@@ -1,5 +1,8 @@
 # Cerid `crd-hesap` — 2026 SOTA Update + Matrix Types + Complex + Elite Refinement
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-19
 **Status:** Research dossier — refines ADR-0065 + phase-3.1.6-hesap.md
 to truly elite tier per user mandate 2026-05-19.

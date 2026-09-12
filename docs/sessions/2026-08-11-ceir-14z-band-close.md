@@ -1,5 +1,8 @@
 # 2026-08-11 — CEIR-14z: the render DEVICE proof band closes (BAND-14 COMPLETE)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Autonomous-loop arc closing **CEIR-14 (band-14)** — the render dialect's device proof. The §169 shape
 list is now proven device-side on both backends through the gold-standard frame-recording executor.
 

@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — crd-platform v1c (input)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Wire keyboard + mouse input into `crd-platform`, hybrid model from v1a's

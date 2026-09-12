@@ -1,5 +1,8 @@
 # Session — 2026-07-20 — B18-f: the path-traced hair swatch (the RT strand tier's payoff)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Turn the B18-f RT strand tier into an actual renderer: film-scale path-traced hair at realistic fibre size,

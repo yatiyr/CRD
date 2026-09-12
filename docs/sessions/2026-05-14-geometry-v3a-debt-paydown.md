@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v3a-debt paydown — Shewchuk Stage D for orient3d + incircle (partial for insphere)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Pay the Shewchuk adaptive-predicates debt logged in `docs/debt.md` after v3a ship: full Stage D for `orient3d`, full Stage C+D for `incircle`, full Stage B+C+D for `insphere`. User mandate: "pay all debts we created" + new policy "clang-tidy after every slice".

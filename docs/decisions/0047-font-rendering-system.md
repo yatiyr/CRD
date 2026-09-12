@@ -1,10 +1,29 @@
 # ADR-0047 — Font rendering system
 
-**Status:** Accepted
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+**Status:** Accepted; library/atlas selections below superseded by the owned text-stack requirement (U-20)
 **Date:** 2026-05-04
 **Tags:** arch, font, renderer, ui, text
 
 ---
+
+## Current text-stack amendment — 2026-09-12
+
+The later user requirement [U-20](../design/rendering-ui-contracts.md#u-20) requires Cerid-owned
+font parsing, shaping and rasterization. FreeType, HarfBuzz and msdfgen may be research/test oracles;
+they are no longer the prescribed product implementation or runtime dependency. Full complex-script
+text, offline cooking, dynamic glyph residency, separate font services and 3D text remain in scope.
+I2D-2 and FONT-3D own their delivery in the [master table](../ROADMAP.md#slice-i2d-2).
+
+MTSDF is an available rendering technique, not a universal small-text correctness guarantee.
+Coverage/outline/distance-field strategies need measured quality across sizes, transforms, scripts
+and displays. Bitmap and vector paths are not categorically excluded. Do not rely on the old
+"8 px through 200 px" or "not real-time capable" assertions below as measured evidence.
+The [execution contract](../design/renderer-ui-execution-contract.md#canvas-text-vector-and-retained-ui)
+defines current ownership and qualification. The original decisions below are preserved as history;
+all FreeType/HarfBuzz/msdfgen selections are superseded, including the dynamic and extruded paths.
 
 ## Context
 
@@ -211,5 +230,5 @@ asset policy.
 - ADR-0046 — MaterialDomain enum (`Surface` for billboard text, `UI` for screen-space text)
 - ADR-0045 — `assets/source/` layout (fonts subdirectory)
 - ADR-0043 — MeshResource vertex layout (extruded text uses same 48B/vertex format)
-- `docs/phases/phase-3.3-font.md` — Phase 3.3 implementation plan
+- `docs/archive/2026-09-12-superseded-plans.md#phase-3.3-font` — Phase 3.3 implementation plan
 - `docs/systems/sandbox.md` — Phase 3.3 sandbox gains font rendering panel

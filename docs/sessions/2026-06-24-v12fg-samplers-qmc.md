@@ -1,5 +1,8 @@
 # 2026-06-24 — v12-f (fast samplers) + v12-g (QMC/ChaCha) close
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.6 `crd-hesap`, v12 Statistics cluster — v12-f + v12-g.
 **State at entry:** v12-a…e shipped (special-fns + RNG suite, linux-gcc-verified); v12-f/g code written in the working tree but **never run to completion** (uncommitted, unverified). Whole v12 batch (a→g) uncommitted.
 **Outcome:** v12-f/g verified GREEN on the 4 Windows configs + guards; one real bug + 7 tidy violations fixed; honest all-peers perf board captured.

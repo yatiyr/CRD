@@ -1,5 +1,8 @@
 # 2026-05-18 — v9a-b1-simd CLOSED: scalar+prefetch the elite answer; SWWC/AVX2 investigated and ruled out
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-b1-simd, the AVX2-vectorised CPU radix follow-on filed at v9a-b1 close.
 
 **Status:** ✅ CLOSED. Net 1.07× speedup on 1M u32 (5.32 ms → 4.99 ms median-of-5) via a single `_mm_prefetch` hint in the scatter inner loop. Three SOTA techniques (AVX2 sub-histograms, Wassenberg SWWC, multi-pass histogram fusion) investigated, measured slower at this working set, removed. **5-config DoD PASS in 35 s.**

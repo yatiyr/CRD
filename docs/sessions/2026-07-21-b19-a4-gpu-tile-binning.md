@@ -1,5 +1,8 @@
 # 2026-07-21 — B19-a4: full GPU tile binning + the real block rasteriser (the last host crutch removed)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) · **Sub-slice:** B19-a4
 **Directive:** "let's go, no defers, no debts, full correct, frontier and performant crushing architecture."
 

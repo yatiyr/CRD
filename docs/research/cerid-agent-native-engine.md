@@ -1,5 +1,8 @@
 # Cerid — Agent-Native Engine: Strategic Vision + CLI/RPC Architecture
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-19
 **Status:** Vision document — informs upcoming ADR-0081 + cross-cutting
 phase-plan additions.

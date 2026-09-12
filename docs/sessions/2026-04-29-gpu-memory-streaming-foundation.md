@@ -1,5 +1,8 @@
 # Session — 2026-04-29 — GPU memory + streaming foundation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Reduce the next graphics risk after the ImGui overlay milestone: stabilize the

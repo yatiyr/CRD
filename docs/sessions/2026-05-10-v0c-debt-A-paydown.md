@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0c debt paydown (v0c-debt-A)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Same-day debt closure for the five v0c follow-ups originally captured in
 `docs/debt.md`.** All five items addressed; one (Vec4f/Vec8f true SIMD
 batching) re-scoped to ship API-only with implementation deferred to

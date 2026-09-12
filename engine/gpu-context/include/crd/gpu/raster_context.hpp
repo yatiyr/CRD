@@ -313,6 +313,8 @@ public:
     virtual void wait_idle() {}
 };
 
+struct RenderingDesc; // CEIR-31b-4-b-i: the command-model render scope (command_model.hpp), used by clear_scope below.
+
 class IRasterContext
 {
 public:
@@ -329,6 +331,14 @@ public:
 
     // Clear `target` to `color` via dynamic rendering and make the result host-readable (`read_pixel`). Synchronous.
     virtual void clear(IRasterTarget& target, ClearColor color) = 0;
+
+    // ⛔ CEIR-31b-4-b-i: clear the attachments of a render SCOPE that records NO draw (an empty-world / fully-culled
+    // geometry pass, a shadow cascade with no casters). The command-lowering encoder folds a scope's begin_rendering
+    // + LoadOp::Clear into its FIRST draw verb, so a 0-draw pass would otherwise emit nothing and leave the attachment
+    // undefined. The encoder's `end_rendering` calls this when a scope wanted a clear but no draw consumed it. Frame-
+    // recording only (the graph has already transitioned the targets). `RenderingDesc` is the command-model scope,
+    // FORWARD-DECLARED here to avoid a circular include (command_model.hpp includes this header for ClearKind).
+    virtual void clear_scope(const RenderingDesc& rendering) = 0;
 
     // --- C1-b: the shader-object DRAW path (appended — vtable-stable) ---------------------------------------------------
 
@@ -539,10 +549,11 @@ public:
     // than by silently drawing into attachment 0 only.
 
 
-    // RET-6 / REN-39: the OVERLAY draw (draw_overlay / draw_overlay_range) de-virtualized off IRasterContext at
-    // RAF-12.4 — the command encoder lowers the overlay SHAPE (a StoragePull draw with a single colour attachment
-    // that LOADs and Alpha-blends + a read-only depth test carried by `compare`) to each backend's private overlay
-    // body. See engine/*/src/*_raster_context.cpp and detail/command_lowering.hpp (StoragePull case).
+    // ⭐ CEIR-34 R2: the OVERLAY draw has NO dedicated verb (draw_overlay / draw_overlay_range / record_overlay were
+    // RETIRED). Its shape — a StoragePull draw with a single colour attachment that LOADs and Alpha-blends + a
+    // read-only depth test — lowers through the SAME generic draw_storage / draw_storage_depth_load verbs every scene
+    // draw uses: the encoder carries the attachment's blend + load + the draw's first_vertex, and the caller declares
+    // depth_write=false via set_pass_state. See detail/command_lowering.hpp (StoragePull case).
 
 
 

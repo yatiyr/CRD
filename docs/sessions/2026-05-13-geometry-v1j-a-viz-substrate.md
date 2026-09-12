@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1j-a: `crd-geometry-viz` companion module substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 First of two v1j sub-slices (split at the user's request after they expanded scope to include a sandbox demo with a scene selector + four showcase modes). v1j-a ships the **substrate** — the new `crd-geometry-viz` module — and tests that exercise every adapter. v1j-b lands the sandbox integration.

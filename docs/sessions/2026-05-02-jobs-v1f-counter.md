@@ -1,5 +1,8 @@
 # Session: `crd-jobs` v1f — Counter + wait mechanism
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-02  
 **Phase:** 2.5 — `crd-jobs` fiber-based job system  
 **Slice:** v1f — Counter pool, Treiber waiter list, ABA-safe double-check wait  

@@ -1,5 +1,8 @@
 # 2026-07-27 — REN-38 C/D/E/F: THE PROGRAM AS AN AUTHORED ASSET
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **D-007 rows 141 (REN-38 bands C · D · E · F) — 21 rows closed this session (32 → 53 ✅, 12 open).**
 > The band's claim: *every* GPU program the renderer runs is cooked from an asset, and the C++ that used to build
 > them is DELETED. Three of the four bands were also INTEGRATED into the live renderer and proven on the Vulkan

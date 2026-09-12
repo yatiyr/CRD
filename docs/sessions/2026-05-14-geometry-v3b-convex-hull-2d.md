@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v3b — 2D convex hull (Andrew's monotone chain)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship 2D convex hull computation as the first concrete consumer of v3a's Shewchuk adaptive predicates. The Andrew 1979 monotone chain is the canonical O(n log n) algorithm: lex-sort points, sweep left-to-right for the lower hull, sweep right-to-left for the upper hull, concatenate. Output is the CCW hull boundary.

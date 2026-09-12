@@ -270,6 +270,20 @@ bool KirBackendVulkan::run(const KGraph& g, int output, const float* const* inpu
         return dispatch_glsl(*impl.compute, impl.alloc, impl.pcache, &impl.pcache_count, crd::containers::to_view(kern.source),1, kern.input_iidx, in_bytes, numel * sizeof(float), &pc, groups, inputs, out);
     }
 
+    if (outn.op == KOp::Broadcast || outn.op == KOp::Permute) // CEIR-25b-2b: one thread per output element, baked index map
+    {
+        const bool bcast = (outn.op == KOp::Broadcast);
+        if (bcast) { if (!emit_broadcast_nd_glsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
+        else if (!emit_permute_glsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 out_numel   = static_cast<crd::u64>(outn.shape.numel());
+        const crd::u64 in_numel    = static_cast<crd::u64>(g.node(outn.a).shape.numel());
+        struct alignas(16) PC { crd::u32 nout; crd::u32 pad[3]; } pc{};
+        pc.nout                    = static_cast<crd::u32>(out_numel);
+        const crd::u64 in_bytes[1] = {in_numel * sizeof(float)};
+        const crd::u32 groups      = (static_cast<crd::u32>(out_numel) + 255U) / 256U;
+        return dispatch_glsl(*impl.compute, impl.alloc, impl.pcache, &impl.pcache_count, crd::containers::to_view(kern.source), 1, kern.input_iidx, in_bytes, out_numel * sizeof(float), &pc, groups, inputs, out);
+    }
+
     // A3: vector/matrix elementwise cone → comps-aware emitter (interleaved I/O: comps floats per element).
     if (graph_uses_vec(g, output, impl.alloc))
     {

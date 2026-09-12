@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v4b: `mesh_raycast`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Second slice of Phase 3.1.7 v4 `-mesh` cluster. Nearest-hit raycast against
 > an indexed triangle mesh via Woop 2013 watertight ray-tri at BVH leaves +
 > Williams/Ize precomputed slab traversal + ordered nearer-first descent.

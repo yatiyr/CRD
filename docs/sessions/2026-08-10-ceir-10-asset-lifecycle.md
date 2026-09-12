@@ -1,5 +1,8 @@
 # CEIR-10 — Asset lifecycle completion (band-7 remainder, re-homed) — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) resumed band 7 as CEIR-10 on the closed 8d/8h/8i
 > foundation. Design substrate: `docs/design/ceir-10a-hot-reload-and-state-migration.md` (2 advisor consults).
 > Master-map: §108 hot-reload · §109 state migration (§110 incremental = 10b).

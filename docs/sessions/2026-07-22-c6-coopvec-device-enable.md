@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · C6 cooperative-vector device enable (the B10 neural-shading device half)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** proceed in order to C6 — enable `VK_NV_cooperative_vector`, leave no gaps, and be sure the path is real. C6 is the
 DEVICE half of the B10 neural-shading moat: per-invocation matrix×vector (each pixel/thread runs a small MLP inline).
 

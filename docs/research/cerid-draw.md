@@ -1,5 +1,8 @@
 # Cerid — draw substrate research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — ADR-0066; `crd-draw` shipped, later re-based rhi-free onto gpu-context/CKIR at RET-6 (2026-07-23). *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Date:** 2026-05-10

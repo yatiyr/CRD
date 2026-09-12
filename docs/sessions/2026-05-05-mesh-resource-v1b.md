@@ -1,5 +1,8 @@
 # Session — Phase 2.7 v1b: MeshResource + glTF Import
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-05  
 **Shipped:** Phase 2.7 v1b — `MeshResource` + cgltf glTF import + MikkTSpace tangent generation  
 **Test delta:** +4 tests (452 win-debug, up from 448)  

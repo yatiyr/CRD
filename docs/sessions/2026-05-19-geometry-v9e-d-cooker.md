@@ -1,5 +1,8 @@
 # Session 2026-05-19 — geometry-v9e-d cooker
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Summary
 
 Shipped Phase 3.1.7 v9e-d: the shader-helpers cooker. Closes the

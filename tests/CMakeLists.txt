@@ -9,6 +9,7 @@ add_subdirectory(core)
 add_subdirectory(vm)
 add_subdirectory(units)
 add_subdirectory(ceir)  # D-007 CEIR-1a: Cerid Execution IR core (arena + intrusive def-use)
+add_subdirectory(chir)  # D-007 CEIR-32b: CHIR source model + CR-D007 graph-schema projection (ADR-0128)
 add_subdirectory(ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge
 add_subdirectory(ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge
 add_subdirectory(ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge

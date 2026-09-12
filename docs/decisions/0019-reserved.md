@@ -1,4 +1,7 @@
-﻿# ADR-0019 — (reserved)
+# ADR-0019 — (reserved)
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** —
 **Status:** Reserved

@@ -1,0 +1,4 @@
+module {
+  ^bb0:
+    transform.constrain_provider_class() {class = "gpu"}
+}

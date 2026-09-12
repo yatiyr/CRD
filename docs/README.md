@@ -1,100 +1,83 @@
-# Cerid — Documentation Map (Start Here)
+# Cerid documentation — one route from question to evidence
 
-> **The single entry point to the whole doc system.** New here — agent or human?
-> Read this first, then follow the reading order below. This file is a **map: pointers
-> only.** It never duplicates the content it links to, and it is the *one* canonical
-> reading order — every other doc points here instead of carrying its own copy.
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
 
----
+**[ROADMAP](ROADMAP.md) is the only live roadmap, slice table and bug/finding queue.**
+Start at [START_HERE](../START_HERE.md), then [AGENTS](../AGENTS.md). [Context](../context.md) names the current row;
+[MEMORY](../MEMORY.md) routes lessons.
+This applies to every human and agent, regardless of tool/model. No host-specific memory is required.
 
-## Reading order (onboarding)
+## Find what you need
 
-Read these in order; they go from stable rules → live state → the task at hand.
+| Need | Read |
+|---|---|
+| Purpose, authorization, conduct and session ritual | [AGENTS](../AGENTS.md) |
+| Current slice | [context](../context.md), then its one [master row](ROADMAP.md) |
+| Architecture and ownership | [PRINCIPLES](PRINCIPLES.md), then the row's ADR |
+| Bug diagnosis and evidence standard | [SANITY](SANITY.md) |
+| Build/test/tidy commands | [BUILDING](BUILDING.md); style in [CODING](CODING.md) |
+| Full renderer/UI/editor scope | [Execution contract](design/renderer-ui-execution-contract.md), [catalogue](design/rendering-ui-contracts.md) |
+| Whole-system vision, classified gaps, AI/collaboration/science | [System review](research/2026-09-12-cerid-whole-system-review.md) |
+| Cross-domain qualification and task closure | [Quality contract](design/system-quality-contract.md) |
+| Source owner, dependencies, public API | [Systems/source map](systems/README.md) |
+| Specific implementation plan or decision | Row's link; reverse lookup in [design](design/README.md) or [ADRs](decisions/README.md) |
+| Prior lesson or matching failure | [MEMORY](../MEMORY.md); query one record |
+| What actually ran or was measured | Linked [session](sessions/), [benchmark](bench/README.md) or [recipe](recipes/README.md) |
+| Old requirements or dated implementation examples | [Archive](archive/README.md); phase/system pointers preserve their route |
 
-1. **`AGENTS.md`** (repo root) — the rulebook: principles, conduct, coding standards (canonical), Definition of Done, git policy, architectural cornerstones.
-2. **`docs/BUILDING.md`** — build presets, verification protocol, smoke tests, platform notes, and ALL troubleshooting. (An untracked local `CLAUDE.md` may exist as an AI-session pointer into these generic docs; project knowledge never lives there.)
-3. **`docs/PRINCIPLES.md`** — non-negotiable engineering principles + pinned cornerstones. Short.
-4. **`docs/SANITY.md`** — engineering sanity doctrine + the living **Sanity Ledger**. Short. Claim one ledger item when you have slack.
-5. **`context.md`** (repo root) — live "where we are now": current focus, active track state, recently landed, risks, gates.
-6. **`docs/ROADMAP.md`** — navigation hub: phase status, decision log (tagged), detour queue, glossary. A hub — don't read end-to-end; follow the link for your task.
-7. **The active phase doc** under `docs/phases/` — its name is in `context.md`. (If the active work is a
-   DETOUR, the detour file under `docs/detours/` is the equivalent — `context.md` names it.)
-8. **The slice's design spec** under `docs/design/`, if it has one — the slice's ROW links it by path, and
-   `docs/design/README.md` is the reverse lookup. **If you were told "read the slice and implement it", this
-   is the document you were sent to**: it carries the reuse audit (what already exists, so you don't rebuild
-   it), the sequenced increments, and the gate for each.
+Useful commands from the repository root:
 
-Then, as your task needs, pull the relevant ADR(s), system overview(s), and research dossier(s) from the map below.
+```powershell
+python scripts/check-master-plan.py --next
+python scripts/check-master-plan.py --slice RAH-1
+python scripts/check-master-plan.py --find reload
+python scripts/check-master-plan.py --find A24
+python scripts/check-master-plan.py --memory stale_exe
+python scripts/check-master-plan.py
+```
 
----
+Queries are read-only views of the Markdown table. They never create another status file. The validator checks
+all repository documentation links, master order/IDs/dependencies, evidence for completed work, current-pointer
+validity and orientation size budgets. Passing it establishes documentation structure, not engine correctness.
 
-## Which document wins — the canonical source-of-truth table
+## Start a slice
 
-When two documents disagree, the one on the right wins for that question; the other one gets fixed (or is
-historical and says so). Dated snapshots (session logs, archived context history, closed phase ledgers) are
-*records* — they were true when written and are never "wrong", but they never override a living doc.
+Read AGENTS → PRINCIPLES → SANITY → MEMORY index → context → the exact ROADMAP row. Open its detail/ADR and
+relevant source; read BUILDING/CODING before code. Name the purpose, inherited scope, prerequisites and evidence
+needed. A table summary never reduces its linked contract. Work under existing user authorization; surface real
+scope/design conflicts without inventing an approval. A query result is not authorization to start an autonomous loop.
 
-| Question | Canonical source |
-| --- | --- |
-| What is Cerid? | `README.md` (root) |
-| How do I work in this repo (rules, DoD, git policy, style)? | `AGENTS.md` (+ `docs/BUILDING.md` for build/verify) |
-| What is happening right now / what's next? | `context.md` |
-| What is the live front's plan + sub-slice status? | the active detour it names (today: `docs/detours/D-007-ceir-tracker.md`, the master CEIR band table — the live-tracking role moved here at CEIR-0f; `D-007-gpu-program-system.md` is the historical pre-CEIR ledger) |
-| What must stay true / how do I not repeat a paid-for bug? | `docs/SANITY.md` (+ the memory index) |
-| What stable principles govern design? | `docs/PRINCIPLES.md` |
-| How does a landed subsystem work today? | `docs/systems/<module>.md` (retired modules have NO overview — deleted with the module; the index's Retired note points at successors, git history keeps the old text) |
-| Why was a decision made? | the ADR under `docs/decisions/` (a superseded clause is struck **in place** and points at its successor) |
-| What is a feature's honest maturity? | `docs/capabilities/gpu-platform-capabilities.toml` (GPU platform) / the phase doc's slice table |
-| What alternatives were investigated? | the dossier under `docs/research/` (research, never current-state) |
-| What happened on a given day? | the session log under `docs/sessions/` (historical snapshot) |
-| What are the measured numbers? | the board under `docs/bench/` (numbers live nowhere else) |
-| What is still owed? | `docs/debt.md` (open items only) |
+## Track a bug or finding
 
----
+Search its ID, symptom and owning module first. Use the existing owner row where possible; otherwise add a stable
+child ID to this same table. Record reproduction/configuration, expected/actual behaviour, harness checks, confidence
+and the blocking acceptance condition in a linked note. **Review** means unverified concern/decision, not a confirmed
+runtime defect. A reproduced failure prevents the owning slice from closing. Detail may live elsewhere; live state
+and its owner live only in ROADMAP. The audit's A01…A27 IDs are searchable from their owner rows.
 
-## The doc system — what lives where
+## Close and hand off
 
-| Area | Where | Purpose | Index / entry | Class |
-|---|---|---|---|---|
-| Project rules | `AGENTS.md`, `docs/BUILDING.md` | Stable rulebook + build/verification reference | — | living |
-| Principles | `docs/PRINCIPLES.md` | Engineering compass, pinned cornerstones | — | living |
-| Benchmarking policy | `docs/PRINCIPLES_reference_class_benchmarking.md` | Head-to-head-vs-strongest-references rule for every numerical kernel | — | living |
-| Crush hints | `docs/hints/crush-playbook.md` | Living playbook of crush/optimization levers + traps (bench fairness, algorithmic wins, SIMD/memory, cross-config miscompiles) — read before a crush, append after one | self | living |
-| Sanity | `docs/SANITY.md` | Sanity doctrine + ledger (the *operational* rules) | self | living |
-| Lessons | `docs/lessons/` | Meta-reflective teaching lessons — the *why* + reusable patterns (sibling of sessions; deeper than SANITY) | `docs/lessons/README.md` | append-only |
-| Live status | `context.md` | Where we are now | — | living |
-| Navigation hub | `docs/ROADMAP.md` | Phases, decision log, detours, glossary | self | living |
-| Decisions (ADRs) | `docs/decisions/` | One decision per file (`NNNN-slug.md`) | `docs/decisions/README.md` | append-only |
-| System overviews | `docs/systems/` | One short overview per shipped module | `docs/systems/README.md` | mixed |
-| Module deep-dives | `docs/<module>/<MODULE>_FILE.md` | Long-form per major module (log, memory, containers) | — | append-only |
-| Phase plans | `docs/phases/` | One file per phase, detailed slices | ROADMAP status table | living (active) / append-only (closed) |
-| **Slice design specs** | `docs/design/` | **The implementation CONTRACT for one slice — the mandatory REUSE AUDIT (what already exists, so it is not rebuilt), the sequenced increments, the gate per increment, named risks + non-goals. Sits between the row and the session log. The slice's ROW links it by path; this index is the reverse lookup.** | `docs/design/README.md` | living until the slice closes |
-| **Authored GPU assets** | `assets/frame/*.frame.toml` · `assets/technique/*.crdt` · `assets/vertex/*.crdv` · `assets/lighting/*.crdl` · `.crdm` | **The five declarations that describe every GPU program the engine runs — SCHEDULE (frame graph) · LIGHTING MODEL (technique) · GEOMETRY STAGE · LIGHT SET · SURFACE. Cooked by `crd-frame-cook` / `crd-technique-cook` / `crd-vertex-cook` / `crd-light-cook` / `crd-material-cook` into CKIR. ⛔ If a rendering change needs a recompile, it belongs in one of these instead.** | the module’s header comment | living |
-| Session logs | `docs/sessions/` | One per work session (`YYYY-MM-DD-slug.md`) | — | append-only |
-| Research dossiers | `docs/research/` | Deep research per topic | — | append-only |
-| **Recipes** | `docs/recipes/` | **Educative build-recipes — teach a studied technique end to end (parameters first, then physics, assembly, traps). Written whenever we study + build something (AGENTS.md rule).** | — | append-only |
-| Open debt | `docs/debt.md` | Cleanups not yet done; pruned to a session log when closed | self | living |
-| Detours | `docs/detours/README.md` | Side-mission queue | self | living |
-| Protocols | `docs/protocols/` | Process protocols (e.g. per-slice verification) | — | reference |
-| Benchmarks | `docs/bench/` | Captured baseline numbers | — | append-only |
-| Templates | `docs/sessions/SESSION_TEMPLATE.md`, `docs/research/RESEARCH_TEMPLATE.md` | Format starters | — | reference |
+Applies after implementations, fixes, investigations and documentation tasks. Inspect all affected current documents;
+correct changed facts, preserve historical evidence and leave already-correct text compact.
 
----
+1. Finish the full contract and all children. Verify production asset/runtime behaviour and the relevant test matrix.
+2. Write `docs/sessions/YYYY-MM-DD-<slice-or-topic>.md`: purpose, changes, exact verification, evidence and limitations.
+   Record continuation as a pointer to ROADMAP, not a competing live Next list.
+3. Update the one row's state and evidence link. **Done** requires evidence and completed children. **Recorded** means
+   dated earlier evidence, not a new run. Keep unresolved/review/later work visible; never use it to hide a failure.
+4. Update context's current ID/handoff; correct affected contracts and source references. New decision → ADR/index;
+   new measured board → bench immediately; learned implementation technique → recipe; durable scar → memory reference.
+5. Run the documentation validator and scoped code checks if code changed. Propose a Conventional Commit; user commits.
 
-## Doc design rules (so the system stays lean, not uniformly short)
+## Keep documents small without losing knowledge
 
-The docs fall into **two classes**, and only one gets size discipline:
+Each file has a role: current rule/navigation/contract, decision record, generated view, or dated reference/evidence.
+Only ROADMAP owns live slice/finding state. Historical statuses, Next lists, grades, tool versions and grants are
+not current instructions. Source-backed facts still require verification when code changes. Preserve original evidence
+when superseding a claim; never rewrite history as though tests ran again.
 
-- **Living / scannable** — `context.md`, `docs/ROADMAP.md`, this map, the index READMEs, `MEMORY.md`, `docs/debt.md`, `docs/detours/README.md`. These **rot** when bloated (you skim them constantly), so they get **soft budgets + prune discipline**: keep them lean, delete stale content, never let one grow into a wall of text. Soft budgets: `context.md` ≤ 300 lines; this map + the index READMEs ≤ ~150 lines.
-- **Append-only historical records** — session logs, ADRs, research dossiers, module deep-dives. **Length is fine; do NOT truncate them** — truncating destroys history. A 600-line dossier is healthy; a 600-line `context.md` is rot.
-
-Cross-cutting rules:
-- **One home per fact; everywhere else points to it.** Don't copy a reading-order list, a status table, or an explanation into a second file — link instead. (SANITY rule #3: an artifact too verbose or duplicated to trust is worse than none.)
-- **Per Definition of Done:** a new ADR adds a one-line row to `docs/decisions/README.md`; a new shipped module adds a row to `docs/systems/README.md`.
-- **"Carefully designed" ≠ "uniformly short."** Prune the scannable; preserve the historical.
-
----
-
-Known living-doc bloat (which scannable docs need pruning, and how) is tracked — dated and
-actionable — in the **Sanity Ledger** (`docs/SANITY.md`). Not restated here: point-in-time
-sizes don't belong in an evergreen map.
+Entry budgets in bytes: AGENTS 8,000; PRINCIPLES 6,500; SANITY 4,500; BUILDING 7,000; MEMORY 3,000;
+context 2,500; this map 6,000; START_HERE 4,500. These are ceilings, not targets. Move examples/scars to linked references before
+exceeding them. The master table and full technical/evidence documents have no arbitrary truncation limit.
+Compatibility pointer pages stay below 1,200 bytes. New reference docs must be reachable from a row or index.

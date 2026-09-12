@@ -1,5 +1,8 @@
 # 14 — Variants, permutation & specialization: the complete guide
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > *The deep dive. What a variant is, why permutation explodes, the two ways to author one, the IR primitives that make
 > specialization work, the content hash that ties it all together — and the one bug that hid inside `optimize()` for the whole
 > life of the pass until a kernel got specialized.*

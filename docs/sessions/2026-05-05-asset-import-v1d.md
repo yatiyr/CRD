@@ -1,5 +1,8 @@
 # Session: Phase 2.7 v1d — GPU upload + smoke_asset_import + crd-sandbox bootstrap
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-05
 **Branch:** main
 **Status:** ✅ shipped — all six configurations green

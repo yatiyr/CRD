@@ -10,6 +10,7 @@ endif()
 
 add_executable(crd-ceir-gpu-cuda-tests
     test_ceir_add_cuda.cpp
+    test_ceir_pipeline_cuda.cpp # CEIR-29b-1: the multi-stage tensor pipeline (expanded ml.mlp) on CUDA via execute_tensor_pipeline
 )
 
 target_link_libraries(crd-ceir-gpu-cuda-tests PRIVATE
@@ -23,6 +24,13 @@ target_link_libraries(crd-ceir-gpu-cuda-tests PRIVATE
     crd-gpu-context-cuda # CudaComputeContext / create_cuda_compute_context / create_pipeline_from_cuda (NVRTC)
     Catch2::Catch2WithMain
 )
+
+# CEIR-29b-1: the tensor-pipeline test loads relu.ckir by CRD_REPO_DIR path (the first CUDA test to load an authored asset) —
+# without this the fallback "." resolves only when CWD==repo root (Windows luck) and fails under WSL ctest (CWD==build dir).
+target_compile_definitions(crd-ceir-gpu-cuda-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+
+# CEIR-29z: std::getenv (the CRD_CEIR_BENCH gate on the bench case) — the tests/anim + ceridc _CRT_SECURE_NO_WARNINGS precedent.
+target_compile_definitions(crd-ceir-gpu-cuda-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 crd_enable_default_pch(crd-ceir-gpu-cuda-tests)
 

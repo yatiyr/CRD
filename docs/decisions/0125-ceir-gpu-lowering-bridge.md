@@ -1,5 +1,8 @@
 # ADR-0125 — The `crd-ceir-gpu` lowering bridge (CEIR-13d): CEIR compute/transfer regions → an inspectable command list
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design advisor-reviewed at the decomposition fork) — the D-007 **CEIR band 13 (Compute + transfer)**, slice **CEIR-13d**.
 Births the `crd-ceir-gpu` bridge module (ADR-0109 §4.2) and its lowering pass.

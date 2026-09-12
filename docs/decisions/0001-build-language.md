@@ -1,4 +1,11 @@
-﻿# ADR-0001 — Build & language
+# ADR-0001 — Build & language
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+> **Current graphics boundary:** gpu-context/CEIR and authored assets govern new work (ADR-0105/0106/0127).
+> Any rhi/renderer path-class ownership below describes the retired stack; retained technique requirements
+> survive in ROADMAP and its linked contracts. See [current principles](../PRINCIPLES.md).
 
 **Date:** 2026-04
 **Status:** Accepted

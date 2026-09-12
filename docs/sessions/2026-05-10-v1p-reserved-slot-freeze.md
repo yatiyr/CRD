@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.0 v1p: Reserved-slot freeze (closes Phase 3.0)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1o3 shipped late 2026-05-09 (sandbox integration with the full Öbek + Preset + Profile + async-upload stack). 16 of 17 Phase 3.0 slices complete; v1p is the final close — every reserved L6/L7/L8 trait must round-trip through `register_component`, the reserved spatial DSL operators must compile and chain, the Öbek + Preset + Profile API surface must be formally pinned.
 
 **Status at end:** v1p shipped — `ScriptComponent` + `ScriptHandle` types added, reserved spatial query operators (`.in_aabb` / `.within_radius`) shipped as passthrough, comprehensive freeze test suite (5 cases + 50+ static_asserts) ratifies the API surface. **Phase 3.0 CLOSED.** 856 unit tests across 12 build configs — all green.

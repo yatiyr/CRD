@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1o3: sandbox integration (closes v1o)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1o2 shipped earlier today. The phase doc's v1o3 row called for "sandbox uses async upload + profile + öbek end-to-end; ImGui panel toggles profile + reverts overrides live; visual proof of full authoring stack." The user's explicit ask: ship it elite-level, fully — author the profile.toml + preset.toml + öbek.toml content, wire the cookers, integrate `ForwardRenderPath` as a real `IPresetTarget`, and pin v1o2's promised drop-callback contract through a proper hook (no sandbox-side workarounds).
 
 **Status at end:** v1o3 shipped — full async-GPU-upload + Profile + Preset + Öbek pipeline runs end-to-end in the sandbox with cooker-driven content, an `IComponentIndex` drop-callback hook, and a `ForwardRenderPath` that consumes `QualityPreset` to drive observable rendering behaviour. **12-config sweep: 851/848 green.**

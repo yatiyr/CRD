@@ -1,5 +1,8 @@
 # 2026-07-28 — 38-G1 live close: every default is an asset · zero validation errors · 53 → 119 fps
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Continues `2026-07-27-ren38-authored-programs.md` (the 38-G1 live-sandbox integration). User direction, verbatim
 > intent: "fix all of them, I only want default assets to run gpu … and then I want blazing speed, we are racing
 > with frontier engines." Three demands: (1) EVERY embedded default resolves disk-first, (2) all remaining
@@ -73,7 +76,7 @@ reuse) — ~38 M vertex invocations/frame on an RTX 4070 Ti SUPER. The lever is 
 `vkCmdBindIndexBuffer` on the SAME storage buffer at `indices_off` (add INDEX_BUFFER usage — zero duplication),
 `vkCmdDrawIndexedIndirect`, instance = `gl_InstanceIndex` through the visible list, vertex pull by
 `gl_VertexIndex` (= the index value). Expected 3–6× vertex-work reduction across every pass, both backends.
-That is a REN-39-class slice (cook contract + both backends + oracle mirror), not a patch — now SLICED as row 142 in `docs/detours/D-007-gpu-program-system.md`: 39-A1/A2 (device verb) → 39-B1/B2 (cook contract) → 39-C1/C2 (renderer switch + measured close).
+That is a REN-39-class slice (cook contract + both backends + oracle mirror), not a patch — now SLICED as row 142 in `docs/archive/D-007-gpu-program-system.md`: 39-A1/A2 (device verb) → 39-B1/B2 (cook contract) → 39-C1/C2 (renderer switch + measured close).
 
 ## Sweeps
 

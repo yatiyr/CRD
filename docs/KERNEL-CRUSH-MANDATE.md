@@ -1,5 +1,8 @@
 # KERNEL CRUSH MANDATE — binding orders for kernel/perf work
 
+<!-- doc-role: rule -->
+> Current rule. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
+
 > **This is not advice. These are ORDERS.** They bind every agent (human or AI) the moment you optimize a compute
 > kernel (GPU or CPU) against a peer — a vendor library (cuBLAS/cuDNN/MKL/oneDNN/BLAS), a published kernel, or any other
 > implementation. Read this before you touch a hot kernel. Violating an order = failing the task, not "using judgment."

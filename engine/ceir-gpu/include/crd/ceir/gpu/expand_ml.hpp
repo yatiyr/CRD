@@ -20,19 +20,24 @@
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/id.hpp>
+#include <crd/containers/hash_map.hpp> // CEIR-29c-1: the expand→source-ml lineage map (a launch-graph provider's stage range)
 
 namespace crd::ceir::gpu
 {
+// Why an ml op could not be EXPANDED into the 22/23 vocab — the TYPED reject (expand NEVER silently emits a wrong-shape kernel).
+// ⛔ append at END (a TYPED-reject enum, the sibling of PlanReject/GradError — the ordinal is stable; a dead value is DEAD-marked +
+// KEPT, never removed, so a persisted ordinal / an exhaustive name-switch never shifts under it).
 enum class MlExpandError : crd::u8
 {
     None = 0,
     OperandNotTensor, // an ml op operand / result is not Tensor-kinded (a non-verify-clean module)
     ElementNotFloat,  // an ml op's element is not Float (ml is float-only this band; quantized MLP = name-forward)
     ShapeRankInvalid, // an ml op operand / result is not rank-2 (the width/shape reads would be out of range)
-    BakedKernelShapeUnsupported, // ⛔ a fixed-size authored kernel's BAKED dims don't match this op (relu.ckir local_size=32 ⇒
-                                 //    every mlp relu'd intermediate must be M·hidden==32; transpose.ckir/softmax.ckir bake
-                                 //    Sk==3 ∧ D==4 ∧ Sq==2). A TYPED reject — never a silent OOB / uninitialized-tail miscompile
-                                 //    (the UnsupportedQuantScheme precedent). Dimension-general kernels = name-forward (24z ledger).
+    BakedKernelShapeUnsupported, // ⛔ DEAD 2026-09-04 (26d-3c, source=scoreboard): NEVER returned — no expand path constructs it
+                                 //    anymore. Was the TYPED reject for a fixed-size authored kernel's baked dims: relu.ckir
+                                 //    local_size=32 (RETIRED 26d-2, now cook-bound via the sentinel) + transpose.ckir/softmax.ckir
+                                 //    baked Sk=3∧D=4∧Sq=2 (RETIRED 26d-3: transpose→synth, softmax→spec-const loop). Member KEPT
+                                 //    (append-only enum — see the head), not live — exactly like GradError::MlpBakedShapeUnsupported.
 };
 
 // The outcome: how many ml ops were expanded + the FIRST error (with the offending op), or {None}.
@@ -51,4 +56,11 @@ struct MlExpandResult
 // Expand EVERY ml.mlp / ml.attention op in module `m` into the CEIR-22/23 tensor vocabulary (in place). Idempotent on an
 // ml-free module (expands 0). ⛔ Context& (NOT const) — builds ops + interns types/attrs; the rewrite RAUWs + erases each ml op.
 [[nodiscard]] MlExpandResult expand_ml_ops(Context& ctx, Module& m);
+
+// CEIR-29c-1 §102: expand_ml_ops + TRACE lineage. Fills `lineage` with (each newly-created op* → the 0-based PRE-ORDER index
+// of the SOURCE ml op it was expanded from). ⛔ an INDEX, not the source ml op pointer — the source op is RAUW'd + ERASED, so
+// its pointer would dangle (and a later expansion could reuse the address). The index aligns 1:1 with `MlPartition::assignments`
+// (partition_ml walks ml ops in the SAME pre-order find_first_ml uses), so `plan_tensor_pipeline_partitioned` reads
+// stage.op → lineage → assignments[idx].provider. `lineage` is CLEARED first. Same expansion + result as the 2-arg overload.
+[[nodiscard]] MlExpandResult expand_ml_ops(Context& ctx, Module& m, containers::HashMap<const Operation*, crd::i32>& lineage);
 } // namespace crd::ceir::gpu

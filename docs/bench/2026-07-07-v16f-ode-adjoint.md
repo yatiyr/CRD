@@ -1,5 +1,8 @@
 # 2026-07-07 — v16-f: revolve checkpointing + ODE-adjoint (DTO vs CTO honesty split)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** `revolve.hpp` — Griewank-Walther optimal checkpointing (the split is chosen by a memoized DP over
 the treeverse cost `cost(len,s)=min_d[d+cost(len−d,s−1)+cost(d,s)]`, so it is GW-optimal by construction — no reliance
 on the closed-form mid), reversing a T-step pass with O(snaps)=O(log T) state memory. `ode_adjoint.hpp` — over a

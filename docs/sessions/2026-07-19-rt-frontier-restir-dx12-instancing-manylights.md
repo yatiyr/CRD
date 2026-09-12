@@ -1,5 +1,8 @@
 # Session — 2026-07-19 · RT frontier: path tracing → ReSTIR spatiotemporal → DX12 mirror → instancing → many-lights
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 (CKIR ray tracing). Continuation of the "complete gold-standard cutting-edge RT system integrated into CKIR"
 campaign before resuming B18 hair. Entry state: RT-1 (inline rayQuery core) + RT-2 (shadows/RTAO/reflections) already landed.
 

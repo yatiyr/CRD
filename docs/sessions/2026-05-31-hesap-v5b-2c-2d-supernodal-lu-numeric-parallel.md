@@ -1,5 +1,8 @@
 # 2026-05-31 — hesap v5b-2c/2d: supernodal-LU numeric + symmetric pruning + tree-parallel moat
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 A long crush-driven session on the sparse-LU numeric (continues v5b-1 oracle ✅, v5b-2a front-end ✅,
 v5b-2b symbolic ✅). Built the full numeric, then pushed measured crush levers: SPA rewrite → symmetric
 pruning → tree-parallel + the determinism moat. Honest standing: **correct, deterministic, matched-residual

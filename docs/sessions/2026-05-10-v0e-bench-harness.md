@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0e: SIMD benchmark harness — closes Phase 3.1 v0
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **CORRIGENDUM (2026-05-10 evening):** the original "12-config sweep
 > clean throughout" claim in this log + the closure dossier referred to
 > bench-target incremental builds, not the full Definition of Done

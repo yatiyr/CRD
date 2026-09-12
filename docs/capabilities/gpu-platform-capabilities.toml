@@ -5,29 +5,73 @@
 # ⛔ THE REGISTRY LEVEL IS THE HONEST CLAIM. D-007 prose must never exceed it.
 #
 # Maturity — the UNIFIED two-axis model (CEIR-0g; §173 is the law; docs/design/ceir-0g-maturity-and-manifest.md).
-# The `level` field below is the `raf_level` axis (today's RAF-asset maturity); a `ceir_level` axis (the forward
-# CEIR-program track) is added at the schema-2 migration. §PR-3's standalone ladder is SUPERSEDED (struck in place).
-# raf_level rungs: L0 catalogued · L1 math/oracle · L2 mechanic · L3 one-backend end-to-end · L4 cross-backend proven
-# · L5 shipped asset · L6 live-authorable (needs CR-D007, NOT yet possible) · L7 production-qualified.
+# TWO axes, DIFFERENT rulers (ceir-0g §1): a feature carries BOTH during the transition (→ CEIR-13z convergence).
+#   `raf_level` (0-7) — today's RAF-asset maturity (the former `level`, renamed at schema=2):
+#     L0 catalogued · L1 math/oracle · L2 mechanic · L3 one-backend end-to-end · L4 cross-backend proven
+#     · L5 shipped asset · L6 live-authorable (needs CR-D007, NOT yet possible) · L7 production-qualified.
+#   `ceir_level` (0-8, or "n/a" for T-class) — how far the feature has climbed as a CEIR PROGRAM (§173):
+#     L0 listed · L1 semantics/ADR · L2 IR-op+verifier · L3 reference/one-provider · L4 optimized-on-primary
+#     · L5 Vulkan+D3D12 multi-provider proof · L6 shipped engine:// program asset · L7 CR-D007 authoring+reload
+#     · L8 production stress/perf/determinism qualification.
+# ⛔ The axes are NOT the same ruler: a shipped RAF feature that is NOT (yet) a CEIR program is ceir_level=0
+#   (e.g. platform_windowing_input, draw_debug_viz). The scene-raster render assets became CEIR programs at CEIR-16d
+#   §128 (E1/E2/E5: record_scene_raster DELETED, scene.raster → record_ceir_render UNCONDITIONALLY — 34-0 census E1/E2/E5);
+#   the fullscreen/frame_runtime path converged at F1 (34-0 census F1). Either way the shipped `.frame.toml` render assets
+#   ARE CEIR programs (they lower through the CEIR plan path / record_ceir_render / ceir.frame) → they earn a real
+#   ceir_level. ceir_level CLASSIFICATION RULE
+#   (rule-driven, cited from THIS file's evidence fields, ⛔ never back-dated — ceir-0g §5 Q1):
+#     L6 = status=shipped + assets non-empty + BOTH tests_vulkan/tests_dx12 + runs through record_ceir_render/ceir.frame.
+#     L5 = cross-backend proven / mature CEIR mechanism, no shipped-asset consumer (ui_effect_graph, hot_reload_*).
+#     L3 = one backend (raytrace_pipeline_mechanic). L2 = IR-op/mechanic landed, no shipped program.
+#     L0 = every status=target (not built as a CEIR program). T-class → "n/a" (tooling is never a CEIR program, §2a).
+#   ⛔ INVARIANT: providers is a CEIR axis — ceir_level ∈ {0, "n/a"} ⇒ providers = [] (a non-CEIR-program has no CEIR
+#     provider, even where tests_vulkan/tests_dx12 prove it runs as a RAF/gpu-context path).
+# raf_level=level (unchanged) · ceir_level derived above · both shown, NEVER collapsed to one max (§5 Q2).
+# §PR-3's standalone ladder is SUPERSEDED (struck in place, CEIR-0f).
 # Classification (§PR-4): A pure-asset · A+R asset+runtime · A+E asset+executor · B canonical/backend · T tooling.
+# ⚠ COMPILER TRANSFORMS / LANGUAGE FRONTENDS (autodiff, optimizer, transform/rewrite, CHIR) have NO native §PR-4 class
+#   (the taxonomy was render-designed) — filed as B-machinery, with: ceir_level = the maturity of the program they
+#   PRODUCE (autodiff's device crown, CHIR's lowered module), providers = where that produced program is proven to run
+#   ([] for a compile-time-only frontend that does not itself execute). This taxonomy gap is a candidate for the
+#   schema=3 revision (with the raf_level-retirement question) — recorded, user-gated, NOT decided here.
 #
-# Seeded 2026-08-06 from a code+test audit (NOT prose). Every `[feature.<id>]` carries the full
-# field set even where empty ("" / []), so a future CI generator
-# (docs/generated/gpu-platform-capability-matrix.md — not built yet) can emit the matrix, missing
-# backend coverage, assets-without-tests, claimed-L5+-without-hot-reload/editor, and stale refs.
+# Seeded 2026-08-06 from a code+test audit (NOT prose). Load-bearing fields (raf_level, ceir_level,
+# providers, determinism_tier, classification, status, band, assets, tests_*, hot_reload_tests) are
+# always present; documentary fields (references, subcategory, ...) are present-iff-meaningful.
+# ✅ The CI generator EXISTS (CEIR-0g §4 step-4): tools/ceir_capability_matrix/gen_matrix.py emits
+# docs/generated/gpu-platform-capability-matrix.md + runs HARD checks (vocab/range/providers-invariant/
+# stale-path/load-bearing-presence) and review flags; gated by the crd-ceir-capability-matrix-{drift,validator} ctests.
 #
-# ⚠ Nothing exceeds L5 today: L6 requires a CR-D007 inspection/authoring schema (band D7E, unstarted).
+# ⚠ CEILINGS (the two axes cap at different rungs, both honest):
+#   raf_level ceiling = L5 today: raf L6 (live-authorable) requires a CR-D007 inspection/authoring schema (D7E, unstarted).
+#   ceir_level ceiling = L6 today (shipped engine:// CEIR program asset): CEIR-L7 (CR-D007 authoring+reload) unlocks with
+#   the D7E editor widgets, which DECISION C RULED (2026-09-11, C2) are the I2D-9 slice — so L7 is now an I2D-band
+#   obligation on the I2D-9 timeline (ADR-0107), NOT an open CEIR gate. CEIR-L8 (production stress/perf/determinism
+#   qualification): its perf/determinism half is the CEIR-35 DoD (Q7 perf boards shipped 2026-09-11, Q1/Q3/Q4/Q8
+#   determinism re-verified), and the whole-engine FEATURE-quality half (DECISION A, RESOLVED 2026-09-11) routes to the
+#   feature bands — so an L8 CLAIM for a given feature rides its owning band, not a single CEIR gate. No feature CLAIMS L7+
+#   until its gating band lands; both former "decisions" are now resolved (context.md §Gated / census §9 / 33-0 census §3).
+# ⚠ SCOPE (2026-09-11): this manifest is RENDER/UI-centric (seeded from the RAF audit). The CEIR-native substrate
+#   families — ceir.audio (CEIR-31) · tensor-ML/NRC · autodiff (CEIR-25) · ceir.dist (CEIR-30) · CUDA-Graphs (CEIR-29)
+#   · CHIR (CEIR-32) — do NOT yet have rows here; adding them (evidence in each band-close log) is the tracked next step.
 # ─────────────────────────────────────────────────────────────────────────────
 
-schema = 1
+schema = 2                   # CEIR-0g §4: two-axis migration (level→raf_level; +ceir_level/providers/determinism_tier)
 generated = false            # hand-seeded; a generator will own regeneration later
-audit_date = "2026-08-06"
+audit_date = "2026-08-06"    # raf-axis seed; ceir_level/providers added 2026-09-11 (schema=2)
 
 # ── field contract every feature must carry (documentation; not enforced until CI) ──
-# id, category, subcategory, definition, level, classification, dependencies,
-# ckir_capabilities, command_families, executors, runtime_systems, backend_capabilities,
+# id, category, subcategory, definition, raf_level, ceir_level, providers, determinism_tier, classification,
+# dependencies, ckir_capabilities, command_families, executors, runtime_systems, backend_capabilities,
 # assets, tests_vulkan, tests_dx12, tests_cross_backend, hot_reload_tests,
 # editor_support, quality_perf_gates, fallback, band, status, references, limitations
+# NEW at schema=2: providers = which CEIR execution PROVIDER-CLASS(es) run it — the `ProviderClass` enum
+#   (semantics.hpp: host / gpu / npu / media / external; §69/ADR-0109), NOT backends. A render feature on Vulkan+D3D12
+#   is the "gpu" provider (the vk/dx12 BACKEND split lives in tests_vulkan/tests_dx12, an orthogonal axis); a host DSP
+#   is "host"; CUDA(-Graphs) is "gpu". Empty where nothing runs on a CEIR provider yet. determinism_tier = the §27
+#   DeterminismClass (BitExact / DeterministicWithinTarget / DeterministicWithinBackend / Nondeterministic /
+#   ExternalNondeterminism); "" = no claim (conservative), filled ONLY where a gate proves the class (CEIR-4b owns the
+#   class→ADR-0098-tier alignment). Render/UI rows are "" today — honest, not lazy (no per-feature determinism gate).
 
 # ═══════════════════════ SHIPPED + PROVEN (L5) ═══════════════════════
 
@@ -35,7 +79,10 @@ audit_date = "2026-08-06"
 category = "render_pipeline"
 subcategory = "forward"
 definition = "Basic forward renderer: opaque scene raster into color+depth, no shadows."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = []
 ckir_capabilities = ["vs", "fs", "brdf"]
@@ -60,7 +107,10 @@ limitations = "no shadows; single light path"
 category = "render_pipeline"
 subcategory = "forward"
 definition = "Forward + cascaded shadow maps: for_each cascade depth-only pass into a shadow atlas, then a shadowed forward pass whose lighting is a swappable named technique."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_basic"]
 ckir_capabilities = ["vs", "fs", "brdf", "shadow", "csm"]
@@ -85,7 +135,10 @@ limitations = "raster shadows only (no RT shadows); coarse program reload (RAH-7
 category = "render_pipeline"
 subcategory = "forward"
 definition = "Forward+CSM with GPU-driven frustum culling (compute cull writes indirect draw args consumed by the forward pass)."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["forward_csm"]
 ckir_capabilities = ["vs", "fs", "brdf", "shadow", "csm", "compute"]
@@ -110,7 +163,10 @@ limitations = "no HZB occlusion cull yet (GVA-1)"
 category = "render_pipeline"
 subcategory = "forward"
 definition = "Forward+CSM with moment shadow maps (filterable soft shadows)."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_csm"]
 ckir_capabilities = ["vs", "fs", "brdf", "softshadow", "msm"]
@@ -135,7 +191,10 @@ limitations = ""
 category = "post"
 subcategory = "tonemap"
 definition = "AgX tonemapping as a swappable fullscreen/post pass; re-installed on tonemap toggle."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_basic"]
 ckir_capabilities = ["fs"]
@@ -160,7 +219,10 @@ limitations = "no ACES/OpenColorIO yet (TPR-2)"
 category = "post"
 subcategory = "tonemap"
 definition = "sRGB output transform as a fullscreen/post pass."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_basic"]
 ckir_capabilities = ["fs"]
@@ -185,7 +247,10 @@ limitations = ""
 category = "geometry"
 subcategory = "mesh_task"
 definition = "Task+mesh amplification pipeline rendering through an authored scene frame (meshlet grid)."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = ["task", "mesh", "fs"]
@@ -210,7 +275,10 @@ limitations = "amplification demo; not virtualized-geometry scale (VGE)"
 category = "geometry"
 subcategory = "tessellation"
 definition = "Hardware tessellation (hull+displacing domain) rendering through an authored scene frame."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = ["tess_control", "tess_eval", "vs", "fs"]
@@ -235,7 +303,10 @@ limitations = "no adaptive/crack-free displacement yet (GVA-4)"
 category = "render_pipeline"
 subcategory = "visibility"
 definition = "Visibility-buffer raster writing distinct primitive IDs, read back as distinct values (id-grading FS)."
-level = 5
+raf_level = 5
+ceir_level = 6
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = ["vs", "fs"]
@@ -260,7 +331,10 @@ limitations = "id+barycentric raster only; no compute material resolve / lightin
 category = "geometry"
 subcategory = "virtualized"
 definition = "Cluster mesh shader unpacks a packed DAG to match the CPU oracle (VGE head)."
-level = 4
+raf_level = 4
+ceir_level = 5    # cross-backend mechanic (REN-41); no shipped CEIR asset
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["mesh_shader_frame"]
 ckir_capabilities = ["task", "mesh"]
@@ -286,7 +360,10 @@ limitations = "oracle-match of DAG unpack; not a full stream/cull/raster VGE pip
 category = "runtime"
 subcategory = "hot_reload"
 definition = "Edit an authored frame graph → re-cook → transactional swap (interface-change rejection, last-good)."
-level = 5
+raf_level = 5
+ceir_level = 5    # CEIR-10a table + 35c soak; runtime mechanism caps <L6 (no program asset)
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = []
@@ -310,7 +387,10 @@ limitations = "L6 (editor inspector of the reload) needs D7E-9"
 category = "runtime"
 subcategory = "hot_reload"
 definition = "Edit a shader/technique/material → rebuild dependent GPU programs."
-level = 5
+raf_level = 5
+ceir_level = 5    # CEIR-10a; shipped-coarse (RAH-7 granular pending)
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["hot_reload_frame"]
 ckir_capabilities = []
@@ -334,7 +414,10 @@ limitations = "COARSE: retires ~40 named caches + full init_programs; hand-maint
 category = "runtime"
 subcategory = "extensibility"
 definition = "An application installs its own frame graph and registers a custom pass executor with no engine edits."
-level = 5
+raf_level = 5
+ceir_level = 5    # executor-registry seam (RAF-10); custom mechanic C++ by design (A+E)
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+E"
 dependencies = []
 ckir_capabilities = []
@@ -358,7 +441,10 @@ limitations = "custom mechanic is C++ (A+E), not a hot-reloadable data asset —
 category = "runtime"
 subcategory = "instancing"
 definition = "A pass instanced over a data-driven collection (for_each='light.0.cascades' → writes shadow_atlas[$index])."
-level = 5
+raf_level = 5
+ceir_level = 5    # for_each resolution in the shipped forward_csm CEIR frame
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_csm"]
 ckir_capabilities = []
@@ -384,7 +470,10 @@ limitations = ""
 category = "mechanic"
 subcategory = "attachments"
 definition = "Multiple color targets (color1..3) written through the live GPU frame-graph path — the deferred G-buffer substrate."
-level = 2
+raf_level = 2
+ceir_level = 2    # MRT mechanic landed; no shipped G-buffer CEIR program
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A"
 dependencies = []
 ckir_capabilities = ["fs"]
@@ -408,7 +497,10 @@ limitations = "MRT write only; no shipped G-buffer+lighting pipeline (deferred_c
 category = "mechanic"
 subcategory = "raytracing"
 definition = "raytrace.pipeline SBT trace (raygen/miss/chit/anyhit) records into the frame's one submission."
-level = 3
+raf_level = 4                       # raytrace.pipeline cross-backend proven: rt_shadow uses it on Vk + DX12 (DXR) + lavapipe (CEIR-19b)
+ceir_level = 5    # raytrace.pipeline mechanism cross-backend proven + consumed by the shipped rt_shadow hybrid frame (CEIR-19b)
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+E"
 dependencies = []
 ckir_capabilities = ["raygen", "miss", "closest_hit", "any_hit"]
@@ -418,21 +510,24 @@ runtime_systems = ["TLAS build"]
 backend_capabilities = ["ray_tracing_pipeline"]
 assets = ["engine://frame/scene_rt"]
 tests_vulkan = ["scene-render scene_rt [gpu][vulkan]"]
-tests_dx12 = [""]
+tests_dx12 = ["scene-render [ceir19b] rt_shadow DXR shadow pass (the raytrace.pipeline DX12 twin) [gpu][dx12]"]
 tests_cross_backend = []
 hot_reload_tests = []
 editor_support = "none"
 quality_perf_gates = []
 fallback = ""
 band = "RAH-4 → RPL-4/5"
-status = "gate-only"
-limitations = "scene_rt traces into a buffer then clears output — a MECHANIC GATE, not a lit RT image renderer. DX12 twin coverage TBD."
+status = "mechanic-proven"
+limitations = "The scene_rt asset itself is a Vulkan MECHANIC GATE (traces into a buffer then clears) — not a lit RT renderer; but the raytrace.pipeline PATH is cross-backend proven + consumed by the shipped rt_shadow hybrid frame on Vk + DX12 (DXR) (CEIR-19b). The earlier 'DX12 twin TBD' is RESOLVED."
 
 [feature.raytrace_inline_mechanic]
 category = "mechanic"
 subcategory = "raytracing"
 definition = "raytrace.dispatch inline ray-query kernel (VK_KHR_ray_query / DXR-1.1 RayQuery) into the frame's one submission."
-level = 2
+raf_level = 2
+ceir_level = 2    # ray_query mechanic, both-backend gate-proven; shipped rt_shadow uses the SBT pipeline path, NOT inline — no shipped inline consumer yet
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+E"
 dependencies = []
 ckir_capabilities = ["compute", "ray_query"]
@@ -450,7 +545,7 @@ quality_perf_gates = []
 fallback = ""
 band = "RAH-4 → RPL-4"
 status = "mechanic-proven"
-limitations = "no shipped hybrid frame consumes it yet (hybrid_rt)"
+limitations = "the inline ray_query path is proven both backends (gpu-context rayQuery Vk+DX12), but the shipped rt_shadow hybrid frame (CEIR-19b) uses the raytrace.pipeline SBT path — so no shipped frame consumes the inline path yet."
 
 # ═══════════════════════ RPL PROOF-QUARTET — TARGETS (the honest gap) ═══════════════════════
 
@@ -458,7 +553,10 @@ limitations = "no shipped hybrid frame consumes it yet (hybrid_rt)"
 category = "render_pipeline"
 subcategory = "forward"
 definition = "Forward+ tiled/clustered light culling: compute cull writes per-tile light lists; forward pass reads them."
-level = 1                       # B8-l cluster-cull math ✅ bit-exact CKIR; NO shipped asset renders it
+raf_level = 1                       # B8-l cluster-cull math ✅ bit-exact CKIR; NO shipped asset renders it
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A"
 dependencies = ["forward_csm", "mrt_gbuffer_mechanic"]
 ckir_capabilities = ["compute", "fs", "render"]
@@ -483,7 +581,10 @@ limitations = "UNPROVEN as a pipeline: L1 math only, no shipped/rendering asset.
 category = "render_pipeline"
 subcategory = "deferred"
 definition = "Classic G-buffer deferred: scene.raster MRT G-buffer + fullscreen/compute lighting."
-level = 2                       # L1 B8-l G-buffer-decode math + L2 MRT mechanic; NO shipped pipeline
+raf_level = 2                       # L1 B8-l G-buffer-decode math + L2 MRT mechanic; NO shipped pipeline
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A"
 dependencies = ["mrt_gbuffer_mechanic", "forward_csm"]
 ckir_capabilities = ["fs", "brdf", "render"]
@@ -508,7 +609,10 @@ limitations = "UNPROVEN as a pipeline: MRT mechanic proven, no G-buffer+lighting
 category = "render_pipeline"
 subcategory = "hybrid"
 definition = "Raster primary + RT effects (shadows/reflections/AO/GI) in one frame graph."
-level = 1
+raf_level = 5                       # RT-shadows variant shipped (rt_shadow.frame.toml, CEIR-19b); reflections/AO/GI still target
+ceir_level = 6    # shipped engine:// CEIR hybrid frame (rt_shadow), Vk + DX12 (DXR) + lavapipe (CEIR-19b) — shadow scope
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["forward_csm", "raytrace_pipeline_mechanic", "raytrace_inline_mechanic"]
 ckir_capabilities = ["fs", "ray_query", "closest_hit"]
@@ -516,24 +620,27 @@ command_families = ["raster.draw_indexed", "raytrace.dispatch", "raytrace.trace_
 executors = ["scene.raster", "raytrace.dispatch", "raytrace.pipeline"]
 runtime_systems = ["TLAS build/refit", "denoise history"]
 backend_capabilities = ["ray_tracing_pipeline", "ray_query"]
-assets = []                     # TARGET: engine://frame/hybrid_rt_*
-tests_vulkan = []
-tests_dx12 = []
-tests_cross_backend = []
+assets = ["engine://frame/rt_shadow"]
+tests_vulkan = ["scene-render [ceir19b] rt_shadow (worldpos round-trip -> RT shadow-mask -> darkening) [gpu][vulkan]"]
+tests_dx12 = ["scene-render [ceir19b] rt_shadow (DXR shadow pass) [gpu][dx12]"]
+tests_cross_backend = ["[ceir19b] Vk + DX12(DXR) twins + lavapipe (CEIR-19b, three devices)"]
 hot_reload_tests = []
 editor_support = "planned"
 quality_perf_gates = []
 fallback = "engine://frame/forward_csm (SS fallback chain)"
-band = "RPL-4 / RTX-1"
-status = "target"
-references = ["UE hybrid RT", "AMD FidelityFX denoisers"]
-limitations = "UNPROVEN: RT mechanics exist, no shipped hybrid frame."
+band = "RPL-4 / RTX-1 / CEIR-19b"
+status = "shipped"
+references = ["UE hybrid RT", "AMD FidelityFX denoisers", "CEIR-19b rt_shadow.frame.toml"]
+limitations = "SHIPPED for RT-SHADOWS only (rt_shadow.frame.toml: raster forward -> compute worldpos -> raytrace.pipeline shadow -> composite; CEIR-19b, Vk + DX12 DXR + lavapipe). Reflections/AO/GI in one frame graph remain target (RPL-4/RTX-1)."
 
 [feature.full_rt_lit]
 category = "render_pipeline"
 subcategory = "raytracing"
 definition = "Lit full-image RT renderer (raygen shades + accumulates to a presented image)."
-level = 1
+raf_level = 2                       # wavefront path-tracer CONTROL-FLOW mechanic proven multi-device (CEIR-19c); not a lit renderer
+ceir_level = 3    # §134 wavefront path-tracer control-flow runs as a ceir.rt program on 3 RT devices (CEIR-19c); NOT L5 — the lit-image FEATURE (multi-bounce/accumulation/frame-runtime routing) is NOT-YET
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["raytrace_pipeline_mechanic"]
 ckir_capabilities = ["raygen", "closest_hit", "miss", "any_hit", "brdf"]
@@ -541,18 +648,18 @@ command_families = ["raytrace.trace_rays"]
 executors = ["raytrace.pipeline", "fullscreen.raster"]
 runtime_systems = ["TLAS build", "accumulation history"]
 backend_capabilities = ["ray_tracing_pipeline"]
-assets = []                     # TARGET: engine://frame/rt_lit
-tests_vulkan = []
-tests_dx12 = []
-tests_cross_backend = []
+assets = ["engine://frame/wavefront_work"]
+tests_vulkan = ["gpu-context [ceir19c] wavefront compact/trace/shade + harness [gpu][vulkan]"]
+tests_dx12 = ["gpu-context [ceir19c] wavefront (DX12) [gpu][dx12]"]
+tests_cross_backend = ["[ceir19c] wavefront path-tracer control-flow on 3 RT devices (Vk + DX12 + lavapipe)"]
 hot_reload_tests = []
 editor_support = "planned"
 quality_perf_gates = ["reference PT comparison (RTX-3)"]
 fallback = "engine://frame/forward_csm"
 band = "RPL-5 / RTX-3 / OFF-*"
-status = "target"
-references = ["Pharr-Jakob-Humphreys PBRT", "OFF-1..9 band"]
-limitations = "UNPROVEN: scene_rt is a mechanic gate; the OFF band holds the reference-PT design."
+status = "gate-only"
+references = ["Pharr-Jakob-Humphreys PBRT", "OFF-1..9 band", "CEIR-19c §134 wavefront_{compact,trace,shade}.ckir"]
+limitations = "The §134 wavefront path-tracer CONTROL-FLOW (queue/state dynamic-work: ray-q -> trace -> hit/miss -> shade -> shadow-q -> compact -> repeat) shipped + is proven on 3 RT devices (Vk + DX12 + lavapipe, CEIR-19c) as a test-harness ceir.rt program. NOT a lit presented-image renderer yet: multi-bounce (shade emits no continuation flag), accumulation-to-presented-image, and frame-runtime routing are NOT-YET (19c L8 list) — so the lit-renderer FEATURE remains target (RPL-5/RTX-3/OFF). The OFF band holds the reference-PT design."
 
 # ═══════════════════════ UI / 2D SUB-PROGRAMME (bands I2D + SPR) ═══════════════════════
 # Existing in-tree seams at honest levels + I2D/SPR targets at L0/L1 (nothing UI/2D-specific built yet).
@@ -562,7 +669,10 @@ limitations = "UNPROVEN: scene_rt is a mechanic gate; the OFF band holds the ref
 category = "ui_foundation"
 subcategory = "platform"
 definition = "OS window + input foundation (engine/platform window.hpp + input.hpp: Input/InputEvent/Mouse) the UI input router/windowing build on."
-level = 3
+raf_level = 3
+ceir_level = 0    # OS windowing/input foundation, not a CEIR program
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = []
@@ -586,7 +696,10 @@ limitations = "single-window/basic input today; multi-window/docking/per-monitor
 category = "ui_foundation"
 subcategory = "debug_ui"
 definition = "Dear ImGui debug/recovery UI (engine/imgui + perf-ui + draw-imgui). KEPT as debug/recovery, never the product UI."
-level = 5
+raf_level = 5
+ceir_level = "n/a"    # T-class: tooling is never a CEIR program (ceir-0g §2a)
+providers = []    # ceir_level "n/a" ⇒ no CEIR provider (ImGui is its own GPU backend, not a CEIR program)
+determinism_tier = ""
 classification = "T"
 dependencies = ["platform_windowing_input"]
 ckir_capabilities = []
@@ -610,7 +723,10 @@ limitations = "intentionally NOT the product/editor UI foundation; not deleted w
 category = "ui_foundation"
 subcategory = "debug_viz"
 definition = "engine/draw debug visualization (DebugLine/DebugText/shapes/overlay_pass) — a SEPARATE debug system, not the Canvas compositor."
-level = 5
+raf_level = 5
+ceir_level = 0    # engine/draw debug system, not a migrated CEIR program
+providers = []    # ceir_level 0 ⇒ no CEIR provider (RAF/gpu-context draw path, not a CEIR program)
+determinism_tier = ""
 classification = "A+R"
 dependencies = []
 ckir_capabilities = ["vs", "fs"]
@@ -634,7 +750,10 @@ limitations = "debug 3D-world viz + debug text; NOT a 2D UI compositor (canvas_c
 category = "ui_2d"
 subcategory = "compositor"
 definition = "Backend-neutral CanvasDisplayList + clip/layer/batch compiler → RAF commands; the shared 2D engine for UI + scene sprites."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["rah_typed_attachments", "rah_resource_table_bindless"]
 ckir_capabilities = ["vs", "fs"]
@@ -659,7 +778,10 @@ limitations = "not started; gated on I2D-0 ADR + RAH-1/RAH-2"
 category = "ui_2d"
 subcategory = "retained_ui"
 definition = "BESPOKE retained UI world (reuses ECS concepts only, NOT crd-scene's impl; UiNodeId != gameplay EntityId; own change-detection/undo/layout-persistence). UiNodeId/UiTree/UiFocusManager/UiInputRouter/UiLayoutEngine/UiStyleEngine/UiAccessibilityTree. Supersedes REN-B 'UI is ECS entities'."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["canvas_compositor", "platform_windowing_input"]
 ckir_capabilities = []
@@ -683,7 +805,10 @@ limitations = "not started; I2D-0 must lock UiWorld-vs-SceneWorld first"
 category = "ui_2d"
 subcategory = "text"
 definition = "Staged text: validate→grapheme→script→bidi→fallback→OpenType shape→line-break→layout→glyph-run; adaptive small-coverage/MSDF/vector."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["canvas_compositor"]
 ckir_capabilities = ["fs"]
@@ -708,7 +833,10 @@ limitations = "not started; Cerid-ownership policy for shaping/font-parsing TBD 
 category = "ui_2d"
 subcategory = "shading"
 definition = "CKIR-backed per-element UiMaterial with a strict input + effect-metadata contract (bounds/backdrop/layer/cache)."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A"
 dependencies = ["canvas_compositor"]
 ckir_capabilities = ["fs"]
@@ -732,31 +860,38 @@ limitations = "not started"
 category = "ui_2d"
 subcategory = "compositing"
 definition = "Multi-pass UI effect graph (glass/backdrop-blur/glow/bloom/distortion) compiling to RAF frame-graph work — reuses RAF, no mini scheduler."
-level = 0
+raf_level = 4
+ceir_level = 5
+providers = ["gpu"]
+determinism_tier = ""
 classification = "A+R"
-dependencies = ["canvas_compositor", "ui_material"]
-ckir_capabilities = ["fs", "compute"]
-command_families = ["compute.dispatch", "raster.draw_fullscreen"]
-executors = ["compute.dispatch", "fullscreen.raster"]
-runtime_systems = ["UiEffectGraph → frame-graph compiler"]
+dependencies = ["forward_basic"]
+ckir_capabilities = ["fs"]
+command_families = ["raster.draw_fullscreen", "transfer.copy"]
+executors = ["fullscreen.raster"]
+runtime_systems = []
 backend_capabilities = []
-assets = ["engine://ui/effect/*"]
-tests_vulkan = []
-tests_dx12 = []
-tests_cross_backend = []
+assets = ["engine://frame/ui_frosted_glass", "engine://ui/backdrop_fetch", "engine://ui/blur", "engine://ui/tint_noise", "engine://ui/mask_rect", "engine://ui/composite"]
+tests_vulkan = ["scene-render CEIR-31b-4-b frosted-glass GATEs [scene-render][ceir31b][gpu][vulkan]"]
+tests_dx12 = ["scene-render CEIR-31b-4-b frosted-glass GATEs [scene-render][ceir31b][gpu][dx12]"]
+tests_cross_backend = ["scene-render CEIR-31b-4-b-iv-g-2 GATE (Vulkan)+(DX12): fb_hash(shipped DERIVE)==fb_hash(literal H/V) at 128x64; the Vulkan gate also runs on llvmpipe (WSL linux-gcc-debug)"]
 hot_reload_tests = []
 editor_support = "planned"
 quality_perf_gates = []
 fallback = "single-pass UiMaterial"
-band = "I2D-7"
-status = "target"
-limitations = "not started; needs RAF transient aliasing + backdrop capture"
+band = "CEIR-31b"
+status = "gate-only"
+references = ["D-007 §141", "ADR-0107 §UiEffectGraph", "tests/scene-render/test_ui_frosted_glass_gpu.cpp", "assets/frame/ui_frosted_glass.frame.toml"]
+limitations = "ONE effect proven — frosted glass / backdrop-blur; glow/bloom/distortion are the SAME authoring recipe (a `.frame.toml` of committed `.ckir` fullscreen kernels on the existing RAF frame graph) but not yet authored. Renders a COMPLETE correct composited image on device (Vk+DX12+llvmpipe) — a fuller gate than scene_rt's cleared-output mechanic — but proven ONLY by device test gates: NO sandbox/app consumer, and the composite reads a fixed spec-const rect, not a live UiPanel/canvas (a parked Track-B/I2D-0 concept, ADR-0107). A distinct `UiEffectGraph` asset/compiler was NOT needed for the proof (31b-0 census: ZERO new ops — the frame IS the authored form); whether I2D-7 per-panel binding needs one beyond a frame is OPEN. L4 (cross-backend proven by device gates) paired with `gate-only` status = proven, not consumed — cf. scene_rt at L3/gate-only; the `level` axis is maturity, the `status` token is evidence-source (gate-proven, no live consumer)."
 
 [feature.ui_style_system]
 category = "ui_2d"
 subcategory = "style"
 definition = "Typed CSS-inspired style: selectors + pseudo-states cooked to compact matchers, design tokens, deterministic cascade, transitions."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A"
 dependencies = ["ui_world"]
 ckir_capabilities = []
@@ -780,7 +915,10 @@ limitations = "not started; ⛔ no per-frame string selector matching (cook to m
 category = "ui_2d"
 subcategory = "vector"
 definition = "GPU compute-first vector renderer (paths/stroke/fill/clip/AA) with an intentional CPU/hybrid fallback+export path."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["canvas_compositor"]
 ckir_capabilities = ["compute", "fs"]
@@ -805,7 +943,10 @@ limitations = "not started; CPU path is a real fallback/export path, not just an
 category = "ui_2d"
 subcategory = "editor"
 definition = "The CR-D007 editor shell (main window/dock/viewport-host/outliner/inspector/asset-list/console/perf-overlay/theme/commands/persistence), then the editor grows inside it."
-level = 0
+raf_level = 0
+ceir_level = "n/a"    # T-class: the editor shell is tooling, not a CEIR program
+providers = []
+determinism_tier = ""
 classification = "T"
 dependencies = ["ui_world", "text_layout", "canvas_compositor"]
 ckir_capabilities = []
@@ -830,7 +971,10 @@ limitations = "not started; bootstrapped early (§35), then hosts the remaining 
 category = "scene_2d"
 subcategory = "sprite"
 definition = "Sprite/atlas platform: instancing, sorting layers, pixel-perfect camera, custom sprite materials, hot reload (Scene not UiWorld)."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["canvas_compositor", "rah_resource_table_bindless"]
 ckir_capabilities = ["vs", "fs"]
@@ -854,7 +998,10 @@ limitations = "not started; ⛔ avoid one draw per sprite"
 category = "scene_2d"
 subcategory = "tilemap"
 definition = "Chunked/instanced tilemaps (ortho/iso/hex), autotiling, animated tiles, streaming, large-world coords, editor tools."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["sprite_renderer"]
 ckir_capabilities = ["vs", "fs"]
@@ -878,7 +1025,10 @@ limitations = "not started; ⛔ no entity per static tile"
 category = "scene_2d"
 subcategory = "lighting"
 definition = "2D lighting/shadows renderer assets: unlit→forward→tiled/Forward+ 2D→2.5D height-aware; normal/height maps; polygon/SDF shadows."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["sprite_renderer"]
 ckir_capabilities = ["fs", "compute"]
@@ -904,7 +1054,10 @@ limitations = "not started; every shipped 2D renderer is a normal engine://frame
 category = "canonical_model"
 subcategory = "attachments"
 definition = "RAH-1 general typed attachment model (arbitrary color spans, typed clear union, views, multiview, resolve, shading-rate); G-buffer/visibility become typed attachments not boolean modes."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "B"
 dependencies = []
 ckir_capabilities = []
@@ -928,7 +1081,10 @@ limitations = "not started; today executors use fixed color1..3 role bits (the t
 category = "canonical_model"
 subcategory = "bindings"
 definition = "RAH-2 resident global resource-table bindless (compact stable indices + lifetime/residency) replacing the fixed input0..7/storage0..3 arrays + desc-cap-8."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "B"
 dependencies = []
 ckir_capabilities = []
@@ -954,7 +1110,10 @@ limitations = "not started; today fixed small arrays + desc cap=8 scar"
 category = "ui_2d"
 subcategory = "reflection"
 definition = "crd-reflect — RNA-class property system: crd-units-typed descriptors, path addressing (node.Component.property), flags (animatable/keyable/undoable/transactional), change notification. One system, seven consumers: inspector/bindings/undo/animation/themes/MCP/CommandSchema."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["ui_world"]
 ckir_capabilities = []
@@ -979,7 +1138,10 @@ limitations = "not started; the agent-drivable/inspector/binding/undo foundation
 category = "ui_2d"
 subcategory = "text"
 definition = "crd-font — Cerid's OWN OpenType/TrueType stack (sfnt/cmap/glyf/CFF/CFF2/GSUB/GPOS/GDEF/kern, variable fonts fvar/gvar/avar, COLR/CPAL color fonts). Zero third-party; FreeType = test oracle only. Resolves I2D-0 text-ownership TBD -> own it (codec doctrine)."
-level = 0
+raf_level = 0
+ceir_level = 0
+providers = []
+determinism_tier = ""
 classification = "A+R"
 dependencies = ["text_layout"]
 ckir_capabilities = []
@@ -1000,3 +1162,320 @@ status = "target"
 references = ["OpenType spec", "HarfBuzz (shaping oracle)", "Unicode UAX-9/14/29"]
 limitations = "not started; own shaping (REN-14) is HarfBuzz-class, HarfBuzz as conformance oracle"
 
+
+# ═══════════════════════ CEIR-NATIVE SUBSTRATE FAMILIES (bands 23-32; never RAF assets) ═══════════════════════
+# Added 2026-09-11 (schema=2): the compute/ML/compiler/provider/audio/language families that ride the CEIR spine but
+# were NEVER RAF render assets (⇒ raf_level="n/a"). ✅ 9 of 9 major families added (23c/25/26/27/28/29/30/31/32).
+# RESIDUAL (finer-grained, not yet rowed): ceir.ml/24 full-MLP breadth (noted in tensor_ml_mlp), sparse (23d/e), + the
+# ceir-0g §4 step-4 matrix generator (T-class). All levels rule-driven + cited from the band's OWN gate (⛔ no cross-band
+# proof borrowing — the optimizer's device exercise via CEIR-25c is credited to CEIR-25's row, not the optimizer row).
+# The .ceir/.ckir files are committed PROOF/DEMO assets (prove the dialect on device), not app-consumed engine://
+# programs ⇒ status="gate-only", ceir_level caps at L5 (multi-provider gate-proven, no live consumer) — the ui_effect_graph precedent.
+
+[feature.tensor_ml_mlp]
+category = "compute"
+subcategory = "quantized_ml"
+definition = "Tensor-ML / quantized-MLP family (ceir.quant + ceir.ml). PROVEN SCOPE: the v14-m Q8 quantized-MLP LAYER (i8 weights; dequantize->gemm->relu) composed device-resident, no CPU round-trip. Broader ceir.ml (CEIR-24: attention, full MLP) breadth is NOT yet separately proven/rowed."
+raf_level = "n/a"
+ceir_level = 5    # the Q8 quantized-MLP LAYER device-resident BIT-EXACT vs the float oracle on Vk+D3D12 (23c-c/d); gate-proven, no app-consumed engine:// program
+providers = ["gpu"]
+determinism_tier = "BitExact"    # 23c-c/d: the Q8 MLP LAYER device-resident == float oracle BIT-EXACT (power-of-2 scales) on BOTH backends
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["gemm", "relu", "quantize", "dequantize"]
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["ml/quant provider (dequantize->gemm fusion window)"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ceir/quant_mlp.ceir", "assets/ckir/quant_gemm_q8.ckir"]
+tests_vulkan = ["ceir-gpu test_tensor_pipeline [ceir][tensor-pipeline][gpu][quant]"]
+tests_dx12 = ["ceir-gpu-dx12 test_ceir_pipeline_dx12 (quant)"]
+tests_cross_backend = ["23c-c/d Vk+DX12 device Q8-MLP LAYER == float oracle BIT-EXACT (power-of-2 scales)"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = ["docs/bench/2026-07-14-fused-mlp-cublas-gold.md (fused MLP 2.37x cuBLAS)"]
+fallback = ""
+band = "CEIR-23c (ceir.ml/24 breadth pending)"
+status = "gate-only"
+references = ["hesap v14-m Q8", "docs/bench/2026-07-14-fused-mlp-cublas-gold.md"]
+limitations = "⛔ 23c BOUNDARY: this is the v14-m Q8 quantized-MLP LAYER, NOT a full MLP — ceir.ml (CEIR-24: attention.ceir, full MLP) is a SEPARATE capability, not yet rowed. BitExact is scoped to the Q8 layer (power-of-2 scales); no app-consumed engine:// program."
+
+[feature.ceir_autodiff]
+category = "compiler"
+subcategory = "autodiff"
+definition = "ceir.autodiff — reverse-mode differentiation as a COMPILER TRANSFORM: build_gradient walks a forward CEIR module in reverse and EMITS the backward pass as ordinary ops (the gradient is another program, not a runtime tape)."
+raf_level = "n/a"
+ceir_level = 5    # B-machinery: the PRODUCED gradient program's device crown — whole MLP backward device-resident on Vk+D3D12+llvmpipe == hesap nn_reverse (§139, 25b)
+providers = ["gpu"]    # where the produced gradient program is proven to run
+determinism_tier = ""    # the grad-check gate is tolerance-vs-finite-diff (a CORRECTNESS gate), not a determinism-class gate
+classification = "B"
+dependencies = []
+ckir_capabilities = ["gemm", "transpose", "broadcast", "elementwise", "relu"]
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["VJP registry (vjp_gemm / vjp_reduce / vjp_mlp)"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ckir/relu_vjp.ckir"]
+tests_vulkan = ["tests/ceir-gpu/test_grad.cpp (MLP backward device, Vulkan)"]
+tests_dx12 = ["tests/ceir-gpu/test_grad.cpp (MLP backward device, DX12)"]
+tests_cross_backend = ["25b §139 MLP backward device-resident on Vk + DX12 + llvmpipe == hesap nn_reverse; 25b-4b sum(gemm(A,A)) backward == matmul_vjp + grad_fd tol 1e-4 (docs/sessions/2026-09-04-ceir-25z-band-close.md)"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-25"
+status = "gate-only"
+references = ["reverse-mode AD / backpropagation", "docs/sessions/2026-09-04-ceir-25z-band-close.md"]
+limitations = "AD as a program rewrite (§57); the crown is differentiable COMPUTE (§139), differentiable RENDER is ledgered. Shipped VJP rules: vjp_gemm / vjp_reduce(sum) / vjp_mlp; kernel-symbol registrants none this band. determinism_tier is empty because the gate is a tolerance grad-check (correctness), not a determinism-class gate."
+
+[feature.cuda_graphs_provider]
+category = "provider"
+subcategory = "native_graph"
+definition = "The §70 native-graph partitioner (provider classes, maximal-subgraph greedy-grow, authored pinning + class constraints) + the CUDA-Graphs launch-graph execution provider (instantiate-once / launch-many)."
+raf_level = "n/a"
+ceir_level = 3    # reference/one-provider bit-exact execution on CUDA (2 RTX). The launch-graph is a CPU-SUBMIT-PATH optimization (bench win is CPU submit, NOT GPU time) so it does NOT lift to L4. Single-provider (CUDA) by nature
+providers = ["gpu"]
+determinism_tier = "BitExact"    # launch-graph replays the SAME kernels ⇒ bit-exact vs the CKIR/stream fallback BY CONSTRUCTION; proven on two RTX devices
+classification = "B"
+dependencies = []
+ckir_capabilities = []
+command_families = ["compute.dispatch"]
+executors = ["cuda_graphs launch-graph provider", "CKIR/stream fallback"]
+runtime_systems = ["§70 provider partitioner (ProviderClass, subgraph greedy-grow, authored pin, class constraints)"]
+backend_capabilities = ["cuda", "native_launch_graph"]
+assets = ["assets/ceir/assign_provider_coopvec.ceir", "assets/ceir/constrain_provider_class_gpu.ceir"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = ["CEIR-29: CUDA-Graphs launch-graph bit-exact vs stream fallback on two RTX; the two-class boundary captured on-device"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = ["docs/bench/2026-09-05-ceir29-cuda-graphs-launch.md"]
+fallback = "CKIR/stream dispatch (bit-exact by construction)"
+band = "CEIR-29"
+status = "gate-only"
+references = ["CUDA Graphs", "docs/sessions/2026-09-05-ceir-29z-band-close.md"]
+limitations = "The runnable §70 provider is CUDA Graphs; the semantic-engine graph APIs (D3D Compute Graph Compiler, VK_ARM_data_graph, NPU) are deferred with triggers. ⛔ The CUDA-Graphs bench win is the CPU SUBMIT PATH, not GPU kernel time (both arms run identical kernels in identical order) — hence L3 (reference/one-provider), not L4. Single-provider (CUDA, ProviderClass=Gpu) by nature; no Vk/DX12 backend test (it is CUDA)."
+
+[feature.ceir_dist_sharding]
+category = "compute"
+subcategory = "multi_device"
+definition = "ceir.dist — multi-device sharding: mesh + shard/all_reduce ops, a 9-kind verifier, the Replicated/Sharded/Partial/Conflict propagation lattice, auto-materialized all_reduce; placement is SEMANTIC (transform.place_mesh directive)."
+raf_level = "n/a"
+ceir_level = 5    # multi-provider: the SAME lowered [Reduce,Reduce,Elementwise] plan runs bit-exact all-Host AND [Host,Host,Gpu] on two RTX runners (§140)
+providers = ["host", "gpu"]
+determinism_tier = "BitExact"    # §140: the SAME lowered plan bit-exact all-Host and [Host,Host,Gpu] — only WHERE each stage ran differs
+classification = "A+R"
+dependencies = []
+ckir_capabilities = []
+command_families = ["compute.dispatch"]
+executors = ["host", "cuda"]
+runtime_systems = ["ceir.dist mesh + shard/all_reduce + the transform.place_mesh placement loader; two §24 memory domains (host / device_local) + a real host<->device transfer tax"]
+backend_capabilities = ["host_device_transfer"]
+assets = ["assets/ceir/dist_shard_reduce.ceir", "assets/ceir/place_mesh_host_host_gpu.ceir"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = ["[ceir][ml][gpu][cuda][dist][30c-2b] §140: SAME plan all-Host == [Host,Host,Gpu] BIT-EXACT on two RTX"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = ["docs/bench/2026-09-05-ceir30-sharded-reduction-transfer-cost.md"]
+fallback = ""
+band = "CEIR-30"
+status = "gate-only"
+references = ["docs/sessions/2026-09-05-ceir-30z-band-close.md"]
+limitations = "Proven on the hardware that exists (ONE RTX 4070 Ti SUPER + WSL2 passthrough); two-CUDA-streams as fake multi-device was rejected. The proof: placement is semantic (a free authored choice), not glue. Host+Gpu is genuine multi-provider (⇒ L5)."
+
+[feature.ceir_audio_dsp]
+category = "audio"
+subcategory = "dsp_graph"
+definition = "ceir.audio — the engine/audio render_graph DSP (source / gain / biquad / delay / compressor / mix) routed through CEIR; execute_audio_graph_ceir walks CEIR block/def-use order, no new scheduler."
+raf_level = "n/a"
+ceir_level = 3    # reference/one-provider execution: bit-exact vs the render_graph REFERENCE oracle on host. Host/CPU DSP by nature
+providers = ["host"]
+determinism_tier = "BitExact"    # §142: execute_audio_graph_ceir bit-exact vs render_graph (kept as the differential oracle) — host/CPU DSP, within its single backend
+classification = "A+R"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = ["execute_audio_graph_ceir (host)"]
+runtime_systems = ["engine/audio render_graph (device-free, deterministic, bit-exact CPU DSP; KEPT as the differential oracle + production path)"]
+backend_capabilities = []
+assets = ["assets/ceir/audio_full_chain.ceir", "assets/ceir/audio_mix3.ceir", "assets/ceir/audio_source_gain_biquad_mix.ceir"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = ["[audio][ceir] execute_audio_graph_ceir bit-exact vs render_graph oracle (host; tests/audio/test_ceir_audio_render.cpp)"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-31 (§142)"
+status = "gate-only"
+references = ["docs/sessions/2026-09-06-ceir-31z-band-close.md"]
+limitations = "No new scheduler: render_graph stays as the differential oracle; the ceir.audio bridge is proven bit-exact against it. Single-provider (host) by nature — the L5 second-provider rung is the domain, not a gap. No bench (§142 is correctness, not speed)."
+
+[feature.chir_language]
+category = "language"
+subcategory = "frontend"
+definition = "CHIR — the Cerid High-level IR / language layer (ADR-0108/0109/0128): the §143 event handler authored as CHIR text AND a CR-D007 graph schema, both lowering through the SAME CHIR->CEIR path to a byte-identical CEIR module, surviving a hot reload."
+raf_level = "n/a"
+ceir_level = 2    # IR/verifier landed, PRE-execution: CHIR-0 §143 verifies + round-trips + parity-gates + reload-schema, with NO capture-seeding (32d named self-containment an EXECUTION caveat) ⇒ not execution-proven
+providers = []    # host-only COMPILE-TIME frontend; it lowers to CEIR, it does not itself execute on a provider
+determinism_tier = ""    # a compile-time frontend does not execute (byte-identical lowering is an anti-drift property, not an execution-determinism class)
+classification = "B"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["engine/chir (crd-chir): parser + CHIR->CEIR lowering + the CR-D007 graph-schema projection; host-only, one-way into crd-ceir"]
+backend_capabilities = []
+assets = ["assets/chir/event_handler.chir", "assets/chir/event_handler.chirgraph"]
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = ["[chir] text+graph -> byte-identical CEIR parity + round-trip (host; tests/chir/test_source_model.cpp, test_chir_lower.cpp)"]
+hot_reload_tests = ["chir [chir] 32e: 6 reload cases on the §143 program (CEIR-10a decision table HotSwap/NoChange/Migrate/Reject; source-derived watermark-safe stable-id pin)"]
+editor_support = "schema-only"    # the CR-D007 graph SCHEMA (nodes/typed-pins/edges/layout) is DEFINED; the editor that RENDERS it is CEIR-33/D7E = I2D-9
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-32 (ADR-0128)"
+status = "gate-only"
+references = ["docs/systems/chir.md", "docs/decisions/0128-chir-0-language-binding-decisions.md", "docs/sessions/2026-09-06-ceir-32z-band-close.md"]
+limitations = "CHIR-0 v1 = the §143 five constructs ONLY (event-handler func / ECS query / parallel-for / await / state-update) + diagnostics/spans; generics/traits/ADTs/pattern-semantics/full-ownership/modules/reflection/stdlib are the deferral ledger. Host-only compile-time frontend (no runtime perf surface). The visual EDITOR that renders the schema = CEIR-33/D7E (I2D-9)."
+
+[feature.ceir_optimizer]
+category = "compiler"
+subcategory = "optimizer"
+definition = "ceir optimizer — DCE -> canonicalize/fold -> CSE -> specialize, a greedy RewritePattern driver; semantics-preserving (differential bit-exact: optimized == unoptimized)."
+raf_level = "n/a"
+ceir_level = 2    # B-machinery: pass + verifier/differential-proof landed, DEVICE-FREE (optimized module == unoptimized, module-level bit-exact) — pre-execution
+providers = []    # compile-time transform; its OWN gate compares modules, it does not execute on a provider (its transforms are exercised on device by CONSUMING bands, credited there)
+determinism_tier = ""    # semantics-preserving is a CORRECTNESS property (optimized==unoptimized), not an execution-determinism class
+classification = "B"
+dependencies = []
+ckir_capabilities = []
+command_families = []
+executors = []
+runtime_systems = ["greedy RewritePattern driver (DCE / canonicalize+fold / CSE / specialize)"]
+backend_capabilities = []
+assets = []
+tests_vulkan = []
+tests_dx12 = []
+tests_cross_backend = ["[ceir][dce] (tests/ceir/test_dce.cpp) + [ceir][cse] (tests/ceir/test_cse.cpp) differential bit-exact: optimized module == unoptimized (host, device-free)"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-26"
+status = "gate-only"
+references = ["docs/detours/D-007-ceir-tracker.md (CEIR-26 rows)"]
+limitations = "Proven via DEVICE-FREE differential bit-exact (optimized == unoptimized, semantics-preserving). Its transforms are EXERCISED on device by CONSUMING bands (e.g. CEIR-25c autodiff DCE erasing a dead gemm, MLP backward bit-exact on Vk+DX12+llvmpipe) — that device maturity is credited to CEIR-25's row, ⛔ NOT borrowed here."
+
+[feature.ceir_transform_rewrite]
+category = "compiler"
+subcategory = "strategy_as_asset"
+definition = "ceir.transform + ceir.rewrite — optimization STRATEGY (an execution SCHEDULE + a peephole REWRITE) as an authorable .ceir asset a loader/driver applies, instead of hard-coded C++ (§71/§72/§146)."
+raf_level = "n/a"
+ceir_level = 5    # the §146 SCHEDULE differential is the band's OWN device gate: two authored schedules -> different plan shape -> BIT-EXACT device output on Vk+DX12+llvmpipe
+providers = ["gpu"]
+determinism_tier = "BitExact"    # §146: two schedules (fuse vs no-fuse) -> BIT-EXACT device output on Vulkan+DX12+llvmpipe (two schedules, one semantics)
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["gemm", "relu"]
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["plan_options_from_transform loader (schedule); greedy_rewrite_rules driver (peephole)"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ceir/schedule_fuse.ceir", "assets/ceir/schedule_nofuse.ceir", "assets/ceir/rule_identity_reshape.ceir", "assets/ceir/rule_reshape_of_reshape.ceir"]
+tests_vulkan = ["ceir-gpu [ceir][ml][gpu][transform] §146 two-schedule differential (Vulkan)"]
+tests_dx12 = ["ceir-gpu-dx12 §146 two-schedule differential (DX12)"]
+tests_cross_backend = ["§146: schedule_fuse vs schedule_nofuse -> different plan shape -> BIT-EXACT device output on Vk+DX12+llvmpipe; §72 [ceir][rewrite] plugin rule == canonicalize fold WITHOUT editing kCanonPatterns"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-27"
+status = "gate-only"
+references = ["docs/sessions/2026-09-05-ceir-27z-band-close.md"]
+limitations = "Optimization strategy is an authorable asset (schedule + rewrite); the plan seam is test-only (flags read at 3 in-seam sites, no signature change). Proofs: §146 two-schedule differential + §72 plugin-rule."
+
+[feature.ceir_autotune]
+category = "compiler"
+subcategory = "autotune"
+definition = "ceir autotune — the §80 SELECTION POLICY over ceir.transform's mechanism: autotune + a target-specific config CACHE (a .ceir asset) + a deterministic LOCKED mode (enumerate -> cost-rank -> measure -> oracle-gate -> checked-in DB -> replay; tune offline, replay forever)."
+raf_level = "n/a"
+ceir_level = 5    # the §80 selection policy proven PORTABLE on Vk+DX12+lavapipe (the band's OWN device gate) + an authorable .ceir config-cache asset + deterministic locked mode
+providers = ["gpu"]
+determinism_tier = ""    # deterministic LOCKED mode = reproducible replay on a target, but the tuned WINNER is per-device (collapses to a plan-equivalence class) — not a single clean DeterminismClass; program_hash/plan_sig are identical across backends
+classification = "A+R"
+dependencies = []
+ckir_capabilities = []
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["autotune loop (enumerate/cost-rank/measure/oracle-gate/DB/replay); plan_tensor_pipeline_cached + TunePolicy{Fallback,Locked}"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ceir/tune_cache.ceir"]
+tests_vulkan = ["ceir-gpu [ceir][ml][gpu][tune] + gpu-context [gpu-context][vulkan][gpu][autotune]"]
+tests_dx12 = ["ceir-gpu-dx12 test_ceir_pipeline_dx12 (tune)"]
+tests_cross_backend = ["§80 selection policy PORTABLE on Vk + DX12 + lavapipe; program_hash + plan_sig identical across backends (MLP payload); [kir][cuda][gpu][autotune] CUDA leg"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = ["docs/bench/2026-09-05-ceir28-autotune-medians.md"]
+fallback = ""
+band = "CEIR-28"
+status = "gate-only"
+references = ["docs/sessions/2026-09-05-ceir-28z-band-close.md"]
+limitations = "Selection policy over CEIR-27's mechanism (§80/§81/§82). Deterministic locked mode = replay-forever; the tuned winner is per-device (a plan-equivalence class), so determinism_tier is empty (not a single class). program_hash = fnv1a-64 of the canonical post-expansion print."
+
+[feature.ceir_sparse]
+category = "compute"
+subcategory = "sparse"
+definition = "ceir.sparse -- CSR sparse matrix-vector multiply: sparse.spmv(row_ptr, col_idx, values, x) with y[i] = sum over row i's nonzeros of values[k]*x[col_idx[k]]. Explicit-triple operands (first-class in vocab+verifier, NOT opaque buffers)."
+raf_level = "n/a"
+ceir_level = 5    # CSR SpMV proven CROSS-VENDOR: Vk + D3D12 device gates (23e-b) + device-free eval == CPU CSR SpMV oracle (23e-a). gate-proven, no app-consumed engine:// program
+providers = ["gpu"]
+determinism_tier = ""    # the device SpMV is fp (fma-divergent across Vk/DX12); the EXACT check is the device-free eval oracle (23e-a), not a cross-backend bit-exact gate
+classification = "A+R"
+dependencies = []
+ckir_capabilities = ["spmv"]
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["ceir.sparse.spmv provider (segmented-sum CSR kernel shape)"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ckir/spmv_csr.ckir"]
+tests_vulkan = ["tests/ceir-gpu-vulkan/test_ceir_sparse_vulkan.cpp [ceir][ckir][sparse][gpu] (CSR SpMV, Vulkan)"]
+tests_dx12 = ["tests/ceir-gpu-dx12/test_ceir_sparse_dx12.cpp (CSR SpMV, DX12)"]
+tests_cross_backend = ["23e-b CSR SpMV Vk + DX12 device gates (dispatch_kernel_1wg, u32 row_ptr/col_idx); 23e-a device-free eval == CPU CSR SpMV oracle"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = []
+fallback = ""
+band = "CEIR-23e"
+status = "gate-only"
+references = ["docs/detours/D-007-ceir-tracker.md (CEIR-23e rows)"]
+limitations = "CSR only (CSC/COO/block-sparse are verifier name-forwards). The device SpMV gate is fp vs oracle; the bit-exact check is the device-free eval (23e-a). Sibling 23/24 dialects: ceir.quant (tensor_ml_mlp), ceir.ml."
+
+[feature.ceir_ml]
+category = "compute"
+subcategory = "tensor_ml"
+definition = "ceir.ml -- the full MLP + attention (SDPA) path (expand_ml): device-resident ml.mlp + scaled-dot-product attention lowering to the compute vocab, beyond the 23c Q8 quantized LAYER."
+raf_level = "n/a"
+ceir_level = 5    # ml.mlp + generic attention DEVICE gate Vk+D3D12 == float/SDPA oracle (band24 + the 26d device re-green); gate-proven, no app-consumed engine:// program
+providers = ["gpu"]
+determinism_tier = ""    # device == oracle at TOLERANCE: attention/MLP fp is fma-divergent across Vk/DX12 (a contraction difference, NOT nondeterminism); no bit-exact-across-backend gate (CUDA fmad=false is correctly-rounded, a per-backend property)
+classification = "A+R"
+dependencies = ["tensor_ml_mlp"]
+ckir_capabilities = ["gemm", "softmax", "relu"]
+command_families = ["compute.dispatch"]
+executors = ["compute.dispatch"]
+runtime_systems = ["expand_ml (ml.mlp / attention lowering); LocalSizeExceedsLimit resolver reject (device-known-at-cook)"]
+backend_capabilities = ["compute", "storage_buffer"]
+assets = ["assets/ceir/attention.ceir"]
+tests_vulkan = ["tests/ceir-gpu/test_band24_gate.cpp + tests/ceir-gpu/test_expand_ml.cpp (ml.mlp/attention == oracle, Vulkan)"]
+tests_dx12 = ["tests/ceir-gpu-dx12/test_ceir_pipeline_dx12.cpp (ml.mlp/attention == oracle, DX12)"]
+tests_cross_backend = ["26d-2c non-32-width ml.mlp Vk+DX12 == float oracle; 26d-3c generic attention (Sq=3,Sk=5,D=4) Vk+DX12 == SDPA oracle (tolerance); [kir][cuda][gpu][attention] CUDA leg"]
+hot_reload_tests = []
+editor_support = "none"
+quality_perf_gates = ["docs/bench/2026-07-14-fused-mlp-cublas-gold.md"]
+fallback = ""
+band = "CEIR-24 (+ 26d device re-green)"
+status = "gate-only"
+references = ["Vaswani et al. attention/SDPA", "docs/bench/2026-07-14-fused-mlp-cublas-gold.md"]
+limitations = "Device == oracle at TOLERANCE (attention/MLP fp is fma-divergent across Vk/DX12, hence determinism_tier=\"\"; the 23c Q8 LAYER is bit-exact only for power-of-2 scales). No app-consumed engine:// program."

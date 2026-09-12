@@ -1,5 +1,8 @@
 # 2026-07-18 — B16 close-out: the full-sweep onion + a gold-standard units typing of the CKIR configs (D-007)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Detour D-007 (GPU program system / CKIR). This session's job was narrow on paper — **close B16 properly (no debts,
 no problems)**: tidy the touched files + run the per-slice sweep on the displaced-ocean + mesh work from 2026-07-15/16.
 Running the FULL sweep for the first time on the accumulated (uncommitted) B14/B15/B16 tree **peeled a large tidy onion**

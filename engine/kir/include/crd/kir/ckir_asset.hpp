@@ -478,7 +478,8 @@ struct CkirReadResult
     crd::containers::Array<crd::u32> sbegin(al);
     crd::containers::Array<KStmt>    stmts(al);
     KEntry                           en;
-    int                              nin = 0;
+    int                              nin        = 0;
+    bool                             stage_seen = false; // CEIR-35b: [[entry]] stage is written unconditionally (kStageNames[stage]); require it
 
     // read a `[[out]]` into en.out[n_out_seen].
     int n_out_seen = 0;
@@ -515,7 +516,12 @@ struct CkirReadResult
             if (!t.header(hb, he)) { break; }
             if (t.word_is(hb, he, "node"))
             {
-                KNode n;
+                // value-init: KNode.op has NO default member initializer (ckir.hpp:846), so a bare `[[node]]` (e.g. a
+                // truncated file) would otherwise leave `op` INDETERMINATE and ckir_write's `kKOpNames[op]` (ckir_asset.hpp:358)
+                // would index OOB -> crash (the CEIR-35b mutation-fuzz finding). `{}` + the `op_seen` require REJECT a node
+                // with no `op =` key instead of accepting-then-crashing (a corrupt asset is REPORTED, never dereferenced).
+                KNode n{};
+                bool  op_seen = false;
                 n.a = n.b = n.c = n.d = -1;
                 while (t.ok && !t.eof() && !t.at('['))
                 {
@@ -523,7 +529,7 @@ struct CkirReadResult
                     if (!t.word(b, en2)) { break; }
                     t.lit('=');
                     if (t.word_is(b, en2, "id")) { crd::usize sb = 0; crd::usize se = 0; (void)t.str_val(sb, se); } // canonical "n<index>" == pool order; ignored (order authoritative)
-                    else if (t.word_is(b, en2, "op")) { n.op = static_cast<KOp>(t.enum_val(td::kKOpNames, td::kKOpCount, "bad op")); }
+                    else if (t.word_is(b, en2, "op")) { n.op = static_cast<KOp>(t.enum_val(td::kKOpNames, td::kKOpCount, "bad op")); op_seen = true; }
                     else if (t.word_is(b, en2, "dtype")) { n.type.scalar = static_cast<DType>(t.enum_val(td::kDTypeNames, static_cast<int>(DType::U32) + 1, "bad dtype")); }
                     else if (t.word_is(b, en2, "tkind")) { n.type.kind = static_cast<TKind>(t.enum_val(td::kTKindNames, static_cast<int>(TKind::Sampler) + 1, "bad tkind")); }
                     else if (t.word_is(b, en2, "trows")) { n.type.rows = static_cast<crd::u8>(t.int_val()); }
@@ -565,18 +571,20 @@ struct CkirReadResult
                     else if (t.word_is(b, en2, "dset")) { n.dset = static_cast<crd::u8>(t.int_val()); }
                     else { t.pos = b; t.fail("unknown node key"); }
                 }
+                if (t.ok && !op_seen) { t.fail("node: missing op"); } // CEIR-35b: an op-less node has an indeterminate op
                 if (t.ok) { nodes.push_back(n); }
             }
             else if (t.word_is(hb, he, "sfield")) { KType ty; read_type_block(ty); if (t.ok) { sfields.push_back(ty); } }
             else if (t.word_is(hb, he, "stmt"))
             {
                 KStmt st;
+                bool  kind_seen = false; // CEIR-35b: the stmt writer emits `kind` unconditionally (kKStmtNames[kind]); require it
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
                     if (!t.word(b, en2)) { break; }
                     t.lit('=');
-                    if (t.word_is(b, en2, "kind")) { st.kind = static_cast<KStmtKind>(t.enum_val(td::kKStmtNames, td::kKStmtCount, "bad kind")); }
+                    if (t.word_is(b, en2, "kind")) { st.kind = static_cast<KStmtKind>(t.enum_val(td::kKStmtNames, td::kKStmtCount, "bad kind")); kind_seen = true; }
                     else if (t.word_is(b, en2, "target")) { st.target = t.noderef(); }
                     else if (t.word_is(b, en2, "index")) { st.index = t.noderef(); }
                     else if (t.word_is(b, en2, "value")) { st.value = t.noderef(); }
@@ -587,6 +595,7 @@ struct CkirReadResult
                     else if (t.word_is(b, en2, "n_ext")) { st.n_ext = static_cast<crd::u16>(t.int_val()); }
                     else { t.pos = b; t.fail("unknown stmt key"); }
                 }
+                if (t.ok && !kind_seen) { t.fail("stmt: missing kind"); } // CEIR-35b: reject a kind-less stmt
                 if (t.ok) { stmts.push_back(st); }
             }
             else if (t.word_is(hb, he, "entry"))
@@ -596,7 +605,7 @@ struct CkirReadResult
                     crd::usize b = 0; crd::usize en2 = 0;
                     if (!t.word(b, en2)) { break; }
                     t.lit('=');
-                    if (t.word_is(b, en2, "stage")) { en.stage = static_cast<KStage>(t.enum_val(td::kStageNames, kStageCount, "bad stage")); }
+                    if (t.word_is(b, en2, "stage")) { en.stage = static_cast<KStage>(t.enum_val(td::kStageNames, kStageCount, "bad stage")); stage_seen = true; }
                     else if (t.word_is(b, en2, "inputs")) { nin = static_cast<int>(t.int_val()); }
                     else if (t.word_is(b, en2, "position")) { en.position = static_cast<int>(t.int_val()); }
                     else if (t.word_is(b, en2, "frag_depth")) { en.frag_depth = static_cast<int>(t.int_val()); }
@@ -678,6 +687,58 @@ struct CkirReadResult
     if (!t.ok) { return CkirReadResult{false, t.err, t.msg}; }
     // ⛔ a real CKIR program has value nodes; empty / non-`.ckir` input (0 nodes) is REPORTED, never a silent empty graph.
     if (nodes.size() == 0) { return CkirReadResult{false, 0, "not a CKIR program (no nodes)"}; }
+    if (!stage_seen) { return CkirReadResult{false, 0, "not a CKIR program (no [[entry]] stage)"}; }
+
+    // ── CEIR-35b: post-parse STRUCTURAL BOUNDS validation (the mutation-fuzz finding). Every node/stmt/ext/struct index was
+    // stored RAW; a corrupt or hostile .ckir can carry an out-of-range ref that a downstream consumer (serialize_graph, an
+    // emitter, eval, or the re-serialize round-trip) would then dereference OOB -> crash. A malformed asset must be REPORTED
+    // (ok=false), never accepted-then-crashed (a §PR-7 PQP-2 robustness gap). BOUNDS ONLY (>= -1 && < size), validated against
+    // FINAL sizes -- the order-authoritative format permits forward refs, and topological/cycle checks are a separate class.
+    {
+        const crd::i64 n_nodes   = static_cast<crd::i64>(nodes.size());
+        const crd::i64 n_stmts   = static_cast<crd::i64>(stmts.size());
+        const crd::i64 n_extpool = static_cast<crd::i64>(ext.size());
+        const crd::i64 n_sflds   = static_cast<crd::i64>(sfields.size());
+        const crd::i64 n_structs = static_cast<crd::i64>(sbegin.size());
+        const auto     nref_ok   = [&](crd::i64 r) noexcept { return r >= -1 && r < n_nodes; };   // node ref: -1 = none/gap
+        const auto     sid_ok    = [&](crd::i64 r) noexcept { return r >= -1 && r < n_structs; }; // struct id into the sbegin registry
+        const auto     extwin_ok = [&](crd::i32 off, crd::u32 cnt) noexcept {                     // a [off, off+cnt) ext window
+            return off == -1 ? true : (off >= 0 && static_cast<crd::i64>(off) + static_cast<crd::i64>(cnt) <= n_extpool);
+        };
+        const auto bodywin_ok = [&](crd::i32 begin, crd::i32 cnt) noexcept {                      // a [begin, begin+cnt) stmt range
+            return begin == -1 ? true : (begin >= 0 && cnt >= 0 && static_cast<crd::i64>(begin) + static_cast<crd::i64>(cnt) <= n_stmts);
+        };
+        for (crd::usize i = 0; i < nodes.size(); ++i)
+        {
+            const KNode& n = nodes[i];
+            if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d)) { return CkirReadResult{false, 0, "node operand ref out of range"}; }
+            if (!extwin_ok(n.ext, n.n_ext)) { return CkirReadResult{false, 0, "node ext-operand window out of range"}; }
+            if (!sid_ok(n.type.struct_id)) { return CkirReadResult{false, 0, "node struct id out of range"}; }
+        }
+        // ext-pool entries are themselves node refs (the variadic operands of aggregate nodes AND of RT/atomic stmts).
+        for (crd::usize i = 0; i < ext.size(); ++i) { if (!nref_ok(ext[i])) { return CkirReadResult{false, 0, "ext-pool operand ref out of range"}; } }
+        // a struct field's type may itself reference a struct; sbegin[] values are offsets into the sfields pool.
+        for (crd::usize i = 0; i < sfields.size(); ++i) { if (!sid_ok(sfields[i].struct_id)) { return CkirReadResult{false, 0, "sfield struct id out of range"}; } }
+        for (crd::usize i = 0; i < sbegin.size(); ++i) { if (static_cast<crd::i64>(sbegin[i]) > n_sflds) { return CkirReadResult{false, 0, "struct field offset out of range"}; } }
+        for (crd::usize i = 0; i < stmts.size(); ++i)
+        {
+            const KStmt& st = stmts[i];
+            if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result)) { return CkirReadResult{false, 0, "stmt operand ref out of range"}; }
+            if (!bodywin_ok(st.body_begin, st.body_count)) { return CkirReadResult{false, 0, "stmt body range out of range"}; }
+            if (!extwin_ok(st.ext, st.n_ext)) { return CkirReadResult{false, 0, "stmt ext-operand window out of range"}; }
+        }
+        // the entry: every node ref, the kernel-body stmt range, and the stage-output refs.
+        if (!nref_ok(en.position) || !nref_ok(en.frag_depth) || !nref_ok(en.discard_cond) || !nref_ok(en.shading_rate)
+            || !nref_ok(en.storage_write_index) || !nref_ok(en.storage_write_value) || !nref_ok(en.mesh_prim)
+            || !nref_ok(en.task_emit) || !nref_ok(en.tess_inner) || !nref_ok(en.tess_outer))
+        {
+            return CkirReadResult{false, 0, "entry node ref out of range"};
+        }
+        for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (!nref_ok(en.task_payload[k])) { return CkirReadResult{false, 0, "entry task_payload ref out of range"}; } }
+        if (!bodywin_ok(en.kernel_body_begin, en.kernel_body_count)) { return CkirReadResult{false, 0, "entry kernel body range out of range"}; }
+        if (en.n_out < 0 || en.n_out > kMaxStageOutputs) { return CkirReadResult{false, 0, "entry n_out out of range"}; }
+        for (int k = 0; k < n_out_seen; ++k) { if (!nref_ok(en.out[k].node)) { return CkirReadResult{false, 0, "stage output node ref out of range"}; } }
+    }
 
     e = en;
     g.serial_restore(nodes.data(), nodes.size(), ext.data(), ext.size(), sfields.data(), sfields.size(),

@@ -1,5 +1,8 @@
 # 2026-07-04 — v10 FFT: the VTune-guided ip4-AoS engine, built → crushed forward → PROMOTED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The full round-by-round record (19 rounds, every mechanism + refutation) lives in
 > **`docs/research/fft-stockham-v2.md`**; boards in
 > **`docs/bench/2026-07-03-v10-fft-remeasure-and-midband.md`** (2026-07-04 sections).

@@ -1,5 +1,8 @@
 # Research — 2026-05-27 — Streaming allocators (virtual-memory substrate)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — Phase 2.2 S1–S8 closed 2026-05-28 (ADR-0085); the allocator parity later re-shipped on gpu-context (RET-4). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Long-form substrate dossier for **Phase 2.2 (ADR-0085)** — the virtual-memory +

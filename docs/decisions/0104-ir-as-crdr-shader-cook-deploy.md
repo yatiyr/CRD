@@ -1,5 +1,8 @@
 # ADR-0104 — IR-as-`crdr`: the shader cook & deploy pipeline (D1–D5)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted — **D1–D12 ALL LANDED 2026-07-22.** CKIR is a full shipping pipeline (IR-as-crdr → cook → variants →
 zero-compile load + persistent pipeline cache → hot-reload → joint VS+FS specialize (D6) → full raster reflection (D7) →
 multi-variant container (D8) → neural-material completeness (D9) → parallel cook on `crd-jobs` fibers (D10) → async pipeline

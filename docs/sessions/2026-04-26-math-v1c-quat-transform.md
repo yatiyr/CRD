@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — crd-math v1c quaternions + transform
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Finish the next spatial-math slice on top of vectors and matrices:

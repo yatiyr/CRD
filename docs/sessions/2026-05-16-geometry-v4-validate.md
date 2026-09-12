@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v4-validate: formal mesh validation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Renewed-scope addition to Phase 3.1.7 v4 `-mesh` cluster (ADR-0076 §15
 > review 2026-05-13). Surfaces every structural defect that breaks
 > downstream queries / cookers / FEA prep — so the cooker / editor / runtime

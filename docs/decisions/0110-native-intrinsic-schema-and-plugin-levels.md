@@ -1,5 +1,8 @@
 # ADR-0110 — Native-intrinsic schema, the legitimacy rule, and the three plugin-extension levels
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-07, user-approved at the CEIR-0d gate) — the D-007 **CEIR band**. Builds on
 ADR-0108 (owned language stack) + ADR-0109 (layer contract + `crd-ceir` placement). Answers the open question
 `docs/design/ceir-0a-execution-path-inventory.md` §10 raised: do the atomic capabilities the inventory found

@@ -1,5 +1,8 @@
 # ADR-0061 — Async GPU upload contract: `UploadHandle` + per-module polling system
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-05-09)
 **Tags:** arch, renderer, rhi, scene, resources, async
 **Related ADRs:** ADR-0008 (Graphics architecture), ADR-0009 (RHI v1a scaffold), ADR-0014 (Reference counting split), ADR-0022 (Open-world streaming pipeline), ADR-0039 (`ResourceHandle<T>` semantics), ADR-0042 (Texture cooked format + GPU upload strategy), ADR-0043 (MeshResource vertex layout), ADR-0053 (Scene/ECS L5: Component index slot framework — `AsyncAwareIndex`)

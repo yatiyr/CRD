@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — crd-containers v1c + v1d (final)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Close out `crd-containers` v1 in a single session:

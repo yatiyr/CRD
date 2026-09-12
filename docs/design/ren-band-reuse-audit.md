@@ -1,5 +1,8 @@
 # REN band — the REUSE AUDIT (all 35 rows)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status**: pass 1, 2026-07-25. User-directed: *"fully audit REN-3 and other REN band slices before we start,
 look at all of them, make deep researches, go find what we have done in our engine and make those slices
 better."*

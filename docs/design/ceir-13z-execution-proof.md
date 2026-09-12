@@ -1,5 +1,8 @@
 # CEIR-13z — the §129 execution proof (design note, stage 1)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** CEIR-13z (D-007 master spine, band-13 CLOSE) · **Status:** ◧ DESIGN-LOCKED (advisor-consulted 2026-08-10;
 implementation starts 13z-1 next tick — the 11a/11b stage-1 precedent) · **ADR:** 0126 (at 13z-1).
 

@@ -1,4 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1i-b: shapecast (closed-form TOI) +
+
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 # `bvh_shapecast_sphere` / `bvh_shapecast_box` + Bvh4 variants
 
 ## Goal

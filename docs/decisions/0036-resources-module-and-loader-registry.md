@@ -11,6 +11,9 @@ tags: [resources, arch]
 
 # ADR-0036 — `crd-resources` module placement + loader-registry pattern
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 Phase 2.6 introduces `crd-resources`: the central runtime registry that holds every loaded asset

@@ -1,5 +1,8 @@
 # 2026-05-31 — hesap v5a-7: within-front parallelism, sub-slice 1 (cmod row-slab)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 This session opened by **closing the hand-tuned-asm investigation (ADR-0088) as REVERTED** — the

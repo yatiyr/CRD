@@ -53,6 +53,61 @@ namespace
     const AttrValue a = ctx.attr_value(op.attr(name));
     return a.kind == AttrKind::Bool && a.b;
 }
+// Read a Tensor's shape type into a CKIR Shape: rank in [1, kMaxRank(8)], all-static. Returns None / RankUnsupported /
+// ShapeNotStatic (the shared shape read for the 25b element-op synths — synth_reduce inlines it; these three reuse it).
+[[nodiscard]] SynthReject read_static_shape(const Context& ctx, TypeId shape_ty, kir::Shape& out) noexcept
+{
+    const Type  st   = ctx.type_of(shape_ty);
+    const usize rank = st.members.size();
+    if (rank == 0U || rank > static_cast<usize>(kir::kMaxRank)) { return SynthReject::RankUnsupported; }
+    out.rank = static_cast<int>(rank);
+    for (usize i = 0; i < rank; ++i)
+    {
+        crd::i64 e = 0;
+        if (!static_extent(ctx, st.members[i], e)) { return SynthReject::ShapeNotStatic; }
+        out.dims[i] = e;
+    }
+    return SynthReject::None;
+}
+// Parse a comma-separated non-negative int list into `out` (<= max entries); false on a malformed/empty token or overflow of max.
+// ⛔ standalone copy of tensor.cpp's dialect-private parse_int_list — the synth is standalone-robust (does not re-enter the dialect).
+[[nodiscard]] bool parse_int_list(containers::StringView s, crd::i64* out, crd::u32 max, crd::u32& count) noexcept
+{
+    count = 0U;
+    if (s.size() == 0U) { return true; }
+    usize start = 0U;
+    for (usize i = 0; i <= s.size(); ++i)
+    {
+        if (i == s.size() || s[i] == ',')
+        {
+            crd::i64 v   = 0;
+            bool     any = false;
+            for (usize j = start; j < i; ++j)
+            {
+                if (s[j] < '0' || s[j] > '9') { return false; }
+                v   = v * 10 + static_cast<crd::i64>(s[j] - '0');
+                any = true;
+            }
+            if (!any || count >= max) { return false; }
+            out[count++] = v;
+            start = i + 1U;
+        }
+    }
+    return true;
+}
+// Is `perm` (a parsed int list of `count` entries) a TRUE permutation of [0, rank)? (standalone copy of the dialect's check.)
+[[nodiscard]] bool is_permutation(const crd::i64* perm, crd::u32 count, usize rank) noexcept
+{
+    if (count != rank || rank > static_cast<usize>(kir::kMaxRank)) { return false; }
+    bool seen[kir::kMaxRank] = {};
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        if (perm[i] < 0 || perm[i] >= static_cast<crd::i64>(rank)) { return false; }
+        if (seen[perm[i]]) { return false; } // duplicate
+        seen[perm[i]] = true;
+    }
+    return true;
+}
 } // namespace
 
 containers::StringView synth_reject_name(SynthReject r) noexcept
@@ -71,11 +126,15 @@ containers::StringView synth_reject_name(SynthReject r) noexcept
     case SynthReject::FftRankUnsupported: return containers::StringView("fft-rank-unsupported");
     case SynthReject::FftLengthNotPow2: return containers::StringView("fft-length-not-pow2");
     case SynthReject::FftDirectionUnknown: return containers::StringView("fft-direction-unknown");
+    case SynthReject::TransposePermInvalid: return containers::StringView("transpose-perm-invalid");
+    case SynthReject::BroadcastShapeUnsupported: return containers::StringView("broadcast-shape-unsupported");
+    case SynthReject::ElementwiseFnUnsupported: return containers::StringView("elementwise-fn-unsupported");
+    case SynthReject::ElementwiseShapeMismatch: return containers::StringView("elementwise-shape-mismatch");
     }
     return containers::StringView("?");
 }
 
-GraphSynth synth_gemm(const Context& ctx, const Operation& op, kir::KGraph& g)
+GraphSynth synth_gemm(const Context& ctx, const Operation& op, kir::KGraph& g, GemmEpilogue epilogue)
 {
     // op-name DIALECT-QUALIFIED (the work.consume scar) + arity (the provider is standalone-robust; a malformed under-arity op
     // is out of contract — find_linalg_misuse / the generated verify_gemm reject it before the provider runs).
@@ -128,6 +187,14 @@ GraphSynth synth_gemm(const Context& ctx, const Operation& op, kir::KGraph& g)
     const int a = g.input(kir::make_shape({m, ka}), kir::DType::F32);
     const int b = g.input(kir::make_shape({ka, n}), kir::DType::F32);
     const int c = g.contract(a, b); // DetTier::Exact (default)
+    if (epilogue == GemmEpilogue::Relu)
+    {
+        // ⭐ CEIR-26e: fuse relu into the store as max(contract, 0). `c` (the contract) is UNCHANGED — same K-loop — so the
+        //    result is bit-exact vs the unfused gemm→relu.ckir chain; the contract emitters UNWRAP this Max(Contract, 0) root.
+        //    The zero is a [M,N] uniform-fill Const (eval_cpu fills it; the emitter never reads it, it just applies max(acc,0)).
+        const int z = g.constant(0.0, kir::make_shape({m, n}), kir::DType::F32);
+        return {SynthReject::None, g.binary(kir::KOp::Max, c, z)};
+    }
     return {SynthReject::None, c};
 }
 
@@ -201,5 +268,122 @@ FftSynth synth_fft(const Context& ctx, const Operation& op, kir::KGraph& g)
     out.n      = static_cast<int>(n);
     out.reject = SynthReject::None;
     return out;
+}
+
+GraphSynth synth_transpose(const Context& ctx, const Operation& op, kir::KGraph& g)
+{
+    if (ctx.op_name(op.kind()) != containers::StringView("tensor.transpose")) { return {SynthReject::OpNotSupported, -1}; }
+    if (op.num_operands() < 1U || op.num_results() < 1U) { return {SynthReject::OpNotSupported, -1}; }
+    const Value* const vin  = op.operand(0U);
+    const Value* const vout = op.result(0U);
+    if (!is_tensor(ctx, vin) || vout == nullptr || ctx.type_of(vout->type()).kind != TypeKind::Tensor)
+    {
+        return {SynthReject::OperandNotTensor, -1};
+    }
+    if (!is_f32(ctx, tensor_elem(ctx, vin->type())) || !is_f32(ctx, tensor_elem(ctx, vout->type())))
+    {
+        return {SynthReject::ElementNotF32, -1};
+    }
+    kir::Shape        src;
+    const SynthReject rs = read_static_shape(ctx, tensor_shape(ctx, vin->type()), src);
+    if (rs != SynthReject::None) { return {rs, -1}; }
+
+    // perm: a comma-separated int list, a true permutation of [0, rank) (else TransposePermInvalid).
+    const AttrValue pv = ctx.attr_value(op.attr(containers::StringView("perm")));
+    crd::i64        perm[kir::kMaxRank];
+    crd::u32        pc = 0U;
+    if (pv.kind != AttrKind::String || !parse_int_list(pv.s, perm, static_cast<crd::u32>(kir::kMaxRank), pc)
+        || !is_permutation(perm, pc, static_cast<usize>(src.rank)))
+    {
+        return {SynthReject::TransposePermInvalid, -1};
+    }
+    crd::u8 p8[kir::kMaxRank];
+    for (crd::u32 i = 0; i < pc; ++i) { p8[i] = static_cast<crd::u8>(perm[i]); }
+
+    const int in  = g.input(src, kir::DType::F32); // iidx 0
+    const int out = g.permute(in, p8);             // KOp::Permute (eval_cpu ckir_eval.hpp:207)
+    return {SynthReject::None, out};
+}
+
+GraphSynth synth_broadcast(const Context& ctx, const Operation& op, kir::KGraph& g)
+{
+    if (ctx.op_name(op.kind()) != containers::StringView("tensor.broadcast")) { return {SynthReject::OpNotSupported, -1}; }
+    if (op.num_operands() < 1U || op.num_results() < 1U) { return {SynthReject::OpNotSupported, -1}; }
+    const Value* const vin  = op.operand(0U);
+    const Value* const vout = op.result(0U);
+    if (!is_tensor(ctx, vin) || vout == nullptr || ctx.type_of(vout->type()).kind != TypeKind::Tensor)
+    {
+        return {SynthReject::OperandNotTensor, -1};
+    }
+    if (!is_f32(ctx, tensor_elem(ctx, vin->type())) || !is_f32(ctx, tensor_elem(ctx, vout->type())))
+    {
+        return {SynthReject::ElementNotF32, -1};
+    }
+    kir::Shape        src;
+    kir::Shape        dst;
+    const SynthReject r0 = read_static_shape(ctx, tensor_shape(ctx, vin->type()), src);
+    if (r0 != SynthReject::None) { return {r0, -1}; }
+    const SynthReject r1 = read_static_shape(ctx, tensor_shape(ctx, vout->type()), dst);
+    if (r1 != SynthReject::None) { return {r1, -1}; }
+
+    // ⛔ SAME-RANK envelope: CKIR g.broadcast is same-rank left-indexed (ckir_eval.hpp:217); each source dim 1-or-equal to dst.
+    if (src.rank != dst.rank) { return {SynthReject::BroadcastShapeUnsupported, -1}; }
+    for (int i = 0; i < src.rank; ++i)
+    {
+        if (src.dims[i] != 1 && src.dims[i] != dst.dims[i]) { return {SynthReject::BroadcastShapeUnsupported, -1}; }
+    }
+
+    const int in  = g.input(src, kir::DType::F32); // iidx 0
+    const int out = g.broadcast(in, dst);          // KOp::Broadcast (eval_cpu ckir_eval.hpp:213)
+    return {SynthReject::None, out};
+}
+
+GraphSynth synth_elementwise(const Context& ctx, const Operation& op, kir::KGraph& g)
+{
+    if (ctx.op_name(op.kind()) != containers::StringView("tensor.elementwise")) { return {SynthReject::OpNotSupported, -1}; }
+    if (op.num_operands() < 2U || op.num_results() < 1U) { return {SynthReject::OpNotSupported, -1}; }
+    const Value* const va = op.operand(0U);
+    const Value* const vb = op.operand(1U);
+    const Value* const vd = op.result(0U);
+    if (!is_tensor(ctx, va) || !is_tensor(ctx, vb) || vd == nullptr || ctx.type_of(vd->type()).kind != TypeKind::Tensor)
+    {
+        return {SynthReject::OperandNotTensor, -1};
+    }
+    if (!is_f32(ctx, tensor_elem(ctx, va->type())) || !is_f32(ctx, tensor_elem(ctx, vb->type()))
+        || !is_f32(ctx, tensor_elem(ctx, vd->type())))
+    {
+        return {SynthReject::ElementNotF32, -1};
+    }
+
+    // ⛔ fn ENVELOPE: the FULL binary vocab {add,sub,mul,div,max,min,pow} → KOp (else ElementwiseFnUnsupported — defensive; fn_in gates it).
+    const AttrValue fn  = ctx.attr_value(op.attr(containers::StringView("fn")));
+    kir::KOp        kop = kir::KOp::Add;
+    if (fn.kind != AttrKind::String) { return {SynthReject::ElementwiseFnUnsupported, -1}; }
+    if (fn.s == containers::StringView("add")) { kop = kir::KOp::Add; }
+    else if (fn.s == containers::StringView("sub")) { kop = kir::KOp::Sub; }
+    else if (fn.s == containers::StringView("mul")) { kop = kir::KOp::Mul; }
+    else if (fn.s == containers::StringView("div")) { kop = kir::KOp::Div; }
+    else if (fn.s == containers::StringView("max")) { kop = kir::KOp::Max; }
+    else if (fn.s == containers::StringView("min")) { kop = kir::KOp::Min; }
+    else if (fn.s == containers::StringView("pow")) { kop = kir::KOp::Pow; }
+    else { return {SynthReject::ElementwiseFnUnsupported, -1}; }
+
+    // ⛔ SAME-SHAPE envelope: g.binary is same-shape (ckir.hpp:140) — NEVER implicit-broadcast (the bin-bcast OOB scar).
+    kir::Shape        sa;
+    kir::Shape        sb;
+    const SynthReject r0 = read_static_shape(ctx, tensor_shape(ctx, va->type()), sa);
+    if (r0 != SynthReject::None) { return {r0, -1}; }
+    const SynthReject r1 = read_static_shape(ctx, tensor_shape(ctx, vb->type()), sb);
+    if (r1 != SynthReject::None) { return {r1, -1}; }
+    if (sa.rank != sb.rank) { return {SynthReject::ElementwiseShapeMismatch, -1}; }
+    for (int i = 0; i < sa.rank; ++i)
+    {
+        if (sa.dims[i] != sb.dims[i]) { return {SynthReject::ElementwiseShapeMismatch, -1}; }
+    }
+
+    const int a   = g.input(sa, kir::DType::F32); // iidx 0
+    const int b   = g.input(sb, kir::DType::F32); // iidx 1
+    const int out = g.binary(kop, a, b);
+    return {SynthReject::None, out};
 }
 } // namespace crd::ceir::gpu

@@ -1,5 +1,8 @@
 # Session — 2026-05-01 — `crd-renderer` v1b real draw execution
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Move `crd-renderer` from frame-plan preparation into real renderer-side

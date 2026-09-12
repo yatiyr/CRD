@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — crd-platform v1b (timer + frame clock)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Add the timing facade to `crd-platform` without touching the windowing

@@ -1,5 +1,8 @@
 # Recipe — mesh extraction: TSDF fusion + marching cubes
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Turning depth maps into a triangle mesh is the bridge from a captured radiance field (2DGS, ckir_gsplat2d.hpp) — or
 any depth source (RGBD, a depth pass) — into real geometry for a mesh/material pipeline. The gold-standard route,
 the one the 2DGS paper (Huang et al. 2024) uses, is two stages: **TSDF fusion** builds a signed distance field on a

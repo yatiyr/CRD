@@ -1,5 +1,8 @@
 # REN-41 per-object velocity — 1M fps board + the DX12 upload-batching fix (median-of-5, both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The REN-41 velocity close measurement: the frontier scene at scale with **per-object motion vectors ON** (the
 default in the device-cull frames — a MRT `depth_prepass` writes `velocity`, `taa_resolve` consumes it). Companion
 to the velocity CORRECTNESS gate (which proves the buffer's VALUES: static ≈ 0, mover ≈ the expected screen delta).

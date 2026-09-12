@@ -1,5 +1,8 @@
 # Stockham v2 — the pass-pipeline FFT engine (the MKL-architecture build)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the v10 FFT engine shipped on this design (deterministic-plan Stockham + codelets). *(stamped 2026-08-07, doc-hygiene pass)*
 
 ## ★★ THE MKL ARCHAEOLOGY (2026-07-04 — sampled + disassembled ON THIS BOX; the definitive answer)

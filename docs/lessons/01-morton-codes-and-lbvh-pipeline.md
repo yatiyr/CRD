@@ -1,5 +1,8 @@
 # Lesson 01 — Morton codes, radix sort, and the LBVH pipeline
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "Why do we need radix sort and morton sort? Where are we going to use them and for what?"
 
 ## TL;DR

@@ -1,4 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1i-a: unified query facade + `RayHit<P>` /
+
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 # `ClosestPointResult<P>` templated result types + `bvh4_closest_point` +
 # `DynamicBvh::closest_point` (ADR-0076 §15, §16 pin #2)
 

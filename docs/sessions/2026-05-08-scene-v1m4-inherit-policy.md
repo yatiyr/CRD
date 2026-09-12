@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m4: InheritPolicy enum + DontInherit semantics
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m3 fully shipped. Full ObekCooker pipeline. 15 cooker tests; six-config 787/787 / 784 release.
 
 **Status at end:** v1m4 shipped — `InheritPolicy` enum (Override / Inherit / DontInherit) + trait registration + DontInherit auto-skip during instantiate_obek. **Inherit is API-only at v1m4**: observable behavior matches Override; the transparent CoW backend optimization is deferred to v1m4b. 5 new tests; six-config 792/792 / 789 release / 17 smokes.

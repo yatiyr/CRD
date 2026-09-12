@@ -1,5 +1,8 @@
 # ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-04
 **Tags:** arch, renderer, shader, materials, rt, post-fx

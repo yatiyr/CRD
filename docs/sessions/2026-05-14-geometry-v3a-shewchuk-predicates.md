@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v3a — Shewchuk 1997 adaptive predicates
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the geometry substrate's foundational robust-predicates layer per ADR-0076 §18.1: `orient2d` / `orient3d` / `incircle` / `insphere` with adaptive-precision floating-point arithmetic (Shewchuk 1997). The kernel that every higher-tier slice (v3b 2D hull → v3c 3D Quickhull → future v6 Vatti / v8 Bowyer-Watson / v9 V-HACD + CFD AMR + FEA contact + CAD boolean) consumes for cross-platform bit-exact sign correctness on near-degenerate input.

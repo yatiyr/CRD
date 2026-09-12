@@ -1,5 +1,8 @@
 # 2026-06-21 — v11w: the `crd-hesap-wavelet` module (DWT / SWT / WPT / CWT / 2-D / denoising)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1.6 `crd-hesap` · v11 DSP cluster (ADR-0093) · NEW module `crd-hesap-wavelet`.** The whole wavelet
 sub-cluster (v11w-a…e), with **no follow-ons left**, implemented and gated against PyWavelets in one session.
 **Full wavelet suite: 14943 assertions / 23 cases GREEN (linux-gcc-release) + all CI guards green.** Not committed.

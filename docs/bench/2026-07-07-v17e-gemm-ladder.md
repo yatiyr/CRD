@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-e: the GEMM optimization ladder vs cuBLAS (f32) — HONEST, CRUSH NOT YET ACHIEVED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The first step of the v17-e vendor crush: a hand-written f32 GEMM ladder (`crd_v17e_gemm_tiled.cu`) benchmarked against
 cuBLAS on the RTX 4070 Ti SUPER. **The fair, winnable fight for our bit-exact-f32 story is `CUBLAS_PEDANTIC_MATH`**
 (true FP32, no TF32 tensor cores) — where cuBLAS is CUDA-core-FMA-bound just like us. **Reported head-on per the

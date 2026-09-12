@@ -1,5 +1,8 @@
 # ADR-0127 — the `ceir.frame` dialect + the FrameGraphDesc↔ceir.frame converter placement
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status: ACCEPTED 2026-08-11 (CEIR-15a).** Born by the CEIR-15 FrameGraph-unification band (§39/§126). Decision
 packet: `docs/design/ceir-15-framegraph-unification.md`. Supersedes-in-place target: **ADR-0106** (struck @ CEIR-15f).
 

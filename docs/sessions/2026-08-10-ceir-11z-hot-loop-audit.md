@@ -1,5 +1,8 @@
 # CEIR-11z — the §153 hot-loop audit gate — session log → CEIR band 11 CLOSED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) reached the last band-11 slice after 11c closed. 11z is a
 > GATE/PROOF slice — it proves the §153 hot-loop property already DECIDED in ADR-0123 (the compiled tier was designed
 > against §153 from line 1), so ⛔ NO ADR. Contract (D-007 11z row): "allocation-free + string-free hot loop proven by

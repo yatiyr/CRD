@@ -1,5 +1,8 @@
 # CEIR-13d part 1a — the `crd-ceir-gpu` lowering bridge is born (scaffold + ADR-0125)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-13d (D-007 master spine) · **Status:** ✅ **CLOSED — parts 1a (scaffold + ADR),
 1b (dispatch lowering + barriers), 2 (transfer + ambient-narrowing), 3 (view→hazard retrofit + FLIP) all DONE + gated
 (481/481 × 4 configs)** · **ADR:** **0125**.

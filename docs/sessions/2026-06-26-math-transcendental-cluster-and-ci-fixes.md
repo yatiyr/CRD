@@ -1,5 +1,8 @@
 # 2026-06-26 — crd-math DETERMINISTIC TRANSCENDENTAL cluster + CI infrastructure fixes
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Engine-wide reroot from std:: math to crd::math::* (deterministic, moat-bearing for cross-platform bit-determinism).
 **Also:** First 18-config CI run exposed 5 pre-existing issues (4) and 1 route regression (1); all fixed in-library.
 **Committed:** crd-math cluster as `76f297a` "v11 closed." (the commit message actually documents v12 prerequisites); CI fixes as `1891fbc` "ci fix."

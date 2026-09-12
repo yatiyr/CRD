@@ -8,6 +8,7 @@ add_executable(crd-ceir-tests
     test_func.cpp     # CEIR-1b: SymbolTable + ceir.func (func.func/call/return, visibility, cross-module symbol refs)
     test_attr.cpp     # CEIR-1c: interned typed attributes + per-op AttrDict + source map + SourceLoc provenance
     test_dialect.cpp  # CEIR-1d: dialect registry + op traits/interfaces + verifier + unknown-dialect preservation
+    test_dce.cpp      # CEIR-26a: the Dead-Code Elimination pass (registered AND Pure AND no-uses; fixpoint; EMPTY!=UNKNOWN; region recursion)
     test_print.cpp    # CEIR-1e (part 1): deterministic canonical printer
     test_roundtrip.cpp # CEIR-1e (part 2): textual parser + byte-exact print/parse/print round-trip
     test_binary.cpp   # CEIR-1f: FourCC-chunked binary serialization + byte-exact serialize/deserialize round-trip
@@ -51,6 +52,9 @@ add_executable(crd-ceir-tests
     test_time_domain.cpp # CEIR-8f: typed time domains (ADR-0116) - the time dialect over 8a type-classes (wall != sim), plugin domain, verify hook, U-56 round-trip
     test_pass_manager.cpp # CEIR-8g: AnalysisManager + PassManager (ADR-0117) - cached analyses + never-stale invalidation via preserved sets
     test_rewrite.cpp     # CEIR-8g: rewrite/conversion skeleton (ADR-0117) - try_apply per-op + ConversionTarget legality (unlisted=Illegal)
+    test_rewrite_driver.cpp # CEIR-26b: the greedy rewrite DRIVER (rewrite_driver.hpp) - collect-per-round fixpoint, is_erased skip, reshape-fold+DCE compose, non-monotone cap->FATAL
+    test_cse.cpp         # CEIR-26c: Common-Subexpression Elimination (cse.hpp) - eligibility (Pure/registered/leaf/results/det), structural equality, three-collapse, cascade, negatives
+
     test_diagnostic.cpp  # CEIR-8g: DiagnosticEngine (ADR-0117) - stable codes/severity/SourceLoc/notes/fixits, one surface, text copied
     test_transaction.cpp # CEIR-8i: transactions (ADR-0119) - atomic commit/rollback, byte-identical A/B rollback, id-under-rollback, the 8h dirty seam
     test_band8_gate.cpp  # CEIR-8z: BAND-8 GATE - ONE composed program (extern type+attr+caps+stable-ids) proving open-world round-trip/preserve/unify/transaction, cross-Context interface-hash purity, composed-blob fuzz
@@ -75,6 +79,8 @@ add_executable(crd-ceir-tests
     test_sparse.cpp   # CEIR-23d: the ceir.sparse dialect (sec 53) - sparse.spmv (CSR sparse-matrix x dense-vector); the CSR triple (row_ptr,col_idx,values) + dense x as explicit rank-1 tensor OPERANDS (no new TypeKind); find_sparse_misuse (all five rank-1, index arrays Int, value side values/x/y Float+equal, nnz col_idx==values, row_ptr==y+1)
     test_ml.cpp       # CEIR-24a: the ceir.ml dialect (sec 55) - ml.mlp (multi-layer perceptron, x + VARIADIC per-layer weights + closed-vocab activation={relu}) + ml.attention (single-head scaled dot-product attention, out=softmax(Q.K^T/sqrt(D)).V); composite PURE ops = the sec-69 provider PARTITION UNIT (no new TypeKind); find_ml_misuse (Tensor+Float+equal element, rank-2, the mlp WIDTH CHAIN input.dim1==W_1.dim0/W_i.dim1==W_i+1.dim0/output==[M,D_n], activation vocab, the attention Q.K^T.V shape relations)
     test_band23_gate.cpp # CEIR-23z: BAND-23 COMPOSING GATE - ONE module carries quant.quantize+dequantize + sparse.spmv; find_quant + find_sparse + find_structure all None (verifiers compose) + TEXT AND BINARY round-trip re-verified byte-clean (the FIRST serializer crossing for the quant/sparse ops)
+    test_dist_gate.cpp # CEIR-30a-1: the ceir.dist dialect (sec 68/103; proof sec 140) - dist.mesh/shard/all_reduce + find_dist_misuse (mesh-shape/duplicate/unknown-mesh, operand-not-tensor, result-type-preserve [sec 70], shard-axis/mesh-axis bounds, collective fn vocab {sum,prod,max,min} sans mean) + text round-trip + the committed dist_shard_reduce.ceir anti-drift-through-the-printer
+    test_audio_gate.cpp # CEIR-31a-1a: the ceir.audio dialect (sec 142) - audio.source/gain/biquad/mix/send + find_audio_misuse (operand-not-tensor, result-type-preserve [buffer shape], biquad filter/cutoff/q bounds mirroring graph_validate, source start_frame >= 0) + the 4-way filter identity + text round-trip. Routes the GEO-10 render_graph through CEIR; 31a-1b = host kernels + bit-exact proof
     ${CEIR_GENERATED_TESTS} # CEIR-2d: generated per-dialect smoke tests (auto-grow as dialects/ops are added)
 )
 
@@ -85,6 +91,10 @@ target_link_libraries(crd-ceir-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+# CEIR-27c: the rewrite-rule gate parse-loads a committed .ceir rule asset (assets/ceir/rule_identity_reshape.ceir) — the
+# first device-free ceir test to read a repo asset, so it needs the repo-root macro the ceir-gpu test targets already set.
+target_compile_definitions(crd-ceir-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+
 crd_enable_default_pch(crd-ceir-tests)
 
 catch_discover_tests(crd-ceir-tests)
@@ -93,12 +103,19 @@ catch_discover_tests(crd-ceir-tests)
 # committed generated C++ must be a byte-identical regen of the *.ceirop.toml); the VALIDATOR test runs the schema
 # validator's unit suite. Both are Python (stdlib only). ⛔ if Python3 is absent the gate FAILS LOUDLY, never skips
 # (an ungated generator is the tidy-blind scar) — CI + every dev toolchain has Python.
+# CEIR-0g §4 step-4: the SAME pattern gates the §174 capability MATRIX generator (tools/ceir_capability_matrix) — the
+# drift test reruns `gen_matrix.py --check` (committed docs/generated matrix == regen AND 0 HARD manifest errors); the
+# validator runs its unit suite (providers-invariant / stale-path / vocab checks).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
     add_test(NAME crd-ceir-opgen-drift
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/ceir_opgen/ceir_opgen.py" --check)
     add_test(NAME crd-ceir-opgen-validator
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/ceir_opgen/test_opgen.py")
+    add_test(NAME crd-ceir-capability-matrix-drift
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/ceir_capability_matrix/gen_matrix.py" --check)
+    add_test(NAME crd-ceir-capability-matrix-validator
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/ceir_capability_matrix/test_gen_matrix.py")
 else()
     add_test(NAME crd-ceir-opgen-NEEDS-PYTHON3 COMMAND "${CMAKE_COMMAND}" -E false)
 endif()

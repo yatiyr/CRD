@@ -1,0 +1,13 @@
+module {
+  ^bb0:
+    func.func() {sample_rate = 48000, sym_name = "main"} {
+      ^bb0:
+        %0 = audio.source() {loop = 0, name = @a, start_frame = 0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %1 = audio.gain(%0) {gain_db = -6.0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %2 = audio.biquad(%1) {cutoff = 0.25, filter = 0, q = 0.7071} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %3 = audio.delay(%2) {delay_frames = 64} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %4 = audio.compressor(%3) {attack_ms = 5.0, ratio = 4.0, release_ms = 20.0, threshold_db = -20.0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %5 = audio.source() {loop = 0, name = @b, start_frame = 0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %6 = audio.mix(%4, %5) : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+    }
+}

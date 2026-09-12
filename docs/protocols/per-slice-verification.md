@@ -1,5 +1,8 @@
 # Per-slice verification protocol
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Locked 2026-05-15 per Strategic Execution Plan (`docs/ROADMAP.md` §
 > Strategic Execution Plan) + CLAUDE.md DoD #8 + memory
 > `feedback_per_slice_run_ctest.md`.

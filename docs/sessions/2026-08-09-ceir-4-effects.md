@@ -1,5 +1,8 @@
 # CEIR-4 — Effect + determinism model (§26/§27/§15/§32) — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Band 4 promotes the frame graph's proven read/write/lifetime discipline (the WAR-needs-lifetime, RMW-not-RWM scars) to
 first-class IR: every effectful op declares semantic effects, determinism classes align 1:1 with the ADR-0098 tiers, and
 the compiler distinguishes reorderable vs ordered ops. This log covers the band slice by slice.
@@ -329,8 +332,14 @@ convention). `Context::ops_hazard(before, after)` (pure, directional) + `collect
 version on the same primitive; no transitive reduction here).
 
 **The judgment calls (fork 2, the crux) — all in-code + here:**
-- Memory class holds **Alloc/Dealloc/ResourceResidency (write)** — lifecycle in Memory so `Deallocate(R)`-then-`read(R)`
+- Memory class holds ~~**Alloc**/~~**Dealloc/ResourceResidency (write)** — lifecycle in Memory so `Deallocate(R)`-then-`read(R)`
   use-after-free is VISIBLE; a separate Alloc class would silently miss it.
+  **[STRUCK — CEIR-31b-3-c-i: `Allocate` moved to INERT `{false,false,None}` (the `Nondeterministic` mold). An allocation
+  orders BEFORE its uses via SSA def-use (the declare's RESULT is the consumer's OPERAND), so a memory-hazard edge is
+  REDUNDANT — and once resource.declare/import gained the Allocate effect (26c/26z, to block CSE), a Memory-write Alloc
+  polluted every frame's hazard set with declare→use pairs (the 15d-1 frame regression). Dealloc/Residency STAY Memory
+  writes: use-after-free is NOT SSA-implied. The Allocate effect still EXISTS on the op (non-Pure ⇒ CSE-blocked; `realtime_safe`
+  still flags may-allocate); only its hazard ACCESS is inert.]**
 - **I/O = ONE `Io` class (rw)** — cross-channel reorder conservatively forbidden until a channel model exists.
 - **ExternalCall + Synchronization = `Universe` (rw)** — a full barrier (consistent with the 4a func.call barrier).
 - ⛔ **`RandomRead` WRITES `Random`** — a PRNG draw advances the stream; the naive "read means read" makes RNG draws
@@ -381,7 +390,8 @@ feat(ceir-4d): effect-derived ordering hazards (RAW/WAR/WAW) from 4a effects
 - hazard.hpp: HazardKind + ResourceClass (14 classes + Universe + None) +
   effect_access(EffectFamily) -> {reads, writes, ResourceClass}, a TOTAL switch
   over 27 families with NO default (-Werror=switch guards a 28th). Judgment calls:
-  Alloc/Dealloc/Residency in Memory (use-after-free visible); I/O one rw class;
+  Dealloc/Residency in Memory (use-after-free visible); Alloc INERT (31b-3-c-i:
+  alloc-before-use is SSA def-use, a hazard edge is redundant); I/O one rw class;
   ExternalCall+Synchronization = Universe barrier; RandomRead WRITES (advances the
   stream); TimeRead inert read; Nondeterministic inert. range_overlap + hazard_rank.
 - Context::ops_hazard(before, after) -> strongest hazard (WAW>RAW>WAR) over the two

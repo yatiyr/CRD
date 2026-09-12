@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-e round 2–4: warp-tiled GEMM schedule bank vs cuBLAS/cublasLt — FIRST CRUSH CELLS (3-run stable)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **⚠ CORRECTION (rounds 5–6, same day, back on Opus): the N=2048 cells below were OVER-CLAIMED.** A fresh, rigorous
 > 6-run min-of-N pass on a *thermally warm* GPU shows N=2048 verdicts swing (RAW 0.90–1.03×, SiLU 0.83–1.02×, ReLU
 > 0.86–1.07×) — cuBLAS-default alone swings 25.6→30.5 TFLOP/s run-to-run, and without `nvidia-smi -lgc` (admin) 2048

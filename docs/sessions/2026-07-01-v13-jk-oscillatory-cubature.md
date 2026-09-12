@@ -1,5 +1,8 @@
 # 2026-07-01 — v13-j (oscillatory + singular-weight quadrature) + v13-k (multi-D cubature) ⇒ the `crd-hesap-quadrature` module is COMPLETE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.6 `crd-hesap`, v13 cluster. This session shipped the final two quadrature rows (v13-j, v13-k),
 > completing the `crd-hesap-quadrature` module (g/h/i/j/k). Iteration loop: WSL gcc (linux-gcc-release) with
 > scipy 1.17.1 + GSL 2.7.1 + Boost.Math 1.83, `gh` on Windows for the reference sources. Windows 4-config DoD +

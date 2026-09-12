@@ -1,3 +1,6 @@
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## RAF-12.4 relocation design — move the 49 encoder-used verbs off IRasterContext into per-backend encoders
 
 ### 0. Ground truth (verified in source)

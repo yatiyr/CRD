@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5a: KD-tree
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster opens with the KD-tree substrate. Static
 > balanced KD-tree over a point set + three queries (k-NN / radius / AABB-
 > window range) + typed Quantity boundary wrappers. New peer module

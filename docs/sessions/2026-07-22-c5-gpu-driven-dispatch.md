@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · C5 GPU-driven dispatch (`dispatch_indirect`, both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** fully finish B11 then C5 — no debts, no follow-ons, gold standard, crushing performance. (B11 quad ops done in the B11
 session log.) C5 = GPU-driven dispatch: the recorder grows indirect-count → device-generated commands → work graphs.
 

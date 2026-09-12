@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1d: `SparseSetStorage` + World dispatch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1c (whole) + allocator-audit Option C shipped earlier the same day. Every byte the World allocates already routed through one `IAllocator`. Scene tests at 87 cases / 11024 assertions, six-config 603/603.
 
 **Status at end:** Phase 3.0 v1d shipped. Both L2 storage backends (Archetype primary + SparseSet escape-hatch) live behind the same `IStorageBackend` interface. `World` dispatches by `StorageHint` at registration. `IStorageEventSink::on_entity_destroyed` now fires once per destroy (consolidated through World), not once per backend. Per-pool version counter pre-wired so v1i ChangeDetect doesn't have to retrofit. Six-config 618/618 / 615 release / 17 smokes. Scene tests 102 cases / 34420 assertions.

@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1o2: `UploadHandle` + async `GpuUploader` + `RenderUploadSystem` (ADR-0061 Layer 2 + Layer 3)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1o1 shipped earlier today (Fence interface + non-waiting `Queue::submit(cmd, fence)`). v1o is the active slice; ADR-0061 §"Layer 2" + §"Layer 3" carve the renderer + ECS surface into v1o2.
 
 **Status at end:** v1o2 shipped — `UploadHandle` (move-only, owns the in-flight Fence + staging buffers + recorded CommandBuffer + pending GpuMesh/GpuTexture); `GpuUploader::upload_mesh_async` / `upload_texture_async`; `PendingMeshUpload` ECS component; `RenderUploadSystem` running in `RenderExtract` phase. **Full 12-config sweep all green at 849/849** (846 in optimised configs). +6 cases / +26 assertions over the 843/843 v1o1 baseline.

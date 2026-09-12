@@ -1,5 +1,8 @@
 # 2026-05-04 — Phase 2.6 v1e: ShaderResourceLoader + MaterialResourceLoader + end-to-end cooked render smoke
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 ### ShaderResourceLoader (`crd-shader`)

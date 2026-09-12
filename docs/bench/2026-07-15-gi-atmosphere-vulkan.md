@@ -1,5 +1,8 @@
 # CKIR GI + atmosphere — Vulkan GPU throughput board (2026-07-15)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The thesis for the visual-frontier kernels (B14 real-time GI + B15 sky/atmosphere): a **portable IR pays NO performance tax**.
 The exact same CKIR source that is verified **bit-exact vs the CPU oracle and across backends** (Vulkan/DX12) compiles to GPU
 code that runs at **real-time 1080p rates**, memory-bandwidth-bound — the correct regime for these gather/stencil kernels

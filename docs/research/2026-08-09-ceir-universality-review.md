@@ -1,5 +1,8 @@
 # CEIR Universality Review — foundation closure, domain-proof architecture, roadmap re-baseline
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The standing quest document** (2026-08-09, user-directed). Section numbers from the quest prompt are cited as
 > **U-§n** here and in the tracker. This is the U-§127 report: sections A/B/N are complete now; C–M accrue as the
 > CEIR-8 (Foundation Closure) and CEIR-9 (Universality Validation) bands land; the final U-§126 answer is recorded

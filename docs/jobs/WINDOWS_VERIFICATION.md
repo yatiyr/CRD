@@ -1,5 +1,8 @@
 # Windows verification — crd-jobs fiber-runtime hardening (2026-05-12)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **STATUS: COMPLETED — 2026-05-12 (Windows dev box).** All steps below were run:
 > full 17-config `scripts/full-sweep.ps1` (`-Reconfigure`; Win ×10 incl. the new
 > `win-debug-sse2`, Linux ×7 incl. `linux-gcc-debug-sse2`, all on AVX2) → all PASS;

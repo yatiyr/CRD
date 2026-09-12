@@ -1,5 +1,8 @@
 # 2026-07-02 — v14-b elementwise + broadcasting engine vs numpy/torch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Machine/config:** i9-14900K, WSL2 Ubuntu 24.04, single pinned core (`taskset -c 4`), 10 reps.
   Cerid: g++ 13.3 `-O3 -march=native -DCRD_SIMD_TARGET=2` (Vec8f/Vec4d). Peers single-threaded:
   numpy 2.4.6 (`out=` preallocated — no allocation overhead measured), torch 2.12.0+cpu

@@ -1,5 +1,8 @@
 # ADR-0043 — MeshResource vertex layout + glTF import scope
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted  
 **Phase:** 2.7 v1b  
 **Tags:** `[resources]` `[renderer]` `[cooker]`

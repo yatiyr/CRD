@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · D5 hot-reload — the deploy chain closed (+ native `remainder`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## `remainder` — the last math gap, done correctly
 
 The user asked for `remainder` (deferred in D3 because the naïve `x − y·rint(x/y)` isn't bit-exact). Implemented natively via the

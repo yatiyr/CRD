@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5-queries-extension
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster's second-to-last slice. Extends the
 > unified `crd::geometry::{raycast,overlap,closest_point,...}` facade
 > (which v1i-a established for `{BvhTree, Bvh4Tree, DynamicBvh, primitive

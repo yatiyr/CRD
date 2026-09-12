@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — bridge + crd-containers v1a
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Two things in one session:

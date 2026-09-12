@@ -1,5 +1,8 @@
 # ADR-0088 — GEMM hand-tuned asm: INVESTIGATED → REVERTED (intrinsics vindicated)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-30
 **Status:** **REVERTED 2026-05-30** — the asm was built end-to-end, measured cleanly, and found **~2%
 SLOWER** than the inlined intrinsic. **All asm code (spike + f64 kernel + runtime dispatch + dual-syntax

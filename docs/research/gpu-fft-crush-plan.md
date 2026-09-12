@@ -1,5 +1,8 @@
 # B-compute GPU FFT — the crush campaign plan (2026-07-13)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **executed** — the GPU-FFT crush campaign ran 2026-07-12…13 (batched 2-D 1.16–1.20× cuFFT bit-exact; boards in `docs/bench/`). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Execute-ready dossier for the hesap-GPU FFT (D-007 **B-cmp**), the compute primitive B13-b's FFT-convolution

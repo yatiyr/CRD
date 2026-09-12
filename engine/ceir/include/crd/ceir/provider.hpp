@@ -33,7 +33,15 @@ public:
 
     // §69: does this provider supply reference behaviour for op-kind `k`? (The partitioner assigns regions by this.) 6b
     // ships the minimal ops-capability query; the full advertise surface — types/layouts/memory-domains/costs/determinism
-    // + a compile→plan interface (§69/§70/§102/§103) — lands with the partitioner band (CEIR-21/26), a NAMED deferral.
+    // + a compile→plan interface (§69/§70/§102/§103) — was a NAMED deferral to the partitioner band. CEIR-29a LANDED the
+    // ADVERTISE half on the DEVICE-FREE partitioner descriptor `MlProvider` (gpu/partition_ml.hpp: provider_class +
+    // memory_domain + determinism + claims_subgraphs).
+    // ⛔ ~~the compile→plan pure-virtual APPEND on THIS seam is CEIR-29b (it lands with its implementor, the launch-graph
+    // provider bridge)~~ **[STRUCK — CEIR-29b-2b reconcile: this seam is the SCALAR reference executor (`ExecResult` =
+    // `Array<i64>`, the §118 Interpreter, arith/core/func); a TENSOR provider does NOT fit it. The "compile→plan" for a tensor
+    // provider IS `plan_tensor_pipeline` (crd-ceir-gpu) — it already produces the reusable, provider-agnostic compiled form; a
+    // LAUNCH-GRAPH provider (a native graph-API bridge) is a plan LAUNCH-MODE (`begin_capture`/`end_capture`, 29b-2a), NOT an
+    // IExecutionProvider implementor. So `IExecutionProvider` gains NOTHING at 29b — no compile→plan pure-virtual here.]**
     [[nodiscard]] virtual bool advertises(const Context& ctx, OpId k) const = 0;
 
     // Execute `@entry(args)` of `m` on this provider's backend; returns the entry's `func.return` values or a typed error.

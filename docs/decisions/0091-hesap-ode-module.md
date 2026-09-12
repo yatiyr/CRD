@@ -1,5 +1,8 @@
 # ADR-0091 — `crd-hesap-ode`: the ODE/DAE module — two API layers, deterministic controllers, the work-precision contract
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-06-11)
 - **Phase:** 3.1.6 v9 (ODE/DAE cluster)
 - **Tags:** `hesap` `ode` `determinism` `architecture`

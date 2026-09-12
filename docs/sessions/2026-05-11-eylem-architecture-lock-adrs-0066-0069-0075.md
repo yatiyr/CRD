@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — eylem multi-domain architecture lock (5 ADRs + audit)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 The user pushed three strategic questions during this session — "what

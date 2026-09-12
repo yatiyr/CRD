@@ -9,7 +9,7 @@
 //
 // ⛔ TWO CKIR TIERS (the survey): GRAPH tier (`g.input`/`g.contract`/`g.reduce` → `KirBackend::run` vs `eval_cpu`) owns gemm +
 // reduce; KERNEL tier (`buffer_decl`+`stmt_*` → `dispatch_kernel_1wg` vs `eval_cpu_kernel`) owns fft. ⛔ BIT-EXACT ENVELOPE: the
-// graph tier has NO general 2D-transpose / scalar-scale / tensor-add node, so gemm maps ONLY the plain contract (α=1, β=0, no
+// graph tier has NO general 2D-transpose / scalar-scale / tensor-add node, so gemm maps the plain contract -- OPTIONALLY with a fused CEIR-26e relu EPILOGUE (max(contract,0): the SAME contract K-loop, only the store applies max(.,0), so bit-exact vs the unfused gemm->relu.ckir chain by construction; synth_gemm appends a Max(Contract,0) graph node the emitters UNWRAP) -- at (α=1, β=0, no
 // transpose) and reduce ONLY {sum,prod,max,min}; ANYTHING outside → a TYPED SynthReject (never a silent wrong-result subset —
 // a plain-contract synthesis of an α=2 gemm is a false-green). F32-only (the CKIR kernels are F32; the 22a element-agnostic
 // declare's F32 restriction lands HERE, with a test). Dialect-qualified op-names + valid-checked attr reads (the scars).
@@ -37,6 +37,14 @@ enum class SynthReject : crd::u8
     FftRankUnsupported,      // fft input is not rank-1 (higher-D / non-innermost-axis c2c → name-forward)
     FftLengthNotPow2,        // fft length n is not a power of two >= 2 (Bluestein → name-forward)
     FftDirectionUnknown,     // fft `direction` not in {forward, inverse}
+    TransposePermInvalid,    // transpose `perm` attr absent / malformed / not a true permutation of [0, rank) (defensive — a
+                             //    verify-clean op has a valid perm; standalone-robust like synth_gemm's arity guard)
+    BroadcastShapeUnsupported, // broadcast input rank != result rank, or a source dim is neither 1 nor equal to the result dim —
+                               //    the CKIR g.broadcast is SAME-RANK left-indexed (ckir_eval.hpp:217), so a numpy right-aligned
+                               //    broadcast is name-forward (the reshape-first pattern that vjp_reduce emits is the canonical form)
+    ElementwiseFnUnsupported,  // elementwise `fn` is not a mapped binary op {add,sub,mul,div,max,min,pow} (defensive; fn_in gates it)
+    ElementwiseShapeMismatch,  // ⛔ elementwise operands are not the SAME shape — g.binary is same-shape (ckir.hpp:140); NEVER rely
+                               //    on implicit GPU broadcast (the bin-bcast OOB scar), a broadcasting elementwise is name-forward
 };
 [[nodiscard]] containers::StringView synth_reject_name(SynthReject r) noexcept;
 
@@ -53,7 +61,18 @@ struct GraphSynth
 // contraction dim. On success builds `input(A)` [M,K] as iidx 0, `input(B)` [K,N] as iidx 1, `contract(A,B)` (DetTier::Exact =
 // bit-exact vs eval_cpu) → the [M,N] output node. The C operand is IGNORED (beta==0). ⛔ reads attrs via the valid-checked
 // reader (the absent-reads-as-zero scar); op-name compared DIALECT-QUALIFIED ("linalg.gemm" — the work.consume scar).
-[[nodiscard]] GraphSynth synth_gemm(const Context& ctx, const Operation& op, kir::KGraph& g);
+// ⭐ CEIR-26e: an OPTIONAL activation fused into the gemm's store (the basic-fusion → generated CKIR). ⛔ append at END.
+enum class GemmEpilogue : crd::u8
+{
+    None = 0, // plain contract (the store writes acc verbatim) — every pre-26e caller
+    Relu,     // max(contract, 0): synth appends a `Max(Contract, 0)` graph node; the contract emitters store `max(acc, 0.0)`
+};
+// `epilogue == Relu` appends a `binary(Max, contract, constant(0,[M,N]))` node (returned as `output`) — the SAME contract K-loop,
+// only the store differs, so eval_cpu + the device emit are bit-exact vs the unfused gemm→relu.ckir chain. Default None ⇒ every
+// existing caller is untouched. ⛔ emit_contract_{glsl,hlsl} UNWRAP this `Max(Contract, 0)` root (the graph is the single source
+// of truth for the epilogue — no separate flag); a `Max(Contract, c≠0)` is NOT a relu and the emitters reject it.
+[[nodiscard]] GraphSynth synth_gemm(const Context& ctx, const Operation& op, kir::KGraph& g,
+                                    GemmEpilogue epilogue = GemmEpilogue::None);
 
 // Synthesize a `ceir.tensor.reduce` op into `g` as a graph-tier CKIR reduce over `mask = 1 << axis`. ⛔ BIT-EXACT ENVELOPE:
 // `fn` in {sum,prod,max,min} → KOp::Reduce{Sum,Prod,Max,Min} (DetTier::Exact); `mean` → ReduceFnUnsupported (the graph tier has
@@ -79,4 +98,23 @@ struct FftSynth
 // {forward,inverse}. im_in / re_out / im_out are the 22a-verified split-complex partners (find_tensor_misuse owns their
 // element/shape equality). op-name DIALECT-QUALIFIED; attrs via the valid-checked reader.
 [[nodiscard]] FftSynth synth_fft(const Context& ctx, const Operation& op, kir::KGraph& g);
+
+// Synthesize a `ceir.tensor.transpose` op into `g` as a graph-tier CKIR Permute (CEIR-25b: the autodiff backward vocab). ⛔
+// ENVELOPE: an F32 tensor of rank in [1, kMaxRank(8)] with all-static dims; `perm` a valid permutation of [0, rank) (else
+// TransposePermInvalid). On success builds `input`[src] iidx 0 + `permute(input, perm)` → the reordered output node (eval_cpu
+// KOp::Permute at ckir_eval.hpp:207). op-name DIALECT-QUALIFIED ("tensor.transpose"); attrs via the valid-checked reader.
+[[nodiscard]] GraphSynth synth_transpose(const Context& ctx, const Operation& op, kir::KGraph& g);
+
+// Synthesize a `ceir.tensor.broadcast` op into `g` as a graph-tier CKIR Broadcast (CEIR-25b). ⛔ SAME-RANK ENVELOPE: input +
+// result F32 tensors of EQUAL rank in [1, kMaxRank(8)], all-static, each source dim 1-or-equal to the matching result dim (else
+// BroadcastShapeUnsupported — CKIR's g.broadcast is same-rank left-indexed; a numpy right-aligned broadcast is name-forward, and
+// vjp_reduce reshapes to same rank FIRST). Builds `input`[src] iidx 0 + `broadcast(input, result)` → the output node.
+[[nodiscard]] GraphSynth synth_broadcast(const Context& ctx, const Operation& op, kir::KGraph& g);
+
+// Synthesize a `ceir.tensor.elementwise` op into `g` as a graph-tier CKIR binary (CEIR-25b). ⛔ SAME-SHAPE ENVELOPE: both
+// operands + the result are F32 tensors of the IDENTICAL shape (rank [1,8], all-static) — g.binary is same-shape (ckir.hpp:140),
+// NEVER implicit-broadcast (the bin-bcast OOB scar); a mismatch → ElementwiseShapeMismatch (name-forward). `fn` maps the FULL
+// binary vocab {add,sub,mul,div,max,min,pow} → KOp::{Add,Sub,Mul,Div,Max,Min,Pow} (else ElementwiseFnUnsupported). Builds
+// `input`(a) iidx 0 + `input`(b) iidx 1 + `binary(fn, a, b)` → the output node.
+[[nodiscard]] GraphSynth synth_elementwise(const Context& ctx, const Operation& op, kir::KGraph& g);
 } // namespace crd::ceir::gpu

@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v0b → v0f: the `crd-geometry-primitives` v0 sub-phase, closed
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Land v0b through v0f of `crd-geometry-primitives` in one push and close the v0 sub-phase

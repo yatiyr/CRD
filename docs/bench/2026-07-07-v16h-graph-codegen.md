@@ -1,5 +1,8 @@
 # 2026-07-07 — v16-h: structural graph AD + tape→C++ codegen
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped (`graph_ad.hpp`):** trace a scalar-generic functor into an expression DAG (`Graph` + `GExpr`
 overloads), differentiate it **symbolically** (`reverse_ad` emits the gradient as NEW graph nodes — reverse-mode over
 the DAG), run **const-fold → CSE (hash-cons) → DCE** (`optimize`), then either **interpret** (`eval`) or **emit a

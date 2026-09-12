@@ -1,5 +1,8 @@
 # Session log — 2026-05-15 — units v0d adoption pass C + Phase 3.1.7.5 CLOSE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7.5 `crd-units` closes. v0d-1 (Vec reductions widening) → v0d-2 (geometry-primitives API re-tag) → v0d-3 (renderer boundary) → v0d-4 (resources contract) → v0d-5 (Layer-6 format/parse + 11 disciplines) → v0d-6 (ImGui inspector) → v0d-close.
 
 ## Scope landed

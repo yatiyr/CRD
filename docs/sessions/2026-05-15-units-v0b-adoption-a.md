@@ -1,5 +1,8 @@
 # Session log — 2026-05-15 — units v0b adoption pass A
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7.5 `crd-units` adoption A. Sequential v0b-1 -> v0b-2 -> v0b-3 -> v0b-4 -> v0b-close, all shipped same session under 5-config DoD.
 
 ## Scope

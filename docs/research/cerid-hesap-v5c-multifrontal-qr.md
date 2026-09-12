@@ -1,5 +1,8 @@
 # Cerid hesap v5c — Multifrontal QR (SuiteSparseQR / SPQR-class) — research + design
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — v5c multifrontal QR shipped (session 2026-06-02). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Phase 3.1.6 `crd-hesap-direct`, slice **v5c**. The sparse-direct QR twin of

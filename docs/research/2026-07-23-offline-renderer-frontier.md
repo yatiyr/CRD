@@ -1,5 +1,8 @@
 # Research — 2026-07-23 — the offline renderer frontier (the OFF band master survey)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Status:** **research → planned** — the D-007 OFF band tracks this survey; not yet started. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > The kickoff/index research for the D-007 **OFF band** (offline render mode, rows 46-54). One master survey mapping the

@@ -1,5 +1,8 @@
 # 2026-05-31 — hesap v5b-2b: column-etree + supernodal-LU SYMBOLIC (the static-pivot structure)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Continues the **v5b sparse-direct LU cluster** (v5b-1 GP-LU oracle ✅, v5b-2a static-pivot front-end ✅).
 v5b-2b materialises the EXACT static-pivot L/U structure UP FRONT — the symbolic phase the v5b-2c/d
 supernodal numeric will fill. The next-session crush (vs Eigen SparseLU + UMFPACK) is v5b-2e.

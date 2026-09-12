@@ -1,5 +1,8 @@
 # 2026-05-13 — Phase 3.1.7 v1 debt-payment pass
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Closes:** Phase 3.1.7 v1 cluster debt-payment for the four active-debt items filed against v1j-b.
 **Successor:** Phase 3.1.7 v2 (`-convex`) — GJK distance + GJK boolean + EPA penetration + SAT + Quickhull + `ConvexHullView` queries + GJK-cast.
 

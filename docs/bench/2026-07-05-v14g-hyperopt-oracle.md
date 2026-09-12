@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-g hyper-optimizer: the python-oracle boards (pre-port gate)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase: 3.1.6 v14-g (`phase-3.1.6-v14.md` row g). Protocol: reconstruct-and-verify-in-python
 > FIRST. Peer = **cotengra 0.8.2** (pip, WSL python 3.12) with **kahypar 1.3.5** installed —
 > their hq default method pair. Machine: i9-14900K, WSL2. Harness:

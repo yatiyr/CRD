@@ -1,5 +1,8 @@
 # ADR-0111 — Open-world type model: dialect-defined type-classes beside the built-in `TypeKind`
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8a**. Implements the universality quest's U-§6
 (open-world types) and pays no recorded IOU but opens the door every future domain type needs (`cad.BRep`,

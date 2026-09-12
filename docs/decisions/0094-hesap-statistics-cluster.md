@@ -1,5 +1,8 @@
 # ADR-0094 — `crd-hesap-special` + `crd-hesap-stats`: the statistics cluster — special-as-leaf, the inverse-incomplete cdf/ppf engine, the counter-RNG determinism moat, and the two-axis honest gate
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-06-28)
 - **Phase:** 3.1.6 v12 (Statistics cluster)
 - **Tags:** `hesap` `statistics` `special-functions` `rng` `determinism` `architecture` `module-edges` `substrate`

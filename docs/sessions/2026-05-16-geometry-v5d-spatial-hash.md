@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5d: SpatialHash
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster continues. Teschner 2003 fixed-grid
 > spatial-hash AABB index — particle/swarm broadphase + soft-body cloth/fluid
 > neighbour search. Includes Amanatides-Woo 1987 voxel raycast +

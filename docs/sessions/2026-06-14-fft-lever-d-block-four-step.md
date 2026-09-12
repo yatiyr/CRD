@@ -1,5 +1,8 @@
 # 2026-06-14 — FFT Lever D: the BLOCK four-step (the proper MKL method) — measured, doesn't win, reverted
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Mandate (standing, user, emphatic):** beat/match MKL on 1D complex FFT throughput — "it's all software,
 think outside the box, do not defer as a Spiral-class wall." This session executed **Lever D** from the
 prior profiling session (`2026-06-14-fft-mkl-profiling.md`): the cache-blocked four-step, the large-N lever.

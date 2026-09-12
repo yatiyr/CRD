@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v3c-c — `enrich_for_gjk` + flat-3D-hull coplanar reconstruction (v3c CLOSED)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Close the v3c Quickhull sub-phase by shipping the two remaining seams: (1) `enrich_for_gjk(QuickhullResult&)` populating v2g vertex adjacency + v2h SoA SIMD arrays for downstream GJK hill-climb / SIMD support paths, and (2) the flat-3D-hull coplanar reconstruction so v3c's `is_coplanar` branch returns a valid 2-face polytope instead of just a flag.

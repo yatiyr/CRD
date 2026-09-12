@@ -1,5 +1,12 @@
 # Cerid — Open Debt
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
+
+> **Reference catalogue, 2026-09-12:** all numbered obligations and triggers are retained in the single
+> [master table](ROADMAP.md#master-table). Dated observations below require source/consumer recensus before
+> closure. This file is no longer a separate live backlog.
+
 Items that are not blockers but should not be forgotten. When picked up,
 move to a session log entry and remove from here.
 
@@ -52,7 +59,7 @@ move to a session log entry and remove from here.
 > (ray-vs-handle hit-testing + drag-state machine + axis-locked
 > translation) consumed by sandbox + future editor.
 >
-> **Architecture written up 2026-05-22 → `docs/phases/phase-ui-tooling.md`**
+> **Architecture written up 2026-05-22 → `docs/archive/2026-09-12-superseded-plans.md#phase-ui-tooling`**
 > ("Cerid UI & Tooling Architecture — `crd-ui` · gizmos · editor overlays").
 > Elite design captured: **two worlds** (document vs transient tooling world —
 > gizmos/editor-UI are `EditorOnly`-tagged entities, hidden from the scene-tree
@@ -66,7 +73,7 @@ move to a session log entry and remove from here.
 > rendering = screen-space 2D frame-graph pass vs worldspace renderable;
 > shader/resource changes ADDITIVE not structural; `crd-font` (MSDF) is the real
 > new substrate. Sequences after renderer + `crd-font` + `crd-scene` + the
-> command layer (`docs/phases/phase-4.0-platform.md`).
+> command layer (`docs/archive/2026-09-12-superseded-plans.md#phase-4.0-platform`).
 >
 > **Sequencing:** undecided. Slots in EITHER after `crd-hesap-dense` v0
 > + Phase 3.1 eylem v1c-resume (consumer-pull from eylem's

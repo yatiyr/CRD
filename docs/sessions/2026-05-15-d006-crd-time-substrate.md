@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-006: `crd-time` substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **Detour D-006** opens + closes same day. Inserted into the Strategic

@@ -1,5 +1,8 @@
 # 2026-06-11 — the x16 + factor crush: multi-stream packs and fused mRHS kernels (part 22)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap`. Directive: "fix the remaining x16 and factor gaps too, same deep approach."
 Continuation of the multi-stream dig (part 21); every step measured.
 

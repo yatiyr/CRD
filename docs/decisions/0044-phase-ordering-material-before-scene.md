@@ -1,5 +1,8 @@
 # ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-04
 **Tags:** arch, renderer, scene, resources

@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m4b: InheritPolicy::Inherit transparent CoW backend
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m4 shipped — InheritPolicy enum + DontInherit + Inherit-as-stub. 792/792 / 789 release.
 
 **Status at end:** v1m4b COMPLETE — three sub-slices (v1m4b1 / v1m4b2 / v1m4b3) shipped. `InheritPolicy::Inherit` now has the transparent CoW backend ADR-0058 pillar 5 specified: byte-deduplicated shared pool with content-hash dedup, refcounted entries, copy-on-first-write break in `get_mut`, refcount eviction on entity destroy, force-SparseSet at registration. **Six-config 805/805 / 802 release / 17 smokes; 16 new tests across 3 sub-slices.**

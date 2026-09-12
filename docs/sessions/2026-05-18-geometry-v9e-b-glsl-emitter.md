@@ -1,5 +1,8 @@
 # Session 2026-05-18 — geometry-v9e-b GLSL emitter + ULP-conformance GPU dispatch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Retroactive log written 2026-05-19** — slice shipped 2026-05-18 but
 > its session log wasn't authored at the time; this fills the gap.
 

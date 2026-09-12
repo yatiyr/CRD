@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1c2: Archetype + ArchetypeGraph + ArchetypeChunkStorage + IStorageEventSink + typed World API
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1a + v1b + v1c1 shipped earlier the same day. The chunk machinery (`ChunkLayout` / `ChunkHeader` / `Chunk` / `ChunkAllocator`) was in place. No archetype struct, no archetype graph, no entity-component bindings, no `add_component<T>`.
 
 **Status at end:** v1c2 SHIPPED. The engine has its first real "entity owns components" capability. Archetype graph is memoised + zero-allocation on the hot navigation path. `IStorageEventSink` — the **Cerid L5 plug point** — is wired on every storage mutation with a `NullStorageEventSink` default. v1i and beyond can fan out to the `IComponentIndex` framework without touching any storage call sites or user code. 11 of 14 slices remain in Phase 3.0; v1d (SparseSet escape-hatch backend) is next.

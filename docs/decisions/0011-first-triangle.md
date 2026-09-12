@@ -1,4 +1,7 @@
-﻿# ADR-0011 — First triangle milestone
+# ADR-0011 — First triangle milestone
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
 **Status:** Accepted

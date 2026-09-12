@@ -1,5 +1,8 @@
 # 2026-07-09 — D-007: CKIR becomes the universal shader IR (ADR-0101) + full vec/mat/quat corpus on Vulkan + DX12
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Detour doc: **`docs/detours/D-007-ckir-universal-shader-ir.md`**. North-star ADR:
 > **`docs/decisions/0101-ir-is-source-of-truth-for-all-shaders.md`**. Corpus reference:
 > **`docs/systems/shader-ir-corpus-and-stages.md`**. This log = the whole arc from the multi-kernel

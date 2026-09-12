@@ -1,5 +1,8 @@
 # v16 — reverse-mode AD + differentiable solvers: the crush reference (2026-07-06)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — v16 reverse-mode AD shipped 2026-07-07 (ADR-0097 finalized: v16 SHIPPED). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > **Implementation reference — read before coding any v16 slice.** The frontier crush levers per slice, the honesty

@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m3c: Nested öbek references (`obek = "..."` per-entity)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m3b shipped. ObekCooker `extends` chain resolution + cycle detection + OCHN entries. 10 cooker tests; six-config 782/782 / 779 release.
 
 **Status at end:** v1m3c shipped — per-entity `obek = "..."` recursive cooking. Eager flatten by default: nested öbek's full entity graph splices into the parent's cooked OBEK bytes. Splice via `ChildOf(nested_root → parent_entity)` for nested entities that have no ChildOf in their own source. Two-level (and arbitrary-depth) nesting works recursively. Cycle detection unified across extends + nested. Six-config 784/784 / 781 release / 17 smokes; 12 cooker tests (+2 net: -1 stale reservation, +3 new).

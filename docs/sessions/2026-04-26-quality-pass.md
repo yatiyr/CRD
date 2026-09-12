@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — Phase 1 quality pass
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Close Phase 1's quality pass before starting `crd-math`:

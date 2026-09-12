@@ -1,5 +1,8 @@
 # ADR-0069 — Eylem materials substrate
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **Accepted** (2026-05-11)
 > Companions: [ADR-0062](0062-eylem-physics-architecture.md) (eylem
 > architecture; §5.5 reserves Material), [ADR-0063](0063-eylem-determinism-contract.md)

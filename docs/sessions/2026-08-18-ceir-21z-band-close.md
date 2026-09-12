@@ -1,5 +1,8 @@
 # CEIR-21z — the CEIR-21 (high-level tensor IR: `ceir.shape` / `ceir.tensor` / `ceir.layout`) band close (2026-08-18)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 CEIR-21 gives the tensor/array/ML world the same authorable-IR treatment the render (18) / RT (19) / device-work (20)
 bands gave graphics: **three value-op dialects over the CEIR-3d tensor TYPES** (Dim/Shape/Tensor, declared since 3d),
 preserving tensor semantics ABOVE raw dispatch (§51/§70: "do not flatten a tensor graph to 100 dispatches before the

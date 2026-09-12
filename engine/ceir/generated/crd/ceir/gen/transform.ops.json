@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "dialect": "transform",
+  "summary": "CEIR-27 sec-71/sec-72/sec-146 the transform dialect: an AUTHORABLE optimization-SCHEDULE program. A transform module is a SEPARATE asset (NOT the payload) whose directive ops set program-global compilation knobs the payload program is then planned with -- so two schedules optimize ONE semantic program (sec-146). This slice (27a) ships the two PROGRAM-GLOBAL knobs the tensor pipeline already exposes as PlanOptions (fuse_gemm_relu, share_intermediate_storage), hoisting the C++ struct into an authored asset (the tensor_pipeline.hpp 26f/27 'fusion IS a schedule decision' seed). The ceir-gpu loader plan_options_from_transform walks the module and maps each directive to its PlanOptions field; an ABSENT directive keeps the base default (a partial schedule is legal). Per-op TARGETING (sec-71 fine-grained 'fuse THESE ops' via payload handles/matchers) is NAMED-FORWARD: it lands when a corpus has two fusable sites wanting DIFFERENT decisions (no live consumer today -- both knobs are program-global by construction, the 26b-4 no-speculative rule). Declarative rewrite RULES (sec-72) are 27c. Directive ops carry NO results/operands and NO effects (compile-time schedule metadata, not runtime work) and are NOT Pure -- a directive is NOT a value computation, so Pure/CSE/DCE reasoning does not apply, and marking it Pure would be a CATEGORY ERROR (two structurally-identical directives, e.g. two transform.fuse{true}, would become CSE merge candidates). A transform module is read by the loader and DISCARDED -- no pass ever runs on it. Module-wide well-formedness (a program-global knob set at most ONCE) is the SEPARATE walk transform::find_transform_misuse (the find_resource/quant_misuse house pattern): a second occurrence of a directive is DuplicateDirective; the generated verify_fuse/verify_share_storage own the STRUCTURAL contract (the required bool enable). CEIR-29a-3b ADDS a THIRD program-global directive, transform.assign_provider (a required string `provider`): it PINS the ml-op partitioner (partition_ml, ceir-gpu) to a named execution provider -- the ceir-gpu loader provider_from_transform resolves the name to an MlProvider span index partition_ml honours as a PREFERENCE. find_transform_misuse gains seen_assign (a duplicate assign_provider is DuplicateDirective, same as fuse/share). CEIR-29c-3b ADDS a FOURTH directive, transform.constrain_provider_class (a required string `class`): it CONSTRAINS the partitioner to a provider CLASS (host/gpu/npu/media/external) as a HARD FILTER (a sec-102 portability boundary, unlike assign_provider's preference) -- the ceir-gpu loader constraint_from_transform resolves the name to a ProviderClass partition_ml filters by; it COMPOSES with assign_provider (filter outer, pin inner). find_transform_misuse gains seen_constrain (a duplicate is DuplicateDirective).",
+  "ops": [
+    {
+      "name": "assign_provider",
+      "qualified": "transform.assign_provider",
+      "version": 1,
+      "summary": "Program-global schedule directive: pin the ml-op partitioner to a named execution provider (resolved to a span index by provider_from_transform).",
+      "docs": "A program-global schedule directive that pins the ml-op partitioner (partition_ml) to a named execution provider for the whole payload. Carries a single required string `provider`; the ceir-gpu loader provider_from_transform matches it against the MlProvider span by name equality and returns the span INDEX partition_ml honours as a PREFERENCE (the pinned provider claims only ops it advertises -- a refused op falls through to first-available, never forced; the coopvec 'gelu on a relu kernel' scar). An absent transform.assign_provider = no pin (first-available). An UNKNOWN name (or a name duplicated in the span) is a typed reject, never a silent no-op. NO results/operands/effects and NOT Pure -- a directive is not a value computation (see transform.fuse: Pure would make two identical directives CSE merge candidates; a transform module is loaded then discarded, never passed). Per-op provider targeting (sec-71 fine-grained) is named-forward: no live consumer while the pin is program-global.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "provider",
+          "kind": "string",
+          "required": true,
+          "doc": "the execution-provider NAME to prefer (matched against the MlProvider span by equality). The ceir-gpu loader provider_from_transform resolves it to a span index partition_ml pins; an unknown name is a typed reject, a name shared by two providers in the span is a typed reject. Program-global; per-op targeting is the sec-71 named-forward."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "constrain_provider_class",
+      "qualified": "transform.constrain_provider_class",
+      "version": 1,
+      "summary": "Program-global schedule directive: constrain the ml-op partitioner to a provider CLASS (a hard filter resolved by constraint_from_transform).",
+      "docs": "A program-global schedule directive that constrains the ml-op partitioner (partition_ml) to a provider CLASS for the whole payload. Carries a single required string `class` (host/gpu/npu/media/external -- the ProviderClass members lowercased); the ceir-gpu loader constraint_from_transform resolves it (via semantics.hpp provider_class_from_name) to a ProviderClass that partition_ml applies as a HARD FILTER -- ONLY providers of that class are eligible to claim, and an op no in-class provider claims falls to the CKIR fallback (-1), NEVER to a provider of another class (a sec-102 portability boundary: 'this class or not at all', unlike the assign_provider PREFERENCE which falls through). It COMPOSES with assign_provider (filter OUTER, pin inner: a pin to a provider the class excludes is ignored). An absent transform.constrain_provider_class = no class constraint. An UNKNOWN/empty name is a typed reject (UnknownProviderClass), never a silent no-op. NO results/operands/effects and NOT Pure -- a directive is not a value computation (see transform.fuse: Pure would make two identical directives CSE merge candidates; a transform module is loaded then discarded, never passed). Per-op class targeting (sec-71) is named-forward.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "class",
+          "kind": "string",
+          "required": true,
+          "doc": "the ProviderClass NAME to require (host/gpu/npu/media/external -- the enum members lowercased, the semantics.hpp provider_class_name table). The ceir-gpu loader constraint_from_transform resolves it to a ProviderClass partition_ml uses as a HARD FILTER; an unknown/empty name is a typed reject (UnknownProviderClass), never a silent no-op. Program-global; per-op targeting is the sec-71 named-forward."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "fuse",
+      "qualified": "transform.fuse",
+      "version": 1,
+      "summary": "Program-global schedule directive: enable/disable operator fusion (maps to PlanOptions.fuse_gemm_relu).",
+      "docs": "A program-global schedule directive that turns operator fusion on/off for the whole payload (the gemm->relu fold into StageKind::GemmRelu). Carries a single required bool `enable`; the ceir-gpu loader plan_options_from_transform maps it to PlanOptions.fuse_gemm_relu (an absent transform.fuse keeps the base default). NO results/operands/effects and NOT Pure -- a directive is not a value computation (marking it Pure would make two identical directives CSE merge candidates; a transform module is loaded then discarded, never passed). Per-op fusion targeting (sec-71 fine-grained) is named-forward: no live consumer while the knob is program-global.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "enable",
+          "kind": "bool",
+          "required": true,
+          "doc": "true = fuse at every fusable site; false = keep separate. The program-global fusion knob; per-op targeting is the sec-71 named-forward."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "place_mesh",
+      "qualified": "transform.place_mesh",
+      "version": 1,
+      "summary": "Program-global schedule directive: author the per-rank device-class placement of a dist mesh (resolved by placement_from_transform).",
+      "docs": "A program-global schedule directive that AUTHORS the per-rank device-class PLACEMENT of a ceir.dist device mesh (CEIR-30c sec-103/sec-146 -- placement is an authored asset). Carries a required symbol `mesh` (the dist.mesh name it places -- resolved against the payload's meshes so the loader can validate against the mesh extent), a required string `classes` (a comma-list of ProviderClass names, one per rank in order), and a required string `fallback` (the class for an unowned stage -- the all-reduce combine). The ceir-gpu loader placement_from_transform resolves it to (Array<ProviderClass> rank_classes, ProviderClass fallback) that feed stage_class_from_placement -- the THIRD producer of the ONE per-stage ProviderClass vector execute_two_class consumes (beside stage_class_from_partition), so the CEIR-30b-3 hand-written [Host,Host,Gpu] placement becomes an authored asset. Typed rejects: an unknown mesh (UnknownMesh), an unknown/empty class name in `classes` or `fallback` (UnknownProviderClass), a classes-count != the mesh extent (RankCountMismatch) -- never a silent rank-placed-nowhere. COMPOSES with assign_provider / constrain_provider_class (those place the PARTITIONER's claim; this places the MESH's ranks). NO results/operands/effects and NOT Pure -- a directive is not a value computation (see transform.fuse: Pure would make two identical directives CSE merge candidates; a transform module is loaded then discarded, never passed). Per-mesh-axis / per-op placement is the sec-71 named-forward.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "mesh",
+          "kind": "symbol",
+          "required": true,
+          "doc": "the dist.mesh NAME whose ranks this places (matched against the payload's dist.mesh ops by name -- the loader resolves it to validate the classes count against the mesh extent). An unknown mesh is a typed reject (UnknownMesh)."
+        },
+        {
+          "name": "classes",
+          "kind": "string",
+          "required": true,
+          "doc": "a COMMA-LIST of ProviderClass names (host/gpu/npu/media/external), ONE per mesh rank in rank order (e.g. \"host,host\"). The ceir-gpu loader placement_from_transform resolves each via semantics.hpp provider_class_from_name; an unknown/empty segment is UnknownProviderClass, and a count != the mesh extent is RankCountMismatch -- both typed rejects, never a silent no-op."
+        },
+        {
+          "name": "fallback",
+          "kind": "string",
+          "required": true,
+          "doc": "the ProviderClass name for a plan stage NO rank owns (the all-reduce COMBINE -- provider < 0 in the lowered plan). Resolved via provider_class_from_name; an unknown/empty name is UnknownProviderClass."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    },
+    {
+      "name": "share_storage",
+      "qualified": "transform.share_storage",
+      "version": 1,
+      "summary": "Program-global schedule directive: enable/disable intermediate-buffer aliasing (maps to PlanOptions.share_intermediate_storage).",
+      "docs": "A program-global schedule directive that turns intermediate-buffer aliasing on/off for the whole payload (the CEIR-26f free-list: disjoint-lifetime Intermediates share physical storage). Carries a single required bool `enable`; the ceir-gpu loader plan_options_from_transform maps it to PlanOptions.share_intermediate_storage (an absent transform.share_storage keeps the base default). NO results/operands/effects and NOT Pure -- a directive is not a value computation (see transform.fuse: Pure would make two identical directives CSE candidates; a transform module is loaded then discarded). Per-pair targeting is the sec-71 named-forward.",
+      "operands": [],
+      "results": [],
+      "attributes": [
+        {
+          "name": "enable",
+          "kind": "bool",
+          "required": true,
+          "doc": "true = disjoint-lifetime Intermediates share storage (the 26f free-list); false = every Intermediate its own buffer. The program-global aliasing knob."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [],
+      "determinism": "",
+      "domain": "",
+      "native": null
+    }
+  ]
+}

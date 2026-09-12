@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0c: `crd::math::deterministic` substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1 v0c (per `docs/phases/phase-3.1-eylem.md` v0 table) shipped.**
 Adds Cephes-style polynomial transcendentals + IEEE-correct rounding
 wrappers in `engine/math/include/crd/math/deterministic.hpp` +

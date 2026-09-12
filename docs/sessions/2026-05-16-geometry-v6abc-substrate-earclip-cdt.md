@@ -1,5 +1,8 @@
 # 2026-05-16 — Phase 3.1.7 v6 `-polygon` cluster: v6a + v6b + v6c
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Half-cluster checkpoint. New `engine/geometry-polygon/` module — the
 > 7th `crd-geometry-*` sub-module. v6d (Vatti polygon Boolean) +
 > v6e (Bentley-Ottmann) + v6-close deferred to a focused next session

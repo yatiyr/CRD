@@ -5,8 +5,9 @@ summary = "CEIR-12a sec-36 the resource dialect: resource declaration, views/ran
 # ----------------------------------------------------------------------------------------------------------------------
 # resource.declare -- a GRAPH-OWNED resource (the planner OWNS its memory, CEIR-12d). The definition site of a resource
 # value; its type is a CEIR-3c resource kind (buffer<T>/image<Dim,Fmt>/tensor<...>/... supplied by the caller's
-# result_type via the ctx.type_* factories). A Pure value constructor -- no effect. ⛔ vs resource.import: declare is
-# graph-owned + PLANNED; import is externally-owned + NEVER planned (the distinction is the OP KIND, not a flag).
+# result_type via the ctx.type_* factories). Carries an ALLOCATE effect on its result (NOT Pure -- a declare names a
+# DISTINCT graph-owned resource, so two identical declares are different buffers and MUST NOT be CSE'd; CEIR-26c). ⛔ vs
+# resource.import: declare is graph-owned + PLANNED; import is externally-owned + NEVER planned (the distinction is the OP KIND, not a flag).
 # ----------------------------------------------------------------------------------------------------------------------
 [[op]]
 name = "declare"
@@ -24,8 +25,9 @@ attributes = [
     { name = "budget_class", kind = "symbol", required = false, doc = "CEIR-12b sec-25 an OPEN budget-class tag (alias_group-style: UNCHECKED by the walk -- open symbol; the 12d planner consumes it)." },
     { name = "size_class", kind = "int", required = false, doc = "CEIR-12c sec-78 the memory SIZE-CLASS bucket (an opaque planner bucket id; absent = unspecified/0). OPEN value (UNCHECKED by the walk); the 12c alias/lifetime analysis reads it -- two transients may share a slot ONLY within the same (size_class, TypeKind) bucket (the frame graph's slot-SIZE scar, IR edition). ⛔ still declare-ONLY planning intent: on a resource.import it is IntentAttrOnImport." },
 ]
-traits = ["Pure"]
-docs = "The graph-owned resource definition site. Result type is a CEIR-3c resource kind. Pure (a value constructor -- no memory effect; reads/writes ride the ops that USE the resource). CEIR-12b attaches the planning-intent attrs HERE: lifetime (sec-20) + history_length (the history<T> ring depth) + memory_domain (sec-24 INTENT) + residency (sec-25 hint) are CLOSED vocabularies enforced by find_resource_intent_misuse; streaming_priority + budget_class + size_class (CEIR-12c sec-78, the alias slot bucket) are OPEN tags (12c/12d consume). ⛔ these are declare-ONLY -- the planner plans declare's resources, NEVER import's, so a planning-intent attr on an import is IntentAttrOnImport (nonsense-by-construction, the view-of-view legal-by-accident shape)."
+traits = []
+effects = [ { family = "Allocate", result = 0 } ]
+docs = "The graph-owned resource definition site. Result type is a CEIR-3c resource kind. Carries an ALLOCATE effect on its result (NOT Pure): a declare NAMES A DISTINCT graph-owned resource -- two structurally-identical declares are DIFFERENT buffers, so declare is NOT referentially transparent and MUST NOT be CSE'd (CEIR-26c: a Pure declare was silently merged, collapsing distinct inputs A/B/C into one -- the MLIR alloc-is-not-CSE-able rule). Reads/writes still ride the ops that USE the resource; the Allocate effect is the definition itself, not a read/write, so the CEIR-12c hazard walk orders allocations without treating declare as a memory access. CEIR-12b attaches the planning-intent attrs HERE: lifetime (sec-20) + history_length (the history<T> ring depth) + memory_domain (sec-24 INTENT) + residency (sec-25 hint) are CLOSED vocabularies enforced by find_resource_intent_misuse; streaming_priority + budget_class + size_class (CEIR-12c sec-78, the alias slot bucket) are OPEN tags (12c/12d consume). ⛔ these are declare-ONLY -- the planner plans declare's resources, NEVER import's, so a planning-intent attr on an import is IntentAttrOnImport (nonsense-by-construction, the view-of-view legal-by-accident shape)."
 
 # ----------------------------------------------------------------------------------------------------------------------
 # resource.view -- a VIEW / RANGE / SUBRESOURCE over a resource. ONE op spans all three: the CEIR-3c View type unifies
@@ -51,7 +53,12 @@ docs = "The unified view/range/subresource op. The mask is in the result View ty
 # resource.import -- bring an EXTERNALLY-OWNED resource into the graph (the PROVIDER binds the handle -- a sec-150
 # provider seam, named-forward to CEIR-13+). ⛔ The planner must NEVER plan an imported resource's memory (it is not
 # graph-owned). Result type is a 3c resource kind (often external_resource for an opaque external, or a typed
-# buffer/image that is externally bound). A Pure value constructor at the IR layer (the actual binding is provider-side).
+# buffer/image that is externally bound). ⛔ NOT Pure (CEIR-26z): an import is an EXTERNAL SOURCE whose value comes from the
+# provider binding (IDENTITY), NOT from its structure -- so two imports are DISTINCT resources and CSE must NOT merge them.
+# Carries an ALLOCATE effect on its result (the [[feedback_cse_must_not_merge_external_source_ops_declare_is_alloc_not_pure]]
+# rule, same as declare): an anonymous import (name absent, required=false) has NO identity attr, so a Pure import would let
+# CSE structurally-merge two anonymous imports into one external -- the declare-A@A collapse. Allocate is NOT a determinism
+# claim (imports stay legal in Deterministic mode) and the planner still keys ExternalIn/never-plan by OP KIND, not the effect.
 # ----------------------------------------------------------------------------------------------------------------------
 [[op]]
 name = "import"
@@ -61,8 +68,9 @@ results = [ { name = "resource", type = "resource", doc = "the imported resource
 attributes = [
     { name = "name", kind = "symbol", required = false, doc = "an optional external identity name (attr-only; the provider resolves the real handle -- sec-150, CEIR-13+)" },
 ]
-traits = ["Pure"]
-docs = "The externally-owned resource entry point. Distinct OP from declare (graph-owned vs externally-owned -- the planner plans declare's resources, NEVER import's). Pure at the IR layer; provider handle binding is a named-forward (sec-150 / CEIR-13+)."
+traits = []
+effects = [ { family = "Allocate", result = 0 } ]
+docs = "The externally-owned resource entry point. Distinct OP from declare (graph-owned vs externally-owned -- the planner plans declare's resources, NEVER import's). NOT Pure -- an ALLOCATE effect (an external source is keyed by identity, not structure; two imports are distinct, so CSE must not merge them -- CEIR-26z); provider handle binding is a named-forward (sec-150 / CEIR-13+)."
 
 # ----------------------------------------------------------------------------------------------------------------------
 # resource.export -- publish a resource externally (the boundary). ⛔ NOT Pure: it carries a conservative MemoryReadWrite

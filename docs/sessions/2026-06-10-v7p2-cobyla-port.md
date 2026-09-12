@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-p-2 CLOSE: the COBYLA port, differentially verified (same session, part 12)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-p-2 — COBYLA, the first of the three user-chosen FULL-PORT slices (the L-BFGS-B playbook).
 **Status: CLOSED — port + functional gates + the differential harness: 2050 checks, 0 failures.**

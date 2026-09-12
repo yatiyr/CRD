@@ -1,5 +1,8 @@
 # Lesson 07 — Using radix and Morton in real consumers
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "How would you use these — just tell me. Where, and for what?"
 
 This lesson is concrete. For each planned consumer of `crd-geometry-bvh-gpu`, it shows the call sequence, which sort variant to use, and where the headache spots are. No theory; just recipes.

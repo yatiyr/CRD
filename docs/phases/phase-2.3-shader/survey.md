@@ -1,5 +1,8 @@
 # Phase 2.3 Shader Survey
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../../ROADMAP.md); current rules: [AGENTS](../../../AGENTS.md).
+
 ## Filament
 
 - **Steal:** aggressively data-driven material/shader pipeline boundaries and

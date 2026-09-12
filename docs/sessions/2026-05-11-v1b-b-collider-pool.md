@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1b-b — eylem rigid-3D ColliderPool (3 kinds)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship v1b-b: per-kind AoSoA-8 `ColliderPool` for Sphere / Box / Capsule

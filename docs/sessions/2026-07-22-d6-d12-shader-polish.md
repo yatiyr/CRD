@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · D6–D12 shader-system polish band (detour slices 37–45)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The user asked to complete **every shader-system polish task** to gold standard, added them to the D-007 slice table after D5,
 and gave one standing constraint: **reuse the engine's existing fiber-based `crd-jobs` scheduler for parallel work — do not write
 a bespoke thread pool** ("we are not rewriting what we already have"). This session closed D6–D12 (slices 37–45). D6–D9 landed in

@@ -1,5 +1,8 @@
 # ADR-0109 — CEIR / CHIR / CKIR ownership, the one-way layer contract, and `crd-ceir` module placement
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-07, user-approved at the CEIR-0c gate) — the D-007 **CEIR band**. Builds on
 ADR-0108 (Accepted — the owned language stack) and formalizes the layer contract + the module the whole detour is
 implemented in. **This ADR is now the binding contract CEIR-1 implements** (the names + edges below are fixed).
@@ -25,7 +28,7 @@ extensions may. This ADR fixes the separation and the names.
 
 | Layer | Owns (answers) | Currency | Must NEVER contain |
 |---|---|---|---|
-| **CHIR** (future language layer; design-only until CEIR-29) | source-language semantics: modules, generics, ADTs, closures, traits, ownership, async/state/events, reflection (§4) | a structured source model (semantic nodes + stable ids + source spans + layout metadata, §10) | execution/scheduling/resource-planning decisions (those are CEIR's); it *lowers/erases* into CEIR |
+| **CHIR** (future language layer; ~~design-only until CEIR-29~~ **→ binding decisions ACCEPTED at CEIR-32a / ADR-0128, 2026-09-06; module `crd-chir` sited there**) | source-language semantics: modules, generics, ADTs, closures, traits, ownership, async/state/events, reflection (§4) | a structured source model (semantic nodes + stable ids + source spans + layout metadata, §10) | execution/scheduling/resource-planning decisions (those are CEIR's); it *lowers/erases* into CEIR |
 | **CEIR** (this detour) | **what work exists, how data/resources flow, what controls execution, where work runs, how work makes more work, how resources synchronize, which lower program implements each op** (§2) | a typed-SSA + graph/CFG/structured-region IR (`Module`/`Operation`/…) — text + binary + builder, all canonical | ⛔ a shading language or a bytecode (that is CKIR/backend — the ADR-0103 I1/I2 invariants extend UP to CEIR: `crd-ceir` never names GLSL/HLSL/WGSL/MSL/CUDA/SPIR-V/DXIL/PTX); ⛔ CHIR source syntax; ⛔ backend command-descriptor fields (§158) |
 | **CKIR** (shipped, ADR-0101/0103; UNCHANGED) | **what one GPU invocation computes** — per-thread shader/kernel math | `KGraph`+`KEntry` → opaque `IGpuProgram` | orchestration/scheduling (that is CEIR's) |
 

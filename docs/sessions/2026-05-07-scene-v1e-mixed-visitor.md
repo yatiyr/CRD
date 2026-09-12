@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1e: `World::for_each_chunk` (mixed-backend chunk visitor)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1d shipped earlier the same day. Both L2 backends (`ArchetypeChunkStorage`, `SparseSetStorage`) live behind `IStorageBackend`, World routes `add/has/get/remove` by `StorageHint`. But each backend's `for_each_chunk` only knows about its own data — multi-backend queries (the typical case for v1g's query DSL) had no primitive yet.
 
 **Status at end:** v1e shipped. `World::for_each_chunk(required, fn, ud)` is the unified iteration primitive that v1g sits on. Splits `required` by hint, fast-paths the pure cases, and walks intersections for mixed and pure-sparse-multi-bit. Filtered chunks land in stack-local scratch — recursive queries are safe. Six-config green at 629/629 / 626 release / 17 smokes. Scene tests 113 / 34450.

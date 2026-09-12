@@ -1,5 +1,8 @@
 # ADR-0065 — `crd-hesap` numerical computing substrate
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-10
 **Status:** Accepted
 **Tags:** [arch] [hesap] [math] [solvers] [autodiff] [optimization] [dsp] [gpu] [scripting]

@@ -452,6 +452,101 @@ TEST_CASE("ceir 10a: a REENTRANT reload from inside the registrar is rejected (R
     CHECK(set.size() == 1U);
 }
 
+// ─────────────────────────── CEIR-35c: hot-reload SOAK (rapid cycles across the decision table) ───────────────────────────
+// CEIR-35 Q5 (sec-172 hot-reload stress): the per-decision tests above each prove ONE reload; this SOAK drives HUNDREDS
+// of cycles rotating the FULL decision table (HotSwap - NoChange - NeedsMigration - ContractChange) and proves the reload
+// LIFECYCLE stays correct + LEAK-FREE under rapid generation churn: every decision is correct, every install stales the
+// old handle + makes the new current, every reject keeps last-good, drain retires every zombie (the set never accumulates
+// generations). The PRECISE leak gate is ASan (win-asan + linux-gcc-asan run this over 256 generations — a leaked
+// per-generation Context or a dangling generation pointer surfaces there); a COARSE deterministic growth bound also rides
+// `num_chunks()` (a small chunk so a per-cycle generation leak would force many chunks, catching a gross leak even on the
+// non-ASan configs). State-VALUE migration correctness is carried by the stage-3 tests above; this soak qualifies the
+// reload lifecycle UNDER LOAD, not the cell move.
+TEST_CASE("ceir 10a: hot-reload SOAK - rapid decision-table cycles stay generation-safe and leak-free", "[ceir][reload][ceir35c]")
+{
+    crd::memory::GrowableTlsfAllocator root(crd::usize{8} << 20); // modest chunks: a per-cycle generation leak GROWS num_chunks
+    ReloadSet     set(&root, &registrar, nullptr);
+    constexpr u64 id = 3500U;
+
+    const Array<u8> b0 = cook_counter(root, id, 7, /*depth=*/1U);
+    REQUIRE(set.add(AssetId{id}, span_of(b0)).ok());
+    set.register_migration(AssetId{id}, &mig_expand_depth, nullptr); // present ⇒ a NeedsMigration reload installs
+
+    u32 cur_depth  = 1U;
+    i64 cur_next   = 7;
+    u32 n_hotswap  = 0U;
+    u32 n_nochange = 0U;
+    u32 n_migrate  = 0U;
+    u32 n_contract = 0U;
+
+    constexpr u32 warmup = 16U;
+    constexpr u32 cycles = 256U;
+    crd::usize    warmup_chunks = 0U;
+
+    for (u32 i = 0U; i < warmup + cycles; ++i)
+    {
+        const ProgramHandle before = set.handle(AssetId{id});
+        const u32           kind   = i % 4U;
+        if (kind == 0U) // HotSwap: a new body constant, same signature + state schema
+        {
+            cur_next             = 1000 + static_cast<i64>(i);
+            const Array<u8>    b = cook_counter(root, id, cur_next, cur_depth);
+            const ReloadResult rr = set.reload(AssetId{id}, span_of(b));
+            CHECK(rr.decision == ReloadDecision::HotSwap);
+            CHECK(rr.installed);
+            CHECK_FALSE(set.is_current(AssetId{id}, before));             // the old handle went stale
+            CHECK(set.is_current(AssetId{id}, set.handle(AssetId{id}))); // the fresh handle is current
+            ++n_hotswap;
+        }
+        else if (kind == 1U) // NoChange: byte-identical to the installed program
+        {
+            const Array<u8>    b = cook_counter(root, id, cur_next, cur_depth);
+            const ReloadResult rr = set.reload(AssetId{id}, span_of(b));
+            CHECK(rr.decision == ReloadDecision::NoChange);
+            CHECK_FALSE(rr.installed);
+            CHECK(set.is_current(AssetId{id}, before)); // last-good unchanged
+            ++n_nochange;
+        }
+        else if (kind == 2U) // NeedsMigration: toggle the ring depth (same contract, fn present ⇒ install)
+        {
+            const u32          nd = (cur_depth == 1U) ? 2U : 1U;
+            const Array<u8>    b  = cook_counter(root, id, cur_next, nd);
+            const ReloadResult rr = set.reload(AssetId{id}, span_of(b));
+            CHECK(rr.decision == ReloadDecision::NeedsMigration);
+            CHECK(rr.installed); // the registered fn's presence flips it from Reject to install
+            CHECK_FALSE(set.is_current(AssetId{id}, before));
+            cur_depth = nd;
+            ++n_migrate;
+        }
+        else // ContractChange: a signature flip (@f()->i64) — REJECT, last-good kept
+        {
+            const Array<u8>    b = cook_leaf(root, id, "f", cur_next, /*i64_result=*/true);
+            const ReloadResult rr = set.reload(AssetId{id}, span_of(b));
+            CHECK(rr.decision == ReloadDecision::ContractChange);
+            CHECK_FALSE(rr.installed);
+            CHECK(set.is_current(AssetId{id}, before)); // last-good unchanged
+            ++n_contract;
+        }
+        set.drain();             // retire the zombie generation every cycle
+        CHECK(set.size() == 1U); // the set never accumulates generations
+        if (i + 1U == warmup) { warmup_chunks = root.num_chunks(); } // steady-state high-water reached
+    }
+
+    // COARSE no-leak growth bound: 256 recycled generations must not grow the arena past its warmup high-water by more than
+    // slack jitter (a per-cycle generation/Context leak would force MANY 8 MiB chunks). The PRECISE gate is ASan.
+    CHECK(root.num_chunks() <= warmup_chunks + 2U);
+    // non-vacuity: the whole decision table was actually exercised (no silently-skipped branch).
+    CHECK(n_hotswap > 0U);
+    CHECK(n_nochange > 0U);
+    CHECK(n_migrate > 0U);
+    CHECK(n_contract > 0U);
+    // the survivor generation is current and executes coherently after the churn.
+    Generation* const g = set.generation(AssetId{id});
+    REQUIRE(g != nullptr);
+    Interpreter in(*g->ctx);
+    CHECK(run_gen(g, in) == 0); // @f() returns 0 (init) on a fresh interpreter — a coherent final generation
+}
+
 // ─────────────────────────── CEIR-10b: the PlanCache × ReloadSet pairing (the 10z rehearsal) ───────────────────────────
 
 TEST_CASE("ceir 10b: a callee interface change stales exactly the ReloadSet affected set of plans", "[ceir][plancache]")

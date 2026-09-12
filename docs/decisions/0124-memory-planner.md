@@ -1,5 +1,8 @@
 # ADR-0124 — The memory planner (CEIR-12d): interval-coloring over the §26/§78 lifetime analysis, an inspectable plan
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design + close advisor-reviewed — a consult at the design fork and pre-close) — the D-007 **CEIR band 12 (Resource/memory
 subsystem)**, slice **CEIR-12d**. The memory planner: `Context::plan_block_memory` colors the CEIR-12c live-range analysis

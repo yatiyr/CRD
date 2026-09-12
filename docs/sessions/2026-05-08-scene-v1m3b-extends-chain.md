@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m3b: ObekCooker `extends` chain resolution
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m3a shipped. ObekCooker substrate (TOML → OBEK CRDR, flat öbeks). 7 cooker tests; six-config 779/779 / 776 release.
 
 **Status at end:** v1m3b shipped — `extends = "..."` chain resolution at cook time with depth-unbounded recursive walk (max-depth = 64 hard cap), path-based cycle detection, deepest-first apply, and OCHN entry emission per chain link. 10 cooker tests (+3 net over v1m3a; one reservation test removed, four new positive tests added). Six-config 782/782 / 779 release / 17 smokes.

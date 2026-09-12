@@ -1,5 +1,8 @@
 # CEIR-11c — crd-perf integration: the profiling seam + per-op regions + a plan-compile cost counter — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) opened CEIR-11c after 11b closed (ADR-0123). Contract
 > (D-007 band-11): "every plan op wrapped in `CRD_PERF_SCOPE`-compatible regions (crd-perf, no new profiler)" + a
 > plan-compile cost counter — WITHOUT breaking the §153 hot-loop discipline 11z audits. Design: advisor consult (recon +

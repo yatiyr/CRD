@@ -1,5 +1,8 @@
 # Session — RAF-12.3: retire `FramePassKind` + RAF band close (2026-08-06)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Branch:** `main`. Detour D-007, RAF band. Mission constitution:
 `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`. ADR: `docs/decisions/0106-...` (closed this session).
 

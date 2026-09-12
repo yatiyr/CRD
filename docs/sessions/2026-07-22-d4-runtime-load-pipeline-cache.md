@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · D4 runtime load + persistent pipeline cache (both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The payoff of the D1–D5 chain: ship cooked bytecode, load it with **zero runtime shader compilation**, and persist the driver's
 pipeline compile across runs so a warm start is instant.
 

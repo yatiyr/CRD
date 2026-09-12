@@ -1,5 +1,8 @@
 # CEIR-11 — Reference executor + compiled host plan — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) opened band 11 after BAND 10 closed. Design substrate:
 > `docs/design/ceir-11a-reference-executor.md` (advisor consults on the design fork + the six-op signatures).
 > Master-map: §38 `ceir.task` · §84 two-tier · §112 debugger hooks · §118 the correctness oracle.

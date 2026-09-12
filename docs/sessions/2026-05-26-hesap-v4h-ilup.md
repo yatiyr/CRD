@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4h: ILU(p) level-of-fill (the ILU family is complete)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Correction 2026-05-26 (v4i-1 close):** the crush numbers below were measured on the
 > Krylov *recurrence* residual vs Eigen's *true* residual — an unfair stopping mismatch
 > ([[feedback_iterative_bench_matched_true_residual]]). At MATCHED true residual the honest

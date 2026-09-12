@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0a: SIMD wrapper substrate (`crd::math::simd`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1 v0a (per `docs/phases/phase-3.1-eylem.md` v0 table) shipped.**
 Adds `Vec4f`/`Vec8f`/`Mat4f`/`Quatf` SIMD wrapper types in
 `engine/math/include/crd/math/simd/` with backend selection

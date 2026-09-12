@@ -114,6 +114,10 @@ struct DrawListBinding
     }
 };
 
+// CEIR-31b-3-a-i-2: fwd-declared for the spec-aware resolve virtuals below (the enum is DEFINED after this class). A
+// pointer param needs only the declaration; the inline default bodies (which name a value) are DEFINED after the enum.
+enum class FrameExecError : crd::u8;
+
 // The seam between an authored graph and the running application. The asset names things (`"@output"`,
 // `"crd://shaders/post/agx_tonemap"`, `"shadow_casters"`); the host resolves those names to live objects. Keeping
 // resolution behind this interface is what lets the SAME asset run in a test, a game and an editor viewport.
@@ -260,6 +264,20 @@ public:
     // correctness) but overrides its clear → LOAD and the recording emits zero draws — the persistent image
     // retains its history. Default FALSE: every instance renders normally.
     [[nodiscard]] virtual bool for_each_load(FrameForEach /*kind*/, crd::u32 /*index*/) const { return false; }
+
+    // ── ⭐⭐ CEIR-31b-3-a-i-2: the SPEC-CONSTANT resolve seam. Appended at END (D135). ──
+    // A fullscreen/compute pass carrying `spec_<n>` params resolves its program THROUGH these, so the host can
+    // SPECIALIZE the CKIR program per pass (blur H vs V, a tint colour) from ONE authored asset. `specs` is a view
+    // valid only for the call; `err` names a spec-specific failure (SpecOnOpaqueProgram / SpecConstNotInProgram) and
+    // the record seat maps a null return with `err==Ok` to UnresolvedProgram. ⛔ APPENDED, not a signature change to
+    // the pure-virtual `program(id)` — a dozen test hosts implement it. DEFAULT (a host with no spec support): a
+    // spec'd pass (count>0) FAILS with SpecConstUnsupportedByHost — a frame whose specs would be DROPPED must not
+    // render — while a spec-free pass delegates to the plain `program(id)`/`kernel(id)`. ONE resolution path. The
+    // bodies are DEFINED below the FrameExecError enum (they name its values). ⛔ DISTINCT names (not an overload of
+    // program()/kernel()) — the house pattern for appended virtuals (instance_program/overlay_pass/…): an overload would
+    // HIDE the base for every subclass that overrides only program(id), which gcc's -Werror=overloaded-virtual rejects.
+    [[nodiscard]] virtual crd::gpu::IRasterProgram* program_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err);
+    [[nodiscard]] virtual crd::gpu::IGpuProgram*    kernel_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err);
 };
 
 // ── WHY a graph failed. Reported, never swallowed. ───────────────────────────────────────────────────────────
@@ -284,10 +302,38 @@ enum class FrameExecError : crd::u8
     UnresolvedAccel,      // a raytrace pass names an acceleration structure the host could not resolve
     UnresolvedArgs,       // an indirect pass names an args buffer the graph did not create
     // ── CEIR-17z. Appended at the END of the enum. ──
-    MissingCeirPlan       // a MIGRATED executor (scene/fullscreen/mesh/tess/mesh.indirect → record_ceir_render) got no CEIR
+    MissingCeirPlan,      // a MIGRATED executor (scene/fullscreen/mesh/tess/mesh.indirect → record_ceir_render) got no CEIR
                           // replay plan — the caller passed no FramePlans (or omitted this pass). §128 deleted the imperative
                           // fallback, so this is a LOUD load-path bug, never a silent no-record: build_frame_plans + pass them.
+    // ── CEIR-31b-3-a-i-2: the spec-const resolution failures (record-time). Appended at the END of the enum. ──
+    SpecOnOpaqueProgram,       // a spec'd pass names a program registered WITHOUT spec support (a Plain provider) — the spec would drop
+    SpecConstNotInProgram,     // a `spec_<n>` id is not a spec constant of the resolved program (a Spec provider's set_spec_const found 0) [wired now, exercised at -a-ii]
+    SpecConstUnsupportedByHost // a host predating spec support was handed a spec'd pass; a frame whose specs would be DROPPED fails, not renders
 };
+
+// CEIR-31b-3-a-i-2: the spec-aware resolve virtuals' default bodies (declared in IFrameGraphHost above; defined HERE
+// because they name FrameExecError values). A host that does not override them has no spec support.
+inline crd::gpu::IRasterProgram* IFrameGraphHost::program_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err)
+{
+    if (specs.count > 0U) { if (err != nullptr) { *err = FrameExecError::SpecConstUnsupportedByHost; } return nullptr; }
+    return program(id);
+}
+inline crd::gpu::IGpuProgram* IFrameGraphHost::kernel_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err)
+{
+    if (specs.count > 0U) { if (err != nullptr) { *err = FrameExecError::SpecConstUnsupportedByHost; } return nullptr; }
+    return kernel(id);
+}
+
+// CEIR-31b-3-c-ii: the record seat's spec-set builder, exposed for the H≠V spec-set unit test — NOT a public API (the
+// `detail::` label; a bare `framecook::` name would invite callers). Gathers a pass's `spec_<n>` params into `buf`
+// (caller owns `buf`, >= kMaxSpecConsts entries); the cook has guaranteed <= kMaxSpecConsts (SpecConstTooMany).
+// ⭐⭐ CEIR-31b-4-b-iv-g-2: it ALSO resolves DERIVED specs (`derive_spec_<n>_{read,axis,op}`) from a read's pixel extent,
+// so it now takes the `desc` (for the resource table) + the output extent (`out_w`/`out_h`) the transient scale sizes against.
+namespace detail
+{
+[[nodiscard]] SpecSet build_pass_spec_set(const FramePassDesc& d, const FrameGraphDesc& desc, crd::u32 out_w,
+                                          crd::u32 out_h, SpecConst* buf) noexcept;
+} // namespace detail
 
 // WHICH graph actually ran. ⛔ A caller must be able to tell "my graph ran" from "something else ran instead" —
 // a fallback that reports success is indistinguishable from a working frame, which is the exact class of lie

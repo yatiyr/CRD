@@ -1,5 +1,8 @@
 # Session 2026-05-19 — geometry-v10e frames + viz + sandbox
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Summary
 
 Shipped Phase 3.1.7 v10e: frames + viz adapters + sandbox `CurvesShowcase`

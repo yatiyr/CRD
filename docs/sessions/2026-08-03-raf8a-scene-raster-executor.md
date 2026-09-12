@@ -1,5 +1,8 @@
 # RAF-8a increment 3 — the `scene.raster` executor records the full live draw vocabulary (2026-08-03)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 (RAF band). **Row:** RAF-8a. **ADR:** 0106. **Prior:** `2026-08-03-raf7-one-submission-close.md`.
 
 ## What shipped

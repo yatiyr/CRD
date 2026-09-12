@@ -1,5 +1,8 @@
 # 2026-07-24 — The Interactive Frontier: UI-as-ECS, text, vector, docking (the REN·B recipe)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **absorbed** — the REN·B UI plan was folded into D-007 §UI/2D SUB-PROGRAMME (I2D/SPR bands, §U-20) + ADR-0107 (Proposed, pending review). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > STUDY→RECIPE for the REN band's interactive half. User mandate (2026-07-24): *"completely future proof,

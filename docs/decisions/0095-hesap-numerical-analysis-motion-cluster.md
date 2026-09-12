@@ -1,5 +1,8 @@
 # ADR-0095 — the v13 Numerical-Analysis + Motion cluster: the 4-module split, the three certification moat pillars, and the error-tier contract
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-06-29)
 - **Phase:** 3.1.6 v13 (Numerical-Analysis + Motion cluster)
 - **Tags:** `hesap` `interpolation` `quadrature` `differentiation` `motion` `determinism` `safety-critical` `architecture` `module-edges` `substrate`

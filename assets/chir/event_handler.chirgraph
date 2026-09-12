@@ -1,0 +1,26 @@
+chirgraph 1
+node 0 9037ee835c12e249 program event_demo -1 0 0 0
+node 1 779bfef7d302c826 state_decl world_state 0 0 0 0
+node 2 1288e59ef95d708c event_handler on_tick 0 0 0 0
+node 3 fba4fe79b9d6a474 query q 2 0 0 0
+node 4 afda9e599d863ae9 parallel_for update 2 0 0 0
+node 5 acfa753f33dc7b8a await task 2 0 0 0
+node 6 e23c32cb8212303b state_update commit 2 0 0 0
+pin 1 out cell World
+pin 3 out entities EntitySet
+pin 4 in entities EntitySet
+pin 4 out updated EntitySet
+pin 5 out result TaskResult
+pin 6 in cell World
+pin 6 in updated EntitySet
+attr 2 domain event
+attr 3 components Position.Velocity
+edge 3 0 4 0
+edge 1 0 6 0
+edge 4 1 6 1
+layout 9037ee835c12e249 00000000 00000000 0
+layout 1288e59ef95d708c 00000000 42c80000 1
+layout fba4fe79b9d6a474 42200000 43200000 1
+layout afda9e599d863ae9 42200000 435c0000 1
+layout acfa753f33dc7b8a 42200000 438c0000 1
+layout e23c32cb8212303b 42200000 43aa0000 1

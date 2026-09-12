@@ -1,5 +1,8 @@
 # 2026-07-08 — v17-h research-grade experiments vs cuBLAS: change the game
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## ⚠ HONEST FRAMING (2026-07-08 post-audit — I over-used "CRUSH"; here's the sober truth)
 None of these is a clean, same-workload, same-accuracy win over cuBLAS. What each actually is:
 - **#1 error-corrected tensor is NOT a crush.** Ozaki-2 (38.5 TF) is 1.32× cuBLAS-*fp32* ONLY because it's ~25× less

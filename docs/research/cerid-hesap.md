@@ -1,5 +1,8 @@
 # Cerid — `crd-hesap` numerical substrate research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — ADR-0065; hesap v0–v16 shipped (see `docs/phases/phase-3.1.6-hesap.md`). *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Date:** 2026-05-10

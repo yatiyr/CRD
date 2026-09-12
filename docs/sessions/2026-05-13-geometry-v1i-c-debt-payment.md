@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1i-c debt payment: all three debts paid immediately
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 The v1i-c close (`docs/sessions/2026-05-13-geometry-v1i-c-broadphase-pairs-and-validation.md`) deferred three items to `docs/debt.md`:

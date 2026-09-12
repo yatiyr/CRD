@@ -1,5 +1,8 @@
 # CEIR-12c — resource alias/lifetime analysis over 4d effects (§78 / §26)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-12c (D-007 master spine) · **Status:** ✅ CLOSED · **ADR:** none — see below.
 
 ## Contract

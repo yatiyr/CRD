@@ -1,216 +1,81 @@
-﻿# Cerid Engine — Engineering Principles
+# Cerid engineering principles
 
-> Non-negotiable. Every slice respects them; deviations are explicit,
-> justified, and recorded as an ADR under `docs/decisions/`.
->
-> Read this every session. It's short and it's the architectural compass.
+<!-- doc-role: rule -->
+> Current rule. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
 
-## Identity
+Current architectural rules; scheduling lives only in [ROADMAP](ROADMAP.md). Departures require an explicit
+decision/ADR. The [previous wording and rationale](archive/2026-09-12-orientation-history.md#docs-principles) are history.
 
-Cerid is a **general-purpose C++20 real-time engine substrate**. Games are
-one consumer; **simulation (incl. robotics), medical visualization,
-DAW-class creative tools, and offline cinematic pipelines** are equal-class
-consumers. The architecture serves all of them; no domain is privileged.
+## Product and module boundaries
 
-| Domain                       | Why Cerid fits                                                                |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| Games                        | Real-time renderer, physics, animation, scripting, scene/entity model         |
-| Simulation (incl. robotics)  | Deterministic option, swappable physics, math depth, sensor/actuator hookable |
-| Medical visualization        | High-quality rendering, large-volume data, deterministic playback             |
-| DAWs / creative tools        | Custom retained-mode UI, node editors, plugin/script extensibility, low jitter |
-| Offline cinematic pipelines  | Same render path, scriptable, deterministic, scene-graph aware                |
+Cerid is a general-purpose engine substrate. Games, simulation/robotics, medical visualization, CAD/CAM, DAWs,
+scientific work and offline cinema are equal-class consumers. Public modules are separable; applications must
+omit unused systems at link/package time. Dependencies go one way. Vendor types stay behind Cerid-owned interfaces.
+Renderer, eylem physics, audio and product UI remain Cerid-owned implementations, not wrappers around a vendor engine.
 
-## Principles
+Build vertical end-to-end slices against real consumers. Measure a workload before optimization or a major path
+replacement. Correctness precedes speed. Determinism is a declared, reachable tier with appropriate replay/precision
+proofs, never an unsupported blanket claim. Verification follows [BUILDING](BUILDING.md); reasoning follows [SANITY](SANITY.md).
 
-- **Modular by default.** Every subsystem is a separable module with a clear
-  public surface. A DAW build that doesn't need physics/animation must be
-  able to omit them at link time.
-- **Vertical slice over horizontal completeness.** Walk a small path
-  end-to-end before widening. The first triangle gate is a permanent example.
-- **Authoring text, runtime binary.** Human-edited data is text (TOML / JSON
-  / glTF). Engine-consumed data is cooked binary. Runtime never imports
-  source assets.
-- **Everything executable is an authorable asset.** The rule above covers
-  DATA; this covers CODE. Every algorithm the engine runs — rendering,
-  culling, lighting, post, GI, compute, numerical — is an authorable CEIR
-  program asset: cooked disk-first, loaded by default, partially modifiable
-  or completely replaceable by an application WITHOUT recompiling the engine.
-  The host/renderer knows nothing about the algorithms it executes; it cooks
-  and runs assets. A C++ graph-builder is a cooker *mechanism*, never the
-  shipping form. (AGENTS.md §Agent Conduct pins the enforcement + the
-  `scene_renderer` hand-built-`ensure_*` scar.)
-- **One-way module dependencies.** Cycles are bugs. The dependency graph is
-  reviewed at every module boundary change.
-- **Real workload before optimization.** No SIMD, fiber, GPU-allocator, ECS
-  rewrite, or render-path swap without a measured baseline and target.
-- **API stable across backends.** Public surfaces (RHI, physics, audio,
-  render path) are designed assuming multiple implementations even when
-  only one exists. Vendor types do not leak.
-- **Tak-çıkar (plug-out) third-party.** Where Cerid uses an external
-  (glslang/shaderc, spirv-reflect, ImGui, toml++), the integration is a
-  backend behind a Cerid-owned interface. Core simulation surfaces
-  (renderer, physics/eylem, audio) are Cerid-native — no vendor wraps.
-- **Determinism is a first-class option.** Not the default, but reachable:
-  fixed-step physics, deterministic random, replay-friendly event log.
-- **Every shipped slice ends green on Debug + Release + ASan.** Three
-  flavours. No exceptions.
-- **The engine is allowed to be slow before it is allowed to be wrong.**
-- **Sanity is a practice, not a phase.** Root-cause over workaround; verify
-  the *shipped* artifact; test boundaries, not just volume; know what your
-  diagnostics can't see; honest scoreboards — including about ourselves. The
-  full doctrine (each rule tied to the bug that taught it) and the living
-  **Sanity Ledger** every agent contributes to live in **`docs/SANITY.md`**
-  — read every session.
-- **Units live at the API surface, raw scalars live in the inner loop.**
-  Cerid runs a **two-layer typed architecture** (formalised at Phase 3.1.7.5
-  close; ADR-0078 §5):
+## Authorable execution — the central contract
 
-  - **Upper layer — typed.** Every public API, every ECS component field,
-    every config key, every cross-module function signature, every cooker /
-    loader public surface, every UI display path uses `Quantity<D, T>`
-    (`Length<T>` / `Mass<T>` / `Force<T>` / `Velocity<T>` / `Torque<T>` / …).
-    The dimensional check happens here, at compile time, on the SI value.
-  - **Lower layer — raw.** SIMD kernels, math primitives (Vec / Mat / Quat
-    inner ops), numerical algorithms (BLAS / LAPACK / closest-point /
-    raycast bodies / Möller-Trumbore / Vatti clipper / etc.), GPU command-
-    buffer writes, file and wire byte buffers, on-disk asset payloads
-    operate on raw `f32` / `f64`. No dimensional tag rides through an
-    `_mm256_*` intrinsic or a `vkCmdPushConstants` call.
+CHIR is high-level authoring; CEIR is canonical execution; CKIR is the device shader/kernel form
+([ADR-0109](decisions/0109-ceir-chir-ckir-ownership-and-module-placement.md)). UI documents, styles, pipelines,
+frame graphs and behaviours are editable assets. The host owns generic mechanisms and executes programs; it does
+not encode a rendering technique in application/engine C++.
 
-  The two layers meet at **the API surface**, and only there. Crossings
-  use `.value`, `to_raw_vec` / `from_raw_vec` (constexpr — compile away),
-  or a documented strip-compute-retag wrapper. Each crossing is one line
-  with a one-line comment naming the boundary (e.g. `// GPU push constant
-  — raw f32 by ADR-0078 §3 D22`).
+Shipping algorithms use committed, directly authorable CEIR/CKIR assets. CKIR `.ckir` node graphs round-trip through
+`ckir_write`/`ckir_read`; CEIR is parse/print authorable. Domain declarations and cookers are frontends of the same
+canonical IR. A bootstrap builder is allowed only to print an asset, verify it, and be deleted from the shipping path.
+Declarations plus a hard-coded algorithm builder are not the final authorable form.
 
-  **The internal canonical unit is SI base** (meters / kg / seconds /
-  radians / kelvin / ampere / candela / mole) at the typed layer. Asset /
-  file / UI boundaries normalise to SI at load (`get_length("65_mph")` →
-  `Velocity32{29.0576F}`); runtime never sees non-SI. The user-facing
-  display layer (`UnitPreferences` + 11 discipline presets) translates SI
-  back to authoring-convention strings for the UI only.
+Every rendering technique is an authored frame graph, including shadows, GI, post, picking, overlays and UI effects.
+`FrameGraphBuilder` is for tests, node editors and runtime-generated graphs; it is not the shipping source for engine
+techniques. Missing expressiveness requires extending the canonical contract, never bypassing it.
+Frame authoring converges through CEIR ([ADR-0127](decisions/0127-ceir-frame-dialect-and-converter.md)); preserve the
+existing public runtime surface, and do not build a second UI/node scheduler beside it.
 
-  **Precision tier (f32 / f64) is orthogonal to the dimensional type.**
-  Same `Length<T>`; games + runtime pick `f32`; aerospace large-world +
-  CAD micrometer + scientific pick `f64`. Zero-overhead layout
-  (`sizeof(Quantity<D, T>) == sizeof(T)`) means the precision choice is
-  the only one that affects storage; the dimensional tag is compile-time
-  metadata.
+**Completion test:** edit/shadow the built-in asset from an app, cook and install it while running, observe the new
+behaviour without an engine rebuild, and retain the previous working generation on failure. Delete the replaced
+C++ algorithm path and prove the application still renders. Cooking alone, a parallel legacy path or an unreachable
+library does not satisfy the contract. UI layout metadata must not change semantic program identity.
 
-  **There is no opt-out at the upper layer.** Bare-float-for-physical-
-  quantity at any API surface is a code-review block and a CI-guard
-  violation (`crd-no-untagged-physical-numeric`). The lower layer stays
-  raw on purpose — pretending an `_mm256_load_ps` carries a `Length`
-  dead-ends in the first lane shuffle.
+Human authoring uses text; runtime installs verified cooked binaries. A development/editor host may invoke cookers;
+shipping source import is not an implicit fallback. Small configuration remains its explicit existing exception.
 
-  → `crd-units` (Phase 3.1.7.5 ✅ CLOSED 2026-05-15); ADR-0078 §1-§5.
+## Current ownership
 
-## Architectural Cornerstones (pinned)
+- `gpu-context` owns device/program/pipeline interfaces. Backend-specific shading languages/bytecode stay inside
+  providers. The former rhi/renderer/shader stack is retired ([ADR-0105](decisions/0105-retire-rhi-renderer-gpu-context-is-the-graphics-layer.md)).
+- Scene owns the gameplay/simulation ECS and spatial hierarchy. UI has a separate retained `UiWorld` and distinct
+  `UiNodeId`; explicit attachments integrate world-space UI. This user-chosen ADR-0107 D2 supersedes the old UI-in-scene
+  clauses. The full [ADR-0107](decisions/0107-ui-2d-architecture.md) remains Proposed.
+- Canvas is shared 2D composition. Cerid owns fonts/shaping/vector rendering. ImGui remains debug/recovery only.
+  Real-time and offline rendering, UI and CR-D007 share asset/property/command contracts and polished visual quality.
+- Generic intrusive references belong to memory; resource ownership/eviction/reload references belong to resources.
+- Eylem remains Cerid-native, deterministic by construction; geometry-before-physics prerequisites remain intact.
+  Current delivery order is [ADR-0129](decisions/0129-renderer-ui-editor-delivery-order.md), not an older phase schedule.
+- Typed properties/commands are shared by in-process GUI, CLI and RPC/MCP. UI does not spawn a CLI per input event.
+  Version schemas; preserve the ADR-0081 deprecation window of at least two minor versions for removed schemas.
+  Existing commands are partial implementation, not proof of universal command coverage.
+- C++ remains a first-class native/provider/authoring interface; its builders emit canonical assets. Cerid owns
+  CHIR rather than embedding Lua/Python/JavaScript/GDScript/Wren as its product execution language (ADR-0108).
 
-These come from accepted ADRs and are not re-litigated in routine sessions.
-If circumstances genuinely change, open a new ADR or escalate to `@heavy`.
+## Units and representation
 
-- **Render path — SUPERSEDED BY EVENTS (annotated 2026-08-07):** the original cornerstone ("Renderer v1
-  ships Clustered Forward+ behind an `IRenderPath` interface; Deferred / Visibility-Buffer land later as
-  additional implementations" → ADR-0016) described the retired `crd-renderer` (deleted at RET-8,
-  ADR-0105). **Today's cornerstone:** rendering is **asset-driven** — every technique is an authored
-  frame-graph asset executed by `crd-render-graph` (ADR-0106); the forward/deferred/visibility "paths" are
-  the post-RAF **RPL proof library** of authored renderers, not C++ path classes. (No formal ADR supersedes
-  0016 yet — flagged 2026-08-07; the original decision text is preserved here and in the ADR.)
-- **Culling — realized on the new stack (annotated 2026-08-07):** the intent of ADR-0017 (frustum → BVH →
-  Hi-Z occlusion; per-light culling) survives and is partially landed as GPU-driven culling (REN-40
-  device-side cull; HZB + LOD/SSE tracked in the post-RAF GVA band); the "part of clustered Forward+"
-  framing referred to the retired renderer. → ADR-0017
-- **Scene + ECS:** **Hybrid model.** SoA component storage for cache-friendly
-  iteration; hierarchical scene tree for traversal/authoring. Not pure ECS,
-  not naive scene graph. → ADR-0020
-- **UI in the scene tree:** Godot-style. Spatial nodes (3D) and Control
-  nodes (UI) coexist as children of the same scene root. → ADR-0020
-- **Physics — Cerid-native (eylem) from day 1.** No third-party wrap. The
-  `crd-eylem` module is built deterministic-by-construction (compile +
-  runtime FP contract), ECS-native, fiber-jobified, multi-domain (games
-  + robotics + medical + cinematic + DAW), templated 2D + 3D from a
-  single substrate, and GPU-extensible. → ADR-0062, ADR-0063
-  (supersedes ADR-0018; phase plan: `docs/phases/phase-3.1-eylem.md`;
-  research: `docs/research/cerid-eylem.md`)
-- **Authoring vs runtime:** Configs and scenes authored in TOML; scenes
-  cooked to binary for runtime. → ADR-0012, ADR-0013
-- **ImGui's role:** Debug-only forever. After `crd-ui` ships, ImGui never
-  grows into editor or game surfaces. → ADR-0023
-- **Reference counting split:** Generic intrusive ref-counting in
-  `crd-memory`. Resource-facing shared references in `crd-resources`. →
-  ADR-0014
-- **Agent-native engine: CLI / RPC is the source of truth.** Every
-  engine operation a human user, artist, engineer, or scientist
-  performs is reachable from CLI + JSON-RPC + **Anthropic MCP (exact
-  compatibility, not adjacent)**. The GUI is a visualization layer
-  that emits CLI commands when the human clicks. AI agents (Claude
-  Code, Claude desktop, OpenAI / Gemini Function Calling agents)
-  drive the engine end-to-end via the same surface. Capability-based
-  security + transactional sessions + sandbox isolation +
-  deterministic replay (ADR-0063 + ADR-0078) make agent sessions
-  safe + reproducible. **Per-slice Definition of Done** includes
-  shipping the CLI command schemas alongside the C++ API from
-  2026-05-19 forward; the `crd-cli` parser substrate itself lands in
-  Phase 4.0 (after `crd-hesap` and eylem v1c+ resume — sequencing
-  locked 2026-05-19 user direction). → ADR-0081 (Proposed); research
-  `docs/research/cerid-agent-native-engine.md` +
-  `docs/research/cerid-hesap-2026-update.md`. Strategic bet: the
-  next decade of creative + engineering + scientific work happens
-  with AI agents as peer collaborators; the engine substrate built
-  for that wins.
+Use `Quantity<D,T>` for physical values at public APIs, ECS/config/cooker/UI and cross-module boundaries. SI is
+canonical inside the typed layer; convert authoring/display units at its edges. Precision (`f32`/`f64`) is independent
+of dimension. Math/SIMD/numerical kernels and GPU/file/wire payloads use raw scalars deliberately. Bridge once at the
+boundary with `.value`, `to_raw_vec`/`from_raw_vec` or strip-compute-retag. No upper-layer opt-out
+([ADR-0078](decisions/0078-units-substrate-architecture.md)).
 
-- **Cerid owns its executable-program language stack (CEIR/CHIR);
-  C++ is one first-class authoring surface, not the only one.**
-  Reusable algorithms are versioned, inspectable, serializable,
-  hot-reloadable program ASSETS, authored as four projections of one
-  semantic model: text (CEIR execution IR now; the CHIR high-level
-  layer later), a CR-D007 visual graph, a domain frontend, or a C++
-  builder. C++ stays first-class for native extension, providers, and
-  programmatic authoring — the C++ builder emits ordinary canonical
-  CEIR — and C++ DLL hot-reload remains supported. **No Lua / Python /
-  JavaScript / GDScript / WrenScript embedded interpreter — CHIR is
-  Cerid's OWN language, not a wrapped third-party VM.** Why the
-  earlier C++-ONLY rule was reversed (ADR-0108): an algorithm-as-asset
-  must be inspectable, semantically diffable, verifiable, partially
-  evaluable, and lowerable to the best legal CPU/GPU/NPU/provider
-  strategy — a compiled `.crds.cpp` DLL is none of those, so "C++ is
-  the only authorable program" would block the CEIR mission. The
-  determinism (ADR-0063), no-marshaling, full-debugger, and zero-FFI
-  benefits of C++ survive as versioned native intrinsics + the C++
-  builder. → ADR-0108 (surgically supersedes ADR-0081 §9), ADR-0081,
-  ADR-0034 (subsumed).
+Use Cerid owning containers in engine/tools/tests; non-owning standard views and algorithms are permitted.
+RAII, allocator ownership, naming and interface stability rules are in [CODING](CODING.md).
 
-- **Schema versioning + backwards-compat for the agent surface.**
-  Every CLI / MCP command schema is versioned (major/minor). Major
-  bump = breaking change to params or output; old schema stays
-  registered for ≥ 2 minor versions with `Deprecated` status before
-  removal. Minor bump = additive (new optional param, additional
-  output field). Backwards-compat CI test: any schema removed before
-  its deprecation window expires triggers a build failure. Schema
-  export (`meta.export-mcp-tools`) produces a versioned MCP tool
-  catalog suitable for committing alongside agent prompts. This
-  discipline is what lets AI agents author scripts they can trust
-  across Cerid versions. → ADR-0081 §2.
+## Cross-domain product contracts
 
-## ⭐⭐ The deletion is the proof (REN-37/38, 2026-07-27)
-
-When a capability moves from C++ into an authored asset, the slice is not done when the asset COOKS — it is done
-when **the C++ it replaced is deleted and the engine still renders**. Anything less leaves two paths, and the one
-that actually draws the frame is the old one.
-
-Three things this band showed, each of which had been true for months without anyone noticing:
-
-1. **A parallel vocabulary always wins by default.** `assets/materials/*.mat.toml` → GLSL files rendered while
-   `.crdm` merely cooked. Two vocabularies for one thing is not redundancy to tidy up later; it is a decision
-   about which one is real, made silently.
-2. **"It cooks" and "it draws" find different bugs.** Every defect in this band that could destroy an image — a
-   varying pair that disagreed, a uv width the emitter rejected, a light direction negated in the wrong place —
-   was invisible until something rendered. A cook-layer gate is necessary and is not sufficient.
-3. **An unreachable library is indistinguishable from a missing one.** `ckir_lighting.hpp` held 1100 lines of
-   gold-standard shading — LTC area lights, split-sum IBL, PCSS/EVSM/MSM — while the technique ABI carried
-   exactly one directional light. None of it was unfinished. There was simply no vocabulary to name it, and a
-   capability nothing can name does not exist.
-
-Corollary for reviews: ask **what would have to change for this to be wrong, and can anything see it?** If the
-answer is "nothing on either backend", the check has to move to cook time and be a DECLARED contract.
+Shared assets and commands serve agents and humans. Inference and training qualify together; native/CHIR functions
+share reflected effects and capabilities. Project collaboration and multiplayer retain distinct authoritative models.
+Memory/task/device lifetimes, clocks/frames and trust boundaries remain explicit. Apply the
+[quality contract](design/system-quality-contract.md); measured evidence defines support, not module names.
+The [expanded review](research/2026-09-12-cerid-whole-system-review.md) routes future domain requirements to ROADMAP.

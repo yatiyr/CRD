@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0f: CPROF capture file format
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 The serialisation half of D-003: every piece of substrate state captured

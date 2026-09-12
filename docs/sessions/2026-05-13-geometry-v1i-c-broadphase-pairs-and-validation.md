@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1i-c: `find_overlapping_pairs(DynamicBvh)` (Catto-style dual-descent) + degenerate-corpus / large-coordinate validation helpers + **`crd-no-non-ascii-test-names` guard correctness fix**
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Third and closing sub-slice of the v1i split (ADR-0076 §15). v1i-a parked

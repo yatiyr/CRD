@@ -1,5 +1,8 @@
 # REN-40 — the MILLION-INSTANCE baseline (before any REN-40 work)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **This is the "where we start" board.** It is a Cerid-internal scaling curve, not a peer crush: nothing here is
 compared against another engine yet. It exists so the REN-40 slices are aimed at a MEASURED wall instead of an
 argued one, and so every later claim has a floor to beat.

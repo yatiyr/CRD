@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0c: `crd-perf` jobs adapter + `win-shipping-profile` preset
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 Three things in this slice:

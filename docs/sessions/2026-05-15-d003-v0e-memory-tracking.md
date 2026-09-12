@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0e: `crd-perf` memory tracking
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 v0e wires `crd::memory::IAllocator` instances into the profiler's per-

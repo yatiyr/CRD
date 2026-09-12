@@ -1,5 +1,8 @@
 # 2026-07-27 (second session) — REN-38 FULL-ARC AUDIT + THE HYGIENE PASS
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **User-directed: "check for gaps and scars for the whole REN-38 arc … fix all the gaps, I don't want any
 > gaps … make the system as hygienic as possible."** The audit verified all 53 closed rows in code, found
 > 8 gaps, and this session closed them. Two of the fixes found and killed REAL latent defects in shipped

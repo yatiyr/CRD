@@ -1,5 +1,8 @@
 # 2026-06-27 — v12-l + v12-m (log-density gradients + descriptive statistics)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.6 `crd-hesap-stats` — v12-l (analytic log-density gradients for every distribution) + v12-m (descriptive statistics + estimators).
 **Outcome:** 348 assertions (v12-l) + 82 assertions (v12-m) green on linux-gcc-release; full hesap-stats suite now **318275 / 105**.
 **Status:** UNCOMMITTED (pending user commit).

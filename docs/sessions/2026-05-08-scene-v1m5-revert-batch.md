@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m5: revert/unpack/enumerate APIs + AAAA-tier batch reservations (closes v1m)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m4b shipped. Inherit transparent CoW backend complete. 805/805 / 802 release.
 
 **Status at end:** v1m5 shipped — closes v1m entirely. Two sub-slices (v1m5a + v1m5b); hot-reload watcher + obekc CLI tool deferred to a separate post-Phase-3.0 follow-up (task #108). Six-config 814/814 / 811 release / 17 smokes; 9 new tests across 2 sub-slices.

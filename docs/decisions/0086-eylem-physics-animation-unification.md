@@ -1,5 +1,8 @@
 # ADR-0086 — Eylem unified motion model: physics-animation as one solve, LOD fidelity continuum, crowd-scale deterministic networking
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Proposed (design direction from a 2026-05-30 design session; to be ratified + reconciled per-slice when eylem resumes after hesap Phase 3.1.6)
 **Date:** 2026-05-30
 **Tags:** [arch] [physics] [eylem] [animation] [networking] [determinism] [lod]

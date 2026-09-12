@@ -1,5 +1,8 @@
 # 2026-06-01 — hesap v5b-3d: node-level parallelism + adaptive MC64 (the MUMPS-gap attack)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Continues the v5b-3 multifrontal LU. Goal (user): attack the MUMPS parallel gap on the CFD targets,
 > honestly. Advisor-steered throughout; measure-first; every claim file-captured. **WIP — not committed.**
 > Full session arc + every measurement: memory `project_lu_umfpack_gap_is_mc64_not_gemm`.

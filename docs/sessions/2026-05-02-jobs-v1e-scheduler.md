@@ -1,5 +1,8 @@
 # Session — 2026-05-02 — `crd-jobs` v1e Priority Scheduler
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 2.5 — `crd-jobs`  
 **Slice:** v1e  
 **Status:** ✅ Shipped

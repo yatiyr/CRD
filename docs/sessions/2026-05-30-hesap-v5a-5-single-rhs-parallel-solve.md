@@ -1,5 +1,8 @@
 # 2026-05-30 — hesap v5a-5: single-RHS parallel Cholesky solve (in progress)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 Close the remaining v5a solve gap: the single-RHS (x1) supernodal-Cholesky solve was
 serial, losing to CHOLMOD at 8 threads (hood 0.74, ldoor 0.76, bmwcra 0.53). Parallelize it.

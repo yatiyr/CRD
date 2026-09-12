@@ -1,5 +1,8 @@
 # CEIR-14z — the render DEVICE pixel proof (14z-0 decision packet)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status: ✅ FORK RESOLVED — Option A RATIFIED by the user 2026-08-11. 14z-1/14z-2/14z-3 DONE (gated 4 configs).** CEIR-14z uses a
 test-surface `execute_render_lowered` driving `ICommandEncoder` (as 13z proved compute on `IComputeContext`); real frame-graph
 integration is DEFERRED to CEIR-15/16. ⭐ **14z-3 is the FIRST render pixels from CEIR** (2026-08-11): the shared CEIR

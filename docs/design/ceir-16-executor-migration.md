@@ -1,5 +1,8 @@
 # CEIR-16 — Executor migration (decision packet)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The band that lifts the §176 pause. **Sources read:** roadmap `# 127.` (executor migration) + `# 128.` (the
 > `scene.raster` decisive proof); `## CEIR-13` band section (L4576, old numbering); `docs/design/ceir-0a-execution-path-inventory.md`
 > §1–4a (the tree reality, "final list from 0a, not from docs"); `docs/design/ceir-0h-migration-and-deletion-tables.md`

@@ -1,5 +1,8 @@
 # ADR-0035 — Networking architecture principles
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted  
 **Date:** 2026-05-02  
 **Tags:** arch, networking, determinism, simulation

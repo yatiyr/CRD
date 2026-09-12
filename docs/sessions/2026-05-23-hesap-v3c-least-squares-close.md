@@ -1,5 +1,8 @@
 # 2026-05-23 — hesap v3c (least-squares family) CLOSE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` v3 (SVD + dense eig). **Slice:** v3c (least-squares family) — CLOSED.
 **Module:** `crd-hesap-dense`.
 

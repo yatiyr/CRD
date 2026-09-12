@@ -1,0 +1,4 @@
+module {
+  ^bb0:
+    transform.place_mesh() {classes = "host,host", fallback = "gpu", mesh = @m2}
+}

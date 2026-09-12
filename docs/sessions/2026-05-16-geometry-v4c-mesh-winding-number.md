@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v4c: `mesh_winding_number`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Third slice of Phase 3.1.7 v4 `-mesh` cluster. Generalised winding number
 > for robust inside/outside on non-watertight meshes via Jacobson, Kavan,
 > Sorkine-Hornung 2013, summing Van Oosterom-Strackee 1983 per-triangle

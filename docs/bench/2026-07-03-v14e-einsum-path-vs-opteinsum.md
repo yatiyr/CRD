@@ -1,5 +1,8 @@
 # 2026-07-03 — v14-e einsum path optimizer vs opt_einsum 3.4.0
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Oracle protocol (python-verified BEFORE the port):** 33-case corpus (`scripts/v14e_einsum_corpus.py`
   → `tests/hesap-tensor/ref_einsum_paths.inc`): matrix chains (2–7 mats), the tensor-network classics,
   20 seeded random networks (3–7 operands), each with opt_einsum's greedy and optimal path FLOPs.

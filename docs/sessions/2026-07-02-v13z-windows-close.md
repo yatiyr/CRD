@@ -1,5 +1,8 @@
 # 2026-07-02 — v13-z: Windows verification + the CLI/docs/guard close of the Numerical-Analysis + Motion cluster
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The v13 cluster (interp/quadrature/diff/motion) was algorithmically complete and **linux-gcc-green** but had never
 > been built on Windows/MSVC, and the win-tidy conformance pass was owed. This session drove the v13-z close on the
 > real target: Windows baseline → win-tidy pass → conformance guard → CLI → system docs → the DoD configs.

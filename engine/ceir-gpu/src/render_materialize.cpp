@@ -501,9 +501,11 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
     const bool batchable_pass = pass_tex == nullptr;
 
     const crd::u32 n = resolvers.draws_count(resolvers.draws_user);
-    // count==0: the scope's Begin/End (materialized by the walk) still runs, so the pass CLEARS regardless; the legacy
-    // geometry-slot fullscreen-triangle fallback is a TEST-gate shape (no shipped scene pass records an empty draw list),
-    // deferred to the gpu-test conversion.
+    // ⛔⛔ CEIR-31b-4-b-i: count==0 STILL CLEARS, but NOT because "the walk's Begin/End runs" — that was a false invariant
+    // (this comment used to assert it, and it hid the defect). The lowering CommandEncoder DEFERS begin_rendering's clear
+    // into the FIRST draw verb, so with 0 draws the walk's begin/end emit nothing on their own. What guarantees the clear
+    // is `CommandEncoder::end_rendering` → `IRasterContext::clear_scope`, which issues a bare clear-only scope when no
+    // draw consumed the clear. So this 0-iteration loop is correct — the empty-world clear lands one layer down.
     for (crd::u32 i = 0; i < n; ++i)
     {
         RasterDrawItem it{};

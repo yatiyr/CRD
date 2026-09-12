@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-g: CLI registration + reference-class solver shootout vs Eigen
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **CLI registration** (`engine/hesap-dense/src/cli_register_solvers.cpp`):

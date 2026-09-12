@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1h: System + Schedule + Commands
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1g shipped earlier the same day. Query DSL with `world.query<Cs...>()` + filter chain. Scene tests 157 / 34559, six-config 673/673.
 
 **Status at end:** v1h shipped. `ISystem` virtual interface + 7-phase fixed schedule + `Commands` deferred-mutation buffer + `step(dt)` and `step_fixed(dt, fixed_dt, max_substeps)` with accumulator math. Six-config 688/688 / 685 release / 17 smokes. Scene tests 172 / 34602.

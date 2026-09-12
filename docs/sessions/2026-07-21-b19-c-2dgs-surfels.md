@@ -1,5 +1,8 @@
 # 2026-07-21 — B19-c1: 2D Gaussian Splatting (surfels) — the geometrically-accurate primitive
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) · **Sub-slice:** B19-c1
 **Directive:** "let's go" (continue B19 → the geometrically-accurate frontier axis + the bridge toward B1 materials).
 

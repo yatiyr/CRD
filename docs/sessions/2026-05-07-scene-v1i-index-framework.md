@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1i: Index framework + ChangeDetect + AsyncAware + reserved slots
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1h shipped. ISystem + 7-phase schedule + Commands. Scene tests 172 / 34602, six-config 688/688.
 
 **Status at end:** v1i shipped. `IComponentIndex` plug-point + fan-out sink + auto-registration of trait-implied indexes + `ChangeDetectIndex` + `AsyncAwareIndex` + five reserved no-op shells (History / SpatialBVH / GpuResident / Replication / Reflection) + `.changed<T>()` and `.skip_pending<T>()` query operators. Six-config 708/708 / 705 release / 17 smokes. Scene tests 192 / 34669.

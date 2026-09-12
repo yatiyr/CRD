@@ -1,5 +1,8 @@
 # Fused MLP vs cuBLAS — the NRC moat, forward + backward (2026-07-14)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Board — RTX 4070 Ti SUPER, fp16 in / fp16 accumulate (both sides identical math).**
 Benches: `bench/gpu-compute/mlp_fused_bench.cu` (forward), `bench/gpu-compute/mlp_backward_bench.cu` (backward).
 nvcc `-O3 -arch=sm_89`, min-of-7×50-iter, 3 warmups, **correctness-gated** (fused vs cuBLAS/CPU-oracle must match).

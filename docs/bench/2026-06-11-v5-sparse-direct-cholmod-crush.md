@@ -1,5 +1,8 @@
 # 2026-06-11 — v5 sparse direct: multifrontal Cholesky factor + solve vs CHOLMOD/UMFPACK/MUMPS
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** WSL2 Ubuntu 24.04, i9-14900K, taskset-pinned serial runs; threaded: P-core scheduling. Cerid: GCC, `-O3 -march=native`. Peers: SuiteSparse CHOLMOD, UMFPACK (serial only), MUMPS libmumps-seq (parallel, 8 threads recorded).

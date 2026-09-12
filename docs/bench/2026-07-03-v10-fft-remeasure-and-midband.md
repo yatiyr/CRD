@@ -1,5 +1,8 @@
 # 2026-07-03 — v10 FFT: full re-measure (f64 + f32) + the mid-band campaign opening
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Trigger:** the user-directed FFT full-crush campaign (reopens ADR-0092's deferred parity).
 - **Machine:** i9-14900K, WSL2, 1T pinned, MKL/FFTW/PocketFFT via `scripts/run_bench_fft.sh` +
   the new `runtime/examples/bench_fft_f32.cpp` (f32 vs MKL DFTI, best-of-15).

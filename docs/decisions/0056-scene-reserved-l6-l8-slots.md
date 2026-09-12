@@ -1,5 +1,8 @@
 # ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-06
 **Tags:** scene, ecs, arch, layer-6, layer-7, layer-8, networking, scripting, editor

@@ -1,5 +1,8 @@
 # Lesson 06 — Substrate vs speculation
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "I think we'll need parallel radix in the future. Should we build it now? Honestly, will it help us?"
 
 This is the most common engineering trap in modular system design: building things "we'll probably need" before any real consumer has shown up. The cost is real (~600 LOC, days of work, debt risk), and the value is speculative (the consumer might never come, or might want something different).

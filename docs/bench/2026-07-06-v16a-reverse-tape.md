@@ -1,5 +1,8 @@
 # 2026-07-06 — v16-a: the deterministic reverse-mode tape — crush + moat
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** `tape.hpp` — the deterministic reverse-mode `Tape` (SoA arena Wengert list) + `Var` + the arithmetic
 / transcendental ops (local partials reuse the audited v15 `forward::detail` slopes — a VJP is the TRANSPOSE of the
 JVP). `backward()` replays in fixed reverse-index order — **no float atomics** — so one pass yields the WHOLE

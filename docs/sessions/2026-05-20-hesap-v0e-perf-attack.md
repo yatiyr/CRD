@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-perf-attack: close solver perf gaps vs Eigen
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 User directive (verbatim): "I want absolutely close performance with eigen
 … DO NOT DEFER PERFORMANCE! I WANT BETTER OR IN PAR PERFORMANCE! … NO
 DEFERALS, NO FOLLOW ONS, IF SOMETHING NEEDS TO BE DONE, WE MUST DO IT."

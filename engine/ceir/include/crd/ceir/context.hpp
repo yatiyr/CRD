@@ -277,6 +277,13 @@ enum class ResourceIntentMisuseKind : u8
 };
 [[nodiscard]] containers::StringView resource_intent_misuse_kind_name(ResourceIntentMisuseKind k) noexcept;
 
+// CEIR-29a-1 §24/§69: is `s` a member of the §24 memory-domain vocabulary (host | pinned_host | device_local |
+// host_visible_device | unified | upload | readback | sparse | external | peer_visible | distributed)? The SAME table
+// `resource.declare`'s `memory_domain` validates against (`MemoryDomainValueInvalid`) — extracted here so the §102
+// partitioner's provider-descriptor `memory_domain` reuses ONE vocabulary (no drift), never a second copy. Empty ⇒ false
+// (a descriptor's "" is "unspecified", checked at its own use-site, not here).
+[[nodiscard]] bool is_memory_domain(containers::StringView s) noexcept;
+
 // The pointing result of the CEIR-12b intent walk: the FIRST misuse (pre-order) and the offending `op` (the misuse is an
 // ATTRIBUTE of the op — there is no bad Value to point at, unlike ResourceMisuse).
 struct ResourceIntentMisuse
@@ -873,6 +880,20 @@ public:
     void set_stable_id(Operation* op, StableId id) noexcept;
     // Restore a module's CEIR-8d id high-water mark (the STID-chunk loader) — so a post-load edit never reuses a freed id.
     void set_stable_id_watermark(Module* m, u64 watermark) noexcept;
+
+    // ⛔ CHIR LOWERING-TIME stable-id PIN (ADR-0128 D3, CEIR-32e) — DISTINCT from set_stable_id (deserialization-only).
+    // A CHIR->CEIR lowering pins a STATE cell's id from its SOURCE identity (name + lexical scope) BEFORE assign_stable_ids
+    // runs, so a re-lower after a body/reorder/insert edit reproduces the SAME state schema (the §143 fifth requirement:
+    // hot reload MIGRATES the cell's value by stable id [exec.cpp restore_state_by_id] instead of losing it to an id shift).
+    // ⛔ The caller MUST keep pinned ids in a reserved LOW band and call reserve_stable_id_floor so assign_stable_ids draws
+    // every UNSET (non-state) id ABOVE the band — watermark-safe, the monotone-id invariant. Uniqueness among the pins is
+    // the caller's contract (a duplicate id corrupts the migration key), exactly as for set_stable_id.
+    void pin_stable_id(Operation* op, StableId id) noexcept;
+    // ⛔ CHIR LOWERING-TIME watermark FLOOR (ADR-0128 D3, CEIR-32e) — raise a module's id high-water mark to `floor`
+    // (monotone max) so assign_stable_ids gives every UNSET op an id strictly ABOVE the CHIR-pinned reserved band. DISTINCT
+    // from set_stable_id_watermark (deserialization restore); this is the lowering-time reserve that keeps the pin
+    // watermark-safe (without it the sequential ids would track max(pinned)+1 — the raw-hash scar the ADR forbids).
+    void reserve_stable_id_floor(Module* m, u64 floor) noexcept;
 
     // ── CEIR-8i (ADR-0119) transaction support ── the privileged inverse/rebuild atoms the `Transaction` recorder
     // (transaction.hpp) routes through so ALL raw mutation stays inside Context (never a second mutation implementation).

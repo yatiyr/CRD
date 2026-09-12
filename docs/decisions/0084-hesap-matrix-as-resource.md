@@ -1,5 +1,8 @@
 # ADR-0084 — Sparse matrices as first-class cooked engine resources (`crd-hesap-resources`)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status**: Accepted (2026-05-25)
 - **Phase**: 3.1.6 `crd-hesap` v4-corpus (start of the v4 iterative cluster)
 - **Tags**: arch, hesap, sparse, resources, cooker, crdr, corpus, agent-native

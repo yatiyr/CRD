@@ -1,5 +1,8 @@
 # 2026-05-23 — hesap v3a-3 MRRR closed + v3a complete + v3b (SVD) opened
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1.6 `crd-hesap` v3 (dense eigenvalue + SVD).** Long session. Closed the entire
 MRRR symmetric eigensolver (v3a-3), completing **v3a**; opened **v3b (SVD)** with the design
 locked + the bidiagonalization foundation shipped.

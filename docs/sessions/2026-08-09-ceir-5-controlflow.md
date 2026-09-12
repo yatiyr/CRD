@@ -1,5 +1,8 @@
 # CEIR-5 — Structured control flow + functions + the reference executor (§13/§14/§20/§118) — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Band 5 is a GEAR CHANGE: region-carrying control-flow *ops* (`ceir.core` if/for/while/match/scope), SSACFG blocks+branches
 beneath, explicit state (§20), and the first reference executor (§118). Band gate: a nontrivial program *executes*.
 

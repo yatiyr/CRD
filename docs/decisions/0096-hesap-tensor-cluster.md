@@ -1,5 +1,8 @@
 # ADR-0096 — crd-hesap-tensor: the N-D tensor substrate — templated compute dtypes over stride views, the two-tier deterministic-reduction contract, deterministic stochastic rounding, and the certified-inference lane
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-02)
 - **Phase:** 3.1.6 v14 (the TENSORS cluster)
 - **Tags:** `hesap` `tensor` `einsum` `determinism` `reproducibility` `quantization` `ml-inference` `safety-critical` `architecture` `substrate`

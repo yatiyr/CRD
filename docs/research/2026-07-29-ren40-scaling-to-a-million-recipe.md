@@ -1,5 +1,8 @@
 # REN-40 — scaling to a million: what the 2026 frontier actually does, and what Cerid should build
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — REN-40 shipped (device-side cull, incremental extract, GPU skinning, frame tricks, cluster-DAG LOD; sessions 2026-07-30…08-02). *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Study → recipe.** This is the survey that precedes 40-A, written against the measured start line in

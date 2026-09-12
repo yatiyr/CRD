@@ -1,5 +1,8 @@
 # CEIR-12a — the `ceir.resource` dialect (resource decl/view/range + import/export) — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) opened CEIR-12 (Resource/memory subsystem) after band 11
 > closed. 12a = the resource op vocabulary (§36 + §23). Recon + advisor design consult. ⛔ NO ADR (an op-vocabulary
 > slice, the 11a/six-ops precedent); the tracker row + this log carry it.

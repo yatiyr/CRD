@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5-index-bringup
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster's first non-backend slice. Promotes the
 > Phase 3.0 v1i `SpatialBVHIndex` reserved-shell (a no-op stub honoring
 > ADR-0053's day-one trait grammar) to a **real `LooseOctree`-backed

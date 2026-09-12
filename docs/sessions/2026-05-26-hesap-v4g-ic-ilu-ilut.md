@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4g: IC(0) + ILU(0) + ILUT incomplete-factorization preconditioners
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Correction 2026-05-26 (v4i-1 close):** the crush numbers below used the Krylov recurrence
 > residual vs Eigen's true residual ([[feedback_iterative_bench_matched_true_residual]]). At
 > MATCHED true residual the honest **IC(0)-PCG figure is 2.07–2.39× wall / 1.33–1.79×

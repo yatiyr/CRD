@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — log module
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Build a complete custom logging system (`crd-log`) on top of `crd-core`, with

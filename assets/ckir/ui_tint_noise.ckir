@@ -1,0 +1,338 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+# CEIR-31b-1a-iii UI-EFFECT TINT + NOISE (the §141 frosted-glass chain's grain pass). A fullscreen fragment pass that
+# samples the (blurred) backdrop, multiplies by a per-channel TINT, and adds a per-pixel film GRAIN:
+#   @output = TexSample(backdrop) * tint + splat(noise(FragCoord) * amp)
+# tint = 4 SCALAR spec-consts (constant_id 0..3, r/g/b/a) assembled via Vec2/VecConcat -> vec4 (NOT baked: 31b-4 arm (a)
+#   sets a known tint; one asset must serve every tint color). amp = spec-const 4 (default 0.03); 31b-4 sets amp=0 for the
+#   far-from-edge +/-1LSB arm (a) and amp>0 for the grain-variance arm (e).
+# noise = a backend-EXACT integer hash of the pixel coord (NOT sin-hash, which is precision-garbage + backend-divergent):
+#   x,y = (u32)FragCoord.xy;  h = x*0x9E3779B1 ^ y*0x85EBCA77;  h ^= h>>15;  h *= 0x27D4EB2F;  h ^= h>>13;
+#   noise = (f32)h * (1/2^32)   [in [0,1); Cast<F32> is a value convert, NOT IntBitsToFloat/reinterpret]
+#   -- all hash nodes are dtype=U32 so the emitter lowers to unsigned uint `>>` (logical shift, not arithmetic), and the
+#   oracle wraps Mul mod 2^32 (the u32-wrap scar) -- so CPU-eval == GPU bit-for-bit.
+# ⛔ device-free gate this tick is STRUCTURAL (eval_cpu_kernel refuses Vec4 -- [[scars_ckir_emitter_eval]]): parse + byte-
+# exact roundtrip + op-vocab teeth (1 TexSample, 5 spec-consts, BitXor>=2, Shr>=2, 0 StorageLoad, emits texture( + >>).
+# The hash MATH is proven at 31b-1a-iii part 2 (NEXT tick): a SEPARATE scalar-output oracle (build_hash_scalar, eval_cpu_
+# kernel-verified vs a C++ reference) + a NODE-SEQUENCE match proving THIS committed file embeds that same hash. Device
+# numerics at 31b-4 arm (e). Texture/Sampler binding (iidx 1/2, StageIn uv) lifted from rt_composite's proven n0-n3.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n36"
+location = 0
+interp = "Smooth"
+
+# --- backdrop sample -----------------------------------------------------------
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "Texture"
+tkind = "Texture"
+trows = 2
+tcols = 0
+shape = [1]
+iidx = 1
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 2
+
+[[node]]
+id = "n3"
+op = "TexSample"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0"]
+
+# --- tint = 4 scalar spec-consts (constant_id 0..3) -> vec4 --------------------
+[[node]]
+id = "n4"
+op = "Const"
+dtype = "F32"
+shape = [1]
+iidx = 0
+axes = 2147483648
+cval = "0x3FECCCCCCCCCCCCD"
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "F32"
+shape = [1]
+iidx = 1
+axes = 2147483648
+cval = "0x3FECCCCCCCCCCCCD"
+
+[[node]]
+id = "n6"
+op = "Const"
+dtype = "F32"
+shape = [1]
+iidx = 2
+axes = 2147483648
+cval = "0x3FF0000000000000"
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "F32"
+shape = [1]
+iidx = 3
+axes = 2147483648
+cval = "0x3FF0000000000000"
+
+[[node]]
+id = "n8"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n4", "n5"]
+
+[[node]]
+id = "n9"
+op = "Vec2"
+tkind = "Vec"
+trows = 2
+shape = [1]
+in = ["n6", "n7"]
+
+[[node]]
+id = "n10"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n8", "n9"]
+
+[[node]]
+id = "n11"
+op = "Mul"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n3", "n10"]
+
+# --- FragCoord -> (u32) x,y ----------------------------------------------------
+[[node]]
+id = "n12"
+op = "Builtin"
+tkind = "Vec"
+trows = 4
+shape = [1]
+iidx = 11
+
+[[node]]
+id = "n13"
+op = "VecComp"
+shape = [1]
+in = ["n12"]
+iidx = 0
+
+[[node]]
+id = "n14"
+op = "VecComp"
+shape = [1]
+in = ["n12"]
+iidx = 1
+
+[[node]]
+id = "n15"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n13"]
+
+[[node]]
+id = "n16"
+op = "Cast"
+dtype = "U32"
+shape = [1]
+in = ["n14"]
+
+# --- integer hash (all dtype=U32 => unsigned uint ops) ------------------------
+[[node]]
+id = "n17"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x41E3C6EF36200000"
+
+[[node]]
+id = "n18"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n15", "n17"]
+
+[[node]]
+id = "n19"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x41E0BD794EE00000"
+
+[[node]]
+id = "n20"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n16", "n19"]
+
+[[node]]
+id = "n21"
+op = "BitXor"
+dtype = "U32"
+shape = [1]
+in = ["n18", "n20"]
+
+[[node]]
+id = "n22"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402E000000000000"
+
+[[node]]
+id = "n23"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n21", "n22"]
+
+[[node]]
+id = "n24"
+op = "BitXor"
+dtype = "U32"
+shape = [1]
+in = ["n21", "n23"]
+
+[[node]]
+id = "n25"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x41C3EA7597800000"
+
+[[node]]
+id = "n26"
+op = "Mul"
+dtype = "U32"
+shape = [1]
+in = ["n24", "n25"]
+
+[[node]]
+id = "n27"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x402A000000000000"
+
+[[node]]
+id = "n28"
+op = "Shr"
+dtype = "U32"
+shape = [1]
+in = ["n26", "n27"]
+
+[[node]]
+id = "n29"
+op = "BitXor"
+dtype = "U32"
+shape = [1]
+in = ["n26", "n28"]
+
+# --- noise in [0,1) = (f32)h * (1/2^32), then * amp (spec-const 4) ------------
+[[node]]
+id = "n30"
+op = "Cast"
+dtype = "F32"
+shape = [1]
+in = ["n29"]
+
+[[node]]
+id = "n31"
+op = "Const"
+dtype = "F32"
+shape = [1]
+cval = "0x3DF0000000000000"
+
+[[node]]
+id = "n32"
+op = "Mul"
+dtype = "F32"
+shape = [1]
+in = ["n30", "n31"]
+
+[[node]]
+id = "n33"
+op = "Const"
+dtype = "F32"
+shape = [1]
+iidx = 4
+axes = 2147483648
+cval = "0x3F9EB851EB851EB8"
+
+[[node]]
+id = "n34"
+op = "Mul"
+dtype = "F32"
+shape = [1]
+in = ["n32", "n33"]
+
+[[node]]
+id = "n35"
+op = "Splat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n34"]
+
+# --- @output = tinted + splat(noise*amp) --------------------------------------
+[[node]]
+id = "n36"
+op = "Add"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n11", "n35"]

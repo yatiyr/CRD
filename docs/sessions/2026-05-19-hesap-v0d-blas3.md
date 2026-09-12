@@ -1,5 +1,8 @@
 # Session 2026-05-19 — Phase 3.1.6 `crd-hesap` v0d FOUNDATION (BLAS L3 + crd-hesap-sched)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per the 2026-05-19 elite mandate + user choice `Full elite v0d (5-7 d)`:

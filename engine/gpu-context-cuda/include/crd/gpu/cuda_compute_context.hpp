@@ -21,6 +21,26 @@ namespace crd::memory { class IAllocator; }
 namespace crd::gpu
 {
 
+// ── CEIR-29b-2: a CAPTURED CUDA graph — a pipeline's dispatches recorded into ONE cudaGraph, INSTANTIATED ONCE, launched
+// MANY (the runnable §70 native-graph provider's core; the instantiate-once/launch-many property is the win 29z benches).
+// Opaque like ComputePipeline (this header stays cuda.h-free); RAII — its dtor destroys the CUgraphExec + CUgraph. A capture
+// that was INVALIDATED (an unsafe call mid-capture) or failed to instantiate yields an INVALID handle: never launch it.
+class CudaGraph
+{
+public:
+    CudaGraph()                            = default;
+    CudaGraph(const CudaGraph&)            = delete;
+    CudaGraph& operator=(const CudaGraph&) = delete;
+    CudaGraph(CudaGraph&&)                 = delete;
+    CudaGraph& operator=(CudaGraph&&)      = delete;
+    virtual ~CudaGraph()                   = default;
+
+    // false ⇒ capture was invalidated / instantiate failed — the caller must NOT launch (the gate REQUIREs this true).
+    [[nodiscard]] virtual bool valid() const noexcept = 0;
+    // The recorded graph-node count (== the captured dispatch count when uploads are kept outside the capture). 0 if invalid.
+    [[nodiscard]] virtual crd::u32 node_count() const noexcept = 0;
+};
+
 // The concrete CUDA context. Consumers normally hold an IComputeContext&; this type adds the CUDA-specific ESCAPE HATCH
 // (compile a kernel from CUDA C source — the mirror of Vulkan `from_spirv` / DX12 `from_hlsl`) and last_gpu_ms(). The
 // create_pipeline(by-name) path resolves `<name>.cubin` in the shader dir (the cooked-kernel path, like Vulkan
@@ -50,6 +70,27 @@ public:
     // NOTE (integration): once crd::gpu::IComputeContext gains the last_gpu_ms() virtual (the CGP-0 increment), mark this
     // `override` — it is intentionally a plain method here because this worktree's IComputeContext predates that virtual.
     [[nodiscard]] double last_gpu_ms() const noexcept override = 0; // RAH/CGP-0: overrides IComputeContext::last_gpu_ms
+
+    // ── CEIR-29b-2: CUDA-Graphs capture (NVIDIA-only — the runnable §70 native-graph provider; NO cross-backend mirror, per
+    // the 29-0 census: portability lives in the device-free partitioner, the runnable proof is CUDA-only). begin_capture()
+    // starts stream capture on the SAME stream begin()/dispatch use and returns the SAME recorder, so the SAME
+    // execute_tensor_pipeline RECORDS its dispatches into a graph instead of launching them. ⛔ capture the DISPATCHES ONLY —
+    // run the H->D uploads via begin()/submit_and_wait() FIRST, because a captured cuMemcpyAsync would re-run on every launch.
+    [[nodiscard]] virtual ComputeRecorder& begin_capture() = 0;
+    // End capture and INSTANTIATE the graph ONCE (the launch-many win). Returns an INVALID CudaGraph (valid()==false) if the
+    // capture was invalidated/unjoined or instantiate failed — never a nullptr, so the caller always REQUIREs valid().
+    [[nodiscard]] virtual std::unique_ptr<CudaGraph> end_capture() = 0;
+    // Launch a captured graph on the stream and WAIT — bracketed by the same events, so last_gpu_ms() reports graph-launch
+    // time via the SAME IComputeContext accessor the tune harness reads. Reusable (REPLAY): nothing re-instantiates. No-op on
+    // an invalid graph.
+    virtual void launch(const CudaGraph& graph) = 0;
+    // ── CEIR-29z: ENQUEUE a captured graph on the recording stream WITHOUT waiting or its own event bracket — the launch()-vs-
+    // enqueue split (the 29b-2a end_capture/launch split rationale, one level down). A TWO-CLASS pipeline records eager prefix
+    // dispatches, enqueues the captured run, and records eager suffix dispatches into ONE begin()/submit_and_wait() bracket:
+    // same-stream order carries the x'->graph->z dependency (CUDA barrier is a no-op) and there is ONE wait, so the CPU submit
+    // path + last_gpu_ms() are measured on the SAME bracket structure as the N-dispatch fallback (the 29z bench's honesty). Use
+    // BETWEEN begin() and submit_and_wait(); launch() is the standalone enqueue+bracket+wait form. No-op on an invalid graph.
+    virtual void enqueue(const CudaGraph& graph) = 0;
 };
 
 // Create the CUDA compute context. Returns a context whose valid() is false if there is no CUDA driver/device (a clean,

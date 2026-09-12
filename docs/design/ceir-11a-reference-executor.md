@@ -1,5 +1,8 @@
 # CEIR-11a — Reference executor (full host subset) + async-host + step hooks — DESIGN NOTE
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **DESIGN LOCKED (2026-08-10, advisor consult).** Substrate for **ADR-0122** (at 11a close). Opens **CEIR-11**
 > (Reference executor + compiled host plan, §83/§84 two-tier). Law: §38 `ceir.task` (the six residual ops) · §84
 > (two-tier contract) · §112 (debugger hook seam) · §118 (the correctness oracle). The 6z routing note is the inbound

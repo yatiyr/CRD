@@ -1,5 +1,8 @@
 # GPU FFT — cuFFT gold-standard board (2026-07-13)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## ⭐⭐⭐ THE CRUSH — fused FFT-convolution vs the vendor's 3-pass (2026-07-13)
 
 The campaign's whole thesis: raw 1D FFT you can only reach parity (memory-bandwidth wall); the CRUSH is the **fused

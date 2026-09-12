@@ -1,5 +1,8 @@
 # Session — 2026-04-28 — crd-rhi-vulkan frame execution slice
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Turn the Vulkan bootstrap into a real per-frame execution path before first

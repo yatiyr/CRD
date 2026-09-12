@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-a GPU Morton-code generation ✅ SHIPPED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.7 v9a-a — first slice of the v9a `-gpu` LBVH cluster + first slice in a brand-new sibling module `crd-geometry-bvh-gpu`. Opens GPU geometry pipeline for Cerid.
 
 **Status:** ✅ shipped same day. **5-config DoD PASS** via `scripts/per-slice-check.ps1 -IncludeRelease -Parallel`.

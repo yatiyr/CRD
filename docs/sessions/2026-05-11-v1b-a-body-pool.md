@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1b-a — eylem rigid-3D BodyPool AoSoA-8
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship v1b-a per the locked Phase 3.1 v1 plan: `crd-eylem-rigid3d` peer

@@ -1,5 +1,8 @@
 # CEIR-13c — CKIR-by-identity: KernelRef deps + the cook-time interface-hash check (§85/§107)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-13c (D-007 master spine) · **Status:** ✅ **CLOSED (PART 1 core + PART 2 cook bridge,
 both gated)** · **ADR:** none (extends the existing cook decision surface — not a new tier).
 

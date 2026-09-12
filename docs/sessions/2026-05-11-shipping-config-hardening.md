@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — Shipping config hardening (max opts + tests + sandbox + CI parity)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per user directive: "look at cmake files and cmake presets and confirm

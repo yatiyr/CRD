@@ -1,5 +1,8 @@
 # 2026-06-19 — FFT M15: orchestrator campaign + 1024 gather fusion banked
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped (banked, default-on)
 
 **1024 gather fusion** for the Bailey four-step FFT (f32 + f64, forward, N where a 1024 sub-FFT

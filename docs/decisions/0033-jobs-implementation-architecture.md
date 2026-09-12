@@ -8,6 +8,9 @@ tags: [jobs, arch, fibers, threading]
 
 # ADR-0033 — crd-jobs implementation architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 Phase 2.5 brings `crd-jobs`: a production-grade fiber-based job system required for async pipeline

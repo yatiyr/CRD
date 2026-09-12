@@ -1,5 +1,8 @@
 # Hesap FFT — Generated Codelet / Planner Project (design)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: OPEN (substrate project, multi-milestone). Opened 2026-06-16 after the AVX2 local-patch campaign closed
 > with four banked archaeology wins (split, f32 scatter NT, f32 SIMD twiddle, f64 SIMD twiddle) lifting f64 8M
 > 0.76→0.84× and f32 8M 0.61→0.78× MKL. The remaining sub-FFT gap is bound-analysis-proven to need genfft-class

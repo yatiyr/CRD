@@ -1,4 +1,7 @@
-﻿# ADR-0003 — Memory v1
+# ADR-0003 — Memory v1
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
 **Status:** Accepted

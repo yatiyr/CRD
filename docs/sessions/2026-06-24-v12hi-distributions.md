@@ -1,5 +1,8 @@
 # 2026-06-24 — v12-h/i/j distributions (continuous + discrete + heavy-tail) + the betainc/AS-241 crush
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.6 `crd-hesap`, v12 Statistics — v12-h + v12-i (the univariate distribution layer).
 **Outcome:** the `Distribution<T>` framework + 25 continuous + 12 discrete distributions, gold-standard-gated vs scipy.stats (650/0 + 304/0), 4-config Windows DoD green, honest all-peers perf board.
 

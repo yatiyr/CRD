@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-b1 CPU stable LSD radix sort of Morton-code pairs ✅ SHIPPED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-b1 of the `crd-geometry-bvh-gpu` v9a LBVH cluster. 6th slice shipped same day as v9a-a base + 4 follow-ons.
 
 **Status:** ✅ shipped same day. 5-config DoD PASS via `scripts/per-slice-check.ps1 -IncludeRelease -Parallel` in 34 s.

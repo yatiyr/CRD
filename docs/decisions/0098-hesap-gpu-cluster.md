@@ -1,5 +1,8 @@
 # ADR-0098 — crd-kir + crd-hesap-gpu: the Cerid GPU compute compiler — a unified compute+autodiff kernel IR lowering to six backends, vendor-beating kernels, and certified cross-vendor determinism
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Proposed (2026-07-07) — v17 kickoff, MAXIMAL scope (user direction 2026-07-07: "do everything… API-agnostic for future-proofing, rely on it to its core… bit-identical AND the fastest… for physics, rendering, all compute, research, ML/AI"). Per the ADR-at-slice-time pattern, base text is Proposed-state; revisions fold into "Amendments at v17-close".
 - **Phase:** 3.1.6 v17 (GPU compute) — TWO modules: **`crd-kir`** (the kernel IR + compute compiler + backends + runtime, a new foundational substrate) and **`crd-hesap-gpu`** (the hesap op library authored *in* CKIR).
 - **Tags:** `kir` `gpu` `compiler` `ir` `vulkan` `cuda` `metal` `dx12` `rocm` `webgpu` `determinism` `reproducibility` `certificates` `autodiff` `autotuning` `portability` `architecture` `substrate`

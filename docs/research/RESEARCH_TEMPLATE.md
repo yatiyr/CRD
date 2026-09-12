@@ -1,5 +1,8 @@
 # Research — YYYY-MM-DD — short-topic
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > One file per research task. Copy this template, rename to
 > `YYYY-MM-DD-short-topic.md`, fill in. Goal: future-me reads this and
 > knows what we found, what we recommend, and why, in five minutes.
@@ -27,7 +30,7 @@ modules or files when relevant.
 
 For each source actually fetched and read (not just snippet-skimmed):
 
-- [Source title](URL) — one-line summary of what it argues, what's useful.
+- [Source title](https://example.com/) — one-line summary of what it argues, what's useful.
 - ...
 
 ## Alternatives considered

@@ -8,6 +8,9 @@ tags: [resources, arch]
 
 # ADR-0037 — ResourceId hybrid UUID scheme
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 `crd-resources` needs a global identity scheme for assets. The candidates were:

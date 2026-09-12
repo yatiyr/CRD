@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-b1-parallel CLOSED: 3-phase parallel radix via crd-jobs
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-b1-parallel, the parallel CPU radix follow-on filed at v9a-b1-simd close.
 
 **Status:** ✅ SHIPPED same day. **1.86× measured speedup** (4.77 ms → 2.56 ms median-of-5 on 1 M u32 win-shipping, 8 workers). 8 conformance tests / 400 025 byte-identical assertions across the worker-spanning adversarial corpus. **5-config DoD PASS in 46 s.**

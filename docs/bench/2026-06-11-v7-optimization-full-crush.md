@@ -1,5 +1,8 @@
 # 2026-06-11 — v7 optimization: OSQP/CMA-ES/Powell/Basin-hopping/Adam full-crush vs scipy/pycma/torch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** WSL2 Ubuntu 24.04, i9-14900K, single-threaded deterministic (exact gradients). Cerid: GCC. Peers: scipy (Powell, NelderMead, trust-region, basin-hopping, OSQP), pycma (CMA-ES), torch 2.7.1 CPU (Adam/AdamW).

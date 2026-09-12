@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · B16 ocean CINEMATIC pass (horizon · sky · clouds · reflections)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Focus:** close the B16 ocean's user-flagged visual gaps to a cinematic bar — *"completely realistic ocean, completely
 realistic atmosphere like between dusk and noon, puffy clouds decorating the scene, horizon must be fully correct, every visual
 error fully addressed, reflections/refractions with no artifacts, cinematic quality."*

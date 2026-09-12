@@ -1,5 +1,8 @@
 # ADR-0118 — Incremental-evaluation unification: one dependency/dirty engine (crd-containers::IncrementalDag)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8h**. ⛔ ENGINE-FIRST UNIFICATION (U-§125 applied to Cerid
 itself): the tree held ≥2 dependency/dirty models (`render-asset-core::DependencyGraph`; the cook `content_hash`/

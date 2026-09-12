@@ -1,5 +1,8 @@
 # Lesson 08 — Physics scaling realities: what "millions of particles" actually means
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "Once we have the full GPU pipeline, we'll simulate physics of millions of particles at very small cost, right?"
 
 The intuition is half right. The GPU LBVH cluster (`v9a-*`) makes one stage of physics — broadphase + spatial queries — scale spectacularly. But "physics" is a 3-stage pipeline, and **the LBVH is not the bottleneck for most realistic million-scale scenarios**. This lesson decomposes the question honestly so future architectural decisions don't overpromise based on broadphase numbers.

@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1b-e — sandbox eylem demo + render interpolation (Fix Your Timestep)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per phase plan §v1b-e: spawn 3 rigid bodies into the sandbox (sphere /

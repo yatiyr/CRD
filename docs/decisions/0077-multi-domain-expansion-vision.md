@@ -1,6 +1,17 @@
 # ADR-0077: Multi-domain expansion — the "absolute beast" vision
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted 2026-05-14
+
+**2026-09-12 direction amendment:** [ADR-0129](0129-renderer-ui-editor-delivery-order.md) owns delivery order;
+[ADR-0130](0130-system-qualification-and-agent-driven-products.md) records the expanded product directions and
+separately proposed mechanisms. CHIR/CEIR/CKIR and gpu-context supersede historical rhi compute and vendor-runtime
+ownership assumptions below. Model import/interoperability does not require making ONNX Runtime the owning engine.
+Inference **and training** qualify together, including custom authored kernels, fine-tuning/distillation and specialized
+game/product brains. DAW/editor/modeling/PCB/embedded/collaboration consumers are explicit master rows. Original
+domain requirements remain retained; historical schedules, horizon estimates and exclusions cannot override that table.
 **Supersedes:** none (extends the long-term outlook in `docs/ROADMAP.md`)
 **Cornerstones:**
 - `docs/PRINCIPLES.md` ("modular by default", "single-path", "substrate-first")

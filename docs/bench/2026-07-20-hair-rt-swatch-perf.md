@@ -1,5 +1,8 @@
 # 2026-07-20 — B18-f path-traced hair swatch — GPU per-sample cost + real-time analysis
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Machine / config
 
 - GPU: NVIDIA RTX 4070 Ti SUPER (Ada), Vulkan, `VK_KHR_ray_query` inline traversal (procedural-AABB BLAS + the

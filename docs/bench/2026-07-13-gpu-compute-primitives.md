@@ -1,5 +1,8 @@
 # B-cmp GPU compute primitives — CUB/cuBLAS gold board (2026-07-13)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The compute-primitive crush campaign (after the FFT: `2026-07-13-gpu-fft-cufft-gold.md`). Each B-cmp primitive is authored in
 CKIR (portable, bit-exact CPU oracle + Vulkan + DX12) and benched against NVIDIA's production library. Machine: **RTX 4070 Ti
 SUPER** (Ada AD103, ~672 GB/s DRAM, **48 MB L2**), CUDA 13.3, ⚠ UNLOCKED clocks (re-lock for a headline). GPU-timed, min-of-N.

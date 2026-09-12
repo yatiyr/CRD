@@ -1,5 +1,8 @@
 # 2026-06-20 — v10 FFT cluster: 1D FFT + NUFFT + DCT/DST + sparse FFT
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).
 
 - **Machine/config:** i9-14900K (14-core), WSL2 Ubuntu 24.04, single pinned core (`taskset -c 4` for bench suite, 1 thread). Cerid: g++ -O2, f64 primary. Peers: Intel MKL (single-thread, best-of-20 runs), FFTW 3.x (ESTIMATE plan), PocketFFT (numpy/scipy.fft backend), FINUFFT, scipy 1.17.1.

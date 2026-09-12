@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0 post-mortem: C4714 LTCG drift + UTF-8 argv mojibake
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** v0 substrate verified actually-clean across all 14 build steps
 (pending the in-flight `boed01to3` sweep result; this doc is written in
 parallel and updated with the final result).

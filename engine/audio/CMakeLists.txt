@@ -23,6 +23,7 @@ target_link_libraries(crd-audio
         crd-hesap-dsp
         crd-hesap-interp
         crd-jobs
+        crd-ceir # CEIR-31a-1b-ii: ceir_audio_render walks a ceir.audio Module (a consumer dep -- ADR-0109-clean)
 )
 
 target_compile_features(crd-audio PUBLIC cxx_std_20)

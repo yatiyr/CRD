@@ -1,5 +1,8 @@
 # REN-3.1 — RTT **DEPTH** transients (the shadow-map substrate)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Parent**: REN-3 (`ren-3-lighting-shadow-pipeline.md`, D-007 row 100). **Status**: spec, 2026-07-25. First
 just-in-time per-slice spec written under the `docs/design/README.md` convention.
 

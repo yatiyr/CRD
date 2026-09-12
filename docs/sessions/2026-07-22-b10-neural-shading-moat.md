@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · B10 neural-shading moat (core + performance crush)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** proceed to B10 (the neural-shading MOAT) on the C6 device enable; leave no gaps; be sure the performance is crushing and
 blazing fast.
 

@@ -1,5 +1,8 @@
 # 2026-05-21 — Phase 3.1.6 `crd-hesap` v2d: multilevel-ND scaffold
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-ordering`. The METIS multilevel chassis — coarsen →
 > bipartition coarsest → uncoarsen-project — producing a valid, un-refined 2-way
 > partition. The frame v2e bolts Fiduccia-Mattheyses refinement + the recursive

@@ -1,5 +1,8 @@
 # ADR-0080 — `crd-rhi-compute` substrate
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SUPERSEDED by ADR-0103/0104/0105 (final strike 2026-07-23, RET band). The compute substrate this ADR
 built on crd-rhi was re-founded on crd-gpu-context + CKIR (ADR-0103: gpu-context owns every GPU program); the
 async-compute queue semantics (D9 pointer-identity, dedicated-family detection) SURVIVE in gpu-context (already

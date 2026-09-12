@@ -1,5 +1,8 @@
 # ADR-0100 — CKIR is the one GPU compute manager: a *kernel-source-agnostic* dispatch surface serving both compiler-authored and hand-written kernels
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-08) — user decision ("all of this is just GPU compute, we should have one GPU compute manager"). **Amends ADR-0098 (CKIR) + ADR-0099 (crd-gpu-context).**
 - **Phase:** 3.1.6 v17 (GPU compute) — architecture slice **v17-i** (compute/rendering separation), refinement **i-c→i-f**.
 - **Tags:** `kir` `gpu-context` `compute` `architecture` `dispatch` `kernels` `geometry-bvh-gpu` `ray-tracing` `abstraction` `substrate`

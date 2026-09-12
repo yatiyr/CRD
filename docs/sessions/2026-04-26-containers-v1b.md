@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — crd-containers v1b + mini quality pass
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 1. Ship `crd-containers` v1b: `String` (SSO 23-byte), `StringView` alias,

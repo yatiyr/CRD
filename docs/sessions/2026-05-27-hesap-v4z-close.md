@@ -1,5 +1,8 @@
 # 2026-05-27 — hesap v4z: v4 CLOSE (audits + reorder default-ON + robustness + ADR §26)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4z** — the cluster close. No new algorithms: quantify the
 convection result, settle the `reorder` default, audit complex + CLI completeness, fix a
 robustness gap that surfaced during the audit, and lock the decisions into ADR-0065 §26.

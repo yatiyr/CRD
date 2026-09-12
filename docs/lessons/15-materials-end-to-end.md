@@ -1,5 +1,8 @@
 # 15 — Materials, end to end: surface, lowering, variants, neural
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > *Everything about materials in Cerid — what a material is, the OpenPBR surface contract, the MaterialX node library, how a
 > material fragment is emitted and lowered, how it flows through the variant matrix (with the real gotchas hit while wiring it),
 > deferred vs forward, and how neural materials fit. Grounded in `ckir_material.hpp`, `ckir_nodes.hpp`, `ckir_cook.hpp`,

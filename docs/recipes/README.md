@@ -1,5 +1,8 @@
 # docs/recipes — educative build-recipes
 
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 A **recipe** is a standalone teaching document for a technique, algorithm, or system we have studied and built.
 Its job: **a human or an agent who reads it once understands the thing completely** — the physics/maths, every
 parameter, the full assembly, the papers it comes from, and the traps that cost us time. Not a changelog, not an
@@ -36,6 +39,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- **2026-09-04-ceir-reverse-mode-autodiff.md** — reverse-mode autodiff as a CEIR compiler transform: `build_gradient` rewrites a forward module into a backward one (VJP rules for gemm/reduce/mlp), which then plans + runs device-resident like any program. The composite-vs-expansion reframe (why you differentiate `ml.mlp`, not the lowered resultless ReLU), write-through-declare, two-output readback, forward-liveness, readonly GLSL-vs-HLSL codegen, recompute-as-checkpointing. Board: `docs/bench/2026-09-04-ceir25-autodiff-scoreboard.md`.
 - **2026-07-21-hair-offline-film.md** — physically-based path-traced hair, film/offline quality. The Marschner /
   Chiang fibre BCSDF, linear-swept-sphere geometry, multi-bounce GI, and the full renderer. The reference the
   real-time tier is measured against.

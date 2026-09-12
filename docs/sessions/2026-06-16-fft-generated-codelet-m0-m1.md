@@ -1,5 +1,8 @@
 # 2026-06-16 — FFT: AVX2 large-N archaeology close + Fork A generated-codelet M0/M1
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-fft` (v10). Continues `2026-06-15-fft-small-n-engine-crush.md`.
 > Design doc: `docs/design/hesap_fft_generated_codelets.md`. Measured history: `docs/research/fft-mkl-crush.md`
 > (FINAL SUMMARY + C-22/C-23). Memory: `project_v10_fft_plan` (Part 29).

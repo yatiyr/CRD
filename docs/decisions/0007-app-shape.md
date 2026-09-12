@@ -1,4 +1,7 @@
-﻿# ADR-0007 — `crd-app` shape
+# ADR-0007 — `crd-app` shape
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
 **Status:** Accepted

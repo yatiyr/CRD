@@ -1,5 +1,8 @@
 # CEIR-20z — the CEIR-20 (`ceir.work` / device-generated work) band close (2026-08-17)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The `ceir.work` dialect (device-side work generation) now ships as **one authored semantic program with THREE
 device lowerings** — the charter's §135 ("at least one modern device lowering") is not just met but exceeded
 (two modern lowerings + the portable fallback). Every algorithm is an authored asset; the C++ is only cooker +

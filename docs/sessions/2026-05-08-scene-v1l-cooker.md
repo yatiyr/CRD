@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1l: cook_scene cooker (`.scene.toml` → SCEN)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1k shipped 2026-05-07. SceneResource + SceneLoader + SceneArtifactBuilder + `World::instantiate_scene` in place. Six-config 758/758 (post-renderer additions) / 17 smokes. Scene tests 225 / 34783.
 
 **Status at end:** v1l shipped — the **authoring layer**. Human-edited `.scene.toml` files cook to deterministic SCEN bytes via the same `SceneArtifactBuilder` shipped in v1k. Built-in readers cover `Transform` + the six built-in relations; user-defined components register their own TOML readers. The cooker bakes world matrices in a temp World by running `TransformPropagation::step()` before serialising — loaded SCEN packs come back with hierarchical world matrices already correct. Six-config 758/758 / 755 release / 17 smokes. 17 cooker tests / scene-cooker pass cleanly across all configs.

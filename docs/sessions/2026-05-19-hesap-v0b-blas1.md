@@ -1,5 +1,8 @@
 # Session 2026-05-19 — Phase 3.1.6 `crd-hesap` v0b BLAS L1
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the first elite v0b deliverable per the 2026-05-19 strategic pivot

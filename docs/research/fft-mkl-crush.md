@@ -1,5 +1,8 @@
 # Research Dossier — Beating MKL on 1D Complex FFT (v10 `crd-hesap-fft`)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## ⭐⭐⭐ AVX2 SINGLE-THREAD LARGE-N C2C CAMPAIGN — CLOSED 2026-06-16 (FINAL SUMMARY)
 
 **1. Executive summary.** The large-N (2M–16M) complex-FFT campaign began with a *premature* "AVX2 ceiling"

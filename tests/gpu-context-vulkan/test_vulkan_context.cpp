@@ -13428,6 +13428,223 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     CHECK(capture.warning_count() == 0U);
 }
 
+// CEIR-34 R2: the depth-tested + RANGED overlay sub-paths on Vulkan (the twin of the DX12 gate). RET-6 above and
+// REN-1 cover the colour-only, non-ranged overlay (compare == Always, first_vertex == 0); the real debug overlay
+// ALSO draws depth-occluded primitives (the grid/gizmos) and RANGED bucket draws (first_vertex > 0). This gate pins
+// both, so CEIR-34 R2's fold of the overlay shape into the generic StoragePull depth-load verb is an IDENTITY change.
+// The overlay program is keyed to VertexIndex {4,5,6} (build_indexed_probe_vs): a ranged draw with first_vertex == 4
+// lights it, first_vertex == 0 collapses it offscreen — so a GREEN centre PROVES the first-vertex offset arrived.
+TEST_CASE("CEIR-34 R2: a ranged, depth-tested overlay composites over a colour+depth scene (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    gpu::GpuContextConfig      cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    // scene = RED triangle at VertexIndex {0,1,2}, z=0 (depth-writing).
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_triangle_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED
+    auto svs = ctx->create_program(svg, sve);
+    auto sfs = ctx->create_program(sfg, sfe);
+    REQUIRE(svs != nullptr);
+    REQUIRE(sfs != nullptr);
+    auto scene = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(scene != nullptr);
+
+    // overlay = the SAME-shaped triangle keyed to {4,5,6}, semi-transparent GREEN, z=0.
+    kir::KGraph ovg(&alloc);
+    kir::KEntry ove;
+    crd::gputest::build_indexed_probe_vs(ovg, ove);
+    kir::KGraph ofg(&alloc);
+    kir::KEntry ofe;
+    crd::gputest::build_solid_alpha_fs(ofg, ofe, 0.0, 1.0, 0.0, 0.5); // GREEN @ 50%
+    auto ovs = ctx->create_program(ovg, ove);
+    auto ofs = ctx->create_program(ofg, ofe);
+    REQUIRE(ovs != nullptr);
+    REQUIRE(ofs != nullptr);
+    auto overlay = raster->create_raster_program(*ovs, *ofs);
+    REQUIRE(overlay != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_depth_target(dim, dim); // companion depth ⇒ the depth-load arm
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    // 1. scene: blue clear (depth → far 1.0) + the red triangle (compare Always, depth-writing).
+    crd::gputest::enc_draw_storage_depth(*raster, *target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1.0F,
+                                         gpu::DepthCompare::Always, *storage, 3U);
+    // 2. overlay: RANGED (first_vertex = 4) + LOAD + alpha-blend + READ-ONLY depth (LessEqual, passes at z=0<=0).
+    crd::gputest::enc_draw_overlay_range(*raster, *target, *overlay, *storage, gpu::DepthCompare::LessEqual, 4U, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(1U, 1U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch    = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch    = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ceir34-r2 ranged-depth vulkan] centre=(" << rch(centre) << "," << gch(centre) << "," << bch(centre)
+                                                    << ") corner=(" << rch(corner) << "," << gch(corner) << ","
+                                                    << bch(corner) << ")");
+    // GREEN at the centre ⇒ first_vertex==4 reached the draw + the depth-load arm + alpha blend ran: ~ (128,128,0).
+    CHECK(rch(centre) > 90U);
+    CHECK(rch(centre) < 165U);
+    CHECK(gch(centre) > 90U);
+    CHECK(gch(centre) < 165U);
+    CHECK(bch(centre) < 25U);
+    // the blue clear survived the overlay LOAD outside the triangles.
+    CHECK(rch(corner) < 25U);
+    CHECK(bch(corner) > 235U);
+    CHECK(capture.error_count() == 0U); // validation-SILENT through the depth-load + ranged overlay
+    CHECK(capture.warning_count() == 0U);
+}
+
+// CEIR-34 R2: the NON-ranged depth-tested overlay (first_vertex == 0) — the clean arm-395 (draw_storage_depth_load)
+// identity anchor, free of the DX12 first_vertex axis the ranged gate tracks. A depth-writing red scene, then a
+// semi-transparent green overlay at the same z with a READ-ONLY LessEqual test that PASSES: the depth-load arm must
+// bind the companion depth LOAD (no clear), NOT write depth, alpha-blend, and compose. This is the pixel gate that
+// verifies CEIR-34 R2's fold of the overlay's depth bucket into draw_storage_depth_load stays byte-identical.
+TEST_CASE("CEIR-34 R2: a non-ranged depth-tested overlay composites over a colour+depth scene (Vulkan)",
+          "[gpu-context][vulkan][gpu][raster][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    gpu::GpuContextConfig      cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_triangle_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED scene
+    auto svs = ctx->create_program(svg, sve);
+    auto sfs = ctx->create_program(sfg, sfe);
+    REQUIRE(svs != nullptr);
+    REQUIRE(sfs != nullptr);
+    auto scene = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(scene != nullptr);
+
+    kir::KGraph ovg(&alloc);
+    kir::KEntry ove;
+    crd::gputest::build_triangle_vs(ovg, ove); // SAME triangle {0,1,2}, first_vertex == 0 (non-ranged)
+    kir::KGraph ofg(&alloc);
+    kir::KEntry ofe;
+    crd::gputest::build_solid_alpha_fs(ofg, ofe, 0.0, 1.0, 0.0, 0.5); // GREEN @ 50%
+    auto ovs = ctx->create_program(ovg, ove);
+    auto ofs = ctx->create_program(ofg, ofe);
+    REQUIRE(ovs != nullptr);
+    REQUIRE(ofs != nullptr);
+    auto overlay = raster->create_raster_program(*ovs, *ofs);
+    REQUIRE(overlay != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    crd::gputest::enc_draw_storage_depth(*raster, *target, *scene, gpu::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1.0F,
+                                         gpu::DepthCompare::Always, *storage, 3U);
+    crd::gputest::enc_draw_overlay(*raster, *target, *overlay, *storage, gpu::DepthCompare::LessEqual, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(1U, 1U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch    = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch    = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ceir34-r2 nonranged-depth vulkan] centre=(" << rch(centre) << "," << gch(centre) << "," << bch(centre)
+                                                       << ") corner=(" << rch(corner) << "," << gch(corner) << ","
+                                                       << bch(corner) << ")");
+    CHECK(rch(centre) > 90U);
+    CHECK(rch(centre) < 165U);
+    CHECK(gch(centre) > 90U);
+    CHECK(gch(centre) < 165U);
+    CHECK(bch(centre) < 25U);
+    CHECK(rch(corner) < 25U);
+    CHECK(bch(corner) > 235U);
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+}
+
+// ⭐⭐ CEIR-34 R2 / REN-39-B1: THE FIRST-VERTEX OFFSET CONTRACT (Vulkan) — the REFERENCE half of the both-backend
+// contract the DX12 twin must match. A non-indexed draw's `first_vertex` MUST reach the shader's VertexIndex; the
+// overlay's ranged bucket addressing depends on it. build_vid_offset_probe covers the centre whether VertexIndex reads
+// {0,1,2} or {4,5,6} and writes R = VertexIndex*(40/255) via a FLAT varying. Drawn RANGED (first_vertex = 4, count = 3)
+// the provoking vertex sees vid = 4 ⇒ centre R = 160. Vulkan folds firstVertex into gl_VertexIndex natively, so this is
+// GREEN as-is — it's the value DX12's identity-index-buffer seam is built to reproduce (see the DX12 twin).
+TEST_CASE("CEIR-34 R2: first_vertex reaches the shader's VertexIndex (Vulkan) (offset contract)",
+          "[gpu-context][vulkan][gpu][raster][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    gpu::GpuContextConfig      cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    crd::gpu::ValidationCapture capture(*vk);
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_vid_offset_probe_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_vid_offset_probe_fs(fg, fe);
+    auto vs = ctx->create_program(vg, ve);
+    auto fs = ctx->create_program(fg, fe);
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    // clear to black, draw the probe RANGED (first_vertex = 4, count = 3).
+    crd::gputest::enc_draw_storage_ranged(*raster, *target, *program, gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *storage,
+                                          4U, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    WARN("[ceir34-r2 fv-contract vulkan] centre R=" << rch(centre) << " (expect 160: gl_VertexIndex = firstVertex+0 = 4)");
+    // vid = 4 at the provoking vertex ⇒ R = 4*40 = 160; UNORM8 spec band |ideal - readback| < 1.1 (0.6-ULP store).
+    CHECK(rch(centre) >= 159U);
+    CHECK(rch(centre) <= 161U);
+    CHECK(capture.error_count() == 0U);
+    CHECK(capture.warning_count() == 0U);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // RET-6 pt 3: the crd-draw GPU HALF on gpu-context -- init compiles the CKIR suite through create_program (no
 // ResourceManager, no cooked-GLSL pack, no pipelines), submit_overlay packs the RenderBuffer into the u32 draw buffer

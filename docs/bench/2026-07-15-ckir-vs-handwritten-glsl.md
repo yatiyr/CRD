@@ -1,5 +1,8 @@
 # CKIR-emitted GLSL vs HAND-WRITTEN GLSL — the zero-IR-overhead head-to-head (2026-07-15)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The definitive honest test of a portable shader IR: does CKIR-emitted GLSL run as fast as a human's hand-written GLSL for the
 SAME algorithm? Both go through the identical shaderc → SPIR-V → driver path, so this isolates the quality of the EMITTED code.
 Same buffers, GPU-timed kernel-only (`last_gpu_ms`, min-of-30), and — the honesty gate — **both kernels' outputs must match**

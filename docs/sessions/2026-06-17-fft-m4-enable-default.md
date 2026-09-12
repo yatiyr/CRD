@@ -1,5 +1,8 @@
 # 2026-06-17 — FFT M4: enable the generated hierarchical f64 sub-FFT by default
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-fft` (v10), Fork A. Continues `2026-06-17-fft-m3-hierarchical-2048.md`.
 > Memory: `project_v10_fft_plan`. The change is default-ON; emergency fallback `-DCRD_FFT_DISABLE_HIER`.
 

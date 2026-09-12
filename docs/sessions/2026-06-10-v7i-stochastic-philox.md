@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-i CLOSE: stochastic/ML optimizers + the Philox v12-pull (same session, part 5)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090) + a v12 pull
 **Slices:** the v12-PULL (new module `crd-hesap-stats` with the Philox counter-RNG) then **v7-i complete**.
 Sequencing per user direction: rather than moving v7-i to the statistics cluster or shipping it with the

@@ -1,5 +1,8 @@
 # Research — 2026-05-28 — hesap v5 sparse-direct factorization
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the v5 sparse-direct family shipped + closed 2026-06-05 (CHOLMOD/MUMPS results on the honest board). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Deep-research design dossier for **Phase 3.1.6 `crd-hesap` v5 — sparse

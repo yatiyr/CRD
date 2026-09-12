@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a `-gpu` LBVH cluster CLOSED ✅
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-close — cluster-close docs + ADR-0076 §25 amendment + 18-config full sweep + performance budget pin.
 
 **Status:** ✅ CLUSTER CLOSED. ADR-0076 §25 ✅ Accepted, locking 33 design decisions (D132-D164). 18-config full sweep PASS. Performance characterization honestly pinned: 53.7 ms / 1M test-harness median-of-5 on dev box (with full CPU↔GPU round-trip + Phase C reorder); ~5-8 ms achievable for pure-GPU pipeline on RTX 3060 (filed `v9a-c-gpu-reorder` + GPU-resident-consumer paths).

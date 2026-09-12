@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — math quality check before primitives
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Do one more cleanup/quality pass on `crd-math` before starting primitive

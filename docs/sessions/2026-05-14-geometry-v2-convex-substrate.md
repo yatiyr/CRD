@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v2 `crd-geometry-convex` substrate (v2a → v2j + v2-close)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the nine first slices of Phase 3.1.7 v2 (the convex-shape narrowphase substrate) in one extended session. Brief per-slice notes here; per-slice session log would have ballooned into nine files.

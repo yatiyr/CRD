@@ -1,5 +1,8 @@
 # 2026-06-01 — hesap v5b-3: Multifrontal LU (serial + deterministic-parallel) + the honest gold-standard scoreboard
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > One of the longest sessions in the project. Started from a **fabricated "crush"** (the prior session
 > invented benchmark numbers); restarted to establish ground truth and build the real thing honestly.
 > Full arc + every measurement: memory `project_lu_umfpack_gap_is_mc64_not_gemm`.

@@ -1,8 +1,10 @@
 // CEIR-22c-3b (device-free) — the AUTHORED viz-prep .ckir kernels' ORACLE. ckir_read the two hand-authored files
 // (assets/ckir/tensor_viz_{magnitude,normalize}.ckir) and eval_cpu_kernel them over L=64 elements, proving the AUTHORING is
 // correct (the node/stmt graph computes mag=sqrt(re^2+im^2) and norm=mag/max) INDEPENDENT of any device — the first gate that
-// fails if the positional refs / Builtin gid / dtype grammar are wrong. Also smoke emit_compute_kernel_glsl (the shape the
-// device legs compile). One workgroup of local_size=L maps 1:1 onto the elements (no tail threads → no OOB).
+// fails if the positional refs / Builtin gid / dtype grammar are wrong. Also smoke emit_compute_kernel_glsl — which returns true
+// once a STRING is produced, NOT a compile check (the shaderc compiler lives in the Vulkan backend per ADR-0103; kir can't link
+// it), so scope bugs pass here and only the device legs' compile catches them. One workgroup of local_size=L maps 1:1 onto the
+// elements (no tail threads → no OOB).
 
 #include <crd/kir/ckir.hpp>             // KGraph / KEntry
 #include <crd/kir/ckir_asset.hpp>       // ckir_read
@@ -192,6 +194,10 @@ TEST_CASE("ceir 23c-a: the authored relu.ckir computes max(x, 0) per element (th
     kir::KGraph                        kg(&root);
     kir::KEntry                        ke;
     load_ckir(CRD_REPO_DIR "/assets/ckir/relu.ckir", &root, kg, ke);
+    // CEIR-26d: relu.ckir now ships the SENTINEL local_size=0 ("bind from numel at cook"); the device legs' resolver patches it
+    // (bind_authored_local_size). This CPU gate is not a resolver, so bind it explicitly to this corpus's width (32) before the
+    // emit smoke so the emitted GLSL is representative of what the device legs compile. eval_cpu_kernel below takes len directly.
+    ke.local_size[0] = 32;
     kir::GlslKernel kern(&root);
     REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &root, kern)); // emit smoke (the device legs compile this)
 
@@ -240,74 +246,66 @@ TEST_CASE("ceir 23e-a: the authored spmv_csr.ckir computes CSR y = A*x (runtime 
     }
 }
 
-// CEIR-24b-1 — the authored transpose.ckir reading gate: ckir_read the committed asset -> eval_cpu_kernel == the CPU transpose
-// (Kt[d,s] = K[s,d], K[Sk,D] -> Kt[D,Sk]) + GLSL emit smoke. The durable proof of the attention Q·Kᵀ transposed operand (the
-// bootstrap builder in test_ckir_kernel.cpp was DELETED after commit; this asset is the sole source). Pure data-movement gather
-// (Div/Mod-free index math) => BIT-EXACT. Dims Sk=3, D=4 (the 24b attention proof); local_size = D = 4, one workgroup.
-TEST_CASE("ceir 24b-1: the authored transpose.ckir computes Kt[d,s]=K[s,d] (K[Sk,D] -> Kt[D,Sk]) vs the CPU ref",
-          "[ceir][ckir][ml]")
-{
-    crd::memory::GrowableTlsfAllocator root;
-    kir::KGraph                        kg(&root);
-    kir::KEntry                        ke;
-    load_ckir(CRD_REPO_DIR "/assets/ckir/transpose.ckir", &root, kg, ke);
-    kir::GlslKernel kern(&root);
-    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &root, kern)); // emit smoke (the device legs compile this)
-
-    constexpr int sk = 3; // K rows (the key seq length Sk)
-    constexpr int dd = 4; // K cols == Kt rows (the head dim D); local_size = D = one thread per output row
-    crd::f64      kin[sk * dd];
-    crd::f64      kt[dd * sk];
-    for (int i = 0; i < sk * dd; ++i) { kin[i] = 1.0 + static_cast<crd::f64>(i); } // K = 1..Sk*D
-    for (int i = 0; i < dd * sk; ++i) { kt[i] = -1.0; }
-    kir::KernelBuffer bufs[2] = {{kin, sk * dd, 0, 0}, {kt, dd * sk, 0, 1}};
-    kir::eval_cpu_kernel(kg, ke, bufs, 2, static_cast<crd::u32>(dd), &root, 1U);
-
-    for (int d = 0; d < dd; ++d)
-    {
-        for (int s = 0; s < sk; ++s) { CHECK(kt[d * sk + s] == kin[s * dd + d]); } // Kt[d,s] == K[s,d], bit-exact
-    }
-}
+// ⛔ CEIR-26d-3c: the "ceir 24b-1" transpose.ckir reading gate is RETIRED with its asset — attention's Kᵀ is now a shape-generic
+// tensor.transpose (a DIALECT op lowered by synth_transpose/emit_permute, the cooker, since 26d-3a), so the baked transpose.ckir
+// authored asset is redundant and DELETED (the DELETION-IS-done discipline). Transpose is proven device-resident by synth at
+// generic dims via the 26d-3c attention gates (test_ceir_pipeline_{vulkan,dx12}.cpp) + the 25b-4a transpose+broadcast+elementwise chain gate.
 
 // CEIR-24b-2 — the authored softmax.ckir reading gate: ckir_read the committed asset -> eval_cpu_kernel == the CPU scaled
 // rowwise softmax (probs[r,c] = exp(scale·scores[r,c] - m_r)/Σ, m_r = max_c scale·scores[r,c]) within a DERIVED tol (exp is
 // float math, bit-exactness dies) + GLSL AND HLSL emit smoke (KOp::Exp in both backends; the emitter-lag scar). The durable
 // proof of the attention softmax step (the bootstrap builder in test_ckir_kernel.cpp was DELETED). scale = 1/√D is a
 // CALLER-UPLOADED 1-element buffer. Dims Sq=2, Sk=3; local_size = Sq = 2, one workgroup.
-TEST_CASE("ceir 24b-2: the authored softmax.ckir computes scaled rowwise softmax (stable) vs the CPU ref (derived tol)",
+// CEIR-24b-2 / 26d-3b: the authored softmax.ckir READING GATE — ckir_read the COMMITTED asset → eval_cpu_kernel == the CPU scaled
+// rowwise softmax at BOTH the 24b proof dims (Sq=2,Sk=3) AND a GENERIC (Sq=3,Sk=5) width (26d-3b generalized the baked Sk=3 unroll
+// to a spec-const loop). Sk rides as the spec-const (constant_id 0, set per case); local_size = Sq (the resolver cook-binds it to
+// dim0; the gate sets it). Derived tol (exp is float, not bit-exact). Proves the COMMITTED asset (the builder is DELETED).
+TEST_CASE("ceir 24b-2: the authored softmax.ckir computes scaled rowwise softmax at (2,3) AND (3,5) vs the CPU ref (26d-3b generalized)",
           "[ceir][ckir][ml]")
 {
     crd::memory::GrowableTlsfAllocator root;
-    kir::KGraph                        kg(&root);
-    kir::KEntry                        ke;
-    load_ckir(CRD_REPO_DIR "/assets/ckir/softmax.ckir", &root, kg, ke);
-    kir::GlslKernel gk(&root);
-    REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &root, gk)); // Vulkan/lavapipe leg
-    kir::GlslKernel hk(&root);
-    REQUIRE(kir::emit_compute_kernel_hlsl(kg, ke, &root, hk)); // DX12 leg (Exp in HLSL)
-
-    constexpr int  sq      = 2; // rows (Sq)
-    constexpr int  sk      = 3; // cols (Sk); Sk=3 baked (unrolled)
-    const crd::f64 scale_v = 0.5; // 1/√D for D=4
-    crd::f64       sc[sq * sk] = {1.0, 2.0, 3.0, 0.5, -1.0, 4.0};
-    crd::f64       sv[1]       = {scale_v};
-    crd::f64       pr[sq * sk];
-    for (int i = 0; i < sq * sk; ++i) { pr[i] = -1.0; }
-    kir::KernelBuffer bufs[3] = {{sc, sq * sk, 0, 0}, {sv, 1, 0, 1}, {pr, sq * sk, 0, 2}};
-    kir::eval_cpu_kernel(kg, ke, bufs, 3, static_cast<crd::u32>(sq), &root, 1U);
-
-    for (int r = 0; r < sq; ++r)
-    {
-        crd::f64 m = -1e30;
-        for (int c = 0; c < sk; ++c) { m = crd::math::max(m, scale_v * sc[r * sk + c]); }
-        crd::f64 dn = 0.0;
-        for (int c = 0; c < sk; ++c) { dn += crd::math::exp(scale_v * sc[r * sk + c] - m); }
-        for (int c = 0; c < sk; ++c)
+    const auto                         run_case = [&](int sq, int sk, bool emit_smoke) {
+        kir::KGraph kg(&root);
+        kir::KEntry ke;
+        load_ckir(CRD_REPO_DIR "/assets/ckir/softmax.ckir", &root, kg, ke);
+        ke.local_size[0] = static_cast<crd::u32>(sq);          // the resolver cook-binds local_size ← Sq=dim0; the gate sets it
+        (void)kg.set_spec_const(0U, static_cast<crd::f64>(sk)); // Sk = the spec-const loop bound
+        if (emit_smoke)
         {
-            const crd::f64 ref = crd::math::exp(scale_v * sc[r * sk + c] - m) / dn;
-            CHECK(crd::math::abs(pr[r * sk + c] - ref) <= 1e-6 * (1.0 + crd::math::abs(ref))); // derived tol (exp != bit-exact)
+            kir::GlslKernel gk(&root);
+            REQUIRE(kir::emit_compute_kernel_glsl(kg, ke, &root, gk)); // Vulkan/lavapipe leg
+            kir::GlslKernel hk(&root);
+            REQUIRE(kir::emit_compute_kernel_hlsl(kg, ke, &root, hk)); // DX12 leg (Exp in HLSL)
         }
-    }
+        const crd::f64 scale_v = 0.5; // 1/√D stand-in
+        const int      n       = sq * sk;
+        crd::f64       sc[3 * 5];
+        crd::f64       sv[1] = {scale_v};
+        crd::f64       pr[3 * 5];
+        for (int i = 0; i < n; ++i) { sc[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5); }
+        for (int i = 0; i < n; ++i) { pr[i] = -1.0; }
+        kir::KernelBuffer bufs[3] = {{sc, n, 0, 0}, {sv, 1, 0, 1}, {pr, n, 0, 2}};
+        kir::eval_cpu_kernel(kg, ke, bufs, 3, static_cast<crd::u32>(sq), &root, 1U);
+        for (int r = 0; r < sq; ++r)
+        {
+            crd::f64 m = -1e30;
+            for (int c = 0; c < sk; ++c) { m = crd::math::max(m, scale_v * sc[r * sk + c]); }
+            crd::f64 dn = 0.0;
+            for (int c = 0; c < sk; ++c) { dn += crd::math::exp(scale_v * sc[r * sk + c] - m); }
+            for (int c = 0; c < sk; ++c)
+            {
+                const crd::f64 ref = crd::math::exp(scale_v * sc[r * sk + c] - m) / dn;
+                CHECK(crd::math::abs(pr[r * sk + c] - ref) <= 1e-6 * (1.0 + crd::math::abs(ref))); // derived tol (exp != bit-exact)
+            }
+        }
+    };
+    // emit_compute_kernel_glsl/_hlsl return true once a STRING is produced — they do NOT compile it, so a scope bug (an
+    // out-of-scope loop temp) passes this "smoke" and only the compile catches it. The COMPILE authority is the 24b-4 device
+    // gates (glslang for Vk, dxc for DX12; ADR-0103 moved the shaderc compiler into the Vulkan backend, out of kir — so this
+    // device-free gate CANNOT link it). 26d-3b's materialize bug proved this: emit smoke + CPU eval were both green; only the
+    // device compile rejected the out-of-scope `base` (fixed via stmt_materialize). This gate's job is the CPU-eval oracle.
+    run_case(2, 3, true);  // the 24b proof dims + the GLSL/HLSL emit string-smoke (NOT a compile — the 24b-4 device gates compile+run it)
+    run_case(3, 5, false); // a GENERIC width — the 26d-3b dimension-general proof (was BakedKernelShapeUnsupported)
 }
 
 TEST_CASE("ceir 23z: the authored quant_dequantize_q8_sym.ckir (symmetric, out = int8*scale) reads + evals vs the CPU ref",

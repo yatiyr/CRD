@@ -2158,3 +2158,198 @@ TEST_CASE("ceir 20b: the shipped wavefront_work.frame.toml parses headless + ext
     REQUIRE(m != nullptr);
     CHECK(ceir::work::find_work_misuse(ctx, *m).kind == ceir::work::WorkMisuseKind::None);
 }
+
+// CEIR-31b-3-c-i: the SHIPPED ui_frosted_glass.frame.toml — the §141 frosted-glass chain authored as a CEIR frame (ZERO
+// new ops/executors/dialect; every pass an existing kind, every kernel a committed `.ckir`). Device-free gate: it PARSES +
+// validates (the 19 rejections), ROUND-TRIPS through ceir.frame (the 15a fixpoint + find_frame_misuse-clean + the
+// desc<->ceir emit-IDENTITY), and its AUTHORING carries the H!=V blur distinction (blur_h1 dir spec (1,0) vs blur_v1 (0,1) —
+// the record-SEAT proof that these resolve to DIFFERENT programs is 31b-3-c-ii device-free + 31b-4 on-device). The step
+// spec-const is EXTENT-DERIVED (CEIR-31b-4-b-iv-g-2): each blur pass authors `derive_spec_2_{read,axis,op}` and the record
+// seat resolves it to 1/extent(read,axis) — this gate pins the AUTHORING (H off X, V off Y). The ping-pong WAR on blur_a is a device concern (31b-4); here the
+// chain is proven STRUCTURALLY VALID. ⛔ CEIR-31b-4-a: the mask pass is now a FULLSCREEN fixed-rect (engine://ui/mask_rect,
+// reads NOTHING) — it REPLACED the ui_panels/panel_fill geometry placeholder (a UiPanel component is a PARKED Track-B
+// concept), so the frame now has exactly ONE draw_list (visible_geometry).
+TEST_CASE("CEIR-31b-3-c-i: the shipped ui_frosted_glass.frame.toml parses, round-trips + authors the H!=V blur",
+          "[framecook][ceir][frame][ceir31b]")
+{
+    std::ifstream f(CRD_FRAME_ASSETS_DIR "/ui_frosted_glass.frame.toml", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    memory::GrowableTlsfAllocator alloc;
+    crd::containers::Array<char>  text(&alloc);
+    text.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(text.data(), sz);
+
+    FrameGraphDesc      desc(&alloc);
+    const FrameCookError perr = parse_frame_toml(StringView(text.data(), static_cast<crd::usize>(sz)), desc);
+    REQUIRE(perr == FrameCookError::Ok);
+    {
+        String where(&alloc);
+        CHECK(validate_frame_graph(desc, &where) == FrameCookError::Ok); // the 19 rejections, explicit (parse already ran it)
+    }
+
+    // STRUCTURE: 7 transients + 10 passes + ONE draw_list (31b-4-a removed the ui_panels placeholder; mask is fullscreen).
+    CHECK(desc.resources.size() == 7U);
+    REQUIRE(desc.passes.size() == 10U);
+    CHECK(desc.draw_lists.size() == 1U);
+
+    const auto pass_by_name = [&](const char* nm) -> const FramePassDesc* {
+        for (crd::usize i = 0; i < desc.passes.size(); ++i)
+        {
+            if (StringView(desc.passes[i].name.c_str(), desc.passes[i].name.size()) == StringView(nm))
+            {
+                return &desc.passes[i];
+            }
+        }
+        return nullptr;
+    };
+
+    // the composite is the multi-read bindless sink: THREE reads → the heap layers 0/1/2.
+    const FramePassDesc* comp = pass_by_name("composite");
+    REQUIRE(comp != nullptr);
+    CHECK(comp->reads.size() == 3U); // scene_color / effect / mask
+
+    // ⛔ the AUTHORING H!=V tooth: the H pass sets dir (1,0), the V pass (0,1). This is what makes build_pass_spec_set hand
+    // the two passes DIFFERENT SpecSets (the record-seat proof, 31b-3-c-ii); here we pin that the FRAME authored the split.
+    const FramePassDesc* h1 = pass_by_name("blur_h1");
+    const FramePassDesc* v1 = pass_by_name("blur_v1");
+    REQUIRE(h1 != nullptr);
+    REQUIRE(v1 != nullptr);
+    const FrameParam* h1x = find_pass_param(*h1, StringView("spec_0"));
+    const FrameParam* h1y = find_pass_param(*h1, StringView("spec_1"));
+    const FrameParam* v1x = find_pass_param(*v1, StringView("spec_0"));
+    const FrameParam* v1y = find_pass_param(*v1, StringView("spec_1"));
+    REQUIRE(h1x != nullptr);
+    REQUIRE(h1y != nullptr);
+    REQUIRE(v1x != nullptr);
+    REQUIRE(v1y != nullptr);
+    CHECK(h1x->v[0] == 1.0); // H = (1,0)
+    CHECK(h1y->v[0] == 0.0);
+    CHECK(v1x->v[0] == 0.0); // V = (0,1) — distinct from H
+    CHECK(v1y->v[0] == 1.0);
+
+    // ⛔ CEIR-31b-4-b-iv-g-2: the step is EXTENT-DERIVED, not a baked literal — pin the authored derive triple on BOTH axes
+    // (H derives off its read's X extent, V off Y), which the record seat resolves to 1/extent at every resolution. A
+    // missing/mistyped field is a cook error (SpecConstLiteralAndDerive / DeriveSpec*), proven in test_frame_asset.cpp;
+    // FIELD-SURVIVAL through emit→parse is proven by the emit-identity round-trip below (a dropped derive → toml_a != toml_b).
+    const FrameParam* h1read = find_pass_param(*h1, StringView("derive_spec_2_read"));
+    const FrameParam* h1axis = find_pass_param(*h1, StringView("derive_spec_2_axis"));
+    const FrameParam* h1op   = find_pass_param(*h1, StringView("derive_spec_2_op"));
+    REQUIRE(h1read != nullptr);
+    REQUIRE(h1axis != nullptr);
+    REQUIRE(h1op != nullptr);
+    CHECK(StringView(h1read->str.c_str(), h1read->str.size()) == StringView("blur_src")); // H derives off blur_src...
+    CHECK(StringView(h1axis->str.c_str(), h1axis->str.size()) == StringView("x"));        // ...along its X extent
+    CHECK(StringView(h1op->str.c_str(), h1op->str.size()) == StringView("inv"));          // op = inv ⇒ 1/extent
+    const FrameParam* v1axis = find_pass_param(*v1, StringView("derive_spec_2_axis"));
+    REQUIRE(v1axis != nullptr);
+    CHECK(StringView(v1axis->str.c_str(), v1axis->str.size()) == StringView("y")); // V derives off the Y extent — the axis split
+
+    // ROUND-TRIP (the 15a mold): desc → ceir.frame → print → re-parse → print FIXPOINT + re-verifies clean.
+    ceir::Context       ctx(&alloc);
+    ceir::Module* const m = to_ceir_frame(desc, ctx);
+    REQUIRE(m != nullptr);
+    CHECK(ctx.find_frame_misuse(*m).kind == ceir::FrameMisuseKind::None); // the SOURCE module verifies clean
+    const String txt = ceir::print(ctx, *m, &alloc);
+    ceir::Context ctx2(&alloc);
+    (void)ceir::arith::register_arith_ops(ctx2);
+    (void)ceir::func::register_dialect(ctx2);
+    (void)ceir::resource::register_resource_ops(ctx2);
+    (void)ceir::frame::register_dialect(ctx2);
+    const ceir::ParseResult pr = ceir::parse(ctx2, StringView(txt.data(), txt.size()));
+    REQUIRE(pr.ok);
+    REQUIRE(pr.module != nullptr);
+    const String txt2 = ceir::print(ctx2, *pr.module, &alloc);
+    CHECK(StringView(txt.data(), txt.size()) == StringView(txt2.data(), txt2.size())); // print(parse(print)) fixpoint
+    CHECK(ctx2.find_frame_misuse(*pr.module).kind == ceir::FrameMisuseKind::None);      // the RE-PARSED module re-verifies clean
+
+    // the desc<->ceir.frame emit-IDENTITY (the 15a-3b lossless gate): from_ceir_frame reconstructs an emit-identical desc.
+    const String   toml_a = emit_frame_toml(desc, &alloc);
+    FrameGraphDesc desc2(&alloc);
+    REQUIRE(from_ceir_frame(ctx, *m, &alloc, desc2));
+    const String toml_b = emit_frame_toml(desc2, &alloc);
+    CHECK(StringView(toml_a.data(), toml_a.size()) == StringView(toml_b.data(), toml_b.size()));
+}
+
+// CEIR-31b-4-b-ii-2: the committed ui_tint_noise_probe.frame.toml — the arm (e) on-DEVICE hash probe (a DEDICATED frame,
+// NOT the frosted-glass chain: tint=0 (spec_0..3) + amp=1 (spec_4) ⇒ @output is the RAW tint_noise, splat(noise(FragCoord))).
+// This device-free gate is the probe's anti-drift where the GPU gate SKIPS (no device): it PARSES + validates clean, has
+// the exact structure (ONE transient + a clear + a fullscreen pass, ZERO draw_lists — no geometry pass), authors the
+// tint=0/amp=1 invariant the numeric oracle depends on, and round-trips through ceir.frame (the 15a mold).
+TEST_CASE("CEIR-31b-4-b-ii-2: the committed ui_tint_noise_probe.frame.toml parses, round-trips + authors tint=0/amp=1",
+          "[framecook][ceir][frame][ceir31b]")
+{
+    std::ifstream f(CRD_FRAME_ASSETS_DIR "/ui_tint_noise_probe.frame.toml", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    memory::GrowableTlsfAllocator alloc;
+    crd::containers::Array<char>  text(&alloc);
+    text.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(text.data(), sz);
+
+    FrameGraphDesc       desc(&alloc);
+    const FrameCookError perr = parse_frame_toml(StringView(text.data(), static_cast<crd::usize>(sz)), desc);
+    REQUIRE(perr == FrameCookError::Ok);
+    {
+        String where(&alloc);
+        CHECK(validate_frame_graph(desc, &where) == FrameCookError::Ok); // the 19 rejections, explicit
+    }
+
+    // STRUCTURE: ONE transient (backdrop), TWO passes (clear + fullscreen), ZERO draw_lists (no geometry pass).
+    CHECK(desc.resources.size() == 1U);
+    REQUIRE(desc.passes.size() == 2U);
+    CHECK(desc.draw_lists.size() == 0U);
+
+    const auto pass_by_name = [&](const char* nm) -> const FramePassDesc* {
+        for (crd::usize i = 0; i < desc.passes.size(); ++i)
+        {
+            if (StringView(desc.passes[i].name.c_str(), desc.passes[i].name.size()) == StringView(nm))
+            {
+                return &desc.passes[i];
+            }
+        }
+        return nullptr;
+    };
+
+    // ⛔ the arm-(e) INVARIANT the probe encodes: tint = 0 (spec_0..3) zeroes TexSample·tint, amp = 1 (spec_4) ⇒ raw noise.
+    // A drift on any of these silently changes what the device gate reads back (a non-zero tint would add the backdrop).
+    const FramePassDesc* tn = pass_by_name("tint_noise");
+    REQUIRE(tn != nullptr);
+    const FrameParam* s0 = find_pass_param(*tn, StringView("spec_0"));
+    const FrameParam* s1 = find_pass_param(*tn, StringView("spec_1"));
+    const FrameParam* s2 = find_pass_param(*tn, StringView("spec_2"));
+    const FrameParam* s3 = find_pass_param(*tn, StringView("spec_3"));
+    const FrameParam* s4 = find_pass_param(*tn, StringView("spec_4"));
+    REQUIRE(s0 != nullptr);
+    REQUIRE(s1 != nullptr);
+    REQUIRE(s2 != nullptr);
+    REQUIRE(s3 != nullptr);
+    REQUIRE(s4 != nullptr);
+    CHECK(s0->v[0] == 0.0); // tint.r
+    CHECK(s1->v[0] == 0.0); // tint.g
+    CHECK(s2->v[0] == 0.0); // tint.b
+    CHECK(s3->v[0] == 0.0); // tint.a ⇒ TexSample·tint = 0
+    CHECK(s4->v[0] == 1.0); // amp    ⇒ @output = raw noise
+
+    // ROUND-TRIP (the 15a mold): desc → ceir.frame → print → re-parse → print FIXPOINT + re-verifies clean.
+    ceir::Context       ctx(&alloc);
+    ceir::Module* const m = to_ceir_frame(desc, ctx);
+    REQUIRE(m != nullptr);
+    CHECK(ctx.find_frame_misuse(*m).kind == ceir::FrameMisuseKind::None);
+    const String txt = ceir::print(ctx, *m, &alloc);
+    ceir::Context ctx2(&alloc);
+    (void)ceir::arith::register_arith_ops(ctx2);
+    (void)ceir::func::register_dialect(ctx2);
+    (void)ceir::resource::register_resource_ops(ctx2);
+    (void)ceir::frame::register_dialect(ctx2);
+    const ceir::ParseResult pr = ceir::parse(ctx2, StringView(txt.data(), txt.size()));
+    REQUIRE(pr.ok);
+    REQUIRE(pr.module != nullptr);
+    const String txt2 = ceir::print(ctx2, *pr.module, &alloc);
+    CHECK(StringView(txt.data(), txt.size()) == StringView(txt2.data(), txt2.size())); // print(parse(print)) fixpoint
+    CHECK(ctx2.find_frame_misuse(*pr.module).kind == ceir::FrameMisuseKind::None);      // the RE-PARSED module re-verifies clean
+}

@@ -1,5 +1,8 @@
 # 2026-05-27 — hesap v4k-c: AMG CLI + F-cycle + complex (and complex dense LU)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4k-c** — the AMG polish slice: close the CLI-per-op debt,
 complete the cycle family, and make SA-AMG complex-capable. Recommended next after v4k-b (K-cycle) to
 clear the standing CLI debt before another algorithm slice.

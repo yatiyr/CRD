@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9b: GPU BVH refit at sub-1ms / 1M
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 `LbvhGpuPipeline::dispatch_refit_lbvh(RefitInputs)` — per-frame refit API for dynamic-body broadphases. Given the existing fat-node BVH (topology preserved from a prior `dispatch_build_lbvh_from_gpu` call) and a new GPU-resident `leaf_aabbs` buffer, recompute all internal-node bounds in-place. Returns the same `GpuResidentTree` handle with `nodes_gpu` bounds updated.

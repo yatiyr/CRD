@@ -1,5 +1,8 @@
 # 2026-05-15 — Phase 3.1.7 v3-close
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **v3-close** closes the v3 cluster (`-convex` hull construction +

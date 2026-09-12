@@ -1,5 +1,8 @@
 # Cerid Lessons
 
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Systemic, architectural, and programming lessons captured while building the engine. Written so the next engineer (human or AI) reads the *reasoning*, not just the *outcome*. The phase docs say what shipped; these say **why**, **what would have been wrong**, and **what pattern to reach for next time**.
 
 This folder is the meta-reflective sibling of `docs/sessions/`. Sessions are *what we did on date D*. Lessons are *what we learned that we want to keep doing / avoid doing forever*.

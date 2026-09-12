@@ -1,5 +1,8 @@
 # CEIR-0a — Execution-path inventory (FROM CODE)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Band:** D-007 · CEIR-0 (repository inventory + architecture ADRs). **Slice:** CEIR-0a.
 > **Tracker row:** `docs/detours/D-007-ceir-tracker.md` → CEIR-0a. **Law:** the mission constitution
 > `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md` §127 (executor migration), §128

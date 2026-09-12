@@ -11,11 +11,12 @@ CEIR-12a sec-36 the resource dialect: resource declaration, views/ranges/subreso
 
 Declare a graph-owned resource of a 3c resource type (the planner owns its memory).
 
-The graph-owned resource definition site. Result type is a CEIR-3c resource kind. Pure (a value constructor -- no memory effect; reads/writes ride the ops that USE the resource). CEIR-12b attaches the planning-intent attrs HERE: lifetime (sec-20) + history_length (the history<T> ring depth) + memory_domain (sec-24 INTENT) + residency (sec-25 hint) are CLOSED vocabularies enforced by find_resource_intent_misuse; streaming_priority + budget_class + size_class (CEIR-12c sec-78, the alias slot bucket) are OPEN tags (12c/12d consume). ⛔ these are declare-ONLY -- the planner plans declare's resources, NEVER import's, so a planning-intent attr on an import is IntentAttrOnImport (nonsense-by-construction, the view-of-view legal-by-accident shape).
+The graph-owned resource definition site. Result type is a CEIR-3c resource kind. Carries an ALLOCATE effect on its result (NOT Pure): a declare NAMES A DISTINCT graph-owned resource -- two structurally-identical declares are DIFFERENT buffers, so declare is NOT referentially transparent and MUST NOT be CSE'd (CEIR-26c: a Pure declare was silently merged, collapsing distinct inputs A/B/C into one -- the MLIR alloc-is-not-CSE-able rule). Reads/writes still ride the ops that USE the resource; the Allocate effect is the definition itself, not a read/write, so the CEIR-12c hazard walk orders allocations without treating declare as a memory access. CEIR-12b attaches the planning-intent attrs HERE: lifetime (sec-20) + history_length (the history<T> ring depth) + memory_domain (sec-24 INTENT) + residency (sec-25 hint) are CLOSED vocabularies enforced by find_resource_intent_misuse; streaming_priority + budget_class + size_class (CEIR-12c sec-78, the alias slot bucket) are OPEN tags (12c/12d consume). ⛔ these are declare-ONLY -- the planner plans declare's resources, NEVER import's, so a planning-intent attr on an import is IntentAttrOnImport (nonsense-by-construction, the view-of-view legal-by-accident shape).
 
 - **Version:** 1
-- **Traits:** `Pure`
+- **Traits:** _none_
 - **Regions:** 0
+- **Effects:** `Allocate on result 0`
 
 **Operands:** _none_
 
@@ -68,11 +69,12 @@ The external-publish boundary. A conservative MemoryReadWrite on operand 0 (writ
 
 Import an externally-owned resource (provider-bound handle); the planner never plans its memory.
 
-The externally-owned resource entry point. Distinct OP from declare (graph-owned vs externally-owned -- the planner plans declare's resources, NEVER import's). Pure at the IR layer; provider handle binding is a named-forward (sec-150 / CEIR-13+).
+The externally-owned resource entry point. Distinct OP from declare (graph-owned vs externally-owned -- the planner plans declare's resources, NEVER import's). NOT Pure -- an ALLOCATE effect (an external source is keyed by identity, not structure; two imports are distinct, so CSE must not merge them -- CEIR-26z); provider handle binding is a named-forward (sec-150 / CEIR-13+).
 
 - **Version:** 1
-- **Traits:** `Pure`
+- **Traits:** _none_
 - **Regions:** 0
+- **Effects:** `Allocate on result 0`
 
 **Operands:** _none_
 

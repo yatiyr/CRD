@@ -1,5 +1,8 @@
 # CEIR band 7 — Asset / cook / runtime lifecycle (§105–§110)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Band 7 makes CEIR programs ordinary Cerid assets: a `'CEIR'` cook (source → verified → binary chunk), a
 generation-safe runtime handle model, hot reload, and an execution-plan cache. It REUSES hard — the CRDR container,
 the ADR-0104 content-hash cook cache, the RAF cooked-asset envelope (`crd-render-asset-core`), and the RAF-11

@@ -1,5 +1,8 @@
 # 2026-06-11 — the SOLVE crush + the full-scoreboard correction (part 20)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap`. The user caught me reporting lattice "parity/WIN" verdicts on FACTOR ratios
 while the same bench lines showed SOLVE losing 2–3× and REGRESSING with thread count — a recorded-but-parked
 deficit I kept parked. Standing correction saved to memory

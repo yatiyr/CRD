@@ -1,5 +1,8 @@
 # 2026-07-24 — GEO-10 + GEO-11: the DAW substrate and the agent surface (D-007 rows 75-76) — **GEO BAND CLOSED**
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Two slices closed in one session; the GEO band (rows 66-76) is complete.
 
 ## GEO-10 — crd-audio (the DAW substrate)

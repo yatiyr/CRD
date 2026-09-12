@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n4: five-layer resolver primitive (`resolve_preset<T>` + `apply_preset<T>`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1n3 shipped — both concrete preset types (`QualityPreset` + `CameraPreset`) live; partial-override convention pinned; 12-config sweep at 826/826 (823 in optimised configs).
 
 **Status at end:** v1n4 shipped — `resolve_preset<T>` + `apply_preset<T>` template helpers in `preset_resolver.hpp` capture ADR-0059 §2's five-layer resolution semantics. **Full 12-config sweep all green at 830/830** (827 in optimised configs). +4 cases / +36 assertions over the v1n3 baseline.

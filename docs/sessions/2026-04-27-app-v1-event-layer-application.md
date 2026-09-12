@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — crd-app v1 (event + layer + application + bus)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship `crd-app` as the layer above `crd-platform` and below future graphics /

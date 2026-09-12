@@ -1,8 +1,18 @@
 # ADR-0081 — Agent-Native Engine: CLI + RPC + MCP Substrate
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-19
 **Status:** **Proposed** (Accepted when `crd-cli` v0 ships)
 **Tags:** [arch] [cli] [rpc] [mcp] [agent] [scripting] [substrate] [vision]
+
+**Current interpretation (2026-09-12):** all C++-only/no-interpreter claims below are superseded by
+[ADR-0108](0108-ceir-owned-language-stack-supersedes-cpp-only-scripting.md): CHIR/CEIR and native C++ are first-class.
+GUI, CLI and MCP call the same in-process typed command implementation; GUI events do not spawn a CLI process.
+Annotation/reflection/codegen, capability checks and native reload are qualified through REFLECT/CMD/SCRIPT/AGENT in
+[ROADMAP](../ROADMAP.md), with [ADR-0130](0130-system-qualification-and-agent-driven-products.md) and its quality contract.
+The older language wording below is rationale/history, not permission to omit CHIR or add a competing VM.
 **Supersedes:** ADR-0034 (C++ scripting / DLL hot-reload — folded in
 as the C++ hot-reload sub-aspect of the broader agent-native vision).
 **Superseded-by:** ADR-0108 (2026-08-07) — §9's "C++ is the ONLY scripting path" clause ONLY

@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n5: Profile substrate (`crd-profile` module + types + load)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1n4 shipped (resolver primitive). 12-config sweep at 830/830 (827 in optimised configs). Working tree carries v1n1..v1n4 uncommitted.
 
 **Status at end:** v1n5 shipped — new `crd-profile` module with types, predicate schema, `ProfileResource`, `ProfileLoader` (FourCC `'PROF'`), and `ProfileArtifactBuilder`. **Full 12-config sweep all green at 834/834** (831 in optimised configs). +4 cases / +79 assertions over the v1n4 baseline.

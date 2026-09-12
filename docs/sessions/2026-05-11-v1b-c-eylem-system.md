@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1b-c — RigidBodyComponent + ColliderComponent + EylemSystem
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per phase plan §v1b-c (~150 LOC + ~3 tests). First eylem entity

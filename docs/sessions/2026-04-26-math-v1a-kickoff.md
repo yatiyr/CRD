@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — crd-math v1a kickoff
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Start `crd-math` for real, not just as a roadmap placeholder.

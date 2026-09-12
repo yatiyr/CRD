@@ -1,5 +1,8 @@
 # 2026-07-07 — v16 reverse-mode AD + differentiable-solvers cluster — FULL CRUSH SCOREBOARD (close)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The consolidated verdict for the v16 reverse-mode automatic-differentiation cluster (`crd-hesap-autodiff`, slices
 a–k). Per-slice detail + raw numbers live in the linked boards; this is the one-screen scoreboard. Peers named in the
 plan: **PyTorch autograd**, **JAX** (`grad`/`vjp`/`hvp`), **Stan Math**, **Adept**, **CoDiPack**, **torchdiffeq**,

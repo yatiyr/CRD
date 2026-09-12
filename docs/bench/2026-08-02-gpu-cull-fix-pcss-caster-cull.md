@@ -1,5 +1,8 @@
 # GPU-cull regression fix + PCSS + shadow-caster screen-size cull (median-of-5, both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The `--gpu-cull` path's "regression" (flagged on the 40-H board as a sync/warmup suspicion) was a
 **device loss**: the depth prepass recorded its draws with the items' FORWARD programs — the executor
 never honored `material_pass = "Shadow"` for a non-`for_each` pass — so a texture-sampling FS ran in a

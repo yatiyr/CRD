@@ -1,5 +1,8 @@
 # ADR-0103 — `crd-gpu-context` owns every GPU program and pipeline; **no module outside a backend names a shading language or a bytecode**
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-10) — user decision ("I want gpu context to handle all the shaders… `crd-shader` must not know any glsl or hlsl, gpu context must handle all of that… we must be able to handle all kinds of shaders from compute to lightings to materials to ray tracings to mesh shaders to geometry shaders to everything").
 - **Phase:** detour **D-008** (the gpu-context convergence), sequenced *before* D-007 Phase-B's raster emitters.
 - **Tags:** `gpu-context` `kir` `shader` `rhi` `renderer` `architecture` `ir` `ray-tracing` `mesh-shaders` `substrate` `north-star`

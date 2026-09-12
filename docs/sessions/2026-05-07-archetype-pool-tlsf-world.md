@@ -1,5 +1,8 @@
 # 2026-05-07 — Allocator-audit Option C: Archetype pool + TLSF-backed World test
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** D-001 closed (TLSF + GrowablePool + ChunkAllocator pooled). Allocator audit done. Audit identified one place where Phase 3.0 still bypassed the IAllocator chain: `ArchetypeGraph` allocated `Archetype` structs via `std::make_unique<Archetype>` (global `operator new`), even though every other byte of the World already routed through `m_alloc`.
 
 **Status at end:** Bypass closed. Archetype structs now flow through a dedicated `GrowablePoolAllocator` whose parent is the World allocator. A new `tests/scene/test_world_tlsf.cpp` proves the deployment pattern end-to-end: a `TlsfAllocator` is the only heap the `World` ever touches. Six configurations green at 603/603 (was 598/598 before this session).

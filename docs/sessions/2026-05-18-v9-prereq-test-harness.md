@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9-prereq-test-harness ✅ SHIPPED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.7 v9-prereq-test-harness — GPU sanity-check infrastructure for the 16 v9 GPU geometry slices.
 
 **Status:** ✅ shipped same day. 5-config DoD PASS (`scripts/per-slice-check.ps1 -IncludeRelease -Parallel`) — win-debug + win-asan + win-shipping + **win-release** + win-tidy.

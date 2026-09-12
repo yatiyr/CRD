@@ -1,0 +1,10 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        dist.mesh() {name = @m2, shape = "2"}
+        %0 = resource.declare() : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %1 = dist.shard(%0) {axis = 0, mesh = @m2, mesh_axis = 0} : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+        %2 = dist.all_reduce(%1) {fn = "sum", mesh = @m2} : !tensor<!f32,!shape<!dim<4>,!dim<8>>>
+    }
+}

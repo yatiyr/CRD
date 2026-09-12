@@ -1,5 +1,8 @@
 # 2026-07-03 — v14-f einsum execution (TTGT over the own GEMM) vs numpy/torch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Machine/config:** i9-14900K, WSL2, `taskset -c 4` (1T, matched), f64, median/best-of-10.
   Cerid: prebuilt `EinsumPlan` + `einsum_execute` (g++ 13.3 -O3 -march=native). Peers: numpy 2.4.6
   `einsum(optimize=True)`, torch 2.12 `einsum` (1 thread). TBLIS/TCL: not installed — N/A stated with

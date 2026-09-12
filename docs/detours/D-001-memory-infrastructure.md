@@ -1,5 +1,8 @@
 # D-001 — Memory infrastructure for elite-tier allocator coverage
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Opened:** 2026-05-07
 **Closed:** 2026-05-07 (same day)
 **Status:** ✅ closed — both halves shipped, all exit criteria met

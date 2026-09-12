@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4f-3: block-GMRES + block-BiCGSTAB (closes v4f)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4 (iterative solvers), slice **v4f-3**. Shipped block-GMRES +
 block-BiCGSTAB for general nonsymmetric multi-RHS systems, completing the block-Krylov
 family. Closes v4f.

@@ -1,5 +1,8 @@
 # 2026-07-07 -- v16-k (part 1): neural ODE vs torchdiffeq
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** a NEURAL ODE trained end-to-end through the v16-f discretize-then-optimize adjoint. The RHS is a tiny
 MLP `f_θ(x) = W2·tanh(W1 x + b1) + b2` (2→8→2, 42 params); training fits the flow map of a true damped-spiral ODE
 `dx/dt = [[-0.1,-1],[1,-0.1]]x` by minimising `Σ_k ||ODE_θ(x0_k→T) − xT_k||²` over a batch, with the parameter gradient

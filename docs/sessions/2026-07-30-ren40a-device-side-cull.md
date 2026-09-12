@@ -1,6 +1,9 @@
 # 2026-07-30 — REN-40-A: the device-side cull, closed live on both backends
 
-**Row 143 / 40-A in `docs/detours/D-007-gpu-program-system.md`. Board:
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+**Row 143 / 40-A in `docs/archive/D-007-gpu-program-system.md`. Board:
 `docs/bench/2026-07-29-ren40-million-instance-baseline.md` (REN-40-A section).**
 
 ---

@@ -372,6 +372,49 @@ void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const flo
 // runtime uses it to forward only authored params into the executor payload. ONE home for the folded-name set.
 [[nodiscard]] bool is_folded_pass_param(crd::containers::StringView name) noexcept;
 
+// CEIR-31b-3-a: a pass param named `spec_<id>` (id = one or more decimal digits) carries a pipeline
+// SPECIALIZATION-CONSTANT value (SPIR-V constant_id = <id>) for the pass's CKIR program. Returns true + the parsed
+// id iff `name` is exactly "spec_" followed by ≥1 decimal digits (rejecting an id that overflows u32); false for any
+// other name. ONE home shared by the cook-time validator (a spec on a program-less pass is SpecConstBadPassKind) and
+// the record-time SpecSet builder (31b-3-a-ii). These params ride the GENERIC `[pass.params]` seam (round-trip free).
+[[nodiscard]] bool parse_spec_param(crd::containers::StringView name, crd::u32& id_out) noexcept;
+
+// CEIR-31b-4-b-iv-g-2: a spec-const DERIVED from a read's pixel extent, authored as three flat `[pass.params]` string
+// params `derive_spec_<id>_{read,axis,op}` (the RAF-12.3 §7 decomposed-param convention — a `FrameParam` cannot hold an
+// inline table). One field of one derivation; the id (which constant) + the field (which of read/axis/op).
+enum class DeriveSpecField : crd::u8
+{
+    Read = 0, // the resource NAME whose extent supplies the value (a pass read; must be an image)
+    Axis,     // which extent axis: "x" (width) or "y" (height)
+    Op        // how to map extent→value: "inv" (1 / extent-in-texels) — the blur-step reciprocal
+};
+// Returns true + the parsed id and field iff `name` is exactly "derive_spec_" + ≥1 decimal digits + "_" + one of
+// {read,axis,op} (rejecting an id that overflows u32); false for any other name (a bare `derive_spec_2` or an unknown
+// `_field` is then an ordinary unknown generic param, exactly as today). Prefix-disjoint from `parse_spec_param`
+// ("derive_" ≠ "spec_"), so the two never collide on one name.
+[[nodiscard]] bool parse_derive_spec_param(crd::containers::StringView name, crd::u32& id_out, DeriveSpecField& field_out) noexcept;
+
+// CEIR-31b-3-a-i-2: a pipeline SPECIALIZATION-CONSTANT value bound to a pass's CKIR program at RESOLVE time. `id` is the
+// SPIR-V constant_id (a `spec_<id>` param's parsed suffix); `value` is the authored f64 (the resolver narrows it to the
+// program's spec dtype — KGraph::set_spec_const's contract). A NEUTRAL POD: frame-cook builds it at the record seat,
+// scene-render's provider consumes it — so neither module's public header learns the other's asset type.
+struct SpecConst
+{
+    crd::u32 id    = 0U;
+    crd::f64 value = 0.0;
+};
+// A pass's spec-const set as a VIEW over caller storage — valid only for the SYNCHRONOUS resolve call, so a provider
+// that caches must COPY. Order is not significant (the resolver sets each id independently).
+struct SpecSet
+{
+    const SpecConst* items = nullptr;
+    crd::u32         count = 0U;
+};
+// The max spec-consts one pass may carry. The record seat builds the SpecSet into a stack buffer of this size, and the
+// cook REJECTS a pass exceeding it (SpecConstTooMany), so a record-seat overflow is unreachable-by-contract (a hard
+// assert). 16 >> the authored fullscreen kernels (tint_noise 5, blur 3); the impostor's ~18 is bespoke C++, off this path.
+inline constexpr crd::u32 kMaxSpecConsts = 16U;
+
 // ── RAF-12.3: pass-mechanic predicates. The ONE place the old `switch (kind)` becomes an executor-id test. ──────
 [[nodiscard]] inline bool pass_is_scene_raster(const FramePassDesc& p) noexcept { return p.executor_id == kExecSceneRaster; }
 // The plain forward-geometry scene-raster pass (not the depth-only or MRT variant) — the old `RasterGeometry`.
@@ -616,7 +659,16 @@ enum class FrameCookError : crd::u8
     // REN-38-F11 (appended)
     LoadNeedsGeometry,        // `load = true` on a kind without load draw verbs — it would silently clear
     // CEIR-20b (appended) — the ceir.work cook (extract_work_desc)
-    WorkQueueNotOne // a work.produce/consume pass must reference EXACTLY 1 CounterBuffer queue (0 or >=2 is malformed)
+    WorkQueueNotOne, // a work.produce/consume pass must reference EXACTLY 1 CounterBuffer queue (0 or >=2 is malformed)
+    // CEIR-31b-3-a-i (appended) — the spec-const pass param
+    SpecConstBadPassKind, // a `spec_<n>` param on a pass that resolves no CKIR program (not fullscreen.raster / compute.dispatch)
+    SpecConstDuplicateId, // two `spec_<n>` params resolve to the SAME constant_id (e.g. `spec_1` + `spec_01`) — one would silently win
+    SpecConstTooMany,     // more than `kMaxSpecConsts` `spec_<n>` params on one pass (the record seat builds a fixed stack buffer)
+    // CEIR-31b-4-b-iv-g-2 (appended) — a spec-const DERIVED from a read's extent (`derive_spec_<n>_{read,axis,op}`)
+    SpecConstLiteralAndDerive, // both a literal `spec_<n>` and a `derive_spec_<n>_*` name the SAME id — the derivation would silently win
+    DeriveSpecIncomplete,      // a `derive_spec_<n>_*` id is missing one of its three fields (read, axis, op) — a partial derivation
+    DeriveSpecBadValue,        // a `derive_spec_<n>_axis` not in {x,y} or `_op` not in {inv} — an unresolvable derivation
+    DeriveSpecBadRead          // a `derive_spec_<n>_read` that is not a pass READ, or names a non-image resource (no extent to invert)
 };
 
 // A human-readable message for `err`, plus the offending name when there is one.

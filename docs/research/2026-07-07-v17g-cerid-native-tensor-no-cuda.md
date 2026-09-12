@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-g BREAKTHROUGH: Cerid-native tensor-core GEMM, ZERO CUDA (Vulkan cooperative_matrix)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the Vulkan coopmat tensor-core path shipped (v17-g GEMM ≈89% cuBLAS). Note: the no-CUDA-toolkit framing was later superseded — CUDA is a required compute backend (user directive 2026-08-07; `gpu-context-cuda`). *(stamped 2026-08-07, doc-hygiene pass)*
 
 After proving that beating cuBLAS-TF32 on consumer Ada needs SASS (a CUDA-only, vendor-hand-tuned, nerfed-hardware

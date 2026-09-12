@@ -1,5 +1,8 @@
 # CEIR-14 — `ceir.render` dialect (design note / design-lock)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** DESIGN-LOCKED 2026-08-10 (advisor-consulted; three discriminating checks run). Implementation starts at
 CEIR-14a next tick. Mirrors the CEIR-13 (compute/transfer) build pattern: dialect TOML → opgen → verifier → the
 `crd-ceir-gpu` lowering → a device proof. → §40 §41 · PROOF §169.

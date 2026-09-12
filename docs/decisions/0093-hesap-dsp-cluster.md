@@ -1,5 +1,8 @@
 # ADR-0093 — `crd-hesap-dsp` (+ `-wavelet` + `-comms`): the DSP cluster — the design/application honest-gate split, SOS-by-default, the two-layer streaming contract
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-06-20)
 - **Phase:** 3.1.6 v11 (DSP cluster)
 - **Tags:** `hesap` `dsp` `filters` `determinism` `architecture` `module-edges` `substrate`

@@ -1,8 +1,22 @@
-﻿# ADR-0023 — UI architecture
+# ADR-0023 — UI architecture
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
-**Status:** Accepted
+**Status:** Accepted; UI-in-scene clauses superseded by the user-chosen ADR-0107 D2
 **Tags:** [ui] [node-editor] [arch]
+
+## Current boundary amendment — 2026-09-12
+
+The user-chosen **separate retained UiWorld** decision in [ADR-0107 D2](0107-ui-2d-architecture.md#d2--uiworld-is-a-dedicated-retained-world-not-the-gameplay-ecs)
+supersedes this record's UI-in-gameplay-scene premise. `UiNodeId` and `EntityId` are distinct;
+UI layout, focus, input, semantics and persistence belong to UiWorld. World-space UI uses explicit
+scene attachments and coordinate/input projection. Existing scene types are not deleted by this
+documentation amendment; compatibility/removal is owned by WORLD-UI in the [master table](../ROADMAP.md#slice-world-ui).
+The complete ADR-0107 is still Proposed. Retained UI, debug-only ImGui, reusable scene infrastructure,
+standalone UI and modularity remain requirements. The text below preserves the original decision,
+including its now-superseded scene/UI ownership assumptions; it must not guide new UI storage.
 
 ## Decision
 
@@ -34,6 +48,6 @@ pass exists in the same frame.
 
 ## References
 
-- `docs/phases/phase-5-ui-rendering.md`
+- `docs/archive/2026-09-12-superseded-plans.md#phase-5-ui-rendering`
 - ADR-0020 — Scene & ECS hybrid + UI in scene tree
 - ADR-0032 — Frame graph v1 (UI canvas pass is a frame graph pass)

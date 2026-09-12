@@ -1,5 +1,8 @@
 # REN-8 — sandbox frame attribution (where the 12 ms goes)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date** 2026-07-25 · **Host** i9-14900K, Windows 11 · **Backend** Vulkan · **Build** `win-release`
 **Scene** sandbox: 10 000 static + 24 animated + 3 monuments; ~4 140 instances visible; 1280x720
 **Method** `crd-sandbox --present immediate --smoke-test 6`, phase means over 400-500 frames.

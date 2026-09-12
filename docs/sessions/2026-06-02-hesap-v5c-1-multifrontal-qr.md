@@ -1,5 +1,8 @@
 # 2026-06-02 — hesap v5c-1: multifrontal QR (SPQR-class) — core + blocked-WY + honest gold-standard scoreboard
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > New slice v5c-1: the sparse-direct QR twin of v5a (Cholesky) / v5b (LU). Built correctness-first,
 > advisor-steered, measure-before-optimize throughout. **WIP — not committed.**
 > Full design + every measurement: dossier `docs/research/cerid-hesap-v5c-multifrontal-qr.md`;

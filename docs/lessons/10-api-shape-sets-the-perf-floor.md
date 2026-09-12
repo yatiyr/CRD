@@ -1,5 +1,8 @@
 # Lesson 10 — API shape sets the performance floor
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "Why are we 3× slower than KittenGpuLBVH? My GPU isn't worse than theirs."
 
 The full answer is in two parts. The short answer is: we weren't slower — we were measuring different things. Once we matched the measurement assumptions of the reference (data already on the GPU), our number went from 7.4 ms / 1 M to **1.45 ms / 1 M** — matching KittenGpuLBVH's published 1.5 ms on RTX 3090, despite our RTX 4070 Ti SUPER having ~40 % LESS memory bandwidth (672 vs 936 GB/s).

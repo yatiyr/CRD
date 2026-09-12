@@ -1,5 +1,8 @@
 # 2026-07-06 — v16-d: matrix-calculus + suite VJPs — JAX value+grad PARITY, factor-reuse speed, value-only robustness
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** `matrix_reverse.hpp` (gemm · general-solve[LU factor-reuse] · SPD-solve[Cholesky] · Cholesky ·
 logdet[SPD+general] · eigvals[value-only] · svdvals[value-only] VJPs) + `suite_reverse.hpp` (FFT VJP = adjoint DFT =
 unnormalised IDFT · DSP filtering[correlation = conv transpose] · spline Thomas[transposed tridiagonal back-solve]).

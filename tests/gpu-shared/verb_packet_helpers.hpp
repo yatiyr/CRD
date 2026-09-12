@@ -236,6 +236,11 @@ inline g::ResourceBinding storage_binding(g::IStorageBuffer& storage)
 inline void enc_draw_overlay(g::IRasterContext& r, g::IRasterTarget& target, g::IRasterProgram& prog,
                              g::IStorageBuffer& storage, g::DepthCompare compare, crd::u32 vertex_count)
 {
+    // CEIR-34 R2: the overlay reads depth read-only — declare depth_write=false through the pass-state seam (mirrors
+    // crd::draw::submit_overlay), restore the default after.
+    g::PassRasterState ps{};
+    ps.depth_write = false;
+    r.set_pass_state(ps);
     auto                   enc = r.create_command_encoder();
     g::RenderingDesc       rd{};
     g::ColorAttachmentDesc c{};
@@ -245,6 +250,7 @@ inline void enc_draw_overlay(g::IRasterContext& r, g::IRasterTarget& target, g::
     rd.color.push_back(c);
     rd.depth.enabled = (compare != g::DepthCompare::Always); // read-only depth test carried by `compare`
     rd.depth.compare = compare;
+    if (rd.depth.enabled) { rd.depth.target = &target; } // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
     enc->begin_rendering(rd);
     g::RasterDrawPacket pk{};
     pk.program                        = &prog;
@@ -253,6 +259,7 @@ inline void enc_draw_overlay(g::IRasterContext& r, g::IRasterTarget& target, g::
     pk.bindings.push_back(storage_binding(storage));
     enc->draw(pk);
     enc->end_rendering();
+    r.set_pass_state(g::PassRasterState{}); // restore default
 }
 
 // REN-39: the ranged twin -> draw_overlay_range (first_vertex > 0 selects it in the encoder; ==0 is draw_overlay,
@@ -261,6 +268,9 @@ inline void enc_draw_overlay_range(g::IRasterContext& r, g::IRasterTarget& targe
                                    g::IStorageBuffer& storage, g::DepthCompare compare, crd::u32 first_vertex,
                                    crd::u32 vertex_count)
 {
+    g::PassRasterState ps{}; // CEIR-34 R2: read-only depth (mirrors submit_overlay)
+    ps.depth_write = false;
+    r.set_pass_state(ps);
     auto                   enc = r.create_command_encoder();
     g::RenderingDesc       rd{};
     g::ColorAttachmentDesc c{};
@@ -270,6 +280,7 @@ inline void enc_draw_overlay_range(g::IRasterContext& r, g::IRasterTarget& targe
     rd.color.push_back(c);
     rd.depth.enabled = (compare != g::DepthCompare::Always);
     rd.depth.compare = compare;
+    if (rd.depth.enabled) { rd.depth.target = &target; } // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
     enc->begin_rendering(rd);
     g::RasterDrawPacket pk{};
     pk.program                        = &prog;
@@ -279,6 +290,7 @@ inline void enc_draw_overlay_range(g::IRasterContext& r, g::IRasterTarget& targe
     pk.bindings.push_back(storage_binding(storage));
     enc->draw(pk);
     enc->end_rendering();
+    r.set_pass_state(g::PassRasterState{}); // restore default
 }
 
 // B5 deferred G-buffer MRT draw -> draw_gbuffer. The IGBufferTarget bundles N host-readable RGBA8 attachments; it is
@@ -318,6 +330,31 @@ inline void enc_draw_storage(g::IRasterContext& r, g::IRasterTarget& target, g::
     pk.program                        = &prog;
     pk.geometry.kind                  = g::GeometryKind::StoragePull;
     pk.geometry.vertex_or_index_count = vertex_count;
+    pk.bindings.push_back(storage_binding(storage));
+    enc->draw(pk);
+    enc->end_rendering();
+}
+
+// CEIR-34 R2 / REN-39-B1: a RANGED plain storage-pull colour draw (first_vertex > 0) -> draw_storage. The first-vertex
+// offset-contract gate drives this: whether `first_vertex` reaches the shader's VertexIndex is EXACTLY what it probes
+// (Vulkan folds firstVertex into gl_VertexIndex natively; DX12 must match via the identity-index-buffer backend seam).
+inline void enc_draw_storage_ranged(g::IRasterContext& r, g::IRasterTarget& target, g::IRasterProgram& prog,
+                                    g::ClearColor clear, g::IStorageBuffer& storage, crd::u32 first_vertex,
+                                    crd::u32 vertex_count)
+{
+    auto                   enc = r.create_command_encoder();
+    g::RenderingDesc       rd{};
+    g::ColorAttachmentDesc c{};
+    c.target = &target;
+    c.load   = g::LoadOp::Clear;
+    c.clear  = clear;
+    rd.color.push_back(c);
+    enc->begin_rendering(rd);
+    g::RasterDrawPacket pk{};
+    pk.program                        = &prog;
+    pk.geometry.kind                  = g::GeometryKind::StoragePull;
+    pk.geometry.vertex_or_index_count = vertex_count;
+    pk.geometry.first_vertex          = first_vertex;
     pk.bindings.push_back(storage_binding(storage));
     enc->draw(pk);
     enc->end_rendering();

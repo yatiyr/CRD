@@ -1,5 +1,8 @@
 # Session 2026-08-07/08 — the CEIR pivot + the CEIR-0 design phase (complete)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Focus:** the user directed a major architectural pivot — **CEIR (the Cerid Execution IR) becomes the master spine
 of D-007** — and we ran the entire CEIR-0 design phase to completion. All work is UNCOMMITTED at session end (user
 commits; no AI co-author trailer). Mission constitution: `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md`.
@@ -81,5 +84,5 @@ Every slice was drafted → advisor-reviewed → corrected → wired. Accepted b
    `docs/design/ceir-0{a,e,g,h,z}-*.md`, `docs/decisions/010{8,9}-*.md`, `docs/decisions/0110-*.md`,
    `docs/decisions/README.md`, `docs/design/README.md`, `docs/detours/D-007-ceir-tracker.md`.
 2. `docs(ceir): CEIR-0f — restructure D-007 under the CEIR spine; live tracker moved` —
-   `docs/detours/D-007-gpu-program-system.md`, `context.md`, `docs/ROADMAP.md`, `docs/detours/README.md`,
+   `docs/archive/D-007-gpu-program-system.md`, `context.md`, `docs/ROADMAP.md`, `docs/detours/README.md`,
    `docs/capabilities/gpu-platform-capabilities.toml`, this session log.

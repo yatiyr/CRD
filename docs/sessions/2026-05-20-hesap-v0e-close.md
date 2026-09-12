@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-close: dense direct solvers cluster closed
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Rollup for the **v0e dense direct solvers** cluster — 7 sub-slices (a–g)
 shipped in one day plus a perf-attack session, all closed 2026-05-20.
 

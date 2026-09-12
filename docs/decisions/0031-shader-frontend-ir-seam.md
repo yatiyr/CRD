@@ -1,5 +1,8 @@
 # ADR-0031 — Shader frontend → IR seam
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-04
 **Status:** Draft
 **Tags:** [shader] [arch] [ir]

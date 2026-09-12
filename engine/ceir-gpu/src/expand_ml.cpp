@@ -2,6 +2,7 @@
 
 #include <crd/ceir/attr.hpp>
 #include <crd/ceir/gen/linalg_ops.hpp> // linalg::build_gemm
+#include <crd/ceir/gen/tensor_ops.hpp> // CEIR-26d-3: tensor::build_transpose (attention Kᵀ via the shape-generic synth path)
 #include <crd/ceir/ir.hpp>
 #include <crd/ceir/type.hpp>
 
@@ -39,14 +40,6 @@ using containers::StringView;
     const Type sh = ctx.type_of(shape_of(ctx, t));
     return axis < sh.members.size() ? sh.members[axis] : TypeId{};
 }
-// The STATIC extent of tensor `t`'s dim `axis`, or 0 if absent / dynamic (0 ⇒ a baked-kernel-shape check conservatively rejects).
-[[nodiscard]] crd::u32 dim_count(const Context& ctx, TypeId t, usize axis) noexcept
-{
-    const Type sh = ctx.type_of(shape_of(ctx, t));
-    if (axis >= sh.members.size()) { return 0U; }
-    const Type d = ctx.type_of(sh.members[axis]);
-    return static_cast<DimKind>(d.cols) == DimKind::Static ? d.count : 0U;
-}
 // tensor<elem, [dim_a, dim_b]> — a rank-2 tensor from two dim TypeIds.
 [[nodiscard]] TypeId tensor2(Context& ctx, TypeId elem, TypeId dim_a, TypeId dim_b)
 {
@@ -68,6 +61,16 @@ using containers::StringView;
     ctx.set_attr(c, StringView("value"), ctx.attr_int(1));
     blk->insert_before(c, at);
     return c->result(0U);
+}
+// CEIR-26d-3: tensor.transpose(src) {perm="1,0"} : dst_t — the rank-2 axis swap, the SHAPE-GENERIC synth path (StageKind::Transpose
+// → synth_transpose/emit_permute, proven device-resident at 25b-4a). Replaces the baked transpose.ckir dispatch in attention so
+// Kᵀ works at ANY (Sk,D) with ZERO baked-shape constraint (mirrors grad.cpp::mk_transpose2d). ⛔ `perm` is a comma-separated digit
+// STRING (find_tensor_misuse parses it via parse_int_list), NOT an int array.
+[[nodiscard]] Value* mk_transpose2d(Context& ctx, Block* blk, Operation* at, Value* src, TypeId dst_t)
+{
+    Operation* const t = tensor::build_transpose(ctx, src, ctx.attr_string(StringView("1,0")), dst_t);
+    blk->insert_before(t, at);
+    return t->result(0U);
 }
 // linalg.gemm(a, b, c) {alpha=1, beta=0, no-transpose} : out_t — the PLAIN gemm (the synth/plan envelope). `c` is a fresh
 // resource.declare (the β·C term; β=0 ⇒ ignored, but the op carries the operand). Inserted before `at`; returns the result value.
@@ -110,17 +113,17 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     if (!is_float_elem(ctx, input->type())) { return MlExpandError::ElementNotFloat; }
     if (rank_of(ctx, input->type()) != 2U) { return MlExpandError::ShapeRankInvalid; }
 
-    // ⛔ (baked-kernel pre-check, BEFORE emitting any ops) each weight rank-2, AND every relu'd intermediate (layers 1..nw-1) has
-    //    M·hidden == 32 — relu.ckir bakes local_size=32 with NO bound guard, so a larger intermediate would leave an
-    //    UNINITIALIZED tail (and a smaller one an OOB write) feeding the next gemm. A TYPED reject, never a silent miscompile
-    //    (the UnsupportedQuantScheme precedent). Dimension-general relu = name-forward (the 24z ledger).
+    // ⛔ (pre-check, BEFORE emitting any ops) each weight rank-2. ⭐ CEIR-26d: the relu'd-intermediate `M·hidden == 32` reject is
+    //    RETIRED — relu.ckir now ships the SHAPE SENTINEL (local_size=0) and the VizDispatch resolver cook-binds local_size to the
+    //    intermediate's numel (bind_authored_local_size, tensor_pipeline.hpp) before emit, so an ml.mlp of ANY hidden width whose
+    //    relu'd intermediate ≤ the device single-workgroup cap runs device-resident; an OVERSIZE numel is a resolver
+    //    UnresolvedKernel (KernelShapeError::LocalSizeExceedsLimit), NOT a pre-emission reject (the width is not known to be
+    //    device-illegal here — the cap is device-dependent, known only at resolve = cook). ⛔ CEIR-26d-3c: ml.attention is ALSO
+    //    dimension-general now (transpose→synth, softmax→spec-const loop) — NO baked-shape reject remains in expand_ml (the
+    //    BakedKernelShapeUnsupported enum value is DEAD-marked + KEPT at 26d-4d, append-only per the enum head — never returned).
     for (u32 i = 1U; i <= nw; ++i)
     {
         if (!is_tensor(ctx, op->operand(i)) || rank_of(ctx, op->operand(i)->type()) != 2U) { return MlExpandError::ShapeRankInvalid; }
-        if (i < nw && dim_count(ctx, input->type(), 0U) * dim_count(ctx, op->operand(i)->type(), 1U) != 32U)
-        {
-            return MlExpandError::BakedKernelShapeUnsupported;
-        }
     }
 
     Block* const blk  = op->parent_block();
@@ -163,22 +166,19 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     {
         return MlExpandError::ShapeRankInvalid;
     }
-    // ⛔ (baked-kernel pre-check) transpose.ckir bakes (Sk=3, D=4) + softmax.ckir bakes (Sq=2, Sk=3) — reject ANY other dims (a
-    //    TYPED reject, never a silent wrong-shape kernel). Dv stays free (the two gemms are synth'd per-shape). Dimension-general
-    //    transpose/softmax = name-forward (the 24z ledger).
-    if (dim_count(ctx, q->type(), 0U) != 2U || dim_count(ctx, k->type(), 0U) != 3U || dim_count(ctx, q->type(), 1U) != 4U)
-    {
-        return MlExpandError::BakedKernelShapeUnsupported;
-    }
+    // ⛔ CEIR-26d-3c: the baked-kernel pre-check (was: reject any dims ≠ Sq=2,Sk=3,D=4) is RETIRED — 26d-3a made Kᵀ a shape-generic
+    //    tensor.transpose (synth_transpose) and 26d-3b made softmax a spec-const loop kernel (local_size←Sq, Sk←spec-const), so the
+    //    composite is dimension-general (any Sq/Sk/Dv; the two gemms are synth'd per-shape). Proven device-resident at generic dims
+    //    (Sq=3,Sk=5,D=4) on both backends by the 26d-3c gates. The teeth moved to those POSITIVE gates.
     const TypeId elem = elem_of(ctx, q->type());
     Block* const blk  = op->parent_block();
     Value* const grid = mk_const1(ctx, blk, op);
 
-    // Kt = transpose(K) : [D, Sk] (the head-dim × seq transpose the plain gemm(Q, Kt) needs).
-    const TypeId kt_t  = tensor2(ctx, elem, dim_of(ctx, q->type(), 1U), dim_of(ctx, k->type(), 0U)); // [D, Sk]
-    Value* const kt    = mk_decl(ctx, blk, op, kt_t);
-    Value* const tb[2] = {k, kt};
-    mk_dispatch(ctx, blk, op, grid, tb, 2U, StringView("transpose"), StringView("r,w"));
+    // Kt = transpose(K) : [D, Sk] — CEIR-26d-3: the SHAPE-GENERIC tensor.transpose (StageKind::Transpose → synth_transpose), NOT
+    // the baked transpose.ckir dispatch — so Kᵀ carries no (Sk,D) baked constraint (the transpose leg of the 24z attention reject
+    // retired; softmax's Sq/Sk baked-ness is 26d-3b).
+    const TypeId kt_t = tensor2(ctx, elem, dim_of(ctx, q->type(), 1U), dim_of(ctx, k->type(), 0U)); // [D, Sk]
+    Value* const kt   = mk_transpose2d(ctx, blk, op, k, kt_t);
 
     // scores = gemm(Q, Kt) : [Sq, Sk].
     const TypeId scores_t = tensor2(ctx, elem, dim_of(ctx, q->type(), 0U), dim_of(ctx, k->type(), 0U)); // [Sq, Sk]
@@ -233,22 +233,46 @@ MlExpandError expand_ml_op(Context& ctx, Operation* op)
     return MlExpandError::None;
 }
 
-MlExpandResult expand_ml_ops(Context& ctx, Module& m)
+namespace
+{
+// The shared driver: expand every ml op in pre-order; when `lineage != nullptr`, record each newly-created op → the 0-based
+// pre-order index of its source ml op (the created ops of one expansion are exactly the ops inserted between `before` and
+// `after` — every mk_* does insert_before(new, ml_op), then the ml op is erased). The index aligns with MlPartition::assignments.
+[[nodiscard]] MlExpandResult expand_ml_ops_impl(Context& ctx, Module& m, containers::HashMap<const Operation*, crd::i32>* lineage)
 {
     MlExpandResult res;
+    crd::i32       ml_idx = 0;
     for (;;)
     {
         Operation* const op = find_first_ml(ctx, m.body());
         if (op == nullptr) { break; }
-        const MlExpandError err = expand_ml_op(ctx, op);
+        Block* const     blk    = op->parent_block();
+        Operation* const before = op->prev_in_block(); // stable across the expand (created ops land between before and after)
+        Operation* const after  = op->next_in_block();
+        const MlExpandError err  = expand_ml_op(ctx, op); // inserts created ops before op, RAUW its result, erase op
         if (err != MlExpandError::None)
         {
             res.error    = err;
             res.error_op = op;
             return res; // ⛔ stop on the first error — the un-expanded op would otherwise loop forever.
         }
+        if (lineage != nullptr && blk != nullptr)
+        {
+            Operation* const start = (before != nullptr) ? before->next_in_block() : blk->first_op();
+            for (Operation* c = start; c != nullptr && c != after; c = c->next_in_block()) { (void)lineage->insert(c, ml_idx); }
+        }
+        ++ml_idx;
         ++res.expanded;
     }
     return res;
+}
+} // namespace
+
+MlExpandResult expand_ml_ops(Context& ctx, Module& m) { return expand_ml_ops_impl(ctx, m, nullptr); }
+
+MlExpandResult expand_ml_ops(Context& ctx, Module& m, containers::HashMap<const Operation*, crd::i32>& lineage)
+{
+    lineage.clear(); // documented: cleared first, so a reused map never carries a stale (op → index) from a prior expand
+    return expand_ml_ops_impl(ctx, m, &lineage);
 }
 } // namespace crd::ceir::gpu

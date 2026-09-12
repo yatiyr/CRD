@@ -1,5 +1,8 @@
 # 2026-05-16 — Phase 3.1.7 v5 `-spatial` cluster CLOSE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > 6th of 11 `crd-geometry` sub-modules complete. Final v5-close slice
 > bundles the ADR amendment, system doc, tracker syncs, and the 18-
 > config full sweep that gates push-to-git.

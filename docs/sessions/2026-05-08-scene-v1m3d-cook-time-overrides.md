@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m3d: Cook-time `overrides = [...]` → OOVR chunk
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m3c shipped. Nested öbek references (`obek = "..."` per-entity) with eager flatten + ChildOf splice. 12 cooker tests; six-config 784/784 / 781 release.
 
 **Status at end:** v1m3d shipped — closes v1m3 entirely. Cook-time `overrides = [...]` block at top level of an `.obek.toml` file bakes into the OOVR chunk; runtime auto-applies these BEFORE caller-supplied patches (so caller patches still win — caller is deepest). 15 cooker tests (+3); six-config 787/787 / 784 release / 17 smokes.

@@ -1,5 +1,8 @@
 # 2026-07-06 — v16-b: the scalar VJP rule library — crush (exact + full coverage)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** `rules_reverse.hpp` — the COMPLETE scalar VJP surface over the reverse `Var` (v16-a tape): the whole
 `crd::math` unary family (asin/acos/atan · sinh/cosh · asinh/acosh/atanh · exp2/exp10/expm1 · log2/log10/log1p · tan ·
 cbrt/rsqrt, on top of v16-a's exp/log/sin/cos/sqrt/tanh/pow), the binary rules (atan2/hypot/pow-dual), and control

@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5b: Loose octree
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster continues. Loose octree (Ulrich 2000) —
 > dynamic AABB index with overlapping children-bounds (loose factor 2.0
 > default). The workhorse for scene spatial culling + eylem broadphase

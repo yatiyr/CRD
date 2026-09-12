@@ -1,5 +1,8 @@
 # CEIR-23 band close — ML/scientific numerics through CEIR (quantization + sparse, §53/§54)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-18 · **Mold:** the 20z/22z band-close discipline (advisor at band-close → fresh family×config sweep →
 row-per-claim / row-per-config tables → zero-builder audit → deferral ledger → tracker BAND row).
 

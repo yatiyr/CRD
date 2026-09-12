@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0a: `crd-perf` substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **Detour D-003** opens 2026-05-15 (immediately after D-006 close). The

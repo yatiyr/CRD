@@ -1,5 +1,8 @@
 # Cerid Eylem — Physics Industry Research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — ADR-0062/0063; eylem v0–v1b shipped, then ⏸ paused (2026-05-11); this dossier remains the v1c+ plan. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > **Eylem** (Turkish: *eylem* — "action" / "motion") is the Cerid-native physics

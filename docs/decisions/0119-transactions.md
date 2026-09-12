@@ -1,5 +1,8 @@
 # ADR-0119 — Transactions: the atomic authored-mutation surface (commit / rollback)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8i**, the LAST framework before the 8z band gate. A
 `Transaction` records a set of IR mutations against a `Module`, applies them EAGERLY, and either COMMITS them

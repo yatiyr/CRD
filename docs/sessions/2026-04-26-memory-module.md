@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — memory module
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Build `crd-memory` v1: a common allocator interface plus four concrete

@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0-close: dense foundation closed
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 v0-close is the cluster-close for Phase 3.1.6 v0 (the dense foundation:
 substrate + BLAS L1/L2/L3 + dense direct solvers + property/bench
 infrastructure). Two deliverables: the **ADR-0065 §14 decision lock** and the

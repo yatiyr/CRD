@@ -1,5 +1,8 @@
 # 2026-06-04 — v5e HSS: compress/factor/solve vs STRUMPACK (serial rank=4, machine-eps)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** WSL2 Ubuntu 24.04, i9-14900K, serial deterministic (SplitMix64 counter-RNG). Cerid: GCC. STRUMPACK oracle via `scripts/setup-strumpack-ref.sh`. 

@@ -370,6 +370,19 @@ void Context::set_stable_id_watermark(Module* m, u64 watermark) noexcept
 {
     if (m != nullptr) { m->m_stable_id_watermark = watermark; } // deserialization-only: restore the monotone high-water mark
 }
+void Context::pin_stable_id(Operation* op, StableId id) noexcept
+{
+    // ADR-0128 D3 lowering-time pin (CEIR-32e) — NOT the deserialization-only set_stable_id. The caller keeps `id` in a
+    // reserved LOW band + calls reserve_stable_id_floor, so assign_stable_ids leaves this (valid) id alone and draws the
+    // sequential ids ABOVE the band. Uniqueness among pins is the caller's contract (a dup corrupts the migration key).
+    if (op != nullptr) { op->m_stable_id = id; }
+}
+void Context::reserve_stable_id_floor(Module* m, u64 floor) noexcept
+{
+    // ADR-0128 D3 lowering-time reserve (CEIR-32e) — a MONOTONE raise (never lowers a live watermark), so assign_stable_ids
+    // assigns every unset op an id strictly above the CHIR-pinned band. Distinct from set_stable_id_watermark (restore).
+    if (m != nullptr && floor > m->m_stable_id_watermark) { m->m_stable_id_watermark = floor; }
+}
 
 // ── CEIR-8i (ADR-0119) transaction support — inverse/rebuild atoms the `Transaction` recorder routes through ──
 namespace
@@ -575,6 +588,10 @@ AttrValue Context::attr_value(AttrId id) const noexcept
 
 void Context::set_attr(Operation* op, containers::StringView name, AttrId value)
 {
+    // CEIR-31b-3-c-ii: an attribute name is NON-EMPTY by construction — the printer would emit an empty name as `"" = v`
+    // (name_needs_quote("")==true) and the parser now REJECTS that (parse_attrs), so a nameless attr could never
+    // round-trip; forbid it at the source so the builder and the text grammar agree on what is constructible.
+    CRD_ASSERT_MSG(name.size() > 0U, "set_attr: an attribute name must be non-empty");
     for (u32 k = 0; k < op->m_num_attrs; ++k) // overwrite in place if `name` is already present
     {
         if (op->m_attrs[k].name == name)
@@ -2464,6 +2481,7 @@ constexpr containers::StringView kMemoryDomainVocab[] = {
     containers::StringView("host_visible_device"), containers::StringView("unified"), containers::StringView("upload"),
     containers::StringView("readback"), containers::StringView("sparse"), containers::StringView("external"),
     containers::StringView("peer_visible"), containers::StringView("distributed")};
+constexpr crd::u32 kMemoryDomainVocabCount = 11U; // CEIR-29a-1: shared by the intent verifier + is_memory_domain (one count, no drift)
 constexpr containers::StringView kResidencyVocab[] = {
     containers::StringView("resident"), containers::StringView("streamable"), containers::StringView("evictable")};
 constexpr containers::StringView kDirectionVocab[] = {
@@ -2524,7 +2542,7 @@ ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) /
                     }
                     if (!is_history) { return {op, ResourceIntentMisuseKind::HistoryLengthWithoutHistory}; }
                 }
-                if (!ceir_intent_string_ok(ctx, op, containers::StringView("memory_domain"), kMemoryDomainVocab, 11U))
+                if (!ceir_intent_string_ok(ctx, op, containers::StringView("memory_domain"), kMemoryDomainVocab, kMemoryDomainVocabCount))
                 {
                     return {op, ResourceIntentMisuseKind::MemoryDomainValueInvalid};
                 }
@@ -2558,6 +2576,15 @@ ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) /
     return {};
 }
 } // namespace
+
+// CEIR-29a-1 §24/§69: the §102 partitioner's provider-descriptor `memory_domain` reuses THIS vocabulary (the same
+// `kMemoryDomainVocab` `resource.declare` validates against — one table, two readers, no drift). Empty ⇒ false (a
+// descriptor's "" means "unspecified", handled at its use-site). `ceir_sv_in`/`kMemoryDomainVocab` are anon-namespace
+// entities of this TU, reachable here.
+bool is_memory_domain(containers::StringView s) noexcept
+{
+    return !s.empty() && ceir_sv_in(s, kMemoryDomainVocab, kMemoryDomainVocabCount);
+}
 
 containers::StringView resource_intent_misuse_kind_name(ResourceIntentMisuseKind k) noexcept
 {

@@ -1,6 +1,9 @@
 # REN-40-B — the INCREMENTAL EXTRACT WALK, measured
 
-**Row 143 / 40-B in `docs/detours/D-007-gpu-program-system.md`.** Start line: the REN-40 baseline + the REN-40-A
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+**Row 143 / 40-B in `docs/archive/D-007-gpu-program-system.md`.** Start line: the REN-40 baseline + the REN-40-A
 device-cull board in `docs/bench/2026-07-29-ren40-million-instance-baseline.md`.
 
 The only change is **how the renderer discovers what moved**. Nothing about what is drawn changes, on either arm.

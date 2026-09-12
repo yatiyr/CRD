@@ -1,5 +1,8 @@
 # ADR-0108 — A Cerid-owned executable-program language stack (CEIR/CHIR); C++ is no longer the *only* authorable program
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-07, user-approved at the CEIR-0b gate) — the D-007 **CEIR band**. This ADR
 captures a **user-directed change of direction** (the CEIR universal-programming roadmap,
 `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md` §5). The **decision is now locked**; the

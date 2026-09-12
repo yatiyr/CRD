@@ -1,5 +1,8 @@
 # ADR-0079 — `crd-perf` profiler substrate + ImGui frontend
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted 2026-05-15 (D-003 close).
 
 **Context.** Detour D-003 ships the engine's perf-measurement substrate.

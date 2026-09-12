@@ -1,5 +1,8 @@
 # Lesson 02 — When scalar code beats SIMD
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "We added AVX2 and SWWC, they were slower than scalar. Why? When does SIMD actually help?"
 
 ## TL;DR

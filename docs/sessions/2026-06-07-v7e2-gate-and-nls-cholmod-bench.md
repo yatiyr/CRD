@@ -1,5 +1,8 @@
 # 2026-06-07 — v7-e-2 gate (symbolic-once) + the NLS-vs-CHOLMOD bench + root-cause dig
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Summary
 
 Two pieces of v7-e-2 (sparse-Jacobian LM, the "crush vehicle"):

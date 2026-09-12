@@ -1,4 +1,11 @@
-﻿# ADR-0017 — Culling strategy
+# ADR-0017 — Culling strategy
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+> **Current graphics boundary:** gpu-context/CEIR and authored assets govern new work (ADR-0105/0106/0127).
+> Any rhi/renderer path-class ownership below describes the retired stack; retained technique requirements
+> survive in ROADMAP and its linked contracts. See [current principles](../PRINCIPLES.md).
 
 **Date:** 2026-04
 **Status:** Accepted
@@ -24,6 +31,6 @@
 
 - `docs/phases/phase-2-graphics.md`
 - `docs/phases/phase-3-simulation.md`
-- `docs/phases/phase-5-ui-rendering.md`
+- `docs/archive/2026-09-12-superseded-plans.md#phase-5-ui-rendering`
 - ADR-0053 — Component index slot framework (defines `SpatialBVHIndex` API; impl Phase 3.5)
 - `docs/ROADMAP.md` — authoritative phase numbering

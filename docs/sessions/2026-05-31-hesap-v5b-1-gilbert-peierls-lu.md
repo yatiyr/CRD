@@ -1,5 +1,8 @@
 # 2026-05-31 — hesap v5b-1: Gilbert-Peierls sparse LU (the serial correctness oracle)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Opens the **v5b sparse-direct LU cluster**. v5b-1 is the SERIAL reference oracle (correctness-gated, not
 a crush); v5b-2 is the deterministic + parallel crush (SuperLU-class supernodal + MC64 + threshold static
 pivot) validated against this. Followed v5a (Cholesky, now winning across the board vs CHOLMOD).

@@ -1,5 +1,8 @@
 # CEIR universality quest — foundation-closure review + roadmap re-baseline (2026-08-09)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What happened.** The user stopped the autonomous grind after CEIR-7b and issued the universality quest: prove the
 CEIR/CHIR/CKIR architecture can be Cerid's common programmable substrate for essentially every computational domain
 (engine, MATLAB-class, DAW, DCC, CAD/CAM, EDA/PCB, simulation, ML, media, agents) — no second graph runtime,

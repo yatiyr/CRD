@@ -1,5 +1,8 @@
 # ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted  
 **Date:** 2026-05-02  
 **Tags:** arch, scripting, extensibility

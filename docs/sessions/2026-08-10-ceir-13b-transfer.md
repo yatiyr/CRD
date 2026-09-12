@@ -1,5 +1,8 @@
 # CEIR-13b — the `ceir.transfer` dialect: movement ops with static per-kind effects (§50)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-13b (D-007 master spine) · **Status:** ✅ CLOSED · **ADR:** none (op-vocabulary +
 verifier slice, 12a/13a precedent).
 

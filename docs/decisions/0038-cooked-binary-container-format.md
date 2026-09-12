@@ -8,6 +8,9 @@ tags: [resources, arch, cooker]
 
 # ADR-0038 — Cooked binary container format
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 ADR-0013 mandates that the runtime never sees source assets — only cooked binary artifacts.

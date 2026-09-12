@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0g: ImGui frontend (`crd-perf-ui`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 The UX layer. New module `engine/perf-ui/` (separate target so the

@@ -1,0 +1,4 @@
+module {
+  ^bb0:
+    rewrite.rule() {action = "build_op_from_inner_operand", constraint = "operand_defined_by_root", operand = 0, result = 0, root = "tensor.reshape"}
+}

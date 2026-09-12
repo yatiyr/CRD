@@ -1,5 +1,8 @@
 # 2026-07-05 — the v14 parallel wave: i/j/k/l shipped concurrently (+ the sparse-CP glue)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The user's directive: close v14 fast WITHOUT quality loss — implement independent slices
 > in parallel, crush all peers, no deferrals. Method: four concurrently-run implementation
 > agents, each owning ONLY its new files (headers/tests/oracles/gate scripts/bench doc),

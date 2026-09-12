@@ -383,6 +383,13 @@ const char* frame_cook_error_text(FrameCookError err) noexcept
     case FrameCookError::UnknownResource:       return "a pass reads or writes a resource that was never declared";
     case FrameCookError::ResourceNeverWritten:  return "a declared resource is never written by any pass";
     case FrameCookError::DependencyCycle:       return "the passes form a dependency CYCLE";
+    case FrameCookError::SpecConstBadPassKind:  return "a `spec_<n>` param needs a fullscreen or compute pass (no program to specialize otherwise)";
+    case FrameCookError::SpecConstDuplicateId:  return "two `spec_<n>` params resolve to the same constant_id (e.g. `spec_1` and `spec_01`)";
+    case FrameCookError::SpecConstTooMany:      return "a pass has too many `spec_<n>` params (exceeds kMaxSpecConsts)";
+    case FrameCookError::SpecConstLiteralAndDerive: return "a `spec_<n>` literal and a `derive_spec_<n>_*` name the same id (the derivation would silently win)";
+    case FrameCookError::DeriveSpecIncomplete:  return "a `derive_spec_<n>_*` id is missing one of its three fields (read, axis, op)";
+    case FrameCookError::DeriveSpecBadValue:    return "a `derive_spec_<n>_axis` is not x/y, or a `_op` is not `inv`";
+    case FrameCookError::DeriveSpecBadRead:     return "a `derive_spec_<n>_read` is not a pass read, or names a non-image resource (no extent)";
     case FrameCookError::MissingShader:         return "a fullscreen pass needs `shader` (a compute pass needs `kernel`)";
     case FrameCookError::MissingDrawList:       return "a geometry or depth-only pass needs `draw_list`";
     case FrameCookError::SubscriptOnNonLayered: return "`[$index]` used on a resource with layers == 1";
@@ -954,6 +961,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     }
                     else if (v.is_boolean())      { prm.type = FrameParamType::Bool;  prm.v[0] = v.value_or(false) ? 1.0 : 0.0; }
                     else if (v.is_integer())      { prm.type = FrameParamType::Int;   prm.v[0] = static_cast<double>(v.value_or<int64_t>(0)); }
+                    // CEIR-31b-4-b-iv-g-2: a STRING value under [pass.params] (e.g. `derive_spec_2_read = "blur_src"`). Without
+                    // this case a string fell to the Float else and became 0.0 — the payload silently lost. The binary blob
+                    // already round-trips `prm.str` (put_str/strv), so this one line makes the whole String seam round-trip.
+                    else if (v.is_string())       { prm.type = FrameParamType::String; if (const auto sv = v.value<std::string_view>()) { set_str(prm.str, *sv); } }
                     else                          { prm.type = FrameParamType::Float; prm.v[0] = v.value_or<double>(0.0); }
                     p.params.push_back(static_cast<FrameParam&&>(prm));
                 }
@@ -1038,6 +1049,138 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
         return nullptr;
     };
     const auto is_sentinel = [](const crd::containers::String& n) { return n.size() > 0U && n.c_str()[0] == '@'; };
+        // CEIR-31b-3-a: a `spec_<n>` pass param specializes the pass's CKIR program at pipeline time. Only a fullscreen
+        // (fullscreen.raster) or compute (compute.dispatch) pass resolves a CKIR program to specialize; a spec on any
+        // other pass is program-less and could only be SILENTLY DROPPED — reject it at cook, by name (never at record).
+        if (!pass_is_fullscreen(p) && !pass_is_compute(p))
+        {
+            for (crd::usize i = 0; i < p.params.size(); ++i)
+            {
+                const crd::containers::StringView pn(p.params[i].name.c_str(), p.params[i].name.size());
+                crd::u32                          spec_id = 0U;
+                crd::u32                          did     = 0U;
+                DeriveSpecField                   dfld{};
+                // CEIR-31b-4-b-iv-g-2: a DERIVED spec (`derive_spec_<n>_*`) is as program-less on this pass kind as a literal
+                // `spec_<n>` — the same silent-drop, so the same by-name rejection.
+                if (parse_spec_param(pn, spec_id) || parse_derive_spec_param(pn, did, dfld))
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::SpecConstBadPassKind;
+                }
+            }
+        }
+        else
+        {
+            // A fullscreen/compute pass DOES resolve a program, so a spec_<n> is legal — but two params that resolve to
+            // the SAME constant_id (e.g. `spec_1` and `spec_01`, distinct names the generic seam preserves) would let one
+            // silently win at record. And the record seat builds the SpecSet into a `kMaxSpecConsts` stack buffer, so a
+            // pass exceeding that is rejected HERE (the record-seat overflow is then unreachable-by-contract). n is a
+            // handful, so a pairwise compare is fine. Reject by name.
+            crd::u32 nspec = 0U;
+            for (crd::usize i = 0; i < p.params.size(); ++i)
+            {
+                crd::u32 id_i = 0U;
+                if (!parse_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), id_i)) { continue; }
+                if (++nspec > kMaxSpecConsts)
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::SpecConstTooMany;
+                }
+                for (crd::usize j = i + 1U; j < p.params.size(); ++j)
+                {
+                    crd::u32 id_j = 0U;
+                    if (parse_spec_param(crd::containers::StringView(p.params[j].name.c_str(), p.params[j].name.size()), id_j) && id_j == id_i)
+                    {
+                        set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                        return FrameCookError::SpecConstDuplicateId;
+                    }
+                }
+            }
+            // ── ⭐⭐ CEIR-31b-4-b-iv-g-2: DERIVED spec-consts (`derive_spec_<n>_{read,axis,op}`) — one SpecConst per id at
+            // record, resolved from the read's pixel extent at g-2-b. Validate each id ONCE (at its first-seen param). `nspec`
+            // continues from the literal loop so the record buffer's 16-slot UNION (literals + deriveds) is enforced.
+            for (crd::usize i = 0; i < p.params.size(); ++i)
+            {
+                crd::u32        did = 0U;
+                DeriveSpecField fi{};
+                if (!parse_derive_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), did, fi)) { continue; }
+                bool first = true; // has an EARLIER param already carried this id? then it was validated there.
+                for (crd::usize k = 0; k < i && first; ++k)
+                {
+                    crd::u32        dk = 0U;
+                    DeriveSpecField fk{};
+                    if (parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) && dk == did) { first = false; }
+                }
+                if (!first) { continue; }
+                if (++nspec > kMaxSpecConsts) // a derived id joins the same 16-slot record buffer as the literals
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::SpecConstTooMany;
+                }
+                // gather this id's three fields; a second param for one field (derive_spec_2 vs derive_spec_02) is a dup id.
+                const FrameParam* pr = nullptr;
+                const FrameParam* pa = nullptr;
+                const FrameParam* po = nullptr;
+                for (crd::usize k = 0; k < p.params.size(); ++k)
+                {
+                    crd::u32        dk = 0U;
+                    DeriveSpecField fk{};
+                    if (!parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) || dk != did) { continue; }
+                    const FrameParam** slot = fk == DeriveSpecField::Read ? &pr : (fk == DeriveSpecField::Axis ? &pa : &po);
+                    if (*slot != nullptr)
+                    {
+                        set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                        return FrameCookError::SpecConstDuplicateId;
+                    }
+                    *slot = &p.params[k];
+                }
+                // a literal `spec_<did>` on the SAME id: the derivation would silently overwrite it at record — reject.
+                for (crd::usize k = 0; k < p.params.size(); ++k)
+                {
+                    crd::u32 sid = 0U;
+                    if (parse_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), sid) && sid == did)
+                    {
+                        set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                        return FrameCookError::SpecConstLiteralAndDerive;
+                    }
+                }
+                if (pr == nullptr || pa == nullptr || po == nullptr) // a partial derivation (one of read/axis/op missing)
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::DeriveSpecIncomplete;
+                }
+                const std::string_view av(pa->str.c_str(), pa->str.size());
+                const std::string_view ov(po->str.c_str(), po->str.size());
+                if ((av != "x" && av != "y") || ov != "inv") // axis∈{x,y}, op∈{inv} — the only resolvable derivation at g-2-b
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::DeriveSpecBadValue;
+                }
+                bool is_read = false; // the read must be one of THIS pass's reads (its binding is what the extent describes)
+                for (crd::usize rr = 0; rr < p.reads.size(); ++rr)
+                {
+                    if (p.reads[rr].name.size() == pr->str.size()
+                        && std::memcmp(p.reads[rr].name.c_str(), pr->str.c_str(), pr->str.size()) == 0)
+                    {
+                        is_read = true;
+                        break;
+                    }
+                }
+                const FrameResourceDesc* rd = find_resource(pr->str);
+                // ⛔ only the three FRAME-SIZED image kinds have an extent the recorder resolves (out_target×scale, or an
+                // absolute width); ExternalTexture's extent is app-owned (not frame-resolvable at record) and buffers have
+                // none. A new frame-sized image kind must be added to this set (else its derivation would 1/0 at g-2-b).
+                const bool read_is_frame_image = rd != nullptr
+                                                 && (rd->kind == FrameResourceKind::TransientImage
+                                                     || rd->kind == FrameResourceKind::PersistentImage
+                                                     || rd->kind == FrameResourceKind::PingPongImage);
+                if (!is_read || !read_is_frame_image)
+                {
+                    set_where(where, std::string_view(p.name.c_str(), p.name.size()));
+                    return FrameCookError::DeriveSpecBadRead;
+                }
+            }
+        }
         if (pass_is_scene_raster(p) && pass_str(p, crd::containers::StringView(pp::kDrawList)).empty())
         {
             set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -1960,6 +2103,49 @@ bool is_folded_pass_param(crd::containers::StringView name) noexcept
         const crd::usize fl = std::strlen(f);
         return name.size() == fl && std::memcmp(name.data(), f, fl) == 0;
     });
+}
+
+bool parse_spec_param(crd::containers::StringView name, crd::u32& id_out) noexcept
+{
+    constexpr char       pfx[]   = "spec_";
+    constexpr crd::usize pfx_len = sizeof(pfx) - 1U; // 5
+    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0) { return false; }
+    crd::u64 v = 0U;
+    for (crd::usize i = pfx_len; i < name.size(); ++i)
+    {
+        const char c = name[i];
+        if (c < '0' || c > '9') { return false; }                  // a non-digit tail is not a spec param
+        v = v * 10U + static_cast<crd::u64>(c - '0');
+        if (v > 0xFFFF'FFFFULL) { return false; }                  // an id that overflows u32 is not a valid constant_id
+    }
+    id_out = static_cast<crd::u32>(v);
+    return true;
+}
+
+bool parse_derive_spec_param(crd::containers::StringView name, crd::u32& id_out, DeriveSpecField& field_out) noexcept
+{
+    constexpr char       pfx[]   = "derive_spec_";
+    constexpr crd::usize pfx_len = sizeof(pfx) - 1U; // 12
+    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0) { return false; }
+    crd::u64   v   = 0U;
+    crd::usize i   = pfx_len;
+    bool       any = false;
+    for (; i < name.size() && name[i] >= '0' && name[i] <= '9'; ++i)
+    {
+        v = v * 10U + static_cast<crd::u64>(name[i] - '0');
+        if (v > 0xFFFF'FFFFULL) { return false; } // an id that overflows u32 is not a valid constant_id
+        any = true;
+    }
+    if (!any) { return false; }                               // no digits ("derive_spec_read") — not a derive param
+    if (i >= name.size() || name[i] != '_') { return false; } // must be <digits>_<field>
+    ++i;                                                      // skip the '_'
+    const std::string_view field(name.data() + i, name.size() - i);
+    if (field == "read")      { field_out = DeriveSpecField::Read; }
+    else if (field == "axis") { field_out = DeriveSpecField::Axis; }
+    else if (field == "op")   { field_out = DeriveSpecField::Op; }
+    else { return false; }                                    // an unknown field — an ordinary unknown param, as today
+    id_out = static_cast<crd::u32>(v);
+    return true;
 }
 
 

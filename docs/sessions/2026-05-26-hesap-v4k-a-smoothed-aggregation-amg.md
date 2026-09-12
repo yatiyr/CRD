@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4k-a: Smoothed-Aggregation AMG (the mesh-independence crush)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4k-a** — Smoothed Aggregation AMG (Vaněk 1996), the
 mesh-independent multilevel preconditioner that achieves what v4j's inverse-based ILU could not
 (v4j root cause: single-pivot deferral ⇒ degenerate coarse space; proven by Bollhöfer-Mehrmann

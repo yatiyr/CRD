@@ -694,7 +694,12 @@ inline bool emit_contract_cuda(const KGraph& g, int output, GlslKernel& out)
     out.input_iidx[1] = g.node(c.b).iidx;
     crd::containers::String& s = out.source;
     s.clear();
-    s.append("extern \"C\" __global__ void ckir(const float* A, const float* Bm, float* C, unsigned M, unsigned K, unsigned N, unsigned nbatch) {\n");
+    // ⛔ CEIR-29b-1: the push blob is ONE by-value param (CudaComputeContext::dispatch passes the whole push_size-byte blob as a
+    // single cuLaunchKernel arg — cuda_compute_context.cpp) — so {M,K,N,nbatch} MUST arrive as ONE 16-byte param, not four
+    // scalars (four scalars leave K/N/nbatch UNBOUND ⇒ garbage dims ⇒ OOB ⇒ SIGSEGV; this push path was untested until 29b-1).
+    // uint4 (a built-in CUDA vector type, 16B x/y/z/w) matches the {M,K,N,nbatch} push exactly.
+    s.append("extern \"C\" __global__ void ckir(const float* A, const float* Bm, float* C, uint4 dims) {\n");
+    s.append("  unsigned M = dims.x, K = dims.y, N = dims.z, nbatch = dims.w;\n");
     s.append("  unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;\n  unsigned mn = M * N; unsigned total = mn * nbatch;\n  if (gid >= total) return;\n");
     s.append("  unsigned b = gid / mn; unsigned rem = gid % mn; unsigned m = rem / N; unsigned nn = rem % N;\n");
     s.append("  unsigned aoff = b * M * K + m * K; unsigned boff = b * K * N + nn;\n");

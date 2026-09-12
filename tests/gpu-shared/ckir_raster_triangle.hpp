@@ -98,6 +98,20 @@ inline void build_solid_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double r, 
     fe.out[0] = {col, 0};
 }
 
+// CEIR-34 R2: a solid colour with an explicit ALPHA output — the overlay's fragment shape, so an alpha-blend
+// composite (srcAlpha·src + (1-srcAlpha)·dst) reads back as a MIXED pixel rather than a pure overwrite. build_solid_fs
+// forces alpha = 1 (opaque, indistinguishable from blend-off); this one drives the blend equation from a < 1.
+inline void build_solid_alpha_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe, double r, double green, double b, double a)
+{
+    namespace kir = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const int  col = g.vec4(g.constant(r, sh, kir::DType::F32), g.constant(green, sh, kir::DType::F32),
+                            g.constant(b, sh, kir::DType::F32), g.constant(a, sh, kir::DType::F32));
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {col, 0};
+}
+
 // ⭐⭐ REN-39-A1 VERTEX entry: the INDEX-VALUE probe. The triangle corners are keyed to VertexIndex ∈ {4,5,6};
 // EVERY other value collapses to (2,2) — offscreen AND zero-area (all three vertices identical). So the triangle
 // renders IFF the index values {4,5,6} actually arrived from a bound index buffer: a non-indexed draw of 3
@@ -845,6 +859,53 @@ inline void build_flat_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
     fe.stage  = kir::KStage::Fragment;
     fe.n_out  = 1;
     fe.out[0] = {col, 0};
+}
+
+// ⭐⭐ CEIR-34 R2 / REN-39-B1 FIRST-VERTEX OFFSET CONTRACT probe (pairs with build_vid_offset_probe_fs). A non-indexed
+// draw's `first_vertex` (StartVertexLocation on D3D12, firstVertex on Vulkan) MUST reach the shader's VertexIndex — the
+// overlay's ranged bucket addressing (the expand-VS `instance = VertexIndex / verts_per_instance`) depends on it. This
+// probe PINS THE VALUE, not merely its presence: the triangle covers the centre whether VertexIndex reads {0,1,2} (offset
+// DROPPED) or {4,5,6} (offset APPLIED) — corner c_k is selected by `vid == k OR vid == k+4` via a CmpEq select chain (no
+// logical-Or op needed) — and a FLAT integer varying carries VertexIndex to the FS, which writes R = vid·(40/255). Draw
+// non-indexed with count = 3, first_vertex = 4: the PROVOKING vertex (vertex 0 under both APIs' default first-vertex
+// provoking convention) sees vid = 4 IFF the offset reached VertexIndex ⇒ centre R = 160; a dropped offset ⇒ vid = 0 ⇒
+// R = 0. The SAME graph on both backends is the both-backend contract proof — Vulkan folds firstVertex into gl_VertexIndex
+// natively; D3D12 must match via the identity-index-buffer backend seam REN-39-A1 proves portable (indexed ⇒ SV_VertexID =
+// index value). The 40/255 scale keeps every vid in {0..6} inside unorm8 (6·40 = 240).
+inline void build_vid_offset_probe_vs(crd::kir::KGraph& g, crd::kir::KEntry& ve)
+{
+    namespace kir = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const auto f   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
+    const int  vid = g.builtin(kir::KBuiltin::VertexIndex); // int
+    const auto eqi = [&](int v) { return g.binary(kir::KOp::CmpEq, vid, g.constant(static_cast<double>(v), sh, kir::DType::I32)); };
+    // c0 = (0,-0.8) · c1 = (0.8,0.8) · c2 = (-0.8,0.8) — the base centre-covering triangle; each corner is chosen by BOTH
+    // its low index k and its offset index k+4, so the SAME triangle rasterizes whether the offset reached vid or not.
+    const int x = g.select(eqi(0), f(0.0), g.select(eqi(4), f(0.0),
+                  g.select(eqi(1), f(0.8), g.select(eqi(5), f(0.8),
+                  g.select(eqi(2), f(-0.8), g.select(eqi(6), f(-0.8), f(2.0)))))));
+    const int y = g.select(eqi(0), f(-0.8), g.select(eqi(4), f(-0.8),
+                  g.select(eqi(1), f(0.8), g.select(eqi(5), f(0.8),
+                  g.select(eqi(2), f(0.8), g.select(eqi(6), f(0.8), f(2.0)))))));
+    ve.stage    = kir::KStage::Vertex;
+    ve.position = g.vec4(x, y, f(0.0), f(1.0));
+    ve.n_out    = 1;
+    ve.out[0]   = {vid, 0, kir::Interp::Flat}; // an integer varying ⇒ flat; carries VertexIndex to the FS
+}
+
+inline void build_vid_offset_probe_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
+{
+    namespace kir = crd::kir;
+    const auto sh  = kir::make_shape({1});
+    const int  in  = g.stage_in(kir::KType::make_scalar(kir::DType::I32), 0, kir::Interp::Flat); // flat int = VertexIndex
+    const int  vf  = g.cast(in, kir::DType::F32);
+    const int  scl = g.constant(40.0 / 255.0, sh, kir::DType::F32);
+    const int  r   = g.binary(kir::KOp::Mul, vf, scl); // vid·(40/255): vid=4 ⇒ 160, vid=0 ⇒ 0 (unorm8)
+    const int  z   = g.constant(0.0, sh, kir::DType::F32);
+    const int  one = g.constant(1.0, sh, kir::DType::F32);
+    fe.stage  = kir::KStage::Fragment;
+    fe.n_out  = 1;
+    fe.out[0] = {g.vec4(r, z, z, one), 0};
 }
 
 // B1-c NOPERSPECTIVE pair. A PERSPECTIVE triangle (the base NDC corners, but clip.w = {1, 4, 1} — vertex 1 is "far") makes

@@ -1,5 +1,8 @@
 # ADR-0059 — Preset System: typed system-config bags with five-layer resolution and `extends`-chain composability
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-08
 **Tags:** scene, resources, cooker, arch, renderer, audio, physics, input, config

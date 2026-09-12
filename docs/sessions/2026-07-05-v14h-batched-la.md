@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-h: batched LA (GEMM/Chol/LU/small-SVD) — full crush + the autovec scar
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Boards: **`docs/bench/2026-07-05-v14h-batched-la.md`**. Same-day siblings: the v10 FFT
 > shipping-gate close (C1002) and the v14-g hyper-optimizer crush (their own logs). This log
 > = the v14-h arc + the day's THIRD MSVC-optimizer scar, the nastiest.

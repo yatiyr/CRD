@@ -1,5 +1,8 @@
 # Session — 2026-04-28 — crd-rhi-vulkan bootstrap
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Create the first real GPU backend module for Cerid. The slice is deliberately

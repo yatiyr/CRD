@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1j-b: sandbox integration — scene selector + four-mode geometry showcase **(closes v1)**
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Final v1 slice. Wire the v1j-a `crd-geometry-viz` substrate into the sandbox as a runnable, eye-test-able validation surface for the whole `crd-geometry-*` substrate (v0 / v1a..v1h primitives + SDFs + intersection corpus + BVH structures + closest-point + shapecast + broadphase pairs). Scene-selector dropdown switches between the existing eylem physics demo (preserved) and a new geometry-showcase scene with four ImGui-selectable sub-modes — primitive viewer, query showcase, BVH viewer, SDF heatmap.

@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-c-followon: fat-node 64 B LBVH + dual-output paths
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **Track A "elite rewrite" of the v9a-c LBVH GPU pipeline.** Replaces the compact 32 B `BvhNode` + canonical-reorder layout with the KittenGpuLBVH-style fat-node 64 B `LbvhFatNode` layout. Adds a second dispatch path (`dispatch_build_lbvh_gpu_resident`) that returns a GPU buffer handle instead of reading the tree back to CPU. Same shaderlogical pipeline (Karras 2012 §2.2 build + §2.4 atomic-counter upsweep) but with structurally different node layout and a carry-register walk in the upsweep.

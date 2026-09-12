@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v4a: `mesh_closest_point`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > First slice of Phase 3.1.7 v4 `-mesh` cluster. New `engine/geometry-mesh/`
 > module shipping `TriangleMeshView` + per-mesh BVH + `mesh_closest_point`
 > via Ericson cascade + BVH branch-and-bound + typed-Quantity wrapper layer

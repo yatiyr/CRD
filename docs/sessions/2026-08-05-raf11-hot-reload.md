@@ -1,5 +1,8 @@
 # Session — RAF-11: dependency-aware hot reload, all 5 kinds (2026-08-05)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Branch:** `main`, stacked on the RAF-10 close (which sits on the RAF-8/9 tail).
 **Gate 11:** reload material param/default · material graph · technique · shader body · frame graph;
 dependency-chain invalidation; interface-change rejection; last-good preservation; atomic generation install;

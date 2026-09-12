@@ -1,5 +1,8 @@
 # Session 2026-05-19 — `crd-hesap` v0d-perf-f64-avx2 (Vec4d substrate + f64 AVX2 microkernel)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 After v0d-perf chunk 1 shipped Goto/BLIS layered GEMM with AVX2 f32

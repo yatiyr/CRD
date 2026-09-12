@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4i-3: Additive + Restricted Schwarz (closes v4i)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4i-3** — overlapping domain-decomposition preconditioners.
 Closes v4i (SPAI + Chebyshev + Schwarz).
 

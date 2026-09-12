@@ -1,0 +1,10 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %0 = audio.source() {loop = 0, name = @a, start_frame = 0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %1 = audio.source() {loop = 0, name = @b, start_frame = 0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %2 = audio.source() {loop = 0, name = @c, start_frame = 0} : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+        %3 = audio.mix(%0, %1, %2) : !tensor<!f32,!shape<!dim<dyn>,!dim<2>>>
+    }
+}

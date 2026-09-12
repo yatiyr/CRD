@@ -1,5 +1,8 @@
 # B16-a-2 — FFT-ocean batched inverse 2-D FFT vs cuFFT (2026-07-15)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Machine:** NVIDIA GeForce RTX 4070 Ti SUPER (Ada), 48 MB L2, 256-bit bus · CUDA 13.3 · Vulkan 1.4.
 **Clocks:** NOT locked (session lacks GPU-clock permission). Both sides min-of-30, GPU-timed (our `last_gpu_ms` /
 cuFFT `cudaEvent` — kernel only, upload/readback excluded), separate processes ⇒ fair *relative*; re-lock

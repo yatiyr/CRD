@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m2: Runtime override patches + OCHN format substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m1 shipped 2026-05-08. Öbek substrate (ObekResource + ObekLoader + ObekArtifactBuilder + World::instantiate_obek) green at 766/766 / 763 release. Original v1m2 scope: extends chain + override patches.
 
 **Status at end:** v1m2 shipped — runtime override patches (ADR-0058 pillar 3) + OCHN chunk format substrate (pillar 11). Six-config 772/772 / 769 release / 17 smokes. 14 öbek tests (+6 over v1m1).

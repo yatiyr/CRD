@@ -7,6 +7,7 @@
 //      proven well-formed; a player's machine is not where a typo should surface.
 
 #include <crd/framecook/frame_asset.hpp>
+#include <crd/framecook/frame_runtime.hpp> // CEIR-31b-3-a-i-2: IFrameGraphHost + SpecSet/FrameExecError for the default-host gate
 
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -373,6 +374,123 @@ TEST_CASE("REN-36.1: every malformed graph is rejected BY NAME at cook time", "[
         CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"p\"\nkind=\"raster.geometry\"\nwrites=[\"@output\"]\n", &alloc)
               == fc::FrameCookError::MissingDrawList);
     }
+    SECTION("CEIR-31b-3-a: a spec_<n> param on a pass that resolves no program is rejected BY NAME")
+    {
+        crd::containers::String w(&alloc);
+        // A raster.geometry pass has no CKIR program to specialize — a spec_<n> could only be silently dropped. The
+        // spec check fires BEFORE MissingDrawList in the contract, so the verdict is the SPECIFIC one (a tooth: it is
+        // not swallowed by a more generic contract error), and it names the offending pass.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"geo\"\nkind=\"raster.geometry\"\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nspec_0 = 1.0\n", &alloc, &w)
+              == fc::FrameCookError::SpecConstBadPassKind);
+        CHECK(std::strcmp(w.c_str(), "geo") == 0);
+        // ...but a fullscreen pass ACCEPTS spec_<n> (it resolves a program) — no false positive.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"blur\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\n"
+                       "writes=[\"@output\"]\n[pass.params]\nspec_0 = 1.0\nspec_1 = 0.0\n", &alloc)
+              == fc::FrameCookError::Ok);
+        // ...and a compute pass is an allowed kind too (compute.dispatch binds a CKIR kernel) — the spec-const kind
+        // gate must admit it. Asserted directly (a compute pass's other contract details are validated elsewhere).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"cs\"\nkind=\"compute\"\nkernel=\"k\"\n"
+                       "writes=[\"@output\"]\n[pass.params]\nspec_2 = 0.5\n", &alloc)
+              != fc::FrameCookError::SpecConstBadPassKind);
+        // ...and the param name matcher is exact: `spec_` alone, or a non-digit tail, is NOT a spec param (so it must
+        // NOT trip the gate on a geometry pass) — proves parse_spec_param's rejection path.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"geo\"\nkind=\"raster.geometry\"\ndraw_list=\"d\"\n"
+                       "writes=[\"@output\"]\n[pass.params]\nspec_x = 1.0\n[[draw_list]]\nname=\"d\"\n", &alloc)
+              != fc::FrameCookError::SpecConstBadPassKind);
+        // ...a raster.composite pass is ALSO fullscreen (kExecFullscreenRaster) — ui_composite is the pass that WILL
+        // carry a spec, so the kind gate must ACCEPT it (no false positive on the composite kind).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"comp\"\nkind=\"raster.composite\"\n"
+                       "writes=[\"@output\"]\n[pass.params]\nspec_0 = 1.0\n", &alloc)
+              != fc::FrameCookError::SpecConstBadPassKind);
+        // ...but TWO spec params that resolve to the SAME constant_id (spec_1 + spec_01, distinct names) on a legal
+        // fullscreen pass are rejected BY NAME — one would silently win at record.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"dup\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\n"
+                       "writes=[\"@output\"]\n[pass.params]\nspec_1 = 1.0\nspec_01 = 2.0\n", &alloc, &w)
+              == fc::FrameCookError::SpecConstDuplicateId);
+        CHECK(std::strcmp(w.c_str(), "dup") == 0);
+        // ...and MORE than kMaxSpecConsts (16) spec params on one pass is rejected — the record seat builds a fixed
+        // stack buffer of that size, so cook caps it (17 distinct ids here) rather than let the record seat overflow.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"many\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nspec_0=0.0\nspec_1=0.0\nspec_2=0.0\nspec_3=0.0\nspec_4=0.0\nspec_5=0.0\nspec_6=0.0\n"
+                       "spec_7=0.0\nspec_8=0.0\nspec_9=0.0\nspec_10=0.0\nspec_11=0.0\nspec_12=0.0\nspec_13=0.0\nspec_14=0.0\n"
+                       "spec_15=0.0\nspec_16=0.0\n", &alloc)
+              == fc::FrameCookError::SpecConstTooMany);
+    }
+    SECTION("CEIR-31b-4-b-iv-g-2: a derive_spec_<n>_{read,axis,op} is validated BY NAME")
+    {
+        crd::containers::String w(&alloc);
+        // a fullscreen writer for blur_src + a fullscreen reader carrying a COMPLETE derivation over that HALF-RES transient
+        // image → ACCEPTED (no false positive; this IS the shape g-2-c ships onto the four blur passes).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"w\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nwrites=[\"blur_src\"]\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc)
+              == fc::FrameCookError::Ok);
+        // BadPassKind: a derive on a raster.geometry pass resolves no CKIR program — the same silent-drop as a literal
+        // spec_<n>, so the same by-name rejection (and it names the pass).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"geo\"\nkind=\"raster.geometry\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc, &w)
+              == fc::FrameCookError::SpecConstBadPassKind);
+        CHECK(std::strcmp(w.c_str(), "geo") == 0);
+        // Incomplete: read + axis but NO op — a partial derivation is unresolvable, rejected by name.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"x\"\n",
+                       &alloc, &w)
+              == fc::FrameCookError::DeriveSpecIncomplete);
+        CHECK(std::strcmp(w.c_str(), "d") == 0);
+        // BadValue (axis not x/y).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"z\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc)
+              == fc::FrameCookError::DeriveSpecBadValue);
+        // BadValue (op not inv).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"y\"\nderive_spec_2_op = \"mul\"\n",
+                       &alloc)
+              == fc::FrameCookError::DeriveSpecBadValue);
+        // BadRead (not a read): the named resource is not one of the pass's reads.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"ghost\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc)
+              == fc::FrameCookError::DeriveSpecBadRead);
+        // BadRead (buffer): the read IS a read, but a BUFFER has no pixel extent to invert (1/0 at g-2-b).
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"buf\"\nkind=\"transient_buffer\"\nsize_bytes=64\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"compute\"\nkernel=\"k\"\nreads=[\"buf\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"buf\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc)
+              == fc::FrameCookError::DeriveSpecBadRead);
+        // LiteralAndDerive: a literal spec_2 AND a derive on id 2 — the derivation would silently overwrite the literal at record.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nspec_2 = 0.5\nderive_spec_2_read = \"blur_src\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc, &w)
+              == fc::FrameCookError::SpecConstLiteralAndDerive);
+        CHECK(std::strcmp(w.c_str(), "d") == 0);
+        // DuplicateId: derive_spec_2_read AND derive_spec_02_read resolve to the SAME id 2 (leading-zero spelling) — one wins.
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"blur_src\"\nscale=0.5\n"
+                       "[[pass]]\nname=\"d\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nreads=[\"blur_src\"]\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nderive_spec_2_read = \"blur_src\"\nderive_spec_02_read = \"blur_src\"\n"
+                       "derive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"\n",
+                       &alloc)
+              == fc::FrameCookError::SpecConstDuplicateId);
+        // TooMany (UNION): 16 literal specs + 1 DERIVED id = 17 SpecConsts in the 16-slot record buffer. The derived id
+        // counts toward the same union — proves the count is not literal-only. (Fires before field validation, so a bare
+        // derive_spec_16_read is enough to be the 17th.)
+        CHECK(parse_of("schema=1\nname=\"g\"\n[[pass]]\nname=\"many\"\nkind=\"raster.fullscreen\"\nshader=\"s\"\nwrites=[\"@output\"]\n"
+                       "[pass.params]\nspec_0=0.0\nspec_1=0.0\nspec_2=0.0\nspec_3=0.0\nspec_4=0.0\nspec_5=0.0\nspec_6=0.0\n"
+                       "spec_7=0.0\nspec_8=0.0\nspec_9=0.0\nspec_10=0.0\nspec_11=0.0\nspec_12=0.0\nspec_13=0.0\nspec_14=0.0\n"
+                       "spec_15=0.0\nderive_spec_16_read = \"blur_src\"\n",
+                       &alloc)
+              == fc::FrameCookError::SpecConstTooMany);
+    }
     SECTION("[$index] on a non-layered resource")
     {
         CHECK(parse_of("schema=1\nname=\"g\"\n[[resource]]\nname=\"flat\"\nwidth=4\nheight=4\n"
@@ -437,6 +555,79 @@ TEST_CASE("REN-36.2: emit -> parse -> cook is BYTE-IDENTICAL to the original coo
     CHECK(reloaded.requires_caps.size() == 1U);             // the capability tier survived
     { const fc::FrameParam* re = fc::find_pass_param(reloaded.passes[2], SV("exposure_ev100")); REQUIRE(re != nullptr); CHECK(re->v[0] == 13.5); } // exact float round-trip
     CHECK(reloaded.draw_lists[0].sort == fc::FrameSortMode::FrontToBack);
+}
+
+TEST_CASE("CEIR-31b-3-a: a spec_<n> pass param round-trips through emit->parse (the generic [pass.params] seam)",
+          "[framecook][ceir31b]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    // A fullscreen pass carrying three pipeline spec-consts (dir.x / dir.y / step — the ui_blur shape). spec_<n> is NOT
+    // a folded engine-config key, so it rides the GENERIC `[pass.params]` seam: no bespoke parse/emit, round-trip free.
+    const char* const src = "schema=1\nname=\"g\"\n[[pass]]\nname=\"blur\"\nkind=\"raster.fullscreen\"\n"
+                            "shader=\"engine://ui/blur\"\nwrites=[\"@output\"]\n"
+                            "[pass.params]\nspec_0 = 1.0\nspec_1 = 0.0\nspec_2 = 0.5\n";
+    // the spec_<n> names must not be classified as folded config — else the emitter would drop them.
+    CHECK(!fc::is_folded_pass_param(SV("spec_0")));
+    CHECK(!fc::is_folded_pass_param(SV("spec_2")));
+
+    fc::FrameGraphDesc d(&alloc);
+    REQUIRE(fc::parse_frame_toml(SV(src), d) == fc::FrameCookError::Ok);
+    REQUIRE(d.passes.size() == 1U);
+    { const fc::FrameParam* p = fc::find_pass_param(d.passes[0], SV("spec_2")); REQUIRE(p != nullptr); CHECK(p->v[0] == 0.5); }
+
+    // emit -> re-parse: the spec values survive EXACTLY (0.5 and 1.0 are representable; the seam carries them untouched).
+    const crd::containers::String text = fc::emit_frame_toml(d, &alloc);
+    fc::FrameGraphDesc r(&alloc);
+    REQUIRE(fc::parse_frame_toml(SV(text.c_str(), text.size()), r) == fc::FrameCookError::Ok);
+    REQUIRE(r.passes.size() == 1U);
+    { const fc::FrameParam* p = fc::find_pass_param(r.passes[0], SV("spec_2")); REQUIRE(p != nullptr); CHECK(p->v[0] == 0.5); }
+    { const fc::FrameParam* p = fc::find_pass_param(r.passes[0], SV("spec_1")); REQUIRE(p != nullptr); CHECK(p->v[0] == 0.0); }
+    { const fc::FrameParam* p = fc::find_pass_param(r.passes[0], SV("spec_0")); REQUIRE(p != nullptr); CHECK(p->v[0] == 1.0); }
+}
+
+namespace
+{
+// CEIR-31b-3-a-i-2: a host with NO spec support — overrides only the 3 pure virtuals, NOT the appended spec-aware
+// program()/kernel(). Proves the base-class DEFAULT: a spec-free pass delegates to plain program(); a spec'd pass FAILS
+// (SpecConstUnsupportedByHost) rather than silently dropping the specs. This is the dozen-existing-test-hosts' behavior.
+class NoSpecHost final : public fc::IFrameGraphHost
+{
+public:
+    bool                                    plain_called = false;
+    [[nodiscard]] crd::gpu::IRasterTarget*  output() override { return nullptr; }
+    [[nodiscard]] crd::gpu::IRasterProgram* program(crd::containers::StringView /*id*/) override
+    {
+        plain_called = true;
+        return nullptr;
+    }
+    [[nodiscard]] bool draw_list(crd::containers::StringView /*name*/, fc::DrawListBinding& /*out*/) override { return false; }
+};
+} // namespace
+
+TEST_CASE("CEIR-31b-3-a-i-2: a host with no spec support FAILS a spec'd pass, never silently drops it", "[framecook][ceir31b]")
+{
+    NoSpecHost          host; // inherits the base program_spec()/kernel_spec() (distinct names — it overrides only program(id),
+                              // so there is no hiding and gcc's -Woverloaded-virtual stays quiet, like the dozen real hosts).
+    const fc::SpecConst one{7U, 1.0};
+    const fc::SpecSet   specs{&one, 1U};
+
+    // a spec-FREE resolve DELEGATES to the plain program() (err untouched) — the unchanged path for every existing host.
+    fc::FrameExecError err = fc::FrameExecError::Ok;
+    (void)host.program_spec(SV("x"), fc::SpecSet{}, &err);
+    CHECK(host.plain_called);
+    CHECK(err == fc::FrameExecError::Ok);
+
+    // a spec'd resolve does NOT delegate — it fails BY NAME before touching program(), so specs are never dropped.
+    host.plain_called = false;
+    err               = fc::FrameExecError::Ok;
+    CHECK(host.program_spec(SV("x"), specs, &err) == nullptr);
+    CHECK_FALSE(host.plain_called);
+    CHECK(err == fc::FrameExecError::SpecConstUnsupportedByHost);
+
+    // the kernel seam has the SAME default.
+    err = fc::FrameExecError::Ok;
+    CHECK(host.kernel_spec(SV("x"), specs, &err) == nullptr);
+    CHECK(err == fc::FrameExecError::SpecConstUnsupportedByHost);
 }
 
 TEST_CASE("REN-36.2: a PROGRAMMATICALLY built graph also emits and re-parses losslessly", "[framecook][ren36]")

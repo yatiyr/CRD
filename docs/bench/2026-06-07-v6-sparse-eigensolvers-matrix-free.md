@@ -1,5 +1,8 @@
 # 2026-06-07 — v6 sparse eigenvalue: Lanczos / thick-restart vs ARPACK/PRIMME/scipy
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** WSL2 Ubuntu 24.04, i9-14900K, well-separated spectrum test matrices (moat guard: clustered eigenvalues ≠ non-unique vectors). Cerid: GCC. Peers: scipy/ARPACK (primary), PRIMME (state-of-art symmetric), Spectra, FEAST.

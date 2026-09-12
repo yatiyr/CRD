@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0b: AoSoA storage substrate (`crd::math::simd::Soa`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1 v0b (per `docs/phases/phase-3.1-eylem.md` v0 table) shipped.**
 Adds `Soa<TChunk, Lane>` typed AoSoA container + `soa_for_each_chunk` /
 `soa_for_each_lane` iteration helpers + `gather8` / `scatter8` /

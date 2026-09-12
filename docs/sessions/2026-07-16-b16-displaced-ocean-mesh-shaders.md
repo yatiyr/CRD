@@ -1,5 +1,8 @@
 # 2026-07-16 — B16 displaced-geometry ocean + B4 mesh shaders + promote + visual polish (D-007)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Detour D-007 (GPU program system / CKIR). A long session: the FFT-ocean pivoted from a flat normal-map fragment render to
 **real displaced GEOMETRY**, gained a full **mesh-shader fast path** (a new B4 subsystem), was **promoted** into the engine as a
 reusable pass, and got a **gold-standard visual polish**. Everything authored in CKIR; the primary render path is GPU-proven on

@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4j-2b: multilevel recursion (recursive Schur + dense base)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4j-2b** — replace the v4j-2a single ILUT leaf with a
 RECURSIVE `InverseBasedIlu` on the Schur complement, closed by an exact dense LU base case.
 The machinery that turns the inverse-based-pivoting core into a true multilevel method.

@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-z close rows: TBLIS (contraction) + xtensor (elementwise)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The two contracted peers never measured during the slices (flagged in the v14-z scoreboard
 > consolidation). Machine: i9-14900K, WSL2 gcc 13.3, pinned core 4 (`taskset -c 4`), f64,
 > single thread both sides, best-of-5, ms. Harnesses (tracked): our side

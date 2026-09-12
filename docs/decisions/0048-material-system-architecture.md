@@ -1,5 +1,8 @@
 # ADR-0048 — Material System Architecture Foundation
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-05
 **Tags:** arch, renderer, shader, materials, resources, cooker

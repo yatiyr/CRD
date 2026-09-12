@@ -1,5 +1,8 @@
 # CEIR-11b — Compiled execution plan + differential harness — session log
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The autonomous grind ([[project_ceir_autonomous_loop_grant]]) continued band 11 into the COMPILED tier after 11a
 > closed the §118 reference oracle. Design substrate: `docs/design/ceir-11b-compiled-execution-plan.md` (advisor consult).
 > Master-map: §84 (two-tier) · §119 (differential) · §153 (hot-path rules).

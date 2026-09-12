@@ -1,0 +1,9 @@
+program event_demo {
+  state_decl world_state (out cell: World)
+  event_handler on_tick [domain=event] {
+    query q [components=Position.Velocity] (out entities: EntitySet)
+    parallel_for update (in entities: EntitySet = q.entities, out updated: EntitySet)
+    await task (out result: TaskResult)
+    state_update commit (in cell: World = world_state.cell, in updated: EntitySet = update.updated)
+  }
+}

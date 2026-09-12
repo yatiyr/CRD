@@ -21,6 +21,26 @@ constexpr u32 kMaxAttrsInline = 64U; // an op with more attrs than this is patho
     return a.size() < b.size();
 }
 
+// CEIR-31b-3-c-i: a name emits BARE when it is a plain identifier [A-Za-z_][A-Za-z0-9_.]*, else QUOTED (MLIR's
+// convention) so a name with non-ident chars round-trips through print→parse (the ceir lexer, parse.cpp
+// `is_ident_char`, rejects ':' and '/'). Serves BOTH symbol refs (@"engine://ui/blur", an asset id) and op-attr names
+// ("p:clear_color:0", the frame param-bag encoding). Bare names print byte-identically to the pre-fix output.
+[[nodiscard]] bool name_needs_quote(containers::StringView s) noexcept
+{
+    if (s.size() == 0U) { return true; }
+    const char c0 = s[0];
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) { return true; }
+    for (usize i = 0; i < s.size(); ++i)
+    {
+        const char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.'))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 class Printer
 {
 public:
@@ -156,7 +176,8 @@ private:
         {
             if (i != 0U) { m_out.append(", "); }
             const containers::StringView an = op->attr_name(order[i]);
-            m_out.append(an.data(), an.size());
+            if (name_needs_quote(an)) { emit_quoted(an); } // "p:clear_color:0" — a frame param-bag key (has ':')
+            else { m_out.append(an.data(), an.size()); }   // bare ident — byte-identical to before
             m_out.append(" = ");
             emit_attr_value(m_ctx.attr_value(op->attr_id_at(order[i])));
         }
@@ -173,7 +194,8 @@ private:
         case AttrKind::String: emit_quoted(v.s); break;
         case AttrKind::SymbolRef:
             m_out.push_back('@');
-            m_out.append(v.s.data(), v.s.size());
+            if (name_needs_quote(v.s)) { emit_quoted(v.s); } // CEIR-31b-3-c-i: @"engine://ui/blur" — a non-ident asset id
+            else { m_out.append(v.s.data(), v.s.size()); }   // @bare_ident — byte-identical to before
             break;
         case AttrKind::Type: emit_type(v.t); break;
         case AttrKind::Array: // CEIR-8b: [v0,v1,...]

@@ -260,6 +260,18 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
+    else if (outn.op == KOp::Broadcast || outn.op == KOp::Permute) // CEIR-25b-2b: one thread per output element, baked index map
+    {
+        const bool bcast = (outn.op == KOp::Broadcast);
+        if (bcast) { if (!emit_broadcast_nd_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
+        else if (!emit_permute_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
+        const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
+        consts[0]                = static_cast<crd::u32>(out_numel);
+        in_bytes[0]              = in_numel * sizeof(float);
+        out_bytes                = out_numel * sizeof(float);
+        groups                   = (static_cast<crd::u32>(out_numel) + 255U) / 256U;
+    }
     else
     {
         if (!emit_elementwise_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }

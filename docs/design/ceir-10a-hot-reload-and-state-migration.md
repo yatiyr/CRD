@@ -1,5 +1,8 @@
 # CEIR-10a — Hot-reload lifecycle + state migration — DESIGN NOTE
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **DESIGN LOCKED (2026-08-10), implementation pending.** This note is the substrate for **ADR-0120**
 > (to be written at the start of the implementation tick). Authored autonomously (the [[project_ceir_autonomous_loop_grant]]
 > grind) after two advisor consults resolved the scope forks. Master-map sections: **§108 hot-reload · §109 state

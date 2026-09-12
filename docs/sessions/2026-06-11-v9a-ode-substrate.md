@@ -1,5 +1,8 @@
 # 2026-06-11 — v9-a: `crd-hesap-ode` substrate (kernels + driver contracts)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.6 v9-a (the first ODE/DAE slice). **ADR-0091 Accepted.** Plan: the v9 block in
 `docs/phases/phase-3.1.6-hesap.md`; design inputs: memory `project_v9_ode_plan` +
 `project_ode_in_games_layering` (the game-dev brainstorm that mandated the two-layer split).

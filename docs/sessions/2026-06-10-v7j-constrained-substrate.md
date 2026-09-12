@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-j CLOSE: the constrained substrate (same session as v7-f/g/h, part 4)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-j — constraints + Jacobians + the KKT system + Lagrangian/ℓ1-merit + multipliers + KKT-residual
 stopping; the foundation v7-k (QP) and v7-n (NLP) consume. Continues the v7-f/g/h logs.

@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-p-4 CLOSE: the BOBYQA port, differentially verified (same session, part 14)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-p-4 — BOBYQA, the LAST full-port slice. **CLOSED: all 6 routines ported + functional gates
 (incl. the EXACT bound landing, x[0] == 1.0 bit-equal) + the differential harness: 3045 checks, 0 failures**

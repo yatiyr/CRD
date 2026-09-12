@@ -1,5 +1,8 @@
 # ADR-0083 — hesap-dense row-major storage (with per-factor escape hatch)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status**: Accepted (2026-05-20)
 - **Phase**: 3.1.6 `crd-hesap` v0e (dense direct solvers)
 - **Tags**: arch, hesap, dense, storage, layout, perf, rowmajor

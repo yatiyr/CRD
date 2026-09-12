@@ -1,5 +1,8 @@
 # Session — 2026-05-12 — Phase 3.1.7 v0a: `crd-geometry-primitives` + the `crd::math::geometry` move-and-delete
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Open Phase 3.1.7 (`crd-geometry`) with v0a: stand up the `crd-geometry-primitives` module

@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-e round 5–6: cp.async + bigger tiles + the HONEST corrected scoreboard (min of 6 runs)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Rounds 5–6 of the GEMM crush, back on Opus. Two new kernels/levers tried, and — importantly — a **rigorous
 re-measurement that corrected an over-claim** from rounds 2–4. Everything below is the **minimum ratio across 6 runs**
 (rounds 2–4's 3 + rounds 5–6's 3), i.e. the worst case for us. Vendor bar = min(cublasSgemm-PEDANTIC,

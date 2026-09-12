@@ -1,5 +1,8 @@
 # CEIR band 8 — Foundation Closure (the universality quest, part 1)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Band 8 closes every U-§112 foundation item BEFORE any further feature band: open-world types/attrs, effect
 widening + extensible locations, stable semantic identity, trait/interface split + region reservation, capability
 contracts + domain/safety split + time domains, the analysis/pass/rewrite/diagnostic skeleton, incremental

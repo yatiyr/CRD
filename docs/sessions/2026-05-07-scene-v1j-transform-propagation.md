@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1j: Transform + TransformPropagation (cross-domain robust)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1i shipped. IComponentIndex framework + ChangeDetect + AsyncAware + 5 reserved shells. Scene tests 192 / 34669, six-config 708/708.
 
 **Status at end:** v1j shipped — first concrete `ISystem` consumer that ties together the entire 8-layer architecture (L1 entities, L2 archetype storage, L3 ChildOf relations + reverse index, L4 PreRender phase + Commands, L5 ChangeDetect on Transform writes). Math layer extended with cross-domain primitives (`from_euler` with explicit ordering, `from_to_rotation`, `from_trs`, `to_trs` with negative-determinant handling). Six-config 727/727 / 724 release / 17 smokes. Scene tests 211 / 34716.

@@ -1,5 +1,8 @@
 # 2026-07-24 — REN-1 frame graph: one-submission batching vs the synchronous per-draw substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The REN-1 frame graph's core performance claim: recording a frame's N draws into ONE command buffer + ONE
 `vkQueueSubmit`/fence-wait replaces the synchronous substrate's N submit+wait+readback stalls. The win is the
 collapse of N CPU↔GPU fence round-trips to one, so it GROWS with the number of draws per frame.

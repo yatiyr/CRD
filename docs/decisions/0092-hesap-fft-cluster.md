@@ -1,5 +1,8 @@
 # ADR-0092 — `crd-hesap-fft`: the FFT cluster — deterministic plan-from-factorization, portable-C++ MKL-adjacent, the full transform suite
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-06-20)
 - **Phase:** 3.1.6 v10 (FFT cluster)
 - **Tags:** `hesap` `fft` `determinism` `architecture` `module-edges` `substrate`

@@ -1,5 +1,8 @@
 # Cerid — `crd-geometry` substrate research SUPPLEMENT
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the renewed-scope additions (curves, transform-aware helpers, v4-validate) shipped; Phase 3.1.7 closed 2026-05-19. *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Date:** 2026-05-11

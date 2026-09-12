@@ -1,5 +1,8 @@
 # Session 2026-08-08 — CEIR-1a closed; seven pre-existing cross-band blockers cleared
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Focus.** Drive the CEIR-1a per-slice gate (`per-slice-check.ps1`: win-debug + win-asan + win-shipping(LTCG) +
 win-tidy) to a full **4-config PASS**. The CEIR-1a *core* (module `crd-ceir`, the IR graph, the
 `GrowableLinearAllocator` move to crd-memory, the I3/I5 grep-gates) had already landed and was committed in

@@ -125,7 +125,16 @@ public:
         m_first = true;
     }
 
-    void end_rendering() override { m_in_scope = false; }
+    void end_rendering() override
+    {
+        // ⛔⛔ CEIR-31b-4-b-i: a scope with NO draw still has to CLEAR. This encoder folds a scope's begin_rendering +
+        // its LoadOp::Clear into the FIRST draw verb (see draw(): `clears = m_first && wants_clear`), so a 0-draw pass
+        // (an empty world, a frustum that culled everything, a shadow cascade with no casters) would otherwise emit
+        // NOTHING and leave the attachment UNDEFINED — an empty viewport rendering garbage. `m_first` still set ⇒ no
+        // draw consumed the clear; issue it now as a bare clear-only scope (clear_scope replays begin/end, no geometry).
+        if (m_in_scope && m_first && wants_clear(m_rendering)) { m_ctx.clear_scope(m_rendering); }
+        m_in_scope = false;
+    }
 
     void draw(const RasterDrawPacket& packet) override
     {
@@ -286,27 +295,12 @@ public:
             {
                 break;
             }
-            // RET-6 / REN-39: the debug OVERLAY compose draw (draw_overlay / draw_overlay_range). The ONLY StoragePull
-            // draw that alpha-blends over the target — LOAD + srcAlpha·(1-srcAlpha), with a READ-ONLY depth test (the
-            // verb derives the depth attachment from the colour target itself; `compare`==Always ⇒ no test). Recognised
-            // by a SINGLE colour attachment whose blend is Alpha (every draw_storage scene verb is Opaque, and the WBOIT
-            // MRT uses Additive/Reveal, never Alpha); first_vertex>0 selects the ranged twin. Checked FIRST so the
-            // opaque draw_storage_depth arm never claims it.
-            if (color0 != nullptr && r.color.size() == 1 && r.color[0].blend == BlendMode::Alpha)
-            {
-                // draw_overlay{,_range} keep a [[nodiscard]] bool refusal signal (MSAA target / invalid program);
-                // the encoder has no per-draw failure channel, so the discard is DELIBERATE (validated at cook time
-                // and by the overlay pixel gates).
-                if (g.first_vertex > 0U)
-                {
-                    (void)m_ctx.draw_overlay_range(*color0, prog, *buf, compare, g.first_vertex, count);
-                }
-                else
-                {
-                    (void)m_ctx.draw_overlay(*color0, prog, *buf, compare, count);
-                }
-                break;
-            }
+            // ⭐ CEIR-34 R2: the debug OVERLAY compose draw is no longer a dedicated device verb. Its shape — a single
+            // colour attachment that LOADs and Alpha-blends, plus a READ-ONLY depth test (the caller set depth_write=false
+            // via set_pass_state; `rd.depth.target` set ⇒ the depth bucket, absent ⇒ the Always/colour-only bucket) — now
+            // flows through the SAME generic StoragePull arms as every scene draw: the per-attachment `blend`/`load` and
+            // `first_vertex` are carried into draw_storage_depth_load (depth bucket) / draw_storage (colour-only bucket).
+            // draw_overlay / draw_overlay_range / record_overlay are RETIRED (the one-execution-program architecture).
             if (bindless != nullptr && color0 != nullptr)
             {
                 m_ctx.draw_bindless(*color0, prog, clear, bindless->texture_array, bindless->array_count, count);
@@ -391,12 +385,16 @@ public:
                 }
                 else
                 {
-                    m_ctx.draw_storage_depth_load(*color0, prog, compare, *buf, count);
+                    // CEIR-34 R2: carry the attachment's blend + the draw's first_vertex so the overlay's depth bucket
+                    // (Alpha, ranged) rides this generic verb. Scene draws are Opaque/0 ⇒ bit-identical.
+                    m_ctx.draw_storage_depth_load(*color0, prog, compare, *buf, count, r.color[0].blend, g.first_vertex);
                 }
             }
             else if (color0 != nullptr)
             {
-                m_ctx.draw_storage(*color0, prog, clear, *buf, count);
+                // CEIR-34 R2: carry load + blend + first_vertex so the overlay's colour-only bucket (LOAD, Alpha, ranged)
+                // rides draw_storage. Scene colour-only draws are Clear/Opaque/0 ⇒ bit-identical.
+                m_ctx.draw_storage(*color0, prog, clear, *buf, count, r.color[0].load, r.color[0].blend, g.first_vertex);
             }
             break;
 

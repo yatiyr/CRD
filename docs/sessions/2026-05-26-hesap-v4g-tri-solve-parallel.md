@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4g-tri-solve-parallel: level-scheduled triangular solve + large-nonsym ILUT crush
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Correction 2026-05-26 (v4i-1 close):** the cd2d-200 ILUT crush below used the Krylov
 > recurrence residual vs Eigen's true residual ([[feedback_iterative_bench_matched_true_residual]]).
 > At MATCHED true residual the honest figure is **1.74×** (Cerid 4 it / 11.11 ms vs Eigen 11 it /

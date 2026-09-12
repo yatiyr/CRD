@@ -1,5 +1,8 @@
 # 2026-07-06 — v15-c: exact second-order forward AD (hyper-dual) — crush + correctness
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** the flat 4-slot hyper-dual `HyperDual<T>` = `{f0, f1, f2, f12}` (Fike & Alonso 2011), exact second
 derivatives with NO step and NO subtractive cancellation; the drivers `hessian_entry` / `hessian` (full symmetric,
 n(n+1)/2 passes) and — the opt lever — `curvature` = **vᵀHv in ONE pass** (seed both ε with v, read f12). Nested

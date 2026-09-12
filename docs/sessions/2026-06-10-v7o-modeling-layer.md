@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-o CLOSE: the algebraic modeling layer (same session, part 10)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-o — the JuMP/CasADi-pattern ergonomic façade. Continues the v7-f..n, l, m logs.
 

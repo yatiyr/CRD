@@ -9,6 +9,8 @@ add_executable(crd-ceir-gpu-vulkan-tests
     test_vulkan_dgc.cpp           # CEIR-20c-2: VK_EXT_device_generated_commands — the GPU authors the command STREAM (count + payloads)
     test_ceir_gemm_vulkan.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on Vulkan, bit-exact vs eval_cpu AND an independent triple loop
     test_ceir_reduce_vulkan.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on Vulkan, bit-exact vs eval_cpu AND an independent serial sum
+    test_ceir_elementwise_vulkan.cpp # CEIR-25b-2a: synth_elementwise → a CKIR binary run on Vulkan (existing fused-elementwise emitter), vs eval_cpu AND an independent op ref (full add/sub/mul/div/max/min/pow vocab)
+    test_ceir_bcast_perm_vulkan.cpp  # CEIR-25b-2b: synth_broadcast/synth_transpose → CKIR Broadcast/Permute run on Vulkan (NEW emit_broadcast_glsl/emit_permute_glsl root emitters), vs eval_cpu AND an independent index-map ref (both broadcast axes; rank-2 [1,0] + a rank-3 perm)
     test_ceir_fft_vulkan.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
     test_ceir_pipeline_vulkan.cpp # CEIR-22c-2: the §137 GEMM->FFT->reduction pipeline plan_+execute_tensor_pipeline device-resident (one submit) vs a composed ref
     test_ceir_quant_vulkan.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real Vulkan device vs the CPU (int8-zp)*scale ref
@@ -21,6 +23,7 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
     crd-memory
     crd-ceir          # the IR + the asset builder
     crd-ceir-gpu      # lower_region + execute_lowered (ADR-0125/0126)
+    crd-hesap-autodiff # CEIR-25b-4b: nn_reverse::matmul_vjp (analytic grad ref) + gradient_check::grad_fd (FD witness)
     crd-ceir-cook     # CEIR-13z-4 leg 2: the 10a ReloadSet (add_source/reload_source hot-reload)
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-vulkan    # the Vulkan backend (transitively: gpu-context-vulkan — VulkanComputeContext, compile_glsl_to_spirv, ValidationCapture)

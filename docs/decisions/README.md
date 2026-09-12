@@ -1,360 +1,139 @@
-﻿# Architecture Decision Records — Index
+# Architecture decisions
 
-Each ADR is one file: `NNNN-short-slug.md`.
-Status: Accepted / Superseded / Deprecated / Reserved.
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-> When adding a new ADR, give it the next free number, drop it in this
-> folder, and add it to BOTH the tag index and the chronological table
-> below. Reference it from the relevant phase file.
+Current work/status: [ROADMAP](../ROADMAP.md). This is a reference lookup, never a competing queue.
+Search a title/ID, open its document, and respect its Proposed/Accepted/supersession notes.
+Older index commentary is [preserved](../archive/2026-09-12-orientation-history.md#docs-decisions-readme).
 
-## By tag
+New decisions get the next unused number and one entry here; the owning ROADMAP row links the ADR.
+Existing dated decisions are amended explicitly, not silently rewritten as a different accepted architecture.
 
-### `[arch]`
-- ADR-0008 — Graphics architecture
-- ADR-0009 — RHI v1a scaffold
-- ADR-0012 — Config substrate
-- ADR-0013 — Asset pipeline
-- ADR-0015 — Job system shape
-- ADR-0016 — Render path strategy
-- ~~ADR-0018 — Physics architecture~~ — **superseded by ADR-0062**
-- ADR-0020 — Scene & ECS hybrid + UI in scene tree
-- ADR-0021 — Animation architecture
-- ADR-0023 — UI architecture
-- ADR-0058 — Öbek system
-- ADR-0059 — Preset system
-- ADR-0060 — Profile system
-- ADR-0061 — Async GPU upload contract
-- ADR-0062 — **Eylem: Cerid-native physics architecture** (supersedes ADR-0018)
-- ADR-0063 — Eylem determinism contract
-- ADR-0064 — **`crd-sdf` substrate architecture**
-- ADR-0065 — **`crd-hesap` numerical computing substrate (MATLAB-class)**
-- ADR-0066 — **`crd-draw` substrate architecture**
-- ADR-0079 — **`crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend** (region timing + jobs auto-instrument + GPU timestamps + memory tracking + CPROF v1 capture format + 7-panel ImGui UI)
-- ~~ADR-0080 — **`crd-rhi-compute` substrate**~~ — **rhi halves superseded by ADR-0103/0105 (module retired at RET-8); compute surface today = `IComputeContext` on gpu-context**
-
-### `[draw]`
-- ADR-0066 — `crd-draw` substrate architecture (peer module; retained `RenderBuffer` + immediate-mode API; vertex-shader quad-expanded AA lines + sort-by-centroid translucent solids; 3 depth modes; per-component visualizer plug-in registry; ImGui projection day-one text + reserved SDF text; consumed by eylem / sdf / audio / nav / editor / renderer / sandbox)
-
-### `[sdf]`
-- ADR-0064 — `crd-sdf` substrate architecture (analytic + dense + narrow-band + CSG; mesh→SDF baker via Jacobson 2013 generalised winding number; CPU first, GPU 3D-texture path; consumed by eylem / font / renderer / audio / editor)
-
-### `[hesap]` `[math]` `[solvers]` `[autodiff]` `[opt]` `[ode]` `[fft]` `[dsp]`
-- ADR-0065 — `crd-hesap` numerical computing substrate (MATLAB-class; dense + sparse + iterative + direct + eig + opt + ODE + FFT + DSP + stats + tensor + autodiff + GPU + REPL; consumed by eylem / audio / robotics / medical / cinematic / DAW / scientific tool)
-
-### `[build]` `[lang]`
-- ADR-0001 — Build & language
-
-### `[log]`
-- ADR-0002 — Logging
-
-### `[memory]`
-- ADR-0003 — Memory v1
-- ADR-0014 — Reference counting split
-- ADR-0022 — Streaming pipeline
-
-### `[containers]`
-- ADR-0004 — Containers v1
-
-### `[math]`
-- ADR-0005 — Math v1 (`crd-math` lean primitive layer — Vec/Mat/Quat/Transform + SIMD wrappers + deterministic stdlib)
-- ADR-0065 — `crd-hesap` numerical computing substrate (heavy LA + solvers + autodiff + DSP + stats; peer module, NOT inside `crd-math`)
-
-### `[platform]`
-- ADR-0006 — Platform v1
-- ADR-0041 — `crd-platform` async filesystem I/O
-
-### `[app]` `[event]`
-- ADR-0007 — `crd-app` shape
-
-### `[rhi]` `[vulkan]` — ⚠ era note: the crd-rhi stack was RETIRED at RET-8 (2026-07-23, ADR-0105); these remain the record of how it was built
-- ADR-0008 — Graphics architecture
-- ADR-0009 — RHI v1a scaffold
-- ADR-0010 — Vulkan bootstrap
-- ADR-0011 — First triangle
-- ADR-0061 — Async GPU upload contract (adds `crd::rhi::Fence` + non-waiting `Queue::submit(cmd, fence)`)
-- ADR-0080 — **`crd-rhi-compute` substrate** (Phase 3.1.7.6 prerequisite for v9; additive RHI extension: IComputePipeline + IStorageBuffer + dispatch + compute↔graphics sync + opt-in async compute + shaderc compute pipeline)
-
-### `[config]`
-- ADR-0012 — Config substrate
-
-### `[resources]`
-- ADR-0013 — Asset pipeline
-- ADR-0014 — Reference counting split
-- ADR-0022 — Streaming pipeline
-- ADR-0036 — `crd-resources` module placement + loader-registry pattern
-- ADR-0037 — ResourceId hybrid UUID scheme
-- ADR-0038 — Cooked binary container format
-- ADR-0039 — `ResourceHandle<T>` semantics
-- ADR-0040 — Cooker CLI + CMake integration
-- ADR-0042 — Texture cooked format + GPU upload strategy
-- ADR-0043 — MeshResource vertex layout + glTF import scope
-
-### `[cooker]`
-- ADR-0040 — Cooker CLI + CMake integration
-- ADR-0042 — Texture cooked format + GPU upload strategy
-- ADR-0043 — MeshResource vertex layout + glTF import scope
-- ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked
-- ADR-0058 — Öbek system
-- ADR-0059 — Preset system
-- ADR-0060 — Profile system
-
-### `[jobs]`
-- ADR-0015 — Job system shape
-- ADR-0033 — crd-jobs implementation architecture (fibers, asm switch, Chase-Lev, SBO, ABA-safe counters)
-
-### `[scripting]`
-- ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism
-- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (ScriptComponent slot)
-
-### `[networking]` `[determinism]`
-- ADR-0035 — Networking architecture principles (layered, determinism-first)
-- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication slot)
-
-### `[renderer]` `[render-path]` — ⚠ era note: crd-renderer was RETIRED (ADR-0105); rendering today = the RAF asset stack (ADR-0106, `[raf]` section below)
-- ADR-0016 — Render path strategy (the IRenderPath plan; render paths are now the post-RAF RPL proof library — no formal superseding ADR yet, flagged 2026-08-07)
-- ADR-0032 — Frame graph v1 (runtime-ownership half superseded by ADR-0106, struck in place; its lifetime/aliasing/barrier contracts live on)
-- ADR-0042 — Texture cooked format + GPU upload strategy
-- ADR-0043 — MeshResource vertex layout + glTF import scope
-- ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
-- ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
-- ADR-0047 — Font rendering system (MTSDF shader, billboard text, Surface domain)
-- ADR-0048 — Material system architecture foundation (two-tier Template/Instance, surface function, MATR format, ShaderOptions)
-- ADR-0061 — Async GPU upload contract (`UploadHandle` + per-module polling system)
-
-### `[culling]`
-- ADR-0017 — Culling strategy
-
-### `[physics]` `[eylem]`
-- ~~ADR-0018 — Physics architecture~~ — **superseded by ADR-0062**
-- ADR-0062 — Eylem: Cerid-native physics architecture
-- ADR-0063 — Eylem determinism contract
-- ADR-0064 — `crd-sdf` substrate (eylem consumes for mesh colliders + closest-point; v3 XPBD uses SDF environment colliders)
-- ADR-0065 — `crd-hesap` substrate (eylem v7 FEM refactors to consume sparse PCG + sparse Cholesky once `crd-hesap` ships; eylem v9 differentiable refactors to consume reverse-mode autodiff)
-
-### `[scene]` `[ecs]`
-- ADR-0020 — Scene & ECS hybrid + UI in scene tree
-- ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS
-- ADR-0049 — Scene/ECS L1: Entity identity & SlotMap
-- ADR-0050 — Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid)
-- ADR-0051 — Scene/ECS L3: Relations as first-class
-- ADR-0052 — Scene/ECS L4: Query · System · Schedule
-- ADR-0053 — Scene/ECS L5: Component index slot framework
-- ADR-0054 — Scene/ECS: Transform hierarchy update model
-- ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked
-- ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection)
-- ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration)
-- ADR-0058 — Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing
-- ADR-0059 — Preset system: typed system-config bags with five-layer resolution
-- ADR-0060 — Profile system: typed predicate selectors with additive composition
-
-### `[obek]` `[prefab]`
-- ADR-0058 — Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing
-
-### `[preset]` `[profile]`
-- ADR-0059 — Preset system: typed system-config bags with five-layer resolution
-- ADR-0060 — Profile system: typed predicate selectors with additive composition
-
-### `[async]` `[upload]`
-- ADR-0014 — Reference counting split (resource handle async-load substrate)
-- ADR-0022 — Open-world streaming pipeline (forward-looking)
-- ADR-0039 — `ResourceHandle<T>` semantics (CPU-side async load)
-- ADR-0053 — Component index slot framework (`AsyncAwareIndex` consumer-facing surface)
-- ADR-0061 — Async GPU upload contract (closes the design half of the GPU-side polling protocol)
-
-### `[sandbox]` `[build]`
-- ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
-
-### `[meshgen]`
-- ADR-0045 — Sandbox executable, asset layout, cook workflow, crd-meshgen
-
-### `[post-fx]` `[rt]`
-- ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy
-
-### `[font]` `[text]`
-- ADR-0047 — Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text)
-- ADR-0064 — `crd-sdf` substrate (font consumes for MTSDF baker + sampler patterns)
-
-### `[animation]`
-- ADR-0021 — Animation architecture
-
-### `[ui]` `[node-editor]`
-- ADR-0020 — Scene & ECS hybrid + UI in scene tree
-- ADR-0023 — UI architecture
-- ADR-0047 — Font rendering system (crd-font, crd-ui dependency)
-- ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration)
-
-### `[imgui]` `[vulkan]`
-- ADR-0024 — ImGui single-viewport default
-
-### `[shader]` `[cache]` `[reflection]` — ⚠ era note: crd-shader was RETIRED (ADR-0105); shaders today = CKIR (ADR-0101/0103/0104 below)
-- ADR-0025 — Shader mechanism policy
-- ADR-0026 — Shader variant key
-- ADR-0027 — Shader reflection consumption model
-- ADR-0028 — Shader cache hierarchy
-- ADR-0029 — Shader hot reload
-- ADR-0030 — Shader / PSO boundary
-- ADR-0031 — Shader frontend → IR seam
-- ADR-0048 — Material system architecture foundation (ShaderOptions, inline functor, ParameterType)
-
-### `[geometry]` `[units]` `[multi-domain]`
-- ADR-0076 — **`crd-geometry` substrate architecture** (11+ sub-modules; §12–§28 amendment trail = the phase ledger)
-- ADR-0077 — Multi-domain expansion (CAD/CFD/FEA/CAM/EDA/ML/sciviz/procgen future phases)
-- ADR-0078 — **`crd-units` substrate + the two-layer typed architecture** (`Quantity<D, T>`; §5 = the engine-wide layer split)
-
-### `[agent-native]` `[cli]` `[scripting]`
-- ADR-0081 — **Agent-native engine** (CLI/JSON-RPC/MCP as source of truth; C++ hot-reload as the ONLY scripting language; subsumes ADR-0034) — §9's C++-ONLY clause **superseded by ADR-0108 (Accepted 2026-08-07)**; §1-§8 reaffirmed. The in-file §9 strike + PRINCIPLES/AGENTS/README/ROADMAP flip **EXECUTED 2026-08-10** at the first CEIR vertical slice (CEIR-13z, ADR-0108 §7)
-- ADR-0108 — **A Cerid-owned executable-program language stack (CEIR/CHIR); C++ is no longer the *only* authorable program** (**Accepted 2026-08-07**; surgically supersedes ADR-0081 §9; cornerstone flip **EXECUTED 2026-08-10** at the first CEIR vertical slice, CEIR-13z)
-
-### `[hesap]` — per-cluster ADRs
-- ADR-0082…0097 — one ADR per hesap cluster (v0 dense microkernels → … → 0089 sparse-eig · 0090 opt · 0091 ODE/DAE · 0092 FFT · 0093 DSP/wavelet/comms · 0094/0095 special/interp/quad/diff/motion · 0096 tensors · 0097 autodiff). Exact titles: the chronological table below.
-
-### `[ceir]` `[chir]` — the execution-IR stack (D-007 CEIR band)
-- ADR-0108 — **A Cerid-owned executable-program language stack** (Accepted; supersedes ADR-0081 §9) — see the `[agent-native]` section
-- ADR-0109 — **CEIR/CHIR/CKIR ownership + `crd-ceir` module placement** (Accepted 2026-08-07 — binding for CEIR-1): the one-way layer contract, the dependency-inversion provider seam (`crd-ceir` host-only + `crd-ceir-host`/`crd-ceir-gpu` bridges), the finalized CEIR-1 type names, the semantic-identity model; extends ADR-0101/0103's I1/I2 as I3/I4/I5
-- ADR-0110 — **Native-intrinsic schema + the legitimacy rule + the 3 plugin levels** (Accepted 2026-08-07): an intrinsic is an ordinary CEIR-2 op with §100 native-binding metadata + a bridge handler; the IFF legitimacy test (capability = intrinsic, algorithm = program, performance = provider); Level A subgraph / B custom-op+lowering / C native
-
-### `[gpu-context]` `[kir]` `[ir]` — the GPU-era north stars
-- ADR-0098 — crd-kir + crd-hesap-gpu: the GPU compute COMPILER (CKIR two-level IR, six backends, determinism tiers)
-- ADR-0099 — crd-gpu-context: one shared GPU device; compute/rendering are separate concerns on it (§6 struck → ADR-0103)
-- ADR-0100 — CKIR is the one GPU compute manager (kernel-source-agnostic dispatch)
-- ADR-0101 — **The IR is the single source of truth for EVERY shader; backend languages are OUTPUTS only**
-- ADR-0102 — Render-data, lighting & pass architecture (frequency-based sets; material = surface response)
-- ADR-0103 — **`crd-gpu-context` owns every GPU program; I1/I2 leak invariants** (supersedes ADR-0099 §6)
-- ADR-0105 — **Retire crd-rhi + crd-renderer: gpu-context IS the graphics layer** (supersedes the rhi halves of 0036/0042/0080/0085, struck in place as slices landed)
-
-### `[raf]` `[frame-graph]` `[rendering-assets]`
-- ADR-0104 — IR-as-crdr: the shader cook + deploy pipeline (content-hash cache, variants, pipeline cache, hot reload)
-- ADR-0106 — **Unified frame-graph runtime: `crd-render-graph` is the single live runtime** (closed at RAF-12.3)
-- ADR-0107 — Interactive UI + 2D rendering architecture (UiWorld/Canvas/I2D-SPR; **Proposed**, pending review)
-
-## All ADRs (chronological)
-
-| ID    | Title                                          | Tags                              | Status   |
-| ----- | ---------------------------------------------- | --------------------------------- | -------- |
-| 0001  | Build & language                               | build, lang                       | Accepted |
-| 0002  | Logging                                        | log                               | Accepted |
-| 0003  | Memory v1                                      | memory                            | Accepted |
-| 0004  | Containers v1                                  | containers                        | Accepted |
-| 0005  | Math v1                                        | math                              | Accepted |
-| 0006  | Platform v1                                    | platform                          | Accepted |
-| 0007  | `crd-app` shape                                | app, event                        | Accepted |
-| 0008  | Graphics architecture                          | rhi, vulkan, arch                 | Accepted |
-| 0009  | RHI v1a scaffold                               | rhi, arch                         | Accepted |
-| 0010  | Vulkan bootstrap                               | vulkan, rhi                       | Accepted |
-| 0011  | First triangle milestone                       | vulkan, rhi, renderer             | Accepted |
-| 0012  | Configuration substrate                        | config, arch                      | Accepted |
-| 0013  | Asset pipeline                                 | resources, arch                   | Accepted |
-| 0014  | Reference counting split                       | memory, resources                 | Accepted |
-| 0015  | Job system shape                               | jobs, arch                        | Accepted |
-| 0016  | Render path strategy                           | renderer, render-path, arch       | Accepted |
-| 0017  | Culling strategy                               | culling, renderer                 | Accepted |
-| 0018  | Physics architecture                           | physics, arch                     | **Superseded by 0062** |
-| 0019  | (reserved)                                     | —                                 | Reserved |
-| 0020  | Scene & ECS hybrid + UI in scene tree          | scene, ecs, ui, arch              | Accepted |
-| 0021  | Animation architecture                         | animation, arch                   | Accepted |
-| 0022  | Open-world streaming pipeline                  | memory, resources                 | Accepted |
-| 0023  | UI architecture                                | ui, node-editor, arch             | Accepted |
-| 0024  | ImGui single-viewport default                  | imgui, ui, vulkan                 | Accepted |
-| 0025  | Shader mechanism policy                        | shader, renderer, arch            | Accepted    |
-| 0026  | Shader variant key                             | shader, cache, arch               | Accepted    |
-| 0027  | Shader reflection consumption model            | shader, reflection, rhi           | Accepted    |
-| 0028  | Shader cache hierarchy                         | shader, cache, vulkan             | Accepted    |
-| 0029  | Shader hot reload                              | shader, hot-reload, runtime       | Accepted    |
-| 0030  | Shader / PSO boundary                          | shader, rhi, renderer             | Accepted    |
-| 0031  | Shader frontend → IR seam                      | shader, arch, ir                  | Accepted    |
-| 0032  | Frame graph v1                                 | renderer, render-path, arch       | Accepted    |
-| 0033  | crd-jobs implementation architecture           | jobs, arch, fibers, threading     | Accepted    |
-| 0034  | C++ hot-reload DLL scripting                   | scripting, arch, extensibility    | Accepted    |
-| 0035  | Networking architecture principles             | networking, arch, determinism     | Accepted    |
-| 0036  | `crd-resources` module + loader registry       | resources, arch                   | Accepted    |
-| 0037  | ResourceId hybrid UUID scheme                  | resources, arch                   | Accepted    |
-| 0038  | Cooked binary container format                 | resources, arch, cooker           | Accepted    |
-| 0039  | `ResourceHandle<T>` semantics                  | resources, arch                   | Accepted    |
-| 0040  | Cooker CLI + CMake integration                 | resources, cooker, build, arch    | Accepted    |
-| 0041  | `crd-platform` async filesystem I/O            | platform, resources, jobs         | Accepted    |
-| 0042  | Texture cooked format + GPU upload strategy    | resources, renderer, cooker       | Accepted    |
-| 0043  | MeshResource vertex layout + glTF import scope | resources, renderer, cooker       | Accepted    |
-| 0044  | Phase ordering: material PSO/variant before scene/ECS | arch, renderer, scene, resources | Accepted |
-| 0045  | Sandbox executable, asset layout, cook workflow, crd-meshgen | arch, sandbox, resources, cooker, build | Accepted |
-| 0046  | MaterialDomain enum, node-editor future-proofing, RT hybrid strategy | arch, renderer, shader, materials, rt | Accepted |
-| 0047  | Font rendering system (MTSDF, FreeType+msdfgen, HarfBuzz, offline+dynamic atlas, extruded text) | arch, font, renderer, ui, text | Accepted |
-| 0048  | Material system architecture foundation (two-tier Template/Instance, surface fn, MATR chunks, ShaderOptions, ParameterType) | arch, renderer, shader, materials, resources, cooker | Accepted |
-| 0049  | Scene/ECS L1: Entity identity & SlotMap                | scene, ecs, arch, layer-1               | Accepted |
-| 0050  | Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid) | scene, ecs, arch, layer-2, performance | Accepted |
-| 0051  | Scene/ECS L3: Relations as first-class                 | scene, ecs, arch, layer-3, relations    | Accepted |
-| 0052  | Scene/ECS L4: Query · System · Schedule                | scene, ecs, arch, layer-4, query, scheduler | Accepted |
-| 0053  | Scene/ECS L5: Component index slot framework           | scene, ecs, arch, layer-5, indexes, extensibility | Accepted |
-| 0054  | Scene/ECS: Transform hierarchy update model            | scene, ecs, math, performance           | Accepted |
-| 0055  | Scene serialization: TOML authoring + SCEN CRDR cooked | scene, ecs, resources, cooker, arch     | Accepted |
-| 0056  | Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection) | scene, ecs, arch, layer-6, layer-7, layer-8, networking, scripting, editor | Accepted |
-| 0057  | Scene/ECS: UI nodes in scene tree (boundary declaration) | scene, ecs, ui, arch                  | Accepted |
-| 0058  | Öbek system: cooked entity-graph templates with composition, variation, AAAA-tier future-proofing | scene, ecs, cooker, resources, arch, renderer, networking, determinism, obek, prefab | Accepted |
-| 0059  | Preset system: typed system-config bags with five-layer resolution | scene, resources, cooker, arch, renderer, audio, physics, input, config, preset | Accepted |
-| 0060  | Profile system: typed predicate selectors with additive composition | scene, resources, cooker, arch, config, networking, app, profile | Accepted |
-| 0061  | Async GPU upload contract: `UploadHandle` + per-module polling system | arch, renderer, rhi, scene, resources, async | Accepted |
-| 0062  | **Eylem: Cerid-native physics architecture** (supersedes 0018) | arch, physics, eylem, ecs, jobs, simd, determinism | Accepted |
-| 0063  | Eylem determinism contract                     | arch, physics, eylem, determinism, ci, fp | Accepted |
-| 0064  | `crd-sdf` substrate architecture               | arch, sdf, eylem, renderer, font, audio, editor, resources | Accepted |
-| 0065  | `crd-hesap` numerical computing substrate (MATLAB-class); §13-§16 v0/v1/v2 locks; §17-§25 v3 dense SVD+eig+lstsq close; **§26 amendment 2026-05-27 — v4 iterative-solvers + preconditioners + AMG cluster CLOSED** (D(iter)-1..10 determinism moat + reorder default-ON + graceful-degrade + O(1) AMD bucket-head + the β=0.3 quantified result) | arch, hesap, math, solvers, autodiff, opt, ode, fft, dsp, scripting | Accepted |
-| 0066  | `crd-draw` substrate architecture        | arch, draw, eylem, sdf, audio, renderer, editor, resources | Accepted |
-| 0067  | Eylem force-field architecture (three-tier substrate)        | arch, physics, eylem, fields, sdf, draw, ecs, obek, determinism | Accepted |
-| 0068  | Eylem body types + collision filtering + callbacks (3 motion types + sensor + 5-tier filter + deferred ECS events + ContactModify) | arch, physics, eylem, collision, filtering, callbacks, ecs, determinism | Accepted |
-| 0069  | Eylem materials substrate (friction + restitution + surface velocity + density)  | arch, physics, eylem, materials, friction, restitution                       | Accepted  |
-| 0070  | Eylem solver catalog + selection guidance (incl. Nonsmooth Newton)              | arch, physics, eylem, solvers                                                 | Planned   |
-| 0071  | Robotics importers (URDF / SDF / MJCF) + actuator catalogue                       | arch, physics, eylem, robotics, importers, actuators, urdf, sdf, mjcf         | Planned   |
-| 0072  | Eylem sensor substrate (IMU / LIDAR / proximity / threshold events / diagnostics) | arch, physics, eylem, sensors, robotics                                       | Planned   |
-| 0073  | Eylem aerospace substrate (variable mass + aero + atm + propulsion + J2 + sep)    | arch, physics, eylem, aerospace, aero, atmosphere, propulsion, fields         | Planned   |
-| 0074  | Eylem cinematic / animation-physics bridge (`crd-eylem-cine` module)              | arch, physics, eylem, cinematic, animation, film                              | Planned   |
-| 0075  | Eylem testing rigor + conservation-law CI                                          | arch, physics, eylem, testing, ci, conservation, scientific-computing        | Accepted  |
-| 0076  | `crd-geometry` substrate (BVH + GJK/EPA + mesh queries + polygon ops + Delaunay + decomposition + GPU-LBVH + shader-helpers); §19-§21 amendments closed `-mesh` / `-spatial` / `-polygon` clusters 2026-05-16; §22 amendment 2026-05-17 — `-mesh-processing` v7 cluster CLOSED (8 algorithm slices); §23 amendment 2026-05-17 — `-delaunay` v8 cluster CLOSED (11 algorithm slices incl. cospherical Stage D insphere_exact paydown); §24 amendment 2026-05-18 — `-decomposition` v9c cluster CLOSED (V-HACD voxelize + decompose); §25 amendment 2026-05-18 — **`-gpu` v9a LBVH cluster CLOSED** (10 algorithm slices: 30-bit Morton CPU+GPU + 60-bit Morton CPU+GPU + typed wrappers + async-compute pool + CPU radix + GPU radix + scalar+prefetch + parallel-via-jobs + LBVH tree+upsweep elite-combine; locks D132-D164 / 33 decisions); §26 amendment 2026-05-19 — **`-shader-helpers` v9e cluster CLOSED** (4 algorithm slices + close: formula-IR flat 3-array storage + GLSL backend + ULP-conformance GPU dispatch + HLSL backend + dxc → SPIR-V GPU verification + cooker library-API; locks D166-D181 / 16 decisions; substrate-side `crd::shader::compile_hlsl` shipped); §27 amendment 2026-05-19 — **`-curves` v10 cluster CLOSED** (6 slices: substrate + sampling + arc-length + queries + frames-viz-sandbox + typed-boundary; locks D182-D216 / 35 decisions; Wang 2008 RMF + uniform closure-twist; typed `queries_typed.hpp` covers WHOLE v10 surface per ADR-0078 §5 D34); §28 amendment 2026-05-19 — **v11 transform-aware + PHASE 3.1.7 FULLY CLOSED** (TransformedShape composition wrapper with trait-based scalar deduction + 14 3D + 7 2D shape transforms + `transform_*_typed` boundary covering FULL primitive catalog; D217-D233 / 17 decisions; 5 advisor-pinned discriminators); **🎉 Phase 3.1.7 substrate FULLY CLOSED 2026-05-19 — 12 of 11 sub-modules complete** | arch, substrate, computational-geometry, bvh, gjk-epa, mesh-processing, spatial-acceleration, polygon-ops, cdt, decomposition, gpu-lbvh, shader-helpers, sdf-cooker, determinism | Accepted  |
-| 0077  | Multi-domain substrate expansion (9 new peer modules + Phase 3.5 prologue + Phase 6 platform expansion)  | arch, strategy, multi-domain, manufacturing, cad, cfd, aerospace, ml, scientific-computing | Accepted  |
-| 0078  | `crd-units` substrate (dimensional types + 6-layer conversion system); §2 v0b adoption A; §3 v0c adoption B; §4 v0d adoption C + Phase 3.1.7.5 CLOSE; §5 amendment 2026-05-16 — **two-layer typed architecture** (D32-D36: units at API surface, raw scalars in inner loop; boundary is the API surface and only there; bridges = `.value` / `to_raw_vec` / `from_raw_vec` / strip-compute-retag wrappers) | arch, substrate, units, dimensional-analysis, type-safety, determinism, physics, eylem, geometry, format-parse, ui, architecture-principle | Accepted  |
-| 0079  | `crd-perf` profiler substrate + `crd-perf-ui` ImGui frontend (D-003 v0a-v0h)       | arch, substrate, perf, profiler, instrumentation, gpu-timing, capture-format, ui            | Accepted  |
-| 0080  | `crd-rhi-compute` substrate (Phase 3.1.7.6 v0a-v0e+close); additive RHI extension for compute pipelines, storage buffers, dispatch, sync, opt-in async compute | arch, substrate, rhi, gpu, compute, async-compute, descriptors, shader-pipeline, prerequisite | Proposed  |
-| 0081  | Agent-native engine: CLI + JSON-RPC + Anthropic MCP substrate (`crd-cli` + `crd-rpc` + `crd-script`); CLI is the source of truth (GUI is a visualization layer that emits commands); supersedes ADR-0034 (folded in as the C++ hot-reload sub-aspect); MCP compatibility = instant Claude Code / OpenAI Function Calling / Gemini Function Calling integration; capability-based security + transactional sessions + sandbox isolation + deterministic replay; Phase 4.0 substrate work + per-DoD CLI surface requirement going forward; first concrete consumer = `crd-hesap` v0 (Phase 3.1.6 immediate next slice ships with CLI surface from day 1) | arch, cli, rpc, mcp, agent, scripting, substrate, vision, supersedes-0034 | Proposed |
-| 0082  | Hesap GEMM microkernel: intrinsics-via-Vec8f/Vec16f, ASM deferred. Locked hot-swap signature `gemm_microkernel<T>(k, a_packed, b_packed, c_tile, ldc)` + `CRD_HESAP_MICROKERNEL_BACKEND` compile-time switch (Intrinsics default; Asm reserved). Target 80-85% peak via crd-math::simd; final 5-10% gap to MKL deferred. Three-condition revisit gate: GEMM >50% of solve time AND intrinsics <70% peak AND no better alternative (GPU/sparse). Same call Eigen/Faer/Highway/xtensor/Stan-math/Armadillo/mlpack made. | arch, hesap, blas3, microkernel, perf, simd, intrinsics, hot-swap | Accepted |
-| 0083  | hesap-dense row-major storage (with per-factor escape hatch). Keep row-major public default (ML/array-ecosystem alignment: NumPy/PyTorch/JAX are row-major; GEMM layout-neutral via packing; GEMV naturally row-major; sparse independent). Accepted bounded cost: small-N (≤256) dense factorizations trail column-major Eigen/LAPACK ~1.4× (column-oriented elimination fits column-major; proven layout-fit gap not kernel quality via 3 experiments). Escape hatch: opaque factor objects may store internal buffer column-major if a hot-loop consumer proves it; batched/fixed-size kernels preferred for tiny-solve hot loops. Revisit only on measured system-level bottleneck. | arch, hesap, dense, storage, layout, perf, rowmajor | Accepted |
-| 0084  | Sparse matrices as first-class cooked engine resources (`crd-hesap-resources` bridge module, depends `crd-resources`+`crd-hesap-sparse`; one-way). `'HMTX'` CRDR (MXHD/MXOP/MXII/MXVL chunks) + 40-byte pinned `MatrixFileInfo` (u64 nnz + topology_hash + frame_stamp + format byte; loader asserts-on-hash-mismatch) + append-only `variant` enum (0=f32/1=f64/2=c32/3=c64). Single loader, variant-in-header; type-erased `SparseMatrixResource` payload + `build_csr<T>()`. In-memory cook-time cooker (reuses v1g `read_matrix_market`); no filesystem dep in the module. Corpus delivery reuses `manifest_write`+`mount_manifest`+`load_sync` (no new ResourceManager API). CLI `hesap.matrix.{info,cook,load}` stateless on inline `.mtx`; `fetch` dev-time (no HTTP client). Cooked binary loads 6–7× faster than re-parsing `.mtx` on real SuiteSparse. Solver vs-reference benches through this path land at v4a (ship-at-consumer). | arch, hesap, sparse, resources, cooker, crdr, corpus, agent-native | Accepted |
-| 0085  | Virtual-memory + streaming allocator cluster (Phase 2.2, before hesap v5). Six allocators + a `crd::platform::vm` reserve/commit layer, composing with the shipped streaming pipeline (jobs + async I/O + ResourceManager) rather than replacing it: (1) platform VM API; (2) `VirtualMemoryAllocator` — reserve-big / commit-on-demand / decommit, **stable addresses, no relocating CPU heap**; (3) re-parent `GrowableTlsfAllocator` onto VM → **removes malloc-at-the-root**; (4) thread-safe **fence/epoch-gated RingAllocator** (staging); (5) `StreamingAllocator` policy layer + ResourceManager budgets/eviction; (6) `GpuAllocator` VkDeviceMemory suballocation; (7) GPU defrag (handle relocation) + residency, **pluggable `IResidencyPolicy`/`IDefragPolicy`**. GPU built now per explicit eyes-open user override (design-without-consumer risk confined to policy objects). D(mem-stream)-1..7. Extends ADR-0003 Phase B + ADR-0022. | memory, platform, rhi, streaming, resources, virtual-memory, gpu-allocator | Accepted |
-| 0086  | Eylem unified motion model (design from a 2026-05-30 session; ratify/reconcile per-slice when eylem resumes after hesap). One solver / one state — animation proposes TARGETS, physics is the sole arbiter of the rendered pose (kills the Unity-style animation-vs-physics fragmentation). Constraints as the universal primitive (collision/joint/IK/animation-motor all one solve). Powered/active ragdoll (animation = per-joint motor targets + a CONTINUOUS gain; no discrete kinematic↔ragdoll switch — smooth hit reactions + death). Reduced-coords Featherstone end-state for characters/robots (FK = forward pass, IK = constraints on the same Jacobians). Pluggable solver over the constraint graph (SI/TGS → XPBD → reduced-coords+hesap → the v9 unify). LOD = a fidelity continuum scaling the whole pipeline per agent (NOT decoupled animation/physics clocks). Authoritative-coarse / cosmetic-fine split = the key LOD + networking enabler (only the cheap authoritative layer is deterministic+networked; cosmetic detail is local). Crowd = detail-follows-attention (thousands cheap/GPU + ~dozens focused full reactions). Networking = deterministic LOCKSTEP for the shared authoritative sim (inputs-not-state ⇒ scales to thousands) + rollback for local players; needs cross-PLATFORM FP determinism (deterministic transcendentals). REFINES ADR-0021 + ADR-0074 (powered ragdoll vs cinematic-kinematic — reconcile), EXTENDS ADR-0035 + ADR-0062 §5 + ADR-0063; builds on ADR-0065 (hesap = the per-step constrained-solve backbone). | arch, physics, eylem, animation, networking, determinism, lod | Proposed |
-| 0087  | Large-scale deterministic simulation (worked example: a 1700s naval-battle MMO — sea + colliding ships + thousands of soldiers, ~half real players; rules: incredible physics, deterministic networking, >60fps). Six transferable principles: (1) replace state with DETERMINISTIC FIELDS (ocean/wind/atmosphere = procedural functions, never simulated or networked; physics-field cheap+deterministic vs render-field rich+cosmetic); (2) couple via SURFACE INTEGRAL over a low-poly proxy (Kerner per-face hydrostatic+hydrodynamic → float/righting/wave-ride/drag), NOT point-probe floaters; (3) authoritative-coarse/cosmetic-fine everywhere; (4) detail-follows-attention; (5) SCALE THE NETWORK MODEL to human-player count; (6) solve agents on carriers in the carrier's LOCAL non-inertial frame + balance controller (inverted-pendulum CoM, ankle/hip/step) + powered ragdoll. KEY networking decision (REFINES ADR-0086 D10): few humans + AI crowd → deterministic LOCKSTEP; MANY humans (MMO) → server-authoritative spatially-partitioned DETERMINISTIC regions (server meshing) + interest management + client prediction/rollback (tight via identical deterministic code) + authoritative/cosmetic split; determinism stays the bedrock (replay + anti-cheat + tight prediction), delivery is NOT lockstep. Generalizes ADR-0073 aero (atmosphere = field, aero = surface integral); extends ADR-0035; builds on ADR-0065 (FFT ocean). Honest frontier: server meshing is bleeding-edge (~100-200 humans/region realistic), cross-platform FP determinism is the deep dependency, balance robustness is research-grade. | arch, physics, eylem, networking, determinism, lod, environment, mmo | Proposed |
-| 0088  | **GEMM hand-tuned asm — INVESTIGATED → REVERTED (intrinsics vindicated).** Re-opened ADR-0082's asm question, built the whole thing (dual-syntax MASM/GAS f64 6×8 kernel + runtime CPUID dispatch + build integration, all bit-identical to the intrinsic, green on MSVC/clang-cl/gcc), and MEASURED it. **Decisive same-process A/B (asm vs intrinsic, identical clock): asm is ~1–2% SLOWER.** Structural, not tunable — the intrinsic INLINES into the panel loop (no call overhead, ~98% peak) while the asm is a hard function call. The bmwcra premise also failed separately (factor is memory/scaling-bound at 8T, not kernel-bound — the kernel win washes out). Earlier "+10–16%" was a turbo-clock artifact. **All asm code + the v0d-asm-0 direct-to-C framework change REVERTED; tree back to v5a-5. ADR-0082 (intrinsics-first) STANDS, vindicated.** Hot-swap point reserved for a genuine future asm-only-ISA need (AMX etc.), not a generic perf lever. bmwcra's crush = the SCALING lever (within-front parallelism), not the kernel — **EXECUTED in v5a-7 (2026-05-31): bmwcra flipped 0.65→1.04–1.05× WIN, every matrix now beats CHOLMOD.** Record: `docs/phases/hesap-v0d-asm-microkernel-plan.md`. | arch, hesap, math, simd, asm, perf, reverted | **Reverted** |
-| 0089  | **crd-hesap-eigen — sparse eigensolvers + module edges (Phase 3.1.6 v6).** Matrix-free over `LinearOp<T>`; Rayleigh-Ritz reuses `crd-hesap-dense`. The crush axis is ALGORITHMIC not kernel: plain Krylov (Lanczos/Arnoldi/IRLBA) = parity + the determinism moat (the honest ceiling, shares ARPACK/PRIMME's BLAS/LAPACK ceilings); the crush is fewer-matvecs via preconditioned methods (shift-invert/LOBPCG/JD/FEAST). **v6-z bench proven (3D Poisson, matched acc): AMG-LOBPCG CRUSHES direct shift-invert ARPACK (9.5× wall + 40× mem, growing) + PARITY vs state-of-art PRIMME at f64 — crush-vs-direct + parity-vs-same-class + the moat is the win, NOT a speed-win over PRIMME+AMG.** Determinism = the differentiator: deterministic counter-RNG start + fixed-order reorthog + pinned sign/coupled-SVD-sign + deterministic dense RR ⇒ eigenpairs bit-identical {1..16} workers (`[moat]` per method); none of ARPACK/PRIMME/SLEPc/PROPACK carries it. Restart SUBSTITUTION (determinism): thick-restart Lanczos≡IRLM, Krylov-Schur≡IRAM, augmented thick-restart≡IRLBA (deterministic, vs the ordering-sensitive implicit bulge-chase). Real-symmetric focus; complex where inherent (Arnoldi/KS emit complex). New acyclic edges hesap-eigen→{hesap-direct (shift-invert/FEAST: v5 LU factor), hesap-iterative (JD: FGMRES correction eqn)} (mirror v5f-c2). Extends ADR-0065 §v6. | arch, hesap, eigen, eigensolver, svd, determinism, module-edges | Accepted |
-| 0090  | **crd-hesap-opt — the optimization domain (substrate + contracts + edges, Phase 3.1.6 v7).** Matrix-free over `Objective<T>` (value/n pure + gradient/hessian_vector virtual; `has_gradient()` capability flag agrees with `gradient()->bool`; vtable append-at-end + a RESERVED fused `value_and_gradient` slot for the L-BFGS/LM hot path). v7 ABSORBS the old v8 constrained cluster (user direction — opt is ONE domain); the universal "find the best X" substrate (eylem/control/FEA-CFD/CAD/ML/rendering/games/robotics/DAW). **Determinism moat (the differentiator none carry):** serial optimizer + bit-exact objective eval ⇒ bit-identical TRAJECTORY+result across {1..16} ⇒ certifiable MPC/control (DO-178C/ISO26262) + reproducible training + replay; `[moat]` per slice asserts convergence too (vacuous-maxed-out guard). Contracts pinned up front: line-search g_out cost contract (Wolfe fills it, Armijo recomputes); workspace = caller's `IAllocator*`; stochastic moat SPLITS (minibatch reproducibility needs v12 counter-RNG). Gold standards (honest, crush-where-the-algorithm-allows + parity+moat else; wall-clock-vs-Python-overhead caveat): Ceres/liblbfgs/scipy/NLopt/CMA-ES/PyTorch/OSQP/IPOPT/SCS/HiGHS (probe Ceres v7-e + IPOPT/cyipopt v7-n early). Edges: hesap-opt→hesap-dense/sparse/jobs now; →hesap-direct/iterative (Newton/KKT) + hesap-eig (exact-TR) later; reverse-mode autodiff plugs the same gradient interface. Extends ADR-0065 D14. | arch, hesap, opt, optimization, determinism, module-edges, substrate | Accepted |
-| 0091  | **crd-hesap-ode — the ODE/DAE module: two API layers + deterministic controllers + the work-precision contract (Phase 3.1.6 v9).** TWO API LAYERS (ADR-0078 two-layer applied to integration): raw-span allocation-free stepper KERNELS (caller scratch, inlined RHS, in-place safe, fixed per-element FP order — what eylem's fused SoA sweep / animation / DAW inline; never a virtual f per body per substep) + the general DRIVER over `OdeFunction<T>` (the v7 Objective capability contract; vtable LOCKED append-at-end — mass matrix appends at v9-h, sparse Jacobian at v9-j; events = integration options, NOT virtuals). Deterministic `OdeWork` counters (CVODE semantics) = the work-precision scoreboard currency (error-vs-nfev-vs-wall, the domain's native honest format). Step controllers = pure deterministic FP fns, TWO types matching their references exactly (scipy elementary accepts err<1 strictly; Hairer PI accepts err≤1 + facold floor — one parametrization would be dishonest). Dense-output contract pinned day 1 (fixed-width coeff blocks, caller-owned storage; cubic-Hermite fallback shipped); recomputed t (no accumulation). Edges v9-a: core/containers/memory ONLY; hesap-dense at v9-d/e, hesap-direct/iterative at v9-j; NO edge to hesap-opt (acyclic — opt consumes ode for shooting later). Named OUT: LSODA auto-switch, f32 stiff. Gold standards: SUNDIALS 6.4.1 + scipy (trajectory-exact) + Hairer Fortran + odeint. Extends ADR-0065; consumes ADR-0063 (symplectic = eylem replay, v9-g). | arch, hesap, ode, dae, determinism, module-edges, substrate | Accepted |
-| 0092  | **crd-hesap-fft — the FFT cluster: deterministic plan-from-factorization + portable-C++ MKL-adjacent + the full transform suite (Phase 3.1.6 v10).** Plan chosen from the size factorization with NO runtime measurement (vs FFTW MEASURE/PATIENT, whose wisdom varies run-to-run + isn't reproducible across builds); one read-only twiddle table/plan ⇒ fixed per-element FP order ⇒ output bit-identical across runs+threads (each thread its own plan; {1..16} nearly free — an FFT has no thread-dependent reduction ⇒ determinism is OFF the usual moat axis, so lead with it + zero-planning-overhead + typed zero-dep integration, NOT a beat-MKL claim). SUITE: complex FFT (`FftPlan`, Stockham radix-2/4/8 + straight-line SIMD codelets N≤32 + Bailey four-step >2¹⁹) · real (`RealFftPlan`) · DCT/DST (`DctPlan`, Makhoul — beats scipy/PocketFFT) · NUFFT (`NufftPlan` — wins FINUFFT small/mid @3× acc) · **Bluestein ANY-size** (`BluesteinPlan`, chirp-z over one pow-2 plan) · **N-D** (`NdFftPlan`, row-column; pow-2 axis→FftPlan else Bluestein; forward-only-per-axis + N-D forward-trick inverse so unnormalized-vs-normalized inverses never clash) · **Sparse FFT** (`SparseFftPlan`, HIKP 2012, END-TO-END SUB-LINEAR + NOISE-ROBUST: multi-scale binary location + voting + median, no O(n) step; coeff-under-noise bounded √(n/B)σ/√R info-theoretically). Lower-layer raw `Complex<T>` (ADR-0078 §5); unnormalized both ways (`ifft_normalized`=1/n). Correctness oracle = brute-force O(N²) DFT (NEVER round-trip — the odeint-d4 trap). **MKL global parity DEFERRED — production-grade portable, not MKL clone:** MKL-adjacent on AVX2 (256K fixed 0.25→0.85×=3.6× default-on, 4M/8M ~0.92-0.95× host-noise-caveated), beats PocketFFT everywhere; residual ~15% = the four-step inter-stage twiddle, measured-exhausted (8 attempts) as the asm-integrated-butterfly gap, OUT OF SCOPE per ADR-0082 (portable-C++/WASM-no-asm). CLI `hesap.fft.*` (forward + sparse). Edges: core/containers/memory + math (simd) + hesap (Complex, CLI). Extends ADR-0065; consumes ADR-0078 + ADR-0082. | arch, hesap, fft, determinism, module-edges, substrate | Accepted |
-| 0095  | **crd-hesap-{interp,quadrature,diff,motion} — the v13 Numerical-Analysis + Motion cluster: the 4-module split + the 3 certification moat pillars + the error-tier contract (Phase 3.1.6 v13).** Re-scoped from a ~1.5-wk sketch to a MAJOR certification-grade cluster (for satellites/drones/robots/self-driving/games): **`crd-hesap-interp`** (NEW — 1-D + scattered/gridded N-D interpolation) · **extend `crd-hesap-quadrature`** (the integrate() API + QUADPACK adaptive + cubature, on the v12-c Gauss nodes) · **`crd-hesap-diff`** (NEW — Fornberg/Richardson/**complex-step**/spectral) · **`crd-hesap-motion`** (NEW — SQUAD/clothoid/min-snap/NURBS/Ruckig-OTG; planning = Phase 3.1.11 consumes it). ⭐⭐ **THE 3 MOAT PILLARS** every entry point obeys = (1) determinism-by-construction (crd::math not std::, fixed FP order, {1,4,16} bit-identical → DO-178C/ISO-26262-ASIL-D replay) · (2) allocation-free streaming (caller workspace, adaptive = ITERATIVE bounded-depth NOT recursive, hard limit = WCET knob, status-not-spin → MISRA 21.6/8.2.10) · (3) error-tier-exposing (`{value, error_estimate, status, eval_count}`, TIER-LABELLED: Tier-1 estimate=foolable-not-a-bound / Tier-2 certified `worst_case_error(h, deriv_bound)` / Tier-3 interval enclosure; status-not-exception, builds -fno-exceptions). ⚠ an estimate is NEVER promoted to a bound (the honest-scoreboard scar applied to error reporting). The certification-readiness axis GSL (mallocs) / Boost (throws) / parallel-BLAS (non-reproducible) structurally lose. SANITY-8 reuse (Gauss nodes/eig_sym/hermite_eval/dense/fft/fresnel/quat/Sibson-NNI/opt-QP). Two-layer ADR-0078. Extends ADR-0065; consumes ADR-0078; sibling to ADR-0094. | arch, hesap, interpolation, quadrature, differentiation, motion, determinism, safety-critical, module-edges, substrate | Accepted |
-| 0096  | **crd-hesap-tensor — the N-D tensor substrate: templated compute dtypes over stride views + the two-tier deterministic-reduction contract + deterministic stochastic rounding + the certified-inference lane (Phase 3.1.6 v14).** ONE module, internal sub-headers (substrate/elementwise/einsum/sparse/decomp/io/nn — dense-only consumers dead-strip the rest). ⭐ Templated COMPUTE dtypes `Tensor<T>`, T ∈ {f32,f64,c32,c64} (+i64/u8) — NO runtime-dtype VM; the low-precision set (f16/bf16/FP8-e4m3/e5m2/int8/int4-block, ggml-compatible blocks) = STORAGE with explicit convert/quantize ops; the ONE exception = int8/int4 integer inference computes natively (bit-exact across ALL hardware = the strongest cert tier). ⭐ NumPy stride-view semantics on a bounded rank ≤ 8 header (allocation-free metadata, WCET); element strides, signed (flips), stride-0 broadcast, contiguity tracking; Tensor owns via IAllocator, TensorView non-owning (Span discipline, no refcount); DLPack maps at the boundary. ⭐⭐ TWO-TIER reduction contract, named never conflated: Tier D default = fixed-order trees serial≡parallel ({1..16} bit-identical) · Tier R opt-in = ReproBLAS-class binned = partition-INDEPENDENT; + ★deterministic stochastic rounding (Philox keyed by (seed, element index) ⇒ order-independent + reproducible-by-seed — nobody ships it). ⭐ einsum = parser → opt_einsum-class paths → `EinsumPlan` build-once (NumPy re-plans every call) → TTGT over the OWN v0d GEMM + HPTT-class permute; cotengra-class hyper-optimizer w/ dynamic slicing = bounded contraction memory (WCET applied to einsum); GETT only if the profile names the transpose (SANITY-5). v13 pillars verbatim (workspace/no-heap, status-not-exception, bounded iteration). Deterministic-RANDOMIZED decompositions (v12 counter-RNG; same seed bit-identical {1..16}). Per-slice Windows verification from day one (the v13-z scar). Gold standards: NumPy-MKL/PyTorch/xtensor · opt_einsum+cotengra · HPTT · TBLIS/TCL · SPLATT/TACO · TensorLy/MATLAB-TT/ttpy · pagemtimes · ReproBLAS · torch/onnxruntime/llama.cpp+ggml. Extends ADR-0065; consumes ADR-0078 + ADR-0084; sibling to ADR-0094/0095; ADR-0097 (autodiff) at v15 kickoff. | arch, hesap, tensor, einsum, determinism, reproducibility, quantization, ml-inference, safety-critical, module-edges, substrate | Accepted |
-| 0097  | **crd-hesap-autodiff — the automatic-differentiation cluster: one module for forward (v15) + reverse (v16), the deterministic no-atomics tape, suite-wide differentiability, differentiable solvers via implicit-diff, tape→C++ codegen (Phase 3.1.6 v15+v16).** ONE module `crd-hesap-autodiff` houses forward+reverse (shared rule math — a VJP is the transpose of a JVP — one 3-oracle gate, one crd::math surface, one set of suite bridges; header-only sub-headers + lean-consumer link isolation). ⭐⭐ THE MOAT = the DETERMINISTIC no-atomics reverse tape: SoA arena tape, fixed-order adjoint accumulation + scatter-inverted-to-gather + fixed-order reduction-tree merge (the v14 Tier-D contract lifted to adjoints), NO float atomics ⇒ **bit-identical {1..16} GRADIENTS = deterministic training** (torch/JAX cannot — atomic scatter-adds); world-first, timely vs the 2025-26 verifiable-training literature. `Dual<T>` MIGRATES from v7-b hesap-opt (opt re-exports, zero-regression gated) ⇒ acyclic edge hesap-opt→hesap-autodiff. Tape operands = OWNING Tensor<T>/arena values (backward runs post-unwind) + revolve checkpointing (Griewank-Walther, O(log T) mem). Autodiff is LOWER than the solvers: a custom_jvp/custom_vjp registration API keeps the edge solver→autodiff always (opt/ode register their own IFT rules — argmin-KKT/Newton/fixed-point implicit-diff with no cycle; differentiate-the-solution-reuse-the-factor, never AD-through-LU). Enzyme named OUT-OF-SCOPE (LLVM-plugin, MSVC-incompatible — the portability cornerstone). tape→.crds.cpp codegen (fusion/CSE/DCE) EMITS+INTERPRETS now; hot-reload execution graceful-gated on ADR-0081. 3-oracle gate on every rule (analytic / v13 complex-step / FD; reconstruct-verify-first). Two-layer (ADR-0078): Dual/Jet/Var = raw lower-layer carriers, typed strip-compute-retag at the driver. Gold standards: forward — Ceres-Jets/autodiff.hpp/CoDiPack/Sacado/Adept/JAX-CPU/ColPack/TaylorDiff-TIDES; reverse — torch-autograd/JAX/Stan-Math/Adept/CoDiPack/dolfin-adjoint-top88/jaxopt(unmaintained⇒own the lane). Showcases: v16-i deterministic-training of the v14-m certified controller · v16-j adjoint topology-opt · v16-k neural-ODE + KAN. Extends ADR-0065; consumes ADR-0078 + ADR-0096 + ADR-0084 + ADR-0081; sibling to ADR-0094/0095/0096. | arch, hesap, autodiff, forward-mode, reverse-mode, determinism, implicit-differentiation, codegen, ml-for-science, safety-critical, module-edges, substrate | Accepted |
-| 0098  | **crd-kir + crd-hesap-gpu — the Cerid GPU compute COMPILER: a unified compute+autodiff kernel IR lowering to six backends, vendor-beating kernels, and certified cross-vendor determinism (Phase 3.1.6 v17, MAXIMAL scope).** NOT a Vulkan port — a tensor/kernel COMPILER (Triton/TVM/XLA-class), the substrate every Cerid project stands on (physics/rendering/geometry/ML/research/WASM). **`crd-kir`** = a NEW foundational module (peer of crd-math/crd-rhi, below hesap-gpu): a **TWO-LEVEL IR** — CKIR-Graph (typed tensor op-graph, **extends the v16-h graph_ad IR ⇒ every kernel differentiable by construction**; const-fold/CSE/DCE/fusion) → CKIR-Tile (tile/loop/schedule IR, coop-matrix/tensor-core, **fixed-tree reductions — NO float atomics, IR-enforced**) → codegen; a **CPU reference lowering** = the single oracle + determinism ground truth. ⭐ **SIX backends from one IR:** Vulkan/SPIR-V · CUDA/PTX-NVRTC · WebGPU/WGSL (browser+WASM) · DirectX12/DXIL · Metal/MSL · ROCm/HIP — each = one Tile codegen + one runtime driver over crd-rhi-compute (+ CUDA/HIP driver layers); op library untouched. ⭐ **Scheduler + AUTOTUNER** (schedule search → checked-in tuning DB, deterministic replay, no runtime tuning) = the vendor-beating engine. ⭐⭐ **Determinism baked in:** T1 run-to-run (fixed trees) · T2 cross-arch reproducible (binned/RFA) · T3 cross-VENDOR bit-exact IEEE-only (NoContraction + `float_controls` audit) **+ crd::math transcendentals AS CKIR ops** (one poly def → identical every backend ⇒ cross-vendor deterministic transcendentals, publishable) · **computation CERTIFICATES** (hash-chained IR/dispatch/IO-digest transcripts = verifiable-compute/DO-178C). **`crd-hesap-gpu`** = the op library authored in CKIR (GEMM/FFT/reduce/scan/sort/tensor/sparse/LA/NN/autodiff — each multi-backend + differentiable + deterministic FOR FREE; autodiff-on-GPU nearly free since CKIR-Graph IS the autodiff graph). **Perf bar = BEAT the vendor kernels** (cuBLAS/cuFFT/cuDNN/cuSPARSE/cuSOLVER/rocBLAS) at matched precision, honest per-op gap; portable peers vkFFT/CLBlast/MAGMA/ncnn/llama.cpp-Vulkan too. **Determinism = certified bit-exact core (where `float_controls` audit passes) + reproducible (T2) elsewhere.** DoD §6 every slice: ValidationCapture 0 · bit/ulp vs CPU-ref · gpu_determinism_check ×3 · cross-backend conformance · CRD_PERF_BUDGET_LE. Kickoff: RTX 4070 Ti SUPER + Vulkan 1.4.341 + glslc; **CUDA toolkit to install (v17-a)**; substrate proven via `geometry-bvh-gpu`. Honest size ~63 KLOC / ~1400 tests / ~18–26 wk. Consumes ADR-0080 + 0085 + 0081 + 0096 + 0097§v16-h; sibling to ADR-0097. | arch, kir, gpu, compiler, ir, cuda, vulkan, metal, dx12, rocm, webgpu, determinism, certificates, autodiff, autotuning, substrate | Proposed |
-| 0094  | **crd-hesap-special + crd-hesap-stats — the statistics cluster: special-as-leaf + the inverse-incomplete cdf/ppf engine + the counter-RNG determinism moat + the two-axis honest gate (Phase 3.1.6 v12).** MAXIMAL subject = special functions + ~50 distributions + descriptive + the full hypothesis-test suite + resampling + KDE/robust/streaming + MCMC + regression/GLM/multivariate. ⭐ A NEW LEAF `crd-hesap-special` (gamma/beta/erf+incomplete+inverses · Bessel/Airy · orthogonal polys · transcendental tail) — stats/quadrature/dsp consume it, it never references them; the elliptic CANONICAL home (dsp delegates here). ⭐ THE INVERSE INCOMPLETE GAMMA/BETA ARE THE cdf/ppf ENGINE (no per-distribution quantile code; `gammainc_p_inv`/`betainc_inv`+`ndtri`, cached-gln/lbeta amortized ⇒ beat scipy's per-element ufunc). ⭐ DETERMINISM MOAT = counter-RNG (Philox4x32/Threefry4x64 pure fns of (counter,key) ⇒ same seed bit-identical independent of thread count — parallel bootstrap + MCMC/MV streams; DO-178C/ISO26262/FDA replay). ⭐⭐ TWO-AXIS HONEST GATE (the v10/v11 scoreboard scar): deterministic cores BIT-FOR-BIT vs scipy/statsmodels/ArviZ (read the peer's source for subtle gold formulas — the ArviZ R-hat/ESS backend — never guess) · RNG-driven by recover-known+same-seed-bit-identity · perf crushes ALL peers named individually (Bessel 24/24, dists 16/16 vs scipy, NUTS 104× ess/s vs PyMC, regression Ridge 47× vs sklearn); where NO clean gold peer exists (AR-spectral CI = asymptotic-normal) state it + gate analytically, never invent a convention. SANITY-8 reuse (regression rides dense lstsq/pinv/eig_sym; quadrature rides eig_sym; MV rides factor_cholesky). Back-wires the v11 spectral CIs (multitaper χ² vs scipy chi2.ppf + AR Berk-normal) closing the ADR-0093 deferral. CLI `hesap.{stats,special}.*`. Edges: stats→{special,dense,quadrature,jobs}; special = leaf. Extends ADR-0065; consumes ADR-0078. | arch, hesap, statistics, special-functions, rng, determinism, module-edges, substrate | Accepted |
-| 0093  | **crd-hesap-dsp (+ -wavelet + -comms) — the DSP cluster: the design/application honest-gate split + SOS-by-default + the two-layer streaming contract (Phase 3.1.6 v11).** MAXIMAL subject (user: "every DSP functionality") = full Signal-Proc-Toolbox + adaptive + wavelets + comms, as 3 ISOLATED modules (a DAW links dsp not comms) + crd-units add (DecibelRatio/DecibelPower nonlinear lenses + NormalizedFrequency). ⭐⭐ THE HONEST GATE (the v10 scoreboard scar): filter DESIGN (ellip/remez/firls = transcendental+iterative — std::sin not bit-identical cross-libm, ULP drift compounds) gates on SPEC-COMPLIANCE (ripple≤Rp·atten≥Rs·alternation-count) + coeffs-to-**10-sig-digits**, NOT bit-match (physically unachievable + meaningless — spec-compliance is what MATLAB validates against, the STRONGER gate); filter APPLICATION (lfilter/sosfilt/biquad = pure mul-add) gates BIT-EXACT + {1..16} determinism MOAT (streaming-only — DAW replay/DO-178C; design is one-time, "deterministic ellip()" is not a differentiator). ⭐ DATA-FLOW RULE (locked v11-a): design in zpk → convert zpk→sos DIRECTLY; tf is OUTPUT-only NEVER a design intermediate (roots-of-tf = Wilkinson-ill-conditioned >order~8, proven by order-12 gate); zpk_freqz = well-conditioned factored eval; zpk→sos = nearest-to-unit-circle pairing (the reason SOS exists); SOS = default high-order IIR. Two-layer (ADR-0078): every filter ships typed whole-array batch + allocation-free stateful streaming kernels (Direct-II-T biquads/FIR/polyphase = the DAW/SDR hot loop). Gold standards: scipy.signal (free primary) + MATLAB-SP-Toolbox-R2026a (industry authority, installed) + Intel-IPP + liquid-dsp + CMSIS-DSP + PyWavelets. Edges: dsp→fft (spectral/conv/Hilbert/CZT) + eigen (DPSS-multitaper/MUSIC-ESPRIT/AR) + math + units + core; wavelet→fft; comms→dsp; NO edge to opt. Extends ADR-0065; consumes ADR-0078 + ADR-0092. | arch, hesap, dsp, filters, determinism, module-edges, substrate | Accepted |
-| 0099  | **crd-gpu-context — the shared GPU device foundation; compute/rendering are separate CONCERNS on ONE device.** A deep `IGpuContext` (device/queues/backend) + `GpuContextManager`; `IComputeContext` (compute) and a future `RenderDevice` (rendering) are independent consumers of the same device — NOT a second VkDevice, NOT the rendering RHI reused for compute. Corrects the i-b VulkanComputeDevice shortcut. | arch, gpu-context, compute, rendering, architecture | Accepted |
-| 0100  | **CKIR is the one GPU compute manager: a kernel-source-agnostic dispatch surface.** One manager owns context + dispatch runtime + kernel compiler; the dispatch surface dispatches a COMPILED kernel regardless of origin (CKIR-authored OR hand-written .spv/.ptx/.metallib) — lets LBVH + ray tracing live under it without pretending to be dataflow graphs. Amends 0098 + 0099. | kir, gpu-context, compute, dispatch, ray-tracing, abstraction, architecture | Accepted |
-| 0101  | **The IR is the single source of truth for EVERY shader (compute + material); backend languages/bytecodes are OUTPUTS only.** Generalizes CKIR to the universal shader IR: front-ends (node editor ↔ IR · our text shader language · C++ builders) → IR (CORE = typed values + structured control flow + full intrinsic library; PROFILES = compute + material w/ PBR surface model) → codegen per backend (GLSL/HLSL/WGSL/MSL/CUDA) → cook to PER-BACKEND bytecode in crdr ('SHDR'); GLSL is never authored or stored. Deep look: Slang (language+IR→all backends, the prior art), MaterialX (material graph→codegen+PBR nodes), Unreal/Unity (graph→HLSL + variant cost + escape-hatch tax). Fix: compute via the rungs (rung 3 = step 1); rendering via the material profile; opaque-import escape hatch (non-portable). Phased A(core hardening)/B(material profile)/C(front-ends)/D(cook+variants). | kir, shader, ir, materials, node-editor, codegen, crdr, architecture, north-star | Accepted |
-| 0102  | **Render-data, lighting & pass architecture — how the shader IR feeds a frontier renderer.** Unification, not greenfield: the renderer (frame graph, `IRenderPath` Forward/Forward+/Deferred/VisBuffer, `PerFrameUbo`, `MaterialTemplate`+variants, reflection, cooking) STAYS; CKIR replaces the hand-written GLSL as the shader SOURCE. Decisions: globals (camera/time) live in the renderer's per-frame set 0, NOT the GPU context (upholds 0099); **frequency-based descriptor sets** 0=frame/1=pass-lighting/2=material/3=object (bindless/GPU-driven ready); **material = surface response (OpenPBR params), lighting-agnostic; render path = lighting technique** → one material works Forward+ OR Deferred (HYBRID: deferred/vis-buffer opaque + forward transparent); multi-pass (shadows/CSM/G-buffer) = the frame graph + `variant_for_pass`; skinning = structured-buffer palette (set 3, VS-skin default); uber-shaders = existing `ShaderOption` variants. D-007 DESIGNS+validates the seam (renders); the full Forward+/Deferred pipelines are the post-hesap RENDERING phase. | renderer, shader, ir, materials, lighting, deferred, forward-plus, frame-graph, bindless, architecture, north-star | Accepted |
-| 0103  | **`crd-gpu-context` owns every GPU program and pipeline; no module outside a backend names a shading language or a bytecode.** Makes ADR-0101 enforceable. TWO grep-checkable invariants: **I1** no GLSL/HLSL/WGSL/MSL/CUDA source crosses a module boundary (it lives only between our emitter and the vendor compiler, inside one backend); **I2** no SPIR-V/DXIL/PTX bytes appear in a public header — a consumer holds only an opaque `IGpuProgram`. Currency IN = the IR (`KGraph`+`KEntry`), OUT = `IGpuProgram`. `IGpuContext` gains `create_program(graph, entry)` + `create_program(cooked_name)` (ship path + the ADR-0101 §4 non-portable escape hatch) and the three domains `compute()`/`raster()`/`raytracing()`. `ShaderStage` complete day one = the 14 SPIR-V execution models (compute · vertex · tess-control · tess-eval · geometry · fragment · task · mesh · raygen · intersection · any-hit · closest-hit · miss · callable); unimplemented stages REFUSE LOUDLY, never fall back to compute. `crd-shader` loses `compile.hpp` + shaderc + dxc, keeps Effect/reflection/runtime/material. `crd-rhi`'s Device/ShaderModule converge onto `IGpuContext`/`IGpuProgram`; `rhi-vulkan` is absorbed by `gpu-context-vulkan` (one VkDevice, one pipeline cache, one Vulkan-aware module). Edge `crd-gpu-context → crd-kir` verified acyclic. **Supersedes ADR-0099 §6** (crd-shader as the shared GLSL/HLSL compiler — an Accepted decision that contradicted ADR-0101). Rollout = detour D-008 C0–C4, each step independently green. | gpu-context, kir, shader, rhi, renderer, architecture, ir, ray-tracing, mesh-shaders, substrate, north-star | Accepted |
-| 0104  | **IR-as-crdr: the shader cook + deploy pipeline (D1–D12).** The IR (ADR-0101) SHIPS: KGraph+KEntry serialize into `.crdr` ('SHDR') → content-hash cook cache → per-backend REAL bytecode (SPIR-V/DXIL/PTX; MSL/WGSL source) → variant containers (VART, content-hash dedup) → zero-compile load + persistent driver pipeline cache (VkPipelineCache / ID3D12PipelineLibrary) → hot-reload (atomic pipeline swap, generation retire) → parallel cook on crd-jobs fibers → async warmup → spec-constant binding at load. Supersedes crd-shader's Effect/PSO path as the deploy currency. | kir, shader-cook, crdr, deploy, variants, pipeline-cache, hot-reload, architecture | Accepted |
-| 0105  | **Retire crd-rhi + crd-renderer: crd-gpu-context IS the graphics layer.** Two facades over ONE device (D-008 made rhi ADOPT gpu-context's VkDevice) = a standing double-wiring tax (GEO-3 2b: sRGB wired twice in a day; cooked linear-space mips never reach the real renderer). rhi/renderer FROZEN immediately; the D-007 **RET band** (rows 89-96) absorbs every capability into gpu-context (present/swapchain · cooked-mip+sRGB upload seam · ADR-0085 allocator parity · ImGui · crd-draw port · bvh-gpu Morton compute · shader/meshgen sweep), PORTS ~5k device-level test assertions (coverage parity = deletion PREcondition), then DELETES crd-rhi + crd-rhi-vulkan + crd-renderer (the legacy-GLSL-Effect precedent). CPU-side resource types re-home GPU-free in crd-resources (ADR-0042's loader posture survives; its rhi upload half dies). Sequencing: GEO-3 close → RET complete → GEO-4..7 integrate ONCE on the clean stack. Supersedes the rhi halves of 0036/0042/0080/0085 (struck in place as slices land). | gpu-context, rhi, renderer, retirement, architecture, substrate | Accepted |
-| 0106  | **Unified frame-graph runtime: `crd-render-graph` is the single live runtime.** RAF-0…7 built the asset-driven foundation as ADDITIVE leaf modules (render-asset-core · render-program · render-material · render-pass registry · render-graph runtime), gated in isolation — the LIVE renderer was never wired onto them, so two frame-graph execution paths exist over one device (SceneRenderer→`frame_runtime.cpp` `FramePassKind` switch→~57 verbs, vs `crd-render-graph::execute_frame`). §2.1 forbids two at close; corollary 3 (unreachable runtime ≡ missing) means RAF-6/7's live migration silently landed on RAF-8. Decision: **render-graph is THE live runtime** (`FrameGraphTemplate`+`CompiledFrameGraph`); **render-pass**/**render-graph** own the registry+runtime (corrects RAF-0 §3, struck in place — folding into frame-cook would rebuild the giant module §18/§21 forbid); **frame-cook** keeps `FrameGraphDesc`+cooked blobs and gains a Cooked→Template **load bridge** via a new ACYCLIC `frame-cook→render-graph` edge (render-graph depends on neither frame-cook nor scene, so `frame-cook ⊥ crd-scene` holds via the preserved `IFrameGraphHost` seam — the host resolves ECS→pre-resolved `DrawItem`; render-graph never sees a scene type); **SceneRenderer** becomes an ORCHESTRATOR; the `FramePassKind` switch is a migration adapter deleted at RAF-12. Migrate ONE kind at a time — old switch + new executor both resolve; command-parity (mock encoder) + pixel-parity + `crd-sandbox --smoke-test 2` both backends per increment. RAF-8 splits into 8a (wire live runtime) + 8b (orchestration). Supersedes ADR-0032's runtime-ownership (preserves its lifetime/aliasing/barrier/one-submission). **CLOSED at RAF-12.3 (2026-08-06):** the `FramePassKind` adapter is deleted (→ `ExecutorTypeId` + role bits); 12.2 unified the live path via `AuthoredPass`+`run_authored_cb` (Decision #1 refined in place — see the ADR's RAF-12 amendment). | renderer, frame-graph, gpu-context, architecture, render-path | Accepted (closed RAF-12.3) |
-| 0107  | **Interactive UI + 2D rendering architecture (I2D-0, post-RAF).** Five distinct concepts (SceneWorld · UiWorld · CanvasCompositor · UiMaterial/UiEffectGraph · FrameGraph), never collapsed. `UiWorld` is a dedicated RETAINED world (`UiNodeId` ≠ gameplay `EntityId`); UI = semantics (layout/focus/nav/a11y/l10n/state/binding), sprites = visuals. `CanvasDisplayList` = a typed backend-neutral compiled paint rep lowering `UiWorld → style/layout/text → paint compile → display list → clip/layer/batch compiler → RAH-hardened canonical GPU commands → RAF executors` (**I2D-1 Canvas BLOCKED on RAH-1 typed attachments + RAH-2 resource-table bindless**; seam consistent with `docs/systems/rah-0-canonical-model-audit.md`). Three authoring paths (documents / builder-reconciliation with stable identity / low-level) → one UiWorld. CKIR-backed UiMaterial + multi-pass UiEffectGraph compiling to the RAF frame graph (no mini scheduler). Reuses `AssetId`/`DiagnosticList`/RAF-11 reloader/`crd-anim`. CR-D007 editor = I2D-9 widgets on the I2D-4 shell (D7E reframed); ImGui kept for debug/recovery. Same L0–L7 maturity (nothing >L5 today). D-007 §UI/2D SUB-PROGRAMME. | ui, 2d, canvas, uiworld, sprite, editor, architecture, post-raf | Proposed |
-| 0108  | **A Cerid-owned executable-program language stack (CEIR/CHIR); C++ is no longer the *only* authorable program (CEIR-0b).** Captures the user-directed CEIR pivot (mission §5): algorithms-as-assets need an inspectable/diffable/serializable/hot-reloadable/agent-authorable/lowerable program representation a compiled `.crds.cpp` DLL structurally cannot provide. **Surgical supersession of ADR-0081 §9 ONLY** (the "C++ is the ONLY scripting path" clause); ADR-0081 §1-§8 (agent-native CLI/RPC/MCP, capability security, command schema, replay) REAFFIRMED. Decision (§5): C++ stays first-class native + hot-reload; Cerid gains an OWNED textual+visual language stack (CEIR execution IR now, CHIR high-level layer design-only until CEIR-29); no Lua/Python/JS runtime (the third-party-VM rejection stands); CLI/RPC/MCP stays source-of-truth; program assets are agent-authorable + machine-inspectable. Language non-negotiables pinned now (§98/§99): no mandatory GC in hot paths · deterministic time/RNG · capability security · C++ FFI · structured concurrency · Result/Option · unit-aware. ⛔ The cornerstone flip (PRINCIPLES/AGENTS/README/ROADMAP) + the ADR-0081 §9 in-file strike are DEFERRED to §5's second gate — the first CEIR vertical slice (§7). Refined by CEIR-0c/0d/0e. | scripting, lang, ceir, chir, ir, agent, architecture, substrate, north-star | **Accepted (2026-08-07; cornerstone flip executed 2026-08-10 at CEIR-13z)** |
-| 0109  | **CEIR/CHIR/CKIR ownership, the one-way layer contract, and `crd-ceir` module placement (CEIR-0c).** Fixes the layer separation (mission §3, unrevisable): CHIR=source semantics (design-only→CEIR-29) → CEIR=execution/orchestration IR → CKIR=per-invocation kernels (UNCHANGED, referenced by content-hash `KernelRef` identity, never a `KGraph`). Lowering strictly one-way (never sideways/up); provenance flows back as metadata. **Module:** `engine/ceir` (`crd-ceir`) is host-only — deps `crd-core/log/memory/containers/units` ONLY (acyclic by construction; units earned = the ADR-0078 dimension-tag boundary on `Type`, designed at CEIR-3e). GPU/jobs stacks reached via **dependency inversion**: the abstract `IExecutionProvider` (append-at-END, D135) lives in `crd-ceir`; implementations live in bridge modules `crd-ceir-host` (→jobs) + `crd-ceir-gpu` (→gpu-context/render-graph/kir, where the CEIR-0a `record_*`+CKIR-compile STAY). Extends ADR-0103 I1/I2 as **I3** (no shading-language/bytecode name in `crd-ceir`) **I4** (no backend type in a `crd-ceir` public header) **I5** (acyclic edge set, ADR-0096 gate extended). Finalizes the CEIR-1 C++ names (`crd::ceir::{Context,Module,Operation,Value,Block,Region,SymbolTable,Type,Dialect,OpId,SourceLoc,KernelRef,ModuleBuilder}`) + the §10 semantic-identity model (stable ids · source spans · layout-separated-from-semantics). Gates CEIR-1. | ceir, chir, ckir, ir, architecture, module-edges, substrate, north-star | **Accepted (2026-08-07 — binding for CEIR-1)** |
-| 0110  | **Native-intrinsic schema, the legitimacy rule, and the three plugin-extension levels (CEIR-0d).** An intrinsic is an ORDINARY CEIR-2 op (printer/verifier/serializer for free) carrying §100 native-binding metadata (id/version/typed-I/O/effects/domain/determinism/thread-safety/lifetime/capabilities/provider/cost/hot-reload/debug) + a bridge-registered handler — NOT a parallel system; `IntrinsicRegistry` in `crd-ceir` (ADR-0109), handlers in bridges. **Legitimacy IFF test:** an intrinsic introduces a capability Cerid didn't previously understand (hardware/OS/device/external/provider primitive); a composable algorithm MUST be a program (§178); ⛔ **composable-but-slow is never Level C — intrinsics = capabilities, providers = performance** (§102/§52/§70). **Plugin levels** (§101, hardest last): A subgraph/func (no native) · B custom op + lowering (plugin compiler, no backend) · C native intrinsic/provider (only when A/B can't express it). Classifies the CEIR-0a atomic set: `present`/codecs/scene-resolvers ✅ legitimate; `submit_overlay`/`draw_overlay` dissolve into `ceir.render` at CEIR-11. Registry lands after CEIR-4; first shipped intrinsic `present` @ CEIR-12. | ceir, intrinsics, plugin, capability, architecture, extensibility, substrate | **Accepted (2026-08-07)** |
-| 0111  | **Open-world TYPE model** (CEIR-3 era). | ceir, type, open-world | Accepted (2026-08-09) |
-| 0112  | **Open-world ATTRIBUTE model.** | ceir, attribute, open-world | Accepted (2026-08-09) |
-| 0113  | **Effect widening + open effect locations.** | ceir, effects | Accepted (2026-08-09) |
-| 0114  | **Stable semantic identity** (ids/spans, layout-separated). | ceir, identity | Accepted (2026-08-09) |
-| 0115  | **Trait/interface split + region reservation.** | ceir, trait, region | Accepted (2026-08-09) |
-| 0116  | **Capabilities/safety split + typed time domains** (the §57 capability model; CEIR-8f). | ceir, capability, safety, time | Accepted (2026-08-09) |
-| 0117  | **Compiler-infrastructure skeleton.** | ceir, compiler | Accepted (2026-08-09) |
-| 0118  | **Incremental-evaluation unification.** | ceir, incremental | Accepted (2026-08-09) |
-| 0119  | **Transactions** (atomic module edit + rollback). | ceir, transactions | Accepted (2026-08-09) |
-| 0120  | **Hot-reload + state migration.** | ceir, hot-reload | Accepted (2026-08-10) |
-| 0121  | **Execution-plan cache.** | ceir, plan-cache | Accepted (2026-08-10) |
-| 0122  | **Reference executor (full host subset).** | ceir, executor | Accepted (2026-08-10) |
-| 0123  | **Compiled execution plan.** | ceir, executor, compiled | Accepted (2026-08-10) |
-| 0124  | **Memory planner.** | ceir, memory-planner | Accepted (2026-08-10) |
-| 0125  | **`ceir-gpu` lowering bridge** (CEIR→CKIR→device). | ceir, gpu-context, lowering | Accepted (2026-08-10) |
-| 0126  | **`ceir-gpu` execution seam** (`IExecutionProvider`; the §69 partitioner landed as `partition_ml` @ CEIR-24). | ceir, gpu-context, executor, provider | Accepted (2026-08-10) |
-| 0127  | **`ceir.frame` dialect + converter** (CEIR-15). | ceir, frame, dialect | Accepted (2026-08-11) |
+| Reference | Purpose |
+|---|---|
+| [0130-system-qualification-and-agent-driven-products](0130-system-qualification-and-agent-driven-products.md) | Confirmed whole-system directions, combined training/inference and separate authorities; detailed mechanism proposals |
+| [0001-build-language](0001-build-language.md) | ADR-0001 — Build & language |
+| [0002-logging](0002-logging.md) | ADR-0002 — Logging |
+| [0003-memory-v1](0003-memory-v1.md) | ADR-0003 — Memory v1 |
+| [0004-containers-v1](0004-containers-v1.md) | ADR-0004 — Containers v1 |
+| [0005-math-v1](0005-math-v1.md) | ADR-0005 — Math v1 |
+| [0006-platform-v1](0006-platform-v1.md) | ADR-0006 — Platform v1 |
+| [0007-app-shape](0007-app-shape.md) | ADR-0007 — `crd-app` shape |
+| [0008-graphics-architecture](0008-graphics-architecture.md) | ADR-0008 — Graphics architecture |
+| [0009-rhi-v1a-scaffold](0009-rhi-v1a-scaffold.md) | ADR-0009 — RHI v1a scaffold |
+| [0010-vulkan-bootstrap](0010-vulkan-bootstrap.md) | ADR-0010 — Vulkan bootstrap |
+| [0011-first-triangle](0011-first-triangle.md) | ADR-0011 — First triangle milestone |
+| [0012-config-substrate](0012-config-substrate.md) | ADR-0012 — Configuration substrate |
+| [0013-asset-pipeline](0013-asset-pipeline.md) | ADR-0013 — Asset pipeline |
+| [0014-refcount-split](0014-refcount-split.md) | ADR-0014 — Reference counting split |
+| [0015-job-system](0015-job-system.md) | ADR-0015 — Job system shape |
+| [0016-render-path](0016-render-path.md) | ADR-0016 — Render path strategy |
+| [0017-culling-strategy](0017-culling-strategy.md) | ADR-0017 — Culling strategy |
+| [0018-physics-architecture](0018-physics-architecture.md) | ADR-0018 — Physics architecture |
+| [0019-reserved](0019-reserved.md) | ADR-0019 — (reserved) |
+| [0020-scene-ecs-hybrid](0020-scene-ecs-hybrid.md) | ADR-0020 — Scene & ECS hybrid + UI in scene tree |
+| [0021-animation-architecture](0021-animation-architecture.md) | ADR-0021 — Animation architecture |
+| [0022-streaming-pipeline](0022-streaming-pipeline.md) | ADR-0022 — Open-world streaming pipeline |
+| [0023-ui-architecture](0023-ui-architecture.md) | ADR-0023 — UI architecture |
+| [0024-imgui-single-viewport-default](0024-imgui-single-viewport-default.md) | ADR-0024 — ImGui single-viewport default |
+| [0025-shader-mechanism-policy](0025-shader-mechanism-policy.md) | ADR-0025 — Shader mechanism policy |
+| [0026-shader-variant-key](0026-shader-variant-key.md) | ADR-0026 — Shader variant key |
+| [0027-shader-reflection-consumption](0027-shader-reflection-consumption.md) | ADR-0027 — Shader reflection consumption model |
+| [0028-shader-cache-hierarchy](0028-shader-cache-hierarchy.md) | ADR-0028 — Shader cache hierarchy |
+| [0029-shader-hot-reload](0029-shader-hot-reload.md) | ADR-0029 — Shader hot reload |
+| [0030-shader-pso-boundary](0030-shader-pso-boundary.md) | ADR-0030 — Shader / PSO boundary |
+| [0031-shader-frontend-ir-seam](0031-shader-frontend-ir-seam.md) | ADR-0031 — Shader frontend → IR seam |
+| [0032-frame-graph-v1](0032-frame-graph-v1.md) | ADR-0032 — Frame graph v1 |
+| [0033-jobs-implementation-architecture](0033-jobs-implementation-architecture.md) | ADR-0033 — crd-jobs implementation architecture |
+| [0034-cpp-hotreload-scripting](0034-cpp-hotreload-scripting.md) | ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism |
+| [0035-networking-architecture](0035-networking-architecture.md) | ADR-0035 — Networking architecture principles |
+| [0036-resources-module-and-loader-registry](0036-resources-module-and-loader-registry.md) | ADR-0036 — `crd-resources` module placement + loader-registry pattern |
+| [0037-resource-id-uuid-scheme](0037-resource-id-uuid-scheme.md) | ADR-0037 — ResourceId hybrid UUID scheme |
+| [0038-cooked-binary-container-format](0038-cooked-binary-container-format.md) | ADR-0038 — Cooked binary container format |
+| [0039-resource-handle-semantics](0039-resource-handle-semantics.md) | ADR-0039 — `ResourceHandle<T>` semantics |
+| [0040-cooker-cli-cmake-integration](0040-cooker-cli-cmake-integration.md) | ADR-0040 — Cooker CLI + CMake integration |
+| [0041-platform-async-filesystem-io](0041-platform-async-filesystem-io.md) | ADR-0041 — `crd-platform` async filesystem I/O |
+| [0042-texture-resource-cooked-format](0042-texture-resource-cooked-format.md) | ADR-0042 — Texture cooked format + GPU upload strategy |
+| [0043-mesh-resource-gltf-import](0043-mesh-resource-gltf-import.md) | ADR-0043 — MeshResource vertex layout + glTF import scope |
+| [0044-phase-ordering-material-before-scene](0044-phase-ordering-material-before-scene.md) | ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS |
+| [0045-sandbox-asset-layout-cook-meshgen](0045-sandbox-asset-layout-cook-meshgen.md) | ADR-0045 — Sandbox executable, asset source layout, cook workflow, crd-meshgen |
+| [0046-material-domain-rt-hybrid-strategy](0046-material-domain-rt-hybrid-strategy.md) | ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy |
+| [0047-font-rendering-system](0047-font-rendering-system.md) | ADR-0047 — Font rendering system |
+| [0048-material-system-architecture](0048-material-system-architecture.md) | ADR-0048 — Material System Architecture Foundation |
+| [0049-scene-entity-identity-slotmap](0049-scene-entity-identity-slotmap.md) | ADR-0049 — Scene/ECS L1: Entity identity & SlotMap |
+| [0050-scene-storage-backends](0050-scene-storage-backends.md) | ADR-0050 — Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid) |
+| [0051-scene-relations-first-class](0051-scene-relations-first-class.md) | ADR-0051 — Scene/ECS L3: Relations as first-class |
+| [0052-scene-query-system-schedule](0052-scene-query-system-schedule.md) | ADR-0052 — Scene/ECS L4: Query · System · Schedule |
+| [0053-scene-component-index-framework](0053-scene-component-index-framework.md) | ADR-0053 — Scene/ECS L5: Component index slot framework |
+| [0054-scene-transform-hierarchy-update](0054-scene-transform-hierarchy-update.md) | ADR-0054 — Scene/ECS: Transform hierarchy update model |
+| [0055-scene-serialization-toml-scen-crdr](0055-scene-serialization-toml-scen-crdr.md) | ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked |
+| [0056-scene-reserved-l6-l8-slots](0056-scene-reserved-l6-l8-slots.md) | ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection) |
+| [0057-scene-ui-in-tree-boundary](0057-scene-ui-in-tree-boundary.md) | ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration) |
+| [0058-obek-system](0058-obek-system.md) | ADR-0058 — Öbek System: cooked entity-graph templates with composition, variation, and AAAA-tier future-proofing |
+| [0059-preset-system](0059-preset-system.md) | ADR-0059 — Preset System: typed system-config bags with five-layer resolution and `extends`-chain composability |
+| [0060-profile-system](0060-profile-system.md) | ADR-0060 — Profile System: typed predicate selectors with additive composition for cross-domain runtime configuration |
+| [0061-async-gpu-upload-contract](0061-async-gpu-upload-contract.md) | ADR-0061 — Async GPU upload contract: `UploadHandle` + per-module polling system |
+| [0062-eylem-physics-architecture](0062-eylem-physics-architecture.md) | ADR-0062 — Eylem: Cerid-native physics architecture |
+| [0063-eylem-determinism-contract](0063-eylem-determinism-contract.md) | ADR-0063 — Eylem determinism contract |
+| [0064-sdf-substrate-architecture](0064-sdf-substrate-architecture.md) | ADR-0064 — `crd-sdf` substrate architecture |
+| [0065-hesap-numerical-substrate](0065-hesap-numerical-substrate.md) | ADR-0065 — `crd-hesap` numerical computing substrate |
+| [0066-draw-substrate-architecture](0066-draw-substrate-architecture.md) | ADR-0066 — `crd-draw` substrate architecture |
+| [0067-eylem-force-field-architecture](0067-eylem-force-field-architecture.md) | ADR-0067 — Eylem force-field architecture |
+| [0068-eylem-body-types-collision-filtering-callbacks](0068-eylem-body-types-collision-filtering-callbacks.md) | ADR-0068 — Eylem body types + collision filtering + contact callbacks |
+| [0069-eylem-materials-substrate](0069-eylem-materials-substrate.md) | ADR-0069 — Eylem materials substrate |
+| [0075-eylem-testing-rigor](0075-eylem-testing-rigor.md) | ADR-0075 — Eylem testing rigor and conservation-law CI |
+| [0076-geometry-substrate-architecture](0076-geometry-substrate-architecture.md) | ADR-0076 — `crd-geometry` substrate architecture |
+| [0077-multi-domain-expansion-vision](0077-multi-domain-expansion-vision.md) | ADR-0077: Multi-domain expansion — the "absolute beast" vision |
+| [0078-units-substrate-architecture](0078-units-substrate-architecture.md) | ADR-0078 — `crd-units` substrate architecture |
+| [0079-crd-perf-substrate-architecture](0079-crd-perf-substrate-architecture.md) | ADR-0079 — `crd-perf` profiler substrate + ImGui frontend |
+| [0080-crd-rhi-compute](0080-crd-rhi-compute.md) | ADR-0080 — `crd-rhi-compute` substrate |
+| [0081-agent-native-engine-cli](0081-agent-native-engine-cli.md) | ADR-0081 — Agent-Native Engine: CLI + RPC + MCP Substrate |
+| [0082-hesap-microkernel-intrinsics-strategy](0082-hesap-microkernel-intrinsics-strategy.md) | ADR-0082 — Hesap GEMM microkernel: intrinsics-via-Vec8f/Vec16f, ASM deferred |
+| [0083-hesap-dense-rowmajor-storage](0083-hesap-dense-rowmajor-storage.md) | ADR-0083 — hesap-dense row-major storage (with per-factor escape hatch) |
+| [0084-hesap-matrix-as-resource](0084-hesap-matrix-as-resource.md) | ADR-0084 — Sparse matrices as first-class cooked engine resources (`crd-hesap-resources`) |
+| [0085-streaming-allocator-cluster](0085-streaming-allocator-cluster.md) | ADR-0085 — Virtual-memory + streaming allocator cluster |
+| [0086-eylem-physics-animation-unification](0086-eylem-physics-animation-unification.md) | ADR-0086 — Eylem unified motion model: physics-animation as one solve, LOD fidelity continuum, crowd-scale deterministic networking |
+| [0087-large-scale-deterministic-simulation](0087-large-scale-deterministic-simulation.md) | ADR-0087 — Large-scale deterministic simulation: environmental fields, surface-integral coupling, moving-frame agents, and player-count-scaled networking |
+| [0088-gemm-runtime-dispatch-asm-microkernels](0088-gemm-runtime-dispatch-asm-microkernels.md) | ADR-0088 — GEMM hand-tuned asm: INVESTIGATED → REVERTED (intrinsics vindicated) |
+| [0089-hesap-eigen-sparse-eigensolvers](0089-hesap-eigen-sparse-eigensolvers.md) | ADR-0089 — crd-hesap-eigen: sparse eigensolvers + module edges (Phase 3.1.6 v6) |
+| [0090-hesap-opt-optimization-domain](0090-hesap-opt-optimization-domain.md) | ADR-0090 — crd-hesap-opt: the optimization domain (substrate + contracts + module edges, Phase 3.1.6 v7) |
+| [0091-hesap-ode-module](0091-hesap-ode-module.md) | ADR-0091 — `crd-hesap-ode`: the ODE/DAE module — two API layers, deterministic controllers, the work-precision contract |
+| [0092-hesap-fft-cluster](0092-hesap-fft-cluster.md) | ADR-0092 — `crd-hesap-fft`: the FFT cluster — deterministic plan-from-factorization, portable-C++ MKL-adjacent, the full transform suite |
+| [0093-hesap-dsp-cluster](0093-hesap-dsp-cluster.md) | ADR-0093 — `crd-hesap-dsp` (+ `-wavelet` + `-comms`): the DSP cluster — the design/application honest-gate split, SOS-by-default, the two-layer streaming contract |
+| [0094-hesap-statistics-cluster](0094-hesap-statistics-cluster.md) | ADR-0094 — `crd-hesap-special` + `crd-hesap-stats`: the statistics cluster — special-as-leaf, the inverse-incomplete cdf/ppf engine, the counter-RNG determinism moat, and the tw… |
+| [0095-hesap-numerical-analysis-motion-cluster](0095-hesap-numerical-analysis-motion-cluster.md) | ADR-0095 — the v13 Numerical-Analysis + Motion cluster: the 4-module split, the three certification moat pillars, and the error-tier contract |
+| [0096-hesap-tensor-cluster](0096-hesap-tensor-cluster.md) | ADR-0096 — crd-hesap-tensor: the N-D tensor substrate — templated compute dtypes over stride views, the two-tier deterministic-reduction contract, deterministic stochastic round… |
+| [0097-hesap-autodiff-cluster](0097-hesap-autodiff-cluster.md) | ADR-0097 — crd-hesap-autodiff: the automatic-differentiation cluster — one module for forward + reverse, the deterministic no-atomics tape, suite-wide differentiability, differe… |
+| [0098-hesap-gpu-cluster](0098-hesap-gpu-cluster.md) | ADR-0098 — crd-kir + crd-hesap-gpu: the Cerid GPU compute compiler — a unified compute+autodiff kernel IR lowering to six backends, vendor-beating kernels, and certified cross-v… |
+| [0099-compute-rendering-separation](0099-compute-rendering-separation.md) | ADR-0099 — `crd-gpu-context`: a backend-agnostic GPU **context manager**; compute and rendering as independent, composable consumers |
+| [0100-ckir-one-gpu-compute-manager](0100-ckir-one-gpu-compute-manager.md) | ADR-0100 — CKIR is the one GPU compute manager: a *kernel-source-agnostic* dispatch surface serving both compiler-authored and hand-written kernels |
+| [0101-ir-is-source-of-truth-for-all-shaders](0101-ir-is-source-of-truth-for-all-shaders.md) | ADR-0101 — The IR is the single source of truth for every shader (compute AND material); backend languages are outputs only |
+| [0102-render-data-lighting-pass-architecture](0102-render-data-lighting-pass-architecture.md) | ADR-0102 — Render-data, lighting & pass architecture: how the shader IR feeds a frontier renderer |
+| [0103-gpu-context-owns-every-gpu-program](0103-gpu-context-owns-every-gpu-program.md) | ADR-0103 — `crd-gpu-context` owns every GPU program and pipeline; **no module outside a backend names a shading language or a bytecode** |
+| [0104-ir-as-crdr-shader-cook-deploy](0104-ir-as-crdr-shader-cook-deploy.md) | ADR-0104 — IR-as-`crdr`: the shader cook & deploy pipeline (D1–D5) |
+| [0105-retire-rhi-renderer-gpu-context-is-the-graphics-layer](0105-retire-rhi-renderer-gpu-context-is-the-graphics-layer.md) | ADR-0105 — Retire crd-rhi + crd-renderer: crd-gpu-context IS the graphics layer |
+| [0106-unified-frame-graph-runtime-render-graph](0106-unified-frame-graph-runtime-render-graph.md) | ADR-0106 — Unified frame-graph runtime: `crd-render-graph` is the single live runtime |
+| [0107-ui-2d-architecture](0107-ui-2d-architecture.md) | ADR-0107 — Interactive UI + 2D rendering architecture: `UiWorld`, `CanvasCompositor`, and the paint-to-command seam |
+| [0108-ceir-owned-language-stack-supersedes-cpp-only-scripting](0108-ceir-owned-language-stack-supersedes-cpp-only-scripting.md) | ADR-0108 — A Cerid-owned executable-program language stack (CEIR/CHIR); C++ is no longer the *only* authorable program |
+| [0109-ceir-chir-ckir-ownership-and-module-placement](0109-ceir-chir-ckir-ownership-and-module-placement.md) | ADR-0109 — CEIR / CHIR / CKIR ownership, the one-way layer contract, and `crd-ceir` module placement |
+| [0110-native-intrinsic-schema-and-plugin-levels](0110-native-intrinsic-schema-and-plugin-levels.md) | ADR-0110 — Native-intrinsic schema, the legitimacy rule, and the three plugin-extension levels |
+| [0111-open-world-type-model](0111-open-world-type-model.md) | ADR-0111 — Open-world type model: dialect-defined type-classes beside the built-in `TypeKind` |
+| [0112-open-world-attribute-model](0112-open-world-attribute-model.md) | ADR-0112 — Open-world attribute model: aggregate kinds + dialect-defined attribute-classes |
+| [0113-effect-widening-and-open-effect-locations](0113-effect-widening-and-open-effect-locations.md) | ADR-0113 — Effect family widening (u32→u64) + open-world effect-LOCATION model |
+| [0114-stable-semantic-identity](0114-stable-semantic-identity.md) | ADR-0114 — Stable semantic identity: content-independent stable ids for ops/functions/state-slots |
+| [0115-trait-interface-split-and-region-reservation](0115-trait-interface-split-and-region-reservation.md) | ADR-0115 — Trait/interface split + region-kind reservation |
+| [0116-capabilities-safety-split-time-domains](0116-capabilities-safety-split-time-domains.md) | ADR-0116 — Capability contracts + domain/safety split + typed time domains |
+| [0117-compiler-infrastructure-skeleton](0117-compiler-infrastructure-skeleton.md) | ADR-0117 — Compiler-infrastructure skeleton: analysis/pass managers, rewrite/conversion, diagnostics |
+| [0118-incremental-evaluation-unification](0118-incremental-evaluation-unification.md) | ADR-0118 — Incremental-evaluation unification: one dependency/dirty engine (crd-containers::IncrementalDag) |
+| [0119-transactions](0119-transactions.md) | ADR-0119 — Transactions: the atomic authored-mutation surface (commit / rollback) |
+| [0120-hot-reload-and-state-migration](0120-hot-reload-and-state-migration.md) | ADR-0120 — Hot-reload lifecycle + state migration (asset lifecycle completion) |
+| [0121-execution-plan-cache](0121-execution-plan-cache.md) | ADR-0121 — Execution-plan cache: a validate-on-hit store of live truth |
+| [0122-reference-executor-full-host-subset](0122-reference-executor-full-host-subset.md) | ADR-0122 — Reference executor: the full host subset (task vocabulary · sequential parallel reference · step hooks · ON-POOL async) |
+| [0123-compiled-execution-plan](0123-compiled-execution-plan.md) | ADR-0123 — The compiled execution plan (CEIR-11b): a dense two-tier, differential-verified against the §118 oracle |
+| [0124-memory-planner](0124-memory-planner.md) | ADR-0124 — The memory planner (CEIR-12d): interval-coloring over the §26/§78 lifetime analysis, an inspectable plan |
+| [0125-ceir-gpu-lowering-bridge](0125-ceir-gpu-lowering-bridge.md) | ADR-0125 — The `crd-ceir-gpu` lowering bridge (CEIR-13d): CEIR compute/transfer regions → an inspectable command list |
+| [0126-ceir-gpu-execution-seam](0126-ceir-gpu-execution-seam.md) | ADR-0126 — the CEIR-13z GPU execution seam (`execute_lowered` on IComputeContext) |
+| [0127-ceir-frame-dialect-and-converter](0127-ceir-frame-dialect-and-converter.md) | ADR-0127 — the `ceir.frame` dialect + the FrameGraphDesc↔ceir.frame converter placement |
+| [0128-chir-0-language-binding-decisions](0128-chir-0-language-binding-decisions.md) | ADR-0128 — CHIR-0: the Cerid high-level language, binding decisions against the corpus |
+| [0129-renderer-ui-editor-delivery-order](0129-renderer-ui-editor-delivery-order.md) | ADR-0129 — Renderer, UI, CR-D007 and notebook delivery order |

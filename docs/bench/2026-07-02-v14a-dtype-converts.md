@@ -1,5 +1,8 @@
 # 2026-07-02 — v14-a dtype converts: f16/bf16/FP8 + deterministic SR vs numpy/ml_dtypes/torch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Machine/config:** i9-14900K, WSL2 Ubuntu 24.04, single pinned core (`taskset -c 4`), 1M elements,
   20 reps. Cerid: g++ 13.3 `-O3 -march=native -DNDEBUG` (F16C/AVX2 active). Peers single-threaded
   (`OMP_NUM_THREADS=1`): numpy 2.4.6, ml_dtypes 0.5.4, torch 2.12.0+cpu.

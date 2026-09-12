@@ -1,5 +1,8 @@
 # ADR-0062 — Eylem: Cerid-native physics architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-05-10)
 **Tags:** [arch] [physics] [eylem] [ecs] [jobs] [simd] [determinism]
 **Supersedes:** ADR-0018 (Physics architecture — PhysX-first plan abandoned)
@@ -205,24 +208,24 @@ when their impl arrives:
   + surface velocity + density. P0 per coverage audit §3.1.
 - **`FieldFormula` enum reservations** — [ADR-0067](0067-eylem-force-field-architecture.md) §3
   closes nine values; two reserved slots (`Reserved_J2` for J2-oblateness
-  gravity, fills via [ADR-0073](0073-eylem-aerospace-substrate.md) when
+  gravity, fills via ADR-0073 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md)) when
   aerospace ships) prevent post-freeze bumps. Aerodynamics is **not**
   field-shaped (reads body velocity at evaluation time) — separate
   `AeroDynamicsComponent` per ADR-0073.
-- **Solver catalog** — [ADR-0070](0070-eylem-solver-catalog.md) locks
+- **Solver catalog** — ADR-0070 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md)) locks
   the per-solver opt-in API + the "when to use which" guidance doc.
-- **Robotics importers + actuator catalogue** — [ADR-0071](0071-eylem-robotics-importers-actuators.md)
+- **Robotics importers + actuator catalogue** — ADR-0071 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md))
   ships URDF / SDF / MJCF importers + motor models (servos / BLDC /
   stepper / hydraulic / pneumatic). New v6 cluster.
-- **Sensor substrate** — [ADR-0072](0072-eylem-sensor-substrate.md)
+- **Sensor substrate** — ADR-0072 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md))
   ships IMU / LIDAR / proximity / tactile / threshold-event sensors.
   Companion to ADR-0068's contact callback substrate.
-- **Aerospace substrate** — [ADR-0073](0073-eylem-aerospace-substrate.md)
+- **Aerospace substrate** — ADR-0073 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md))
   ships variable-mass bodies (Tsiolkovsky), aerodynamic forces,
   US Standard Atmosphere 1976, propulsion / thrust vector / gimbal,
   J2 oblateness gravity, multi-body separation. New `crd-eylem-aero`
   module + new v6 cluster.
-- **Cinematic / animation-physics bridge** — [ADR-0074](0074-eylem-cinematic-bridge.md)
+- **Cinematic / animation-physics bridge** — ADR-0074 (planned, not filed; [retained contract](../phases/phase-3.1-eylem.md))
   ships `crd-eylem-cine` module (animation curves driving kinematic
   bodies, pre-roll, per-shot overrides, slow-motion substeps).
 - **Testing rigor** — [ADR-0075](0075-eylem-testing-rigor.md) ships
@@ -338,7 +341,7 @@ fight Cerid's existing schedule.
   by ADR-0062**.
 - **`docs/phases/phase-3.1-eylem.md`** (new) — full slice plan, ~30
   slices over v0–v9.
-- **`docs/phases/phase-6-native-physics.md`** — folded into Phase 3.1
+- **`docs/archive/2026-09-12-superseded-plans.md#phase-6-native-physics`** — folded into Phase 3.1
   (the "native physics" phase IS the physics phase now).
 - **`docs/research/cerid-eylem.md`** (new) — research backing this
   decision; the *why* file.

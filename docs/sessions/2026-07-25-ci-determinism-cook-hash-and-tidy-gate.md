@@ -1,5 +1,8 @@
 # 2026-07-25 — CI determinism: the cook content-hash, and the win-tidy gate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Goal (user-directed):** make CI **completely green, deterministically** — no "retry until it passes",
 > no disabled checks standing in for a fix. Targeted verification only (re-run the problematic parts of
 > the sweep, not the whole matrix).

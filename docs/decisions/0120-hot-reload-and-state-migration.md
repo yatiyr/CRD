@@ -1,5 +1,8 @@
 # ADR-0120 — Hot-reload lifecycle + state migration (asset lifecycle completion)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design + close advisor-reviewed — five consults across the slice) — the D-007 **CEIR band 10 (Asset lifecycle
 completion)**, slice **CEIR-10a**. A `ReloadSet` supervises a set of live CEIR programs and runs the reload lifecycle:

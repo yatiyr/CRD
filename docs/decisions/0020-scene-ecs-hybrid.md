@@ -1,8 +1,22 @@
-﻿# ADR-0020 — Scene & ECS hybrid + UI in scene tree
+# ADR-0020 — Scene & ECS hybrid + UI in scene tree
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
-**Status:** Accepted
+**Status:** Accepted; UI-in-scene clauses superseded by the user-chosen ADR-0107 D2
 **Tags:** [scene] [ecs] [ui] [arch]
+
+## Current boundary amendment — 2026-09-12
+
+The user-chosen **separate retained UiWorld** decision in [ADR-0107 D2](0107-ui-2d-architecture.md#d2--uiworld-is-a-dedicated-retained-world-not-the-gameplay-ecs)
+supersedes this record's UI-in-gameplay-scene premise. `UiNodeId` and `EntityId` are distinct;
+UI layout, focus, input, semantics and persistence belong to UiWorld. World-space UI uses explicit
+scene attachments and coordinate/input projection. Existing scene types are not deleted by this
+documentation amendment; compatibility/removal is owned by WORLD-UI in the [master table](../ROADMAP.md#slice-world-ui).
+The complete ADR-0107 is still Proposed. Retained UI, debug-only ImGui, reusable scene infrastructure,
+standalone UI and modularity remain requirements. The text below preserves the original decision,
+including its now-superseded scene/UI ownership assumptions; it must not guide new UI storage.
 
 ## Decision
 
@@ -31,6 +45,6 @@
 
 - `docs/phases/phase-3.0-scene-ecs.md` — Phase 3.0 plan implementing this cornerstone
 - `docs/phases/phase-3-simulation.md`
-- `docs/phases/phase-5-ui-rendering.md`
+- `docs/archive/2026-09-12-superseded-plans.md#phase-5-ui-rendering`
 - ADR-0049…ADR-0057 — eight-layer architecture sub-ADRs (locked 2026-05-06)
 - ADR-0055 — closes this ADR's "FlatBuffers vs Cap'n Proto" deferral with `SCEN` CRDR

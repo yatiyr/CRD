@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4j-1b: MultilevelIlu scaffold (MC64-preprocessed ILUT)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4j-1b** — the multilevel-ILU scaffold consuming MC64
 (v4j-1a). A working, robust preconditioner now; the structure the v4j-2 inverse-based-pivoting
 recursion plugs into.

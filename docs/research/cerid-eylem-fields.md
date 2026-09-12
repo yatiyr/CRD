@@ -1,5 +1,8 @@
 # Cerid Eylem — Force-Field Architecture Research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — ADR-0067 (three-tier force-field substrate); shipped through v1b scope, rest resumes v1c+. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > **Companion to** [`cerid-eylem.md`](cerid-eylem.md). That file backed

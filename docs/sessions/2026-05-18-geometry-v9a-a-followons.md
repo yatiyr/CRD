@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-a follow-ons (all 4) ✅ SHIPPED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-a-typed + v9a-60bit-cpu + v9a-a-async-compute + v9a-60bit-gpu. **Combined "v9a-a follow-ons" close.** Same day as the v9a-a base slice. Filed-but-deferred entries from earlier this day were paid in full per user direction.
 
 **Status:** ✅ shipped same day. 5-config DoD PASS via `scripts/per-slice-check.ps1 -IncludeRelease -Parallel`.

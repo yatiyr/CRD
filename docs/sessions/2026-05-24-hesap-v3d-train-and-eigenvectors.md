@@ -1,5 +1,8 @@
 # 2026-05-23/24 — hesap v3d: multishift train + v3c-1c + non-sym eigenvectors (v3d-2a)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Spans two calendar days in one continuous arc. Three landings + one debt-policy
 correction.
 

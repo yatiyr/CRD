@@ -1,5 +1,8 @@
 # Session 2026-05-19 — Phase 3.1.6 `crd-hesap` v0a substrate scaffolding
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Kick off Phase 3.1.6 `crd-hesap` — the MATLAB-class numerical substrate locked

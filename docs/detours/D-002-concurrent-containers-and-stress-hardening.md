@@ -1,5 +1,8 @@
 # D-002 — Concurrent containers + stress-hardening of containers, allocators & scene storages
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** CLOSED 2026-05-12 (opened 2026-05-12). All slices v0–v6 implemented; built + run green on win-debug/win-asan/win-clang-cl/linux-gcc-debug per slice; full 14-config `scripts/full-sweep.ps1` + the four `[.soak]` runs delegated to CI. Closing session log: `docs/sessions/2026-05-12-d002-concurrent-containers-stress.md`. Main roadmap resumes at Phase 3.1.7 `crd-geometry` v0a.
 **Paused (now resumed):** Phase 3.1.7 `crd-geometry` v0a.
 **Owner pipeline:** research → coder → tester → reviewer → docs-keeper, same DoD as a phase slice.

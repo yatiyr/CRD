@@ -1,5 +1,8 @@
 # 2026-05-07 — Detour D-001-b: `GrowablePoolAllocator` + `ChunkAllocator` refactor (D-001 closed)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** D-001-a shipped (TLSF, production-grade, arbitrary alignment, `try_allocate`). v1c1 chunk allocator's `free` was still O(outstanding) — flagged in v1c1 session log as perf debt.
 
 **Status at end:** Detour D-001 closed. `GrowablePoolAllocator` ships. `ChunkAllocator` refactored to wrap it. Chunk `allocate`/`free` are now both O(1) via intrusive free-list. v1c2 archetype storage tests pass unchanged. Phase 3.0 v1d resumes.

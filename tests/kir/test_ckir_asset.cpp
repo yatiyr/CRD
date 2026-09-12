@@ -16,11 +16,19 @@
 #include <crd/kir/ckir_asset.hpp>
 #include <crd/kir/ckir_glsl.hpp>       // CEIR-18a-2 Stage 2b: GLSL emit check for the light-cull kernel
 #include <crd/kir/ckir_hlsl.hpp>       // CEIR-19b: HLSL emit check for the worldpos kernel (both-backend compute texture sample)
+#include <crd/kir/ckir_kernel_eval.hpp> // CEIR-25c-0: eval_cpu_kernel — the relu_vjp.ckir reading-gate oracle
 #include <crd/kir/ckir_serialize.hpp>
 #include <crd/kir/ckir_technique.hpp> // CEIR-18p: body_moment_convert/blur — the library builders the moment bootstrap emits from
 
+#include "../gpu-shared/ui_tint_noise_oracle.hpp" // CEIR-31b-4-b-ii-2: the scalar ref_hash* ORACLE, lifted so the device (e) gate shares it
+
 #include <crd/core/platform.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp> // CEIR-35b: growable arena for the ckir_read mutation fuzz
+#include <crd/containers/array.hpp> // CEIR-35b: Array<u8> mutant buffer
+#include <crd/containers/span.hpp>  // CEIR-35b: ConstSpan<u8> seed/mutant view
+
+#include <ckir_asset_list.hpp> // CEIR-35a Q1: GENERATED manifest of every committed assets/ckir/*.ckir (the load-sweep gate)
 
 #include <cstdio>  // FILE/fopen/fwrite — the [.emitckir] regen writer (the test_ckir_kernel_emit idiom)
 #include <cstring>
@@ -28,9 +36,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#ifndef CRD_REPO_DIR
-#define CRD_REPO_DIR "." // CMake defines the real repo root; this keeps the TU standalone-parseable
-#endif
+// ⛔ NO `#ifndef CRD_REPO_DIR / #define "."` fallback -- crd-kir-tests CMakeLists ALWAYS defines it (PRIVATE
+// CRD_REPO_DIR); a "." fallback is the cwd-luck scar pre-armed (Win-greens on ./assets, WSL-reds). A missing define must
+// fail LOUD. [[feedback_cuda_test_target_missing_crd_repo_dir_is_cwd_luck]].
 
 namespace kir = crd::kir;
 namespace ad  = crd::kir::asset_detail;
@@ -238,6 +246,95 @@ int ckir_roundtrip_diff(kir::KGraph& g, const kir::KEntry& e, crd::memory::IAllo
     if (blob.size() != blob2.size()) { return static_cast<int>(blob.size() < blob2.size() ? blob.size() : blob2.size()); }
     return first_diff(blob, blob2);
 }
+
+// ── CEIR-31b-1a-iii part 2: the hash-INTENT oracle for the committed ui_tint_noise.ckir. `emit_hash_u32` builds the EXACT
+// 13-node U32 integer-hash sequence the committed file carries at n17..n29; `emit_noise_from_hash` the 3-node F32 tail
+// (n30..n32 -- Cast<F32>/·(1/2^32)). ⛔ these are VERIFICATION FIXTURES kept permanently -- NOT a kernel builder (the .ckir
+// is hand-authored, so there is nothing to delete): `build_hash_scalar` wraps `emit_hash_u32` as a COMPUTE kernel that
+// eval_cpu_kernel-verifies BIT-EXACT vs a C++ u32 reference (a Fragment FragCoord kernel cannot eval -- the scalar evaluator
+// is compute-only), and the reading gate NODE+WIRING-matches the committed file against a run of these same helpers.
+int emit_hash_u32(kir::KGraph& g, int xu32, int yu32)
+{
+    const auto sh1 = kir::make_shape({1});
+    const auto cu  = [&](double v) { return g.constant(v, sh1, kir::DType::U32); };
+    const int  a_k = cu(2654435761.0); // 0x9E3779B1
+    const int  x_a = g.binary(kir::KOp::Mul, xu32, a_k);
+    const int  b_k = cu(2246822519.0); // 0x85EBCA77
+    const int  y_b = g.binary(kir::KOp::Mul, yu32, b_k);
+    const int  h1  = g.binary(kir::KOp::BitXor, x_a, y_b);
+    const int  s15 = cu(15.0);
+    const int  h1s = g.binary(kir::KOp::Shr, h1, s15);
+    const int  h2  = g.binary(kir::KOp::BitXor, h1, h1s);
+    const int  c_k = cu(668265263.0); // 0x27D4EB2F
+    const int  h3  = g.binary(kir::KOp::Mul, h2, c_k);
+    const int  s13 = cu(13.0);
+    const int  h3s = g.binary(kir::KOp::Shr, h3, s13);
+    return g.binary(kir::KOp::BitXor, h3, h3s); // h4
+}
+int emit_noise_from_hash(kir::KGraph& g, int h4)
+{
+    const auto sh1 = kir::make_shape({1});
+    const int  hf  = g.cast(h4, kir::DType::F32);
+    const int  inv = g.constant(2.3283064365386963e-10, sh1, kir::DType::F32); // 1/2^32
+    return g.binary(kir::KOp::Mul, hf, inv);
+}
+// COMPUTE oracle: in[2*lid], in[2*lid+1] = (x,y) as U32; out[lid] = the U32 hash. One lane per (x,y) pair.
+kir::KEntry build_hash_scalar(kir::KGraph& g)
+{
+    const auto sh1    = kir::make_shape({1});
+    const auto cu     = [&](double v) { return g.constant(v, sh1, kir::DType::U32); };
+    const int  inbuf  = g.buffer_decl(kir::DType::U32, 0, 0, false);
+    const int  outbuf = g.buffer_decl(kir::DType::U32, 0, 1, true);
+    const int  lid    = g.builtin(kir::KBuiltin::LocalInvocationIndex);
+    const int  mark   = g.kernel_stmt_mark();
+    const int  base   = g.binary(kir::KOp::Mul, lid, cu(2.0));
+    const int  x_i    = g.buffer_load(inbuf, base);
+    const int  y_i    = g.buffer_load(inbuf, g.binary(kir::KOp::Add, base, cu(1.0)));
+    g.stmt_buffer_store(outbuf, lid, emit_hash_u32(g, x_i, y_i));
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 8U;
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+// The C++ reference for the eval-verify (ref_hash / _stage1 / _stage3): LIFTED to tests/gpu-shared/ui_tint_noise_oracle.hpp
+// so the on-device arm (e) gate computes GPU==eval from the SAME definition eval==C++ uses here. Pulled into this anon
+// namespace so the existing unqualified call sites (the bit-31 probes + the eval CHECK below) resolve unchanged.
+using crd::tests::ref_hash;
+using crd::tests::ref_hash_stage1;
+using crd::tests::ref_hash_stage3;
+
+// ── CEIR-31b-1b: the σ=R/3 Gaussian weight function for ui_blur (R=4, 9 taps). THE PERMANENT ORACLE + SPEC (kept when the
+// graph builder is deleted): σ = R/3 = 4/3 puts the ±4 window at ±3σ (~0.27% truncated, so renormalization is a ~1e-3
+// correction not a ~1e-1 one). Computes the weights in f64, normalizes, ROUNDS EACH TO f32, then folds the residual
+// (1 − Σf32) into the CENTER tap so the stored f32 set stays SYMMETRIC and its f32 left-to-right sum is within 1 ulp of 1.0
+// (measured 0.99999994 -- exact 1.0f is unreachable for a symmetric f32 set: the f32-storage-floor scar). The bootstrap
+// builder CALLS this (one function, two consumers -- the emit_hash_u32 discipline); the reading gate matches committed cvals
+// to it. ⛔ do NOT re-derive the weights anywhere else.
+void blur_weights_r4_sigma_r3(float out[9])
+{
+    const double sigma = 4.0 / 3.0; // R/3, R=4
+    double       w64[9];
+    double       sum = 0.0;
+    for (int k = 0; k < 9; ++k)
+    {
+        const double xk = static_cast<double>(k - 4);
+        w64[k]          = std::exp(-(xk * xk) / (2.0 * sigma * sigma));
+        sum += w64[k];
+    }
+    float fsum = 0.0F;
+    for (int k = 0; k < 9; ++k)
+    {
+        out[k] = static_cast<float>(w64[k] / sum); // normalize in f64, round each to f32
+        fsum   = fsum + out[k];                    // left-to-right f32 sum (the order the gate checks)
+    }
+    out[4] = out[4] + (1.0F - fsum); // fold the residual into the CENTER tap (preserves symmetry)
+}
+// ⛔ CEIR-31b-1b: the bootstrap graph builder `build_ui_blur` + its `[.emit-ui-blur]` generator were DELETED after the commit
+// + reading gate landed (the committed assets/ckir/ui_blur.ckir is the source). `blur_weights_r4_sigma_r3` above is KEPT as
+// the permanent weight ORACLE the reading gate matches the committed cvals against. To regenerate: restore the builder from
+// git history (it called this oracle) — the reading gate's weight-match guards a drifted regen.
 } // namespace
 
 TEST_CASE("CEIR-18q: the CKIR op/stmt NAME TABLES are a bijection (no duplicate token collides two ops)",
@@ -280,6 +377,226 @@ TEST_CASE("CEIR-18q: malformed .ckir input is REPORTED (ok=false), never thrown"
     CHECK_FALSE(read("").ok);                       // empty
     CHECK_FALSE(read("garbage not a program").ok);  // bad magic
     CHECK_FALSE(read("KIR1 inputs 0 nodes 1 NotAnOp F32 Scalar 0 0 0 0 0").ok); // bad op name (truncated too)
+
+    // ── CEIR-35b regression: the mutation fuzz found ckir_read ACCEPTING-then-crashing on two structural defects (a node
+    // whose `op` key is absent -> indeterminate op -> kKOpNames[op] OOB; an operand ref past the node array -> downstream OOB).
+    // Pin the EXACT reason (gate=identity-not-category) so a future refactor can't silently downgrade the rejection.
+    {
+        const kir::CkirReadResult r = read("schema = 1\n[[entry]]\nstage = \"Compute\"\n[[node]]\n"); // a [[node]] with no `op =` key
+        CHECK_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "node: missing op") == 0);
+    }
+    {
+        const kir::CkirReadResult r = read("schema = 1\n[[entry]]\nstage = \"Compute\"\n[[node]]\nop = \"Const\"\nin = [\"n7\"]\n"); // operand ref to a nonexistent node
+        CHECK_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "node operand ref out of range") == 0);
+    }
+}
+
+// ── CEIR-35b: systematic MUTATION-robustness fuzz for ckir_read (the .ckir text loader). ──────────────────────────────
+// Extends the hand-picked malformed corpus above into exhaustive coverage: mutate a valid .ckir seed thousands of ways
+// and prove ckir_read NEVER crashes/throws (ASan-clean under the asan configs) and ALWAYS returns a WELL-FORMED result.
+// Four teeth: (1) well-formed result; (2) any ACCEPTED mutant round-trips BYTE-IDENTICAL (ckir_roundtrip_diff == -1),
+// pushing the fuzz into ckir_write + serialize_graph; (3) determinism (same seed -> identical (ok,off) trace); (4)
+// non-vacuity (>=1 accept AND >=1 reject). Deterministic splitmix64 (no <random>); the mutator is duplicated per exe (not
+// shared-headered) at this size, per the advisor. GrowableTlsfAllocator: ckir_read appends incrementally (no header-count
+// pre-alloc), so there is no count-inflation blowup; the arena just recycles each per-mutant KGraph's allocations.
+namespace
+{
+struct FuzzRng
+{
+    crd::u64 state;
+    explicit FuzzRng(crd::u64 seed) noexcept : state(seed) {}
+    crd::u64 next() noexcept
+    {
+        crd::u64 z = (state += 0x9E3779B97F4A7C15ULL);
+        z          = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
+        z          = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
+        return z ^ (z >> 31U);
+    }
+    crd::u32 below(crd::u32 n) noexcept { return n == 0U ? 0U : static_cast<crd::u32>(next() % n); }
+};
+
+// The first `count` bytes of `src` in a fresh Array — the TRUNCATION primitive (count == size copies whole).
+[[nodiscard]] crd::containers::Array<crd::u8> fuzz_prefix(crd::containers::ConstSpan<crd::u8> src, crd::usize count,
+                                                          crd::memory::IAllocator* alloc)
+{
+    crd::containers::Array<crd::u8> b(alloc);
+    b.reserve(count);
+    for (crd::usize i = 0U; i < count; ++i) { b.push_back(src[i]); }
+    return b;
+}
+
+// ONE byte-level mutation chosen by `rng` (bit-flip / delete / insert-any-byte / duplicate / swap), copy-with-transform
+// (needs only push_back). Insert spans the FULL byte range incl. NUL and 0x80-0xFF (the signed-char tokenizer scar).
+[[nodiscard]] crd::containers::Array<crd::u8> fuzz_mutate(crd::containers::ConstSpan<crd::u8> src, FuzzRng& rng,
+                                                          crd::memory::IAllocator* alloc)
+{
+    crd::containers::Array<crd::u8> b(alloc);
+    const crd::usize                n = src.size();
+    if (n == 0U)
+    {
+        b.push_back(static_cast<crd::u8>(rng.next()));
+        return b;
+    }
+    const crd::u32   kind = rng.below(5U);
+    const crd::usize pos  = rng.below(static_cast<crd::u32>(n));
+    switch (kind)
+    {
+    case 0U: // bit-flip one byte
+        b.reserve(n);
+        for (crd::usize i = 0U; i < n; ++i)
+        {
+            b.push_back(i == pos ? static_cast<crd::u8>(src[i] ^ static_cast<crd::u8>(1U << rng.below(8U))) : src[i]);
+        }
+        break;
+    case 1U: // delete the byte at pos
+        b.reserve(n - 1U);
+        for (crd::usize i = 0U; i < n; ++i)
+        {
+            if (i != pos) { b.push_back(src[i]); }
+        }
+        break;
+    case 2U: // insert an arbitrary byte before pos
+    {
+        const crd::u8 v = static_cast<crd::u8>(rng.next());
+        b.reserve(n + 1U);
+        for (crd::usize i = 0U; i < n; ++i)
+        {
+            if (i == pos) { b.push_back(v); }
+            b.push_back(src[i]);
+        }
+        break;
+    }
+    case 3U: // duplicate the byte at pos
+        b.reserve(n + 1U);
+        for (crd::usize i = 0U; i < n; ++i)
+        {
+            b.push_back(src[i]);
+            if (i == pos) { b.push_back(src[i]); }
+        }
+        break;
+    default: // swap two bytes
+    {
+        const crd::usize q = rng.below(static_cast<crd::u32>(n));
+        b.reserve(n);
+        for (crd::usize i = 0U; i < n; ++i)
+        {
+            crd::u8 v = src[i];
+            if (i == pos) { v = src[q]; }
+            else if (i == q) { v = src[pos]; }
+            b.push_back(v);
+        }
+        break;
+    }
+    }
+    return b;
+}
+
+// A CkirReadResult is WELL-FORMED iff a rejection carries an in-range offset + a non-empty static reason. (ckir_read
+// fills KGraph&/KEntry& by reference and has no module pointer, so an acceptance is simply ok.)
+[[nodiscard]] bool ckir_result_wf(const kir::CkirReadResult& r, crd::usize input_size) noexcept
+{
+    if (r.ok) { return true; }
+    return r.error_offset <= input_size && r.error != nullptr && r.error[0] != '\0';
+}
+} // namespace
+
+TEST_CASE("ceir fuzz: ckir_read survives byte mutation of a .ckir and never crashes", "[kir][asset][fuzz][ceir35b]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+
+    // Seed = a valid .ckir text (ckir_write of the D1 scale kernel), built IN-TEST (no file I/O, no CRD_REPO_DIR).
+    kir::KGraph                   seed_g(&root);
+    const kir::KEntry             seed_e    = build_scale(seed_g, 2.0);
+    const crd::containers::String seed_text = kir::ckir_write(seed_g, seed_e, &root);
+    const crd::containers::ConstSpan<crd::u8> seed(reinterpret_cast<const crd::u8*>(seed_text.c_str()), seed_text.size());
+    REQUIRE(seed.size() > 16U);
+    {
+        kir::KGraph g(&root); // (0) non-vacuity floor: the unmutated seed reads ok
+        kir::KEntry e;
+        REQUIRE(kir::ckir_read(crd::containers::StringView(seed_text.c_str(), seed_text.size()), g, e).ok);
+    }
+
+    crd::usize accepts = 0U;
+    crd::usize rejects = 0U;
+
+    auto run_one = [&](crd::containers::ConstSpan<crd::u8> mutant) -> crd::u64 {
+        kir::KGraph               g(&root);
+        kir::KEntry               e;
+        const kir::CkirReadResult r = kir::ckir_read(
+            crd::containers::StringView(reinterpret_cast<const char*>(mutant.data()), mutant.size()), g, e);
+        CHECK(ckir_result_wf(r, mutant.size())); // (invariant 1) well-formedness
+        if (r.ok)
+        {
+            ++accepts;
+            // (invariant 2) an ACCEPTED mutant round-trips BYTE-IDENTICAL (write->read->serialize == serialize);
+            // ckir_roundtrip_diff returns -1 on byte-identity (-2 if the re-read fails). Pushes into ckir_write/serialize.
+            CHECK(ckir_roundtrip_diff(g, e, &root) == -1);
+        }
+        else { ++rejects; }
+        return (static_cast<crd::u64>(r.ok) << 63U) ^ static_cast<crd::u64>(r.error_offset);
+    };
+
+    for (crd::usize off = 0U; off <= seed.size(); ++off) // (a) exhaustive truncation
+    {
+        const crd::containers::Array<crd::u8> t = fuzz_prefix(seed, off, &root);
+        (void)run_one(crd::containers::ConstSpan<crd::u8>(t.data(), t.size()));
+    }
+
+    auto random_pass = [&](crd::u64 seed_val) -> crd::u64 { // (b) random byte-level mutations
+        FuzzRng            rng(seed_val);
+        crd::u64           trace        = 1469598103934665603ULL; // FNV-1a offset basis
+        constexpr crd::u32 mutant_count = 256U * 5U;              // ~256 per mutation kind
+        for (crd::u32 i = 0U; i < mutant_count; ++i)
+        {
+            const crd::containers::Array<crd::u8> m = fuzz_mutate(seed, rng, &root);
+            trace = (trace ^ run_one(crd::containers::ConstSpan<crd::u8>(m.data(), m.size()))) * 1099511628211ULL;
+        }
+        return trace;
+    };
+    CHECK(random_pass(0xCC1235B0ULL) == random_pass(0xCC1235B0ULL)); // (invariant 3) determinism
+
+    CHECK(accepts > 0U); // (invariant 4) non-vacuity
+    CHECK(rejects > 0U);
+}
+
+// ── CEIR-35a Q1: the committed-asset LOAD SWEEP. Every `.ckir` under assets/ckir/ (enumerated by the CMake-generated
+// manifest, CONFIGURE_DEPENDS) MUST ckir_read OK. This is the HONEST close of the CEIR-35b over-rejection claim: the
+// hand-picked [asset] gates below cover only ~1/3 of the 40+ committed assets; the rest are loaded only by engine-runtime
+// / other-exe paths (which ran STALE when only crd-kir-tests was rebuilt for the header-only fix). Loading them ALL here
+// proves the 35b kir fix (op/kind/stage requires + index-range validation) does NOT over-reject a committed (incl.
+// hand-authored) asset. A failure prints the file + the EXACT reason, so "fix the file" vs "the require is too strict for
+// hand-authoring" becomes a real decision, never a silent regression. Standing Q1 gate; a new asset auto-joins on reconfigure.
+TEST_CASE("CEIR-35a: every committed assets/ckir/*.ckir loads via ckir_read (the over-rejection sweep)",
+          "[kir][asset][ceir35a]")
+{
+    crd::memory::GrowableTlsfAllocator root; // grows; each per-asset KGraph/String/Array recycles into the arena
+    REQUIRE(crd::kir::test::kCommittedCkirCount > 0); // a glob that found nothing is a config bug, not a pass
+    for (int i = 0; i < crd::kir::test::kCommittedCkirCount; ++i)
+    {
+        const char* const name = crd::kir::test::kCommittedCkir[i];
+        crd::containers::String path(&root);
+        path.append(CRD_REPO_DIR "/assets/ckir/");
+        path.append(name);
+
+        std::ifstream f(path.c_str(), std::ios::binary | std::ios::ate);
+        INFO("asset: " << name);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        REQUIRE(sz > 0);
+        f.seekg(0);
+        crd::containers::Array<char> src(&root);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+
+        kir::KGraph               g(&root);
+        kir::KEntry               e;
+        const kir::CkirReadResult r =
+            kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e);
+        INFO("reason: " << r.error);
+        CHECK(r.ok);
+    }
 }
 
 // ── CEIR-18a-1: the committed scene_light_cull.ckir LOADS + is SELF-CONSISTENT + has the cull shape. ──────────────────
@@ -317,6 +634,471 @@ TEST_CASE("CEIR-18a-1: the committed scene_light_cull.ckir parses, round-trips +
 
     // self-consistency: the parsed graph round-trips byte-exact through ckir_write/ckir_read.
     CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+}
+
+// ── CEIR-31b-1a: the committed ui_backdrop_fetch.ckir (the §141 frosted-glass chain's first pass) LOADS + round-trips +
+// LOWERS on both backends. ⛔ a FULLSCREEN Vec4 COLOR kernel has NO device-free NUMERIC gate -- eval_cpu_kernel is SCALAR
+// and refuses Vec nodes ([[scars_ckir_emitter_eval]]); its numerics ride the 31b-4 ON-DEVICE gate. So this device-free
+// gate is STRUCTURAL, with teeth that pin the pass as a FETCH (not a masked composite): parses, byte-exact round-trip (a
+// hand-broken file fails LOUD), the right shape, EXACTLY ONE TexSample and ZERO StorageLoad (the discriminator vs
+// rt_composite's storage read), and emits GLSL AND HLSL whose source actually USES the sampler (`texture(` / `.Sample(` --
+// a dead binding would emit neither). The 2x2 box average is NOT in this kernel: it is the frame-graph contract (a LINEAR
+// sampler + a 2:1 dest transient), declared + gated at 31b-3 and proven on-device at 31b-4.
+TEST_CASE("CEIR-31b-1a: the committed ui_backdrop_fetch.ckir parses, round-trips, and lowers on both backends",
+          "[kir][asset][ceir31b]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/ui_backdrop_fetch.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+
+    // STRUCTURE: a 4-node fullscreen fragment fetch (StageIn uv -> Texture + Sampler -> TexSample -> @output).
+    CHECK(g.size() == 4);
+    CHECK(e.stage == kir::KStage::Fragment);
+    CHECK(e.n_out == 1);
+
+    // TEETH: exactly ONE TexSample and ZERO StorageLoad -- a fetch, not rt_composite-minus-mask (which reads storage).
+    int n_texsample  = 0;
+    int n_storageload = 0;
+    for (int i = 0; i < static_cast<int>(g.size()); ++i)
+    {
+        const kir::KOp op = g.node(i).op;
+        if (op == kir::KOp::TexSample) { ++n_texsample; }
+        if (op == kir::KOp::StorageLoad) { ++n_storageload; }
+    }
+    CHECK(n_texsample == 1);
+    CHECK(n_storageload == 0);
+
+    // ROUND-TRIP byte-exact (the anti-drift contract).
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+
+    // BOTH-BACKEND lowering: the fragment stage emits GLSL AND HLSL that ACTUALLY SAMPLE the bound texture (a dead binding
+    // would compile to neither call). GLSL uses implicit-LOD `texture(`, HLSL uses `.Sample(`.
+    kir::GlslKernel gk_glsl(&a);
+    CHECK(kir::emit_stage_glsl(g, e, &a, gk_glsl));
+    CHECK(gk_glsl.source.size() > 0U);
+    CHECK(std::strstr(gk_glsl.source.c_str(), "texture(") != nullptr);
+    kir::GlslKernel gk_hlsl(&a);
+    CHECK(kir::emit_stage_hlsl(g, e, &a, gk_hlsl));
+    CHECK(gk_hlsl.source.size() > 0U);
+    CHECK(std::strstr(gk_hlsl.source.c_str(), ".Sample(") != nullptr);
+}
+
+// ── CEIR-31b-1a-iii: the committed ui_tint_noise.ckir (the §141 frosted-glass chain's grain pass) LOADS + round-trips +
+// LOWERS on both backends. Device-free gate is STRUCTURAL WITH TEETH (eval_cpu_kernel refuses this Vec4 output --
+// [[scars_ckir_emitter_eval]]): the tint+grain OP-VOCABULARY pins it -- exactly 1 TexSample (the backdrop fetch), exactly
+// 5 spec-consts (4 tint channels + amp), a REAL integer hash (>=2 BitXor + >=2 Shr on U32 => unsigned uint `>>`), 0
+// StorageLoad (a fetch+grain, NOT rt_composite's storage read), byte-exact roundtrip, and emits GLSL (`texture(` + `>>`)
+// AND HLSL. ⛔ THREE-TIER honesty about what this buys: (1) the roundtrip pins the file is CANONICAL (a non-shortest hex /
+// stray field / wrong dtype token fails write->read, since ckir_roundtrip_diff is serialize(g)==serialize(parse(write(g))),
+// a fixed-point test); (2) the teeth pin the OP-VOCABULARY is right; (3) NEITHER proves the cvals + wiring are the hash you
+// INTENDED -- a wrong magic constant (a valid f64 bit pattern) passes every tooth here. That last proof is 31b-1a-iii part 2
+// (NEXT tick): a scalar-output `build_hash_scalar` oracle eval_cpu_kernel-verified vs a C++ reference + a NODE-SEQUENCE match
+// asserting THIS file embeds that same hash. Device numerics ride 31b-4 arm (e).
+TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir parses, round-trips, and lowers on both backends",
+          "[kir][asset][ceir31b]")
+{
+    std::ifstream f(CRD_REPO_DIR "/assets/ckir/ui_tint_noise.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+
+    crd::memory::TlsfAllocator   a(8U << 20U);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+
+    CHECK(e.stage == kir::KStage::Fragment);
+    CHECK(e.n_out == 1);
+
+    // TEETH (identity, not category): the tint+grain vocabulary -- 1 texture sample, 5 spec-consts (4 tint + 1 amp), a
+    // real integer hash (>=2 BitXor + >=2 Shr), and NO storage read.
+    int n_texsample   = 0;
+    int n_specconst   = 0;
+    int n_bitxor      = 0;
+    int n_shr         = 0;
+    int n_storageload = 0;
+    for (int i = 0; i < static_cast<int>(g.size()); ++i)
+    {
+        const kir::KNode& nd = g.node(i);
+        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
+        if (nd.op == kir::KOp::BitXor) { ++n_bitxor; }
+        if (nd.op == kir::KOp::Shr) { ++n_shr; }
+        if (nd.op == kir::KOp::StorageLoad) { ++n_storageload; }
+        if (kir::is_spec_const(nd)) { ++n_specconst; }
+    }
+    CHECK(n_texsample == 1);
+    CHECK(n_specconst == 5);
+    CHECK(n_bitxor >= 2);
+    CHECK(n_shr >= 2);
+    CHECK(n_storageload == 0);
+
+    // ROUND-TRIP byte-exact (the anti-drift contract; a hand-broken cval/edge fails LOUD).
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+
+    // BOTH-BACKEND lowering: GLSL samples the backdrop (`texture(`) AND shifts (`>>`, the integer hash); HLSL emits.
+    kir::GlslKernel gk_glsl(&a);
+    CHECK(kir::emit_stage_glsl(g, e, &a, gk_glsl));
+    CHECK(gk_glsl.source.size() > 0U);
+    CHECK(std::strstr(gk_glsl.source.c_str(), "texture(") != nullptr);
+    CHECK(std::strstr(gk_glsl.source.c_str(), ">>") != nullptr);
+    kir::GlslKernel gk_hlsl(&a);
+    CHECK(kir::emit_stage_hlsl(g, e, &a, gk_hlsl));
+    CHECK(gk_hlsl.source.size() > 0U);
+}
+
+// ── CEIR-31b-1a-iii PART 2: the hash-INTENT proof that flips ui_tint_noise 🔄→✅. Two claims, ONE transitive statement
+// (the committed file computes the eval-verified integer hash, WIRING included): (1) EVAL-VERIFY -- `build_hash_scalar`, a
+// COMPUTE oracle wrapping the SAME `emit_hash_u32` the committed file's n17..n29 is matched against, evaluated by the scalar
+// `eval_cpu_kernel` == a C++ u32 reference BIT-EXACT over 8 (x,y) pairs incl. ≥2 with bit 31 set at BOTH shift stages (the
+// logical-vs-arithmetic `>>` probe, one per shift). ⛔ SCOPE: eval == C++ u32 is proven HERE; GPU == eval is a SEPARATE claim
+// resting on the emitter's uint lowering (U32 dtype → `uint` ctype, grep-verified) + casting before `>>`, proven ON-DEVICE at
+// 31b-4 arm (e) — do NOT let "bit-exact" bleed onto the untested GPU layer. (2) NODE+WIRING
+// MATCH -- the committed n17..n32 == a run of `emit_hash_u32`+`emit_noise_from_hash` on op/dtype/cval AND operand wiring
+// (constant-offset map for intra-run operands; the x/y inputs correspond to committed n15/n16), so a swapped-input or A·A
+// mis-wire that survives emit is caught here. Together: the structural-teeth gate above proves the op-vocabulary; THIS proves
+// the cvals + wiring are the intended hash. Device numerics still ride 31b-4 arm (e).
+TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir embeds the eval-verified integer hash (node+wiring match)",
+          "[kir][asset][ceir31b]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+
+    // (1) EVAL-VERIFY the hash MATH: the compute oracle == the C++ u32 reference, bit-exact.
+    {
+        kir::KGraph    g(&a);
+        kir::KEntry    e        = build_hash_scalar(g);
+        const crd::u32 xs[8]    = {0U, 1U, 7U, 100U, 1920U, 3U, 65535U, 12345U};
+        const crd::u32 ys[8]    = {0U, 1U, 13U, 200U, 1080U, 99999U, 4U, 54321U};
+        int            n_b31_s1 = 0;
+        int            n_b31_s3 = 0;
+        for (int i = 0; i < 8; ++i)
+        {
+            if ((ref_hash_stage1(xs[i], ys[i]) >> 31U) == 1U) { ++n_b31_s1; }
+            if ((ref_hash_stage3(xs[i], ys[i]) >> 31U) == 1U) { ++n_b31_s3; }
+        }
+        // ⛔ BOTH `>>` shifts (>>15 on stage1, >>13 on stage3) must be logical; probe bit 31 at BOTH so the coverage can't
+        // silently drop if a constant is edited. (stage1 gives 3, stage3 gives 5 with these 8 pairs.)
+        REQUIRE(n_b31_s1 >= 2);
+        REQUIRE(n_b31_s3 >= 2);
+        crd::f64 in[16];
+        crd::f64 out[8];
+        for (int i = 0; i < 8; ++i)
+        {
+            in[2 * i]     = static_cast<crd::f64>(xs[i]);
+            in[2 * i + 1] = static_cast<crd::f64>(ys[i]);
+        }
+        for (double& o : out) { o = -1.0; }
+        kir::KernelBuffer bufs[2] = {{in, 16, 0, 0}, {out, 8, 0, 1}};
+        kir::eval_cpu_kernel(g, e, bufs, 2, 8U, &a, 1U);
+        for (int i = 0; i < 8; ++i) { CHECK(static_cast<crd::u32>(out[i]) == ref_hash(xs[i], ys[i])); }
+    }
+
+    // (2) NODE + WIRING MATCH: parse the committed file; assert n17..n32 == a run of the SAME helpers.
+    kir::KGraph committed(&a);
+    kir::KEntry ce;
+    {
+        std::ifstream f(CRD_REPO_DIR "/assets/ckir/ui_tint_noise.ckir", std::ios::binary | std::ios::ate);
+        REQUIRE(f.good());
+        const std::streamsize sz = f.tellg();
+        f.seekg(0);
+        crd::containers::Array<char> src(&a);
+        src.resize(static_cast<crd::usize>(sz), '\0');
+        f.read(src.data(), sz);
+        REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), committed, ce).ok);
+    }
+    kir::KGraph ref(&a);
+    const auto  sh1   = kir::make_shape({1});
+    const int   rx    = ref.constant(0.0, sh1, kir::DType::U32); // placeholder x input
+    const int   ry    = ref.constant(0.0, sh1, kir::DType::U32); // placeholder y input
+    const int   first = static_cast<int>(ref.size());            // index of the first hash node (Const A)
+    const int   rh4   = emit_hash_u32(ref, rx, ry);
+    (void)emit_noise_from_hash(ref, rh4);
+    const int c0    = 17;        // committed n17 = Const A (the hash run start; n15/n16 = the Cast x/y inputs)
+    const int delta = c0 - first;
+    const auto match_operand = [&](int rop, int cop) {
+        if (rop < 0) { CHECK(cop < 0); }                      // unused-slot sentinel
+        else if (rop >= first) { CHECK(cop == rop + delta); } // intra-run operand -> constant offset
+        else if (rop == rx) { CHECK(cop == 15); }             // the x input <-> committed n15
+        else if (rop == ry) { CHECK(cop == 16); }             // the y input <-> committed n16
+        else { CHECK(false); }                                // an operand outside the run that is not x/y
+    };
+    for (int k = 0; k < 16; ++k)
+    {
+        const kir::KNode& cn = committed.node(c0 + k);
+        const kir::KNode& rn = ref.node(first + k);
+        CHECK(cn.op == rn.op);
+        CHECK(cn.dtype() == rn.dtype());
+        CHECK(cn.cval == rn.cval);
+        match_operand(rn.a, cn.a);
+        match_operand(rn.b, cn.b);
+        match_operand(rn.c, cn.c);
+    }
+}
+
+// ── CEIR-31b-1b: the committed ui_blur.ckir — a σ=R/3 separable Gaussian blur (H/V selected by the dir spec-const). The
+// device-free gate is STRUCTURAL teeth + a NUMERIC WEIGHT check (the only device-free numeric surface; the blurred pixels
+// ride 31b-4). ⛔ 0 Vec3 is the 2D discriminator — a moment_blur copy-paste (9 Vec3, array coords) fails here. The 9 weights
+// (the non-spec F32 Consts with cval∈(0,1); the tap-index consts -4..4 are excluded by the OPEN interval) == the σ=R/3 oracle
+// bit-exact, are symmetric + monotone-from-center, and their f32 LEFT-TO-RIGHT sum is within 1 ulp of 1.0 (measured
+// 0.99999994 — exact 1.0f is unreachable for a symmetric f32 set). That ±2^-23 ⇒ blur-of-a-constant returns c·(1±2^-23);
+// 31b-4 arm (a)'s ±1 LSB at 8-bit output has ~50x headroom (NOT "unbiased by construction" — the device adds its own
+// accumulation ulps; arm (a) measures the real total).
+TEST_CASE("CEIR-31b-1b: the committed ui_blur.ckir is a sigma=R/3 separable Gaussian (weights + structure)",
+          "[kir][asset][ceir31b]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    std::ifstream              f(CRD_REPO_DIR "/assets/ckir/ui_blur.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+
+    CHECK(e.stage == kir::KStage::Fragment);
+    CHECK(e.n_out == 1);
+
+    // STRUCTURAL TEETH + the weight-cval harvest (in file order = tap order -4..4).
+    int   n_tex       = 0;
+    int   n_samp      = 0;
+    int   n_texsample = 0;
+    int   n_spec      = 0;
+    int   n_storage   = 0;
+    int   n_vec3      = 0;
+    int   n_weight    = 0;
+    float wfile[9]    = {0.0F};
+    for (int i = 0; i < static_cast<int>(g.size()); ++i)
+    {
+        const kir::KNode& nd = g.node(i);
+        if (nd.op == kir::KOp::Texture) { ++n_tex; }
+        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
+        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
+        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
+        if (nd.op == kir::KOp::Vec3) { ++n_vec3; }
+        if (kir::is_spec_const(nd)) { ++n_spec; }
+        else if (nd.op == kir::KOp::Const && nd.dtype() == kir::DType::F32 && nd.cval > 0.0 && nd.cval < 1.0)
+        {
+            if (n_weight < 9) { wfile[n_weight] = static_cast<float>(nd.cval); }
+            ++n_weight;
+        }
+    }
+    CHECK(n_texsample == 9);
+    CHECK(n_spec == 3); // dir.x@0, dir.y@1, step@2
+    CHECK(n_tex == 1);
+    CHECK(n_samp == 1);
+    CHECK(n_storage == 0);
+    CHECK(n_vec3 == 0); // ⛔ 2D discriminator — NOT moment_blur's array coords
+    CHECK(n_weight == 9);
+
+    // WEIGHTS == the σ=R/3 oracle bit-exact; symmetric; monotone-from-center; f32 left-to-right sum within 1 ulp of 1.0.
+    float wref[9] = {0.0F};
+    blur_weights_r4_sigma_r3(wref);
+    for (int k = 0; k < 9; ++k) { CHECK(wfile[k] == wref[k]); }
+    for (int k = 0; k < 4; ++k) { CHECK(wfile[k] == wfile[8 - k]); }
+    CHECK(wfile[4] > wfile[3]);
+    CHECK(wfile[3] > wfile[2]);
+    CHECK(wfile[2] > wfile[1]);
+    CHECK(wfile[1] > wfile[0]);
+    float ssum = 0.0F;
+    for (float wv : wfile) { ssum = ssum + wv; } // left-to-right (the named order)
+    const float dev = ssum - 1.0F;
+    CHECK(dev <= 0x1p-23F); // one f32 ulp
+    CHECK(dev >= -0x1p-23F);
+
+    // ROUND-TRIP byte-exact + both-backend lowering (a fragment stage sampling the backdrop).
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk_glsl(&a);
+    CHECK(kir::emit_stage_glsl(g, e, &a, gk_glsl));
+    CHECK(gk_glsl.source.size() > 0U);
+    CHECK(std::strstr(gk_glsl.source.c_str(), "texture(") != nullptr);
+    kir::GlslKernel gk_hlsl(&a);
+    CHECK(kir::emit_stage_hlsl(g, e, &a, gk_hlsl));
+    CHECK(gk_hlsl.source.size() > 0U);
+}
+
+// ── CEIR-31b-3-b: the committed ui_composite.ckir — the §141 frosted-glass chain's LAST pass, lerp(scene, effect, mask.r)
+// over THREE textures via the BINDLESS idiom (the deferred_lighting arrayed-Texture + SampleIndexed precedent, NOT three
+// single-texture bindings — the multi-read fullscreen contract; a 1-read pass binds a single texture at binding 1, a
+// multi-read pass binds the reads into the descriptor-array heap at binding 16). The device-free gate is STRUCTURAL only —
+// a Vec4 color kernel has NO CPU-eval numeric surface ([[scars_ckir_emitter_eval]] Vec-refusal), and the mixed pixels +
+// the reads→heap-layer BINDING ride 31b-4. ⛔ TEETH: the descriptor-array length (Texture count==3) rejects a single-texture
+// copy; the layer tooth (the 3 SampleIndexed index operands are U32 Consts 0/1/2 EACH ONCE) rejects a `0,0,1` typo that
+// reads scene twice; TexSample==0 is the discriminator vs the other 3 ui kernels (they sample via TexSample, composite via
+// SampleIndexed); StorageLoad==0 vs rt_composite's storage-mask multiply.
+TEST_CASE("CEIR-31b-3-b: the committed ui_composite.ckir is a bindless 3-texture mix(scene,effect,mask)",
+          "[kir][asset][ceir31b]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    std::ifstream              f(CRD_REPO_DIR "/assets/ckir/ui_composite.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+
+    CHECK(e.stage == kir::KStage::Fragment);
+    CHECK(e.n_out == 1);
+    CHECK(g.node(e.out[0].node).type.rows == 4); // ⛔ the output is vec4 — a VecConcat that dropped the alpha (vec3) fails HERE, not as black-alpha on device
+
+    int n_tex       = 0;
+    int n_samp      = 0;
+    int n_texsample = 0;
+    int n_sampidx   = 0;
+    int n_mix       = 0;
+    int n_storage   = 0;
+    int tex_count   = 0;             // the descriptor-array length of the (single) Texture node
+    int layer_seen[3] = {0, 0, 0};   // times each bindless layer 0/1/2 is a SampleIndexed index operand
+    int layer_other   = 0;           // a SampleIndexed indexing anything but 0/1/2 (a wrong-layer typo)
+    for (int i = 0; i < static_cast<int>(g.size()); ++i)
+    {
+        const kir::KNode& nd = g.node(i);
+        if (nd.op == kir::KOp::Texture) { ++n_tex; tex_count = static_cast<int>(nd.type.count); }
+        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
+        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
+        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
+        if (nd.op == kir::KOp::Mix) { ++n_mix; }
+        if (nd.op == kir::KOp::SampleIndexed)
+        {
+            ++n_sampidx;
+            const kir::KNode& idx   = g.node(nd.d); // the 4th operand = the bindless layer index
+            const int         layer = static_cast<int>(idx.cval);
+            if (idx.op == kir::KOp::Const && layer >= 0 && layer < 3) { ++layer_seen[layer]; }
+            else { ++layer_other; }
+        }
+    }
+    CHECK(n_tex == 1);
+    CHECK(tex_count == 3);   // ⛔ a descriptor-array of 3 (the bindless heap) — a count==1 single-texture copy is wrong
+    CHECK(n_samp == 1);      // ONE Sampler (the one-sampler-per-pass contract)
+    CHECK(n_sampidx == 3);   // scene / effect / mask
+    CHECK(n_mix == 1);       // the lerp
+    CHECK(n_texsample == 0); // discriminator: composite samples via SampleIndexed, not TexSample
+    CHECK(n_storage == 0);   // vs rt_composite's StorageLoad mask
+    CHECK(layer_other == 0);
+    CHECK(layer_seen[0] == 1); // layer 0 = scene, exactly once
+    CHECK(layer_seen[1] == 1); // layer 1 = effect, exactly once
+    CHECK(layer_seen[2] == 1); // layer 2 = mask, exactly once (a 0,0,1 typo trips one of these)
+
+    // ROUND-TRIP fixed-point + both-backend lowering (a fragment stage sampling the bindless heap).
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk_glsl(&a);
+    CHECK(kir::emit_stage_glsl(g, e, &a, gk_glsl));
+    CHECK(gk_glsl.source.size() > 0U);
+    CHECK(std::strstr(gk_glsl.source.c_str(), "texture(") != nullptr); // the bindless sample is emitted, not dead
+    kir::GlslKernel gk_hlsl(&a);
+    CHECK(kir::emit_stage_hlsl(g, e, &a, gk_hlsl));
+    CHECK(gk_hlsl.source.size() > 0U);
+}
+
+// ── CEIR-31b-4-a: the committed ui_mask_rect.ckir — the panel-coverage source that REPLACES the placeholder
+// engine://ui/panel_fill geometry pass (a fullscreen fixed-rect touches nothing parked; the ADR-0107 UiPanel is a PARKED
+// Track-B concept). cov = step(x0,uv.x)*step(uv.x,x1)*step(y0,uv.y)*step(uv.y,y1) → the R8 mask.r the composite reads as
+// bindless layer 2. The rect bounds are 4 SPEC-CONSTS (x0@0/y0@1/x1@2/y1@3, defaults 0.25/0.25/0.75/0.75) so 31b-4 arm (a)
+// can MOVE the rect (a [pass.params] edit) and watch the composite output move (baked bounds would need a 2nd asset). The
+// device-free gate is STRUCTURAL (a Vec-math kernel, no CPU-eval — [[scars_ckir_emitter_eval]] Vec-refusal). ⛔ TEETH: 4
+// spec-consts with the EXACT rect defaults (a swapped x0/x1 or a wrong bound fails HERE); 4 Step (the 4 half-planes);
+// 0 Texture/Sampler/TexSample/SampleIndexed/StorageLoad — the discriminator: the ONE ui kernel that reads NO texture (its
+// pass is reads=[]); the Step ternary is EMITTED (not dead) on both backends; the output is Vec4 (the R8 target takes .r).
+TEST_CASE("CEIR-31b-4-a: the committed ui_mask_rect.ckir is a 4-spec-const hard rect (no textures)",
+          "[kir][asset][ceir31b]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    std::ifstream              f(CRD_REPO_DIR "/assets/ckir/ui_mask_rect.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    REQUIRE(sz > 0);
+    f.seekg(0);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    kir::KGraph g(&a);
+    kir::KEntry e;
+    REQUIRE(kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e).ok);
+
+    CHECK(e.stage == kir::KStage::Fragment);
+    CHECK(e.n_out == 1);
+    CHECK(g.node(e.out[0].node).type.rows == 4); // Vec4 output; the R8 mask target stores .r = cov
+
+    int    n_tex       = 0;
+    int    n_samp      = 0;
+    int    n_texsample = 0;
+    int    n_sampidx   = 0;
+    int    n_storage   = 0;
+    int    n_step      = 0;
+    int    n_splat     = 0;
+    int    n_stagein   = 0;
+    int    n_swizzle   = 0;
+    int    n_spec      = 0;
+    double spec_def[4] = {-99.0, -99.0, -99.0, -99.0}; // default cval by spec id 0..3
+    for (int i = 0; i < static_cast<int>(g.size()); ++i)
+    {
+        const kir::KNode& nd = g.node(i);
+        if (nd.op == kir::KOp::Texture) { ++n_tex; }
+        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
+        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
+        if (nd.op == kir::KOp::SampleIndexed) { ++n_sampidx; }
+        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
+        if (nd.op == kir::KOp::Step) { ++n_step; }
+        if (nd.op == kir::KOp::Splat) { ++n_splat; }
+        if (nd.op == kir::KOp::StageIn) { ++n_stagein; }
+        if (nd.op == kir::KOp::Swizzle) { ++n_swizzle; }
+        if (kir::is_spec_const(nd))
+        {
+            ++n_spec;
+            const crd::u32 id = kir::spec_const_id(nd);
+            if (id < 4U) { spec_def[id] = nd.cval; }
+        }
+    }
+    CHECK(n_tex == 0);       // ⛔ the discriminator: the ONLY ui kernel reading NO texture (its pass is reads=[])
+    CHECK(n_samp == 0);
+    CHECK(n_texsample == 0);
+    CHECK(n_sampidx == 0);
+    CHECK(n_storage == 0);
+    CHECK(n_step == 4);      // the 4 half-plane edges
+    CHECK(n_splat == 1);     // cov → Vec4
+    CHECK(n_stagein == 1);   // the fullscreen uv
+    CHECK(n_swizzle == 2);   // uv.x, uv.y
+    CHECK(n_spec == 4);      // x0@0 / y0@1 / x1@2 / y1@3
+
+    // the EXACT rect defaults — a swapped x0/x1 or a wrong bound fails HERE, device-free (0.25/0.75 are exact in f64)
+    CHECK(spec_def[0] == 0.25); // x0
+    CHECK(spec_def[1] == 0.25); // y0
+    CHECK(spec_def[2] == 0.75); // x1
+    CHECK(spec_def[3] == 0.75); // y1
+
+    // ROUND-TRIP fixed-point + both-backend emit; the Step coverage is EMITTED (not dead), and NOTHING samples a texture.
+    CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    kir::GlslKernel gk_glsl(&a);
+    CHECK(kir::emit_stage_glsl(g, e, &a, gk_glsl));
+    CHECK(gk_glsl.source.size() > 0U);
+    CHECK(std::strstr(gk_glsl.source.c_str(), "? 0.0 : 1.0") != nullptr); // Step emitted inline — the coverage math is live
+    CHECK(std::strstr(gk_glsl.source.c_str(), "texture(") == nullptr);    // ⛔ NO texture sample — the reads=[] discriminator
+    kir::GlslKernel gk_hlsl(&a);
+    CHECK(kir::emit_stage_hlsl(g, e, &a, gk_hlsl));
+    CHECK(gk_hlsl.source.size() > 0U);
 }
 
 // ── CEIR-18b: the committed scene_light_cull_3d.ckir (64 = 4×4×4 clusters) LOADS + round-trips + is DISTINCT from the 2D. ──
@@ -1092,4 +1874,229 @@ TEST_CASE("CEIR-18p: the committed impostor assets parse, round-trip; FS carries
     const auto blob_b = kir::serialize_graph(gfp, efp, &a);
     CHECK(blob_a.size() == blob_b.size());
     CHECK(first_diff(blob_a, blob_b) >= 0);
+}
+
+// ── CEIR-25c-0: assets/ckir/relu_vjp.ckir — the ReLU VJP kernel (the relu.ckir <-> relu_vjp.ckir asset-driven differentiable
+//    pair, §57). gx[i] = (x[i] > 0) ? gy[i] : 0 — the reverse of out=max(in,0): the gradient passes through where the forward
+//    was active, zeroed elsewhere. `x` is the forward PRE-activation (relu's input), `gy` the upstream adjoint. 3 buffers:
+//    x@0 (read), gy@1 (read), gx@2 (write). ⛔ CEIR-26d-4: local_size is the SENTINEL (0 = "bind from the write numel at cook", like
+//    relu.ckir) — the resolver cook-binds it; the M*hidden==32 baked contract is RETIRED (a vjp runs at any interior width).
+//    ⛔ CmpGt gives EXACT `x>0?1:0` (matches hesap nn_reverse::relu_vjp's STRICT `>0` at x==0, where GLSL step() would differ),
+//    consumed by Select (bool cond). Authored via the BOOTSTRAP path (build -> ckir_write -> eval-verify -> commit) because the
+//    bool-typed CmpGt + the Select ternary make the type fields error-prone to hand-author; the builder types them by construction.
+namespace
+{
+kir::KEntry build_relu_vjp(kir::KGraph& g)
+{
+    const int        xbuf  = g.buffer_decl(kir::DType::F32, 0, 0, false); // x@0  — the forward pre-activation (read)
+    const int        gybuf = g.buffer_decl(kir::DType::F32, 0, 1, false); // gy@1 — the upstream adjoint (read)
+    const int        gxbuf = g.buffer_decl(kir::DType::F32, 0, 2, true);  // gx@2 — the operand adjoint (write)
+    const int        lid   = g.builtin(kir::KBuiltin::LocalInvocationIndex);
+    const kir::Shape sh1   = kir::make_shape({1});
+    const int        zero  = g.constant(0.0, sh1, kir::DType::F32);
+    const int        x     = g.buffer_load(xbuf, lid);
+    const int        gy    = g.buffer_load(gybuf, lid);
+    const int        mask  = g.binary(kir::KOp::CmpGt, x, zero); // (x > 0) — Bool
+    const int        gx    = g.select(mask, gy, zero);           // (x>0) ? gy : 0
+    const int        mark  = g.kernel_stmt_mark();
+    g.stmt_buffer_store(gxbuf, lid, gx);
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 0; // ⛔ CEIR-26d-4b: the SENTINEL (0 = bind at cook) — the resolver cook-binds local_size ← the write numel; MUST match the committed relu_vjp.ckir (0), else a [.emit-relu-vjp] regen reverts the sentinel
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+
+// ── CEIR-26d-3b: assets/ckir/softmax.ckir — the GENERALIZED scaled row-wise softmax (Sk any width via a spec-const loop bound; the
+//    24b baked Sk=3 unroll retired). probs[r,c] = exp(s·scores[r,c] − m_r)/Σ_c exp(s·scores[r,c] − m_r), m_r = max_c(s·scores[r,c]),
+//    s = scale[0] = 1/√D. One lane per OUTPUT ROW r = LocalInvocationIndex in [0, Sq); local_size = Sq (the resolver cook-binds it
+//    to dim0(scores); the eval/reading gates set it). Sk is a SPEC-CONST (constant_id 0, default 3) — the For loop bound. The
+//    per-row max m_r + normalizer d_r are carried across the loop in GROUPSHARED slots (kernel-tier For has NO register carry —
+//    26d-3b-1; each lane touches only its own [r] slot ⇒ no barrier). Three UNIFORM `For c in [0,Sk)` passes: (1) m = max; (2)
+//    d += exp(·−m); (3) probs = exp(·−m)/d (RECOMPUTE exp — no store-and-reload, the inline-load RAW scar). Bootstrapped via
+//    ckir_write (build → eval-verify (2,3)+(3,5) → commit → reading gate → DELETE builder; the 23e-a mold).
+kir::KEntry build_softmax(kir::KGraph& g)
+{
+    using kir::KOp;
+    const kir::Shape sh1 = kir::make_shape({1});
+    const int        scores = g.buffer_decl(kir::DType::F32, 0, 0, false); // scores@0 (read)
+    const int        scale  = g.buffer_decl(kir::DType::F32, 0, 1, false); // scale@1 (read, [1])
+    const int        probs  = g.buffer_decl(kir::DType::F32, 0, 2, true);  // probs@2 (write)
+    constexpr int    cap   = 1024;                                        // shared cap ≥ max Sq (avoids a 3rd cook-bind; r<Sq≤cap)
+    const int        m_sh   = g.shared_decl(kir::DType::F32, cap);        // per-row running max
+    const int        d_sh   = g.shared_decl(kir::DType::F32, cap);        // per-row normalizer
+    const int        r      = g.builtin(kir::KBuiltin::LocalInvocationIndex);
+    const int        sk     = g.spec_constant(0U, 3.0, kir::DType::U32);   // Sk = the loop bound (spec-const, default 3)
+    const int        base   = g.binary(KOp::Mul, r, sk);                   // r·Sk (U32)
+    const int        zero_u  = g.constant(0.0, sh1, kir::DType::U32);
+    const int        s      = g.buffer_load(scale, zero_u);                 // scale[0] = 1/√D
+    const int        negmax = g.constant(-static_cast<crd::f64>(3.4028234663852886e38), sh1, kir::DType::F32); // −FLT_MAX (f64→f32 exact)
+    const int        zero_f  = g.constant(0.0, sh1, kir::DType::F32);
+
+    const int mark = g.kernel_stmt_mark();
+    // ⛔ base = r·Sk is consumed inside ALL THREE loop bodies — MATERIALIZE it at the enclosing (body) scope, else the emitter
+    //    declares its temp inside the FIRST loop and passes 2/3 reference an OUT-OF-SCOPE temp (glslang rejects it; the temp-scope
+    //    materialize scar [[feedback_ckir_if_block_shared_temp_scope_materialize]]).
+    g.stmt_materialize(base);
+    g.stmt_shared_store(m_sh, r, negmax); // m_r = −FLT_MAX
+    g.stmt_shared_store(d_sh, r, zero_f);  // d_r = 0
+    // PASS 1 — m_r = max_c(s·scores[base+c])
+    {
+        const int f   = g.stmt_for_begin(sk);
+        const int c   = g.kernel_loop_var(f);
+        const int idx = g.binary(KOp::Add, base, c);
+        const int e   = g.binary(KOp::Mul, s, g.buffer_load(scores, idx));
+        g.stmt_shared_store(m_sh, r, g.binary(KOp::Max, g.shared_load(m_sh, r), e));
+        g.stmt_for_end(f);
+    }
+    // PASS 2 — d_r = Σ_c exp(s·scores[base+c] − m_r)
+    {
+        const int f   = g.stmt_for_begin(sk);
+        const int c   = g.kernel_loop_var(f);
+        const int idx = g.binary(KOp::Add, base, c);
+        const int e   = g.binary(KOp::Mul, s, g.buffer_load(scores, idx));
+        const int ex  = g.unary(KOp::Exp, g.binary(KOp::Sub, e, g.shared_load(m_sh, r)));
+        g.stmt_shared_store(d_sh, r, g.binary(KOp::Add, g.shared_load(d_sh, r), ex));
+        g.stmt_for_end(f);
+    }
+    // PASS 3 — probs[base+c] = exp(s·scores[base+c] − m_r) / d_r
+    {
+        const int f   = g.stmt_for_begin(sk);
+        const int c   = g.kernel_loop_var(f);
+        const int idx = g.binary(KOp::Add, base, c);
+        const int e   = g.binary(KOp::Mul, s, g.buffer_load(scores, idx));
+        const int ex  = g.unary(KOp::Exp, g.binary(KOp::Sub, e, g.shared_load(m_sh, r)));
+        g.stmt_buffer_store(probs, idx, g.binary(KOp::Div, ex, g.shared_load(d_sh, r)));
+        g.stmt_for_end(f);
+    }
+    kir::KEntry e;
+    e.stage             = kir::KStage::Compute;
+    e.local_size[0]     = 0; // ⛔ CEIR-26d-4e: the SENTINEL (0 = bind at cook) — the resolver cook-binds local_size ← Sq=dim0(probs) via bind_authored_local_size (typed cap); eval/reading gates set it explicitly
+    e.kernel_body_begin = mark;
+    e.kernel_body_count = g.stmt_count() - mark;
+    return e;
+}
+} // namespace
+
+// HIDDEN GENERATOR ([.emit-relu-vjp]): (re)write assets/ckir/relu_vjp.ckir from build_relu_vjp. Run explicitly to regenerate:
+//   crd-kir-tests.exe "[.emit-relu-vjp]"  — the committed .ckir is the asset; this builder is the regen source (kept in-tree,
+//   the [.emit-fft-cuda] idiom). Regenerate whenever the ReLU VJP formulation changes.
+TEST_CASE("CEIR-25c-0: (re)generate assets/ckir/relu_vjp.ckir from the builder", "[.emit-relu-vjp]")
+{
+    crd::memory::TlsfAllocator         a(8U << 20U);
+    kir::KGraph                        g(&a);
+    const kir::KEntry                  e    = build_relu_vjp(g);
+    const crd::containers::String      text = kir::ckir_write(g, e, &a);
+    FILE*                              f    = nullptr;
+#ifdef _MSC_VER
+    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", "wb") != 0) { f = nullptr; }
+#else
+    f = std::fopen(CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", "wb");
+#endif
+    REQUIRE(f != nullptr);
+    fwrite(text.c_str(), 1, text.size(), f);
+    fclose(f);
+}
+
+// CEIR-26d-3b-2: the BOOTSTRAP eval-verify — build_softmax's graph, spec-const Sk set + local_size Sq, eval_cpu_kernel == a CPU
+// scaled row-wise softmax at BOTH the 24b proof dims (Sq=2, Sk=3) AND a generic (Sq=3, Sk=5) — proves the loop kernel is
+// dimension-general BEFORE the .ckir is generated. f64 eval vs f64 ref (algorithm check, not device f32); DELETE with the builder.
+namespace
+{
+void softmax_eval_case(crd::u32 sq, crd::u32 sk)
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    kir::KEntry                e = build_softmax(g);
+    (void)g.set_spec_const(0U, static_cast<crd::f64>(sk)); // Sk = the loop bound
+    e.local_size[0]        = sq;                           // one lane per row
+    const crd::u32 n       = sq * sk;
+    crd::f64       scores[16];
+    crd::f64       probs[16];
+    crd::f64       scale[1] = {0.5}; // 1/√D stand-in
+    for (crd::u32 i = 0; i < n; ++i) { scores[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5); }
+    for (crd::u32 i = 0; i < n; ++i) { probs[i] = -999.0; }
+    kir::KernelBuffer bufs[3] = {{scores, static_cast<int>(n), 0, 0}, {scale, 1, 0, 1}, {probs, static_cast<int>(n), 0, 2}};
+    kir::eval_cpu_kernel(g, e, bufs, 3, sq, &a, 1U);
+    const auto ad = [](crd::f64 x) { return x < 0.0 ? -x : x; };
+    for (crd::u32 r = 0; r < sq; ++r)
+    {
+        crd::f64 m = -1e300;
+        for (crd::u32 c = 0; c < sk; ++c) { const crd::f64 v = scale[0] * scores[r * sk + c]; if (v > m) { m = v; } }
+        crd::f64 denom = 0.0;
+        for (crd::u32 c = 0; c < sk; ++c) { denom += std::exp(scale[0] * scores[r * sk + c] - m); }
+        for (crd::u32 c = 0; c < sk; ++c)
+        {
+            const crd::f64 ref = std::exp(scale[0] * scores[r * sk + c] - m) / denom;
+            CHECK(ad(probs[r * sk + c] - ref) <= 1e-6 * (1.0 + ad(ref)));
+        }
+    }
+}
+} // namespace
+TEST_CASE("CEIR-26d-3b: build_softmax evals == CPU scaled row-wise softmax at (Sq=2,Sk=3) and (Sq=3,Sk=5)", "[kir][asset]")
+{
+    softmax_eval_case(2U, 3U); // the 24b attention proof dims
+    softmax_eval_case(3U, 5U); // a generic width — the dimension-general proof (previously BakedKernelShapeUnsupported)
+}
+
+// HIDDEN GENERATOR ([.emit-softmax]): (re)write assets/ckir/softmax.ckir from build_softmax. Run explicitly to regenerate:
+//   crd-kir-tests.exe "[.emit-softmax]". ⛔ per the 23e-a mold this builder is DELETED after the commit + reading gate land
+//   (softmax.ckir's header records the bootstrap-then-delete; NOT relu_vjp's keep-as-regen exception).
+TEST_CASE("CEIR-26d-3b: (re)generate assets/ckir/softmax.ckir from the builder", "[.emit-softmax]")
+{
+    crd::memory::TlsfAllocator    a(8U << 20U);
+    kir::KGraph                   g(&a);
+    const kir::KEntry             e    = build_softmax(g);
+    const crd::containers::String text = kir::ckir_write(g, e, &a);
+    FILE*                         f    = nullptr;
+#ifdef _MSC_VER
+    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/softmax.ckir", "wb") != 0) { f = nullptr; }
+#else
+    f = std::fopen(CRD_REPO_DIR "/assets/ckir/softmax.ckir", "wb");
+#endif
+    REQUIRE(f != nullptr);
+    fwrite(text.c_str(), 1, text.size(), f);
+    fclose(f);
+}
+
+// The READING GATE: ckir_read the COMMITTED assets/ckir/relu_vjp.ckir and eval_cpu_kernel it — gx == (x>0)?gy:0 EXACTLY (a
+// mask/select, no arithmetic rounding; x/gy chosen f32-exact so the F32 store round-trips identically). Proves the committed
+// asset (not a rebuilt graph) matches the analytic ReLU VJP over positive / zero / negative pre-activations.
+TEST_CASE("CEIR-25c-0: the committed relu_vjp.ckir computes the analytic ReLU VJP (gx = (x>0)?gy:0)", "[kir][asset]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    kir::KGraph                g(&a);
+    kir::KEntry                e;
+    std::ifstream              f(CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", std::ios::binary | std::ios::ate);
+    REQUIRE(f.good());
+    const std::streamsize sz = f.tellg();
+    f.seekg(0);
+    crd::containers::Array<char> src(&a);
+    src.resize(static_cast<crd::usize>(sz), '\0');
+    f.read(src.data(), sz);
+    const auto rr = kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, e);
+    REQUIRE(rr.ok);
+    REQUIRE(e.stage == kir::KStage::Compute);
+    REQUIRE(e.local_size[0] == 0U); // ⛔ CEIR-26d-4: the SENTINEL (0 = "bind from the write numel at cook") — the resolver cook-binds
+                                    //    it (bind_authored_local_size) on the device path; this device-free eval passes ls explicitly.
+
+    constexpr int ls = 32;
+    crd::f64      x[ls];
+    crd::f64      gy[ls];
+    crd::f64      gx[ls];
+    const crd::f64 xvals[3] = {-1.0, 0.0, 2.0}; // negative / zero / positive — all f32-exact
+    for (int i = 0; i < ls; ++i)
+    {
+        x[i]  = xvals[i % 3];
+        gy[i] = static_cast<crd::f64>(i) / 32.0; // dyadic ⇒ f32-exact (the store round-trips identically)
+        gx[i] = -9.0;
+    }
+    kir::KernelBuffer bufs[3] = {{x, ls, 0, 0}, {gy, ls, 0, 1}, {gx, ls, 0, 2}};
+    kir::eval_cpu_kernel(g, e, bufs, 3, static_cast<crd::u32>(ls), &a);
+    for (int i = 0; i < ls; ++i)
+    {
+        const crd::f64 ref = x[i] > 0.0 ? gy[i] : 0.0; // the definition hesap nn_reverse::relu_vjp implements (strict >0 at x==0; computed inline — tests/kir doesn't link hesap)
+        CHECK(gx[i] == ref);
+    }
 }

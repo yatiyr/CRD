@@ -1,5 +1,8 @@
 # Session — 2026-07-20 — B18-f: the RT strand tier (linear swept spheres)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Close B18-f — hair strands as a **ray-traced** primitive — and with it the last open items of C3 and B9.

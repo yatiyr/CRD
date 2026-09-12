@@ -1,5 +1,8 @@
 # ADR-0122 — Reference executor: the full host subset (task vocabulary · sequential parallel reference · step hooks · ON-POOL async)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design + close advisor-reviewed — multiple consults across the slice) — the D-007 **CEIR band 11 (Reference executor +
 compiled host plan)**, slice **CEIR-11a**. The CEIR-5z reference `Interpreter` is grown to the **full host subset** — the

@@ -1,5 +1,8 @@
 # 2026-08-03 — REN-41 Visual Frontier: velocity CORRECTNESS gate + 1M fps board (the two "also open" items)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Live state: `context.md` (READ THIS FIRST block). Continuation dossier: `docs/research/2026-08-02-visual-frontier-plan.md`.
 > REN-band row: D-007 REN-41. Prior session (runtime integration): `docs/sessions/2026-08-03-ren41-velocity-runtime-integration.md`.
 

@@ -1,5 +1,8 @@
 # CEIR-17 — Scene / ECS / geometry bridge (design + STATUS ledger)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Band contract (D-007 tracker CEIR-17, master roadmap §CEIR-14 = §45/§46/§47): **implement scene/query/resource
 > resolver semantics; PROOF = rigid / skinned / indirect scene rendering + GPU culling, as CEIR.** This is a
 > PROMOTION, not a rewrite (SANITY #8) — the resolution logic already ships (the REN-37 material/technique stack, the

@@ -1,5 +1,8 @@
 # Session 2026-08-07 — `context.md` history archive (2026-06-10 → 2026-08-07)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **What this is.** The stacked historical focus/handoff snapshots pruned out of `context.md` during the
 > 2026-08-07 repository-wide documentation-hygiene pass (see
 > `docs/sessions/2026-08-07-doc-hygiene-pass.md`). `context.md` is a *dashboard* (its own rule: ≤ 300 lines);
@@ -22,7 +25,7 @@
 > ### ⏩⏩ HANDOFF (2026-08-07) — RAF CLOSED; the post-RAF roadmap is written. READ THIS FIRST.
 > **RAF band is COMPLETE** (asset-driven render foundation; `FramePassKind` retired, `FramePassDesc` dissolved into a
 > typed param payload, ADR-0106 closed — see the 2026-08-06 session log). The user's master roadmap prompt was applied
-> to **`docs/detours/D-007-gpu-program-system.md`**: stale mid-migration + exit sections struck in place, the RAF-12
+> to **`docs/archive/D-007-gpu-program-system.md`**: stale mid-migration + exit sections struck in place, the RAF-12
 > agent handoff compressed to a landed pointer, and a full **§POST-RAF PROGRAMME** appended (18 bands RAH→EYL, L0–L7
 > maturity model, A/A+R/A+E/B/T classifications, 18 invariants, dependency graph, per-band contracts+DoD+taxonomy,
 > "not-yet-proven" honesty list). Machine-readable registry seeded: **`docs/capabilities/gpu-platform-capabilities.toml`**
@@ -1415,7 +1418,7 @@
 > leg env-blocked: WSL dir lacks spirv-reflect source — pre-existing, unrelated). **NEXT: C2-e** empty the I1 allowlist
 > (migrate crd-shader `Effect` frontend / `runtime.cpp` off shaderc — the last hand-written GLSL) → **C2-f** retire rhi's
 > own device creation.
-> Docs: **`docs/detours/D-007-gpu-program-system.md`** (the MERGED master — D-007 + D-008 in one ordered subslice table;
+> Docs: **`docs/archive/D-007-gpu-program-system.md`** (the MERGED master — D-007 + D-008 in one ordered subslice table;
 > the old `D-007-ckir-*` / `D-008-gpu-context-*` are redirect stubs), `docs/decisions/0101-*.md` + `0102-*.md` +
 > **`0103-gpu-context-owns-every-gpu-program.md`**, `docs/sessions/2026-07-09-d007-*.md` + **`2026-07-10-d007-b0-type-system.md`**. ═══**
 >

@@ -1,5 +1,8 @@
 # Session — 2026-05-03: Phase 2.6 v1c — RefCounted<T> + ResourceHandle<T> + load_sync<T>
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SHIPPED  
 **Tests after:** 420/420 win-debug, 420/420 win-relwithdebinfo, 420/420 win-asan, 420/420 win-clang-cl, 420/420 win-tidy, 417/417 win-release  
 **Duration:** one session

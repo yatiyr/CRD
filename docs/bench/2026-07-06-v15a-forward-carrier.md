@@ -1,5 +1,8 @@
 # 2026-07-06 — v15-a forward-mode carrier vs ALL frontier gold standards (full board)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What:** ns per FULL gradient (value + N partials), forward mode, matched accuracy. 1T pinned (`taskset`), g++ 13.3
 `-O3 -march=native` (AVX2+FMA), median-of-15, WSL. Harness: `external/crd_v15a_forward_bench.cpp`. Every engine
 checked vs a central-FD reference before timing (all `err` equal per row → matched accuracy). DoNotOptimize barriers

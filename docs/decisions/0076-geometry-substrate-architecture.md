@@ -1,5 +1,8 @@
 # ADR-0076 — `crd-geometry` substrate architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-05-11) · **Amended (2026-05-11)** — sequence pivoted to precede Phase 3.1 v1c instead of following Phase 3.1.6 (see §12).
 
 **Phase:** 3.1.7 — executed **after Phase 3.1 v1b cluster close and BEFORE Phase 3.1 v1c (broadphase)**. Originally slotted after Phase 3.1.6 `crd-hesap` and before Phase 3.2 animation; resequenced by the §12 amendment to eliminate the deferred-refactor debt on eylem v1c/v1d and sdf v2.

@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-c: CUDA backend + the first vendor benchmark (cuBLAS SGEMM) — HONEST BASELINE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The CKIR CUDA backend (`crd-kir-cuda`, `KirBackendCuda` over the CUDA driver API + NVRTC) runs on the RTX 4070 Ti,
 **bit-exact vs the CPU reference** for correctly-rounded ops. This board is the FIRST vendor benchmark — the naive
 CKIR matmul vs cuBLAS SGEMM. It is a **baseline, not a crush**: at v17-c the CKIR kernel is the naive

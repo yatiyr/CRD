@@ -1,5 +1,8 @@
 # Session: crd-jobs v1i — SBO lambda helpers + parallel_for
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-02  
 **Slice:** v1i  
 **Branch:** main

@@ -1,5 +1,8 @@
 # Lesson 04 — Parallel stable merge: the per-(chunk, bucket) offset table
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "How do you make a parallel radix sort produce *exactly* the same output as the serial reference, across runs, across worker counts, byte-for-byte?"
 
 This is the template for any "fan out work, then merge deterministically" pattern. Once you understand the offset-table trick, you can reach for it any time you have:

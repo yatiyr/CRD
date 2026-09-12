@@ -1,5 +1,12 @@
 # ADR-0032 — Frame graph v1
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+> **Current graphics boundary:** gpu-context/CEIR and authored assets govern new work (ADR-0105/0106/0127).
+> Any rhi/renderer path-class ownership below describes the retired stack; retained technique requirements
+> survive in ROADMAP and its linked contracts. See [current principles](../PRINCIPLES.md).
+
 **Date:** 2026-05
 **Status:** Accepted — **runtime-ownership half SUPERSEDED by ADR-0106 (2026-08)**: `crd-render-graph` is the
 single live frame-graph runtime (the crd-renderer home of this ADR was retired at RET-8, ADR-0105). The design

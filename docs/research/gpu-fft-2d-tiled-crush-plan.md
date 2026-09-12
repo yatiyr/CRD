@@ -1,5 +1,8 @@
 # The tiled register-blocked 2-D FFT — execute-ready crush plan (2026-07-13)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **executed** — the tiled register-blocked 2-D path landed during the 2026-07-13 campaign (see the ncu boards in `docs/bench/`). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > The path to crushing cuFFT at 1024²+ (single-image) 2-D FFT / FFT-convolution. Written after the fused-2-D-conv landed

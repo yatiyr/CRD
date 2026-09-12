@@ -1,5 +1,8 @@
 # 2026-06-13 — v10-a: FFT substrate (`crd-hesap-fft`)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > v10 = FFT cluster. RATIFIED bar = **beat MKL**, scope = **a→h** (memory `project_v10_fft_plan`; plan +
 > subslice table in `docs/phases/phase-3.1.6-hesap.md`). Gold standards FFTW3 + PocketFFT + MKL.
 

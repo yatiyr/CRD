@@ -1,3 +1,6 @@
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Session 2026-05-17 — Phase 3.1.7 v7e Liepa hole filling (Liepa 2003 §3 + §4 + §5)
 
 > **Update 2026-05-17 (same session):** v7e was initially shipped with §3

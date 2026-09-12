@@ -1,5 +1,8 @@
 # CEIR-24 band close — ceir.ml + §69 provider partitioning (MLP + attention, §55/§69/§136/§138)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The AUTHORITATIVE CEIR-24 close record. `ceir.ml` declares HIGH-LEVEL ML ops (`ml.mlp`, `ml.attention`) as first-class,
 authorable IR; a §69 execution-provider partitioner routes each op to a native provider (the `VK_NV_cooperative_vector` MLP) OR
 to the portable CKIR expansion; the §136 crown runs ONE region through BOTH strategies to the same numbers on real hardware.

@@ -1,5 +1,8 @@
 # 2026-05-16 — Phase 3.1.7 v6 `-polygon` cluster CLOSE
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > 7th of 11 `crd-geometry` sub-modules complete. v6d Vatti polygon Boolean
 > + v6e Bentley-Ottmann sweep shipped this session on top of v6a/b/c from
 > the earlier checkpoint, then cluster-close deliverables (ADR amendment,

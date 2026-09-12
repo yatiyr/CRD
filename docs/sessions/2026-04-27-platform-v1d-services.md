@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — crd-platform v1d (filesystem + dynlib + threading)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Close `crd-platform` Phase 1 with the remaining OS-service slice:

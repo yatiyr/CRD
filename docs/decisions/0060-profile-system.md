@@ -1,5 +1,8 @@
 # ADR-0060 — Profile System: typed predicate selectors with additive composition for cross-domain runtime configuration
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-08
 **Tags:** scene, resources, cooker, arch, config, networking, app

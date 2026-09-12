@@ -1,5 +1,8 @@
 # Session: crd-jobs — fiber job system hardened (4 root-caused bugs fixed)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-12
 **Scope:** `engine/jobs/src/worker_pool.{cpp,hpp}`, `engine/jobs/src/counter.{cpp,hpp}`,
 `engine/jobs/CMakeLists.txt`, `tests/jobs/test_jobs.cpp`, `tests/jobs/test_counter.cpp`,

@@ -1,5 +1,8 @@
 # ADR-0063 — Eylem determinism contract
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-05-10)
 **Tags:** [arch] [physics] [eylem] [determinism] [ci] [fp]
 **Related ADRs:** ADR-0005 (Math v1), ADR-0033 (`crd-jobs`), ADR-0035

@@ -1,3 +1,6 @@
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Session 2026-05-17 — Phase 3.1.7 v7 `-mesh-processing` cluster CLOSED
 
 ### Goal

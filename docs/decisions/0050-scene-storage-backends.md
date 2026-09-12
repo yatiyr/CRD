@@ -1,5 +1,8 @@
 # ADR-0050 — Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-06
 **Tags:** scene, ecs, arch, layer-2, performance

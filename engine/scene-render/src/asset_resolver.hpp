@@ -14,6 +14,9 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/renderasset/renderasset.hpp> // AssetRef · AssetScheme · on_disk_relative · DiagnosticList · DiagCode
+#include <crd/framecook/frame_runtime.hpp> // CEIR-31b-3-a-i-2: SpecSet + FrameExecError for the spec-aware registry below.
+                                           // scene-render ALREADY depends on frame-cook (SceneHost implements IFrameGraphHost),
+                                           // so the registry naming these is not a new arrow — don't "fix" this include away.
 
 namespace crd::gpu
 {
@@ -123,33 +126,78 @@ class ProgramRegistry
 public:
     using RasterFn = crd::gpu::IRasterProgram* (*)(void* user);
     using KernelFn = crd::gpu::IGpuProgram* (*)(void* user);
+    // CEIR-31b-3-a-i-2: a SPEC provider also receives the pass's SpecSet + an err out-param, so it can specialize the
+    // CKIR program per pass AND report SpecConstNotInProgram (a spec id absent from the program). The err param is
+    // designed in NOW so -a-ii's generic ui provider needs no signature change to this just-introduced type.
+    using SpecRasterFn = crd::gpu::IRasterProgram* (*)(void* user, crd::framecook::SpecSet specs, crd::framecook::FrameExecError* err);
+    using SpecKernelFn = crd::gpu::IGpuProgram* (*)(void* user, crd::framecook::SpecSet specs, crd::framecook::FrameExecError* err);
 
     explicit ProgramRegistry(crd::memory::IAllocator* alloc) noexcept : m_raster(alloc), m_kernel(alloc) {}
 
     void register_raster(crd::renderasset::AssetId id, RasterFn fn, void* user)
     {
-        m_raster.push_back(RasterEntry{id, fn, user});
+        m_raster.push_back(RasterEntry{id, fn, nullptr, user, Kind::Plain});
     }
     void register_kernel(crd::renderasset::AssetId id, KernelFn fn, void* user)
     {
-        m_kernel.push_back(KernelEntry{id, fn, user});
+        m_kernel.push_back(KernelEntry{id, fn, nullptr, user, Kind::Plain});
+    }
+    // A SPEC-aware program: resolved via `raster(id, specs, err)` / `kernel(id, specs, err)`. A spec-free resolve of one
+    // (`raster(id)`) passes an empty SpecSet → the program at its DEFAULT spec values (honest, portable).
+    void register_raster_spec(crd::renderasset::AssetId id, SpecRasterFn fn, void* user)
+    {
+        m_raster.push_back(RasterEntry{id, nullptr, fn, user, Kind::Spec});
+    }
+    void register_kernel_spec(crd::renderasset::AssetId id, SpecKernelFn fn, void* user)
+    {
+        m_kernel.push_back(KernelEntry{id, nullptr, fn, user, Kind::Spec});
     }
 
     // Resolve a (parsed, folded) AssetId to a device program by invoking its provider. nullptr if unregistered —
     // SceneHost turns that into a clear "no program for id" error (the executor already reports it by name).
+    // Spec-free resolve (the ~40 engine defaults, RT stages, tests): an empty SpecSet. A Spec-registered id resolves at
+    // its DEFAULT spec values through this — never a null/crash.
     [[nodiscard]] crd::gpu::IRasterProgram* raster(crd::renderasset::AssetId id) const
     {
-        for (crd::usize i = 0; i < m_raster.size(); ++i)
-        {
-            if (m_raster[i].id == id) { return m_raster[i].fn(m_raster[i].user); }
-        }
-        return nullptr;
+        return raster(id, crd::framecook::SpecSet{}, nullptr);
     }
     [[nodiscard]] crd::gpu::IGpuProgram* kernel(crd::renderasset::AssetId id) const
     {
+        return kernel(id, crd::framecook::SpecSet{}, nullptr);
+    }
+    // CEIR-31b-3-a-i-2: the spec-aware resolve. UNREGISTERED (id not found) → nullptr with `err` UNTOUCHED, so the record
+    // seat maps it to UnresolvedProgram — unregistered WINS over spec-on-opaque. A Plain (opaque) entry + a non-empty
+    // SpecSet → SpecOnOpaqueProgram (the spec would silently drop). A Spec entry → its provider (which may set
+    // SpecConstNotInProgram). Empty SpecSet on a Plain entry → the unchanged fn(user) path.
+    [[nodiscard]] crd::gpu::IRasterProgram* raster(crd::renderasset::AssetId id, crd::framecook::SpecSet specs,
+                                                   crd::framecook::FrameExecError* err) const
+    {
+        for (crd::usize i = 0; i < m_raster.size(); ++i)
+        {
+            if (m_raster[i].id != id) { continue; }
+            if (m_raster[i].kind == Kind::Spec) { return m_raster[i].spec_fn(m_raster[i].user, specs, err); }
+            if (specs.count > 0U)
+            {
+                if (err != nullptr) { *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram; }
+                return nullptr;
+            }
+            return m_raster[i].fn(m_raster[i].user);
+        }
+        return nullptr;
+    }
+    [[nodiscard]] crd::gpu::IGpuProgram* kernel(crd::renderasset::AssetId id, crd::framecook::SpecSet specs,
+                                                crd::framecook::FrameExecError* err) const
+    {
         for (crd::usize i = 0; i < m_kernel.size(); ++i)
         {
-            if (m_kernel[i].id == id) { return m_kernel[i].fn(m_kernel[i].user); }
+            if (m_kernel[i].id != id) { continue; }
+            if (m_kernel[i].kind == Kind::Spec) { return m_kernel[i].spec_fn(m_kernel[i].user, specs, err); }
+            if (specs.count > 0U)
+            {
+                if (err != nullptr) { *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram; }
+                return nullptr;
+            }
+            return m_kernel[i].fn(m_kernel[i].user);
         }
         return nullptr;
     }
@@ -158,17 +206,28 @@ public:
     [[nodiscard]] crd::usize kernel_count() const noexcept { return m_kernel.size(); }
 
 private:
+    // CEIR-31b-3-a-i-2: a Plain entry carries `fn` (spec_fn null); a Spec entry carries `spec_fn` (fn null). The kind
+    // is what makes a spec-on-opaque REJECT loud-by-construction — the registry KNOWS which providers take specs.
+    enum class Kind : crd::u8
+    {
+        Plain,
+        Spec
+    };
     struct RasterEntry
     {
         crd::renderasset::AssetId id;
         RasterFn                  fn;
+        SpecRasterFn              spec_fn;
         void*                     user;
+        Kind                      kind;
     };
     struct KernelEntry
     {
         crd::renderasset::AssetId id;
         KernelFn                  fn;
+        SpecKernelFn              spec_fn;
         void*                     user;
+        Kind                      kind;
     };
     crd::containers::Array<RasterEntry> m_raster;
     crd::containers::Array<KernelEntry> m_kernel;

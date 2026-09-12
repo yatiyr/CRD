@@ -423,13 +423,14 @@ TEST_CASE("ceir 23d-1: a runtime-count For reduction round-trips through .ckir +
 // was DELETED (the 18a-1 write->commit->read->delete mold). The committed asset is the source, verified device-free by
 // test_ckir_viz.cpp's "ceir 23e-a" eval oracle (== the CPU CSR SpMV) and on-device by the Vulkan + DX12 gates.
 
-// CEIR-24b-1: the attention Q·Kᵀ TRANSPOSE kernel (K[Sk,D] -> Kt[D,Sk], one thread per output row + a uniform For over columns,
-// Div/Mod-free gather) was bootstrapped here (build -> eval-verify bit-exact -> ckir_write) into assets/ckir/transpose.ckir, then
-// this builder was DELETED (the 23e-a write->commit->read->delete mold). The committed asset is the source, verified device-free
-// by test_ckir_viz.cpp's "ceir 24b-1" eval oracle (== the CPU transpose) + GLSL emit smoke, and on-device by the 24b-4 gates.
+// CEIR-24b-1 / 26d-3c: the attention Q·Kᵀ transpose kernel + its transpose.ckir asset are RETIRED — attention's Kᵀ is now a
+// shape-generic tensor.transpose (a DIALECT op lowered by synth_transpose, the cooker, since 26d-3a), so the baked authored asset
+// was DELETED (its bootstrap builder here was already gone at 24b-1). Transpose is proven by synth at generic dims via the 26d-3c
+// attention gates + the 25b-4a transpose+broadcast+elementwise chain gate.
 
-// CEIR-24b-2: the attention SCALED ROWWISE SOFTMAX kernel (probs[r,c] = exp(scale·scores[r,c] - m_r)/Σ, m_r = max_c scale·
-// scores[r,c]; scale = 1/√D a caller-uploaded 1-element buffer; Sk=3 unrolled straight-line; KOp::Exp) was bootstrapped here
-// (build -> eval-verify within derived tol -> ckir_write) into assets/ckir/softmax.ckir, then this builder was DELETED (the
-// 23e-a write->commit->read->delete mold). The committed asset is the source, verified device-free by test_ckir_viz.cpp's
-// "ceir 24b-2" eval oracle (== the CPU scaled softmax, derived tol) + GLSL/HLSL emit smoke, and on-device by the 24b-4 gates.
+// CEIR-24b-2 / 26d-3b: the attention SCALED ROWWISE SOFTMAX kernel (probs[r,c] = exp(scale·scores[r,c] - m_r)/Σ, m_r = max_c
+// scale·scores[r,c]; scale = 1/√D a caller-uploaded 1-element buffer; KOp::Exp) was GENERALIZED at 26d-3b from the baked Sk=3
+// unroll to a spec-const `For c in [0,Sk)` loop (Sk a spec-const, local_size←Sq, groupshared m/d carry). ⛔ its builder now lives
+// in test_ckir_asset.cpp's build_softmax (KEPT as the regen source — the uncommitted-delete scar; delete at the user's commit),
+// NOT here/deleted. The committed asset is the source, verified device-free by test_ckir_viz.cpp's "ceir 24b-2" eval oracle (==
+// the CPU scaled softmax at (2,3)+(3,5), derived tol) and on-device by the 24b-4 + 26d-3c attention gates.

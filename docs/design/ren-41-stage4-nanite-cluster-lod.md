@@ -1,5 +1,8 @@
 # REN-41 Stage 4 — Nanite cluster-LOD renderer integration (design contract)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The implementation contract for the REN-41 remainder. Row: **D-007 REN-41** (links here). Live state:
 > `context.md`. Campaign dossier: `docs/research/2026-08-02-visual-frontier-plan.md` (§"Stage 4"). Algorithm/data
 > pipeline: **REN-40-I, CLOSED** (56/56). This slice is the RENDERER SEAM that makes 40-I draw a frame.

@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — quality cleanup before math
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Do one last cleanup pass before `crd-math` starts:

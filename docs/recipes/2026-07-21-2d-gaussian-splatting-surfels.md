@@ -1,5 +1,8 @@
 # Recipe — 2D Gaussian Splatting (surfels): the geometrically-accurate radiance-field primitive
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 A **2D Gaussian Splat** (2DGS, Huang et al., *SIGGRAPH 2024*) represents a scene as a cloud of flat oriented
 **disks** (surfels) instead of the 3D ellipsoids of 3DGS. Rendering is an **exact ray–surfel intersection**, which
 buys two things the ellipsoid cannot: **view-consistent** splatting (a flat disk has no perspective-dependent

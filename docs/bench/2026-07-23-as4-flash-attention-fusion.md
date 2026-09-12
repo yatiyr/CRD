@@ -1,5 +1,8 @@
 # AS-4 — FLASH ATTENTION fusion: the `KOp::Attention` intrinsic crushes the unfused peer (2026-07-23)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **The feature:** a first-class CKIR `KOp::Attention` intrinsic — O = softmax(Q·Kᵀ·scale)·V — that the CUDA backend FUSES into
 ONE tiled online-softmax (flash) kernel. The unfused peer (3 kernels: Q·Kᵀ → softmax → P·V) must MATERIALIZE the S×S scores
 matrix to DRAM twice; flash never does (one block per query tile streams K/V tiles through shared with a running max/sum). That

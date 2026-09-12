@@ -1,5 +1,8 @@
 # RAF-9 — Engine default assets load by canonical `engine://` id through a public registry
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — RAF-9 shipped 2026-08-04 (`engine://` default-asset registry; session 2026-08-04-raf9-engine-default-assets). *(stamped 2026-08-07, doc-hygiene pass)*
 
 ## Context

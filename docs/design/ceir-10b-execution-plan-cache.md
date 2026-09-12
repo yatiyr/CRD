@@ -1,5 +1,8 @@
 # CEIR-10b — Execution-plan cache — DESIGN NOTE
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **DESIGN LOCKED (2026-08-10, advisor consult).** Substrate for **ADR-0121** (at 10b close). The 7d contract:
 > an execution-plan cache keyed by (content hash × target × compiler version) through the 8h model — compiled artifacts
 > are caches, never truth. Master-map §110 (incremental) · §104 (ADR-0104 persistent-pipeline-cache precedent).

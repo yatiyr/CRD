@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-g: the cotengra-class hyper-optimizer — oracle → C++ → FULL CRUSH
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Boards + protocol: **`docs/bench/2026-07-05-v14g-hyperopt-oracle.md`**. This log = the arc +
 > verification state + the two root-caused bugs. (The same day also closed the v10 FFT shipping
 > gate — C1002 root fix — recorded in the 2026-07-04 session log's addendum.)

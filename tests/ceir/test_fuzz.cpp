@@ -256,6 +256,98 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
     REQUIRE(pb.ok);
     CHECK(blob_equal(b1, serialize(ctx_bin, *pb.module, root)));
 }
+
+// ---- CEIR-35b: systematic MUTATION-robustness fuzz (the malformed-input direction of §167) -------------
+// The harness above generates random VALID modules and checks round-trip. The pair below takes a valid seed
+// and MUTATES it thousands of ways, proving the text PARSER and the binary DESERIALIZER never crash/throw on
+// ANY input (ASan-clean under the asan configs) and always return a WELL-FORMED result. It systematizes the
+// hand-picked malformed corpuses (test_roundtrip.cpp / test_binary.cpp / test_malformed.cpp) into exhaustive
+// coverage. Reuses this file's deterministic Rng, span(), blob_equal, text_equal. ⛔ Array<u8> on the test
+// root (never std, never the default allocator).
+
+// The first `count` bytes of `src` in a fresh Array — the TRUNCATION primitive (count == size copies whole).
+[[nodiscard]] Array<u8> mutant_prefix(ConstSpan<u8> src, usize count, crd::memory::IAllocator* alloc)
+{
+    Array<u8> b(alloc);
+    b.reserve(count);
+    for (usize i = 0U; i < count; ++i) { b.push_back(src[i]); }
+    return b;
+}
+
+// ONE byte-level mutation chosen by `rng` (bit-flip / delete / insert-any-byte / duplicate / swap), built by
+// copy-with-transform so it assumes only push_back. Insert spans the FULL byte range incl. NUL and 0x80-0xFF
+// (the signed-char tokenizer scar).
+[[nodiscard]] Array<u8> mutate_bytes(ConstSpan<u8> src, Rng& rng, crd::memory::IAllocator* alloc)
+{
+    Array<u8>   b(alloc);
+    const usize n = src.size();
+    if (n == 0U)
+    {
+        b.push_back(static_cast<u8>(rng.u32v()));
+        return b;
+    }
+    const u32   kind = rng.range(5U);
+    const usize pos  = rng.range(static_cast<u32>(n));
+    switch (kind)
+    {
+    case 0U: // bit-flip one byte
+        b.reserve(n);
+        for (usize i = 0U; i < n; ++i)
+        {
+            b.push_back(i == pos ? static_cast<u8>(src[i] ^ static_cast<u8>(1U << rng.range(8U))) : src[i]);
+        }
+        break;
+    case 1U: // delete the byte at pos
+        b.reserve(n - 1U);
+        for (usize i = 0U; i < n; ++i)
+        {
+            if (i != pos) { b.push_back(src[i]); }
+        }
+        break;
+    case 2U: // insert an arbitrary byte before pos
+    {
+        const u8 v = static_cast<u8>(rng.u32v());
+        b.reserve(n + 1U);
+        for (usize i = 0U; i < n; ++i)
+        {
+            if (i == pos) { b.push_back(v); }
+            b.push_back(src[i]);
+        }
+        break;
+    }
+    case 3U: // duplicate the byte at pos
+        b.reserve(n + 1U);
+        for (usize i = 0U; i < n; ++i)
+        {
+            b.push_back(src[i]);
+            if (i == pos) { b.push_back(src[i]); }
+        }
+        break;
+    default: // swap two bytes
+    {
+        const usize q = rng.range(static_cast<u32>(n));
+        b.reserve(n);
+        for (usize i = 0U; i < n; ++i)
+        {
+            u8 v = src[i];
+            if (i == pos) { v = src[q]; }
+            else if (i == q) { v = src[pos]; }
+            b.push_back(v);
+        }
+        break;
+    }
+    }
+    return b;
+}
+
+// A load result (parse OR deserialize — same ParseResult shape) is WELL-FORMED iff a rejection is clean (no
+// module, offset in-range, a non-empty static reason) and an acceptance carries a module. (No-throw is proven
+// by the harness not wrapping the call: an exception or a memory fault fails the run under ASan.)
+[[nodiscard]] bool load_result_well_formed(const ParseResult& r, usize input_size) noexcept
+{
+    if (r.ok) { return r.module != nullptr; }
+    return r.module == nullptr && r.error_offset <= input_size && r.error != nullptr && r.error[0] != '\0';
+}
 } // namespace
 
 TEST_CASE("ceir fuzz: random valid modules round-trip byte-exact through text and binary", "[ceir][fuzz]")
@@ -310,4 +402,149 @@ TEST_CASE("ceir fuzz: the stable content hash is deterministic and content-deriv
     const auto      pr = deserialize(c2, span(blob));
     REQUIRE(pr.ok);
     CHECK(stable_hash(c2, *pr.module, &root) == stable_hash(c1, src, &root));
+}
+
+TEST_CASE("ceir fuzz: the text parser survives byte mutation and never crashes", "[ceir][fuzz][ceir35b]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+
+    // Seed = the printer's canonical form of the dense fixture, built IN-TEST (no file I/O, no CRD_REPO_DIR).
+    Context             seed_ctx(&root);
+    const String        seed_text = print(seed_ctx, *test::build_rich(seed_ctx), &root);
+    const ConstSpan<u8> seed(reinterpret_cast<const u8*>(seed_text.data()), seed_text.size());
+    REQUIRE(seed.size() > 16U); // the fixture is dense — a real seed to mutate
+    {
+        Context c(&root); // (0) non-vacuity floor: the unmutated seed parses ok
+        REQUIRE(parse(c, StringView(seed_text.data(), seed_text.size())).ok);
+    }
+
+    usize accepts = 0U;
+    usize rejects = 0U;
+
+    // Parse ONE mutant into a FRESH Context (parse.hpp: a failed parse leaves arena garbage reclaimed with the
+    // Context; a shared Context would grow unbounded across thousands of mutants under ASan). Asserts the
+    // invariants and returns a hash of the observable (ok, error_offset) for the determinism trace.
+    auto run_one = [&](ConstSpan<u8> mutant) -> u64 {
+        Context           c(&root);
+        const ParseResult r = parse(c, StringView(reinterpret_cast<const char*>(mutant.data()), mutant.size()));
+        CHECK(load_result_well_formed(r, mutant.size())); // (invariant 1) well-formedness
+        if (r.ok)
+        {
+            ++accepts;
+            // (invariant 2) an ACCEPTED mutant is a print/parse FIXED POINT — pushes the fuzz into the printer.
+            const String      p1 = print(c, *r.module, &root);
+            Context           c2(&root);
+            const ParseResult r2 = parse(c2, StringView(p1.data(), p1.size()));
+            REQUIRE(r2.ok);
+            REQUIRE(r2.module != nullptr);
+            CHECK(text_equal(p1, print(c2, *r2.module, &root)));
+        }
+        else { ++rejects; }
+        return (static_cast<u64>(r.ok) << 63U) ^ static_cast<u64>(r.error_offset);
+    };
+
+    // (a) EXHAUSTIVE truncation at every offset [0, size] — off==0 => a guaranteed reject, off==size => the
+    // whole valid seed => a guaranteed accept (establishes non-vacuity outright).
+    for (usize off = 0U; off <= seed.size(); ++off)
+    {
+        const Array<u8> t = mutant_prefix(seed, off, &root);
+        (void)run_one(span(t));
+    }
+
+    // (b) random byte-level mutations — a FIXED seed, ~256 per kind. A rolling FNV-1a over the (ok,off) trace
+    // makes (invariant 3) determinism a single equality on a second identical pass.
+    auto random_pass = [&](u64 seed_val) -> u64 {
+        Rng           rng(seed_val);
+        u64           trace    = 1469598103934665603ULL; // FNV-1a offset basis
+        constexpr u32 mutant_count = 256U * 5U;              // ~256 per mutation kind
+        for (u32 i = 0U; i < mutant_count; ++i)
+        {
+            const Array<u8> m = mutate_bytes(seed, rng, &root);
+            trace             = (trace ^ run_one(span(m))) * 1099511628211ULL; // FNV-1a prime
+        }
+        return trace;
+    };
+    CHECK(random_pass(0xCE1235B0U) == random_pass(0xCE1235B0U)); // (invariant 3) determinism
+
+    CHECK(accepts > 0U); // (invariant 4) non-vacuity: never all-reject
+    CHECK(rejects > 0U); //                            nor all-accept
+}
+
+TEST_CASE("ceir fuzz: the binary deserializer survives byte mutation and never crashes", "[ceir][fuzz][ceir35b]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+
+    Context             seed_ctx(&root);
+    const Array<u8>     seed_blob = serialize(seed_ctx, *test::build_rich(seed_ctx), &root);
+    const ConstSpan<u8> seed      = span(seed_blob);
+    REQUIRE(seed.size() > 12U); // header + chunks
+    {
+        Context c(&root); // (0) non-vacuity floor: the unmutated blob deserializes ok
+        REQUIRE(deserialize(c, seed).ok);
+    }
+
+    usize accepts = 0U;
+    usize rejects = 0U;
+
+    auto run_one = [&](ConstSpan<u8> mutant) -> u64 {
+        Context           c(&root);
+        const ParseResult r = deserialize(c, mutant);
+        CHECK(load_result_well_formed(r, mutant.size())); // (invariant 1) well-formedness
+        if (r.ok)
+        {
+            ++accepts;
+            // (invariant 2) an ACCEPTED mutant RE-SERIALIZES STABLY (serialize.deserialize.serialize ==
+            // serialize, binary.hpp) — pushes the fuzz into the serializer.
+            const Array<u8>   b2 = serialize(c, *r.module, &root);
+            Context           c2(&root);
+            const ParseResult r2 = deserialize(c2, span(b2));
+            REQUIRE(r2.ok);
+            REQUIRE(r2.module != nullptr);
+            CHECK(blob_equal(b2, serialize(c2, *r2.module, &root)));
+        }
+        else { ++rejects; }
+        return (static_cast<u64>(r.ok) << 63U) ^ static_cast<u64>(r.error_offset);
+    };
+
+    for (usize off = 0U; off <= seed.size(); ++off) // (a) exhaustive truncation
+    {
+        const Array<u8> t = mutant_prefix(seed, off, &root);
+        (void)run_one(span(t));
+    }
+
+    // (b) random byte-level mutations. ⛔ FEWER than the text arm: a mutation that flips a zero-stream-cost
+    // count field (a block-arg / op-result count, capped at kMaxDecodeCount=1<<20) forces an ~1M-element
+    // allocation, so the binary path is intrinsically heavier per mutant — 64 keeps the gate fast, while the
+    // count CAP itself is stress-tested exhaustively by section (c) with values OVER the cap (fast rejects).
+    auto random_pass = [&](u64 seed_val) -> u64 {
+        Rng           rng(seed_val);
+        u64           trace    = 1469598103934665603ULL;
+        constexpr u32 mutant_count = 64U;
+        for (u32 i = 0U; i < mutant_count; ++i)
+        {
+            const Array<u8> m = mutate_bytes(seed, rng, &root);
+            trace             = (trace ^ run_one(span(m))) * 1099511628211ULL;
+        }
+        return trace;
+    };
+    CHECK(random_pass(0xB1A0FF5EU) == random_pass(0xB1A0FF5EU)); // (invariant 3) determinism
+
+    // (c) TARGETED length-field corruption — overwrite 4-byte LE words in the header + first chunks with
+    // hostile counts, exercising the kMaxDecodeCount / chunk-length-bound defenses (binary.hpp). Clean reject.
+    const u32   hostile[] = {0xFFFFFFFFU, kMaxDecodeCount + 1U, 0x7FFFFFFFU};
+    const usize cap       = seed.size() < 64U ? seed.size() : 64U;
+    for (usize off = 0U; off + 4U <= cap; off += 4U)
+    {
+        for (u32 val : hostile)
+        {
+            Array<u8> b = mutant_prefix(seed, seed.size(), &root);
+            for (u32 k = 0U; k < 4U; ++k) { b[off + k] = static_cast<u8>((val >> (8U * k)) & 0xFFU); }
+            Context           c(&root);
+            const ParseResult r = deserialize(c, span(b));
+            CHECK(load_result_well_formed(r, b.size()));
+        }
+    }
+
+    CHECK(accepts > 0U); // (invariant 4) non-vacuity
+    CHECK(rejects > 0U);
 }

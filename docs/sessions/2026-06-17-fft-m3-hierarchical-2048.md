@@ -1,5 +1,8 @@
 # 2026-06-17 — FFT M3: hierarchical 2048 = 64×32 sub-FFT → 8M clears the gate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-fft` (v10), Fork A. Continues `2026-06-17-fft-m2-hierarchical-64x64.md`.
 > Design: `docs/design/hesap_fft_generated_codelets.md`. Memory: `project_v10_fft_plan` (Part 31).
 > All probes in gitignored `build/`; the gated engine path (`CRD_FFT_M2_HIER`) is still OFF by default.

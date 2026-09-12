@@ -1,11 +1,14 @@
 # Session 2026-08-07 — Post-RAF roadmap integration, four-track tracker, RAH-1a.1, CUDA backend
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Focus:** turn the completed RAF foundation into an executing, trackable post-RAF platform programme, and start building
 across parallel tracks. All work below is **UNCOMMITTED** at session end (user commits; no AI co-author trailer).
 
 ## 1. D-007 roadmap integration (documentation)
 
-Applied two user master-roadmap prompts to `docs/detours/D-007-gpu-program-system.md`:
+Applied two user master-roadmap prompts to `docs/archive/D-007-gpu-program-system.md`:
 
 - **§POST-RAF PROGRAMME** (from `CRD_D007_POST_RAF_MASTER_ROADMAP_PROMPT`): 18 bands (RAH · RPL · GVA · LSH · ARG · RTX ·
   MAT · TPR · VFX · TXS · VGE · CGP · HGP · MLR · MED · D7E · PQP · EYL), the L0–L7 maturity model, A/A+R/A+E/B/T

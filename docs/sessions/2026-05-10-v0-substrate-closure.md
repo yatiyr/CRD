@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0 substrate — full closure dossier
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **CORRIGENDUM (2026-05-10 evening, after this dossier was first
 > written):** the "12-config sweep clean throughout" line below was
 > based on bench-target incremental builds. A full Definition of Done
@@ -34,18 +37,18 @@ able to reconstruct the full mental model of the v0 substrate.
 
 ## Table of contents
 
-1. [What v0 is and why](#1-what-v0-is-and-why)
-2. [Inventory — every type, function, file](#2-inventory--every-type-function-file)
-3. [The six slices, in order](#3-the-six-slices-in-order)
-4. [Determinism contract — how it's enforced](#4-determinism-contract--how-its-enforced)
-5. [SIMD architecture + backend selection](#5-simd-architecture--backend-selection)
-6. [Build system additions](#6-build-system-additions)
-7. [CI guards](#7-ci-guards)
-8. [Performance — measured numbers](#8-performance--measured-numbers)
-9. [Bugs surfaced + fixed during v0](#9-bugs-surfaced--fixed-during-v0)
-10. [What's deferred + where it lives](#10-whats-deferred--where-it-lives)
-11. [Pitfalls + extension notes](#11-pitfalls--extension-notes)
-12. [What v1a inherits + where to start](#12-what-v1a-inherits--where-to-start)
+1. [What v0 is and why](2026-05-10-v0-substrate-closure.md#1-what-v0-is-and-why)
+2. [Inventory — every type, function, file](2026-05-10-v0-substrate-closure.md#2-inventory--every-type-function-file)
+3. [The six slices, in order](2026-05-10-v0-substrate-closure.md#3-the-six-slices-in-order)
+4. [Determinism contract — how it's enforced](2026-05-10-v0-substrate-closure.md#4-determinism-contract--how-its-enforced)
+5. [SIMD architecture + backend selection](2026-05-10-v0-substrate-closure.md#5-simd-architecture--backend-selection)
+6. [Build system additions](2026-05-10-v0-substrate-closure.md#6-build-system-additions)
+7. [CI guards](2026-05-10-v0-substrate-closure.md#7-ci-guards)
+8. [Performance — measured numbers](2026-05-10-v0-substrate-closure.md#8-performance--measured-numbers)
+9. [Bugs surfaced + fixed during v0](2026-05-10-v0-substrate-closure.md#9-bugs-surfaced--fixed-during-v0)
+10. [What's deferred + where it lives](2026-05-10-v0-substrate-closure.md#10-whats-deferred--where-it-lives)
+11. [Pitfalls + extension notes](2026-05-10-v0-substrate-closure.md#11-pitfalls--extension-notes)
+12. [What v1a inherits + where to start](2026-05-10-v0-substrate-closure.md#12-what-v1a-inherits--where-to-start)
 
 ---
 
@@ -944,7 +947,7 @@ compiles to both).
 
 ### What v1a (eylem rigid 3D, slice 1) gets for free
 
-Everything in [Section 2](#2-inventory--every-type-function-file). Specifically:
+Everything in [Section 2](2026-05-10-v0-substrate-closure.md#2-inventory--every-type-function-file). Specifically:
 
 - `Vec8f` for AoSoA-8 hot loops (broadphase pair tests, velocity
   integration, constraint impulse computation).

@@ -1,5 +1,8 @@
 # ADR-0113 — Effect family widening (u32→u64) + open-world effect-LOCATION model
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8c**. Widens the CEIR-4a effect-family bitmask past its
 32-bit ceiling to admit the U-§19 domain families (document/CAD/EDA/transaction/UI/agent) and replaces the

@@ -1,5 +1,8 @@
 # Bench — B10 cooperative-vector neural shading vs scalar-FMA (2026-07-22)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Board:** per-pixel neural-material MLP at 1080p — the cooperative-vector tensor path vs the identical MLP hand-written as a
 scalar-FMA shader. The moat: real-time per-pixel neural materials/textures/BRDFs.
 

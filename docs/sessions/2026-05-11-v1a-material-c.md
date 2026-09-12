@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1a-material-c — per-collider Collider::material handle
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the per-collider material attachment surface per ADR-0069 §3 + §11.

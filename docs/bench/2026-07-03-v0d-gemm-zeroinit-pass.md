@@ -1,5 +1,8 @@
 # 2026-07-03 — v0d GEMM crush pass (order-preserving): ZeroInit + alpha==1 merge
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Trigger:** the v14-f einsum table's GEMM-bound cells (chain @512 0.82–0.96×, `abc,bad` 0.89×).
 - **Constraint honored:** ADR-0063 — Kc slab boundaries + the micro-tile-then-merge structure define
   every c_ij's rounding chain engine-wide. All changes below are BIT-IDENTICAL by construction and

@@ -1,5 +1,8 @@
 # Research — 2026-07-23 — the WORLD-CLASS resource + scene system (GEO band, no-gap expansion)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted as the GEO-band expansion plan** — see the D-007 master table for which rows have landed. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Round 2 of the geometry-resource research (companion: `2026-07-23-geometry-resource-pipeline.md`), user-directed: "FULL WORLD

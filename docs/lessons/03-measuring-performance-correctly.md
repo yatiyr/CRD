@@ -1,5 +1,8 @@
 # Lesson 03 — Measuring performance correctly
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "You measured on win-release. Are you sure we have all the optimizations we need? Why didn't you try win-shipping? Check optimization parameters too."
 
 That critique was right, and it changed the answer. The original single-shot win-release scalar baseline was 9.5 ms. After measuring properly on win-shipping with median-of-5, the same code came in at **4.99 ms** — a ~50% difference that came entirely from measurement methodology, not from any code change.

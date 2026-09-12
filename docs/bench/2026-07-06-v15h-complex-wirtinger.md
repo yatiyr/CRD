@@ -1,5 +1,8 @@
 # 2026-07-06 — v15-h: complex / Wirtinger forward AD — capability crush
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** `complex_dual.hpp` — the holomorphic dual is `Dual<std::complex<T>>` (value + tangent both complex),
 so every holomorphic op propagates `ẇ = f'(z)·ż` via a COMPLEX multiply using the **identical real-dual code**
 (`dual.hpp`), no new rules, for `+−×÷ / exp log sqrt pow sin cos tan tanh` and the linear FFT (JAX `jvp` un-conjugated

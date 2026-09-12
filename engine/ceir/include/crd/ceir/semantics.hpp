@@ -10,6 +10,7 @@
 // CEIR-4a "predicate-now, wire-when-a-pass-exists" precedent).
 
 #include <crd/ceir/effect.hpp> // EffectFamily (effect_legal_in_region composes §26 effects with the region tag)
+#include <crd/containers/string_view.hpp> // CEIR-29c-3b: provider_class_name / _from_name (the ProviderClass<->string table)
 #include <crd/core/types.hpp>
 
 namespace crd::ceir
@@ -133,6 +134,61 @@ struct RegionExec
     RealtimeClass realtime = RealtimeClass::Unspecified;
     [[nodiscard]] friend constexpr bool operator==(const RegionExec&, const RegionExec&) noexcept = default;
 };
+
+// The §69 execution-provider CLASS (ADR-0110): which BRIDGE implements a provider (host / gpu / npu / media / external).
+// Distinct from a kind's `native_provider` NAME string ("host", 29b's "cuda") — this is the typed CLASS of the provider
+// row the §102 partitioner assigns to. ⛔ Unlike a region's RealtimeClass, a provider ALWAYS has a class — there is no
+// valid "unspecified" (a classless provider is a bug), so deliberately NO Unspecified member. ⛔ APPEND AT END (a new
+// class is a new backend bridge). CEIR-29a-1 §69.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ProviderClass : u8
+{
+    Host = 0,
+    Gpu,
+    Npu,
+    Media,
+    External,
+};
+inline constexpr ProviderClass kLastProviderClass = ProviderClass::External;
+static_assert(static_cast<u8>(kLastProviderClass) == 4U, "ProviderClass has 5 §69 classes (ADR-0110)");
+
+// CEIR-29c-3b §69: the ProviderClass <-> authored-name table (the enum members LOWERCASED) — ONE table shared by the
+// transform.constrain_provider_class loader (constraint_from_transform) and any future provider-descriptor print, so the parse
+// and the print can never drift. `provider_class_from_name` is the house decode-and-validate shape (bool + out-param, like
+// unpack_region_exec): it leaves `out` untouched and returns false for an unknown/empty name — there is deliberately NO invalid
+// ProviderClass member to return (widening a closed enum for a parser is the widen-enum scar), so the caller reads the bool.
+[[nodiscard]] constexpr containers::StringView provider_class_name(ProviderClass c) noexcept
+{
+    switch (c)
+    {
+    case ProviderClass::Host: return containers::StringView("host");
+    case ProviderClass::Gpu: return containers::StringView("gpu");
+    case ProviderClass::Npu: return containers::StringView("npu");
+    case ProviderClass::Media: return containers::StringView("media");
+    case ProviderClass::External: return containers::StringView("external");
+    }
+    return containers::StringView("?");
+}
+[[nodiscard]] constexpr bool provider_class_from_name(containers::StringView s, ProviderClass& out) noexcept
+{
+    if (s == provider_class_name(ProviderClass::Host)) { out = ProviderClass::Host; return true; }
+    if (s == provider_class_name(ProviderClass::Gpu)) { out = ProviderClass::Gpu; return true; }
+    if (s == provider_class_name(ProviderClass::Npu)) { out = ProviderClass::Npu; return true; }
+    if (s == provider_class_name(ProviderClass::Media)) { out = ProviderClass::Media; return true; }
+    if (s == provider_class_name(ProviderClass::External)) { out = ProviderClass::External; return true; }
+    return false;
+}
+// A compile-time drift lock across the two directions of the ONE table (a lowercasing typo or a missing member fails the build).
+constexpr bool provider_class_names_roundtrip() noexcept
+{
+    ProviderClass o = ProviderClass::Gpu;
+    return provider_class_from_name(provider_class_name(ProviderClass::Host), o) && o == ProviderClass::Host
+           && provider_class_from_name(provider_class_name(ProviderClass::Gpu), o) && o == ProviderClass::Gpu
+           && provider_class_from_name(provider_class_name(ProviderClass::Npu), o) && o == ProviderClass::Npu
+           && provider_class_from_name(provider_class_name(ProviderClass::Media), o) && o == ProviderClass::Media
+           && provider_class_from_name(provider_class_name(ProviderClass::External), o) && o == ProviderClass::External;
+}
+static_assert(provider_class_names_roundtrip(), "provider_class_name <-> provider_class_from_name must round-trip (ONE §69 table)");
 [[nodiscard]] constexpr i64 pack_region_exec(const RegionExec& r) noexcept
 {
     return static_cast<i64>(static_cast<u64>(r.domain) | (static_cast<u64>(r.realtime) << 4U));

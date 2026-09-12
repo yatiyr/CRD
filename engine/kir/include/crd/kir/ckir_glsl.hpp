@@ -106,6 +106,68 @@ inline void fast_comb(crd::containers::String& s, KOp op, const char* x, const c
     if (op == KOp::ReduceMin) { return fsfx ? "3.402823466e38f" : "3.402823466e38"; }
     return fsfx ? "0.0f" : "0.0";
 }
+
+// CEIR-25b-2b: the SHARED gather-index kernel body for Permute / Broadcast (one thread per OUTPUT element). Both are pure
+// data-movement `O[gid] = A[iidx]` where `iidx` maps the output's linear index back to an input element; only the per-output-axis
+// COEFFICIENT differs (Broadcast: 0 for a size-1 axis else the input stride; Permute: the input stride of the permuted axis).
+// ⛔ SAME-SHADER-BODY for GLSL + HLSL (buffers A[]/O[], `uint gid`, uint arithmetic are identical spellings) so the two backends
+// can never drift (the emitters-lag-wire-both scar). STATIC-shape BAKED: out dims + coefficients are literals (the synth envelope
+// guarantees static dims), so the index math is straight-line with NO push-constant shape arrays. ⛔ every literal gets the `u`
+// suffix (the uint-suffix scar). `coef[k]==0` axes contribute nothing (a broadcast axis); `iidx` stays 0 when all are size-1.
+inline void emit_gather_index_body(crd::containers::String& s, const Shape& out, const crd::u32* coef, int rank)
+{
+    s.append("  uint iidx = 0u;\n");
+    for (int k = 0; k < rank; ++k)
+    {
+        if (coef[k] == 0U) { continue; } // a size-1 (broadcast) axis: contributes nothing
+        crd::u32 os = 1U;                 // out stride of axis k = product of the trailing out dims
+        for (int j = k + 1; j < rank; ++j) { os *= static_cast<crd::u32>(out.dims[j]); }
+        s.append("  iidx += ((gid");
+        if (os != 1U) { s.append(" / "); app_uint(s, os); s.append("u"); }
+        s.append(") % "); app_uint(s, static_cast<crd::u32>(out.dims[k])); s.append("u)");
+        if (coef[k] != 1U) { s.append(" * "); app_uint(s, coef[k]); s.append("u"); }
+        s.append(";\n");
+    }
+    s.append("  O[gid] = A[iidx];\n");
+}
+// Broadcast coefficients: coef[k] = 0 if the source axis is size-1 (broadcast), else the source row-major stride of axis k.
+// ⛔ SAME-RANK envelope (synth_broadcast guarantees it): the CKIR broadcast is same-rank left-indexed (ckir_eval.hpp:213).
+[[nodiscard]] inline bool broadcast_coef(const KGraph& g, int output, Shape& out, crd::u32* coef, int& rank) noexcept
+{
+    const KNode& bn = g.node(output);
+    if (bn.op != KOp::Broadcast || g.node(bn.a).op != KOp::Input) { return false; }
+    const Shape& in = g.node(bn.a).shape;
+    out  = bn.shape;
+    rank = out.rank;
+    if (in.rank != rank || rank < 1 || rank > kMaxRank) { return false; }
+    for (int k = 0; k < rank; ++k)
+    {
+        crd::u32 is = 1U;
+        for (int j = k + 1; j < rank; ++j) { is *= static_cast<crd::u32>(in.dims[j]); }
+        coef[k] = (in.dims[k] == 1) ? 0U : is;
+    }
+    return true;
+}
+// Permute coefficients: coef[k] = the source row-major stride of the axis that output axis k reads (perm[k]). out.dims[k] ==
+// in.dims[perm[k]]. So the output's k-th coordinate scales the input stride of the permuted source axis (a generic N-D transpose).
+[[nodiscard]] inline bool permute_coef(const KGraph& g, int output, Shape& out, crd::u32* coef, int& rank) noexcept
+{
+    const KNode& pn = g.node(output);
+    if (pn.op != KOp::Permute || g.node(pn.a).op != KOp::Input) { return false; }
+    const Shape& in = g.node(pn.a).shape;
+    out  = pn.shape;
+    rank = out.rank;
+    if (rank < 1 || rank > kMaxRank || in.rank != rank) { return false; }
+    for (int k = 0; k < rank; ++k)
+    {
+        const int src = pn.perm[k];
+        if (src < 0 || src >= in.rank) { return false; }
+        crd::u32 is = 1U;
+        for (int j = src + 1; j < in.rank; ++j) { is *= static_cast<crd::u32>(in.dims[j]); }
+        coef[k] = is;
+    }
+    return true;
+}
 } // namespace glsl_detail
 
 // Emit a fused elementwise f32 compute kernel for `output`. Returns false if the subtree isn't purely elementwise
@@ -645,6 +707,9 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
 {
     using namespace glsl_detail;
     if (!entry.is_kernel()) { return false; }
+    if (entry.local_size[0] == 0U) { return false; } // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    // the resolver (bind_authored_local_size) BEFORE emit — refuse loudly rather than emit `local_size_x = 0` (opaque glslang
+    // reject) or a silent 1-thread kernel; the caller surfaces this as an unresolved stage (UnresolvedKernel).
     const int                n = g.size();
     crd::containers::String& s = out.source;
     s.clear();
@@ -2274,9 +2339,24 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
 // scheduler splits deeper graphs). One thread per output element C[b,m,n], sequential-k `precise` product +
 // accumulation ⇒ bit-matches the CPU reference (dtype-faithful, ascending-k). Push constants: M, K, N, nbatch.
 // binding 0 = A (iidx input_iidx[0]), 1 = B (input_iidx[1]), 2 = C (output).
+// ⭐ CEIR-26e: the root is EITHER a bare `Contract` (plain gemm) OR a `Max(Contract, Const 0)` (the fused relu epilogue
+// synth_gemm emits) — the latter is unwrapped to the contract + `max(acc, 0.0)` at the store (SAME K-loop ⇒ bit-exact vs the
+// unfused gemm→relu.ckir chain). A `Max(Contract, c≠0)` is NOT a relu ⇒ reject (never a silent max-with-a-nonzero false-green).
 inline bool emit_contract_glsl(const KGraph& g, int output, GlslKernel& out)
 {
-    const KNode& c = g.node(output);
+    int  croot = output;
+    bool relu  = false;
+    {
+        const KNode& r = g.node(output);
+        if (r.op == KOp::Max)
+        {
+            const KNode& zb = g.node(r.b);
+            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0) { return false; }
+            croot = r.a;
+            relu  = true;
+        }
+    }
+    const KNode& c = g.node(croot);
     if (c.op != KOp::Contract) { return false; }
     if (g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
     out.n_inputs      = 2;
@@ -2301,7 +2381,7 @@ inline bool emit_contract_glsl(const KGraph& g, int output, GlslKernel& out)
     s.append("    precise float prod = A[aoff + k] * Bm[boff + k * N];\n");
     s.append("    acc = acc + prod;\n");
     s.append("  }\n");
-    s.append("  C[b * mn + m * N + nn] = acc;\n}\n");
+    s.append(relu ? "  C[b * mn + m * N + nn] = max(acc, 0.0);\n}\n" : "  C[b * mn + m * N + nn] = acc;\n}\n"); // 26e relu epilogue
     return true;
 }
 
@@ -2671,6 +2751,52 @@ inline bool emit_gather_glsl(const KGraph& g, int output, GlslKernel& out)
     return true;
 }
 
+// CEIR-25b-2b: emit an N-D BROADCAST kernel (one thread per output element) — O[gid] = A[broadcast-map(gid)]. Baked static-shape
+// index math (emit_gather_index_body); a size-1 source axis has coef 0 (it broadcasts). SAME-RANK envelope (synth_broadcast). ⛔
+// distinct from the scalar-only emit_broadcast_glsl below (numel==1, dtype-aware, radix fan-out) — this is the general F32 N-D form.
+inline bool emit_broadcast_nd_glsl(const KGraph& g, int output, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    Shape    osh;
+    crd::u32 coef[kMaxRank];
+    int      rank = 0;
+    if (!broadcast_coef(g, output, osh, coef, rank)) { return false; }
+    out.n_inputs      = 1;
+    out.input_iidx[0] = g.node(g.node(output).a).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 450\n");
+    s.append("layout(local_size_x = 256) in;\n");
+    s.append("layout(std430, binding = 0) readonly buffer BA { float A[]; };\n");
+    s.append("layout(std430, binding = 1) writeonly buffer BO { float O[]; };\n");
+    s.append("layout(push_constant) uniform PC { uint nout; };\n");
+    s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= nout) { return; }\n");
+    emit_gather_index_body(s, osh, coef, rank);
+    s.append("}\n");
+    return true;
+}
+// CEIR-25b-2b: emit a PERMUTE (generic N-D transpose) kernel — O[gid] = A[permute-map(gid)]. Baked static-shape index math.
+inline bool emit_permute_glsl(const KGraph& g, int output, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    Shape    osh;
+    crd::u32 coef[kMaxRank];
+    int      rank = 0;
+    if (!permute_coef(g, output, osh, coef, rank)) { return false; }
+    out.n_inputs      = 1;
+    out.input_iidx[0] = g.node(g.node(output).a).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("#version 450\n");
+    s.append("layout(local_size_x = 256) in;\n");
+    s.append("layout(std430, binding = 0) readonly buffer BA { float A[]; };\n");
+    s.append("layout(std430, binding = 1) writeonly buffer BO { float O[]; };\n");
+    s.append("layout(push_constant) uniform PC { uint nout; };\n");
+    s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= nout) { return; }\n");
+    emit_gather_index_body(s, osh, coef, rank);
+    s.append("}\n");
+    return true;
+}
 // Emit a SCATTER kernel — out=base, then out[idx[m],...]=updates[m,...] (LAST-WINS, output-centric ⇒ race-free).
 inline bool emit_scatter_glsl(const KGraph& g, int output, GlslKernel& out)
 {
@@ -2721,6 +2847,8 @@ inline bool emit_scatteradd_glsl(const KGraph& g, int output, GlslKernel& out)
 }
 
 // Scalar BROADCAST: out[gid] = A[0] — a 1-element source fanned out to [N]. (The radix's totalFalses fan-out.) dtype-aware.
+// ⛔ this is the SCALAR (numel==1) special case, direct-call only (NOT run()-wired); the general F32 N-D form is
+// `emit_broadcast_nd_glsl` above (run()-reachable, CEIR-25b autodiff). Two emitters share the op — see that comment.
 inline bool emit_broadcast_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& bn = g.node(output);

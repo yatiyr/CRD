@@ -1,5 +1,8 @@
 # REN-39 — indexed pull vs classic pull (post-transform vertex reuse)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date** 2026-07-29 · **Host** i9-14900K + RTX 4070 Ti SUPER, Windows 11 · **Backend** Vulkan · **Build** `win-release`
 **Scene** sandbox: 10 000 static + 24 animated + 3 monuments; ~4 850 instances visible; 1280x720, shadows ON (4 cascades @ 2048)
 **Method** `build\win-release\sandbox\crd-sandbox.exe --no-validation --present immediate --smoke-test 6 [--pull-draws]`,

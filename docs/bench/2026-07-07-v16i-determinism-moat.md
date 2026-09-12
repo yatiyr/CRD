@@ -1,5 +1,8 @@
 # 2026-07-07 -- v16-i: the deterministic-training moat
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** the moat *demonstration*. `batch_gradient` (v16-a) computes `Sigma_s grad(loss_s)` data-parallel
 (each worker its own tape, no shared adjoints) and folds the per-sample gradients in a **FIXED sample order** -- never
 an atomic scatter-add -- so the batched gradient, and therefore a whole **training run** over it, is BIT-IDENTICAL

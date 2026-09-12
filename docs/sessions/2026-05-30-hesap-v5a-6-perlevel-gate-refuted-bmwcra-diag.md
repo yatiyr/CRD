@@ -1,5 +1,8 @@
 # 2026-05-30 — hesap v5a-6: per-level solve work-gate (REFUTED) + bmwcra scaling diagnosis
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context / how this session started
 Resumed mid-CHOLMOD-crush. The PRIOR session (v5a-5) emitted **fabricated bench numbers**
 (tool-output corruption; documented in its own log). So this session's first job was to separate

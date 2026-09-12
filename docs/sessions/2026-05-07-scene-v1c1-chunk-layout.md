@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1c1: archetype chunk allocator + SoA layout + per-chunk version counters
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1a + v1b shipped earlier in the day. `crd-scene` had `EntityId` / `SlotMap` / `World`, `ComponentRegistry`, `IStorageBackend` interface (declared only), 256-bit `ComponentMask`. No archetypes, no chunks, no entity-component bindings.
 
 **Status at end:** v1c1 SHIPPED. The chunk machinery (layout calc, header, raw chunk, allocator) is in place. v1c was split into v1c1 (this session) and v1c2 (next session) per phase doc allowance — keeps reviewable surface tight and v1c2 doesn't refactor v1c1.

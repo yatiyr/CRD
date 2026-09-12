@@ -1,5 +1,8 @@
 # CEIR-13z — the §129 execution proof (session log)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-13z (D-007 master spine, band-13 CLOSE) · **Status:** ◧ IN PROGRESS — design-locked
 + **13z-1a (the execution seam + ADR-0126) DONE + gated (485/485 × 4)**; 13z-1b (`add` on both backends) NEXT · **ADR:** 0126.
 

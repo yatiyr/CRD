@@ -122,6 +122,32 @@ private:
 // Local params cap — a compute backend has no dependency on the raster command_model's kMaxBindings.
 inline constexpr crd::u32 kCudaMaxBindings = 16U;
 
+// CEIR-29b-2: a captured+instantiated CUDA graph. RAII — destroys the exec THEN the source graph. An invalid instance
+// (m_exec==nullptr) is the capture-failed sentinel: valid() is false, launch() ignores it, the gate REQUIREs valid().
+class CudaGraphImpl final : public CudaGraph
+{
+public:
+    CudaGraphImpl(CUgraphExec exec, CUgraph graph, crd::u32 nodes) noexcept : m_exec(exec), m_graph(graph), m_nodes(nodes) {}
+    ~CudaGraphImpl() override
+    {
+        if (m_exec != nullptr) { cuGraphExecDestroy(m_exec); }
+        if (m_graph != nullptr) { cuGraphDestroy(m_graph); } // kept past instantiate for a future cuGraphExecUpdate (29z)
+    }
+    CudaGraphImpl(const CudaGraphImpl&)            = delete;
+    CudaGraphImpl& operator=(const CudaGraphImpl&) = delete;
+    CudaGraphImpl(CudaGraphImpl&&)                 = delete;
+    CudaGraphImpl& operator=(CudaGraphImpl&&)      = delete;
+
+    [[nodiscard]] bool        valid() const noexcept override { return m_exec != nullptr; }
+    [[nodiscard]] crd::u32    node_count() const noexcept override { return m_nodes; }
+    [[nodiscard]] CUgraphExec exec() const noexcept { return m_exec; }
+
+private:
+    CUgraphExec m_exec  = nullptr;
+    CUgraph     m_graph = nullptr;
+    crd::u32    m_nodes = 0U;
+};
+
 class CudaContextImpl final : public CudaComputeContext
 {
     // The recorder issues copies/dispatches straight onto the context's stream (async); submit_and_wait synchronises.
@@ -292,6 +318,61 @@ public:
     [[nodiscard]] crd::u32 shared_memory_bytes() const noexcept override { return m_shmem; }
     [[nodiscard]] double   last_gpu_ms() const noexcept override { return m_last_ms; }
 
+    // CEIR-29b-2: start stream capture on the SAME stream (THREAD_LOCAL mode — scopes the capture's "no unsafe call" rule to
+    // this thread, so another thread touching the driver can't invalidate it). Subsequent dispatches RECORD into the graph.
+    [[nodiscard]] ComputeRecorder& begin_capture() override
+    {
+        // ⛔ track begin's SUCCESS: if it fails (a prior capture was invalidated + never ended, or the stream is already
+        // capturing) the dispatches would run EAGERLY on the stream — end_capture() must then refuse to call
+        // cuStreamEndCapture on a non-capturing stream (and never hand back a "graph" for work that already executed).
+        m_capturing = m_ok && cuStreamBeginCapture(m_stream, CU_STREAM_CAPTURE_MODE_THREAD_LOCAL) == CUDA_SUCCESS;
+        return m_rec;
+    }
+
+    // End capture + INSTANTIATE ONCE. Returns an INVALID handle (m_exec==nullptr) — never a partial graph — if begin_capture
+    // failed, or cuStreamEndCapture returns _INVALIDATED/_UNJOINED (an unsafe call ran mid-capture) or a null graph.
+    [[nodiscard]] std::unique_ptr<CudaGraph> end_capture() override
+    {
+        const bool was_capturing = m_capturing;
+        m_capturing              = false; // clear regardless — a failed begin leaves the flag false, a good one is consumed here
+        CUgraph graph = nullptr;
+        if (!was_capturing || cuStreamEndCapture(m_stream, &graph) != CUDA_SUCCESS || graph == nullptr)
+        {
+            if (graph != nullptr) { cuGraphDestroy(graph); }
+            return std::make_unique<CudaGraphImpl>(nullptr, nullptr, 0U);
+        }
+        size_t nodes = 0;
+        cuGraphGetNodes(graph, nullptr, &nodes); // null array + &count = query the node count
+        CUgraphExec exec = nullptr;
+        if (cuGraphInstantiateWithFlags(&exec, graph, 0U) != CUDA_SUCCESS) // 11.4+ / 12.x / 13.x — version-stable form
+        {
+            cuGraphDestroy(graph);
+            return std::make_unique<CudaGraphImpl>(nullptr, nullptr, 0U);
+        }
+        return std::make_unique<CudaGraphImpl>(exec, graph, static_cast<crd::u32>(nodes));
+    }
+
+    // CEIR-29b-2: launch a captured graph and WAIT, bracketed by the same events as submit_and_wait ⇒ last_gpu_ms() reports
+    // graph-launch time. Reusable (replay) — the exec is not re-instantiated.
+    void launch(const CudaGraph& graph) override
+    {
+        if (!m_ok || !graph.valid()) { return; }
+        cuEventRecord(m_ev0, m_stream);
+        cuGraphLaunch(static_cast<const CudaGraphImpl&>(graph).exec(), m_stream);
+        cuEventRecord(m_ev1, m_stream);
+        cuStreamSynchronize(m_stream);
+        float ms = 0.0F;
+        if (cuEventElapsedTime(&ms, m_ev0, m_ev1) == CUDA_SUCCESS) { m_last_ms = static_cast<double>(ms); }
+    }
+
+    // CEIR-29z: enqueue the graph on the stream WITHOUT a bracket or wait — for a two-class begin()/submit_and_wait() bracket
+    // that records eager prefix + this graph + eager suffix as ONE submission (same-stream order carries the dependency).
+    void enqueue(const CudaGraph& graph) override
+    {
+        if (!m_ok || !graph.valid()) { return; }
+        cuGraphLaunch(static_cast<const CudaGraphImpl&>(graph).exec(), m_stream);
+    }
+
 private:
     crd::memory::IAllocator& m_alloc;
     Recorder                 m_rec;
@@ -305,6 +386,7 @@ private:
     crd::u32                 m_shmem  = 49152U;
     double                   m_last_ms = 0.0;
     bool                     m_ok     = false;
+    bool                     m_capturing = false; // CEIR-29b-2a: true between a SUCCESSFUL begin_capture and its end_capture
 };
 
 } // namespace

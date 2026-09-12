@@ -1,5 +1,8 @@
 # ADR-0064 — `crd-sdf` substrate architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-10
 **Status:** Accepted
 **Tags:** [arch] [sdf] [eylem] [renderer] [font] [audio] [editor] [resources]

@@ -1,5 +1,8 @@
 # Crush & Optimization Playbook (living hints)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **⛔ The BINDING ORDERS for kernel/perf crush work are `docs/KERNEL-CRUSH-MANDATE.md` — read them first.** This
 > playbook is the *techniques* (levers + traps); the mandate is the *law* (never invoke a wall a peer already beat; pin
 > the target; profile-then-fix; exhaust every lever; reverse-engineer + deep-research on plateau; never declare a crush

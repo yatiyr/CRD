@@ -1,0 +1,31 @@
+schema_version = 1
+dialect = "rewrite"
+summary = "CEIR-27 sec-72 the rewrite dialect: an AUTHORABLE declarative REWRITE-RULE program. A rewrite module is a SEPARATE asset (NOT the payload) whose rules a runtime driver (greedy_rewrite_rules, passes/rewrite_rules.hpp) applies to a payload -- so a plugin dialect ships a canonicalization/peephole WITHOUT editing the central C++ pattern array (canonicalize.hpp's kCanonPatterns, whose header notes it has NO plugin boundary; sec-72's DSL is exactly that boundary). A rule matches an op of a named ROOT kind under a CONSTRAINT and applies an ACTION. The TWO authored rules that express canonicalize.hpp's COMPLETE tensor.reshape set: 27c identity_reshape (a no-op reshape -> its input, RAUW-to-operand) + 27d reshape_of_reshape (reshape(reshape(x)) -> reshape(x), BUILD a new op over the grandchild operand). Vocabularies are CLOSED (enforced by find_rewrite_misuse, the find_resource/quant/transform_misuse house pattern) and grow by one entry when a new rule needs them (27d added the `operand_defined_by_root` constraint + `build_op_from_inner_operand` action). A rewrite.rule carries NO results/operands and NO effects (compile-time rule metadata, not runtime work) and is NOT Pure -- a rule is not a value computation, so Pure/CSE/DCE reasoning does not apply. ⛔ the re-match guard is UNIVERSAL (the DRIVER's contract, NOT a rule attr): BOTH actions RAUW result(result_idx) and LEAVE the dead op for DCE, so match REQUIRES result(result_idx) to still HAVE uses -- else re-firing on an already-rewritten op never terminates. Putting it in the driver means no rule author can forget it. ⛔ an action that WALKS a path (build_op_from_inner_operand) may only pair with the constraint that VALIDATES that path (operand_defined_by_root) -- find_rewrite_misuse rejects the cross-pairing (ActionNeedsConstraint), else a vocab-valid asset would deref a null/absent inner operand."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# rewrite.rule -- one declarative rewrite: match an op of kind `root` (an op-NAME, e.g. "tensor.reshape") under `constraint`,
+# apply `action` addressing result index `result`, operand index `operand`, and (for 2-hop rules) inner_operand. The TWO authored
+# rules that express canonicalize.hpp's COMPLETE tensor.reshape set: (27c) identity_reshape = root="tensor.reshape",
+# constraint="result_type_eq_operand", action="replace_result_with_operand" (a RAUW-to-operand); (27d) reshape_of_reshape =
+# root="tensor.reshape", constraint="operand_defined_by_root", action="build_op_from_inner_operand" (BUILD a new reshape over the
+# grandchild operand). constraint/action are CLOSED vocabularies (find_rewrite_misuse rejects UnknownConstraint/UnknownAction); an
+# index out of the MATCHED op's arity is a RUNTIME reject in the driver (arity is per-matched-op, not statically known). ⛔ RULE
+# BLOCK ORDER IS PATTERN PRIORITY -- the driver tries rules in module order (mirror kCanonPatterns: reshape_of_reshape BEFORE
+# identity_reshape, else an OUTER-identity chain [outer result-type == inner's, inner != input; e.g. [8,8]->[64]->[64]] has identity
+# RAUW the outer away BEFORE reshape_of_reshape folds it -> a different module with fewer reshapes; gated by 27d(e)). NO results/
+# operands/effects + NOT Pure: rule metadata, not runtime work.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "rule"
+summary = "One declarative rewrite rule: match op-kind `root` under `constraint`, apply `action` at result/operand indices."
+version = 1
+attributes = [
+    { name = "root", kind = "string", required = true, doc = "the op-NAME to match (e.g. \"tensor.reshape\") -- a string, compared by ctx.op_name (I6), NOT a symbol-table reference." },
+    { name = "constraint", kind = "string", required = true, doc = "a CLOSED-vocabulary match predicate: \"result_type_eq_operand\" (result(result).type == operand(operand).type -- the no-op reshape) OR \"operand_defined_by_root\" (operand(operand) is produced by an op of kind==root with an inner_operand'th operand -- reshape-of-reshape). find_rewrite_misuse enforces the vocabulary." },
+    { name = "action", kind = "string", required = true, doc = "a CLOSED-vocabulary rewrite: \"replace_result_with_operand\" (RAUW result(result) -> operand(operand)) OR \"build_op_from_inner_operand\" (build a root-kind op over operand(operand).def.operand(inner_operand) with result type = result(result).type, insert before, RAUW). BOTH leave the dead op for DCE. ⛔ a built op gets NO attrs -- a root whose builder needs required attrs is NOT buildable this way (named-forward)." },
+    { name = "result", kind = "int", required = true, doc = "the result index the constraint/action address (0-based; a value >= the matched op's num_results is a RUNTIME reject in the driver)." },
+    { name = "operand", kind = "int", required = true, doc = "the operand index the constraint/action address (0-based; a value >= the matched op's num_operands is a RUNTIME reject in the driver)." },
+    { name = "inner_operand", kind = "int", required = false, doc = "for the 2-hop path constraints/actions (operand_defined_by_root / build_op_from_inner_operand): the operand index INTO the inner op reached via operand(operand).def. OPTIONAL -- absent reads 0 (the resource.import optional-name precedent). A general operand-PATH (variable hop count) is the deferred frontier." },
+]
+traits = []
+docs = "One authored declarative rewrite rule. Match an op of kind `root` (an op-name compared via ctx.op_name) under `constraint`, apply `action` at the `result`/`operand` indices. constraint/action are CLOSED vocabularies enforced by find_rewrite_misuse (UnknownConstraint/UnknownAction); an index exceeding the MATCHED op's arity is a RUNTIME reject in greedy_rewrite_rules (arity is per-matched-op). NO results/operands/effects and NOT Pure -- rule metadata, not a value computation. The identity_reshape rule (this slice) is root=tensor.reshape, constraint=result_type_eq_operand, action=replace_result_with_operand, result=0, operand=0."

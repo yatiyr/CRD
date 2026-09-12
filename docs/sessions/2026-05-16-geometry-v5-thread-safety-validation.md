@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5 thread-safety validation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Cross-cutting tightening pass after v5e UniformGrid close. Locks the
 > design principle that emerged across v5d/v5e and applies it
 > retroactively to the three "naturally const-safe" backends (v5a KdTree,

@@ -2,10 +2,8 @@
 
 #include <crd/audio/audio_graph.hpp>
 
-#include <crd/hesap/dsp/filter.hpp>
-#include <crd/hesap/dsp/rbj.hpp>
+#include <crd/audio/audio_kernels.hpp> // CEIR-31a-1b: the extracted per-node stages (apply_source/gain/biquad + db_to_linear)
 #include <crd/hesap/interp/keyframe.hpp>
-#include <crd/math/cmath.hpp>
 #include <crd/time/rational_time.hpp>
 
 namespace crd::audio
@@ -78,7 +76,6 @@ namespace
         return nullptr;
     }
 
-    [[nodiscard]] crd::f32 db_to_linear(crd::f32 db) { return crd::math::pow(10.0F, db / 20.0F); }
 } // namespace
 
 crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpan<GraphSourceBinding> bindings,
@@ -147,40 +144,22 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
             switch (static_cast<AudioNodeType>(node.type))
             {
             case AudioNodeType::Source:
-            {
-                const GraphSourceBinding& b       = bindings[node_index];
-                const crd::u64            bframes = b.samples.size() / b.channels;
-                for (crd::i64 i = 0; i < len; ++i)
-                {
-                    crd::u64 f = static_cast<crd::u64>(start + i) + static_cast<crd::u64>(node.start_frame);
-                    if (node.loop != 0) { f %= bframes; }
-                    if (f >= bframes) { continue; } // one-shot past the end = silence
-                    if (b.channels >= 2)
-                    {
-                        mine[i * 2] += b.samples[f * b.channels];
-                        mine[i * 2 + 1] += b.samples[f * b.channels + 1];
-                    }
-                    else // mono centers
-                    {
-                        const crd::f32 s = b.samples[f];
-                        mine[i * 2] += s;
-                        mine[i * 2 + 1] += s;
-                    }
-                }
+                apply_source(mine, start, len, bindings[node_index], node.start_frame, node.loop != 0);
                 break;
-            }
             case AudioNodeType::Gain:
             case AudioNodeType::Send:
             {
                 const AudioAutoRec* autom = find_auto(graph, node_index, AudioParam::GainDb);
-                for (crd::i64 i = 0; i < len; ++i)
+                if (autom == nullptr) { apply_gain(mine, len, node.gain_db); }
+                else // AUTOMATED: a per-sample dB -- the branch the extracted apply_gain deliberately does NOT cover
                 {
-                    const crd::f32 db =
-                        autom != nullptr ? auto_value_at(graph, *autom, start + i, graph.sample_rate)
-                                         : node.gain_db;
-                    const crd::f32 g = db_to_linear(db);
-                    mine[i * 2] *= g;
-                    mine[i * 2 + 1] *= g;
+                    for (crd::i64 i = 0; i < len; ++i)
+                    {
+                        const crd::f32 db = auto_value_at(graph, *autom, start + i, graph.sample_rate);
+                        const crd::f32 g  = db_to_linear(db);
+                        mine[i * 2] *= g;
+                        mine[i * 2 + 1] *= g;
+                    }
                 }
                 break;
             }
@@ -190,28 +169,7 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
                 const crd::f32      cutoff = autom != nullptr
                                                  ? auto_value_at(graph, *autom, start, graph.sample_rate)
                                                  : node.cutoff; // coeffs per block (state carries across)
-                crd::hesap::dsp::Biquad<crd::f64> bq;
-                const crd::f64                    f0 = static_cast<crd::f64>(cutoff);
-                const crd::f64                    q  = static_cast<crd::f64>(node.q);
-                switch (static_cast<BiquadType>(node.filter))
-                {
-                case BiquadType::Lowpass: bq = crd::hesap::dsp::rbj_lowpass<crd::f64>(f0, q); break;
-                case BiquadType::Highpass: bq = crd::hesap::dsp::rbj_highpass<crd::f64>(f0, q); break;
-                case BiquadType::Bandpass: bq = crd::hesap::dsp::rbj_bandpass<crd::f64>(f0, q); break;
-                case BiquadType::Notch:
-                default: bq = crd::hesap::dsp::rbj_notch<crd::f64>(f0, q); break;
-                }
-                for (crd::i64 i = 0; i < len; ++i)
-                {
-                    for (int c = 0; c < 2; ++c)
-                    {
-                        const crd::f64 x = static_cast<crd::f64>(mine[i * 2 + c]);
-                        const crd::f64 y = bq.b0 * x + bq_z1[node_index][c];
-                        bq_z1[node_index][c] = bq.b1 * x - bq.a1 * y + bq_z2[node_index][c];
-                        bq_z2[node_index][c] = bq.b2 * x - bq.a2 * y;
-                        mine[i * 2 + c]      = static_cast<crd::f32>(y);
-                    }
-                }
+                apply_biquad(mine, len, node.filter, cutoff, node.q, bq_z1[node_index], bq_z2[node_index]);
                 break;
             }
             case AudioNodeType::Mix:

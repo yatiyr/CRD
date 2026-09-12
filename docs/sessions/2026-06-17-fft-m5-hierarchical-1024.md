@@ -1,5 +1,8 @@
 # 2026-06-17 — FFT M5: hierarchical 1024 = 32×32 sub-FFT → 2M near-parity, 1M crush
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-fft` (v10), Fork A. Continues `2026-06-17-fft-m4-enable-default.md` (M4 committed `251bd79`).
 > Memory: `project_v10_fft_plan`. The 1024-hier is now part of the default-on hier path (disable `-DCRD_FFT_DISABLE_HIER`).
 

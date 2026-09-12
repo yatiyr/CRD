@@ -1,6 +1,9 @@
 # D-008 — the gpu-context convergence  ·  ⟶ MERGED into D-007
 
-> **This detour is now tracked in the single master doc: [`D-007-gpu-program-system.md`](D-007-gpu-program-system.md).**
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+> **This detour is now tracked in the single master doc: [`D-007-gpu-program-system.md`](../archive/D-007-gpu-program-system.md).**
 > D-007 (the universal shader IR) and D-008 (the device convergence) were merged 2026-07-11 into ONE ordered subslice
 > table — the two-doc split was confusing (two different "C3"s; interleaved shader/device slices). This file is kept only
 > as a redirect so existing links resolve.
@@ -12,5 +15,5 @@ outright at RET-8, 2026-07-23, ADR-0105): the device convergence is CLOSED.** `C
 2026-07-11. Decision record: [ADR-0103](../decisions/0103-gpu-context-owns-every-gpu-program.md).
 
 **The remaining frontier device slices** (`C3` ray-tracing context · `C4` DX12 raster · `C5` GPU-driven/work-graphs ·
-`C6` cooperative-vector device) live in the master table in [`D-007-gpu-program-system.md`](D-007-gpu-program-system.md),
+`C6` cooperative-vector device) live in the master table in [`D-007-gpu-program-system.md`](../archive/D-007-gpu-program-system.md),
 interleaved with the shader slices they pair with (C3↔B9, C5↔B11, C6↔B10).

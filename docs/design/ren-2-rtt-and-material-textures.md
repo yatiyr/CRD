@@ -1,5 +1,8 @@
 # REN-2 design — render-to-texture transients + sampled material textures (D-007 row 99)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status**: spec written 2026-07-25 (during the REN-1 close sweep); implementation follows against this doc.
 Builds directly on REN-1's frame graph and the ALREADY-PROVEN RTT sequence in `draw_wboit`.
 

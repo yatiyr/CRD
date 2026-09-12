@@ -1,5 +1,8 @@
 # 2026-07-19 — B17 OIT tier accuracy scoreboard (WBOIT · MBOIT · A-buffer vs the exact reference)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The three order-independent-transparency tiers, scored by **max per-channel RGBA8 error vs the exact sorted `over`
 composite** (the ground truth). This is an *accuracy* board (not a perf board): OIT tiers trade accuracy for
 cost/memory, so the meaningful measurement is how close each approximation lands to the exact reference. All three run as

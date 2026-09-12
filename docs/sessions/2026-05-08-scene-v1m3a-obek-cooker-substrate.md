@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m3a: ObekCooker substrate (TOML → OBEK, flat öbeks)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m2 shipped. Runtime override patches + OCHN format substrate. 14 öbek tests; six-config 772/772 / 769 release.
 
 **Status at end:** v1m3a shipped — `ObekCooker` substrate. TOML → OBEK CRDR pipeline riding on the v1l `SceneCooker` reader-registry pattern. Flat öbeks (no extends, no nested, no overrides) cook + load + instantiate cleanly. 7 cooker tests; six-config 779/779 / 776 release / 17 smokes.

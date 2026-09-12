@@ -1,5 +1,8 @@
 # ADR-0112 — Open-world attribute model: aggregate kinds + dialect-defined attribute-classes
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8b**. Pays the recorded `attr.hpp:6` IOU ("CEIR-2/3
 extend it [arrays, dictionaries, typed constants]" — never landed) AND opens the open-world attribute door

@@ -1,5 +1,8 @@
 # 2026-07-31 — REN-40-D closed: PCSS debugged (three stacked defects) + the moment tier (EVSM/MSM), both backends
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **REN-40-D is closed.** `forward_csm` now carries the full softness axis as DECLARED options —

@@ -1,5 +1,8 @@
 # CEIR-12z — the BAND-12 gate: the resource/memory subsystem closes
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-12z (D-007 master spine) · **Status:** ✅ CLOSED · **Closes:** CEIR-12 (band). ADR:
 none (a gate composes, it does not decide).
 

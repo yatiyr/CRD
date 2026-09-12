@@ -1,5 +1,8 @@
 # CEIR-22 band close — numerical GPU workflows through CEIR (the §137 GEMM→FFT→reduction→viz-prep proof)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-18 · **Mold:** the 20z band-close discipline (advisor at band-close → fresh family×config sweep →
 row-per-claim / row-per-config tables → deferral ledger → tracker BAND row).
 

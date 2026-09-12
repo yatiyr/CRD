@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4j-2a: inverse-based pivoting + ICE estimator (single-level)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4j-2a** — the ILUPACK numerical core: a Crout-form ILU
 whose pivots are accepted/deferred by a bound on the inverse-triangular-factor norms (the
 "inverse-based pivoting" of Bollhöfer-Saad, SISC 27(5):1627-1650, 2006). Single-level: the

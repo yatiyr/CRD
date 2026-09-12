@@ -1,5 +1,8 @@
 # 2026-07-06 — v16-c: bidirectional coloring (bicoloring) + sparse reverse-mode LA
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Two v16-c capability crushes, gated on **win-debug** (`crd-hesap-autodiff-tests`, the link-isolation smoke — both
 features live in the autodiff module and pull no heavy deps). The full autodiff suite is **2534 assertions / 91 cases**
 green after these land.

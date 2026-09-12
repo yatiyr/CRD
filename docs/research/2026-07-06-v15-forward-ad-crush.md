@@ -1,5 +1,8 @@
 # Research — 2026-07-06 — v15 forward-mode AD: the frontier crush levers + reconstruct-verify tables
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — v15 forward-mode AD shipped 2026-07-06 (`crd-hesap-autodiff`, ADR-0097). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Deep-research dossier standing up v15 (`crd-hesap-autodiff`, forward mode). Captured

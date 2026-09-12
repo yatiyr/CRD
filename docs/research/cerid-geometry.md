@@ -1,5 +1,8 @@
 # Cerid — `crd-geometry` substrate research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — ADR-0076; the full `crd-geometry` substrate shipped and Phase 3.1.7 closed 2026-05-19. Section-level consumer notes (e.g. eylem v1d-mesh) describe still-future eylem work. *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Date:** 2026-05-11

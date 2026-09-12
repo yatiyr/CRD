@@ -1,5 +1,8 @@
 # Research — the Command / Action Layer: one agent-native backbone for every Cerid surface
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Status:** **research only (direction pinned)** — the unified command/action layer is a strategic direction (memory `project_command_layer_unified_action_interface`); no implementation phase scheduled yet. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Status: RESEARCH / DESIGN DOSSIER (pre-phase). User-directed 2026-08-03: build the command/action layer as its

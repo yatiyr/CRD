@@ -1,0 +1,75 @@
+schema_version = 1
+dialect = "dist"
+summary = "CEIR-30 sec-68/sec-103 ceir.dist: MULTI-DEVICE SHARDING as SEMANTICS, not application glue (proof sec-140). A device MESH is a named logical grid of devices; a tensor is annotated SHARDED over a mesh axis; a COLLECTIVE (all_reduce this slice) combines the sharded pieces. ⛔ sec-70 (the tensor-dialect rule, inherited): the annotations are the HIGH-LEVEL placement IR -- shard/all_reduce are Pure, typed NoSemantics, carry NO kernel_ref and NO lowering hook, and PRESERVE THE LOGICAL TENSOR (result type == input type EXACTLY): the per-device physical shape + the materialized transfers/collectives are the CEIR-30a-2/30a-3 sharding-PROPAGATION + MATERIALIZATION passes' business, never pre-lowered here (a shard that changed the result type would defeat every downstream find_tensor_misuse shape check -- the load-bearing invariant). This slice (30a-1) declares the STRUCTURAL THREE: dist.mesh (the named grid), dist.shard (place a tensor on it), dist.all_reduce (the sec-140 combine). ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented, each with a real consumer -- the 26b-4 no-speculative rule): dist.peer_copy is a MATERIALIZED op (the 30a-3 lowering inserts it where a value's placement != its consumer's; reuse transfer.ceirop.toml's movement ops when it lands) -> 30a-3; all_gather / reduce_scatter / broadcast / barrier / collective-groups -> each its first consumer; reshard (a value that changes sharding mid-program) -> a real re-shard consumer; a mesh rank > 1 (per-dim split_axes) -> a 2-D mesh consumer; the `mean` collective fn (needs a materialization post-scale the graph tier lacks -- the tensor.reduce ckir ReduceFnUnsupported note) -> the 30a-3 post-scale. Providers multi-adapter local-GPU / NCCL / MPI / remote / cluster (sec-68) -> a >1-GPU box / a cluster (the 30-0 census deferral ledger). ⛔ I6 -- find_dist_misuse switches on op NAME + TypeKind, never op.kind. The mesh NAME is resolved by find_dist_misuse's own module walk (attr-only name-match, the frame.name precedent -- NOT a global SymbolTable entry this slice). crd-ceir NEVER links gpu-context; ZERO renderer changes."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# dist.mesh -- declare a NAMED device MESH: a logical grid of devices the sharding annotations place tensors onto. A
+# PROGRAM-GLOBAL declaration (referenced by dist.shard / dist.all_reduce via their `mesh` symbol attr). ⛔ NO results/
+# operands/effects + NOT Pure: a mesh is a NAMED DECLARATION, not a value computation -- a zero-result Pure op is dead by
+# definition (DCE would erase it), and two structurally-identical Pure meshes would be CSE merge candidates (the transform-
+# directive category error). find_dist_misuse owns the module-wide rules: a `shape` that is not >=1 positive ints is
+# MeshShapeInvalid; two meshes with the same `name` are DuplicateMesh (the second occurrence).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "mesh"
+summary = "Declare a named device mesh (a logical grid of devices); referenced by dist.shard/dist.all_reduce. NOT Pure (a named declaration, not a value)."
+version = 1
+attributes = [
+    { name = "name", kind = "symbol", required = true, doc = "the mesh identity (@name), referenced by dist.shard/dist.all_reduce's `mesh` attr. Resolved by find_dist_misuse's module walk (attr-only name-match -- the frame.draw-list-name precedent, NOT a global SymbolTable entry this slice). A second mesh with the same name is DuplicateMesh." },
+    { name = "shape", kind = "string", required = true, doc = "the mesh EXTENT: comma-separated POSITIVE ints (e.g. \"2\" = a 1-D 2-device mesh; \"2,4\" = a 2-D 2x4 mesh), one per mesh axis. find_dist_misuse: parses to >=1 positive ints (MeshShapeInvalid). The `perm`/`shape` comma-string precedent (ATTR_KINDS has no int-array). The mesh RANK (axis count) is this list's length -- dist.shard's mesh_axis is bounded by it." },
+]
+traits = []
+docs = "dist.mesh() {name, shape}. A named device-mesh declaration (sec-68): the logical grid dist.shard places tensors onto and dist.all_reduce reduces across. Carries a required symbol `name` (referenced by the collectives) + a required string `shape` (comma-separated positive ints, one per mesh axis; the RANK = the count). NO results/operands/effects and NOT Pure -- a mesh is a NAMED DECLARATION, not a value computation (Pure would make two identical meshes CSE candidates and a zero-result Pure op is DCE-dead; the transform-directive mold). find_dist_misuse: `shape` parses to >=1 positive ints (MeshShapeInvalid); a duplicate `name` in the module is DuplicateMesh (the second). The generated verify_mesh owns the STRUCTURAL contract (name present+Symbol, shape present+String)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# dist.shard -- annotate a tensor as SHARDED over a mesh axis: split the tensor's `axis` across the mesh's `mesh_axis` of
+# mesh `mesh`. ⛔ Pure + result type == input type EXACTLY: the LOGICAL tensor is preserved (sec-70 don't-prematurely-lower);
+# only the PLACEMENT is annotated. The per-device physical shape (input.shape[axis] / mesh.shape[mesh_axis]) is the 30a-3
+# materialization pass's business, never here (a shard that shrank the result type would break every downstream tensor
+# shape check -- the load-bearing invariant). find_dist_misuse: operand + result Tensor-kinded (OperandNotTensor); result
+# type == input type (ResultTypeMismatch); `mesh` resolves to a dist.mesh (UnknownMesh); `axis` in [0, input rank)
+# (ShardAxisInvalid); `mesh_axis` in [0, mesh rank) (MeshAxisInvalid).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "shard"
+summary = "Annotate a tensor as sharded over a mesh axis (split tensor `axis` across mesh `mesh_axis`). Pure; result type == input type (the logical tensor is preserved)."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the tensor being placed on the mesh (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the SAME tensor value, now carrying a sharding annotation; result type == input type EXACTLY (ResultTypeMismatch otherwise). ⛔ the LOGICAL shape is unchanged -- only the placement is annotated (the per-device physical shape is the 30a-3 materialization's)." },
+]
+attributes = [
+    { name = "mesh", kind = "symbol", required = true, doc = "the mesh identity (@mesh) this tensor is placed on; must resolve to a dist.mesh in the module (UnknownMesh)." },
+    { name = "axis", kind = "int", required = true, doc = "the TENSOR axis split across the mesh (>=0, < input tensor rank). find_dist_misuse: present+Int and in bounds (ShardAxisInvalid)." },
+    { name = "mesh_axis", kind = "int", required = true, doc = "the MESH axis the tensor axis is split across (>=0, < mesh rank = the mesh's `shape` length). find_dist_misuse: present+Int and in bounds (MeshAxisInvalid). ⛔ a 1-D mesh ⇒ mesh_axis is 0; a per-dim multi-axis split is the 2-D-mesh named-forward." },
+]
+traits = ["Pure"]
+docs = "dist.shard(%input) {mesh, axis, mesh_axis} -> %result. Annotate a tensor as sharded over a mesh axis (sec-103): the tensor's `axis` is split across the mesh's `mesh_axis` of mesh `mesh`. Pure. ⛔ result type == input type EXACTLY -- the logical tensor is PRESERVED (sec-70: the per-device physical shape + the materialized peer copies are the 30a-3 pass's, never pre-lowered here; a type-changing shard breaks downstream find_tensor_misuse). find_dist_misuse: operand + result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch); `mesh` resolves to a dist.mesh (UnknownMesh); `axis` present+Int in [0, input rank) (ShardAxisInvalid); `mesh_axis` present+Int in [0, mesh rank) (MeshAxisInvalid). The generated verify_shard owns the STRUCTURAL contract (1 operand, 1 result, the three attrs present+kind)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# dist.all_reduce -- COMBINE a sharded tensor's per-device pieces across a mesh with `fn`, replicating the result to every
+# device (the sec-140 collective). ⛔ Pure + result type == input type: an all-reduce PRESERVES shape (it combines partials,
+# it does not reduce an axis -- the tensor.reduce distinction); the annotation is semantic, the executing tier realizes the
+# communication (sec-70). Determinism rides the executing tier (a device all-reduce != a serial sum bit-for-bit -- the
+# tensor.reduce determinism-class note). `fn` = tensor.reduce's vocab MINUS mean (mean needs a materialization post-scale
+# the graph tier lacks -- the 30a-3 named-forward). find_dist_misuse: operand + result Tensor-kinded (OperandNotTensor);
+# result type == input type (ResultTypeMismatch); `mesh` resolves (UnknownMesh); `fn` in {sum,prod,max,min} (FnInvalid).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "all_reduce"
+summary = "Combine a sharded tensor's per-device pieces across a mesh with `fn`, replicated to every device (the sec-140 collective). Pure; result type == input type."
+version = 1
+operands = [
+    { name = "input", type = "tensor", doc = "the (sharded / partially-combined) tensor to reduce across the mesh (a 3d Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the combined tensor, replicated to every device; result type == input type EXACTLY (ResultTypeMismatch otherwise). ⛔ an all-reduce PRESERVES shape -- it combines partials across devices, it does not drop an axis (the tensor.reduce distinction)." },
+]
+attributes = [
+    { name = "mesh", kind = "symbol", required = true, doc = "the mesh (@mesh) the reduction spans; must resolve to a dist.mesh (UnknownMesh)." },
+    { name = "fn", kind = "string", required = true, doc = "the combine op, a CLOSED vocab: sum | prod | max | min (tensor.reduce's reduction vocab MINUS mean -- mean needs a materialization post-scale, the 30a-3 named-forward). find_dist_misuse rejects any other token (FnInvalid)." },
+]
+traits = ["Pure"]
+docs = "dist.all_reduce(%input) {mesh, fn} -> %result. Combine a sharded tensor across a mesh and replicate to every device (sec-68/sec-140 collective). Pure. ⛔ result type == input type -- an all-reduce PRESERVES shape (it combines partials, not an axis-reduce; sec-70: the semantic annotation, the executing tier realizes the communication). Determinism rides the executing tier (tensor.reduce's order-sensitivity note). find_dist_misuse: operand + result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch); `mesh` resolves to a dist.mesh (UnknownMesh); `fn` in {sum,prod,max,min} (FnInvalid -- tensor.reduce's vocab minus mean, the 30a-3 post-scale named-forward). The generated verify_all_reduce owns the STRUCTURAL contract (1 operand, 1 result, mesh+fn present+kind)."

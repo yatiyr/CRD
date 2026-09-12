@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n1: Preset substrate (`crd-preset` module + registry + loader + artifact builder)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1m fully delivered; v1n is the next slice. Off-the-record session before this one closed CI (12/12 green) and locked ADR-0061 (async GPU upload contract → v1o1+v1o2). Working tree clean.
 
 **Status at end:** v1n1 shipped — new `crd-preset` module with the full substrate from ADR-0059. **win-debug 819/819, linux-gcc-debug 819/819 (+5 tests, +38 assertions over the 814/814 baseline).** No concrete preset types yet; those are v1n2 (`QualityPreset`) and v1n3 (`CameraPreset`).

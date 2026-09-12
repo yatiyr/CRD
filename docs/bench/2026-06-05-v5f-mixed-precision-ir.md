@@ -1,5 +1,8 @@
 # 2026-06-05 — v5f mixed-precision iterative refinement (f32 factor + f64 IR vs smumps+IR)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** WSL2 Ubuntu 24.04, i9-14900K, serial OMP=1. Cerid: GCC. Peers: smumps (libmumps-seq, single-precision factor + 64·eps f64-IR loop, matched reference setup), UMFPACK (f64).

@@ -1,5 +1,8 @@
 # Session — 2026-05-03: Phase 2.6 v1b — Cooker CLI + zstd compression
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SHIPPED  
 **Tests after:** 408/408 win-debug, 408/408 win-relwithdebinfo, 408/408 win-asan, 408/408 win-clang-cl, 408/408 win-tidy, 405/405 win-release  
 **Duration:** one session (continuation of v1a)

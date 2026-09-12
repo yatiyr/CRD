@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — clang-cl thin-LTO debt PAID (no workaround; targeted single-file isolation)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 User directive: "I want you to pay the debt, shipping builds should do

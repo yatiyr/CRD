@@ -1,5 +1,8 @@
 # AS-4 board — CKIR auto-tuned GEMM vs cuBLAS Sgemm (f32, matched precision)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-07-22 · **Slice:** D-007 row 58 (ADR-0098 §4, AS-4) · **GPU:** RTX 4070 Ti SUPER (Ada sm_89, ~44 TFLOP f32
 theoretical, 672 GB/s) · **CUDA:** 13.3 · **Peer:** cuBLAS Sgemm (CUDA-core FMA — *not* tensor cores; `cublasSgemm` on f32 uses
 the CUDA cores, so this is a fair f32-vs-f32 fight) · **Test:** `tests/kir-cuda/test_autotune_cublas.cpp` (`[cublas]`, min-of-20

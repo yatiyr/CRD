@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-n-1 ⭐ CLOSE: SQP + augmented Lagrangian (same session, part 7)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-n-1 — the first two of the NLP trio. The third (IPOPT-class filter IPM) is the explicitly-scoped
 **v7-n-2** next sub-slice (the v7-d-3/v7-e-2 decomposition pattern; the session had run very long and the

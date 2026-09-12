@@ -1,5 +1,8 @@
 # 2026-05-24 — hesap v3d-2c-2b: complex Aggressive Early Deflation (zlaqr0-class)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The production complex Schur. Single-shift `complex_schur` (v3d-2c-2) converges
 one eigenvalue per O(n) sweep — sweep count grows super-linearly with n. Complex
 AED converges a whole trailing window per inner Schur, collapsing the sweep count

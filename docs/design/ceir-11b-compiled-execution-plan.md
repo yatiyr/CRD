@@ -1,5 +1,8 @@
 # CEIR-11b — Plan compiler + `CompiledExecutionPlan` + the differential harness — DESIGN NOTE
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **DESIGN LOCKED (2026-08-10, advisor consult).** Substrate for **ADR-0123** (at 11b close; 0123 verified free
 > — 0120/0121/0122 exist). CEIR band 11, slice 11b (§84 two-tier · §119 differential · §153 hot-path rules). The COMPILED
 > tier — the fast path the 11a §118 reference oracle differential-compares against. crd-ceir core (new `plan.{hpp,cpp}`).

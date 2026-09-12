@@ -1,5 +1,8 @@
 # Session — RAF-12: delete the legacy rendering architecture (2026-08-05)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Branch:** `main`. Detour D-007, RAF band, Phase 12 (§7 deletion list in `docs/design/raf-0-rendering-foundation-design.md`).
 **Goal:** ONE rendering architecture — delete the legacy that RAF-8/9 already moved off, proven empty via repo-wide grep.
 Every increment is sandbox-safe, gated **byte-identical both backends + one Linux gcc build + LLVM-20 tidy**, and banked

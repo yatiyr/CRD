@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-b: Cholesky (SPD real)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 Right-looking blocked Cholesky factorization for symmetric positive-

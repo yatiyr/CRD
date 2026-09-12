@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5c: R*-tree
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster continues. Full Beckmann 1990 R*-tree —
 > the right index for **static-or-slow-change** AABB data. Includes STR
 > (Sort-Tile-Recursive) bulk-load + Hjaltason-Samet 1999 incremental k-NN.

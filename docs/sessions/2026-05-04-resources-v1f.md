@@ -1,5 +1,8 @@
 # 2026-05-04 — Phase 2.6 v1f: hot-reload (atomic swap, mtime watching, callbacks)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 ### Atomic `payload` in `ResourceControlBlock`

@@ -1,5 +1,8 @@
 # 2026-07-24 — GEO-9: the TIMELINE resource (D-007 row 74)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice**: the TIMELINE/SEQUENCE resource — OTIO-shaped editorial data in RATIONAL time, `.otio` interchange,
 deterministic evaluation, EXR-sequence render, param automation. Closed in one session, every gate green.
 

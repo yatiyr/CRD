@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4f-2: block-CG + block-PCG (the complete block-CG family)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4 (iterative solvers), slice **v4f-2**. Shipped block-CG +
 block-PCG for SPD/HPD multi-RHS systems, with the complete block-preconditioner family.
 

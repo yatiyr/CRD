@@ -1,5 +1,8 @@
 # CEIR-12d — the memory planner (interval-coloring port; inspectable plan) — §78 / §162
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-12d (D-007 master spine) · **Status:** ✅ CLOSED · **ADR:** **0124** (this slice — see
 "ADR" below).
 

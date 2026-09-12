@@ -1,5 +1,8 @@
 # 2026-05-15 — Phase 3.1.7.5 v0a: crd-units substrate + 6-layer conversion system
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 **Phase 3.1.7.5 v0a** ships the `crd-units` substrate with the full 6-layer

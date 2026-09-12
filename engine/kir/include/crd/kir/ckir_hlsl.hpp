@@ -227,6 +227,9 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
 {
     using namespace glsl_detail;
     if (!entry.is_kernel()) { return false; }
+    if (entry.local_size[0] == 0U) { return false; } // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    // the resolver (bind_authored_local_size) BEFORE emit — refuse loudly rather than emit `numthreads(0,..)` or a silent
+    // 1-thread kernel; the caller surfaces this as an unresolved stage (UnresolvedKernel). Mirrors the GLSL twin.
     const int                n = g.size();
     crd::containers::String& s = out.source;
     s.clear();
@@ -2186,9 +2189,23 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
 }
 
 // Batched-matmul HLSL kernel (root constants M,K,N,nbatch).
+// ⭐ CEIR-26e: mirrors emit_contract_glsl — root is a bare `Contract` OR a `Max(Contract, Const 0)` (fused relu epilogue) →
+// unwrap + `max(acc, 0.0)` at the store (SAME K-loop ⇒ bit-exact). A `Max(Contract, c≠0)` is NOT a relu ⇒ reject.
 inline bool emit_contract_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
-    const KNode& c = g.node(output);
+    int  croot = output;
+    bool relu  = false;
+    {
+        const KNode& r = g.node(output);
+        if (r.op == KOp::Max)
+        {
+            const KNode& zb = g.node(r.b);
+            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0) { return false; }
+            croot = r.a;
+            relu  = true;
+        }
+    }
+    const KNode& c = g.node(croot);
     if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
@@ -2201,7 +2218,7 @@ inline bool emit_contract_hlsl(const KGraph& g, int output, GlslKernel& out)
     s.append("  uint b = gid / mn; uint rem = gid % mn; uint m = rem / N; uint nn = rem % N;\n");
     s.append("  uint aoff = b * M * K + m * K; uint boff = b * K * N + nn;\n");
     s.append("  precise float acc = 0.0;\n  for (uint k = 0; k < K; ++k) { precise float prod = A[aoff + k] * Bm[boff + k * N]; acc = acc + prod; }\n");
-    s.append("  C[b * mn + m * N + nn] = acc;\n}\n");
+    s.append(relu ? "  C[b * mn + m * N + nn] = max(acc, 0.0);\n}\n" : "  C[b * mn + m * N + nn] = acc;\n}\n"); // 26e relu epilogue
     return true;
 }
 
@@ -2342,6 +2359,45 @@ inline bool emit_gather_hlsl(const KGraph& g, int output, GlslKernel& out)
     return true;
 }
 
+// CEIR-25b-2b: HLSL twin of emit_broadcast_glsl -- the SAME baked index body (glsl_detail::emit_gather_index_body), DX12 UAV/cbuffer
+// header. Sharing the body is the emitters-lag-wire-both scar guard: GLSL + HLSL index math can never drift.
+inline bool emit_broadcast_nd_hlsl(const KGraph& g, int output, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    Shape    osh;
+    crd::u32 coef[kMaxRank];
+    int      rank = 0;
+    if (!broadcast_coef(g, output, osh, coef, rank)) { return false; }
+    out.n_inputs      = 1;
+    out.input_iidx[0] = g.node(g.node(output).a).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("RWStructuredBuffer<float> A : register(u0);\nRWStructuredBuffer<float> O : register(u1);\n");
+    s.append("cbuffer PC : register(b0) { uint nout; };\n");
+    s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= nout) return;\n");
+    emit_gather_index_body(s, osh, coef, rank);
+    s.append("}\n");
+    return true;
+}
+// CEIR-25b-2b: HLSL twin of emit_permute_glsl (generic N-D transpose).
+inline bool emit_permute_hlsl(const KGraph& g, int output, GlslKernel& out)
+{
+    using namespace glsl_detail;
+    Shape    osh;
+    crd::u32 coef[kMaxRank];
+    int      rank = 0;
+    if (!permute_coef(g, output, osh, coef, rank)) { return false; }
+    out.n_inputs      = 1;
+    out.input_iidx[0] = g.node(g.node(output).a).iidx;
+    crd::containers::String& s = out.source;
+    s.clear();
+    s.append("RWStructuredBuffer<float> A : register(u0);\nRWStructuredBuffer<float> O : register(u1);\n");
+    s.append("cbuffer PC : register(b0) { uint nout; };\n");
+    s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= nout) return;\n");
+    emit_gather_index_body(s, osh, coef, rank);
+    s.append("}\n");
+    return true;
+}
 // Scatter HLSL kernel — out=base, then out[idx[m],...]=updates[m,...] (LAST-WINS, output-centric ⇒ race-free).
 inline bool emit_scatter_hlsl(const KGraph& g, int output, GlslKernel& out)
 {

@@ -1,5 +1,8 @@
 # 2026-06-14 — FFT-vs-MKL deep profiling (the reframe: codelet ≥ MKL, the gap is overhead)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Mandate (user, emphatic):** beat or match MKL on 1D FFT throughput — "it's all software, think outside the box, do not proceed until parity or crush." Took the step back and PROFILED instead of guessing.
 
 ## Tools

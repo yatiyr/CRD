@@ -1,5 +1,8 @@
 # 2026-06-12 — v9-b + v9-c + v9-g batch: embedded ERK + events/dense-output + symplectic
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slices:** Phase 3.1.6 v9-b (embedded explicit RK), v9-c (events + continuous output), v9-g (symplectic) —
 implemented as ONE batch per user direction ("implement as many slices as you can, then test and fix in
 batches"). ADR-0091 contracts from v9-a consumed unchanged (no retrofits — the day-1 contracts held).

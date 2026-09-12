@@ -1,5 +1,8 @@
 # Session — 2026-05-13 — Phase 3.1.7 v1h: `crd-geometry-primitives` substrate hardening (ADR-0076 §15)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 The first of the three ADR-0076 §15 checklist-driven additions, slotted after the

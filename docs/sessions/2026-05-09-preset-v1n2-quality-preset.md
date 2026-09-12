@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n2: `QualityPreset` first concrete preset type
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1n1 just shipped — `crd-preset` module substrate (`PresetResource` / `PresetLoader` / `PresetRegistry` / `PresetArtifactBuilder` / empty `IPresetTarget`) at 819/819 across both platforms. Working tree on the v1n1 commit.
 
 **Status at end:** v1n2 shipped — `QualityPreset` schema struct (FourCC `'PRQL'`, version 1) lands as the first concrete preset type and IPresetTarget gets its `apply(QualityPreset)` overload. **win-debug 823/823, linux-gcc-debug 823/823 (+4 cases, +38 assertions over the 819/819 baseline).**

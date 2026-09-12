@@ -1,5 +1,8 @@
 # 2026-05-10 — Phase 3.1 v0d: deterministic sort + heap substrate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **v0d shipped.** Adds `crd::containers::sort` / `stable_sort` /
 `nth_element` / `push_heap` / `pop_heap` / `make_heap` / `sort_heap`
 with deterministic-by-construction guarantees + a CI lint banning

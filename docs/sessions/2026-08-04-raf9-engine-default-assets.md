@@ -1,5 +1,8 @@
 # Session — RAF-9: engine default assets load by canonical `engine://` id (2026-08-04)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Branch:** `raf-9-engine-default-assets` (stacked on the RAF-8 tail + A13-VRS-fix WIP).
 **Plan executed:** `docs/research/RAF9plan.md` (Ultraplan-refined, user-approved), verbatim.
 

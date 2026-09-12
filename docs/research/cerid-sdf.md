@@ -1,5 +1,8 @@
 # Cerid — SDF substrate research
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Status:** **research → planned** — ADR-0064 Accepted; the `crd-sdf` module is not yet built (Phase 3.1.5 slot). *(stamped 2026-08-07, doc-hygiene pass)*
 
 **Date:** 2026-05-10

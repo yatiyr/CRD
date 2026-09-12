@@ -1,5 +1,8 @@
 # crd-containers — A Walkthrough In Plain Words
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Companion to `docs/log/LOG_FILE.md` and `docs/memory/MEMORY_FILE.md`.
 > Same spirit: this is for *you* (and future-you), not a manual for
 > outsiders. It explains *why* every piece exists and *how* the insides

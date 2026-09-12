@@ -11,6 +11,9 @@
 #include <crd/ceir/linalg.hpp>
 #include <crd/ceir/tensor.hpp>
 #include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_eval.hpp> // eval_cpu — the CPU oracle the 25b element-op synths compare against (device-free numeric gate)
+#include <crd/kir/ckir_glsl.hpp> // CEIR-26e: emit_contract_glsl — the relu-epilogue store is a device-free source check
+#include <crd/kir/ckir_hlsl.hpp> // CEIR-26e: emit_contract_hlsl — the DX12 mirror of the epilogue store
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -69,6 +72,19 @@ Operation* gemm(Context& ctx, const Kit& k, Block* b, Value* a, Value* bb, Value
     b->append(op);
     return op;
 }
+// CEIR-26e: does the emitted kernel source contain `needle`? (a device-free proxy for the relu-epilogue store — ASCII scan, no std).
+bool src_has(const crd::containers::String& s, StringView needle)
+{
+    const StringView h = crd::containers::to_view(s);
+    if (needle.size() > h.size()) { return false; }
+    for (crd::usize i = 0; i + needle.size() <= h.size(); ++i)
+    {
+        bool m = true;
+        for (crd::usize j = 0; j < needle.size(); ++j) { if (h[i + j] != needle[j]) { m = false; break; } }
+        if (m) { return true; }
+    }
+    return false;
+}
 } // namespace
 
 TEST_CASE("ceir 22b: synth_gemm maps a plain gemm to a CKIR contract node (the bit-exact envelope)", "[ceir][ckir-synth]")
@@ -89,6 +105,82 @@ TEST_CASE("ceir 22b: synth_gemm maps a plain gemm to a CKIR contract node (the b
     const gpu::GraphSynth  s = gpu::synth_gemm(ctx, *op, g);
     CHECK(s.reject == gpu::SynthReject::None);
     CHECK(s.output >= 0); // a real CKIR node id (input 0, input 1, contract → node 2); the DEVICE gate proves it computes A·B.
+}
+
+TEST_CASE("ceir 26e-2a: synth_gemm relu epilogue fuses max(contract 0) bit-exact and the contract emitters unwrap the Max root",
+          "[ceir][ckir-synth]")
+{
+    memory::GrowableTlsfAllocator root;
+    Context                       ctx(&root);
+    const Kit                     k(ctx);
+    Module* const                 m  = ctx.create_module();
+    Block* const                  b  = mkmain(ctx, *m);
+    const TypeId                  ef = ctx.type_f32();
+    // gemm(A[2,2], B[2,2]) plain → D[2,2]. A=[[1,2],[3,4]], B=[[1,0],[0,-1]] ⇒ A·B = [[1,-2],[3,-4]] (NEGATIVE outputs, so relu is
+    // NOT identity — the advisor's "seed a negative row" gate). relu(A·B) = [[1,0],[3,0]].
+    Value* const     a  = tf(ctx, k, b, sh2(ctx, 2U, 2U));
+    Value* const     bb = tf(ctx, k, b, sh2(ctx, 2U, 2U));
+    Value* const     cc = tf(ctx, k, b, sh2(ctx, 2U, 2U));
+    Operation* const op = gemm(ctx, k, b, a, bb, cc, 1.0, 0.0, false, false, ctx.type_tensor(ef, sh2(ctx, 2U, 2U)));
+
+    const f64  ad[4]     = {1, 2, 3, 4};  // A row-major
+    const f64  bd[4]     = {1, 0, 0, -1}; // B row-major
+    const f64* inputs[2] = {ad, bd};
+
+    // (1) NUMERIC: eval_cpu(synth_gemm(Relu)) == relu(A·B) elementwise (the fused graph carries the Max node the emitters unwrap).
+    {
+        kir::KGraph           g2(&root);
+        const gpu::GraphSynth s = gpu::synth_gemm(ctx, *op, g2, gpu::GemmEpilogue::Relu);
+        REQUIRE(s.reject == gpu::SynthReject::None);
+        REQUIRE(s.output >= 0);
+        f64 out[4] = {};
+        kir::eval_cpu(g2, inputs, &root, s.output, out);
+        const f64 expect[4] = {1, 0, 3, 0}; // relu([1,-2,3,-4])
+        for (int i = 0; i < 4; ++i) { CHECK(out[i] == expect[i]); }
+    }
+    // (2) REGRESSION: eval_cpu(synth_gemm(None)) == A·B (the default arg leaves every pre-26e caller intact — negatives survive).
+    {
+        kir::KGraph           g2(&root);
+        const gpu::GraphSynth s = gpu::synth_gemm(ctx, *op, g2); // default None
+        REQUIRE(s.reject == gpu::SynthReject::None);
+        f64 out[4] = {};
+        kir::eval_cpu(g2, inputs, &root, s.output, out);
+        const f64 expect[4] = {1, -2, 3, -4};
+        for (int i = 0; i < 4; ++i) { CHECK(out[i] == expect[i]); }
+    }
+    // (3) EMIT (both backends): the Relu graph emits `max(acc` at the store; the None graph does NOT (identity, not presence).
+    {
+        kir::KGraph           gr(&root);
+        const gpu::GraphSynth sr = gpu::synth_gemm(ctx, *op, gr, gpu::GemmEpilogue::Relu);
+        kir::KGraph           gn(&root);
+        const gpu::GraphSynth sn = gpu::synth_gemm(ctx, *op, gn); // None
+        kir::GlslKernel       kg_r(&root);
+        kir::GlslKernel       kg_n(&root);
+        REQUIRE(kir::emit_contract_glsl(gr, sr.output, kg_r));
+        REQUIRE(kir::emit_contract_glsl(gn, sn.output, kg_n));
+        CHECK(src_has(kg_r.source, StringView("max(acc")));
+        CHECK(!src_has(kg_n.source, StringView("max(acc")));
+        kir::GlslKernel kh_r(&root);
+        kir::GlslKernel kh_n(&root);
+        REQUIRE(kir::emit_contract_hlsl(gr, sr.output, kh_r));
+        REQUIRE(kir::emit_contract_hlsl(gn, sn.output, kh_n));
+        CHECK(src_has(kh_r.source, StringView("max(acc")));
+        CHECK(!src_has(kh_n.source, StringView("max(acc")));
+    }
+    // (4) NEGATIVE (the cval guard): a Max(Contract, Const 5) root is NOT a relu — both emitters REJECT it (never a silent
+    //     max-with-a-nonzero false-green). Hand-built (synth_gemm only ever emits cval 0).
+    {
+        kir::KGraph     g2(&root);
+        const int       ia  = g2.input(kir::make_shape({2, 2}), kir::DType::F32);
+        const int       ib  = g2.input(kir::make_shape({2, 2}), kir::DType::F32);
+        const int       con = g2.contract(ia, ib);
+        const int       z5  = g2.constant(5.0, kir::make_shape({2, 2}), kir::DType::F32);
+        const int       mx  = g2.binary(kir::KOp::Max, con, z5);
+        kir::GlslKernel kg(&root);
+        kir::GlslKernel kh(&root);
+        CHECK(!kir::emit_contract_glsl(g2, mx, kg));
+        CHECK(!kir::emit_contract_hlsl(g2, mx, kh));
+    }
 }
 
 TEST_CASE("ceir 22b: synth_gemm TYPED-REJECTS everything outside the bit-exact envelope", "[ceir][ckir-synth]")
@@ -235,4 +327,143 @@ TEST_CASE("ceir 22b: synth_fft maps a rank-1 power-of-2 c2c FFT to a CKIR plan +
     { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
       Operation* op=build_fft(ctx,k,b,sh1(ctx,8U),ctx.type_f32(),"sideways",0);
       CHECK(synth(ctx,root,*op).reject==RJ::FftDirectionUnknown); }
+}
+
+TEST_CASE("ceir 25b-1: synth_transpose maps tensor.transpose to a CKIR permute + eval_cpu matches the transpose oracle", "[ceir][ckir-synth][autodiff]")
+{
+    using RJ = gpu::SynthReject;
+    // ACCEPT + NUMERIC: transpose A[2,3] perm=[1,0] -> [3,2]; eval_cpu(g,{A}) == Aᵀ (pure data movement — exact f64).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Value* a=tf(ctx,k,b,sh2(ctx,2U,3U));
+      Operation* op=tensor::build_transpose(ctx,a,ctx.attr_string(StringView("1,0")),ctx.type_tensor(ef,sh2(ctx,3U,2U)));
+      b->append(op);
+      kir::KGraph g(&root);
+      const gpu::GraphSynth s=gpu::synth_transpose(ctx,*op,g);
+      REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
+      const f64 ad[6]={1,2,3, 4,5,6}; const f64* inputs[1]={ad}; f64 out[6]={};
+      kir::eval_cpu(g,inputs,&root,s.output,out);
+      const f64 expect[6]={1,4, 2,5, 3,6}; // Aᵀ row-major [3,2]
+      for (int i=0;i<6;++i) { CHECK(out[i]==expect[i]); } }
+    // OpNotSupported: a bare resource.declare.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      Value* v=tf(ctx,k,b,sh2(ctx,2U,3U)); kir::KGraph g(&root);
+      CHECK(gpu::synth_transpose(ctx,*v->defining_op(),g).reject==RJ::OpNotSupported); }
+    // ElementNotF32: i32 transpose.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ei=ctx.type_i32();
+      Value* a=mkval(ctx,k,b,ctx.type_tensor(ei,sh2(ctx,2U,3U)));
+      Operation* op=tensor::build_transpose(ctx,a,ctx.attr_string(StringView("1,0")),ctx.type_tensor(ei,sh2(ctx,3U,2U)));
+      b->append(op); kir::KGraph g(&root);
+      CHECK(gpu::synth_transpose(ctx,*op,g).reject==RJ::ElementNotF32); }
+    // TransposePermInvalid: perm "0,0" is not a permutation (duplicate) — the synth is standalone-robust (does not re-run the verifier).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Value* a=tf(ctx,k,b,sh2(ctx,2U,3U));
+      Operation* op=tensor::build_transpose(ctx,a,ctx.attr_string(StringView("0,0")),ctx.type_tensor(ef,sh2(ctx,3U,2U)));
+      b->append(op); kir::KGraph g(&root);
+      CHECK(gpu::synth_transpose(ctx,*op,g).reject==RJ::TransposePermInvalid); }
+}
+
+TEST_CASE("ceir 25b-1: synth_broadcast maps tensor.broadcast to a CKIR broadcast + eval_cpu matches; rejects non-same-rank", "[ceir][ckir-synth][autodiff]")
+{
+    using RJ = gpu::SynthReject;
+    // ACCEPT + NUMERIC: broadcast in[3,1] -> [3,4]; each row repeats in[r] across 4 cols (eval_cpu ckir_eval.hpp:213 same-rank).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Value* in=tf(ctx,k,b,sh2(ctx,3U,1U));
+      Operation* op=tensor::build_broadcast(ctx,in,ctx.type_tensor(ef,sh2(ctx,3U,4U)));
+      b->append(op);
+      kir::KGraph g(&root);
+      const gpu::GraphSynth s=gpu::synth_broadcast(ctx,*op,g);
+      REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
+      const f64 ind[3]={10,20,30}; const f64* inputs[1]={ind}; f64 out[12]={};
+      kir::eval_cpu(g,inputs,&root,s.output,out);
+      for (int r=0;r<3;++r) { for (int c=0;c<4;++c) { CHECK(out[r*4+c]==ind[r]); } } }
+    // ACCEPT + NUMERIC (FIRST axis): broadcast in[1,4] -> [3,4]; each COLUMN repeats in[c] down 3 rows (the axis-0 reduce-grad
+    // shape — a DIFFERENT branch of eval_cpu:217's index map than the last-axis case above; nothing else in-tree checks it).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Value* in=tf(ctx,k,b,sh2(ctx,1U,4U));
+      Operation* op=tensor::build_broadcast(ctx,in,ctx.type_tensor(ef,sh2(ctx,3U,4U)));
+      b->append(op);
+      kir::KGraph g(&root);
+      const gpu::GraphSynth s=gpu::synth_broadcast(ctx,*op,g);
+      REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
+      const f64 ind[4]={100,200,300,400}; const f64* inputs[1]={ind}; f64 out[12]={};
+      kir::eval_cpu(g,inputs,&root,s.output,out);
+      for (int r=0;r<3;++r) { for (int c=0;c<4;++c) { CHECK(out[r*4+c]==ind[c]); } } }
+    // OpNotSupported: a bare resource.declare.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      Value* v=tf(ctx,k,b,sh2(ctx,3U,1U)); kir::KGraph g(&root);
+      CHECK(gpu::synth_broadcast(ctx,*v->defining_op(),g).reject==RJ::OpNotSupported); }
+    // ElementNotF32: i32 broadcast.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ei=ctx.type_i32();
+      Value* in=mkval(ctx,k,b,ctx.type_tensor(ei,sh2(ctx,3U,1U)));
+      Operation* op=tensor::build_broadcast(ctx,in,ctx.type_tensor(ei,sh2(ctx,3U,4U)));
+      b->append(op); kir::KGraph g(&root);
+      CHECK(gpu::synth_broadcast(ctx,*op,g).reject==RJ::ElementNotF32); }
+    // BroadcastShapeUnsupported: in[4] (rank-1) -> [3,4] (rank-2) — a numpy right-aligned broadcast the VERIFIER accepts, but the
+    // CKIR g.broadcast is same-rank (name-forward; vjp_reduce reshapes to same rank FIRST).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Value* in=tf(ctx,k,b,sh1(ctx,4U));
+      Operation* op=tensor::build_broadcast(ctx,in,ctx.type_tensor(ef,sh2(ctx,3U,4U)));
+      b->append(op); kir::KGraph g(&root);
+      CHECK(gpu::synth_broadcast(ctx,*op,g).reject==RJ::BroadcastShapeUnsupported); }
+}
+
+TEST_CASE("ceir 25b-1: synth_elementwise maps the full binary vocab to a CKIR binary + eval_cpu matches; rejects mismatch/bad-fn", "[ceir][ckir-synth][autodiff]")
+{
+    using RJ = gpu::SynthReject;
+    // build an elementwise op a[2,2] {fn} b[2,2] -> [2,2].
+    const auto build_ew = [](Context& ctx, const Kit& k, Block* b, TypeId ea, TypeId sa, TypeId eb, TypeId sb, const char* fn,
+                             TypeId er, TypeId sr) {
+        Value* a=mkval(ctx,k,b,ctx.type_tensor(ea,sa)); Value* bb=mkval(ctx,k,b,ctx.type_tensor(eb,sb));
+        Operation* op=tensor::build_elementwise(ctx,a,bb,ctx.attr_string(StringView(fn)),ctx.type_tensor(er,sr));
+        b->append(op); return op;
+    };
+    // ACCEPT + NUMERIC: add / sub / mul over [2,2] == the exact-f64 oracle.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32(); const TypeId s22=sh2(ctx,2U,2U);
+      const f64 ad[4]={1,2,3,4}; const f64 bd[4]={10,20,30,40}; const f64* inputs[2]={ad,bd};
+      struct Case { const char* fn; f64 e[4]; };
+      const Case cases[3]={{"add",{11,22,33,44}},{"sub",{-9,-18,-27,-36}},{"mul",{10,40,90,160}}};
+      for (const Case& cs : cases) {
+          Operation* op=build_ew(ctx,k,b,ef,s22,ef,s22,cs.fn,ef,s22);
+          kir::KGraph g(&root);
+          const gpu::GraphSynth s=gpu::synth_elementwise(ctx,*op,g);
+          REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
+          f64 out[4]={}; kir::eval_cpu(g,inputs,&root,s.output,out);
+          for (int i=0;i<4;++i) { CHECK(out[i]==cs.e[i]); }
+      } }
+    // VOCAB: the FULL binary vocab {add,sub,mul,div,max,min,pow} all MAP (reject None) — the gold-standard completeness claim.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32(); const TypeId s22=sh2(ctx,2U,2U);
+      for (const char* fn : {"add","sub","mul","div","max","min","pow"}) {
+          Operation* op=build_ew(ctx,k,b,ef,s22,ef,s22,fn,ef,s22);
+          kir::KGraph g(&root);
+          CHECK(gpu::synth_elementwise(ctx,*op,g).reject==RJ::None);
+      } }
+    // OpNotSupported: a bare resource.declare.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      Value* v=tf(ctx,k,b,sh2(ctx,2U,2U)); kir::KGraph g(&root);
+      CHECK(gpu::synth_elementwise(ctx,*v->defining_op(),g).reject==RJ::OpNotSupported); }
+    // ElementNotF32: i32 add.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ei=ctx.type_i32(); const TypeId s22=sh2(ctx,2U,2U);
+      Operation* op=build_ew(ctx,k,b,ei,s22,ei,s22,"add",ei,s22); kir::KGraph g(&root);
+      CHECK(gpu::synth_elementwise(ctx,*op,g).reject==RJ::ElementNotF32); }
+    // ElementwiseFnUnsupported: a bogus fn (the synth is standalone-robust; fn_in would reject it in-dialect).
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32(); const TypeId s22=sh2(ctx,2U,2U);
+      Operation* op=build_ew(ctx,k,b,ef,s22,ef,s22,"atan2",ef,s22); kir::KGraph g(&root);
+      CHECK(gpu::synth_elementwise(ctx,*op,g).reject==RJ::ElementwiseFnUnsupported); }
+    // ⛔ ElementwiseShapeMismatch: a[2,2] + b[2,1] — broadcast-compatible per the VERIFIER, but g.binary is same-shape (the
+    // bin-bcast OOB scar). NEVER an implicit broadcast → a TYPED reject.
+    { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
+      const TypeId ef=ctx.type_f32();
+      Operation* op=build_ew(ctx,k,b,ef,sh2(ctx,2U,2U),ef,sh2(ctx,2U,1U),"add",ef,sh2(ctx,2U,2U)); kir::KGraph g(&root);
+      CHECK(gpu::synth_elementwise(ctx,*op,g).reject==RJ::ElementwiseShapeMismatch); }
 }

@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — Phase 1 closeout / quality check
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Do a quick but honest Phase 1 retrospective before jumping into graphics.

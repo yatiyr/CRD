@@ -1,10 +1,13 @@
 # Lesson 11 — The Shader-Stage Frontier: every stage, what it's for, and the cutting-edge we build on it
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > A lecture, not a status report. The phase docs say *what* the D-007 detour ships; this says *what each shader stage
 > actually is*, *where it's used*, *what frontier techniques ride on it*, *which backends light up when we're done*, and
 > *how the node editor / shader tools fit*. Written so someone who has never touched a mesh shader or a ray-tracing SBT
 > comes out able to reason about the whole GPU. Grounded in Cerid's own IR (`crd::kir`) — the 14 `KStage`s and their
-> builtins in `engine/kir/include/crd/kir/ckir.hpp` — and the D-007 master table (`docs/detours/D-007-gpu-program-system.md`).
+> builtins in `engine/kir/include/crd/kir/ckir.hpp` — and the D-007 master table (`docs/archive/D-007-gpu-program-system.md`).
 
 ---
 

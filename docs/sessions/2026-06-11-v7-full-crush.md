@@ -1,5 +1,8 @@
 # 2026-06-11 — v7 FULL CRUSH: every scoreboard gap closed honestly (same marathon, part 18)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation — the post-close crush pass ("I WANT FULL CRUSH!").
 Five levers, two real bugs fixed at the root, one build-landmine re-occurrence handled. Suite **3782/152**
 (was 3774/151); win-debug + win-asan + win-shipping + win-tidy + ctest guards green.

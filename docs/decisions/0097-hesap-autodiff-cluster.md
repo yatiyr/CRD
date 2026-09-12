@@ -1,5 +1,8 @@
 # ADR-0097 — crd-hesap-autodiff: the automatic-differentiation cluster — one module for forward + reverse, the deterministic no-atomics tape, suite-wide differentiability, differentiable solvers via implicit-diff, and the tape→C++ codegen lane
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-06); **v15 forward-mode SHIPPED (2026-07-06)** + **v16 reverse-mode + differentiable-solvers SHIPPED (2026-07-07)** — full crush vs PyTorch/JAX/torchdiffeq/jaxopt/cvxpylayers/top88/efficient-kan at matched accuracy + the `{1..16}` determinism moat; scoreboard `docs/bench/2026-07-07-v16z-scoreboard.md`; 6-config DoD green, cluster CLOSED
 - **Phase:** 3.1.6 v15 (forward mode) + v16 (reverse mode + differentiable solvers) — one module, two clusters
 - **Tags:** `hesap` `autodiff` `forward-mode` `reverse-mode` `determinism` `implicit-differentiation` `codegen` `ml-for-science` `safety-critical` `architecture` `substrate`

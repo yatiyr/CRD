@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — roadmap & docs structure
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 No code this session. Decide the order of the remaining Phase 1 modules,

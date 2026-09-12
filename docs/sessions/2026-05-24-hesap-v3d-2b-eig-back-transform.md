@@ -1,5 +1,8 @@
 # 2026-05-24 — hesap v3d-2b: public real `eig()` + 3-stage back-transform
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Shipped the consumer-facing non-symmetric eigensolver: `eig(Matrix<T>) →
 EigNonsym<T>` assembling the already-shipped real-Schur pipeline into the public
 API, with the 3-stage back-transform from Schur basis to the original matrix.

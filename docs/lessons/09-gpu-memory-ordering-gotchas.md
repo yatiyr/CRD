@@ -1,5 +1,8 @@
 # Lesson 09 — GPU memory ordering: atomicAdd is not enough
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The bug that motivated this lesson:** v9a-c LBVH upsweep on GPU. 11 of 12 tests passed. The N=10000 random-AABB oracle failed with **0.5+ unit differences in bounds** — not 1-ULP rounding, hundreds of millions of ULPs. The implementation looked right. The fix was a single GLSL keyword.
 
 ## TL;DR

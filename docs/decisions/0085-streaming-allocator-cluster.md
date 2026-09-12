@@ -1,5 +1,8 @@
 # ADR-0085 — Virtual-memory + streaming allocator cluster
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-27
 **Status:** Accepted — the GPU-side (rhi-vulkan) half is SUPERSEDED-IN-PLACE by ADR-0105 (2026-07-23, RET band): the
 suballocation/relocation/defrag CONTRACTS survive but re-home in crd-gpu-context (RET-4 absorbs them + PORTS the

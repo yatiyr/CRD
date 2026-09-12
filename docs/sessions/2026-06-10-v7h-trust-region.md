@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-h CLOSE: trust-region (same session as v7-f/g, part 3)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-h — the trust-region framework + the full subproblem ladder. Continues
 `2026-06-10-v7f-first-order.md` + `2026-06-10-v7g-newton.md`.

@@ -1,5 +1,8 @@
 # 2026-06-15 — FFT small-N codelets wired into the engine (parity + a narrow N=8 batched win) — corrected
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > ⚠ **HONESTY ADDENDUM at the foot of this file (same day).** The body below was written before a cleanup
 > pass that the user mandated: the file `crush_codelets.hpp` was renamed `small_n_codelets.hpp`, the oversold
 > source comments were corrected to the measured truth (single-transform = PARITY, not a crush — the "1.70×"

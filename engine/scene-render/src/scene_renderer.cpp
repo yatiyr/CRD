@@ -49,6 +49,7 @@
 
 #include "asset_resolver.hpp" // RAF-9: the file-reading resolver (mount table + platform::fs; render-asset-core stays leaf)
 #include "reload.hpp"         // RAF-11: the dependency-aware hot-reload engine + deferred GPU release queue
+#include "spec_apply.hpp"     // CEIR-31b-3-a-ii: apply a pass's spec_N SpecSet to a `.ckir` graph (device-free core)
 #include <crd/memory/construct.hpp> // RAF-11: construct<>/destroy<> for the staged FrameGraphDesc
 
 #include <chrono> // REN-8: CPU wall-clock of render(), to compare against the frame graph's GPU timestamps
@@ -1241,6 +1242,12 @@ struct SceneRenderer::Impl
         fs_hashes.clear();
         for (auto& s : adv_stages) { rg(s); }
         adv_stages.clear();
+        // CEIR-31b-3-a-ii: the ui effect provider's (kind, spec-set) program cache. Its `pfs` stages already went to
+        // adv_stages (retired above); retire the cached raster programs and drop the variants so a reload re-cooks them
+        // disk-first — the moment_prog/adv_stages treatment, per the :1172 "any program added later MUST be retired
+        // here too" mandate (the fs_programs/fs_hashes cache three lines up is the exact precedent).
+        for (auto& v : ui_variants) { rr(v.prog); }
+        ui_variants.clear();
     }
 
     // Make init_programs RE-RUNNABLE: retire the programs + reset the technique library so the rebuild re-reads and
@@ -1999,6 +2006,100 @@ struct SceneRenderer::Impl
         return slot.get();
     }
 
+    // ── ⭐⭐ CEIR-31b-3-a-ii: the GENERIC ui `.ckir` fullscreen-effect provider (§141 frosted-glass chain). ──────
+    // The three committed ui effect kernels (backdrop_fetch / tint_noise / blur) resolve through ONE Spec-aware provider
+    // registered under three engine ids. Body = the ensure_moment_program recipe with apply_spec_set standing in for the
+    // hand-coded set_spec_const calls: cook the shared fullscreen VS, resolve_program_text (disk-first) the kernel
+    // `.ckir`, ckir_read, apply the PASS'S spec_N knobs to the D12 spec-const defaults (ALL-OR-NOTHING — apply_spec_set
+    // fails LOUD via `err` when a spec_N is not in this kernel), create_program, create_raster_program. ⛔ CACHED PER
+    // (kind, spec-set): the H and V blur passes set DIFFERENT dir spec-consts and MUST resolve to DIFFERENT programs
+    // (the emitted default IS the pipeline value — there is no VkSpecializationInfo path). The `pfs` stage keep-alive
+    // rides adv_stages (already swept on reload); only the cached raster program needs its own retire (retire_all_-
+    // programs, alongside moment_prog/adv_stages — the :1172 "any program added later MUST be retired here too"
+    // mandate). ⛔ create_program is DEVICE-gated: this provider is exercised end-to-end on a real device at 31b-4 (the
+    // record seat + the H!=V distinct-program proof); the device-FREE half (apply_spec_set patching + the (kind,
+    // spec-set) cache key) is unit-gated in test_scene_render.
+    enum class UiKind : crd::u8
+    {
+        BackdropFetch = 0U,
+        TintNoise     = 1U,
+        Blur          = 2U,
+        Composite     = 3U,
+        MaskRect      = 4U
+    };
+    static const char* ui_asset_path(UiKind kind) noexcept
+    {
+        switch (kind)
+        {
+        case UiKind::BackdropFetch: return "ckir/ui_backdrop_fetch";
+        case UiKind::TintNoise: return "ckir/ui_tint_noise";
+        case UiKind::Blur: return "ckir/ui_blur";
+        case UiKind::Composite: return "ckir/ui_composite";
+        case UiKind::MaskRect: return "ckir/ui_mask_rect";
+        }
+        return "ckir/ui_blur"; // unreachable (the enum is closed) — satisfies -Wreturn-type without a default arm
+    }
+    struct UiVariant
+    {
+        UiKind                                    kind = UiKind::BackdropFetch;
+        crd::u64                                  hash = 0U;
+        crd::framecook::SpecConst                 specs[crd::framecook::kMaxSpecConsts]{};
+        crd::u32                                  count = 0U;
+        std::unique_ptr<crd::gpu::IRasterProgram> prog;
+    };
+    crd::containers::Array<UiVariant> ui_variants; // (kind, spec-set) -> specialized program; retired on reload
+    [[nodiscard]] crd::gpu::IRasterProgram* ensure_ui_program(UiKind kind, crd::framecook::SpecSet specs,
+                                                              crd::framecook::FrameExecError* err)
+    {
+        const crd::u64 h = crd::scenerender::spec_set_hash(specs);
+        for (crd::usize i = 0; i < ui_variants.size(); ++i)
+        {
+            if (ui_variants[i].kind == kind && ui_variants[i].hash == h &&
+                crd::scenerender::spec_set_equal(crd::framecook::SpecSet{ui_variants[i].specs, ui_variants[i].count},
+                                                 specs))
+            {
+                return ui_variants[i].prog.get();
+            }
+        }
+        if (raster == nullptr || ctx == nullptr) { return nullptr; }
+        crd::gpu::IGpuProgram* pvs = cook_stage_named("vertex/post_fullscreen.crdv");
+        if (pvs == nullptr) { return nullptr; }
+        const char*             asset_path = ui_asset_path(kind);
+        crd::containers::String fs_text(alloc);
+        if (!resolve_program_text(asset_path, fs_text) || fs_text.size() == 0U)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "ui: authored program {} is missing (app:// + engine://)", asset_path);
+            return nullptr;
+        }
+        crd::kir::KGraph fg(alloc);
+        crd::kir::KEntry fe;
+        const auto rr = crd::kir::ckir_read(crd::containers::StringView(fs_text.c_str(), fs_text.size()), fg, fe);
+        if (!rr.ok)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "ui: ckir_read({}) failed at byte {} ({})", asset_path, rr.error_offset,
+                          rr.error);
+            return nullptr;
+        }
+        // patch the PASS'S spec_N knobs into the D12 spec-const defaults (ALL-OR-NOTHING; a spec_N absent from this
+        // kernel FAILS via `err` rather than silently rendering an unspecialized program — the asset-OK-but-WRONG class).
+        if (!crd::scenerender::apply_spec_set(fg, specs, err)) { return nullptr; }
+        // NO lower_entry — the ui kernels are create_program-native (backdrop_fetch = 1 TexSample like hzb; blur = the
+        // moment_blur unrolled-tap twin; tint_noise = a straight-line integer hash). None carry the taa Step/Floor/-
+        // ternary that needs lowering. Whether create_program agrees is a 31b-4 device-verify (the only device concern).
+        std::unique_ptr<crd::gpu::IGpuProgram> pfs = ctx->create_program(fg, fe);
+        if (pfs == nullptr) { return nullptr; }
+        UiVariant v;
+        v.kind  = kind;
+        v.hash  = h;
+        v.count = specs.count <= crd::framecook::kMaxSpecConsts ? specs.count : crd::framecook::kMaxSpecConsts;
+        for (crd::u32 i = 0U; i < v.count; ++i) { v.specs[i] = specs.items[i]; }
+        v.prog                           = raster->create_raster_program(*pvs, *pfs);
+        crd::gpu::IRasterProgram* result = v.prog.get();
+        adv_stages.push_back(std::move(pfs));
+        ui_variants.push_back(std::move(v));
+        return result;
+    }
+
     // ── ⭐ REN-40-G3: HZB BUILD program — half-res MIN reduction of scene depth. ────────────────────────────
     // textureGather fetches the 2×2 bilinear footprint → min of 4 → output. The fullscreen VS is shared.
     std::unique_ptr<crd::gpu::IRasterProgram> prog_hzb;
@@ -2606,7 +2707,7 @@ struct SceneRenderer::Impl
           group_of_mesh(a), material_color(a), material_texture(a), entity_slot(a),
           contrib_draws(a), frame(a), fallback(a), recorder(a), groups_view(a), fs_hashes(a), fs_programs(a),
           fb_frame_names(a), fb_frame_descs(a), techniques(a), scene_material(a), scene_material_textured(a),
-          app_techniques(a), adv_stages(a), app_posts(a)
+          app_techniques(a), adv_stages(a), app_posts(a), ui_variants(a)
     {
         frame_ok = false; // populated by set_asset_root()
         contrib_draws.reserve(kMaxContributions);
@@ -2643,86 +2744,201 @@ struct SceneRenderer::Impl
     // count-guard see a non-empty registry and skip registering EVERY engine default, so the whole scene went black the
     // instant an app added one program. The flag tracks exactly "have the engine defaults been registered", nothing else.
     bool default_programs_registered = false;
-    void register_default_programs()
+    // ⛔ CEIR-34 E4 DONE (2026-09-11): the imperative `register_default_programs()` hand-list (40 register_raster /
+    // register_raster_spec / register_kernel calls over the ensure_* thunks) is DELETED. The program SET is now the
+    // AUTHORABLE ASSET `assets/scene_programs.manifest`, loaded by `register_from_manifest()` below (verified: RAF-11
+    // reload + RAF-9 "renders a shadowed frame" green on Vulkan AND DX12 through the manifest path). Adding a program is
+    // a manifest edit — zero C++. The `default_programs_registered` once-guard (above) is reused by register_from_manifest.
+
+    // ── CEIR-34 E4: the MANIFEST-DRIVEN program registry (the §178 replacement for register_default_programs above). ────
+    // The program SET is now an AUTHORABLE ASSET (`assets/scene_programs.manifest`); the parameterized `ensure_*` cook-
+    // frontends stay C++. `register_from_manifest` reads the manifest (app-shadow → engine) and registers every entry
+    // through the SAME ProgramRegistry the hand-list used, binding each cooker via a STABLE per-entry ProgramCookCtx
+    // (the registry stores a fn-ptr + void* user; the param rides the ctx). Adding a program that reuses a cooker tag is
+    // a MANIFEST edit — zero scene_renderer.cpp change. 0h E4 DoD: identical program set (set-equality ctest) + RAF-11
+    // reload green through this path. ⛔ register_default_programs above is DELETED once the set-equality gate is green.
+    enum class CookTag : crd::u8
     {
-        if (default_programs_registered) { return; }
+        Tess, Mesh, Visbuffer, Impostor, Hzb, Taa, VelocityDebug, DeferredLighting, RtComposite, Post, Moment, // raster
+        Ui,                                                                                                     // raster_spec
+        Cull, CullMark, CullView, CullReset, OcclusionCull, GpuSkin, PaletteSnapshot, LightCull, LightCull3d,   // kernel
+        Rt, RtShadow, RtWorldpos,                                                                               // kernel (rt)
+        Unknown
+    };
+    struct ProgramCookCtx { Impl* impl; CookTag tag; int param; };
+    // STABLE per-entry bindings — reserved ONCE to the entry count in register_from_manifest, so &program_cook_ctxs[i]
+    // (handed to the registry as `user`) never dangles. Impl outlives the registry, so these outlive every lookup.
+    crd::containers::Array<ProgramCookCtx> program_cook_ctxs{alloc};
+
+    [[nodiscard]] static CookTag cook_tag_from(crd::containers::StringView s) noexcept
+    {
+        using SV = crd::containers::StringView;
+        if (s == SV("tess")) { return CookTag::Tess; }
+        if (s == SV("mesh")) { return CookTag::Mesh; }
+        if (s == SV("visbuffer")) { return CookTag::Visbuffer; }
+        if (s == SV("impostor")) { return CookTag::Impostor; }
+        if (s == SV("hzb")) { return CookTag::Hzb; }
+        if (s == SV("taa")) { return CookTag::Taa; }
+        if (s == SV("velocity_debug")) { return CookTag::VelocityDebug; }
+        if (s == SV("deferred_lighting")) { return CookTag::DeferredLighting; }
+        if (s == SV("rt_composite")) { return CookTag::RtComposite; }
+        if (s == SV("post")) { return CookTag::Post; }
+        if (s == SV("moment")) { return CookTag::Moment; }
+        if (s == SV("ui")) { return CookTag::Ui; }
+        if (s == SV("cull")) { return CookTag::Cull; }
+        if (s == SV("cull_mark")) { return CookTag::CullMark; }
+        if (s == SV("cull_view")) { return CookTag::CullView; }
+        if (s == SV("cull_reset")) { return CookTag::CullReset; }
+        if (s == SV("occlusion_cull")) { return CookTag::OcclusionCull; }
+        if (s == SV("gpu_skin")) { return CookTag::GpuSkin; }
+        if (s == SV("palette_snapshot")) { return CookTag::PaletteSnapshot; }
+        if (s == SV("light_cull")) { return CookTag::LightCull; }
+        if (s == SV("light_cull_3d")) { return CookTag::LightCull3d; }
+        if (s == SV("rt")) { return CookTag::Rt; }
+        if (s == SV("rt_shadow")) { return CookTag::RtShadow; }
+        if (s == SV("rt_worldpos")) { return CookTag::RtWorldpos; }
+        return CookTag::Unknown;
+    }
+
+    static crd::gpu::IRasterProgram* cook_raster(void* u)
+    {
+        auto* const c = static_cast<ProgramCookCtx*>(u);
+        Impl* const i = c->impl;
+        switch (c->tag)
+        {
+        case CookTag::Tess: return i->ensure_tess_program();
+        case CookTag::Mesh: return i->ensure_mesh_program();
+        case CookTag::Visbuffer: return i->ensure_visbuffer_program();
+        case CookTag::Impostor: return i->ensure_impostor_program();
+        case CookTag::Hzb: return i->ensure_hzb_program();
+        case CookTag::Taa: return i->ensure_taa_program();
+        case CookTag::VelocityDebug: return i->ensure_velocity_debug_program();
+        case CookTag::DeferredLighting: return i->ensure_deferred_lighting_program();
+        case CookTag::RtComposite: return i->ensure_rt_composite();
+        case CookTag::Post: return i->ensure_post_program(c->param != 0);
+        case CookTag::Moment: return i->ensure_moment_program(static_cast<crd::u32>(c->param), 0U);
+        default: return nullptr;
+        }
+    }
+    static crd::gpu::IRasterProgram* cook_raster_spec(void* u, crd::framecook::SpecSet s, crd::framecook::FrameExecError* e)
+    {
+        auto* const c = static_cast<ProgramCookCtx*>(u);
+        if (c->tag == CookTag::Ui) { return c->impl->ensure_ui_program(static_cast<UiKind>(c->param), s, e); }
+        return nullptr;
+    }
+    static crd::gpu::IGpuProgram* cook_kernel(void* u)
+    {
+        auto* const c = static_cast<ProgramCookCtx*>(u);
+        Impl* const i = c->impl;
+        switch (c->tag)
+        {
+        case CookTag::Cull: return i->ensure_cull_kernel();
+        case CookTag::CullMark: return i->ensure_cull_mark_kernel();
+        case CookTag::CullView: return i->ensure_cull_view_kernel(static_cast<crd::u32>(c->param));
+        case CookTag::CullReset: return i->ensure_cull_reset_kernel();
+        case CookTag::OcclusionCull: return i->ensure_occlusion_cull_kernel();
+        case CookTag::GpuSkin: return i->ensure_skin_compute_kernel();
+        case CookTag::PaletteSnapshot: return i->ensure_palette_snapshot_kernel();
+        case CookTag::LightCull: return i->ensure_light_cull_kernel();
+        case CookTag::LightCull3d: return i->ensure_light_cull_3d_kernel();
+        case CookTag::Rt: return i->ensure_rt_kernel(static_cast<crd::u32>(c->param));
+        case CookTag::RtShadow: return i->ensure_rt_shadow_kernel(static_cast<crd::u32>(c->param));
+        case CookTag::RtWorldpos: return i->ensure_rt_worldpos();
+        default: return nullptr;
+        }
+    }
+
+    // Read the manifest (app-shadow → engine) and register every program. ⛔ LOUD false on a missing/garbled manifest or
+    // an unknown kind/cooker (never a silent partial registry). RAF-11 re-runnable via the `default_programs_registered`
+    // guard (registers once; the ctx array persists across reloads).
+    [[nodiscard]] bool register_from_manifest()
+    {
+        if (default_programs_registered) { return true; }
+        using SV = crd::containers::StringView;
+        crd::containers::String text(alloc);
+        if (!resolver.read_relative(SV("scene_programs.manifest"), text, crd::renderasset::AssetScheme::App)
+            && !resolver.read_relative(SV("scene_programs.manifest"), text, crd::renderasset::AssetScheme::Engine))
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "register_from_manifest: scene_programs.manifest not found (app:// or engine://)");
+            return false;
+        }
+        // Parse into a temp list FIRST, so program_cook_ctxs is reserved ONCE (stable &ctx for the registry). The id
+        // StringViews point into `text`; they are consumed by prog_id() within this function, before `text` is freed.
+        struct Entry { int kind; SV id; CookTag tag; int param; }; // kind: 0 raster · 1 raster_spec · 2 kernel
+        crd::containers::Array<Entry> entries(alloc);
+        const char*       p   = text.c_str();
+        const char* const end = p + text.size();
+        while (p < end)
+        {
+            const char* const ls = p;
+            while (p < end && *p != '\n') { ++p; }
+            const SV line(ls, static_cast<crd::usize>(p - ls));
+            if (p < end) { ++p; }
+            crd::usize a = 0;
+            while (a < line.size() && (line[a] == ' ' || line[a] == '\t' || line[a] == '\r')) { ++a; }
+            if (a >= line.size() || line[a] == '#') { continue; } // blank / comment
+            SV         tok[4];
+            int        nt = 0;
+            crd::usize j  = a;
+            while (j < line.size() && nt < 4)
+            {
+                while (j < line.size() && (line[j] == ' ' || line[j] == '\t' || line[j] == '\r')) { ++j; }
+                const crd::usize ts = j;
+                while (j < line.size() && line[j] != ' ' && line[j] != '\t' && line[j] != '\r') { ++j; }
+                if (j > ts) { tok[nt++] = SV(line.data() + ts, j - ts); }
+            }
+            if (nt < 3)
+            {
+                CRD_LOG_ERROR(g_log_scenerender, "register_from_manifest: malformed manifest line (need >= 3 fields)");
+                return false;
+            }
+            int kind = -1;
+            if (tok[0] == SV("raster")) { kind = 0; }
+            else if (tok[0] == SV("raster_spec")) { kind = 1; }
+            else if (tok[0] == SV("kernel")) { kind = 2; }
+            else
+            {
+                CRD_LOG_ERROR(g_log_scenerender, "register_from_manifest: unknown program kind (want raster|raster_spec|kernel)");
+                return false;
+            }
+            const CookTag tg = cook_tag_from(tok[2]);
+            if (tg == CookTag::Unknown)
+            {
+                CRD_LOG_ERROR(g_log_scenerender, "register_from_manifest: unknown cooker tag");
+                return false;
+            }
+            int param = 0;
+            if (nt >= 4)
+            {
+                for (crd::usize k = 0; k < tok[3].size(); ++k)
+                {
+                    const char ch = tok[3][k];
+                    if (ch >= '0' && ch <= '9') { param = (param * 10) + (ch - '0'); }
+                }
+            }
+            entries.push_back(Entry{kind, tok[1], tg, param});
+        }
+        if (entries.size() == 0U)
+        {
+            CRD_LOG_ERROR(g_log_scenerender, "register_from_manifest: manifest has no programs");
+            return false;
+        }
+        program_cook_ctxs.clear();
+        program_cook_ctxs.reserve(entries.size()); // reserve ONCE ⇒ push_back below never reallocates ⇒ stable &ctx
         default_programs_registered = true;
-        // ── raster programs (SceneHost::program) ──
-        program_registry.register_raster(prog_id("engine://scene/tess"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_tess_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/mesh"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_mesh_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/visbuffer"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_visbuffer_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/impostor"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_impostor_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/hzb_build"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_hzb_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/taa_resolve"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_taa_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/velocity_debug"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_velocity_debug_program(); }, this);
-        program_registry.register_raster(prog_id("engine://scene/deferred_lighting"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_deferred_lighting_program(); }, this);
-        // ⭐ CEIR-19b: the hybrid RT-shadow COMPOSITE (fullscreen scene_hdr × shadow_mask → @output; STEP-1 passthrough).
-        program_registry.register_raster(prog_id("engine://scene/rt_composite"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_composite(); }, this);
-        program_registry.register_raster(prog_id("engine://post/tonemap_agx"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_post_program(true); }, this);
-        program_registry.register_raster(prog_id("engine://post/srgb_only"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_post_program(false); }, this);
-        program_registry.register_raster(prog_id("engine://shadow/moment_convert"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(0U, 0U); }, this);
-        program_registry.register_raster(prog_id("engine://shadow/moment_blur_x"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(1U, 0U); }, this);
-        program_registry.register_raster(prog_id("engine://shadow/moment_blur_y"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_moment_program(2U, 0U); }, this);
-        // ── kernels (SceneHost::kernel) ──
-        program_registry.register_kernel(prog_id("engine://scene/cull"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_mark"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_mark_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_view0"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(0U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_view1"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(1U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_view2"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(2U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_view3"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(3U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_view4"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_view_kernel(4U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/cull_reset"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_cull_reset_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/occlusion_cull"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_occlusion_cull_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/gpu_skin"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_skin_compute_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/palette_snapshot"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_palette_snapshot_kernel(); }, this);
-        // ⭐⭐ CEIR-18a-2 Stage 2b: the Forward+ GPU light-cull producer (forward_plus_gpu's compute pass).
-        program_registry.register_kernel(prog_id("engine://scene/light_cull"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_light_cull_kernel(); }, this);
-        // ⭐⭐ CEIR-18b: the 3D CLUSTERED twin (forward_clustered_3d_gpu's compute pass) — 64 clusters, same builder.
-        program_registry.register_kernel(prog_id("engine://scene/light_cull_3d"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_light_cull_3d_kernel(); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/raygen"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(0U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/miss"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(1U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/chit"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(2U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/anyhit"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_kernel(3U); }, this);
-        // ⭐ CEIR-19b: the hybrid RT-shadow programs — the shadow raygen/miss/chit + the worldpos reconstruction kernel.
-        program_registry.register_kernel(prog_id("engine://scene/rt/shadow_raygen"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_shadow_kernel(0U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/shadow_miss"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_shadow_kernel(1U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt/shadow_chit"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_shadow_kernel(2U); }, this);
-        program_registry.register_kernel(prog_id("engine://scene/rt_worldpos"),
-            [](void* u) { return static_cast<Impl*>(u)->ensure_rt_worldpos(); }, this);
+        for (crd::usize e = 0; e < entries.size(); ++e)
+        {
+            program_cook_ctxs.push_back(ProgramCookCtx{this, entries[e].tag, entries[e].param});
+            ProgramCookCtx* const           pctx = &program_cook_ctxs[program_cook_ctxs.size() - 1U]; // (not `ctx` — shadows Impl::ctx)
+            const crd::renderasset::AssetId pid  = prog_id(entries[e].id);
+            switch (entries[e].kind)
+            {
+            case 0: program_registry.register_raster(pid, &Impl::cook_raster, pctx); break;
+            case 1: program_registry.register_raster_spec(pid, &Impl::cook_raster_spec, pctx); break;
+            default: program_registry.register_kernel(pid, &Impl::cook_kernel, pctx); break;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] crd::math::Vec4f resolve_color(const crd::resources::ResourceId& material)
@@ -3398,9 +3614,16 @@ bool SceneRenderer::init_programs(crd::gpu::IGpuContext& ctx)
     // first, so the rebuild below re-reads and re-cooks everything from the (edited) authored sources. No-op on the
     // first init — every cache is empty and there is nothing in flight to retire.
     m_impl->prepare_reinit();
-    // RAF-9: register every engine default program/kernel under its canonical engine:// id (idempotent). Providers are
-    // lazy thunks over the ensure_* builders, so this is device-independent bookkeeping — the builders cook on demand.
-    m_impl->register_default_programs();
+    // CEIR-34 E4: register every engine default program/kernel from the AUTHORABLE MANIFEST (assets/scene_programs.manifest)
+    // through the RAF-9 registry — the §178 replacement for the register_default_programs hand-list. Providers are lazy
+    // thunks over the ensure_* cook-frontends (device-independent bookkeeping; the builders cook on demand). LOUD on a
+    // missing/garbled manifest (an engine without its program set is a hard error, never a silent empty registry). ⛔ the
+    // old register_default_programs hand-list is kept (uncalled) only until the set-equality + RAF-11 gates are green, then deleted.
+    if (!m_impl->register_from_manifest())
+    {
+        CRD_LOG_ERROR(g_log_scenerender, "init_programs: register_from_manifest failed (see the manifest error above)");
+        return false;
+    }
 
     // ⭐⭐ REN-37.2: EVERY fragment program this renderer runs is now COOKED FROM THE MATERIAL and SHADED BY A
     // NAMED TECHNIQUE. There is no hand-written fragment shader left in this file. The technique library is the
@@ -4426,6 +4649,13 @@ bool SceneRenderer::read_gpu_cull_counts(GpuCullCounts& out) const
     out.fill_pass_count    = impl.fill_diag_pass_count;
     out.occ_step           = impl.fill_diag_occ_step;
     return any;
+}
+
+// ⛔⛔ CEIR-31b-4-b-ii-1 (arm d): the current size of the ensure_ui_program (kind, spec-set) cache — see header.
+crd::u32 SceneRenderer::ui_variant_count() const noexcept
+{
+    if (m_impl == nullptr) { return 0U; }
+    return static_cast<crd::u32>(m_impl->ui_variants.size());
 }
 
 // REN-39 (the gizmo fix): resolve the woven overlay pass's DECLARED image for the app callback (see header).
@@ -5460,6 +5690,20 @@ public:
     [[nodiscard]] crd::gpu::IGpuProgram* kernel(crd::containers::StringView id) override
     {
         return m_impl.program_registry.kernel(m_impl.prog_id(id));
+    }
+
+    // ⭐⭐ CEIR-31b-3-a-i-2: the SPEC-AWARE resolve — a fullscreen/compute pass's `spec_<n>` params reach the registry
+    // here, which specializes a Spec-registered program (per pass) or rejects a spec on a Plain (opaque) one
+    // (SpecOnOpaqueProgram). The err out-param carries the spec-specific verdict back to the record seat.
+    [[nodiscard]] crd::gpu::IRasterProgram* program_spec(crd::containers::StringView id, crd::framecook::SpecSet specs,
+                                                         crd::framecook::FrameExecError* err) override
+    {
+        return m_impl.program_registry.raster(m_impl.prog_id(id), specs, err);
+    }
+    [[nodiscard]] crd::gpu::IGpuProgram* kernel_spec(crd::containers::StringView id, crd::framecook::SpecSet specs,
+                                                     crd::framecook::FrameExecError* err) override
+    {
+        return m_impl.program_registry.kernel(m_impl.prog_id(id), specs, err);
     }
 
     // B4: the graph NAMES an acceleration structure; the renderer resolves it to the one the host installed
@@ -6660,7 +6904,12 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
         }
         stats.uploaded_bytes += sizeof(draw_table) + sizeof(impostor_table);
     }
-    if (draw_list.size() == 0U) { return stats; }
+    // ⛔⛔ CEIR-31b-4-b-i: NO early-out on an empty draw list. This once returned here — a valid "nothing to draw"
+    // when a frame was pure geometry, but WRONG since a frame is an authored graph: the scene pass's CLEAR, the
+    // transients, and any authored FULLSCREEN chain (the §141 frosted-glass panel, editor post) all still have to
+    // record. Skipping them left an empty world rendering nothing and an empty viewport showing stale contents.
+    // The record path itself had to learn to record a 0-item geometry pass as clear-only (frame_runtime.cpp:874 —
+    // its program comes from the first draw, absent here). The b-i gate's `record_ok == 1` on an EMPTY world pins both.
 
     // REN-1: compose all N culled groups in ONE submission through the frame graph (the async single-submission
     // surface). The per-frame header/visible uploads already ran (synchronous transfers, complete before this).

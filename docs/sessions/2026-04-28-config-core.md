@@ -1,5 +1,8 @@
 # Session — 2026-04-28 — crd-config core
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the configuration substrate core before ImGui overlay work begins: a

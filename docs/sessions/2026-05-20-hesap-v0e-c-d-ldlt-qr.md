@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-c + v0e-d: LDLT (Bunch-Kaufman) + QR (Householder)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Combined session log for v0e-c (LDLT, Bunch-Kaufman indefinite) and
 v0e-d (Householder QR). Both shipped on 2026-05-20 in the same session
 as v0e-a + v0e-b. Patterns reuse the established v0e-a substrate

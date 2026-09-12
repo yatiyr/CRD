@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n6: Profile resolver + context detection — closes v1n
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1n5 shipped (Profile substrate types + load). 12-config sweep at 834/834 (831 optimised). 5 sub-slices uncommitted (v1n1..v1n5).
 
 **Status at end:** v1n6 shipped — **v1n is fully delivered**. ProfileResolver evaluates predicates against ProfileContext, applies additive composition (priority-stable-sort + concat), context detection helpers (`detect_os` / `detect_cpu_cores`) ship for the closed enums. **Full 12-config sweep all green at 838/838** (835 in optimised configs). +4 cases / +50 assertions over the v1n5 baseline.

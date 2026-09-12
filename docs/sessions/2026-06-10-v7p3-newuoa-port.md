@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-p-3 CLOSE: the NEWUOA port, differentially verified (same session, part 13)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-p-3 — NEWUOA, the second FULL-PORT slice (after the differentially-verified COBYLA).
 **Status: CLOSED — all 6 routines ported + functional gates + the differential harness: 3773 checks, 0

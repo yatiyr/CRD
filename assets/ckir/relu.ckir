@@ -1,8 +1,12 @@
 # relu.ckir - CEIR-23c the quantized-MLP activation: out[i] = max(in[i], 0), elementwise ReLU. The between-layers activation of
 # the crown quant-MLP (h1 = relu(x·W1)), authored as a compute.dispatch kernel that rides the VizDispatch path (like the §137 viz
-# kernels) — NO new StageKind. 2 buffers: in@0 (read) · out@1 (write). local_size = 32 (the MLP hidden width h1[4,8]=32), one
-# workgroup (grid 1,1,1), gid = LocalInvocationIndex in [0,32) (the SCALAR builtin eval_cpu_kernel supports). KOp::Max is wired in
-# every emitter (bloom/clouds/atmosphere/cuda use it). AUTHORED .ckir DIRECT (mandate #1); node refs POSITIONAL; F32 is default.
+# kernels) — NO new StageKind. 2 buffers: in@0 (read) · out@1 (write). ⛔ CEIR-26d SHAPE-SPECIALIZATION: local_size = 0 is the
+# SENTINEL "bind x from the write operand's numel at COOK" (M2 — the resolver's bind_authored_local_size patches it before emit
+# from the stage's trailing-write tensor type, capped at the device workgroup limit); one workgroup (grid 1,1,1), gid =
+# LocalInvocationIndex in [0,numel) (the SCALAR builtin eval_cpu_kernel supports — eval callers pass numel explicitly, the
+# sentinel is invisible to them). An UNBOUND 0 reaching emit is a resolver error (never silently 1). Was baked local_size=32
+# (the M·hidden==32 contract) — now shape-general. KOp::Max is wired in every emitter (bloom/clouds/atmosphere/cuda use it).
+# AUTHORED .ckir DIRECT (mandate #1); node refs POSITIONAL; F32 is default.
 schema = 1
 
 [[entry]]
@@ -18,7 +22,7 @@ storage_write_index = -1
 storage_write_value = -1
 interlock = false
 n_out = 0
-local_size = [32, 1, 1]
+local_size = [0, 1, 1]
 kernel_body_begin = 0
 kernel_body_count = 1
 mesh_vertices = 0

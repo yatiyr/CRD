@@ -1,5 +1,8 @@
 # 2026-05-05 — Phase 2.7 v1c: Full Material System Foundation (ADR-0048)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 Phase 2.7 v1c implements the complete material system foundation described in ADR-0048: the two-tier `MaterialTemplate` + `MaterialInstance` split, typed parameter schema, pass-keyed shader pairs, domain and raster-state enums, a new MATR v2 artifact format, a full cooker rewrite, and backward-compat for legacy META artifacts.

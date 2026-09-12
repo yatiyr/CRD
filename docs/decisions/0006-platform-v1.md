@@ -1,4 +1,7 @@
-﻿# ADR-0006 — Platform v1
+# ADR-0006 — Platform v1
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
 **Status:** Accepted

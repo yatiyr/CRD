@@ -1,5 +1,8 @@
 # ADR-0024 — ImGui single-viewport default
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-04
 **Status:** Accepted
 **Tags:** [imgui] [ui] [vulkan]

@@ -1,6 +1,15 @@
 # ADR-0075 — Eylem testing rigor and conservation-law CI
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **Accepted** (2026-05-11)
+
+> **2026-09-12 performance amendment:** the current full peer-crush direction supersedes historical "within 2×"
+> elite-tier closure language below. Preserve all scenes, conservation/accuracy tests and benchmarks; pin comparable
+> physical models/tolerances/time steps and report the full board. Ties/losses cannot close full-victory work.
+> [PHYS-QUAL.plan](../ROADMAP.md#slice-phys-qual.plan) and
+> [review G22](../research/2026-09-12-cerid-whole-system-review.md#finding-g22) own the qualification expansion.
 > Companions: [ADR-0062](0062-eylem-physics-architecture.md) (eylem
 > architecture), [ADR-0063](0063-eylem-determinism-contract.md) (determinism
 > contract), [ADR-0067](0067-eylem-force-field-architecture.md) (force

@@ -1,5 +1,8 @@
 # Session — RAF-10: an application customises the renderer ten ways, no engine edits (2026-08-04)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Branch:** stacked on the RAF-9 tail (which sits on the RAF-8 + A13-VRS-fix WIP).
 **Gate 10:** a small app package customises the renderer in every intended way, on BOTH backends, WITHOUT editing a
 line of engine rendering code — and using NO privileged engine-only path (no engine-private method, no backend

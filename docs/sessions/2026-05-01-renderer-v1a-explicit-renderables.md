@@ -1,5 +1,8 @@
 # Session — 2026-05-01 — `crd-renderer` v1a explicit renderables
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Start `crd-renderer` as the first real consumer of the completed shader packet.

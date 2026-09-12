@@ -1,0 +1,183 @@
+schema_version = 1
+dialect = "audio"
+summary = "CEIR-31 sec-142 ceir.audio: an audio-DSP GRAPH as a CEIR program (route the GEO-10 offline audio renderer through CEIR, NO new scheduler -- CEIR's def-use/topological order replaces render_graph's Kahn walk; proof = BIT-EXACT vs render_graph). A stereo f32 audio buffer is a Tensor value ([frames,2]); the nodes are audio.source (plays a bound buffer), audio.gain (dB scale), audio.biquad (RBJ IIR -- a STATEFUL RECURRENCE, OpTrait::StateEdge, the 9b DAW mock's feedback form), audio.mix (sum the variadic input tail), audio.send (a tap = a gain, routing via use-edges). ⛔ 31a-1a declares the FIVE structural nodes + find_audio_misuse; 31a-1b lowers each to a HOST CPU kernel reusing the IDENTICAL hesap-dsp Biquad<f64>/rbj_* + crd::math::pow render_graph uses (bit-exact by construction, the 30b-2b-1 identical-kernel precedent). ⛔ NO-FOLLOW / NAME-FORWARD (declared != implemented, the 26b-4 no-speculative rule): audio.delay + audio.compressor (the sec-142 chain's other two nodes) -> 31a-2 (delay-line + dynamics kernels, absent from render_graph AND hesap-dsp today); automation (per-sample gain, per-block cutoff -- the GEO-9 AudioAutoRec) -> a later slice or the deferral ledger; the REALTIME path (RT-safe/no-alloc/hot-reload, audio_device.hpp) -> a realtime consumer (offline render_graph IS the runnable proof). ⛔ I6 -- find_audio_misuse switches on op NAME + TypeKind, never op.kind (the find_dist_misuse mold). The audio value is a Tensor ([frames,channels] f32); gain/biquad/send/mix PRESERVE the buffer shape (result type == input type). crd-ceir NEVER links gpu-context/engine-audio; ZERO renderer changes."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.source -- play a bound audio buffer, producing a stereo audio value. NO operands (the PCM buffer is bound at
+# execution -- the GraphSourceBinding, 31a-1b's concern -- keyed by `name`). NOT Pure: it reads external buffer state, so
+# two identical sources are NOT CSE-merge candidates and DCE keeps it when its result is live. find_audio_misuse: result
+# Tensor-kinded (OperandNotTensor); `start_frame` >= 0 (SourceStartFrameInvalid -- mirrors graph_validate).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "source"
+summary = "Play a bound audio buffer, producing a stereo audio value. NO operands (the buffer is bound at execution, keyed by `name`). NOT Pure (external read)."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+results = [
+    { name = "result", type = "tensor", doc = "the source's stereo audio output (a [frames,2] f32 Tensor). Tensor-kinded (OperandNotTensor otherwise)." },
+]
+attributes = [
+    { name = "name", kind = "symbol", required = true, doc = "the source identity (@name) -- the executor's binding key (the AGRF name_off precedent), mapping this source to a GraphSourceBinding at 31a-1b." },
+    { name = "start_frame", kind = "int", required = true, doc = "the offset into the bound buffer (>= 0). find_audio_misuse: present+Int and >= 0 (SourceStartFrameInvalid, mirroring graph_validate)." },
+    { name = "loop", kind = "int", required = true, doc = "0 = one-shot (silence past the end), non-0 = loop (modulo the buffer length). The AGRF `loop` flag." },
+]
+traits = []
+docs = "audio.source() {name, start_frame, loop} -> %result. Play a bound audio buffer (the GEO-10 Source node), producing a stereo audio value ([frames,2] f32 Tensor). NO operands -- the PCM is bound at execution (GraphSourceBinding, keyed by `name` -- 31a-1b). NOT Pure (reads external buffer state -- not CSE/DCE-eligible). find_audio_misuse: result Tensor-kinded (OperandNotTensor); `start_frame` present+Int >= 0 (SourceStartFrameInvalid). The generated verify_source owns the STRUCTURAL contract (0 operands, 1 result, name+start_frame+loop present+kind)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.gain -- scale a stereo audio buffer by `gain_db` dB (linear = pow(10, db/20)). Pure + result type == input type
+# (a per-sample elementwise scale, buffer-shape-preserving). find_audio_misuse: operand + result Tensor-kinded
+# (OperandNotTensor); result type == input type (ResultTypeMismatch). (gain_db is unrestricted -- any dB is legal.)
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "gain"
+summary = "Scale a stereo audio buffer by gain_db dB (linear = pow(10, db/20)). Pure; result type == input type."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "input", type = "tensor", doc = "the audio buffer to scale (a [frames,2] f32 Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the scaled buffer; result type == input type EXACTLY (ResultTypeMismatch otherwise) -- a per-sample scale preserves the buffer shape." },
+]
+attributes = [
+    { name = "gain_db", kind = "float", required = true, doc = "the gain in dB; the host kernel applies crd::math::pow(10, gain_db/20) in f32 (the IDENTICAL render_graph call -- 31a-1b). Any value is legal." },
+]
+traits = ["Pure"]
+docs = "audio.gain(%input) {gain_db} -> %result. Scale a stereo audio buffer by gain_db dB (the GEO-10 Gain node). Pure. ⛔ result type == input type -- a per-sample elementwise scale preserves the buffer shape. find_audio_misuse: operand + result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch). The generated verify_gain owns the STRUCTURAL contract (1 operand, 1 result, gain_db present+Float)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.biquad -- an RBJ IIR filter over a stereo audio buffer: a STATEFUL RECURRENCE (DF2T, f64 state per channel --
+# y[n] = b0*x[n] + z1; z1 = b1*x - a1*y + z2; z2 = b2*x - a2*y). ⛔ OpTrait::StateEdge (the 9b DAW mock's feedback form:
+# the 5d verifier keys on the TRAIT, so a feedback loop THROUGH a biquad is legal like core.delay; the z1/z2 recurrence
+# state is node-internal, threaded across blocks by the executor -- 31a-1b). NOT Pure (a stateful op, not a pure sample
+# fn). find_audio_misuse (mirrors graph_validate): `filter` in [0,3]=Lowpass/Highpass/Bandpass/Notch (BiquadFilterInvalid);
+# `cutoff` in (0,1) Nyquist fraction (BiquadCutoffInvalid); `q` > 0 (BiquadQInvalid); operand+result Tensor (OperandNotTensor);
+# result type == input type (ResultTypeMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "biquad"
+summary = "An RBJ IIR filter over a stereo audio buffer (DF2T, f64 state). StateEdge (a stateful recurrence); NOT Pure. result type == input type."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "input", type = "tensor", doc = "the audio buffer to filter (a [frames,2] f32 Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the filtered buffer; result type == input type EXACTLY (ResultTypeMismatch otherwise) -- the filter preserves the buffer shape." },
+]
+attributes = [
+    { name = "filter", kind = "int", required = true, doc = "the RBJ filter type: 0=Lowpass 1=Highpass 2=Bandpass 3=Notch (the BiquadType enum). find_audio_misuse: present+Int in [0,3] (BiquadFilterInvalid)." },
+    { name = "cutoff", kind = "float", required = true, doc = "the cutoff as a Nyquist fraction, in (0,1) exclusive (the automatable AudioParam::CutoffNyq). find_audio_misuse: present+Float and 0 < cutoff < 1 (BiquadCutoffInvalid, mirroring graph_validate)." },
+    { name = "q", kind = "float", required = true, doc = "the filter Q (resonance), > 0. find_audio_misuse: present+Float and q > 0 (BiquadQInvalid, mirroring graph_validate)." },
+]
+traits = ["StateEdge"]
+docs = "audio.biquad(%input) {filter, cutoff, q} -> %result. An RBJ IIR filter over a stereo audio buffer (the GEO-10 Biquad node; DF2T, f64 coeffs+state per channel). ⛔ OpTrait::StateEdge -- a STATEFUL RECURRENCE (the 9b DAW feedback form: the 5d verifier keys on the trait, so feedback THROUGH a biquad is legal; the z1/z2 state is node-internal, threaded across blocks by the executor at 31a-1b). NOT Pure. ⛔ result type == input type -- the filter preserves the buffer shape. find_audio_misuse (mirrors graph_validate): `filter` present+Int in [0,3] (BiquadFilterInvalid); `cutoff` present+Float in (0,1) (BiquadCutoffInvalid); `q` present+Float > 0 (BiquadQInvalid); operand+result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch). The generated verify_biquad owns the STRUCTURAL contract (1 operand, 1 result, filter+cutoff+q present+kind)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.mix -- SUM a variadic tail of stereo audio buffers (the GEO-10 Mix node -- and the implicit input-summation every
+# render_graph node did). Pure + result type == every input type (all buffers same shape). ⛔ the variadic operand ORDER
+# is the AUTHORING order -- for bit-exactness vs render_graph's edge-list-order f32 sum (non-associative!), 31a-1b's gate
+# builds the AGRF FROM the same operand list this op was authored from. find_audio_misuse: every operand + result
+# Tensor-kinded (OperandNotTensor); result type == each input type (ResultTypeMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "mix"
+summary = "Sum a variadic tail of stereo audio buffers (the GEO-10 Mix). Pure; result type == every input type. Operand order = authoring order (the f32-sum-order contract)."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "inputs", type = "tensor", variadic = true, doc = "the audio buffers to sum, in AUTHORING order (a [frames,2] f32 Tensor each). ⛔ the order is the f32 non-associative sum order -- 31a-1b matches the AGRF edge-list order to it. Every input Tensor-kinded (OperandNotTensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the summed buffer; result type == every input type (ResultTypeMismatch otherwise)." },
+]
+traits = ["Pure"]
+docs = "audio.mix(%inputs...) -> %result. Sum a variadic tail of stereo audio buffers (the GEO-10 Mix node + the input-summation every render_graph node performs). Pure. ⛔ result type == every input type -- all buffers share the shape. ⛔ the variadic operand ORDER is the authoring order, which IS the f32 non-associative summation order -- 31a-1b's gate builds the reference AGRF from the same operand list (the operand-order==edge-order contract). find_audio_misuse: every operand + result Tensor-kinded (OperandNotTensor); result type == each input type (ResultTypeMismatch). The generated verify_mix owns the STRUCTURAL contract (>=1 operand via the variadic tail, 1 result)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.send -- a TAP with its own gain_db (the GEO-10 Send node): a gain whose result is routed to another node via a
+# use-edge. Pure + result type == input type (a scale like audio.gain; the ROUTING meaning is the use-edge, not the op).
+# find_audio_misuse: operand + result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "send"
+summary = "A tap with its own gain_db (the GEO-10 Send): a gain routed via a use-edge. Pure; result type == input type."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "input", type = "tensor", doc = "the audio buffer to tap+scale (a [frames,2] f32 Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the tapped+scaled buffer; result type == input type EXACTLY (ResultTypeMismatch otherwise)." },
+]
+attributes = [
+    { name = "gain_db", kind = "float", required = true, doc = "the send gain in dB (crd::math::pow(10, gain_db/20), f32 -- as audio.gain). The routing meaning lives in the result's use-edges, not the op." },
+]
+traits = ["Pure"]
+docs = "audio.send(%input) {gain_db} -> %result. A tap with its own gain_db (the GEO-10 Send node): a gain whose result is routed to another node via a use-edge (the routing meaning is the edge, not the op). Pure. ⛔ result type == input type. find_audio_misuse: operand + result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch). The generated verify_send owns the STRUCTURAL contract (1 operand, 1 result, gain_db present+Float)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.delay -- delay a stereo audio buffer by `delay_frames` samples (out[n] = in[n-D], zero before) -- the sec-142
+# chain's delay node (absent from render_graph AND hesap-dsp; 31a-2a's NEW kernel). ⛔ OpTrait::StateEdge -- a delay line
+# is the classic FEEDBACK element (an echo = delay(mix(source, delayed)): the delay's operand is defined LATER, so
+# StateEdge is what makes the 5d verifier accept the back-edge instead of FeedbackWithoutState -- as biquad). NOT Pure.
+# find_audio_misuse: `delay_frames` >= 0 (DelayFramesInvalid, NO upper bound -- D >= frames = all-zero output);
+# operand+result Tensor (OperandNotTensor); result type == input type (ResultTypeMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "delay"
+summary = "Delay a stereo audio buffer by delay_frames samples (out[n] = in[n-D], zero before). StateEdge (a delay line -- the classic feedback echo); NOT Pure. result type == input type."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "input", type = "tensor", doc = "the audio buffer to delay (a [frames,2] f32 Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the delayed buffer; result type == input type EXACTLY (ResultTypeMismatch otherwise) -- the delay preserves the buffer shape." },
+]
+attributes = [
+    { name = "delay_frames", kind = "int", required = true, doc = "the delay in samples (>= 0): out[n] = in[n - delay_frames], zero for n < delay_frames. find_audio_misuse: present+Int and >= 0 (DelayFramesInvalid). NO upper bound -- D >= frames yields all-zero output." },
+]
+traits = ["StateEdge"]
+docs = "audio.delay(%input) {delay_frames} -> %result. Delay a stereo audio buffer by delay_frames samples (out[n] = in[n-D], zero before) -- the sec-142 chain's delay node (absent from render_graph AND hesap-dsp; 31a-2a's new kernel). ⛔ OpTrait::StateEdge -- a delay line is the classic FEEDBACK element (an echo = delay(mix(source, delayed)): the delay's operand is defined LATER, and StateEdge is what makes the 5d verifier accept the back-edge instead of FeedbackWithoutState -- the 9b DAW form, as biquad). NOT Pure (a stateful op). ⛔ result type == input type -- the delay preserves the buffer shape. find_audio_misuse: `delay_frames` present+Int >= 0 (DelayFramesInvalid, no upper bound); operand+result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch). The generated verify_delay owns the STRUCTURAL contract (1 operand, 1 result, delay_frames present+kind)."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# audio.compressor -- a feed-forward peak compressor over a stereo audio buffer (the sec-142 chain's dynamics node; the
+# LAST sec-142 node, absent from render_graph AND hesap-dsp -- 31a-2b's NEW kernel, genuinely-new numerics). PEAK detector,
+# stereo-LINKED (d = max(|L|,|R|)); a linear-domain one-pole envelope (env = c*env + (1-c)*d, c = exp(-1/(ms*1e-3*sr)),
+# attack when d>env else release); a hard-knee static curve on 20*log10(env) (gain_db = (env_db>threshold_db) ?
+# (env_db-threshold_db)*(1/ratio-1) : 0, equivalently min(0,...) for ratio>=1); the same gain to both channels; NO makeup
+# gain (a following audio.gain). ⛔ OpTrait::StateEdge -- the
+# envelope is a stateful recurrence (as biquad/delay; threaded across blocks by the executor). sample_rate is NOT an attr:
+# it rides the GRAPH (an audio.graph_meta op -- 31a-2b-ii), the kernel takes it as sr. NOT Pure. find_audio_misuse:
+# `ratio` >= 1 (CompressorRatioInvalid); `attack_ms` > 0 (CompressorAttackInvalid); `release_ms` > 0
+# (CompressorReleaseInvalid); threshold_db unrestricted; operand+result Tensor (OperandNotTensor); result type == input
+# type (ResultTypeMismatch).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "compressor"
+summary = "A feed-forward peak compressor over a stereo audio buffer (peak linked detector, one-pole envelope, hard-knee static curve, no makeup). StateEdge (a stateful envelope); NOT Pure. result type == input type."
+version = 1
+determinism = "BitExact"
+domain = "HostAudioTime"
+operands = [
+    { name = "input", type = "tensor", doc = "the audio buffer to compress (a [frames,2] f32 Tensor)." },
+]
+results = [
+    { name = "result", type = "tensor", doc = "the compressed buffer; result type == input type EXACTLY (ResultTypeMismatch otherwise) -- the compressor preserves the buffer shape." },
+]
+attributes = [
+    { name = "threshold_db", kind = "float", required = true, doc = "the compression threshold in dB (unrestricted -- any dB is legal). Above it the gain reduces per the ratio; below it the gain is unity." },
+    { name = "ratio", kind = "float", required = true, doc = "the compression ratio (>= 1; 1 = no compression, oo = limiter). find_audio_misuse: present+Float and ratio >= 1 (CompressorRatioInvalid)." },
+    { name = "attack_ms", kind = "float", required = true, doc = "the envelope attack time in milliseconds (> 0): the one-pole coefficient exp(-1/(attack_ms*1e-3*sr)) applied when the detector rises above the envelope. find_audio_misuse: present+Float and attack_ms > 0 (CompressorAttackInvalid)." },
+    { name = "release_ms", kind = "float", required = true, doc = "the envelope release time in milliseconds (> 0): the one-pole coefficient exp(-1/(release_ms*1e-3*sr)) applied when the detector falls below the envelope. find_audio_misuse: present+Float and release_ms > 0 (CompressorReleaseInvalid)." },
+]
+traits = ["StateEdge"]
+docs = "audio.compressor(%input) {threshold_db, ratio, attack_ms, release_ms} -> %result. A feed-forward peak compressor over a stereo audio buffer (the sec-142 chain's LAST node -- dynamics; absent from render_graph AND hesap-dsp; 31a-2b's new kernel). A PEAK detector, stereo-LINKED (d = max(|L|,|R|)); a linear-domain one-pole envelope (env = c*env + (1-c)*d; c = exp(-1/(ms*1e-3*sr)); attack when d>env else release); a hard-knee static curve on 20*log10(env) (gain_db = (env_db>threshold_db) ? (env_db-threshold_db)*(1/ratio-1) : 0, equivalently min(0,...) for ratio>=1); the SAME gain to both channels (update-then-gain, feed-forward); NO makeup gain (a following audio.gain). ⛔ OpTrait::StateEdge -- the envelope is a STATEFUL RECURRENCE (as biquad/delay; the envelope state is node-internal, threaded across blocks by the executor). ⛔ sample_rate is NOT an attr -- it rides the GRAPH (an audio.graph_meta op the executor reads, 31a-2b-ii); the kernel takes sr directly. NOT Pure. ⛔ result type == input type -- the compressor preserves the buffer shape. find_audio_misuse: `ratio` present+Float >= 1 (CompressorRatioInvalid); `attack_ms` present+Float > 0 (CompressorAttackInvalid); `release_ms` present+Float > 0 (CompressorReleaseInvalid); threshold_db unrestricted; operand+result Tensor-kinded (OperandNotTensor); result type == input type (ResultTypeMismatch). The generated verify_compressor owns the STRUCTURAL contract (1 operand, 1 result, threshold_db+ratio+attack_ms+release_ms present+Float)."

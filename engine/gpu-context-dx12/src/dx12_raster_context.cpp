@@ -1442,6 +1442,51 @@ public:
         return target;
     }
 
+    // ⛔⛔ CEIR-31b-4-b-i: the DX12 twin of clear_scope (see IRasterContext / the Vulkan impl). The command-lowering
+    // encoder folds a scope's clear into its FIRST draw verb, so a 0-draw geometry pass (empty world, fully-culled
+    // scene, casterless cascade) would emit nothing and leave the attachment undefined. This binds the scope's
+    // targets and issues the authored clears with no draw. Frame-recording only (the graph already transitioned the
+    // targets to RENDER_TARGET / DEPTH_WRITE). A uint id RTV clears to 0 — DX12 ClearRenderTargetView cannot express
+    // an arbitrary integer id (the draw_visbuffer L2457 note); the visibility draw is what writes real ids anyway.
+    void clear_scope(const RenderingDesc& rendering) override
+    {
+        if (!m_ok || !frame_recording()) { return; }
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvs[crd::gpu::kMaxColorAttachments];
+        crd::u32                    ncol = 0U;
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(rendering.color.size()) && ncol < crd::gpu::kMaxColorAttachments;
+             ++i)
+        {
+            if (rendering.color[i].target == nullptr) { continue; }
+            rtvs[ncol++] = static_cast<Dx12RasterTarget&>(*rendering.color[i].target).rtv();
+        }
+        const bool have_depth =
+            rendering.depth.enabled && rendering.depth.target != nullptr
+            && static_cast<Dx12RasterTarget&>(*rendering.depth.target).has_depth();
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
+        if (have_depth) { dsv = static_cast<Dx12RasterTarget&>(*rendering.depth.target).dsv(); }
+        if (ncol == 0U && !have_depth) { return; }
+        m_list->OMSetRenderTargets(ncol, ncol > 0U ? rtvs : nullptr, FALSE, have_depth ? &dsv : nullptr);
+        crd::u32 ci = 0U;
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(rendering.color.size()) && ci < ncol; ++i)
+        {
+            if (rendering.color[i].target == nullptr) { continue; }
+            if (rendering.color[i].load == LoadOp::Clear)
+            {
+                const float z[4]    = {0.0F, 0.0F, 0.0F, 0.0F};
+                const float rgba[4] = {rendering.color[i].clear.r, rendering.color[i].clear.g,
+                                       rendering.color[i].clear.b, rendering.color[i].clear.a};
+                m_list->ClearRenderTargetView(rtvs[ci], rendering.color[i].clear_kind == ClearKind::Uint ? z : rgba, 0,
+                                              nullptr);
+            }
+            ++ci;
+        }
+        if (have_depth && rendering.depth.load == LoadOp::Clear)
+        {
+            auto& dt = static_cast<Dx12RasterTarget&>(*rendering.depth.target);
+            m_list->ClearDepthStencilView(dsv, dt.clear_flags(), rendering.depth.clear_depth, 0, 0, nullptr);
+        }
+    }
+
     void clear(IRasterTarget& target, ClearColor color) override
     {
         if (!m_ok) { return; }
@@ -3223,18 +3268,21 @@ public:
         return true;
     }
 
+    // CEIR-34 R2: `load`/`blend`/`first_vertex` (Clear/Opaque/0 defaults) let this colour-only verb ALSO serve the
+    // overlay's arm-406 compose (LOAD, Alpha via the PSO key, ranged). Every scene caller omits them ⇒ bit-identical.
     void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, IStorageBuffer& storage,
-                      crd::u32 vertex_count)
+                      crd::u32 vertex_count, LoadOp load = LoadOp::Clear, BlendMode blend = BlendMode::Opaque,
+                      crd::u32 first_vertex = 0U)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
-        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format()); // single-sample colour
+        ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format(), &blend); // single-sample colour
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-2: in frame-graph recording mode, draw_storage into an RTT transient records color-only (no readback).
-        if (frame_recording()) { record_offscreen(t, p, s, pso, clear, vertex_count); return; }
+        if (frame_recording()) { record_offscreen(t, p, s, pso, clear, vertex_count, load, first_vertex); return; }
 
         // Point the heap's slot-0 UAV at the storage buffer (a structured buffer of uint words — the shader's RWStructured…).
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -3251,8 +3299,11 @@ public:
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-        const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        if (load == LoadOp::Clear) // CEIR-34 R2: LOAD composes over existing contents (COMMON→RENDER_TARGET preserves them)
+        {
+            const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
+            m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        }
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -3265,7 +3316,7 @@ public:
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+        draw_instanced_ranged(vertex_count, first_vertex); // CEIR-34 R2: first_vertex>0 rides the identity-IB seam
 
         // Colour → readback (the target), and the storage buffer → its readback.
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -3787,6 +3838,61 @@ public:
         return true;
     }
 
+    // ⭐⭐ CEIR-34 R2 / REN-39-B1: lazily create/regrow the identity index buffer to hold [0 .. count). UPLOAD heap ⇒
+    // CPU-filled once, GENERIC_READ (no state transition, valid across command-list resets). Regrowing recreates + refills
+    // (a ranged overlay grows monotonically toward its largest bucket, so this settles after a few draws). Returns false
+    // on allocation/Map failure ⇒ the caller falls back to the plain non-indexed draw (visibly wrong beats a crash).
+    [[nodiscard]] bool ensure_identity_index_buffer(crd::u32 count)
+    {
+        if (m_identity_ib != nullptr && m_identity_ib_count >= count) { return true; }
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width            = static_cast<crd::u64>(count) * 4U;
+        rd.Height           = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels        = 1;
+        rd.SampleDesc       = {1, 0};
+        rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ComPtr<ID3D12Resource> ib;
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                     nullptr, IID_PPV_ARGS(&ib))))
+        {
+            return false;
+        }
+        const D3D12_RANGE none{0, 0};
+        void*             mapped = nullptr;
+        if (FAILED(ib->Map(0, &none, &mapped))) { return false; }
+        auto* idx = static_cast<crd::u32*>(mapped);
+        for (crd::u32 i = 0U; i < count; ++i) { idx[i] = i; }
+        ib->Unmap(0, nullptr);
+        m_identity_ib       = ib;
+        m_identity_ib_count = count;
+        return true;
+    }
+
+    // ⭐⭐ CEIR-34 R2 / REN-39-B1: issue a (possibly RANGED) non-indexed-shaped draw on `m_list`. first_vertex == 0 ⇒ the
+    // plain DrawInstanced. first_vertex > 0 ⇒ route through the identity index buffer so SV_VertexID = first_vertex+i on
+    // BOTH backends (DX12 drops StartVertexLocation from SV_VertexID; the index VALUE carries the offset instead). The
+    // `first_vertex → VertexIndex` contract the encoder/submit_overlay/expand-VS rely on is thereby honored at the DX12
+    // backend seam alone — no change to the portable command model. If the identity buffer can't be built, fall back to
+    // the plain draw (the collapsed/wrong pixel is caught by the offset-contract gate, never a silent crash).
+    void draw_instanced_ranged(crd::u32 vertex_count, crd::u32 first_vertex)
+    {
+        if (first_vertex == 0U || !ensure_identity_index_buffer(first_vertex + vertex_count))
+        {
+            m_list->DrawInstanced(vertex_count, 1, first_vertex, 0);
+            return;
+        }
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = m_identity_ib->GetGPUVirtualAddress();
+        ibv.SizeInBytes    = static_cast<UINT>(m_identity_ib_count) * 4U;
+        ibv.Format         = DXGI_FORMAT_R32_UINT;
+        m_list->IASetIndexBuffer(&ibv);
+        m_list->DrawIndexedInstanced(vertex_count, 1, first_vertex, 0, 0); // SV_VertexID = identity[first_vertex+i]
+    }
+
     // ── ⭐⭐ REN-39-A2: INDEXED MULTI-DRAW (see IRasterContext) — ONE ExecuteIndirect over N DRAW_INDEXED
     // commands, the scene buffer bound ONCE through an IBV covering the index section, bracketed by the
     // UAV ↔ kIndexedDrawStates pair. DrawIndex rides the command signature's root constant, exactly as the
@@ -4160,19 +4266,30 @@ public:
 
     // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the Clear calls (colour + depth both persist;
     // depth keeps testing AND writing so mesh groups compose through the real depth buffer).
+    // CEIR-34 R2: `blend` (Opaque default) + `first_vertex` (0 default) let this depth-load verb ALSO serve the
+    // overlay's depth bucket — the blend folds into the PSO key (pass_pso &blend) and depth-write rides m_pass_state
+    // (the caller's set_pass_state(depth_write=false)); first_vertex reaches DrawInstanced. Scene callers omit both
+    // ⇒ Opaque + 0 ⇒ bit-identical.
     void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                 IStorageBuffer& storage, crd::u32 vertex_count)
+                                 IStorageBuffer& storage, crd::u32 vertex_count, BlendMode blend = BlendMode::Opaque,
+                                 crd::u32 first_vertex = 0U)
     {
         if (!m_ok || m_uav_heap == nullptr) { return; }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (!t.has_depth()) { return; }
-        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
+        // ⛔ CEIR-34 R2: a DEPTH-requested draw onto a DEPTH-LESS target draws colour-only LOAD (symmetric with
+        // draw_storage_depth's delegate) — never silently skipped (the overlay's depth bucket on a colour-only target).
+        if (!t.has_depth())
+        {
+            draw_storage(target, program, ClearColor{}, storage, vertex_count, LoadOp::Load, blend, first_vertex);
+            return;
+        }
+        ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format(), &blend);
         if (!p.valid() || pso == nullptr) { return; }
 
         // REN-1 pt-2: record into the shared open list (LOAD variant — no clears) when a frame graph is executing.
-        if (frame_recording()) { record_scene(t, p, s, pso, false, ClearColor{}, 0.0F, vertex_count); return; }
+        if (frame_recording()) { record_scene(t, p, s, pso, false, ClearColor{}, 0.0F, vertex_count, first_vertex); return; }
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_UNKNOWN;
@@ -4201,7 +4318,7 @@ public:
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+        draw_instanced_ranged(vertex_count, first_vertex); // CEIR-34 R2: first_vertex>0 rides the identity-IB seam
 
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION dst{};
@@ -4217,28 +4334,12 @@ public:
         submit_and_wait();
     }
 
-    // ── ⭐⭐ REN-39-D1: THE OVERLAY DRAW, ON DX12. ────────────────────────────────────────────────────────────
-    // Parity with the Vulkan verb (RET-6 / ADR-0105): composite instanced debug primitives ONTO a target's
-    // EXISTING contents — no clears, standard alpha blending, and a READ-ONLY depth test when the target carries
-    // depth and `compare` is not Always. ⛔ This backend had NO overlay implementation at all: the base class
-    // returned false, so `crd::draw::submit_overlay` logged "refused" and the grid + gizmo + every debug shape
-    // silently did not exist on DX12. An engine capability the second backend cannot reach is not a capability.
-    //
-    // Two things are deliberately NOT the pass state the caller installed:
-    //   * depth WRITE is forced off — the overlay reads the scene's depth, never modifies it, so chained overlay
-    //     draws all test against the same scene (the Vulkan verb's `vkCmdSetDepthWriteEnable(FALSE)`).
-    //   * the blend is Alpha, unconditionally — the overlay's whole contract is compositing.
-    // Both ride the PSO cache key (PassRasterState + BlendMode are part of it), so this cannot collide with a
-    // pass that asked for opaque/depth-writing state.
-    [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                    DepthCompare compare, crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
-    {
-        return draw_overlay_range(target, program, storage, compare, 0U, vertex_count);
-    }
-
-    // The ranged twin (REN-39): `first_vertex` reaches `DrawInstanced`'s StartVertexLocation, which D3D12 folds
-    // into SV_VertexID for a non-indexed draw exactly as Vulkan folds firstVertex into gl_VertexIndex — so the
-    // expand-VS's `instance = VertexIndex / verts_per_instance` addressing selects the same bucket on both.
+    // ⭐ CEIR-34 R2: draw_overlay / draw_overlay_range / record_overlay RETIRED — the overlay compose now rides the
+    // generic draw_storage / draw_storage_depth_load verbs (blend folds into the PSO key, load + first_vertex carried
+    // by the encoder; depth_write=false via set_pass_state). One execution-program architecture, no dedicated overlay
+    // device verb. The RANGED overlay's first_vertex is honored via the identity-index-buffer seam (draw_instanced_ranged
+    // / ensure_identity_index_buffer) because StartVertexLocation empirically does NOT reach SV_VertexID on this adapter —
+    // the portable offset is the draw table (REN-39-B1), applied at the backend seam so the command model is unchanged.
     // ⭐⭐ REN-39-D1: D3D12's NDC has +Y pointing UP the render target, the opposite of Vulkan. See the base
     // declaration for why this is a DECLARED backend fact and not a fix at each clip-to-UV call site.
     [[nodiscard]] bool ndc_y_points_down() const noexcept override { return false; }
@@ -4435,80 +4536,6 @@ public:
     }
 
 
-
-    [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                          DepthCompare compare, crd::u32 first_vertex,
-                                          crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
-    {
-        if (!m_ok || m_uav_heap == nullptr || vertex_count == 0U) { return false; }
-        auto& t = static_cast<Dx12RasterTarget&>(target);
-        auto& p = static_cast<Dx12RasterProgram&>(program);
-        auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (t.samples() != 1U) { return false; } // the overlay canvas contract, same as Vulkan
-
-        const bool      depth_on = t.has_depth() && compare != DepthCompare::Always;
-        PassRasterState st       = m_pass_state;
-        st.depth_write           = false;
-        const BlendMode blend    = BlendMode::Alpha;
-        ID3D12PipelineState* pso =
-            p.pso_for(1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN,
-                      depth_on ? to_d3d12_compare(compare) : D3D12_COMPARISON_FUNC_ALWAYS, /*conservative=*/false,
-                      1U, kColorFormat, &blend, &st);
-        if (!p.valid() || pso == nullptr) { return false; }
-
-        if (frame_recording())
-        {
-            record_overlay(t, p, s, pso, depth_on, first_vertex, vertex_count);
-            return true;
-        }
-
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-        uav.Format                     = DXGI_FORMAT_UNKNOWN;
-        uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-        uav.Buffer.FirstElement        = 0;
-        uav.Buffer.NumElements         = s.num_elements();
-        uav.Buffer.StructureByteStride = 4;
-        m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav,
-                                            m_uav_heap->GetCPUDescriptorHandleForHeapStart());
-
-        m_cmd_alloc->Reset();
-        m_list->Reset(m_cmd_alloc.Get(), nullptr);
-
-        // ⛔ COMMON → RENDER_TARGET PRESERVES contents on D3D12 (unlike a Vulkan UNDEFINED acquire, which
-        // discards) — so "load" here is simply the absence of a clear call. Chained overlay draws each park the
-        // target back in COMMON, which is what makes them compose.
-        transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
-
-        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
-        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(p.root());
-        ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get()};
-        m_list->SetDescriptorHeaps(1, heaps);
-        m_list->SetGraphicsRootDescriptorTable(0, m_uav_heap->GetGPUDescriptorHandleForHeapStart());
-        m_list->SetPipelineState(pso);
-        apply_stencil_ref();
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, first_vertex, 0);
-
-        transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource       = t.readback();
-        dst.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        dst.PlacedFootprint = t.footprint();
-        D3D12_TEXTURE_COPY_LOCATION src{};
-        src.pResource        = t.tex();
-        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        src.SubresourceIndex = 0;
-        m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-        transition(t.tex(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-        submit_and_wait();
-        return true;
-    }
 
     // ── ⭐⭐ REN-39-A1: the INDEXED storage draw (see IRasterContext) — the scene buffer serves as its OWN
     // index buffer. The IBV addresses the u32 index section at `index_offset_bytes` on the UAV-default resource;
@@ -6318,7 +6345,8 @@ private:
     // (no self-barrier needed — the storage buffer is read-only vertex-pull data); the target was transitioned to
     // RENDER_TARGET by the graph before the pass, and depth stays in DEPTH_WRITE (created that way).
     void record_scene(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, ID3D12PipelineState* pso,
-                      bool clear, ClearColor clear_color, float clear_depth, crd::u32 vertex_count)
+                      bool clear, ClearColor clear_color, float clear_depth, crd::u32 vertex_count,
+                      crd::u32 first_vertex = 0U)
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
@@ -6345,30 +6373,9 @@ private:
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+        draw_instanced_ranged(vertex_count, first_vertex); // CEIR-34 R2: first_vertex>0 rides the identity-IB seam
     }
 
-    // ⭐⭐ REN-39-D1: the frame-mode body of draw_overlay — LOAD (no clears) + alpha blend + read-only depth,
-    // recorded into the graph's shared list so the overlay is a PASS of the frame like every other draw.
-    void record_overlay(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, ID3D12PipelineState* pso,
-                        bool depth_on, crd::u32 first_vertex, crd::u32 vertex_count)
-    {
-        const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
-        // ⛔ NO clears, ever — the overlay composites over what the graph already drew into this target.
-        const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
-        const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
-        m_list->RSSetViewports(1, &vp);
-        m_list->RSSetScissorRects(1, &sc);
-        m_list->SetGraphicsRootSignature(p.root());
-        m_list->SetGraphicsRootDescriptorTable(0, table);
-        m_list->SetPipelineState(pso);
-        apply_stencil_ref();
-        m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, first_vertex, 0);
-    }
 
     // ⭐⭐ REN-39-A1: the frame-mode INDEXED scene draw — record_scene with the scene buffer ALSO bound through
     // an IBV at the section offset, bracketed by the UAV ↔ kIndexedDrawStates state pair (the
@@ -6482,8 +6489,13 @@ private:
                          bool clear = true)
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n);
-        D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-        const D3D12_CPU_DESCRIPTOR_HANDLE rtv          = t.rtv();
+        // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER on the bindless run. This binding IGNORED it (heap-start = the
+        // default s0 WRAP sampler) while EVERY non-bindless draw offsets by active_sampler_slot (REN-38-B8) — so a bindless
+        // fullscreen pass could not clamp on DX12, and the frosted-glass composite's half-res upsample WRAPPED opposite-edge
+        // content across the screen edge (Vulkan already honored the pass sampler). Same REN-38-B8 offset as :4086.
+        D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc;
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         // ⛔ REN-38-A12: the WBOIT composite LOADS — it resolves `rgb·(1-reveal) + background·reveal`, so the
         // background must still be there when it runs. On D3D12 "load" is simply not issuing the clear.
@@ -6514,8 +6526,13 @@ private:
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE storage_gpu  = frame_alloc_storage_slot(s);          // u0, param 0
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n); // t3[], param 3
-        const D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu     = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-        const D3D12_CPU_DESCRIPTOR_HANDLE rtv          = t.rtv();
+        // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER (REN-38-B8 offset, as :4086) — this bindless-storage path (TAA's
+        // resolve) likewise IGNORED it (heap-start = s0 WRAP). Behaviour is unchanged until a pass sets `address` (default
+        // slot 0), but it makes the knob work: TAA reprojects by UV, and a reprojection past the edge WRAPPED to the far
+        // side of last frame's history — a real ghosting source once clamp is declared.
+        D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+        samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc;
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
         m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
@@ -6554,13 +6571,17 @@ private:
     // REN-2: the frame-mode body of draw_storage — a COLOR-ONLY render into an RTT transient (no depth, no readback),
     // into the shared list. Pass 1 of render-to-texture; a later pass samples it via record_textured.
     void record_offscreen(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s, ID3D12PipelineState* pso,
-                          ClearColor clear_color, crd::u32 vertex_count)
+                          ClearColor clear_color, crd::u32 vertex_count, LoadOp load = LoadOp::Clear,
+                          crd::u32 first_vertex = 0U)
     {
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-        const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
-        m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        if (load == LoadOp::Clear) // CEIR-34 R2: LOAD composes over existing contents (overlay's colour-only bucket)
+        {
+            const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
+            m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
+        }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -6570,7 +6591,7 @@ private:
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
         m_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_list->DrawInstanced(vertex_count, 1, 0, 0);
+        draw_instanced_ranged(vertex_count, first_vertex); // CEIR-34 R2: first_vertex>0 rides the identity-IB seam
     }
 
     // REN-2: the frame-mode body of draw_sampled — bind a SAMPLED image (an RTT transient or a material map, SRV at
@@ -6744,6 +6765,14 @@ private:
     ComPtr<ID3D12Resource> m_multi_idx_args;
     crd::u8* m_multi_idx_map = nullptr;
     crd::u32 m_multi_idx_cursor = 0U;
+    // ⭐⭐ CEIR-34 R2 / REN-39-B1: the IDENTITY index buffer [0,1,2,…] — the DX12-internal seam that makes a RANGED
+    // non-indexed draw honor first_vertex. StartVertexLocation empirically does NOT reach SV_VertexID on this adapter
+    // (the #417/offset-contract gates read R=0 at first_vertex=4), while an INDEXED draw's SV_VertexID = index VALUE
+    // (REN-39-A1, proven both backends). So `draw_instanced_ranged` binds this buffer over [0, first_vertex+count) and
+    // issues DrawIndexedInstanced(count,1,first_vertex,0,0) ⇒ SV_VertexID = first_vertex+i. UPLOAD heap (CPU-filled,
+    // GENERIC_READ, no transition); lazily created + regrown by `ensure_identity_index_buffer`.
+    ComPtr<ID3D12Resource> m_identity_ib;
+    crd::u32               m_identity_ib_count = 0U; // capacity in u32 indices currently populated
     bool                               m_mesh_shader = false; // B4: D3D12_FEATURE_D3D12_OPTIONS7 MeshShaderTier supported
     ComPtr<ID3D12Fence>                m_fence;
     HANDLE                             m_event     = nullptr;

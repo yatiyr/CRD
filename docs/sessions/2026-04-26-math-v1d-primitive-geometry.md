@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — crd-math v1d primitive geometry
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Finish the Phase 1 math substrate with a clean primitive-geometry layer:

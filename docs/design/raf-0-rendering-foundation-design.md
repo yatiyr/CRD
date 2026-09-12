@@ -1,5 +1,8 @@
 # RAF-0 — Gold-Standard Asset-Driven Rendering Foundation: DESIGN SPEC
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The implementation CONTRACT for the RAF band. Mission (followed verbatim):
 > `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`. Band + slices: D-007 "RAF band"
 > (RAF-0 … RAF-13 ↔ mission §19 Phases 0–13). This doc is RAF-0's deliverable (Gate 0) + the current→target map,

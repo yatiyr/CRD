@@ -1,5 +1,8 @@
 # Lesson 05 — CPU vs GPU performance tiers
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **The question that motivated this lesson:** "How fast is the GPU radix sort right now? When do we use it vs the CPU one?"
 
 The honest answer surprised the user (and me): the GPU radix is **slower end-to-end** than the parallel CPU radix at 1 M elements. Not because the GPU is bad, but because the question "how fast" only has a meaningful answer once you specify **where the data lives** and **where it goes next**.

@@ -1,5 +1,8 @@
 # Session 2026-08-07 — repository-wide documentation hygiene pass
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Focus:** make the doc corpus trustworthy again — accurate current-state claims, explicit source-of-truth
 ownership, history preserved and *labeled*, living dashboards actually small. User-directed quest (full spec in
 the session prompt); no feature/architecture work. All changes UNCOMMITTED at session end (user commits).

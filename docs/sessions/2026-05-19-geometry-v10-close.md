@@ -1,5 +1,8 @@
 # Session 2026-05-19 — geometry v10 cluster CLOSED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Summary
 
 **Phase 3.1.7 v10 `-curves` cluster CLOSED.** 6 slices on a single day

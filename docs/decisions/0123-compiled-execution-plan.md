@@ -1,5 +1,8 @@
 # ADR-0123 — The compiled execution plan (CEIR-11b): a dense two-tier, differential-verified against the §118 oracle
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design + close advisor-reviewed — a consult at every stage's design fork and pre-close) — the D-007 **CEIR band 11
 (Reference executor + compiled host plan)**, slice **CEIR-11b**. The COMPILED tier of §84 two-tier execution: a

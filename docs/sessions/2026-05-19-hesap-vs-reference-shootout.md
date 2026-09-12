@@ -1,5 +1,8 @@
 # Session 2026-05-19 — `crd-hesap` vs Eigen-MT / OpenBLAS shootout
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 After Phase 3.1.6 v0d-parallelism shipped (~4-5× scaling at 32 workers),

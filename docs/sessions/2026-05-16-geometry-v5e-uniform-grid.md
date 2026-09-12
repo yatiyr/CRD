@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v5e: UniformGrid
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7 v5 `-spatial` cluster's last backend before scene-index
 > bringup + queries-extension + close. Dense bounded-domain 3D cell array —
 > distinct from v5d SpatialHash (no hash, no collision, O(cell_count)

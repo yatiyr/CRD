@@ -1,5 +1,8 @@
 # REN-3 design — the gold LIGHTING · SHADOW · SKY · ANTI-ALIASING device pipeline (D-007 row 100)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > ## ⛔⛔⛔ TOP RULE — WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS
 >
 > **(user, restated IN ANGER 2026-07-25)** Every rendering technique ships as an **authored `.frame.toml` ASSET**

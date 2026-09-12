@@ -882,7 +882,14 @@ private:
         expect('{', "expected '{' opening an attribute dict");
         while (m_ok)
         {
-            names.push_back(parse_ident("expected an attribute name"));
+            // CEIR-31b-3-c-i: a QUOTED attr name ("p:clear_color:0") carries a name with non-ident chars — the frame
+            // param-bag key encoding; a plain identifier still parses bare. Symmetric with the printer's
+            // name_needs_quote — print(parse) is byte-exact for both forms. ⛔ an EMPTY quoted name ("") is REJECTED:
+            // set_attr forbids a nameless attr (a builder can't make one), so admitting `"" = v` through text would be
+            // a re-parse the builder can't round-trip + a fuzz crash path — REJECT with an offset, don't push it.
+            const containers::StringView an = (la() == '"') ? parse_quoted() : parse_ident("expected an attribute name");
+            if (m_ok && an.size() == 0U) { fail("empty attribute name"); }
+            names.push_back(an);
             expect('=', "expected '=' in an attribute entry");
             vals.push_back(parse_attr_value());
             if (!accept(',')) { break; }
@@ -902,7 +909,11 @@ private:
         if (c == '@')
         {
             accept('@');
-            const containers::StringView s = parse_ident("expected a symbol name after '@'");
+            // CEIR-31b-3-c-i: a QUOTED symbol (@"...") carries a name with non-ident chars (an `engine://ui/blur` asset
+            // id) that a bare @ident cannot; a plain identifier still parses bare. Symmetric with the printer's
+            // sym_needs_quote — print(parse(@"engine://x")) == @"engine://x", print(parse(@name)) == @name.
+            const containers::StringView s = (la() == '"') ? parse_quoted() : parse_ident("expected a symbol name after '@'");
+            if (m_ok && s.size() == 0U) { fail("empty symbol name"); } // @"" — a nameless symbol ref, REJECT (never printable)
             return m_ctx.attr_symbol(s);
         }
         if (c == '!') { return m_ctx.attr_type(parse_type()); }

@@ -1,0 +1,63 @@
+# scene_programs.manifest — CEIR-34 E4: the engine's DEFAULT program set, as an AUTHORABLE ASSET.
+#
+# Replaces the imperative `register_default_programs()` hand-list in scene_renderer.cpp. The registry loader reads this
+# file and registers every entry through ProgramRegistry::register_raster / register_raster_spec / register_kernel,
+# binding the (legitimately-C++) parameterized `ensure_*` cook-frontends by their `cooker` tag. Adding a program that
+# reuses an existing cooker is a MANIFEST edit — zero scene_renderer.cpp change (§178: the program SET is data, the
+# cookers are C++). The 0h E4 DoD: the loader serves the IDENTICAL set the hand-list did (set-equality ctest) + the
+# RAF-11 reload suite green through this path.
+#
+# One program per line, whitespace-separated:  <kind>  <id>  <cooker>  <param>
+#   kind   = raster | raster_spec | kernel
+#   id     = the canonical engine:// program id (ProgramRegistry key; prog_id() folds it to an AssetId)
+#   cooker = the cook-frontend tag the dispatch maps to an `ensure_*` method
+#   param  = an integer the parameterized cookers interpret (0 when unused): post 1=agx/0=srgb; moment 0=convert/1=blur_x/
+#            2=blur_y; ui 0=backdrop_fetch/1=tint_noise/2=blur/3=composite/4=mask_rect; cull_view 0..4; rt 0=raygen/
+#            1=miss/2=chit/3=anyhit; rt_shadow 0=raygen/1=miss/2=chit.
+# Lines beginning with '#' and blank lines are ignored. Order is the registration order (deterministic).
+
+# ── raster programs (SceneHost::program) ──
+raster       engine://scene/tess                tess              0
+raster       engine://scene/mesh                mesh              0
+raster       engine://scene/visbuffer           visbuffer         0
+raster       engine://scene/impostor            impostor          0
+raster       engine://scene/hzb_build           hzb               0
+raster       engine://scene/taa_resolve         taa               0
+raster       engine://scene/velocity_debug      velocity_debug    0
+raster       engine://scene/deferred_lighting   deferred_lighting 0
+raster       engine://scene/rt_composite        rt_composite      0
+raster       engine://post/tonemap_agx          post              1
+raster       engine://post/srgb_only            post              0
+raster       engine://shadow/moment_convert     moment            0
+raster       engine://shadow/moment_blur_x      moment            1
+raster       engine://shadow/moment_blur_y      moment            2
+
+# ── ui effect kernels (SPEC-aware, register_raster_spec; one cooker over ensure_ui_program) ──
+raster_spec  engine://ui/backdrop_fetch         ui                0
+raster_spec  engine://ui/tint_noise             ui                1
+raster_spec  engine://ui/blur                   ui                2
+raster_spec  engine://ui/composite              ui                3
+raster_spec  engine://ui/mask_rect              ui                4
+
+# ── kernels (SceneHost::kernel) ──
+kernel       engine://scene/cull                cull              0
+kernel       engine://scene/cull_mark           cull_mark         0
+kernel       engine://scene/cull_view0          cull_view         0
+kernel       engine://scene/cull_view1          cull_view         1
+kernel       engine://scene/cull_view2          cull_view         2
+kernel       engine://scene/cull_view3          cull_view         3
+kernel       engine://scene/cull_view4          cull_view         4
+kernel       engine://scene/cull_reset          cull_reset        0
+kernel       engine://scene/occlusion_cull      occlusion_cull    0
+kernel       engine://scene/gpu_skin            gpu_skin          0
+kernel       engine://scene/palette_snapshot    palette_snapshot  0
+kernel       engine://scene/light_cull          light_cull        0
+kernel       engine://scene/light_cull_3d       light_cull_3d     0
+kernel       engine://scene/rt/raygen           rt                0
+kernel       engine://scene/rt/miss             rt                1
+kernel       engine://scene/rt/chit             rt                2
+kernel       engine://scene/rt/anyhit           rt                3
+kernel       engine://scene/rt/shadow_raygen    rt_shadow         0
+kernel       engine://scene/rt/shadow_miss      rt_shadow         1
+kernel       engine://scene/rt/shadow_chit      rt_shadow         2
+kernel       engine://scene/rt_worldpos         rt_worldpos       0

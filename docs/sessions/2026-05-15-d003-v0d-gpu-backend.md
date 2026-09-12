@@ -1,5 +1,8 @@
 # 2026-05-15 — Detour D-003 v0d: `crd-perf` GPU timestamp backend
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## What shipped
 
 v0d wires GPU timing into the substrate. Two pieces:

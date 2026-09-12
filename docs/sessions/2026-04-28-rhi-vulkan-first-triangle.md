@@ -1,5 +1,8 @@
 # Session — 2026-04-28 — first triangle milestone
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Finish the first real graphics milestone: draw a triangle through the full

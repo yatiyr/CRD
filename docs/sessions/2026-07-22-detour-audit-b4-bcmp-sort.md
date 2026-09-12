@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · D-007 table audit (B16 / B-cmp / B4) + the DX12 sort gate
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** the user flagged that B16, B-cmp, and B4 are not ticked in the detour master table — verify whether they're actually
 full, finish any genuine gaps, then move on (in order) to C6 and report.
 
@@ -55,7 +58,7 @@ the HLSL path before. This is the recurring "COMPUTE emitter lagged an op ⇒ em
 
 - `engine/kir/include/crd/kir/ckir_hlsl.hpp` — 3 subgroup wave-intrinsic cases in the compute value emitter.
 - `tests/gpu-context-dx12/test_dx12_compute.cpp` — `+#include <crd/kir/ckir_sort.hpp>`; the DX12 radix-sort gate.
-- `docs/detours/D-007-gpu-program-system.md` — B4 🚧→✅, B-cmp ⬜→✅ with audit notes.
+- `docs/archive/D-007-gpu-program-system.md` — B4 🚧→✅, B-cmp ⬜→✅ with audit notes.
 
 ## Proposed commit (user commits — no AI co-author trailer)
 

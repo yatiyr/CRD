@@ -1,5 +1,8 @@
 # Session — 2026-05-04: Phase 2.6 v1d — AsyncFile + load_async<T> + wait_ready()
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SHIPPED  
 **Tests after:** 429/429 win-debug, 429/429 win-relwithdebinfo, 429/429 win-asan, 429/429 win-clang-cl, 429/429 win-tidy, 426/426 win-release  
 **Duration:** two sessions (context switch after implementation, docs written in second session)

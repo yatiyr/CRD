@@ -1,5 +1,8 @@
 # ADR-0116 — Capability contracts + domain/safety split + typed time domains
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8f**. Builds the U-§57 capability model (finally OWNING the
 §107 capability-contract field flagged ownerless since 7a), splits the safety axes out of `EvalDomain` (U-§23), and

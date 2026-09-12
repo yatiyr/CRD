@@ -1,4 +1,8 @@
 # D-007 — CEIR UNIVERSAL PROGRAMMING SYSTEM
+
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Frontier-complete master roadmap for asset-authored execution, visual programming, scripting, GPU/CPU/accelerator orchestration, and CKIR integration
 
 **Status:** proposed architectural priority; supersedes earlier narrower PassIR / CEIR drafts  
@@ -13,7 +17,7 @@
 Before changing code or D-007:
 
 1. Read the current working tree, not only `main`.
-2. Read the current uncommitted `docs/detours/D-007-gpu-program-system.md`.
+2. Read the current uncommitted `docs/archive/D-007-gpu-program-system.md`.
 3. Read `docs/PRINCIPLES.md`, `AGENTS.md`, `docs/ROADMAP.md`, the rendering-foundation system docs, RAF/RAH docs, CKIR docs, asset/cooker docs, hot-reload docs, frame-graph implementation, executor registry, command model, CRD-Hesap GPU-related work, UI/2D planning, media plans, and relevant tests.
 4. Inventory every current execution-program representation and every path that directly records or schedules work.
 5. Preserve all finished RAF/RAH work.

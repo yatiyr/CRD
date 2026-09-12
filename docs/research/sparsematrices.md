@@ -1,5 +1,8 @@
 # Seyrek Matris Hesaplamaları ve Özel Oyun Motoru İçin Uygulamalı Rehber
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — grounded `crd-hesap-sparse` + the sparse-direct/iterative clusters. *(stamped 2026-08-07, doc-hygiene pass)*
 
 ## Yönetici özeti

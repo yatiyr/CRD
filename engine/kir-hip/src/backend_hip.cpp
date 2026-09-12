@@ -203,16 +203,20 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     bool result = false;
     if (alloc_ok)
     {
-        void* params[kMaxIn + 6];
-        int   np = 0;
+        void*    params[kMaxIn + 6];
+        int      np = 0;
+        crd::u32 cdims[4] = {d0, d1, d2, d3}; // Contract: emit_contract_cuda's uint4{M,K,N,nbatch} — ONE 16B arg, not four scalars
         for (int i = 0; i < n_inputs; ++i) { params[np++] = &d_in[i]; }
         params[np++] = &d_out;
-        params[np++] = &d0;
-        if (outn.op == KOp::Contract) { params[np++] = &d1; params[np++] = &d2; params[np++] = &d3; }
-        else if (is_reduce(outn.op)) { params[np++] = &d1; }
-        else if (outn.op == KOp::Gather) { params[np++] = &d1; }
-        else if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
-        else if (outn.op == KOp::ScanSum) { params[np++] = &d1; }
+        if (outn.op == KOp::Contract) { params[np++] = cdims; } // ckir(A,Bm,C, uint4{M,K,N,nbatch})
+        else
+        {
+            params[np++] = &d0;
+            if (is_reduce(outn.op)) { params[np++] = &d1; }
+            else if (outn.op == KOp::Gather) { params[np++] = &d1; }
+            else if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
+            else if (outn.op == KOp::ScanSum) { params[np++] = &d1; }
+        }
         result = launch_and_readback(fn, groups, params, d_in, in_bytes, n_inputs, kern.input_iidx, inputs, d_out, out_bytes, out);
     }
 

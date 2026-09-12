@@ -1,5 +1,8 @@
 # Session 2026-05-19 — `crd-hesap` v0d-parallelism (BLIS-style outer-loop GEMM parallelism)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 After v0d-perf chunk 1 (5-loop GEMM + AVX2 f32 microkernel) and

@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9c `-decomposition` cluster CLOSED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.7 v9c-close. Final wrap of the v9c V-HACD cluster.
 
 **Status:** ✅ shipped. **18-config full sweep PASS** (`scripts/full-sweep.ps1`). ADR-0076 §24 amendment locked (D123-D131). eylem v1c convex-collider-conditioning **stub integration smoke** PASS. Phase 3.1.7 sub-module 10 of 11 COMPLETE.

@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9c-b V-HACD decompose ✅ SHIPPED
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** Phase 3.1.7 v9c-b — V-HACD recursive convex decomposition (Mamou 2014 §3.2-3.4). Second slice of the v9c `-decomposition` cluster.
 
 **Status:** ✅ shipped same day. **5-config DoD PASS** (`scripts/per-slice-check.ps1 -IncludeRelease -Parallel`).

@@ -1533,6 +1533,80 @@ public:
         return ok;
     }
 
+    // ⛔⛔ CEIR-31b-4-b-i: CLEAR a render scope that records NO DRAW. The command-lowering encoder folds a scope's
+    // begin_rendering + its LoadOp::Clear into the FIRST draw verb, so a 0-draw geometry pass (an empty world, a
+    // frustum that culled everything, a shadow cascade with no casters) would emit nothing and leave the attachment
+    // UNDEFINED — an empty viewport rendered garbage. This replays the scope's begin/end with no geometry: a bare
+    // vkCmdBeginRendering carrying every attachment's authored LoadOp/clear value clears exactly the Clear ones (a
+    // Load attachment is a no-op begin/end, preserving its content). The frame graph already put every target in its
+    // attachment layout (the execute-loop barrier), so no transition belongs here. Colour (float AND uint id) + depth
+    // + MRT are all covered by walking `rendering.color` + `rendering.depth` — the four 0-draw variants of one defect.
+    void clear_scope(const RenderingDesc& rendering) override
+    {
+        if (!frame_recording()) { return; }
+        const auto to_vk_load = [](LoadOp l) -> VkAttachmentLoadOp {
+            if (l == LoadOp::Load) { return VK_ATTACHMENT_LOAD_OP_LOAD; }
+            if (l == LoadOp::DontCare) { return VK_ATTACHMENT_LOAD_OP_DONT_CARE; }
+            return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        };
+        VkRenderingAttachmentInfo catts[kMaxColorAttachments]{};
+        crd::u32                  ncol = 0U;
+        crd::u32                  w    = 0U;
+        crd::u32                  h    = 0U;
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(rendering.color.size()) && ncol < kMaxColorAttachments; ++i)
+        {
+            if (rendering.color[i].target == nullptr) { continue; }
+            auto& t                      = static_cast<VulkanRasterTarget&>(*rendering.color[i].target);
+            w                            = t.width();
+            h                            = t.height();
+            VkRenderingAttachmentInfo& a = catts[ncol++];
+            a.sType                      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            a.imageView                  = t.view();
+            a.imageLayout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            a.loadOp                     = to_vk_load(rendering.color[i].load);
+            a.storeOp                    = VK_ATTACHMENT_STORE_OP_STORE;
+            if (rendering.color[i].clear_kind == ClearKind::Uint)
+            {
+                a.clearValue.color.uint32[0] = rendering.color[i].clear_uint;
+            }
+            else
+            {
+                a.clearValue.color.float32[0] = rendering.color[i].clear.r;
+                a.clearValue.color.float32[1] = rendering.color[i].clear.g;
+                a.clearValue.color.float32[2] = rendering.color[i].clear.b;
+                a.clearValue.color.float32[3] = rendering.color[i].clear.a;
+            }
+        }
+        VkRenderingAttachmentInfo dep{};
+        bool                      have_depth = false;
+        if (rendering.depth.enabled && rendering.depth.target != nullptr)
+        {
+            auto& dt = static_cast<VulkanRasterTarget&>(*rendering.depth.target);
+            if (dt.has_depth())
+            {
+                dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                dep.imageView                     = dt.depth_view();
+                dep.imageLayout                   = dt.depth_attach_layout();
+                dep.loadOp                        = to_vk_load(rendering.depth.load);
+                dep.storeOp                       = VK_ATTACHMENT_STORE_OP_STORE;
+                dep.clearValue.depthStencil.depth = rendering.depth.clear_depth;
+                w                                 = dt.width();
+                h                                 = dt.height();
+                have_depth                        = true;
+            }
+        }
+        if (ncol == 0U && !have_depth) { return; }
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea.extent    = {w, h};
+        ri.layerCount           = 1U;
+        ri.colorAttachmentCount = ncol;
+        ri.pColorAttachments    = ncol > 0U ? catts : nullptr;
+        ri.pDepthAttachment     = have_depth ? &dep : nullptr;
+        vkCmdBeginRendering(m_frame_rec.cmd, &ri);
+        vkCmdEndRendering(m_frame_rec.cmd);
+    }
+
     void clear(IRasterTarget& target, ClearColor color) override
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
@@ -3271,8 +3345,12 @@ public:
         end_and_wait(cmd);
     }
 
+    // CEIR-34 R2: `load` (Clear default) + `blend` (Opaque default) let this colour-only verb ALSO serve the
+    // overlay's LOAD+Alpha compose onto an existing target — the arm-406 StoragePull shape the retired draw_overlay
+    // handled. Every existing caller omits both ⇒ Clear + Opaque ⇒ bit-identical.
     void draw_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear_color, IStorageBuffer& storage,
-                      crd::u32 vertex_count)
+                      crd::u32 vertex_count, LoadOp load = LoadOp::Clear, BlendMode blend = BlendMode::Opaque,
+                      crd::u32 first_vertex = 0U)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
@@ -3280,7 +3358,7 @@ public:
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE) { return; }
 
         // REN-2: in frame-graph recording mode, a draw_storage into an RTT transient records color-only (no readback).
-        if (frame_recording()) { record_offscreen(t, p, s, clear_color, vertex_count); return; }
+        if (frame_recording()) { record_offscreen(t, p, s, clear_color, vertex_count, load, blend, first_vertex); return; }
 
         // Allocate + point the storage descriptor (set 0, binding 0) at the buffer.
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
@@ -3308,11 +3386,13 @@ public:
                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
         VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        if (load == LoadOp::Load) { att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; } // CEIR-34 R2: compose over existing contents
         VkRenderingInfo           ri  = one_colour_rendering(t, att);
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        apply_draw_blend(cmd, blend); // CEIR-34 R2: Alpha compose (no-op for Opaque)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex); // CEIR-34 R2: ranged overlay draws (default 0)
         vkCmdEndRendering(cmd);
 
         // FS storage writes → transfer read, then copy the SSBO into its host-visible readback.
@@ -3423,16 +3503,31 @@ public:
     // GEO-8: the CONTINUING scene draw — draw_storage_depth minus the clear: colour LOADs from the previous scene
     // draw (whose post-draw layout is TRANSFER_SRC — the readback contract), depth LOADs and keeps WRITING (the
     // depth image stays DEPTH_ATTACHMENT_OPTIMAL between draws; submits are serialized by end_and_wait).
+    // CEIR-34 R2: `blend` (Opaque default) + `first_vertex` (0 default) let this depth-load verb ALSO serve the
+    // overlay's depth bucket (Alpha compose + RO depth via the caller's set_pass_state(depth_write=false), ranged via
+    // first_vertex). Every scene caller omits both ⇒ Opaque + 0 ⇒ bit-identical.
     void draw_storage_depth_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
-                                 IStorageBuffer& storage, crd::u32 vertex_count)
+                                 IStorageBuffer& storage, crd::u32 vertex_count, BlendMode blend = BlendMode::Opaque,
+                                 crd::u32 first_vertex = 0U)
     {
         auto& t = static_cast<VulkanRasterTarget&>(target);
         auto& p = static_cast<VulkanRasterProgram&>(program);
         auto& s = static_cast<VulkanStorageBuffer&>(storage);
         if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE) { return; }
-        if (!t.has_depth() && !frame_recording()) { return; } // the sync LOAD path needs the depth attachment
+        // ⛔ CEIR-34 R2: a DEPTH-requested draw onto a DEPTH-LESS target draws colour-only LOAD (symmetric with
+        // draw_storage_depth's delegate) — never silently skipped. This is the overlay's depth bucket on a colour-only
+        // target (the retired draw_overlay's `depth_on = has_depth && compare != Always` derived the same behaviour).
+        if (!t.has_depth() && !frame_recording())
+        {
+            draw_storage(target, program, ClearColor{}, storage, vertex_count, LoadOp::Load, blend, first_vertex);
+            return;
+        }
 
-        if (frame_recording()) { record_scene(t, p, s, false, ClearColor{}, 0.0F, compare, vertex_count); return; }
+        if (frame_recording())
+        {
+            record_scene(t, p, s, false, ClearColor{}, 0.0F, compare, vertex_count, blend, first_vertex);
+            return;
+        }
 
         vkResetDescriptorPool(m_device, m_desc_pool, 0);
         VkDescriptorSetAllocateInfo dsai{};
@@ -3495,8 +3590,9 @@ public:
         vkCmdBeginRendering(cmd, &ri);
 
         set_draw_state(cmd, t.width(), t.height(), 1U, true, to_vk_compare(compare));
+        apply_draw_blend(cmd, blend);                                 // CEIR-34 R2: Alpha compose (no-op for Opaque)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex);            // CEIR-34 R2: ranged overlay draws (default 0)
         vkCmdEndRendering(cmd);
 
         copy_colour_to_readback(cmd, t);
@@ -4660,109 +4756,10 @@ public:
 
 
 
-    // RET-6 (ADR-0105): the OVERLAY draw — see IRasterContext::draw_overlay. Composites onto the target's EXISTING
-    // contents (color loadOp=LOAD; the target's post-draw layout is TRANSFER_SRC — the RET-2 contract — so the
-    // preserving transition is TRANSFER_SRC → COLOR_ATTACHMENT, never UNDEFINED, which would discard). Standard alpha
-    // blending over set_draw_state's blend-off baseline; a READ-ONLY depth test when the target carries depth (write
-    // explicitly disabled — the overlay never modifies the scene's depth, so chained overlay draws all test against
-    // the same scene). Single-sample targets only (the overlay canvas contract).
-    [[nodiscard]] bool draw_overlay(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                    DepthCompare compare, crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
-    {
-        return draw_overlay_range(target, program, storage, compare, 0U, vertex_count);
-    }
-
-    // REN-39: the ranged twin — the whole body, with `first_vertex` reaching vkCmdDraw (see raster_context.hpp).
-    [[nodiscard]] bool draw_overlay_range(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
-                                          DepthCompare compare, crd::u32 first_vertex,
-                                          crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
-    {
-        auto& t = static_cast<VulkanRasterTarget&>(target);
-        auto& p = static_cast<VulkanRasterProgram&>(program);
-        auto& s = static_cast<VulkanStorageBuffer&>(storage);
-        if (!m_api.valid() || !p.valid() || m_desc_pool == VK_NULL_HANDLE || t.samples() != 1U || vertex_count == 0U)
-        {
-            return false;
-        }
-
-        if (frame_recording()) { return record_overlay(t, p, s, compare, first_vertex, vertex_count); }
-
-        // the storage descriptor at set 0 / binding 0 (the draw_storage seam — VERTEX+FRAGMENT visible)
-        vkResetDescriptorPool(m_device, m_desc_pool, 0);
-        VkDescriptorSetAllocateInfo dsai{};
-        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dsai.descriptorPool     = m_desc_pool;
-        dsai.descriptorSetCount = 1U;
-        dsai.pSetLayouts        = &m_storage_set_layout;
-        VkDescriptorSet dset = VK_NULL_HANDLE;
-        if (vkAllocateDescriptorSets(m_device, &dsai, &dset) != VK_SUCCESS) { return false; }
-        VkDescriptorBufferInfo dbi{s.buf(), 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet   wr{};
-        wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wr.dstSet          = dset;
-        wr.dstBinding      = 0U;
-        wr.descriptorCount = 1U;
-        wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        wr.pBufferInfo     = &dbi;
-        vkUpdateDescriptorSets(m_device, 1U, &wr, 0U, nullptr);
-
-        VkCommandBuffer cmd = begin_cmd();
-        if (cmd == VK_NULL_HANDLE) { return false; }
-
-        // preserve the existing contents: post-draw the colour sits in TRANSFER_SRC (readback copied from it)
-        transition(cmd, t.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-
-        VkRenderingAttachmentInfo att{};
-        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        att.imageView   = t.view();
-        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD; // the scene stays — the overlay composites on top
-        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-
-        const bool                depth_on = t.has_depth() && compare != DepthCompare::Always;
-        VkRenderingAttachmentInfo dep{};
-        if (depth_on)
-        {
-            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            dep.imageView   = t.depth_view();
-            dep.imageLayout = t.depth_attach_layout();
-            dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;  // the scene's depth is the test source
-            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // preserved — chained overlay draws re-test against it
-        }
-
-        VkRenderingInfo ri{};
-        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ri.renderArea.extent    = {t.width(), t.height()};
-        ri.layerCount           = 1U;
-        ri.colorAttachmentCount = 1U;
-        ri.pColorAttachments    = &att;
-        ri.pDepthAttachment     = depth_on ? &dep : nullptr;
-        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
-        if (ri.pDepthAttachment != nullptr && t.has_stencil())
-        {
-            dep.clearValue.depthStencil.stencil = 0U;
-            ri.pStencilAttachment               = &dep;
-        }
-        vkCmdBeginRendering(cmd, &ri);
-
-        set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
-        vkCmdSetDepthWriteEnable(cmd, VK_FALSE); // the overlay READS the scene's depth, never writes it
-        const VkBool32 blend_on[1] = {VK_TRUE};  // standard alpha over set_draw_state's blend-off baseline
-        m_api.set_color_blend_enable(cmd, 0U, 1U, blend_on);
-        VkColorBlendEquationEXT eq[1]{};
-        eq[0] = {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
-                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
-        m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count, first_vertex);
-        vkCmdEndRendering(cmd);
-
-        copy_colour_to_readback(cmd, t); // read_pixel stays valid + the layout returns to TRANSFER_SRC for chaining
-        end_and_wait(cmd);
-        return true;
-    }
+    // ⭐ CEIR-34 R2: draw_overlay / draw_overlay_range / record_overlay are RETIRED. The overlay compose (LOAD +
+    // Alpha + read-only depth + first_vertex) now rides the GENERIC draw_storage / draw_storage_depth_load verbs —
+    // the encoder carries the attachment's blend + load + the draw's first_vertex, and the caller declares
+    // depth_write=false through set_pass_state. One execution-program architecture, no dedicated overlay device verb.
 
     // ── REN-1: frame-graph RECORDING-MODE bodies (called by the branched public draws while a graph executes) ─────
 
@@ -4841,7 +4838,8 @@ public:
     // The frame-mode body of draw_storage_depth (clear=true) / draw_storage_depth_load (clear=false): one
     // begin/end-rendering block into the shared cmd, no per-draw transition/readback.
     void record_scene(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, bool clear,
-                      ClearColor clear_color, float clear_depth, DepthCompare compare, crd::u32 vertex_count)
+                      ClearColor clear_color, float clear_depth, DepthCompare compare, crd::u32 vertex_count,
+                      BlendMode blend = BlendMode::Opaque, crd::u32 first_vertex = 0U)
     {
         VkCommandBuffer cmd  = m_frame_rec.cmd;
         VkDescriptorSet dset = frame_alloc_storage_set(s);
@@ -4886,8 +4884,9 @@ public:
         }
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, t.has_depth(), to_vk_compare(compare));
+        apply_draw_blend(cmd, blend); // CEIR-34 R2: Alpha compose (no-op for Opaque) — subsumes the overlay's depth bucket
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex); // CEIR-34 R2: ranged overlay draws (first_vertex default 0)
         vkCmdEndRendering(cmd);
     }
 
@@ -5071,18 +5070,21 @@ public:
     // REN-2: the frame-mode body of draw_storage — a COLOR-ONLY render into an RTT transient (no depth attachment,
     // no readback), into the shared cmd. Pass 1 of render-to-texture; a later pass samples it via record_textured.
     void record_offscreen(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s, ClearColor clear_color,
-                          crd::u32 vertex_count)
+                          crd::u32 vertex_count, LoadOp load = LoadOp::Clear, BlendMode blend = BlendMode::Opaque,
+                          crd::u32 first_vertex = 0U)
     {
         VkCommandBuffer cmd  = m_frame_rec.cmd;
         VkDescriptorSet dset = frame_alloc_storage_set(s);
         if (dset == VK_NULL_HANDLE) { return; }
         frame_self_barrier_if_needed(t);
         VkRenderingAttachmentInfo att = colour_clear_attachment(t.view(), clear_color);
+        if (load == LoadOp::Load) { att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; } // CEIR-34 R2: compose over existing contents
         VkRenderingInfo           ri  = one_colour_rendering(t, att);
         vkCmdBeginRendering(cmd, &ri);
         set_draw_state(cmd, t.width(), t.height(), 1U, false, VK_COMPARE_OP_ALWAYS);
+        apply_draw_blend(cmd, blend); // CEIR-34 R2: Alpha compose (no-op for Opaque)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count);
+        bind_and_draw(cmd, p, vertex_count, first_vertex); // CEIR-34 R2: ranged overlay draws (default 0)
         vkCmdEndRendering(cmd);
     }
 
@@ -5303,61 +5305,6 @@ public:
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
         bind_and_draw(cmd, p, vertex_count);
         vkCmdEndRendering(cmd);
-    }
-
-    // The frame-mode body of draw_overlay: LOAD + alpha-blend + read-only depth, into the shared cmd.
-    [[nodiscard]] bool record_overlay(VulkanRasterTarget& t, VulkanRasterProgram& p, VulkanStorageBuffer& s,
-                                      DepthCompare compare, crd::u32 first_vertex, crd::u32 vertex_count)
-    {
-        VkCommandBuffer cmd  = m_frame_rec.cmd;
-        VkDescriptorSet dset = frame_alloc_storage_set(s);
-        if (dset == VK_NULL_HANDLE) { return false; }
-        frame_self_barrier_if_needed(t);
-
-        VkRenderingAttachmentInfo att{};
-        att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        att.imageView   = t.view();
-        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-        att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-
-        const bool                depth_on = t.has_depth() && compare != DepthCompare::Always;
-        VkRenderingAttachmentInfo dep{};
-        if (depth_on)
-        {
-            dep.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            dep.imageView   = t.depth_view();
-            dep.imageLayout = t.depth_attach_layout();
-            dep.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-            dep.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        }
-
-        VkRenderingInfo ri{};
-        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ri.renderArea.extent    = {t.width(), t.height()};
-        ri.layerCount           = 1U;
-        ri.colorAttachmentCount = 1U;
-        ri.pColorAttachments    = &att;
-        ri.pDepthAttachment     = depth_on ? &dep : nullptr;
-        // REN-38-F11: a stencil-capable target binds the SAME image as the stencil attachment
-        if (ri.pDepthAttachment != nullptr && t.has_stencil())
-        {
-            dep.clearValue.depthStencil.stencil = 0U;
-            ri.pStencilAttachment               = &dep;
-        }
-        vkCmdBeginRendering(cmd, &ri);
-        set_draw_state(cmd, t.width(), t.height(), 1U, depth_on, to_vk_compare(compare));
-        vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
-        const VkBool32 blend_on[1] = {VK_TRUE};
-        m_api.set_color_blend_enable(cmd, 0U, 1U, blend_on);
-        VkColorBlendEquationEXT eq[1]{};
-        eq[0] = {VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
-                 VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD};
-        m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.layout(), 0U, 1U, &dset, 0U, nullptr);
-        bind_and_draw(cmd, p, vertex_count, first_vertex);
-        vkCmdEndRendering(cmd);
-        return true;
     }
 
     [[nodiscard]] std::unique_ptr<ITexture> create_texture(crd::u32 width, crd::u32 height, const void* rgba) override
@@ -5969,6 +5916,21 @@ public:
             return {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
                     VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
         }
+    }
+
+    // CEIR-34 R2: enable a per-draw blend on the single colour attachment AFTER set_draw_state (the A15 ordering:
+    // set_draw_state installs the blend-OFF default for every attachment, and blend-enabling paths overwrite it
+    // here). `Opaque` is a no-op — the default stands, so every existing Opaque caller stays bit-identical. This is
+    // what lets the generic draw_storage / draw_storage_depth verbs SUBSUME the overlay's Alpha compose (the
+    // retired draw_overlay used these exact two calls) without a dedicated verb.
+    void apply_draw_blend(VkCommandBuffer cmd, BlendMode blend) const
+    {
+        if (blend == BlendMode::Opaque) { return; }
+        if (m_api.set_color_blend_enable == nullptr || m_api.set_color_blend_equation == nullptr) { return; }
+        const VkBool32 on[1] = {VK_TRUE};
+        m_api.set_color_blend_enable(cmd, 0U, 1U, on);
+        VkColorBlendEquationEXT eq[1] = {blend_equation(blend)};
+        m_api.set_color_blend_equation(cmd, 0U, 1U, eq);
     }
 
     // ── REN-38-A2: dispatch a CKIR compute kernel INTO THE FRAME'S command buffer. ──────────────────────────

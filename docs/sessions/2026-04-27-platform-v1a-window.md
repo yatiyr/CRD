@@ -1,5 +1,8 @@
 # Session — 2026-04-27 — crd-platform v1a (window + context)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Open Phase 1 step 8a. Stand up `crd-platform` with a backend-agnostic window

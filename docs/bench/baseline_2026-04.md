@@ -1,5 +1,8 @@
 # Benchmark Baseline — 2026-04
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Build flavour: `win-release`
 
 Machine:

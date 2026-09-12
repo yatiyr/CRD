@@ -1,5 +1,8 @@
 # REN-40-H — LOD scaling curve (median-of-5, both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The 40-H gate: re-measure the full instance curve WITH LOD drawing, both backends, median-of-5.
 Every earlier fps figure was WITHDRAWN when LOD started drawing (the triangle count changed);
 this board replaces them.

@@ -73,8 +73,9 @@ struct EffectAccess
 
 // The CLASSIFIER — a total switch over all §26 families. ⛔ NO default case: appending a 28th family without classifying
 // it is a `-Werror=switch` COMPILE ERROR (the append-at-end guard, free). The conservative-correct judgment calls
-// (Allocate/Dealloc/Residency in Memory so use-after-free shows; GPUCommand a write; I/O one rw class; ExternalCall +
-// Synchronization = Universe; RandomRead a WRITE; TimeRead inert-read; Nondeterministic inert) are documented in §4d.
+// (Dealloc/Residency in Memory so use-after-free shows; Allocate INERT — alloc-before-use is SSA-implied, see the case;
+// GPUCommand a write; I/O one rw class; ExternalCall + Synchronization = Universe; RandomRead a WRITE; TimeRead
+// inert-read; Nondeterministic inert) are documented in §4d.
 [[nodiscard]] constexpr EffectAccess effect_access(EffectFamily f) noexcept
 {
     switch (f)
@@ -82,8 +83,13 @@ struct EffectAccess
     case EffectFamily::MemoryRead: return {true, false, ResourceClass::Memory};
     case EffectFamily::MemoryWrite: return {false, true, ResourceClass::Memory};
     case EffectFamily::MemoryReadWrite: return {true, true, ResourceClass::Memory};
-    // lifecycle in the Memory class so Deallocate(R)-then-MemoryRead(R) use-after-free is visible (identical access)
-    case EffectFamily::Allocate:
+    // ⭐ CEIR-31b-3-c-i (26c/26z regression fix): Allocate is INERT in the hazard walk (the Nondeterministic mold at
+    // {false,false,None}) — an allocation orders BEFORE its uses via SSA def-use (the declare's RESULT is the consumer's
+    // OPERAND), so a memory-hazard edge is REDUNDANT and would pollute every frame's hazard set with declare->use pairs.
+    // The Allocate effect still EXISTS on resource.declare/import (blocks CSE via non-Pure; realtime_safe classifies by it),
+    // only its hazard ACCESS is inert. ⛔ Deallocate/Residency STAY Memory-writes: Deallocate(R)-then-MemoryRead(R)
+    // use-after-free is NOT SSA-implied (a dealloc produces no value the later use consumes), so it must show as a hazard.
+    case EffectFamily::Allocate: return {false, false, ResourceClass::None};
     case EffectFamily::Deallocate:
     case EffectFamily::ResourceResidency: return {false, true, ResourceClass::Memory};
     case EffectFamily::GPUCommand: return {false, true, ResourceClass::Gpu};

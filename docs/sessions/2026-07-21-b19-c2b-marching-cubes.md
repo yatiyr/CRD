@@ -1,5 +1,8 @@
 # 2026-07-21 — B19-c2b: marching cubes (the mesh bridge is complete)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) · **Sub-slice:** B19-c2b
 **Directive:** "let's go, no debts, no defers, full gold standard."
 

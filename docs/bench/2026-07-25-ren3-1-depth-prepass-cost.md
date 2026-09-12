@@ -1,5 +1,8 @@
 # REN-3.1 — depth-only pre-pass cost vs the equivalent colour pass (Vulkan + DX12)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Measured** 2026-07-25 · **why**: this is the per-frame baseline REN-3.2 (CSM) multiplies by cascade count, so it
 must exist *before* cascades land. The question the board answers is "what does adding a shadow pass cost?", not
 an abstract throughput number.

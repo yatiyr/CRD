@@ -1,5 +1,8 @@
 # Session: `crd-renderer` v1g — `ForwardRenderPath`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-01
 **Slice:** Phase 2.4g
 **Status:** shipped

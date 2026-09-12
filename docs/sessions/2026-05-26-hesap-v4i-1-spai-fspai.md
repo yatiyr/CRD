@@ -1,5 +1,8 @@
 # 2026-05-26 — hesap v4i-1: SPAI + FSPAI (sparse approximate inverse preconditioners)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Phase 3.1.6 `crd-hesap` v4, slice **v4i-1** (first of three: v4i = SPAI / Chebyshev / Schwarz).
 Sparse approximate inverse preconditioners — the matrix-free, naturally-parallel-setup family
 Eigen does not ship.

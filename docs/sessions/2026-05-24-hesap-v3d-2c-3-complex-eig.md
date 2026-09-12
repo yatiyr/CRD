@@ -1,5 +1,8 @@
 # 2026-05-24 — hesap v3d-2c-3: complex ztrevc + public complex `eig` + CLI
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Closes **v3d-2c (complex non-symmetric eigensolver)**. The public
 `eig(Matrix<Complex<T>>)` assembles the shipped complex pipeline (balance →
 Hessenberg → `complex_schur_aed` → ztrevc → unitary back-transform) and **beats

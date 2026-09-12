@@ -1,0 +1,213 @@
+# ui_frosted_glass.frame.toml — the §141 UI-EFFECT frosted-glass chain, authored as a CEIR frame (CEIR-31b-3-c).
+#
+# ⛔⛔⛔ TOP RULE: WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS. This file IS the frosted-glass effect — the technique
+# lives here as DATA, running committed `.ckir` fullscreen kernels by mount id (the tonemap_agx/deferred precedent).
+# ZERO new ops/executors/dialect (the 31b-0 census ruling): every pass is an existing kind, every kernel a committed asset.
+#
+# ── the chain ─────────────────────────────────────────────────────────────────────────────────────────────────
+#   scene          raster.geometry    the app's content → scene_color (HDR). 31b-4 feeds a synthetic hard-EDGE here.
+#   backdrop_copy   copy               scene_color → backdrop (a COPY, so the blur never RMWs the live scene — the §141
+#                                      backdrop-capture precedent; transfer.copy is a wired pass kind, ZERO new code).
+#   backdrop_fetch  raster.fullscreen  one LINEAR TexSample of backdrop → blur_src at HALF-RES (`filter="linear"` +
+#                                      scale 0.5 = the 2:1 box downsample the census pinned; engine://ui/backdrop_fetch).
+#   blur_h1/v1/h2/v2 raster.fullscreen the σ=R/3 separable Gaussian (engine://ui/blur), dir spec 0/1 selecting H vs V,
+#                                      ping-ponging blur_src→blur_a→blur_b→blur_a→blur_b (×2 iterations).
+#   tint_noise      raster.fullscreen  blur_b → effect: tint × backdrop + noise (engine://ui/tint_noise, spec defaults).
+#   mask            raster.fullscreen  a fixed hard-rect → mask (coverage in .r; engine://ui/mask_rect, rect bounds = 4
+#                                      spec-consts so 31b-4 can move the rect and watch composite move; reads NOTHING).
+#   composite       raster.fullscreen  reads [scene_color, effect, mask] → the bindless heap layers 0/1/2, mix(scene,
+#                                      effect, mask.r) → @output (engine://ui/composite; the deferred multi-read idiom).
+#
+# ⛔ THE STEP SPEC-CONST IS EXTENT-DERIVED (CEIR-31b-4-b-iv-g-2): a fullscreen blur's step = 1/half-res-dimension is a
+# RUNTIME extent — a baked `.ckir` spec default is correct at ONE resolution only (the g-1 falsifier proved a baked literal
+# collapses to the resample floor at any other size). So each blur pass DERIVES spec_2 from its OWN read via the
+# `derive_spec_2_{read,axis,op}` triple: the record seat (build_pass_spec_set) computes 1/extent(read, axis) from the LIVE
+# output extent × the read transient's scale — the H passes off the read's X extent, the V passes off its Y extent, so the
+# step is RESOLUTION-CORRECT and AXIS-CORRECT at every size (a non-square render distinguishes the two axes). This reuses
+# the ONE sizing formula the transients themselves use (no drift), NOT a magic-float sentinel, NOT a seat-hardcoded 'id 2'.
+# ⛔ THE MASK is a FULLSCREEN fixed-rect (CEIR-31b-4-a): `engine://ui/mask_rect` writes coverage 1.0 inside an axis-aligned
+# rect (bounds = 4 spec-consts x0@0/y0@1/x1@2/y1@3, symmetric [0.25,0.75] so the NDC±Y flip is invisible), 0.0 outside, to
+# the R8 `mask` target's .r. This REPLACES the old `ui_panels`/`engine://ui/panel_fill` geometry placeholder: a `UiPanel`
+# ECS component is a PARKED Track-B (ADR-0107) concept, so a geometry mask would drag I2D into this proof; a fullscreen
+# fixed-rect touches nothing parked (the census's "31b-4 test quad"). The composite reads mask as its 3rd bindless read.
+
+schema = 1
+name   = "engine://frame/ui_frosted_glass"
+
+# ── transients ────────────────────────────────────────────────────────────────────────────────────────────────
+[[resource]]
+name         = "scene_color"
+kind         = "transient_image"
+format       = "RGBA16F"
+scale        = 1.0
+sampled      = true       # read by the copy AND (as bindless layer 0) by the composite
+depth_buffer = true       # the scene geometry pass needs depth
+
+[[resource]]
+name    = "backdrop"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true            # the full-res backdrop the fetch downsamples
+
+[[resource]]
+name    = "blur_src"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 0.5             # HALF-RES — the 2:1 downsample dest
+sampled = true
+
+[[resource]]
+name    = "blur_a"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 0.5
+sampled = true
+
+[[resource]]
+name    = "blur_b"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 0.5
+sampled = true
+
+[[resource]]
+name    = "effect"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 0.5             # the blurred+tinted result (composite upsamples it)
+sampled = true
+
+[[resource]]
+name    = "mask"
+kind    = "transient_image"
+format  = "R8"
+scale   = 1.0
+sampled = true            # coverage in .r, read as bindless layer 2 by the composite
+
+# ── draw lists ────────────────────────────────────────────────────────────────────────────────────────────────
+[[draw_list]]
+name = "visible_geometry"
+all  = ["MeshRenderer", "Transform"]
+cull = "frustum"
+sort = "material"
+
+# ── passes ────────────────────────────────────────────────────────────────────────────────────────────────────
+[[pass]]
+name          = "scene"
+kind          = "raster.geometry"
+draw_list     = "visible_geometry"
+writes        = ["scene_color"]
+technique     = "standard_forward"
+material_pass = "Forward"
+clear_color   = [0.09, 0.10, 0.13, 1.0]
+clear_depth   = 0.0
+depth         = "GreaterEqual"   # reverse-Z
+
+[[pass]]
+name   = "backdrop_copy"
+kind   = "copy"
+reads  = ["scene_color"]
+writes = ["backdrop"]
+
+[[pass]]
+name   = "backdrop_fetch"
+kind   = "raster.fullscreen"
+reads  = ["backdrop"]
+writes = ["blur_src"]
+shader = "engine://ui/backdrop_fetch"
+filter = "linear"   # ⛔ 31b-1a ledger: a LINEAR sampler is the 2:1 box average (Nearest=default would point-sample)
+address = "clamp"   # ⛔ CEIR-31b-4-b-iii-2: CLAMP (the post-process default), NOT the Repeat default — a UI backdrop's
+                    # downsample/blur must not wrap opposite-edge content across the screen edge (the border-bleed defect).
+
+[[pass]]
+name   = "blur_h1"
+kind   = "raster.fullscreen"
+reads  = ["blur_src"]
+writes = ["blur_a"]
+shader = "engine://ui/blur"
+address = "clamp"   # CLAMP: the ±4-tap Gaussian must not wrap across the screen edge (31b-4-b-iii-2 border-bleed fix)
+[pass.params]
+spec_0 = 1.0            # dir.x = 1 (HORIZONTAL)
+spec_1 = 0.0            # dir.y = 0
+derive_spec_2_read = "blur_src"
+derive_spec_2_axis = "x"
+derive_spec_2_op = "inv"
+
+[[pass]]
+name   = "blur_v1"
+kind   = "raster.fullscreen"
+reads  = ["blur_a"]
+writes = ["blur_b"]
+shader = "engine://ui/blur"
+address = "clamp"   # CLAMP: the ±4-tap Gaussian must not wrap across the screen edge (31b-4-b-iii-2 border-bleed fix)
+[pass.params]
+spec_0 = 0.0            # dir.x = 0
+spec_1 = 1.0            # dir.y = 1 (VERTICAL) — H≠V is the dir spec, the record-seat proof (31b-3-c-ii/31b-4)
+derive_spec_2_read = "blur_a"
+derive_spec_2_axis = "y"
+derive_spec_2_op = "inv"
+
+[[pass]]
+name   = "blur_h2"
+kind   = "raster.fullscreen"
+reads  = ["blur_b"]
+writes = ["blur_a"]
+shader = "engine://ui/blur"
+address = "clamp"   # CLAMP: the ±4-tap Gaussian must not wrap across the screen edge (31b-4-b-iii-2 border-bleed fix)
+[pass.params]
+spec_0 = 1.0
+spec_1 = 0.0
+derive_spec_2_read = "blur_b"
+derive_spec_2_axis = "x"
+derive_spec_2_op = "inv"
+
+[[pass]]
+name   = "blur_v2"
+kind   = "raster.fullscreen"
+reads  = ["blur_a"]
+writes = ["blur_b"]
+shader = "engine://ui/blur"
+address = "clamp"   # CLAMP: the ±4-tap Gaussian must not wrap across the screen edge (31b-4-b-iii-2 border-bleed fix)
+[pass.params]
+spec_0 = 0.0
+spec_1 = 1.0
+derive_spec_2_read = "blur_a"
+derive_spec_2_axis = "y"
+derive_spec_2_op = "inv"
+
+[[pass]]
+name   = "tint_noise"
+kind   = "raster.fullscreen"
+reads  = ["blur_b"]
+writes = ["effect"]
+shader = "engine://ui/tint_noise"   # tint × backdrop + noise; the 5 knobs are EXPLICIT spec-consts (like the mask rect
+                                    # and the blur step) so 31b-4 can patch them — these values ARE the ui_tint_noise.ckir
+                                    # authored defaults (0.9/0.9/1.0/1.0, amp 0.03), so the cooked program is byte-identical.
+[pass.params]
+spec_0 = 0.90   # tint.r — 31b-4 arm (h) patches r/g to 1.00 so the effect reproduces the backdrop for the far==tint proof
+spec_1 = 0.90   # tint.g
+spec_2 = 1.00   # tint.b
+spec_3 = 1.00   # tint.a
+spec_4 = 0.03   # noise amplitude — 31b-4 arm (h) patches to 0.00 to isolate the tinted backdrop (arm (e) probe used amp=1)
+
+[[pass]]
+name   = "mask"
+kind   = "raster.fullscreen"
+reads  = []                        # ⛔ NO texture reads — coverage is pure uv math (ui_mask_rect writes a fixed rect)
+writes = ["mask"]
+shader = "engine://ui/mask_rect"   # a fullscreen hard-rect: cov=step(x0,uv.x)·step(uv.x,x1)·step(y0,uv.y)·step(uv.y,y1)
+[pass.params]
+spec_0 = 0.25   # x0 — the panel rect (symmetric about 0.5 so the NDC±Y flip is invisible)
+spec_1 = 0.25   # y0
+spec_2 = 0.75   # x1
+spec_3 = 0.75   # y1
+
+[[pass]]
+name   = "composite"
+kind   = "raster.fullscreen"
+reads  = ["scene_color", "effect", "mask"]   # → bindless heap layers 0/1/2 (declaration order)
+writes = ["@output"]
+shader = "engine://ui/composite"
+address = "clamp"   # CLAMP the half-res `effect` upsample: at the screen edge a bindless bilinear tap must not wrap to the
+                    # opposite edge (31b-4-b-iii-2 border-bleed fix — does the pass sampler reach the bindless read?).

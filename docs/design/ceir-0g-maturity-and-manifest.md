@@ -1,5 +1,8 @@
 # CEIR-0g — One maturity model + the §174 machine-readable manifest
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Band:** D-007 · CEIR-0 · slice 0g. **Tracker row:** `docs/detours/D-007-ceir-tracker.md` → CEIR-0g.
 > **Gate:** one maturity model; a registry-migration plan. **Law:** mission §173 (CEIR L0–L8), §174 (manifest).
 > **Reconciles:** the post-RAF L0–L7 model (D-007 §PR-3, live in `docs/capabilities/gpu-platform-capabilities.toml`)
@@ -10,7 +13,7 @@
 
 ## 1. The finding — the two scales measure DIFFERENT axes (so "merge" ≠ "renumber")
 
-Left column verified against §PR-3's own ladder (`docs/detours/D-007-gpu-program-system.md:530`), not the TOML's
+Left column verified against §PR-3's own ladder (`docs/archive/D-007-gpu-program-system.md:530`), not the TOML's
 paraphrase — they match.
 
 | | post-RAF L0–L7 (§PR-3, verified) | CEIR L0–L8 (§173) | relationship |

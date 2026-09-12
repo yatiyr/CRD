@@ -1,5 +1,8 @@
 # 2026-07-01 — v13-n/o/p/q: `crd-hesap-motion` + the arbitrary-state Ruckig-class OTG (crushes Ruckig's C++)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Sibling session to `2026-07-01-v13-jk-oscillatory-cubature.md` (which covers v13-j/k quadrature + v13-l/m diff).
 > This one is the **motion module** end-to-end: trajectory generation primitives **and** the full Ruckig-class
 > online time-optimal generator — single-DoF arbitrary-state **and** multi-DoF arbitrary-state synchronization —

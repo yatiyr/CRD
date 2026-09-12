@@ -1,5 +1,8 @@
 # REN-41 — VISUAL FRONTIER: TAA + prefiltered impostors + Nanite cluster-LOD
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — REN-41 shipped (velocity/TAA + impostors + Nanite-class cluster LOD start, sessions 2026-08-03); the broader frontier planning was superseded by the 2026-08-03 RAF mission + §POST-RAF programme. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Execute-ready campaign dossier. User-directed 2026-08-02: "fully gold standard, frontier 2026

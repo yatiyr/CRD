@@ -1,5 +1,8 @@
 # Session — 2026-05-03: Phase 2.6 v1a — `crd-resources` + `asset_cooker manifest_dump`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SHIPPED  
 **Tests after:** 393/393 win-debug, 393/393 win-asan, 393/393 win-clang-cl, 393/393 win-tidy, 393/393 win-relwithdebinfo, 390/390 win-release  
 **Duration:** one session (continuation of prior architecture session)

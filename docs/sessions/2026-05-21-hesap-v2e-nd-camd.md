@@ -1,5 +1,8 @@
 # 2026-05-21 — Phase 3.1.6 `crd-hesap` v2e: nested-dissection ordering + CAMD (v2 CLOSE)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-ordering`. The fill-reducing payoff of the v2 reordering
 > cluster: a recursive nested-dissection ordering that **beats Eigen-AMD fill on
 > 2/3 FEM matrices** via constrained AMD. Closes Phase 3.1.6 v2.

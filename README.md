@@ -1,5 +1,11 @@
 # Cerid Engine
 
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
+
+**New here?** [START_HERE](START_HERE.md) gives the agent/human entry route. The
+[system review](docs/research/2026-09-12-cerid-whole-system-review.md) separates existing substrate from planned products.
+
 [![CI](https://github.com/yatiyr/crd/actions/workflows/ci.yml/badge.svg)](https://github.com/yatiyr/crd/actions/workflows/ci.yml)
 
 **Cerid** is a general-purpose C++20 real-time engine substrate. Games are one consumer;
@@ -12,12 +18,12 @@ API-stable across backends, and built on vertical slices rather than horizontal 
 - **Determinism as a product feature.** Bit-identical results across thread counts
   (`{1..16}` workers), runs, and — where claimed — compilers: deterministic transcendental
   math (`crd::math`, no `std::` in engine numerics), counter-based RNG (Philox), fixed-order
-  parallel reductions, deterministic stochastic rounding. Built for replay, certification
-  (DO-178C / ISO 26262-class evidence), and reproducible science.
+  parallel reductions, deterministic stochastic rounding. Built for replay and reproducible science;
+  domain certification requires its own evidence and is not established by these primitives.
 - **A MATLAB-class numerical substrate (`crd-hesap`)** benchmarked head-to-head against the
   strongest references (Eigen, CHOLMOD/UMFPACK, ARPACK, scipy, MATLAB toolboxes, Boost, GSL,
   SUNDIALS, FFTW/MKL, Ruckig, NumPy/PyTorch, …) with honest, reproducible scoreboards —
-  see [`docs/bench/`](docs/bench/).
+  see [`docs/bench/`](docs/bench).
 - **Safety-critical API contracts** in the numerical layer: caller-provided workspaces
   (zero heap on hot paths), bounded iteration (no unbounded recursion), status codes instead
   of exceptions, error estimates with labelled certification tiers.
@@ -34,45 +40,35 @@ API-stable across backends, and built on vertical slices rather than horizontal 
   CEIR/CHIR (text or CR-D007 visual) or via a C++ builder; C++ hot-reload stays a first-class
   authoring surface, no longer the only one (ADR-0108).
 
-## Modules (shipped)
+## Source map and current work
 
-| Area | Modules |
-|---|---|
-| Foundation | `core` · `log` · `vm` · `memory` · `containers` · `math` · `jobs` · `platform` · `app` · `config` · `units` · `time` · `perf` |
-| GPU platform | `gpu-context` (one device facade; Vulkan · DX12 · CUDA backends) · `kir` (**CKIR** — the backend-neutral shader/kernel IR; GLSL/HLSL/WGSL/MSL/CUDA are emitter *outputs*, never authored) · the asset-driven **RAF** rendering stack (`render-graph`/`render-pass`/`render-program`/`render-material` + five asset cookers — every technique is a cooked asset, not C++) · `draw` (overlay/viz) · `imgui` (debug-only) |
-| Scene & assets | `scene` (8-layer ECS substrate) · `resources` (CRDR pack format, hot-reload) · `asset-io` · `anim` · `profile` |
-| Geometry | 13 sub-modules: primitives (Shewchuk predicates) · BVH (+GPU LBVH) · convex (GJK/EPA/Quickhull) · mesh · mesh-processing (QEM/remesh) · spatial · polygon (Boolean) · Delaunay/Voronoi · decomposition (V-HACD) · curves · shader-helpers · viz · meshgen |
-| Numerics (`crd-hesap`) | dense (BLAS/LAPACK-class) · sparse · orderings · iterative+AMG · sparse-direct (supernodal Cholesky/LU/QR/LDLᵀ, HSS/BLR, mixed-precision IR) · eigensolvers · optimization (QP/LP/NLP/conic/MIP/global) · ODE/DAE · FFT · DSP/wavelets/comms · special functions · statistics (RNG/distributions/MCMC/regression) · interpolation · quadrature · differentiation · motion (Ruckig-class OTG) · tensors (incl. quantized dtypes + NN inference) · autodiff (forward + reverse, deterministic gradients) |
+The [module/source map](docs/systems/README.md) lists the actual engine modules and their manifests.
+Read current public source before relying on a historical system example or a dated test count.
 
-Current front: the post-RAF GPU-platform programme (rendering pipelines · UI/2D · GPU
-compute/science/ML · media/editor) — live state in [`context.md`](context.md). Then: hesap-GPU
-numerics, the notebook + MCP agent platform, the Cerid-native physics resume (`eylem`), and the
-editor.
+Current sequence: finish the entire retained renderer library → native `crd-ui` and **CR-D007**
+(game/engineering editor and game publishing) → hesap GPU and the notebook → media and remaining
+programmes. The notebook shares one workspace implementation between CR-D007 and a standalone host.
+Windows/Linux qualify first; macOS/web explicitly follow. Track every slice in the single
+[master table](docs/ROADMAP.md#master-table); [context](context.md) is the current pointer.
+
+CEIR is the shared execution IR; CHIR is its high-level authoring layer and CKIR its device-program
+form. The recorded CEIR execution foundation is complete; that does not mean renderer quality,
+full CHIR, UI widgets or CR-D007 have shipped. [Module inventory](docs/systems/README.md) and
+[system audit](docs/research/2026-09-12-system-audit.md) distinguish these boundaries.
 
 ## Building
 
-Requirements: CMake ≥ 3.25, Ninja, Vulkan SDK ≥ 1.4.305 (NV extension headers; 1.4.341 is the
-CI pin), and MSVC 2026 (VS 18)/clang-cl (Windows) or GCC (Linux). CUDA Toolkit is optional
-(enables the CUDA compute backend).
-
-```powershell
-cmake --preset win-debug
-cmake --build --preset win-debug
-ctest --preset win-debug
-```
-
-Linux presets (`linux-gcc-debug`, `linux-gcc-release`, …) mirror the Windows ones. The full
-preset list, sanitizer configs, per-slice verification protocol, and troubleshooting live in
-[`docs/BUILDING.md`](docs/BUILDING.md).
+Use [BUILDING](docs/BUILDING.md) for scoped local targets, CTest, tidy and CI qualification.
+The helper scripts and CMake presets define actual tool paths and available configurations.
 
 ## Documentation
 
 Start at **[`docs/README.md`](docs/README.md)** — the documentation map: canonical reading
 order plus a map of every doc area. Quick links:
 
-- **Status & roadmap** — [`docs/ROADMAP.md`](docs/ROADMAP.md); live state in [`context.md`](context.md)
+- **Status & roadmap** — [`docs/ROADMAP.md`](docs/ROADMAP.md#master-table); live state in [`context.md`](context.md)
 - **Engineering principles** — [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md); sanity doctrine — [`docs/SANITY.md`](docs/SANITY.md)
-- **Subsystem overviews** — [`docs/systems/`](docs/systems/)
-- **Architecture decisions (ADRs)** — [`docs/decisions/`](docs/decisions/)
-- **Benchmark results** — [`docs/bench/`](docs/bench/)
-- **Session history** — [`docs/sessions/`](docs/sessions/)
+- **Subsystem overviews** — [`docs/systems/`](docs/systems)
+- **Architecture decisions (ADRs)** — [`docs/decisions/`](docs/decisions)
+- **Benchmark results** — [`docs/bench/`](docs/bench)
+- **Session history** — [`docs/sessions/`](docs/sessions)

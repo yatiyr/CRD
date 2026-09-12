@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-z: the ALL-PEERS SCOREBOARD (crd-hesap-tensor vs every measured gold standard)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.6 v14-z close artifact. This is a CONSOLIDATION — every number below is quoted verbatim
 > from the linked source board (the single home for measurements, per `docs/bench/README.md`); nothing
 > here was re-measured or recomputed except where a row explicitly says "computed from the board's own

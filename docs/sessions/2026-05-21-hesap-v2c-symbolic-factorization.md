@@ -1,5 +1,8 @@
 # 2026-05-21 — Phase 3.1.6 `crd-hesap` v2c: full symbolic factorisation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-ordering`. The v5 sparse-direct hand-off. Built on the v2a
 > CSparse port (`cs_etree`/`cs_post`/`cs_counts`); adds the full L row pattern and
 > the fundamental supernode partition. **CLOSED — 4-config DoD PASS.**

@@ -1,5 +1,8 @@
 # The Hair/Fur Frontier Collection — B18 research dossier
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the hair/fur RT renderer shipped (offline path working; real-time path tracked); see the hair recipes in `docs/recipes/`. *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Studied 2026-07-19 (pymupdf page-image reading; see `reference_read_pdfs_with_pymupdf` memory).

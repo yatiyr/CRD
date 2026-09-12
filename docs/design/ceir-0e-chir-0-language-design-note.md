@@ -1,5 +1,8 @@
 # CEIR-0e — CHIR-0: the Cerid high-level language design note (DESIGN-ONLY)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **This is a DESIGN NOTE, not an ADR — it decides nothing.** It weighs options, sketches directions, and states
 > what is deferred. The binding CHIR decisions are made by a future ADR at **CEIR-29**, *after* the CEIR corpus
 > exists to correct this design with real evidence. ⛔ **ZERO implementation** follows from this note — CHIR is not
@@ -12,6 +15,16 @@
 > **Status:** ACCEPTED as the design DIRECTION (2026-08-07, user-approved at the CEIR-0e gate). ⛔ The binding
 > language decisions remain deferred to the CEIR-29 ADR (against the corpus); accepting this note accepts the
 > *direction* (the §5 composite ownership leaning, the constraints, the deferral), not a specification.
+>
+> ⛔ **CEIR-32 census correction (2026-09-06, annotate-in-place — tracker-authoritative):** (1) NUMBERING — this note
+> predates the band re-baseline; every "CEIR-29" below = **the CHIR band, now CEIR-32** (`D-007-ceir-tracker.md` row
+> CEIR-32). (2) STATUS — two "⬜ not yet built" markers below are STALE: the **CEIR-1c semantic-identity model IS built**
+> (`Context::assign_stable_ids` + `Operation::stable_id`, used by `program_asset.cpp` §20 state-schema), and the **CEIR-3f
+> ownership/view qualifiers ARE built** (`TypeKind::Qualified` + `OwnershipKind` incl. `BorrowedView` in `type.hpp:64-79`) —
+> so §5's light-borrow surfaces onto an EXISTING encoding, and §7's identity model already exists. **→ The binding CHIR
+> decisions are now made: [ADR-0128](../decisions/0128-chir-0-language-binding-decisions.md) (CEIR-32a, ACCEPTED
+> 2026-09-06) binds scope/ownership/reload-identity/text-graph/module-placement against the corpus. This note's §5
+> leaning + §8 deferral are RESOLVED there; read the ADR for the decisions, this note for the rationale that fed them.**
 
 ---
 

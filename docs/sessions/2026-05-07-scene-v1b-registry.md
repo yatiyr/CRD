@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1b: `ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1a shipped 2026-05-06. `crd-scene` had `EntityId` / `SlotMap` / `World` (entity identity layer only). No components, no storage, no traits.
 
 **Status at end:** Phase 3.0 v1b SHIPPED. `World::register_component<T>(traits...)` accepts the full ADR-0056 trait grammar. `ComponentRegistry` + `IStorageBackend` interface + `ComponentMask` (256-bit) all live. 22 new unit tests / 131 new assertions. 12 of 14 slices remaining; v1c (`ArchetypeChunkStorage`) is next.

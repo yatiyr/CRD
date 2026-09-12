@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · B11 wave/subgroup op class in CKIR (bit-exact both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** carry on the D-007 main line, no gaps, a performant frontier system with CKIR. Next in order after B10: **B11** (wave/
 subgroup + quad ops + work-graph node shaders). Hardware check: the full subgroup suite is supported; work graphs
 (`VK_AMDX_shader_enqueue`) are NOT on this NVIDIA device → the work-graph halves of B11/C5 are env-blocked, subgroup ops are fully

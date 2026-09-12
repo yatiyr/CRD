@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1k: SceneResource + SceneLoader (persistence)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1j shipped. Transform + TransformPropagation. Scene tests 211 / 34716, six-config 727/727.
 
 **Status at end:** v1k shipped — the **persistence layer**. SCEN artifact format with full World round-trip via `SceneArtifactBuilder` (build) + `SceneLoader` (parse) + `World::instantiate_scene` (restore). Forward-compat by FourCC; hard-fail on size/version mismatch. Determinism contract verified by bit-exact byte comparison. Six-config 741/741 / 738 release / 17 smokes. Scene tests 225 / 34783.

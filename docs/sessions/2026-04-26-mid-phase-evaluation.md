@@ -1,5 +1,8 @@
 # Session — 2026-04-26 — mid-phase quality evaluation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 No code this session. Step back, look at the project as a whole, decide

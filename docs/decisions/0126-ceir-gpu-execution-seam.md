@@ -1,5 +1,8 @@
 # ADR-0126 — the CEIR-13z GPU execution seam (`execute_lowered` on IComputeContext)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** ACCEPTED 2026-08-10 · **Band:** CEIR-13z (the §129 execution proof) · **Module:** `crd-ceir-gpu` (bridge) ·
 **Supersedes/strikes:** ADR-0125 §2.3 (the "validate_dispatch on a resolved DispatchDesc at execute" clause) + the
 lower.hpp "binds to a gpu-context DispatchDesc at execute" comments — corrected in place here (§4).

@@ -1,5 +1,8 @@
 # 2026-07-07 — v16-g: the implicit-differentiation suite (the open C++ lane)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped (`implicit_diff.hpp`):** differentiate the SOLUTION of an equation via the implicit function theorem —
 NEVER by unrolling the solver, so the backward is O(1) linear solves independent of the solver's iteration count and
 reuses the solver's own factor.

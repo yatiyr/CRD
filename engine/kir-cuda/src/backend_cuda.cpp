@@ -362,6 +362,9 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     if (!alloc_ok) { return false; }
     void* params[kMaxIn + 8];
     int   np = 0;
+    // Non-tiled Contract packs {M,K,N,nbatch} into ONE 16-byte arg — emit_contract_cuda's `uint4 dims` push ABI (a byte-
+    // copied launch param, so this array's align-4 is fine); four scalars would leave K/N/nbatch unbound (SIGSEGV).
+    crd::u32 cdims[4] = {d0, d1, d2, d3};
     if (attention) // ckir(Q, K, V, O, S, scale)
     {
         params[np++] = &impl.pool_in[0];
@@ -384,11 +387,11 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         for (int i = 0; i < n_inputs; ++i) { params[np++] = &impl.pool_in[i]; }
         params[np++] = &impl.pool_out;
         if (tiled) { params[np++] = &d0; params[np++] = &d2; params[np++] = &d1; } // tiled ckir(A,Bm,C, M,N,K)
+        else if (outn.op == KOp::Contract) { params[np++] = cdims; } // non-tiled ckir(A,Bm,C, uint4{M,K,N,nbatch})
         else
         {
             params[np++] = &d0;
-            if (outn.op == KOp::Contract) { params[np++] = &d1; params[np++] = &d2; params[np++] = &d3; }
-            else if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
+            if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
             else if (is_reduce(outn.op) || outn.op == KOp::Gather || outn.op == KOp::ScanSum) { params[np++] = &d1; } // these three take just the row size
         }
     }
@@ -456,18 +459,19 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
     }
     if (mok)
     {
-        // 4. params + grid (tiled: ckir(A,Bm,C,M,N,K); naive: ckir(A,Bm,C,M,K,N,batch))
+        // 4. params + grid (tiled: ckir(A,Bm,C, M,N,K); naive: ckir(A,Bm,C, uint4{M,K,N,nbatch}) — ONE 16B arg per emit_contract_cuda)
         void*    params[8];
         int      np = 0;
         crd::u32 pm = mm;
         crd::u32 pn = nn;
         crd::u32 pk = kk;
         crd::u32 pb = batch;
+        crd::u32 ndims[4] = {pm, pk, pn, pb};
         params[np++] = &d_in0;
         params[np++] = &d_in1;
         params[np++] = &d_out;
         if (tiled) { params[np++] = &pm; params[np++] = &pn; params[np++] = &pk; }
-        else { params[np++] = &pm; params[np++] = &pk; params[np++] = &pn; params[np++] = &pb; }
+        else { params[np++] = ndims; }
         const crd::u32 gx = tiled ? (nn / static_cast<crd::u32>(sched.bn)) : (mm * nn * batch + 255U) / 256U;
         const crd::u32 gy = tiled ? (mm / static_cast<crd::u32>(sched.bm)) : 1U;
         const crd::u32 bx = tiled ? static_cast<crd::u32>(sched.nt) : 256U;

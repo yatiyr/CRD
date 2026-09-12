@@ -1,5 +1,8 @@
 # 2026-07-21 — B19 frontier axes complete: relightable · pop-free · compressible · trainable · portable
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) — CLOSED
 **Directive:** "let's go and finish all frontier axes and finish B19, no debts, full gold standard and frontier and quality."
 

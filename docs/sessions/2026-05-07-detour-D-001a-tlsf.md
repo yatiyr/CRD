@@ -1,5 +1,8 @@
 # 2026-05-07 — Detour D-001-a: `TlsfAllocator` (Two-Level Segregated Fit)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1c2 shipped. ECS routing all allocations through `MallocAllocator`. `crd-memory` had `LinearAllocator`, `StackAllocator`, `PoolAllocator` (fixed-slot-count), but no general-purpose O(1) heap. CLAUDE.md and `docs/memory/MEMORY_FILE.md` had promised TLSF since Phase 1.
 
 **Status at end:** TLSF allocator shipped as opt-in `IAllocator*` consumer. 18 unit tests / 2142 assertions including a 1000-iteration random alloc/free stress under ASan. Six configs green. **`MallocAllocator` remains the engine default** — TLSF/Pool are explicit `IAllocator*` you choose. Detour D-001-b is next: `GrowablePoolAllocator` + `ChunkAllocator` refactor.

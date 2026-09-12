@@ -1,5 +1,8 @@
 # Session 2026-08-03 (later) — RAF-7 closed: one-submission frame recording + all 4 frame-graph-shaped kinds gated
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Re-entry pointer: `context.md` §"STATE AT 2026-08-03 (LATER)". Band: D-007 "RAF band". Mission: §7 / Gate 7.
 > Prior half: `docs/sessions/2026-08-03-raf-substrate-through-frame-graph.md` (RAF-0…7 substrate). Everything below is
 > **green (VK+DX12), LLVM-20 tidy-clean, and uncommitted** (user controls commits).

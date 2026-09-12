@@ -1,5 +1,8 @@
 # Session — 2026-04-28 — ImGui debug overlay
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the first debug overlay over the now-working triangle path, using ImGui's

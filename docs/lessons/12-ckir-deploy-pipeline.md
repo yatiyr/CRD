@@ -1,5 +1,8 @@
 # 12 — The CKIR deploy pipeline: from graph to GPU
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > *How a shader authored as an IR graph becomes shippable, cached, deduplicated, zero-runtime-compile bytecode — and how one
 > content hash ties the whole pipeline together. The concrete walkthrough behind ADR-0104 (D1–D5).*
 

@@ -1,5 +1,8 @@
 # 2026-08-05 — REN-40-D + REN-39-C1: the two pre-existing GPU-gate regressions fixed (both backends)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 After RAF-10 closed, three flagged failures remained from the RAF-8 flip baseline. All three are now fixed and the
 full `crd-scene-render-tests` suite is **64/64 (1394 assertions)** GREEN on **Vulkan AND DX12**.
 

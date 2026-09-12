@@ -1,5 +1,8 @@
 # ADR-0114 — Stable semantic identity: content-independent stable ids for ops/functions/state-slots
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-09, advisor-approved under the CEIR-8 gold-standard autonomous cadence) — the
 D-007 **CEIR band 8 (Foundation Closure)**, slice **CEIR-8d**. Pays the ADR-0109 §6 semantic-identity IOU (only
 `SourceLoc` landed at 1c; the *stable id* — item 1 — never did). Retires pointer/pre-order identity from the

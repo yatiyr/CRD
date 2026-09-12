@@ -1,5 +1,8 @@
 # 2026-06-13 — v9 remainder batch: IMEX · Krylov · sensitivities · Pantelides · close
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > User direction: "as many slices as batches, ELITE + GOLD standard, NEVER DEFER ANYTHING, we test and
 > bench at the END, FULL CRUSH." Advisor-adjusted into **two verification cadences**: the cheap
 > deterministic correctness gates (trajectory/order/determinism) run **per-slice as I go** (that is how

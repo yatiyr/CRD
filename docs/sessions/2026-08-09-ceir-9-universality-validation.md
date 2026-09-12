@@ -1,5 +1,8 @@
 # CEIR-9 — Universality Validation (the universality quest, part 2: PROOF, not features)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Band 9 drives real mock-domains through the closed foundation (bands 1–8) to prove universality by open-world
 > semantics. ⛔ Every 9x slice applies the **U-§97 failure criterion**: *did this domain require a second generic
 > scheduler / compiler / runtime / dependency-graph?* If yes → EXTEND CEIR (a missing universal concept) or FORMALIZE a

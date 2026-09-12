@@ -1,5 +1,8 @@
 # ADR-0099 — `crd-gpu-context`: a backend-agnostic GPU **context manager**; compute and rendering as independent, composable consumers
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-08) — user decision. (Supersedes this ADR's first Proposed draft, which mis-argued "share the device"; the audit below overturned it.) **Refines ADR-0080.** **§6 SUPERSEDED by ADR-0103 (2026-07-10)** — see the strike-through in *Decision*.
 - **Phase:** 3.1.6 v17 (GPU compute) — foundational architecture slice **v17-i**, laid **before** resuming GPU-compute feature work (tensor fan-out, fusion, …).
 - **Tags:** `gpu-context` `rhi` `compute` `rendering` `architecture` `vulkan` `cuda` `metal` `dx12` `webgpu` `hip` `kir` `geometry-bvh-gpu` `separation` `headless` `context-manager` `substrate`

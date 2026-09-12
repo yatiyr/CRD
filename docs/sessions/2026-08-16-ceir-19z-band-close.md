@@ -1,5 +1,8 @@
 # CEIR-19z — the CEIR-19 (RT / ceir.rt) band close (2026-08-16)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The RT band is authored-asset complete: the `ceir.rt` dialect (19a), the hybrid RT-shadow renderer (19b),
 the ceir.rt→gpu execution bridge + the §134 wavefront path tracer (19c), and the four band-close fixes
 (19z-1 F1, 19z-2 drift, 19z-3 F2, 19z-4 this close). Every RT algorithm + rendering DECISION ships as a

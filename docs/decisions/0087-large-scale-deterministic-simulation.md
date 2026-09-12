@@ -1,5 +1,8 @@
 # ADR-0087 — Large-scale deterministic simulation: environmental fields, surface-integral coupling, moving-frame agents, and player-count-scaled networking
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Proposed (design direction from a 2026-05-30 design session; ratify per-slice when eylem + the marine/aero + networking clusters resume after hesap Phase 3.1.6)
 **Date:** 2026-05-30
 **Tags:** [arch] [physics] [eylem] [networking] [determinism] [lod] [environment] [mmo]

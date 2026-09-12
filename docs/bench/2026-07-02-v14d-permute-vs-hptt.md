@@ -1,5 +1,8 @@
 # 2026-07-02 — v14-d tensor permute vs HPTT (single-thread head-to-head)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Machine/config:** i9-14900K, WSL2 Ubuntu 24.04, `taskset -c 4` (one P-core thread), median of 10.
   Both sides g++ 13.3 `-O3 -march=native`. HPTT = the tensor-transpose gold standard
   (`external/hptt`, SHA 9425386, `hptt::ESTIMATE` plans, alpha=1) — baselines from

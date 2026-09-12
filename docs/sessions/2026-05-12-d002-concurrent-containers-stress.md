@@ -1,5 +1,8 @@
 # 2026-05-12 — Detour D-002: concurrent containers + stress-hardening
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Closes detour D-002.** Main roadmap resumes at Phase 3.1.7 `crd-geometry` v0a.
 
 Side mission to harden `crd-containers` / `crd-memory` / `crd-scene` storages under

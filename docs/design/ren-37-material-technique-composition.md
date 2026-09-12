@@ -1,5 +1,8 @@
 # REN-37 design — MATERIAL × TECHNIQUE composition: how an authored frame graph reaches into the fragment shader
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > ## ⛔⛔⛔ TOP RULE — WE WILL ONLY USE OUR AUTHORED FRAME GRAPHS
 > Every rendering technique ships as an authored `.frame.toml` ASSET, never as C++ that builds passes.
 > This document exists because CSM exposed the one place that rule was not yet expressible: **a lighting

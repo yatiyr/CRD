@@ -1,5 +1,8 @@
 # 2026-07-02 — v14-c reductions: Tier-D fixed-tree + Tier-R binned vs ReproBLAS
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Machine/config:** i9-14900K, WSL2 Ubuntu 24.04, `taskset -c 4`, median of 10, g++ 13.3
   `-O3 -march=native`. ReproBLAS v2.1.0 baselines from `external/PEER_ORACLES.md` (same machine, same
   pinning, same `sin(2π(i/N−0.5))` cancellation workload, fold=3).

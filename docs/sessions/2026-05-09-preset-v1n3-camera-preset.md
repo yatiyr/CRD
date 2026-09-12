@@ -1,5 +1,8 @@
 # 2026-05-09 — Phase 3.0 v1n3: `CameraPreset` second concrete preset type + partial-override convention
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** v1n2 just shipped — `QualityPreset` is the first concrete type, `IPresetTarget::apply(QualityPreset)` overload landed on the base. Tests at 823/823 across both platforms.
 
 **Status at end:** v1n3 shipped — `CameraPreset` is the second concrete type, `IPresetTarget::apply(CameraPreset)` overload appended. **Full 12-config sweep (Win × 7, Linux × 5) all green: 826/826 in assert-enabled configs, 823/823 in optimised configs (debug-only `FiberState` tests gated out).**

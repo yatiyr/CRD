@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1a-material-d — mass derivation (CLOSES v1a-material cluster)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per ADR-0069 §3 + §8 + §11, ship the canonical mass / centre-of-mass /

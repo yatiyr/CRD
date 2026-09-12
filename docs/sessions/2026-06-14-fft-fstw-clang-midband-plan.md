@@ -1,5 +1,8 @@
 # 2026-06-14 — FFT: fstw read-floor cut (+15% @8M), clang refuted, the paper-grounded mid-band crush plan
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Mandate (user, emphatic, standing):** FULL MKL CRUSH on 1D complex FFT — every size, not just beat PocketFFT.
 This session banked a real large-N win, killed a cheap hypothesis with a clean probe, *read the actual papers*
 (`docs/books/`), and converted "the mid-band needs genfft codegen" from a vague verdict into a **concrete,

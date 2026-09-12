@@ -596,6 +596,9 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                     app(o, "]");
                 }
                 else if (prm.type == FrameParamType::Bool) { app(o, prm.v[0] != 0.0 ? "true" : "false"); }
+                // CEIR-31b-4-b-iv-g-2: a STRING generic param (e.g. `derive_spec_2_read = "blur_src"`) emits as a quoted
+                // TOML string from `prm.str` — without this it fell to app_f64(v[0]) and the payload was dropped on save.
+                else if (prm.type == FrameParamType::String) { app_quoted_sv(o, SV(prm.str.c_str(), prm.str.size())); }
                 else { app_f64(o, prm.v[0]); }
                 app(o, "\n");
             }

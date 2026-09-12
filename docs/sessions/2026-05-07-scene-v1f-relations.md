@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1f: Relations (six built-ins)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1e shipped earlier the same day. `World::for_each_chunk` mixed-backend visitor in place, both L2 backends (Archetype + SparseSet) routed by `StorageHint`, sink fan-out consolidated through World. Scene tests 113 / 34450, six-config 629/629.
 
 **Status at end:** v1f shipped. Relations are a first-class L3 layer with six built-in tag types (`ChildOf`, `AttachedTo`, `Owns`, `Targets`, `DependsOn`, `PossessedBy`), three opt-in traits (`ReverseIndex`, `Acyclic`, `OnTargetDestroyed`), and an iterative destruction worklist that handles 500-deep cascade trees without stack overflow. Six-config 651/651 / 648 release / 17 smokes. Scene tests 135 / 34520.

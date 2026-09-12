@@ -1,5 +1,8 @@
 # Session: crd-jobs v1g — Worker Thread Pool + Main-Thread Fiber
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-02  
 **Scope:** `engine/jobs/src/worker_pool.hpp`, `worker_pool.cpp`, `fiber.hpp`, `fiber_pool.cpp`, `fiber_init.cpp`, `fiber_switch_win64.asm`, `fiber_context.hpp`; `tests/jobs/test_jobs.cpp`
 

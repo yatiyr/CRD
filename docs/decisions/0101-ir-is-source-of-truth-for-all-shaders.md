@@ -1,5 +1,8 @@
 # ADR-0101 — The IR is the single source of truth for every shader (compute AND material); backend languages are outputs only
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 - **Status:** Accepted (2026-07-09) — user decision ("we must ensure that our IR is the source of truth… materials and all shader stuff handled just like in any other frontier engine… IR must be very consistent, control flow to any other functions").
 - **Phase:** 3.1.6 v17 (GPU compute / CKIR) — architecture slice **v17-i / v17-e**, extending CKIR from a compute kernel IR to the **universal shader IR**.
 - **Tags:** `kir` `shader` `ir` `materials` `node-editor` `codegen` `crdr` `architecture` `north-star`

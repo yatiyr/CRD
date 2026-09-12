@@ -1,5 +1,8 @@
 # ADR-0078 — `crd-units` substrate architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted 2026-05-15 (v0a-close).
 
 **Context.** Phase 3.1.7.5 `crd-units` ships as a peer-substrate module

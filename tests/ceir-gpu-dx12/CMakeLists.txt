@@ -12,6 +12,8 @@ add_executable(crd-ceir-gpu-dx12-tests
     test_work_smoke_dx12.cpp    # CEIR-20b: execute_work_lowered DEVICE proof (DX12 twin) — produce writes the count, indirect consume reads it
     test_ceir_gemm_dx12.cpp     # CEIR-22b: synth_gemm → a CKIR Contract run on D3D12, bit-exact vs eval_cpu AND an independent triple loop
     test_ceir_reduce_dx12.cpp   # CEIR-22b: synth_reduce → a CKIR reduce run on D3D12, bit-exact vs eval_cpu AND an independent serial sum
+    test_ceir_elementwise_dx12.cpp # CEIR-25b-2a: synth_elementwise → a CKIR binary run on D3D12 (existing fused-elementwise emitter), vs eval_cpu AND an independent op ref (full add/sub/mul/div/max/min/pow vocab; HLSL/GLSL agreement)
+    test_ceir_bcast_perm_dx12.cpp  # CEIR-25b-2b: synth_broadcast/synth_transpose → CKIR Broadcast/Permute run on D3D12 (NEW emit_broadcast_hlsl/emit_permute_hlsl root emitters), vs eval_cpu AND an independent index-map ref (both broadcast axes; rank-2 [1,0] + a rank-3 perm)
     test_ceir_fft_dx12.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
     test_ceir_pipeline_dx12.cpp # CEIR-22c-3e: the parse-loaded design-B GEMM->FFT->mag->reduce->normalize pipeline on D3D12 (portable copy-readback) vs a composed ref
     test_ceir_quant_dx12.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real D3D12 device vs the CPU ref (the HLSL/GLSL emitter-agreement check)
@@ -24,6 +26,7 @@ target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE
     crd-memory
     crd-ceir          # the IR + the asset builder
     crd-ceir-gpu      # lower_region + execute_lowered (ADR-0125/0126)
+    crd-hesap-autodiff # CEIR-25b-4b: nn_reverse::matmul_vjp (analytic grad ref) + gradient_check::grad_fd (FD witness)
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-dx12      # the D3D12 CKIR backend (emit_compute_kernel_hlsl support)
     crd-gpu-context-dx12  # Dx12ComputeContext / create_pipeline_from_hlsl (its include dir isn't re-exported by crd-kir-dx12)

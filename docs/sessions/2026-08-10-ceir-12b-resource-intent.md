@@ -1,5 +1,8 @@
 # CEIR-12b — resource planning-INTENT attribute vocabulary (§20 lifetime / §24 memory-domain / §25 residency)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-08-10 · **Slice:** CEIR-12b (D-007 master spine) · **Status:** ✅ CLOSED · **ADR:** none (attr-vocabulary
 refinement, consistent with 12a's no-ADR op-vocabulary slice).
 

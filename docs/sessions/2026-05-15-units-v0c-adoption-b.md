@@ -1,5 +1,8 @@
 # Session log — 2026-05-15 — units v0c adoption pass B
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.7.5 `crd-units` adoption B. v0c-1 (RigidBody + PhysicsConfig dimensional) → v0c-2 (integrator typed-math) → v0c-3 (ForceFieldComponent geometric params) → v0c-close. v0c-4 (geometry-primitives surface re-tag) deferred to post-DimRoot per scope discovery.
 
 ## Scope landed

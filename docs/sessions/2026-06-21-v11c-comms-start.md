@@ -1,5 +1,8 @@
 # 2026-06-21 — v11c: the complete `crd-hesap-comms` module (modulation → OFDM) + crush benchmarks
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase 3.1.6 `crd-hesap` · v11 DSP cluster (ADR-0093) · NEW module `crd-hesap-comms`.** The entire comms/SDR module
 (v11c-a through v11c-g) was built and gated against the comms gold standard (liquid-dsp 1.6.0 + theoretical AWGN BER
 curves) in one session, and **crushes liquid-dsp on every benchmarked op**. **Comms suite: 39592 assertions / 26

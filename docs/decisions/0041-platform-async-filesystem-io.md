@@ -8,6 +8,9 @@ tags: [platform, resources, jobs]
 
 # ADR-0041 — `crd-platform` async filesystem I/O
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 ADR-0022 listed five prerequisites for the open-world streaming pipeline:

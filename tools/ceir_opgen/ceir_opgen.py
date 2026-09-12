@@ -364,6 +364,34 @@ def _camel(name):
     return "".join(part.capitalize() for part in name.split("_"))
 
 
+# The C++20 reserved keywords + alternative-token operator words. An authored attr/operand/result NAME is a valid IR
+# identifier (the _is_ident regex) but need NOT be a valid C++ identifier: a name like `class` becomes `AttrId class` in
+# the generated builder, which does not compile (CEIR-29c-3b: the first keyword-named attr). opgen is the ONE place that
+# turns an authored name into a C++ identifier, so it sanitizes here -- the IR/asset name stays raw (`{class = "gpu"}`),
+# only the emitted C++ identifier gets a trailing `_`. The `attr("%s")` / set_attr string arguments keep the RAW name.
+_CXX_KEYWORDS = frozenset((
+    "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char",
+    "char8_t", "char16_t", "char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "constinit",
+    "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", "do", "double",
+    "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if",
+    "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or",
+    "or_eq", "private", "protected", "public", "register", "reinterpret_cast", "requires", "return", "short", "signed",
+    "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local", "throw",
+    "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual", "void", "volatile",
+    "wchar_t", "while", "xor", "xor_eq",
+))
+# Drift lock: fails loudly if the table is ever trimmed below what the live corpus needs (`class` is CEIR-29c-3b's attr;
+# `gpu` is a value, never a keyword). The shape, not the specific pair, is the point -- a keyword-named attr must sanitize.
+# ⛔ a plain `assert` is stripped under `python -O`; a raise cannot be, so the lock holds even if the drift ctest runs optimized.
+if "class" not in _CXX_KEYWORDS or "gpu" in _CXX_KEYWORDS:
+    raise RuntimeError("opgen: _CXX_KEYWORDS lost its keyword-sanitizer coverage")
+
+
+def _cxx_ident(name):
+    """The authored NAME as a legal C++ identifier: a trailing `_` iff it collides with a C++ keyword (else unchanged)."""
+    return name + "_" if name in _CXX_KEYWORDS else name
+
+
 def _cstr(s):
     """A C++ narrow-string literal (UTF-8 body kept as-is; /utf-8 is on)."""
     body = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
@@ -402,11 +430,11 @@ def emit_hpp(model):
         out.append("    explicit %s(Operation* op) noexcept : m_op(op) {}\n" % cls)
         out.append("    [[nodiscard]] Operation* operation() const noexcept { return m_op; }\n")
         for i, o in enumerate(op["operands"]):
-            out.append("    [[nodiscard]] Value* %s() const noexcept { return m_op->operand(%dU); }\n" % (o["name"], i))
+            out.append("    [[nodiscard]] Value* %s() const noexcept { return m_op->operand(%dU); }\n" % (_cxx_ident(o["name"]), i))
         for i, r in enumerate(op["results"]):
-            out.append("    [[nodiscard]] Value* %s() const noexcept { return m_op->result(%dU); }\n" % (r["name"], i))
+            out.append("    [[nodiscard]] Value* %s() const noexcept { return m_op->result(%dU); }\n" % (_cxx_ident(r["name"]), i))
         for a in op["attrs"]:
-            out.append('    [[nodiscard]] AttrId %s() const noexcept { return m_op->attr("%s"); }\n' % (a["name"], a["name"]))
+            out.append('    [[nodiscard]] AttrId %s() const noexcept { return m_op->attr("%s"); }\n' % (_cxx_ident(a["name"]), a["name"]))
         out.append("\nprivate:\n    Operation* m_op;\n};\n")
     out.append("\n// -- builders (through the ordinary Context factories - no privileged construction). NOTE: a builder\n"
                "// produces the MINIMUM arity on every variadic axis (operands / results / regions); build the full arity\n"
@@ -424,8 +452,8 @@ def emit_hpp(model):
 
 def _builder_params(op, with_default=True):
     params = ["Context& ctx"]
-    params += ["Value* %s" % o["name"] for o in op["operands"]]
-    params += ["AttrId %s" % a["name"] for a in op["attrs"] if a.get("required", False)]
+    params += ["Value* %s" % _cxx_ident(o["name"]) for o in op["operands"]]
+    params += ["AttrId %s" % _cxx_ident(a["name"]) for a in op["attrs"] if a.get("required", False)]
     # The default argument belongs ONLY on the declaration (hpp); repeating it on the definition is a redefinition error.
     params.append("TypeId result_type = {}" if with_default else "TypeId result_type")
     return params
@@ -511,7 +539,7 @@ def emit_cpp(model):
         out.append("Operation* %s\n{\n" % _builder_sig(op, with_default=False))
         n_ops = len(op["operands"])
         if n_ops > 0:
-            out.append("    Value* operands[] = {%s};\n" % ", ".join(o["name"] for o in op["operands"]))
+            out.append("    Value* operands[] = {%s};\n" % ", ".join(_cxx_ident(o["name"]) for o in op["operands"]))
             span = "containers::ConstSpan<Value*>(operands, %dU)" % n_ops
         else:
             span = "{}"
@@ -519,7 +547,7 @@ def emit_cpp(model):
                    % (op["name"], span, len(op["results"]), op["num_regions"]))
         for a in op["attrs"]:
             if a.get("required", False):
-                out.append('    ctx.set_attr(op, "%s", %s);\n' % (a["name"], a["name"]))
+                out.append('    ctx.set_attr(op, "%s", %s);\n' % (a["name"], _cxx_ident(a["name"])))
         out.append("    return op;\n}\n")
     # §26 effect tables (CEIR-4a) — emitted BEFORE register_%s_ops so the register call can reference them; an
     # anonymous-namespace member is visible across every anon-namespace block in this TU, so the OpSchema table reuses

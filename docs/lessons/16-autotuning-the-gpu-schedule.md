@@ -1,5 +1,8 @@
 # Lesson 16 — Autotuning: finding the fastest way to run a kernel
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The story of the AS band (ADR-0098 §4). Written for the engineer who asks "what *is* autotuning, and why does a compiler need it?" — the answer is the difference between "CKIR runs everywhere" and "CKIR runs everywhere *and is the fastest*."
 
 ## The fact that starts everything

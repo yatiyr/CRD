@@ -1,5 +1,8 @@
 # CEIR-0h — Migration + explicit DELETION tables
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Band:** D-007 · CEIR-0 · slice 0h. **Tracker row:** `docs/detours/D-007-ceir-tracker.md` → CEIR-0h.
 > **Gate:** the tables are complete; **every deletion names its parity gate FIRST** (the-deletion-is-the-proof rule).
 > **Law:** mission §126 (framegraph migration), §127 (executor migration), §178 (must-not-stay-native).

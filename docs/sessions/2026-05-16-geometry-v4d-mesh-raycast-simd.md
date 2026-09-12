@@ -1,5 +1,8 @@
 # Session log — 2026-05-16 — geometry v4d: `mesh_raycast_simd`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Fourth slice of Phase 3.1.7 v4 `-mesh` cluster. AVX2 8-wide Möller-Trumbore
 > batched ray-triangle test at BVH leaves, alongside the v4b Woop watertight
 > default. SIMD-batched ALU + scalar lane-scan for masking.

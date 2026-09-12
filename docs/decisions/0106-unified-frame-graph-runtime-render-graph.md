@@ -1,5 +1,8 @@
 # ADR-0106 — Unified frame-graph runtime: `crd-render-graph` is the single live runtime
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-08-03) — **CLOSED at RAF-12.3 (2026-08-06).** The `FramePassKind` migration adapter is
 DELETED (retired to `ExecutorTypeId` + role bits); one live runtime remains. See the RAF-12 close amendment below.
 **Phase:** D-007 (RAF band) — RAF-8a/8b. Mission constitution: `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`.

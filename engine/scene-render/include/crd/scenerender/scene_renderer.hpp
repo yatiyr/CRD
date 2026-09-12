@@ -663,6 +663,12 @@ public:
     };
     [[nodiscard]] bool read_gpu_cull_counts(GpuCullCounts& out) const;
 
+    // ⛔⛔ CEIR-31b-4-b-ii-1 (arm d, cache-hit H==H): how many specialized UI programs are currently cached in the
+    // `ensure_ui_program` (kind, spec-set) table. The b-ii-1 device gate renders the same spec-set twice and asserts
+    // BOTH byte-identical output AND that this count did not grow on the second render — the tooth that separates a
+    // real cache HIT from a cache that re-cooks an identical program every frame (which would pass H==H alone).
+    [[nodiscard]] crd::u32 ui_variant_count() const noexcept;
+
     // ⛔ HARD RULE (AGENTS.md): EVERY render pass goes through our own frame-graph machinery. An overlay — the
     // infinite grid, gizmos, debug viz, editor chrome — is a RENDER PASS, so it belongs in the frame's graph as
     // a pass, not as a separate `draw_*` sequence with its own submit.

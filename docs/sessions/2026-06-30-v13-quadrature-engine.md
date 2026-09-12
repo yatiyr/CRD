@@ -1,5 +1,8 @@
 # 2026-06-30 — v13 quadrature engine (g/h/i): composite + adaptive QUADPACK + DE + non-Gauss
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Session spanned the close of **v13-f** (interpolation — Clough-Tocher) and the **entire 1-D scalar
 > quadrature engine** of `crd-hesap-quadrature` (v13-g/h/i). Every method crushes every available
 > frontier peer (scipy + MATLAB + Boost + GSL 2.7.1). **Uncommitted** — the user commits + runs the

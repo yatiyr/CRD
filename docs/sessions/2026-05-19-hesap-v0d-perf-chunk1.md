@@ -1,5 +1,8 @@
 # Session 2026-05-19 — Phase 3.1.6 `crd-hesap` v0d-perf chunk 1 (packing + microkernel invocation + benchmark)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 After v0d-FOUNDATION shipped the BLAS L3 surface earlier today, user

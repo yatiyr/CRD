@@ -1,5 +1,8 @@
 # Huang 2022 — A Microfacet-based Hair Scattering Model (B18-b research)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the Huang microfacet hair BSDF shipped in the hair renderer (see the VNDF orientation scar in memory/SANITY). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > Source: Weizhen Huang, Matthias B. Hullin, Johannes Hanika, *"A Microfacet-based Hair Scattering

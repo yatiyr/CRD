@@ -1,5 +1,8 @@
 # 13 — Shaders, pipelines, materials & lighting, the Cerid way
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > *A concepts primer. What each of these words means plainly, and how CKIR realizes it. Read this before the deploy-pipeline
 > walkthrough ([12](12-ckir-deploy-pipeline.md)) and the variant deep-dive ([14](14-variants-permutation-and-specialization.md)).
 > Complements [11 — the shader-stage frontier](11-the-shader-stage-frontier.md), which covers the 14 GPU stages in detail.*

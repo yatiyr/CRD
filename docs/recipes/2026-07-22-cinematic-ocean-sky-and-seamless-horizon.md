@@ -1,5 +1,8 @@
 # Recipe — Cinematic ocean sky + a seamless projected-grid horizon (CKIR)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > How to take a functional-but-flat FFT ocean render to a cinematic bar: a physical analytic sky, puffy cumulus, and — the
 > hard part — a **seamless horizon** where a displaced projected-grid meets the sky with no dark sawtooth outline. All in CKIR,
 > portable to GLSL + HLSL, rendering identically across the fragment / vertex-pull / mesh-shader paths.

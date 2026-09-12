@@ -1,5 +1,8 @@
 # ADR-0082 — Hesap GEMM microkernel: intrinsics-via-Vec8f/Vec16f, ASM deferred
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-19
 **Status:** **Accepted**
 **Tags:** [arch] [hesap] [blas3] [microkernel] [perf] [simd]

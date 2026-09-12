@@ -1,5 +1,8 @@
 # crd-log — A Walkthrough In Plain Words
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > This document is for **you** (and future-you), not a manual for outsiders.
 > It explains, in plain language, *why* every piece of the logging system exists and *how*
 > it actually works on the inside. No marketing, no diagrams pretending things are simpler

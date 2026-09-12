@@ -1,5 +1,8 @@
 # ADR-0068 — Eylem body types + collision filtering + contact callbacks
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Status: **Accepted** (2026-05-11)
 > Companions: [ADR-0062](0062-eylem-physics-architecture.md) (eylem
 > architecture), [ADR-0063](0063-eylem-determinism-contract.md) (determinism
@@ -400,7 +403,7 @@ scene → snapshot hash matches across MSVC / clang / gcc × x64 / ARM
   needing pressure-distributed contact.
 - **Cross-reference (added 2026-05-11):** the broader sensor substrate
   (IMU / LIDAR / proximity / threshold-event sensors / diagnostic
-  sensors) is locked in [ADR-0072](0072-eylem-sensor-substrate.md).
+  sensors) is locked in ADR-0072 (planned, not filed; [retained contract](../archive/phases/phase-3.1-eylem.md)).
   ADR-0072 consumes this ADR's contact-event stream + adds the
   raycast / threshold sensor catalog.
 
@@ -422,7 +425,7 @@ scene → snapshot hash matches across MSVC / clang / gcc × x64 / ARM
 - **Cross-reference (added 2026-05-11):** the broader cinematic /
   animation-physics bridge (animation curves driving kinematic bodies,
   pre-roll simulation, per-shot physics overrides, slow-motion
-  substepping) is locked in [ADR-0074](0074-eylem-cinematic-bridge.md).
+  substepping) is locked in ADR-0074 (planned, not filed; [retained contract](../archive/phases/phase-3.1-eylem.md)).
   ADR-0074 consumes this ADR's filter + callback substrate from the
   cinematic side; the Kinematic body's velocity-inference contract
   (§1) is what makes animation-curve-driven kinematic bodies push

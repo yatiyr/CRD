@@ -1,5 +1,8 @@
 # ADR-0121 — Execution-plan cache: a validate-on-hit store of live truth
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** **ACCEPTED** (2026-08-10, under the standing autonomous loop grant [[project_ceir_autonomous_loop_grant]];
 design + close advisor-reviewed) — the D-007 **CEIR band 10 (Asset lifecycle completion)**, slice **CEIR-10b**. A
 `PlanCache` stores caller-produced (opaque) execution-plan artifacts keyed by (content hash × target × compiler

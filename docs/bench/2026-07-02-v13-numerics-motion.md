@@ -1,5 +1,8 @@
 # 2026-07-02 — v13 numerical computing + motion: interpolation · quadrature · differentiation · trajectory generation
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).**
 
 - **Machine/config (sessions 2026-06-30 through 2026-07-02):**

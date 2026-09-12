@@ -1,5 +1,8 @@
 # 2026-05-18 — Phase 3.1.7 v9a-c LBVH tree-build + AABB upsweep ✅ SHIPPED (elite combined slice)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice:** v9a-c (combined with the originally-separate v9a-d per the elite-combine decision). Ships a fully queryable GPU LBVH end-to-end in one slice — no half-built intermediate.
 
 **Status:** ✅ shipped same day. 5-config DoD PASS via `scripts/per-slice-check.ps1 -IncludeRelease -Parallel` in 39 s. 12 LBVH test cases / **379 021 byte-identical+1-ULP assertions** including the 4 advisor-flagged degenerate cases + end-to-end CPU↔GPU pipeline conformance.

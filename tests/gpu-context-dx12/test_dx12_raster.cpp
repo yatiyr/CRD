@@ -268,6 +268,288 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     CHECK(((corner >> 16U) & 0xFFU) >= 250U); // B high
 }
 
+// CEIR-34 R2: THE DX12 OVERLAY PIXEL GATE — the both-backend coverage the RET-6 Vulkan overlay gate lacked a
+// DX12 twin for. The overlay SHAPE (a StoragePull draw with a SINGLE Alpha-blended, colour-LOAD attachment +
+// a read-only depth test) lowers through the SAME command encoder on DX12; today it reaches the backend-private
+// draw_overlay, and (CEIR-34 R2) will reach the unified draw_storage path. This gate is the IDENTITY anchor for
+// that migration: it must render pixel-identically before and after. It proves the three overlay properties on a
+// COLOUR-ONLY target (compare == Always ⇒ no depth), which is exactly the path a naive fold would break (arm-406
+// draw_storage CLEARS): (1) BLEND — a semi-transparent green (alpha 0.5) over the red triangle composites to a
+// MIXED pixel (~128,128,0), never a pure overwrite; (2) LOAD — the blue clear OUTSIDE the triangle survives the
+// overlay (a clear would wipe it); (3) the draw actually happened (green appears where the scene had none).
+TEST_CASE("CEIR-34 R2: an alpha-blended, colour-LOAD overlay composites over the scene on DX12",
+          "[dx12][raster][gpu][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    // the SCENE program: the shared StoragePull triangle painted solid RED.
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_triangle_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED
+    auto svs = gctx->create_program(svg, sve);
+    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto sfs = gctx->create_program(sfg, sfe);
+    REQUIRE(sfs != nullptr);
+    auto scene = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(scene != nullptr);
+
+    // the OVERLAY program: the SAME triangle painted semi-transparent GREEN (alpha 0.5).
+    kir::KGraph ovg(&alloc);
+    kir::KEntry ove;
+    crd::gputest::build_triangle_vs(ovg, ove);
+    kir::KGraph ofg(&alloc);
+    kir::KEntry ofe;
+    crd::gputest::build_solid_alpha_fs(ofg, ofe, 0.0, 1.0, 0.0, 0.5); // GREEN @ 50%
+    auto ovs = gctx->create_program(ovg, ove);
+    REQUIRE(ovs != nullptr);
+    auto ofs = gctx->create_program(ofg, ofe);
+    REQUIRE(ofs != nullptr);
+    auto overlay = raster->create_raster_program(*ovs, *ofs);
+    REQUIRE(overlay != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim); // COLOUR-ONLY ⇒ the compare==Always overlay path
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U); // bound by the overlay shape; the VertexIndex-keyed VS ignores it
+    REQUIRE(storage != nullptr);
+
+    // 1. the scene: blue clear + the red triangle (a StoragePull draw that CLEARS).
+    crd::gputest::enc_draw_storage(*raster, *target, *scene, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, *storage, 3U);
+    // 2. the overlay: LOAD + alpha-blend the green triangle OVER it, no depth (Always).
+    crd::gputest::enc_draw_overlay(*raster, *target, *overlay, *storage, g::DepthCompare::Always, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U); // inside both triangles → the blended pixel
+    const crd::u32 corner = target->read_pixel(0U, 0U);             // outside → the blue clear must survive the LOAD
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch    = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch    = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ceir34-r2 overlay dx12] centre=(" << rch(centre) << "," << gch(centre) << "," << bch(centre) << ") corner=("
+                                             << rch(corner) << "," << gch(corner) << "," << bch(corner) << ")");
+    // BLEND: 0.5·green + 0.5·red ≈ (128,128,0) — R pulled DOWN from 255, G pushed UP from 0 (not a pure overwrite).
+    CHECK(rch(centre) > 90U);
+    CHECK(rch(centre) < 165U);
+    CHECK(gch(centre) > 90U);
+    CHECK(gch(centre) < 165U);
+    CHECK(bch(centre) < 25U);
+    // LOAD: the blue clear OUTSIDE the triangle survived the overlay compose (a CLEAR would have wiped it).
+    CHECK(rch(corner) < 25U);
+    CHECK(gch(corner) < 25U);
+    CHECK(bch(corner) > 235U);
+}
+
+// CEIR-34 R2: the OTHER overlay sub-paths on DX12 — a RANGED draw (first_vertex > 0) onto a COLOUR+DEPTH target
+// with a real (non-Always) depth compare. Together with the colour-only gate above this pins the whole overlay
+// path space that CEIR-34 R2 folds into the generic StoragePull verbs: the colour-only LOAD arm AND the
+// depth-load arm, non-ranged AND ranged. The overlay program is keyed to VertexIndex {4,5,6} (build_indexed_probe_vs);
+// a ranged draw with first_vertex == 4 lights it, first_vertex == 0 would collapse it offscreen — so a GREEN centre
+// PROVES the first-vertex offset reached the draw (not just that something drew). The RO-depth attachment is the
+// target's own companion depth; LessEqual against the scene's written depth passes for the coplanar overlay.
+// ⭐ This gate EXPOSED a real, PRE-EXISTING DX12 defect (ORTHOGONAL to CEIR-34 R2's verb-unification — the retired
+// draw_overlay_range used the identical non-indexed first_vertex path under a false "D3D12 folds StartVertexLocation"
+// comment, but NO DX12 ranged-overlay gate existed to catch it): a non-indexed DrawInstanced's StartVertexLocation
+// does NOT reach SV_VertexID on this adapter (see the offset-contract gate above, which read R=0 at first_vertex=4).
+// FIXED by the identity-index-buffer backend seam (dx12_raster_context.cpp draw_instanced_ranged): for first_vertex>0
+// the draw rides an identity index buffer so SV_VertexID = index value = first_vertex+i (REN-39-A1 / the draw-table
+// doctrine REN-39-B1). The first_vertex→VertexIndex command-model contract is unchanged; only DX12's honoring of it
+// moved to the backend seam. [!mayfail] REMOVED 2026-09-11 — the gate is now a hard GREEN on both backends.
+TEST_CASE("CEIR-34 R2: a ranged, depth-tested overlay composites over a colour+depth scene on DX12",
+          "[dx12][raster][gpu][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    // scene = the shared RED triangle at VertexIndex {0,1,2}, z = 0; writes depth where it covers.
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_triangle_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED
+    auto svs = gctx->create_program(svg, sve);
+    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto sfs = gctx->create_program(sfg, sfe);
+    REQUIRE(sfs != nullptr);
+    auto scene = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(scene != nullptr);
+
+    // overlay = the SAME-shaped triangle keyed to VertexIndex {4,5,6}, semi-transparent GREEN, z = 0.
+    kir::KGraph ovg(&alloc);
+    kir::KEntry ove;
+    crd::gputest::build_indexed_probe_vs(ovg, ove);
+    kir::KGraph ofg(&alloc);
+    kir::KEntry ofe;
+    crd::gputest::build_solid_alpha_fs(ofg, ofe, 0.0, 1.0, 0.0, 0.5); // GREEN @ 50%
+    auto ovs = gctx->create_program(ovg, ove);
+    REQUIRE(ovs != nullptr);
+    auto ofs = gctx->create_program(ofg, ofe);
+    REQUIRE(ofs != nullptr);
+    auto overlay = raster->create_raster_program(*ovs, *ofs);
+    REQUIRE(overlay != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_depth_target(dim, dim); // companion depth ⇒ the depth-load arm
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    // 1. scene: blue clear (depth → far 1.0) + the red triangle (depth-writing, compare Always).
+    crd::gputest::enc_draw_storage_depth(*raster, *target, *scene, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1.0F,
+                                         g::DepthCompare::Always, *storage, 3U);
+    // 2. overlay: RANGED (first_vertex = 4) + LOAD + alpha-blend + READ-ONLY depth test (LessEqual, passes at z=0<=0).
+    crd::gputest::enc_draw_overlay_range(*raster, *target, *overlay, *storage, g::DepthCompare::LessEqual, 4U, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(0U, 0U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch    = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch    = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ceir34-r2 ranged-depth dx12] centre=(" << rch(centre) << "," << gch(centre) << "," << bch(centre)
+                                                  << ") corner=(" << rch(corner) << "," << gch(corner) << ","
+                                                  << bch(corner) << ")");
+    // the GREEN overlay composited at the centre ⇒ first_vertex==4 reached the draw (else {0,1,2} collapses offscreen)
+    // AND the depth-load arm + alpha blend ran: ~ (128,128,0).
+    CHECK(rch(centre) > 90U);
+    CHECK(rch(centre) < 165U);
+    CHECK(gch(centre) > 90U);
+    CHECK(gch(centre) < 165U);
+    CHECK(bch(centre) < 25U);
+    // the blue clear survived the overlay LOAD outside the triangles.
+    CHECK(rch(corner) < 25U);
+    CHECK(bch(corner) > 235U);
+}
+
+// ⭐⭐ CEIR-34 R2 / REN-39-B1: THE FIRST-VERTEX OFFSET CONTRACT (DX12). Pins the VALUE the ranged overlay depends on —
+// a non-indexed draw's `first_vertex` MUST reach the shader's VertexIndex. build_vid_offset_probe covers the centre
+// whether VertexIndex reads {0,1,2} (offset DROPPED) or {4,5,6} (offset APPLIED), and a FLAT varying carries VertexIndex
+// to the FS as R = VertexIndex*(40/255). Drawn RANGED (first_vertex = 4, count = 3) the provoking vertex sees vid = 4 IFF
+// the offset arrived ⇒ centre R = 160; a dropped offset ⇒ vid = 0 ⇒ R = 0. The Vulkan twin asserts the SAME 160. This is
+// the permanent regression gate for the identity-index-buffer backend seam that makes DX12 honor first_vertex (REN-39-A1
+// proves indexed draws deliver SV_VertexID = index value on this adapter). Was RED (R=0) before that seam; MUST be green.
+TEST_CASE("CEIR-34 R2: first_vertex reaches the shader's VertexIndex on DX12 (offset contract)",
+          "[dx12][raster][gpu][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph vg(&alloc);
+    kir::KEntry ve;
+    crd::gputest::build_vid_offset_probe_vs(vg, ve);
+    kir::KGraph fg(&alloc);
+    kir::KEntry fe;
+    crd::gputest::build_vid_offset_probe_fs(fg, fe);
+    auto vs = gctx->create_program(vg, ve);
+    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto fs = gctx->create_program(fg, fe);
+    REQUIRE(fs != nullptr);
+    auto program = raster->create_raster_program(*vs, *fs);
+    REQUIRE(program != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    // clear to black, draw the probe RANGED (first_vertex = 4, count = 3).
+    crd::gputest::enc_draw_storage_ranged(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, *storage, 4U,
+                                          3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    WARN("[ceir34-r2 fv-contract dx12] centre R=" << rch(centre) << " (expect 160: VertexIndex saw first_vertex+0 = 4)");
+    // vid = 4 at the provoking vertex ⇒ R = 4*40 = 160; UNORM8 spec band |ideal - readback| < 1.1 (0.6-ULP store).
+    CHECK(rch(centre) >= 159U);
+    CHECK(rch(centre) <= 161U);
+}
+
+// CEIR-34 R2: the NON-ranged depth-tested overlay on DX12 (first_vertex == 0) — the clean arm-395
+// (draw_storage_depth_load) identity anchor, free of the DX12 first_vertex axis the ranged gate above tracks. Same
+// shape as the Vulkan twin: a depth-writing red scene + a semi-transparent green overlay at the same z, RO LessEqual
+// that passes ⇒ a blended centre and a surviving blue corner. This is the DX12 pixel gate CEIR-34 R2's depth-bucket
+// fold must keep green.
+TEST_CASE("CEIR-34 R2: a non-ranged depth-tested overlay composites over a colour+depth scene on DX12",
+          "[dx12][raster][gpu][overlay][ceir34]")
+{
+    namespace kir = crd::kir;
+
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    kir::KGraph svg(&alloc);
+    kir::KEntry sve;
+    crd::gputest::build_triangle_vs(svg, sve);
+    kir::KGraph sfg(&alloc);
+    kir::KEntry sfe;
+    crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED scene
+    auto svs = gctx->create_program(svg, sve);
+    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    auto sfs = gctx->create_program(sfg, sfe);
+    REQUIRE(sfs != nullptr);
+    auto scene = raster->create_raster_program(*svs, *sfs);
+    REQUIRE(scene != nullptr);
+
+    kir::KGraph ovg(&alloc);
+    kir::KEntry ove;
+    crd::gputest::build_triangle_vs(ovg, ove); // SAME triangle {0,1,2}, first_vertex == 0 (non-ranged)
+    kir::KGraph ofg(&alloc);
+    kir::KEntry ofe;
+    crd::gputest::build_solid_alpha_fs(ofg, ofe, 0.0, 1.0, 0.0, 0.5); // GREEN @ 50%
+    auto ovs = gctx->create_program(ovg, ove);
+    REQUIRE(ovs != nullptr);
+    auto ofs = gctx->create_program(ofg, ofe);
+    REQUIRE(ofs != nullptr);
+    auto overlay = raster->create_raster_program(*ovs, *ofs);
+    REQUIRE(overlay != nullptr);
+
+    constexpr crd::u32 dim    = 64U;
+    auto               target = raster->create_color_depth_target(dim, dim);
+    REQUIRE(target != nullptr);
+    auto storage = raster->create_storage_buffer(16U);
+    REQUIRE(storage != nullptr);
+
+    crd::gputest::enc_draw_storage_depth(*raster, *target, *scene, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F}, 1.0F,
+                                         g::DepthCompare::Always, *storage, 3U);
+    crd::gputest::enc_draw_overlay(*raster, *target, *overlay, *storage, g::DepthCompare::LessEqual, 3U);
+
+    const crd::u32 centre = target->read_pixel(dim / 2U, dim / 2U);
+    const crd::u32 corner = target->read_pixel(0U, 0U);
+    const auto     rch    = [](crd::u32 p) { return p & 0xFFU; };
+    const auto     gch    = [](crd::u32 p) { return (p >> 8U) & 0xFFU; };
+    const auto     bch    = [](crd::u32 p) { return (p >> 16U) & 0xFFU; };
+    WARN("[ceir34-r2 nonranged-depth dx12] centre=(" << rch(centre) << "," << gch(centre) << "," << bch(centre)
+                                                     << ") corner=(" << rch(corner) << "," << gch(corner) << ","
+                                                     << bch(corner) << ")");
+    CHECK(rch(centre) > 90U);
+    CHECK(rch(centre) < 165U);
+    CHECK(gch(centre) > 90U);
+    CHECK(gch(centre) < 165U);
+    CHECK(bch(centre) < 25U);
+    CHECK(rch(corner) < 25U);
+    CHECK(bch(corner) > 235U);
+}
+
 
 // D-007 B17 OIT QUALITY SCOREBOARD (pure CPU): the approximate WBOIT tier vs the EXACT A-buffer reference on the shared
 // scene. WBOIT is a single-pass depth-weighted approximation — it stays in the neighbourhood of the exact sorted composite

@@ -1,5 +1,8 @@
 # ADR-0066 — `crd-draw` substrate architecture
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-10
 **Status:** Accepted
 **Tags:** [arch] [draw] [eylem] [sdf] [audio] [renderer] [editor] [resources]

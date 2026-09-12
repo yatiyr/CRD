@@ -1,5 +1,8 @@
 # Recipe — Real-time hair (games)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > The same physically-based hair as the offline recipe, but at frame rate. This is not a different look — it is
 > the SAME fibre BCSDF and geometry with the transport approximated so it fits a 16–33 ms budget. Read the offline
 > recipe first (`2026-07-21-hair-offline-film.md`) for the fibre model and its parameters; this recipe is only the

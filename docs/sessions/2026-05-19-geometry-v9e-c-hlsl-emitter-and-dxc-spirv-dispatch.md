@@ -1,5 +1,8 @@
 # Session 2026-05-19 — geometry-v9e-c HLSL emitter + dxc → SPIR-V GPU dispatch
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Retroactive log written 2026-05-19** — slice shipped 2026-05-19 but
 > the session log wasn't authored at the time it landed; this fills
 > the gap. v9e-c initially shipped with structural-parity only; the

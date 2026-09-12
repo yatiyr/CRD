@@ -1,112 +1,133 @@
-# Systems
+# Systems and source map
 
-One short overview per shipped engine module. Plain English. "What is it, what does it do, how do I use it."
-Read this folder to remember what the engine *is*; read `docs/sessions/` to remember how it got that way.
+<!-- doc-role: navigation -->
+> Navigation; no independent live queue. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-> Refreshed 2026-08-07 (doc-hygiene pass); Known-gap list updated 2026-08-19 (added the `ceir`/`ceir-gpu` module family — CEIR bands 13z…24 shipped since). Statuses here are honest as of that date — a row's ✅ means the
-> module is shipped and its overview describes reality; docs written mid-phase carry their own historical
-> markers. When a new module ships, add a row; when a module dies, move its row to **Retired** (never delete
-> the overview — it becomes history).
+This index maps the current source tree. **Slice status lives only in [ROADMAP](../ROADMAP.md#master-table).**
+An existing module, overview or test directory is not a blanket production-quality claim. The
+[system audit](../research/2026-09-12-system-audit.md) records the 2026-09-12 dependency/coverage census.
+The [expanded review](../research/2026-09-12-cerid-whole-system-review.md) classifies the whole system and routes
+additional qualification gaps to the same master table; its [census](../research/2026-09-12-whole-system-census.json)
+records all manifests and sampled source identity without claiming tests ran.
 
-## The current GPU / rendering stack (read these, not the retired docs)
+Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CHIR](chir.md) and
+[CKIR stages](shader-ir-corpus-and-stages.md) for the executable-asset system. The
+[execution contract](../design/renderer-ui-execution-contract.md) describes the planned UI/editor boundaries.
 
-| Doc | What it is |
-| --- | ---------- |
-| [rendering-foundation.md](rendering-foundation.md) | **The RAF architecture** — the whole asset-driven rendering stack in one overview: the five authored declarations (`.frame.toml`/`.crdt`/`.crdv`/`.crdl`/`.crdm`), cookers, runtime, executors, backends. Start here. |
-| [shader-ir-corpus-and-stages.md](shader-ir-corpus-and-stages.md) | The CKIR shader-IR corpus + stage model (ADR-0101/0103) — what the IR can express and how it lowers. |
-| [rah-0-canonical-model-audit.md](rah-0-canonical-model-audit.md) | **Design note (pending user review)** — the post-RAF canonical-command-model audit driving RAH-1…8. |
+## Current module inventory
 
-⚠ **Known gap (reported, not hidden):** the live GPU modules — `gpu-context` (+ `-vulkan`/`-dx12`/`-cuda`),
-`kir` (+ per-backend emitters), **`ceir` (the CEIR IR + every dialect: arith/func/resource/compute/render/rt/work/
-shape/tensor/layout/linalg/quant/sparse/ml) + `ceir-gpu` (the CKIR native provider, `plan/execute_tensor_pipeline`,
-`expand_ml`/`partition_ml`/`coopvec_mlp` — CEIR-13z…24)**, `render-graph`/`render-pass`/`render-program`/
-`render-material`/`render-asset-core`, `draw`, the five cookers (`frame/technique/vertex/light/material-cook`),
-`scene-render`, `anim`, `asset-io`, `lod`, `preset`, `timeline` — have **no per-module overview yet**; the docs
-above + **the live `docs/detours/D-007-ceir-tracker.md`** (for the CEIR family) are authoritative for them.
+All 96 engine module CMake files are represented below. Existing overview links retain their dated evidence;
+where no dedicated overview exists, the public source and CMake manifest are the direct entry points.
 
-## Foundation
+| Module | Overview / source | Build and dependency contract |
+|---|---|---|
+| `anim` | [Public source](../../engine/anim/include/) | [CMake](../../engine/anim/CMakeLists.txt) |
+| `app` | [app](app.md) | [CMake](../../engine/app/CMakeLists.txt) |
+| `asset-io` | [Public source](../../engine/asset-io/include/) | [CMake](../../engine/asset-io/CMakeLists.txt) |
+| `audio` | [Public source](../../engine/audio/include/) | [CMake](../../engine/audio/CMakeLists.txt) |
+| `ceir` | [ceir](ceir.md) | [CMake](../../engine/ceir/CMakeLists.txt) |
+| `ceir-cook` | [Public source](../../engine/ceir-cook/include/) | [CMake](../../engine/ceir-cook/CMakeLists.txt) |
+| `ceir-gpu` | [Public source](../../engine/ceir-gpu/include/) | [CMake](../../engine/ceir-gpu/CMakeLists.txt) |
+| `ceir-host` | [Public source](../../engine/ceir-host/include/) | [CMake](../../engine/ceir-host/CMakeLists.txt) |
+| `chir` | [chir](chir.md) | [CMake](../../engine/chir/CMakeLists.txt) |
+| `config` | [config](config.md) | [CMake](../../engine/config/CMakeLists.txt) |
+| `containers` | [containers](containers.md) | [CMake](../../engine/containers/CMakeLists.txt) |
+| `core` | [core](core.md) | [CMake](../../engine/core/CMakeLists.txt) |
+| `draw` | [Public source](../../engine/draw/include/) | [CMake](../../engine/draw/CMakeLists.txt) |
+| `draw-imgui` | [Public source](../../engine/draw-imgui/include/) | [CMake](../../engine/draw-imgui/CMakeLists.txt) |
+| `eylem` | [Public source](../../engine/eylem/include/) | [CMake](../../engine/eylem/CMakeLists.txt) |
+| `eylem-rigid3d` | [Public source](../../engine/eylem-rigid3d/include/) | [CMake](../../engine/eylem-rigid3d/CMakeLists.txt) |
+| `eylem-viz` | [Public source](../../engine/eylem-viz/include/) | [CMake](../../engine/eylem-viz/CMakeLists.txt) |
+| `frame-cook` | [Public source](../../engine/frame-cook/include/) | [CMake](../../engine/frame-cook/CMakeLists.txt) |
+| `geometry-bvh` | [geometry-bvh](geometry-bvh.md) | [CMake](../../engine/geometry-bvh/CMakeLists.txt) |
+| `geometry-bvh-gpu` | [geometry-bvh-gpu](geometry-bvh-gpu.md) | [CMake](../../engine/geometry-bvh-gpu/CMakeLists.txt) |
+| `geometry-convex` | [geometry-convex](geometry-convex.md) | [CMake](../../engine/geometry-convex/CMakeLists.txt) |
+| `geometry-curves` | [geometry-curves](geometry-curves.md) | [CMake](../../engine/geometry-curves/CMakeLists.txt) |
+| `geometry-decomposition` | [geometry-decomposition](geometry-decomposition.md) | [CMake](../../engine/geometry-decomposition/CMakeLists.txt) |
+| `geometry-delaunay` | [geometry-delaunay](geometry-delaunay.md) | [CMake](../../engine/geometry-delaunay/CMakeLists.txt) |
+| `geometry-mesh` | [geometry-mesh](geometry-mesh.md) | [CMake](../../engine/geometry-mesh/CMakeLists.txt) |
+| `geometry-mesh-processing` | [geometry-mesh-processing](geometry-mesh-processing.md) | [CMake](../../engine/geometry-mesh-processing/CMakeLists.txt) |
+| `geometry-polygon` | [geometry-polygon](geometry-polygon.md) | [CMake](../../engine/geometry-polygon/CMakeLists.txt) |
+| `geometry-primitives` | [geometry-primitives](geometry-primitives.md) | [CMake](../../engine/geometry-primitives/CMakeLists.txt) |
+| `geometry-shader-helpers` | [geometry-shader-helpers](geometry-shader-helpers.md) | [CMake](../../engine/geometry-shader-helpers/CMakeLists.txt) |
+| `geometry-spatial` | [geometry-spatial](geometry-spatial.md) | [CMake](../../engine/geometry-spatial/CMakeLists.txt) |
+| `geometry-viz` | [geometry-viz](geometry-viz.md) | [CMake](../../engine/geometry-viz/CMakeLists.txt) |
+| `gpu-context` | [Public source](../../engine/gpu-context/include/) | [CMake](../../engine/gpu-context/CMakeLists.txt) |
+| `gpu-context-cuda` | [Public source](../../engine/gpu-context-cuda/include/) | [CMake](../../engine/gpu-context-cuda/CMakeLists.txt) |
+| `gpu-context-dx12` | [Public source](../../engine/gpu-context-dx12/include/) | [CMake](../../engine/gpu-context-dx12/CMakeLists.txt) |
+| `gpu-context-vulkan` | [Public source](../../engine/gpu-context-vulkan/include/) | [CMake](../../engine/gpu-context-vulkan/CMakeLists.txt) |
+| `hesap` | [Public source](../../engine/hesap/include/) | [CMake](../../engine/hesap/CMakeLists.txt) |
+| `hesap-amg` | [Public source](../../engine/hesap-amg/include/) | [CMake](../../engine/hesap-amg/CMakeLists.txt) |
+| `hesap-autodiff` | [hesap-autodiff](hesap-autodiff.md) | [CMake](../../engine/hesap-autodiff/CMakeLists.txt) |
+| `hesap-comms` | [hesap-comms](hesap-comms.md) | [CMake](../../engine/hesap-comms/CMakeLists.txt) |
+| `hesap-dense` | [hesap-dense](hesap-dense.md) | [CMake](../../engine/hesap-dense/CMakeLists.txt) |
+| `hesap-diff` | [hesap-diff](hesap-diff.md) | [CMake](../../engine/hesap-diff/CMakeLists.txt) |
+| `hesap-direct` | [Public source](../../engine/hesap-direct/include/) | [CMake](../../engine/hesap-direct/CMakeLists.txt) |
+| `hesap-dsp` | [hesap-dsp](hesap-dsp.md) | [CMake](../../engine/hesap-dsp/CMakeLists.txt) |
+| `hesap-eigen` | [hesap-eigen](hesap-eigen.md) | [CMake](../../engine/hesap-eigen/CMakeLists.txt) |
+| `hesap-fft` | [hesap-fft](hesap-fft.md) | [CMake](../../engine/hesap-fft/CMakeLists.txt) |
+| `hesap-interp` | [hesap-interp](hesap-interp.md) | [CMake](../../engine/hesap-interp/CMakeLists.txt) |
+| `hesap-iterative` | [Public source](../../engine/hesap-iterative/include/) | [CMake](../../engine/hesap-iterative/CMakeLists.txt) |
+| `hesap-motion` | [hesap-motion](hesap-motion.md) | [CMake](../../engine/hesap-motion/CMakeLists.txt) |
+| `hesap-ode` | [hesap-ode](hesap-ode.md) | [CMake](../../engine/hesap-ode/CMakeLists.txt) |
+| `hesap-opt` | [hesap-opt](hesap-opt.md) | [CMake](../../engine/hesap-opt/CMakeLists.txt) |
+| `hesap-ordering` | [hesap-ordering](hesap-ordering.md) | [CMake](../../engine/hesap-ordering/CMakeLists.txt) |
+| `hesap-preconditioners` | [Public source](../../engine/hesap-preconditioners/include/) | [CMake](../../engine/hesap-preconditioners/CMakeLists.txt) |
+| `hesap-quadrature` | [hesap-quadrature](hesap-quadrature.md) | [CMake](../../engine/hesap-quadrature/CMakeLists.txt) |
+| `hesap-resources` | [hesap-resources](hesap-resources.md) | [CMake](../../engine/hesap-resources/CMakeLists.txt) |
+| `hesap-sched` | [Public source](../../engine/hesap-sched/include/) | [CMake](../../engine/hesap-sched/CMakeLists.txt) |
+| `hesap-sparse` | [hesap-sparse](hesap-sparse.md) | [CMake](../../engine/hesap-sparse/CMakeLists.txt) |
+| `hesap-special` | [hesap-special](hesap-special.md) | [CMake](../../engine/hesap-special/CMakeLists.txt) |
+| `hesap-stats` | [hesap-stats](hesap-stats.md) | [CMake](../../engine/hesap-stats/CMakeLists.txt) |
+| `hesap-tensor` | [hesap-tensor](hesap-tensor.md) | [CMake](../../engine/hesap-tensor/CMakeLists.txt) |
+| `hesap-wavelet` | [hesap-wavelet](hesap-wavelet.md) | [CMake](../../engine/hesap-wavelet/CMakeLists.txt) |
+| `imgui` | [imgui](imgui.md) | [CMake](../../engine/imgui/CMakeLists.txt) |
+| `jobs` | [jobs](jobs.md) | [CMake](../../engine/jobs/CMakeLists.txt) |
+| `kir` | [Public source](../../engine/kir/include/) | [CMake](../../engine/kir/CMakeLists.txt) |
+| `kir-cuda` | [Public source](../../engine/kir-cuda/include/) | [CMake](../../engine/kir-cuda/CMakeLists.txt) |
+| `kir-dx12` | [Public source](../../engine/kir-dx12/include/) | [CMake](../../engine/kir-dx12/CMakeLists.txt) |
+| `kir-hip` | [Public source](../../engine/kir-hip/include/) | [CMake](../../engine/kir-hip/CMakeLists.txt) |
+| `kir-metal` | [Public source](../../engine/kir-metal/include/) | [CMake](../../engine/kir-metal/CMakeLists.txt) |
+| `kir-vulkan` | [Public source](../../engine/kir-vulkan/include/) | [CMake](../../engine/kir-vulkan/CMakeLists.txt) |
+| `kir-webgpu` | [Public source](../../engine/kir-webgpu/include/) | [CMake](../../engine/kir-webgpu/CMakeLists.txt) |
+| `light-cook` | [Public source](../../engine/light-cook/include/) | [CMake](../../engine/light-cook/CMakeLists.txt) |
+| `lod` | [Public source](../../engine/lod/include/) | [CMake](../../engine/lod/CMakeLists.txt) |
+| `log` | [log](log.md) | [CMake](../../engine/log/CMakeLists.txt) |
+| `material-cook` | [Public source](../../engine/material-cook/include/) | [CMake](../../engine/material-cook/CMakeLists.txt) |
+| `math` | [math](math.md) | [CMake](../../engine/math/CMakeLists.txt) |
+| `memory` | [memory](memory.md) | [CMake](../../engine/memory/CMakeLists.txt) |
+| `meshgen` | [meshgen](meshgen.md) | [CMake](../../engine/meshgen/CMakeLists.txt) |
+| `perf` | [perf](perf.md) | [CMake](../../engine/perf/CMakeLists.txt) |
+| `perf-ui` | [Public source](../../engine/perf-ui/include/) | [CMake](../../engine/perf-ui/CMakeLists.txt) |
+| `platform` | [platform](platform.md) | [CMake](../../engine/platform/CMakeLists.txt) |
+| `preset` | [Public source](../../engine/preset/include/) | [CMake](../../engine/preset/CMakeLists.txt) |
+| `profile` | [Public source](../../engine/profile/include/) | [CMake](../../engine/profile/CMakeLists.txt) |
+| `render-asset-core` | [Public source](../../engine/render-asset-core/include/) | [CMake](../../engine/render-asset-core/CMakeLists.txt) |
+| `render-graph` | [Public source](../../engine/render-graph/include/) | [CMake](../../engine/render-graph/CMakeLists.txt) |
+| `render-material` | [Public source](../../engine/render-material/include/) | [CMake](../../engine/render-material/CMakeLists.txt) |
+| `render-pass` | [Public source](../../engine/render-pass/include/) | [CMake](../../engine/render-pass/CMakeLists.txt) |
+| `render-program` | [Public source](../../engine/render-program/include/) | [CMake](../../engine/render-program/CMakeLists.txt) |
+| `resources` | [resources](resources.md) | [CMake](../../engine/resources/CMakeLists.txt) |
+| `scene` | [scene](scene.md) | [CMake](../../engine/scene/CMakeLists.txt) |
+| `scene-render` | [Public source](../../engine/scene-render/include/) | [CMake](../../engine/scene-render/CMakeLists.txt) |
+| `shader-cook` | [Public source](../../engine/shader-cook/include/) | [CMake](../../engine/shader-cook/CMakeLists.txt) |
+| `technique-cook` | [Public source](../../engine/technique-cook/include/) | [CMake](../../engine/technique-cook/CMakeLists.txt) |
+| `time` | [Public source](../../engine/time/include/) | [CMake](../../engine/time/CMakeLists.txt) |
+| `timeline` | [Public source](../../engine/timeline/include/) | [CMake](../../engine/timeline/CMakeLists.txt) |
+| `units` | [units](units.md) | [CMake](../../engine/units/CMakeLists.txt) |
+| `vertex-cook` | [Public source](../../engine/vertex-cook/include/) | [CMake](../../engine/vertex-cook/CMakeLists.txt) |
+| `vm` | [vm](vm.md) | [CMake](../../engine/vm/CMakeLists.txt) |
 
-| System | Status | Overview |
-| ------ | ------ | -------- |
-| `crd-core`       | ✅ | [core.md](core.md) |
-| `crd-log`        | ✅ | [log.md](log.md) — deep-dive: [`docs/log/LOG_FILE.md`](../log/LOG_FILE.md) |
-| `crd-vm`         | ✅ | [vm.md](vm.md) |
-| `crd-memory`     | ✅ | [memory.md](memory.md) — deep-dive: [`docs/memory/MEMORY_FILE.md`](../memory/MEMORY_FILE.md) |
-| `crd-containers` | ✅ | [containers.md](containers.md) — deep-dive: [`docs/containers/CONTAINERS_FILE.md`](../containers/CONTAINERS_FILE.md) |
-| `crd-math`       | ✅ | [math.md](math.md) — SIMD layer: [math-simd.md](math-simd.md) |
-| `crd-platform`   | ✅ | [platform.md](platform.md) |
-| `crd-app`        | ✅ | [app.md](app.md) |
-| `crd-config`     | ◧ | [config.md](config.md) — 1.6a shipped; 1.6b hot-reload hook deferred |
-| `crd-units`      | ✅ | [units.md](units.md) — `Quantity<D, T>` two-layer typed architecture (ADR-0078) |
-| `crd-jobs`       | ✅ | [jobs.md](jobs.md) — fiber job system; run/wait/parallel_for; Cerid-owned semaphore/deques |
-| `crd-perf`       | ✅ | [perf.md](perf.md) — per-thread sample rings + `ScopedRegion` + perf-ui |
-| `crd-imgui`      | ✅ | [imgui.md](imgui.md) — debug-only overlay (forever, ADR-0023); backend on gpu-context since RET-5 |
+## Planned product modules
 
-## Scene & assets
+`crd-ui`, Canvas, owned font/shaping, vector rendering and reflection are not existing module directories at this
+baseline. Their final boundaries are specified by ADR-0107 and the execution contract; implementation closes the
+I2D/REFLECT rows. CR-D007 is an application assembled from public modules, and the notebook is another consumer.
 
-| System | Status | Overview |
-| ------ | ------ | -------- |
-| `crd-scene`      | ✅ | [scene.md](scene.md) — Phase 3.0 closed 2026-05-10; 8-layer slot ECS (ADRs 0049–0061). Concurrency: [scene-concurrency.md](scene-concurrency.md) |
-| `crd-resources`  | ✅ | [resources.md](resources.md) — handle table, sync/async/streamed loading, eviction, hot-reload, CRDR cooker. GPU-free resource types re-homed here at RET-3: [texture_resource.md](texture_resource.md) · [mesh_resource.md](mesh_resource.md) |
-| `crd-meshgen`    | ✅ | [meshgen.md](meshgen.md) — procedural primitives producing the standard vertex layout |
-| `crd-sandbox`    | ✅ | [sandbox.md](sandbox.md) — the interactive desktop app; runs entirely on gpu-context since RET-6/8 (overview partially historical, see its banner) |
+## Retired graphics stack
 
-## Geometry (`crd-geometry-*`, Phase 3.1.7 ✅ CLOSED 2026-05-19, ADR-0076)
-
-| System | Status | Overview |
-| ------ | ------ | -------- |
-| `-primitives` | ✅ | [geometry-primitives.md](geometry-primitives.md) — shapes, Shewchuk predicates, intersection corpus |
-| `-bvh` | ✅ | [geometry-bvh.md](geometry-bvh.md) — binned-SAH / dynamic / quad-BVH + SIMD traversal |
-| `-bvh-gpu` | ✅ | [geometry-bvh-gpu.md](geometry-bvh-gpu.md) — Karras LBVH on the compute context |
-| `-convex` | ✅ | [geometry-convex.md](geometry-convex.md) — GJK/EPA/SAT, Quickhull |
-| `-mesh` | ✅ | [geometry-mesh.md](geometry-mesh.md) — closest-point / watertight raycast / winding number |
-| `-mesh-processing` | ✅ | [geometry-mesh-processing.md](geometry-mesh-processing.md) — QEM, Loop subdivision, remesh, repair |
-| `-spatial` | ✅ | [geometry-spatial.md](geometry-spatial.md) — KD-tree, loose octree, R*-tree, spatial hash, uniform grid |
-| `-polygon` | ✅ | [geometry-polygon.md](geometry-polygon.md) — ear-clip, CDT, Vatti Boolean, Bentley-Ottmann |
-| `-delaunay` | ✅ | [geometry-delaunay.md](geometry-delaunay.md) — Delaunay/Voronoi 2D/3D, Ruppert, CVT |
-| `-decomposition` | ✅ | [geometry-decomposition.md](geometry-decomposition.md) — voxelize + V-HACD |
-| `-curves` | ✅ | [geometry-curves.md](geometry-curves.md) — Bezier/Hermite/Catmull-Rom/B-spline + arc-length + frames |
-| `-viz` | ✅ | [geometry-viz.md](geometry-viz.md) — debug visualization emitters (now over crd-draw) |
-| `-shader-helpers` | ✅ | [geometry-shader-helpers.md](geometry-shader-helpers.md) — cooker-emitted GLSL/HLSL helper corpus |
-
-## Numerics (`crd-hesap-*`, Phase 3.1.6 — v0–v16 ✅, paused mid-v17/GPU → D-007)
-
-| System | Status | Overview |
-| ------ | ------ | -------- |
-| `crd-hesap-dense`| ✅ (v0) | [hesap-dense.md](hesap-dense.md) — BLAS L1/L2/L3 over Matrix/Symmetric/Triangular/Banded; GEMM wins vs Eigen-MT; FMA microkernels; allocator-propagating |
-| `crd-hesap-sparse` | ✅ | [hesap-sparse.md](hesap-sparse.md) — sparse formats + kernels substrate |
-| `crd-hesap-ordering` | ✅ | [hesap-ordering.md](hesap-ordering.md) — AMD/ND fill-reducing orderings |
-| `crd-hesap-eigen` | ✅ (v6) | [hesap-eigen.md](hesap-eigen.md) — Lanczos/Arnoldi/LOBPCG/JD/FEAST/IRLBA sparse eigensolvers (ADR-0089) |
-| `crd-hesap-opt` | ✅ (v7) | [hesap-opt.md](hesap-opt.md) — QP/LP/conic/NLP/DFO/CMA-ES/global/MIP (ADR-0090) |
-| `crd-hesap-ode` | ✅ (v9 a→z, 2026-06-13) | [hesap-ode.md](hesap-ode.md) — ODE/DAE cluster (ADR-0091): stepper kernels + driver substrate, IMEX, Krylov, sensitivities, index reduction |
-| `crd-hesap-fft` | ✅ (v10) | [hesap-fft.md](hesap-fft.md) — deterministic-plan Stockham + split-radix codelets + four-step + real FFT/NUFFT/DCT/DST |
-| `crd-hesap-dsp` | ✅ (v11) | [hesap-dsp.md](hesap-dsp.md) — DSP cluster (ADR-0093): design/filtering/multirate/spectral/adaptive on a multi-threaded bit-identical FFT |
-| `crd-hesap-wavelet` | ✅ (v11w) | [hesap-wavelet.md](hesap-wavelet.md) — 76 families, DWT/SWT/CWT/2-D/MODWT + denoising; beats pywt's C core |
-| `crd-hesap-comms` | ✅ (v11c) | [hesap-comms.md](hesap-comms.md) — modulation/pulse/sync/equalizers/channels/OFDM; crushes liquid-dsp |
-| `crd-hesap-special` | ✅ (v12) | [hesap-special.md](hesap-special.md) — special functions incl. Bessel; generated minimax rationals beat Boost |
-| `crd-hesap-stats` | ✅ (v12) | [hesap-stats.md](hesap-stats.md) — RNG (Philox), distributions, samplers, MCMC, descriptive/regression |
-| `crd-hesap-interp` | ✅ (v13) | [hesap-interp.md](hesap-interp.md) — PCHIP/splines/barycentric/RBF/gridded N-D/kriging (ADR-0095) |
-| `crd-hesap-quadrature` | ✅ (v12-c+v13) | [hesap-quadrature.md](hesap-quadrature.md) — Gauss + QUADPACK-class adaptive + DE + oscillatory + cubature; crushes scipy/GSL |
-| `crd-hesap-diff` | ✅ (v13) | [hesap-diff.md](hesap-diff.md) — Fornberg stencils, Richardson, complex-step (machine-exact), Savitzky-Golay |
-| `crd-hesap-motion` | ✅ (v13) | [hesap-motion.md](hesap-motion.md) — SQUAD/clothoid/NURBS/min-jerk/S-curve + full Ruckig-class OTG, bit-exact and faster than Ruckig |
-| `crd-hesap-tensor` | ✅ (v14, 2026-07-05) | [hesap-tensor.md](hesap-tensor.md) — Tensor/TensorView + dtypes (f16/bf16/FP8/quantized + SR converts), einsum, batched LA, npy/npz/safetensors/DLPack I/O, NN inference pack (ADR-0096) |
-| `crd-hesap-autodiff` | ✅ (v15 fwd + v16 rev, 2026-07-07) | [hesap-autodiff.md](hesap-autodiff.md) — forward Dual/Jet/HyperDual + SIMD drivers, sparsity, Taylor-mode; reverse mode + implicit diff + ODE adjoints + KAN (ADR-0097). Deterministic `{1..16}` gradients |
-| `crd-hesap-resources` | ✅ | [hesap-resources.md](hesap-resources.md) — the `crd-resources` ↔ hesap bridge (sparse matrices in CRDR; 'TNSR' tensor artifacts since v14-l) |
-
-## Physics (paused)
-
-| System | Status | Overview |
-| ------ | ------ | -------- |
-| `crd-eylem` | ⏸ paused at v1b (2026-05-11) | [eylem-allocators.md](eylem-allocators.md) — the allocator design note; full plan `docs/phases/phase-3.1-eylem.md` |
-
-## Retired modules (overviews deleted — history lives in git + the ADRs)
-
-The `crd-rhi` (+`-vulkan`), `crd-rhi-compute`, `crd-renderer`, and `crd-shader` modules were deleted at RET-8
-(2026-07-23, ADR-0105); their overview docs were **deleted 2026-08-07** (user direction — recoverable via git
-history). Successors: `crd-gpu-context` (ADR-0103) · `IComputeContext` (ADR-0099/0103) · gpu-context + RAF frame
-graphs (ADR-0106) · CKIR (ADR-0101/0104). The retirement ledger (coverage-parity audit, what re-homed where):
-D-007 RET band rows 89–96. Historical mentions of the deleted overview paths in old ADRs/phase docs are left as
-written — they describe their own era.
-
-When a new module ships, add a row here and link to its overview. If a module gets a long-form deep-dive
-document (like `LOG_FILE.md`), link to that too — the overview here should stay short and stable.
+`rhi`, `rhi-vulkan`, `rhi-compute`, `renderer` and `shader` were retired under
+[ADR-0105](../decisions/0105-retire-rhi-renderer-gpu-context-is-the-graphics-layer.md).
+Their successor is gpu-context plus CEIR/CKIR and the authored render-asset stack. Historical source mentions in
+session records do not authorize rebuilding the old interfaces. Geometry/eylem/numerical implementation is outside
+the current audit; use the master table and existing phase contracts when those programmes resume.

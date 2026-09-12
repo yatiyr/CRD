@@ -1,5 +1,8 @@
 # Session — 2026-07-22 · D2 the offline shader cook (CKIR graph → `.crdr` bundle)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Ask:** "let's go with D2 … full gold standard system." D2 (ADR-0104) = the OFFLINE cook: turn a CKIR shader graph into a
 self-contained `.crdr` bundle carrying the IR + reflection + per-backend bytecode, so the runtime ships with ZERO shader
 compilation on the hot path.

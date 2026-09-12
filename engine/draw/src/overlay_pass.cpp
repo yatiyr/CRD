@@ -206,6 +206,10 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
         rd.color.push_back(c);
         rd.depth.enabled = (compare != gpu::DepthCompare::Always); // read-only depth test carried by `compare`
         rd.depth.compare = compare;
+        // CEIR-34 R2: name the target as its own companion-depth carrier so the encoder routes the overlay's depth
+        // bucket through the generic draw_storage_depth_load arm (the Always bucket keeps depth disabled ⇒ the
+        // colour-only draw_storage arm). The backend derives the read-only depth view from this colour target.
+        if (rd.depth.enabled) { rd.depth.target = &target; }
         enc->begin_rendering(rd);
         gpu::RasterDrawPacket pk{};
         pk.program                        = &prog;
@@ -220,6 +224,15 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
         enc->end_rendering();
         return true;
     };
+    // CEIR-34 R2: the overlay READS the scene's depth but NEVER writes it (the retired draw_overlay forced
+    // vkCmdSetDepthWriteEnable(FALSE) / a depth_write=false PSO). Now that the compose rides the generic
+    // draw_storage[_depth_load] verbs — whose set_draw_state honours m_pass_state.depth_write — declare it through
+    // the context's pass-state seam (the sanctioned direct-encoder discipline, same as set_sampler) for the span of
+    // the overlay draws, then restore the default so no later pass inherits it.
+    gpu::PassRasterState overlay_state{};
+    overlay_state.depth_write = false;
+    s.raster->set_pass_state(overlay_state);
+
     if (config.grid.enabled)
     {
         ok = overlay_draw(*s.grid_prog, *s.storage, config.depth_test, 0U, 6U) && ok;
@@ -237,6 +250,7 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
         ok = overlay_draw(*s.line_prog, *s.line_storage, compare_of[v], r.first * 6U, r.count * 6U) && ok;
     }
 
+    s.raster->set_pass_state(gpu::PassRasterState{}); // restore the default (no pass inherits the overlay's RO-depth)
     return ok;
 }
 

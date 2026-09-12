@@ -1,0 +1,4 @@
+module {
+  ^bb0:
+    rewrite.rule() {action = "replace_result_with_operand", constraint = "result_type_eq_operand", operand = 0, result = 0, root = "tensor.reshape"}
+}

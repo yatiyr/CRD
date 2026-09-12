@@ -1,0 +1,5 @@
+module {
+  ^bb0:
+    transform.fuse() {enable = false}
+    transform.share_storage() {enable = false}
+}

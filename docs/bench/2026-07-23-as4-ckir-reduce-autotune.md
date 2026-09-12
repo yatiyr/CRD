@@ -1,5 +1,8 @@
 # AS-4 — the auto-scheduler TUNES the reduction (op-generality) vs CUB (2026-07-23)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **The claim:** the CKIR auto-scheduler (ADR-0098 §4), proven on the Contract/GEMM tile hierarchy, is a GENERAL kernel
 auto-scheduler — the SAME `enumerate → cost-rank → measure-on-device → oracle-validate → pick-best` loop tunes a
 **device-wide reduction**, a structurally different op (memory-bound, a fan-in tree, no data reuse). It automatically

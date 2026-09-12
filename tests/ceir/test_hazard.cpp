@@ -85,8 +85,14 @@ TEST_CASE("ceir hazard: effect_access classifies every family (incl the RandomRe
     CHECK_FALSE(effect_access(EffectFamily::MemoryRead).writes);
     CHECK(effect_access(EffectFamily::MemoryReadWrite).reads);
     CHECK(effect_access(EffectFamily::MemoryReadWrite).writes);
-    CHECK(effect_access(EffectFamily::Allocate).writes); // lifecycle lives in the Memory class (use-after-free visible)
-    CHECK(effect_access(EffectFamily::Allocate).klass == ResourceClass::Memory);
+    // ⛔ CEIR-31b-3-c-i: Allocate is INERT (the Nondeterministic mold) — alloc-before-use is SSA def-use (the declare's
+    // RESULT is the consumer's OPERAND), so a memory-hazard edge is redundant; a Memory-write Alloc polluted every frame's
+    // hazard set with declare->use pairs (26c/26z regression). Dealloc/Residency STAY Memory-writes (use-after-free, below).
+    CHECK_FALSE(effect_access(EffectFamily::Allocate).reads);
+    CHECK_FALSE(effect_access(EffectFamily::Allocate).writes);
+    CHECK(effect_access(EffectFamily::Allocate).klass == ResourceClass::None);
+    CHECK(effect_access(EffectFamily::Deallocate).writes); // lifecycle lives in the Memory class (use-after-free visible)
+    CHECK(effect_access(EffectFamily::Deallocate).klass == ResourceClass::Memory);
     CHECK(effect_access(EffectFamily::GPUCommand).klass == ResourceClass::Gpu);
     CHECK(effect_access(EffectFamily::FileIO).klass == ResourceClass::Io);
     CHECK((effect_access(EffectFamily::FileIO).reads && effect_access(EffectFamily::FileIO).writes));

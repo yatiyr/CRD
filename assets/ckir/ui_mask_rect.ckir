@@ -1,0 +1,168 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+# CEIR-31b-4-a UI-EFFECT PANEL MASK (the S141 frosted-glass chain's coverage source). A fullscreen fragment pass that
+# writes a HARD-EDGED axis-aligned rectangle of coverage 1.0 (inside) / 0.0 (outside) into the R8 `mask` transient the
+# composite reads as bindless layer 2 (mask.r selects effect-vs-scene). It replaces the placeholder `engine://ui/panel_fill`
+# geometry pass (the ADR-0107 UiPanel component is a PARKED Track-B concept; a fullscreen fixed-rect touches nothing parked
+# — the census's "31b-4 test quad"). NO texture reads (reads=[] on its pass); coverage is pure uv math.
+#   cov = step(x0,uv.x) * step(uv.x,x1) * step(y0,uv.y) * step(uv.y,y1)   (Step(edge=a,v=b) = (v<edge)?0:1 = v>=edge)
+# The rect bounds are 4 SPEC-CONSTS (x0@0 / y0@1 / x1@2 / y1@3, defaults 0.25/0.25/0.75/0.75) NOT baked: 31b-4 arm (a)
+# proves the composite actually READS mask by MOVING the rect (a [pass.params] edit) and watching the output move — baked
+# bounds would need a 2nd asset. This is the 4th Spec-registered ui id and the FIRST with real specs on a NON-blur kernel
+# (composite has zero) — free coverage of the provider spec path. Also the FIRST fullscreen ui kernel with 0 texture reads.
+# ⛔ SYMMETRIC RECT ([0.25,0.75] about 0.5): the NDC±Y convention flips uv.y on one backend vs the other; a symmetric rect
+# lands identically both ways so the flip is INVISIBLE (the clip-space-Y scar). Step emits inline as `(v<edge)?0:1` on both
+# backends (ckir_glsl/hlsl) so it needs no `lower_entry` for EMISSION; the create_program device lower-vs-not is a 31b-4-b
+# arm (the tint_noise-hash precedent). The StageIn(uv Vec2) + fullscreen convention is LIFTED from ui_backdrop_fetch.ckir.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n14"
+location = 0
+interp = "Smooth"
+
+# ── the fullscreen uv (Vec2, 0..1) ─────────────────────────────────────────────────────────────────────────────
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+# uv.x (scalar)
+[[node]]
+id = "n1"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [0, 0, 0, 0, 0, 0, 0, 0]
+
+# uv.y (scalar)
+[[node]]
+id = "n2"
+op = "Swizzle"
+shape = [1]
+in = ["n0"]
+perm = [1, 0, 0, 0, 0, 0, 0, 0]
+
+# ── the 4 rect-bound spec-consts (float; axes=0x80000000 = kSpecConstFlag; iidx = spec id; cval = f64-bits default) ─
+# x0 @ id 0, default 0.25 (0x3fd0000000000000)
+[[node]]
+id = "n3"
+op = "Const"
+shape = [1]
+cval = "0x3fd0000000000000"
+axes = 2147483648
+
+# y0 @ id 1, default 0.25
+[[node]]
+id = "n4"
+op = "Const"
+shape = [1]
+cval = "0x3fd0000000000000"
+iidx = 1
+axes = 2147483648
+
+# x1 @ id 2, default 0.75 (0x3fe8000000000000)
+[[node]]
+id = "n5"
+op = "Const"
+shape = [1]
+cval = "0x3fe8000000000000"
+iidx = 2
+axes = 2147483648
+
+# y1 @ id 3, default 0.75
+[[node]]
+id = "n6"
+op = "Const"
+shape = [1]
+cval = "0x3fe8000000000000"
+iidx = 3
+axes = 2147483648
+
+# ── coverage: 4 half-plane tests, AND-ed by multiply ──────────────────────────────────────────────────────────
+# uv.x >= x0
+[[node]]
+id = "n7"
+op = "Step"
+shape = [1]
+in = ["n3", "n1"]
+
+# uv.x <= x1  (step(edge=uv.x, v=x1) = x1 >= uv.x)
+[[node]]
+id = "n8"
+op = "Step"
+shape = [1]
+in = ["n1", "n5"]
+
+# uv.y >= y0
+[[node]]
+id = "n9"
+op = "Step"
+shape = [1]
+in = ["n4", "n2"]
+
+# uv.y <= y1
+[[node]]
+id = "n10"
+op = "Step"
+shape = [1]
+in = ["n2", "n6"]
+
+# x-inside = (uv.x>=x0) * (uv.x<=x1)
+[[node]]
+id = "n11"
+op = "Mul"
+shape = [1]
+in = ["n7", "n8"]
+
+# y-inside = (uv.y>=y0) * (uv.y<=y1)
+[[node]]
+id = "n12"
+op = "Mul"
+shape = [1]
+in = ["n9", "n10"]
+
+# cov = x-inside * y-inside (scalar 1.0 inside the rect, 0.0 outside)
+[[node]]
+id = "n13"
+op = "Mul"
+shape = [1]
+in = ["n11", "n12"]
+
+# broadcast cov to the Vec4 fragment output; the R8 `mask` target stores .r = cov (the extra channels are harmless)
+[[node]]
+id = "n14"
+op = "Splat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n13"]

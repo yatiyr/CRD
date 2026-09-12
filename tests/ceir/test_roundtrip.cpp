@@ -57,6 +57,42 @@ TEST_CASE("ceir roundtrip: a rich graph prints, parses, and re-prints byte-exact
     CHECK(bytes_equal(text1, text2));
 }
 
+// CEIR-31b-3-c-i: a NAME with non-ident chars round-trips through print→parse via the QUOTED "..." form (MLIR's
+// convention), while a plain-identifier name still prints BARE (byte-identical to before). This covers BOTH ceir-core
+// asymmetries the first engine://-id'd, param-carrying frame exposed: (1) a SYMBOL ref (@"engine://ui/blur", an asset
+// id — ':' and '/'), and (2) an op-ATTR NAME ("p:clear_color:0", the frame param-bag key encoding — ':'). Before this
+// fix, to_ceir_frame printed both bare, and the parser's lexer (is_ident_char) stopped at the ':' — the ceir TEXT
+// round-trip was broken for EVERY engine://-id'd frame (its name, every shader id, and every per-pass param). One fix,
+// one helper (name_needs_quote), symmetric on the printer and the parser. Host-only, device-free.
+TEST_CASE("ceir roundtrip: a non-ident symbol/attr-name round-trips via the quoted form; plain ones stay bare",
+          "[ceir][roundtrip]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    Module* const                      m   = ctx.create_module();
+    Block* const                       top = ctx.create_block(0U);
+    m->body()->append(top);
+    Operation* const op = ctx.create_operation(ctx.intern_op("test", "sym"), {}, 0U);
+    ctx.set_attr(op, "bare", ctx.attr_symbol("bare_target"));     // a plain-ident symbol → prints BARE
+    ctx.set_attr(op, "uri", ctx.attr_symbol("engine://ui/blur")); // ':' and '/' → symbol prints QUOTED
+    ctx.set_attr(op, "flag", ctx.attr_bool(true));                // a plain-ident attr NAME → prints BARE
+    ctx.set_attr(op, "p:clear_color:0", ctx.attr_int(1));         // ':' in the attr NAME → prints QUOTED
+    top->append(op);
+
+    const String t1 = print(ctx, *m, &root);
+    CHECK(std::strstr(t1.c_str(), "bare = @bare_target") != nullptr);         // BARE symbol — unchanged form
+    CHECK(std::strstr(t1.c_str(), "uri = @\"engine://ui/blur\"") != nullptr); // QUOTED symbol (non-ident asset id)
+    CHECK(std::strstr(t1.c_str(), "flag = true") != nullptr);                 // BARE attr name — unchanged form
+    CHECK(std::strstr(t1.c_str(), "\"p:clear_color:0\" = 1") != nullptr);     // QUOTED attr name (frame param key)
+
+    Context           ctx2(&root);
+    const ParseResult pr = parse(ctx2, t1);
+    REQUIRE(pr.ok);
+    REQUIRE(pr.module != nullptr);
+    const String t2 = print(ctx2, *pr.module, &root);
+    CHECK(bytes_equal(t1, t2)); // print(parse(print)) fixpoint — both quoted forms re-parse to the identical name
+}
+
 TEST_CASE("ceir roundtrip: parsing is deterministic across two independent parses", "[ceir][roundtrip]")
 {
     crd::memory::GrowableTlsfAllocator root;
@@ -139,4 +175,6 @@ TEST_CASE("ceir roundtrip: malformed inputs are rejected with an offset", "[ceir
     CHECK(rejects("module { ^bb0: test.use(%9) }"));          // operand references an undefined value
     CHECK(rejects("module { ^bb0: nodialect() }"));           // op name is not 'dialect.op'
     CHECK(rejects("module { ^bb0: test.x(%0"));               // unterminated operands / truncated
+    CHECK(rejects("module { ^bb0: test.x() {\"\" = 1} }"));   // CEIR-31b-3-c-ii: an EMPTY quoted attr name — nameless attr
+    CHECK(rejects("module { ^bb0: test.x() {s = @\"\"} }"));  // CEIR-31b-3-c-ii: an EMPTY quoted symbol ref — never printable
 }

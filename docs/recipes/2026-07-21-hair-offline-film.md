@@ -1,5 +1,8 @@
 # Recipe — Physically-based hair, film / offline quality
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > How to build cinematic path-traced hair from the fibre up: the scattering model, the geometry, the renderer.
 > Read this once and you understand every equation in `ckir_hair.hpp` / `ckir_lss.hpp` / `ckir_hair_rt.hpp` and
 > can rebuild the system. The real-time form is a separate recipe (`2026-07-21-hair-realtime.md`); this is the

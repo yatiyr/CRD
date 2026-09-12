@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-f CLOSE: first-order momentum methods (+ the win-shipping stale-obj root cause)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-f (first-order) — CLOSED. Steepest descent (v7-a) · nonlinear CG (landed in `b261478`) · **momentum/Nesterov (this session)**.
 

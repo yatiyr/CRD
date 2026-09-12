@@ -1,0 +1,45 @@
+# ui_tint_noise_probe.frame.toml — CEIR-31b-4-b-ii-2 arm (e): the on-DEVICE hash-numeric probe for engine://ui/tint_noise.
+#
+# ⛔ A DEDICATED probe, NOT the frosted-glass chain: the chain's blur → composite → mask would smear the per-pixel noise
+# beyond recovery (you would be inverting a pipeline to read back a bit pattern). Here the tint spec-consts are set to 0,
+# which ZEROES the `TexSample(backdrop) * tint` term, and amp (spec 4) is 1, so the fragment output is the RAW noise:
+#   @output.rgba = splat( noise( hash( (u32)FragCoord.xy ) ) )   in [0,1)
+# The arm (e) gate reads @output and compares each pixel to the lifted `ref_hash` oracle (tests/gpu-shared/ui_tint_noise_
+# oracle.hpp). ⭐ The noise keys on FragCoord (window-space, top-origin on BOTH backends) and tint=0 removes the only UV-
+# dependent term, so the output is Y-FLIP-INVARIANT and BACKEND-AGNOSTIC — cross-backend equality of the bytes is a free
+# tooth, and the frosted-glass fullscreen-VS flip question (ensure_ui_program passes no ndc_y_points_down) is untouched
+# here (it needs spatially-varying backdrop content — that is 31b-4-b-iii's hard-edge scene).
+#
+# The backdrop is CLEARED to a finite colour (not for its value — tint=0 discards it — but so the `*0` term is a clean 0
+# and never a NaN from an uninitialized transient: NaN*0 = NaN would poison the output).
+
+schema = 1
+name   = "engine://frame/ui_tint_noise_probe"
+
+# ── transients ────────────────────────────────────────────────────────────────────────────────────────────────
+[[resource]]
+name    = "backdrop"
+kind    = "transient_image"
+format  = "RGBA16F"
+scale   = 1.0
+sampled = true            # tint_noise samples it at binding 1 (a single-read fullscreen pass, NOT bindless)
+
+# ── passes ────────────────────────────────────────────────────────────────────────────────────────────────────
+[[pass]]
+name        = "clear_backdrop"
+kind        = "clear"           # a wired transfer.clear: produces the target, reads nothing
+writes      = ["backdrop"]
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[[pass]]
+name   = "tint_noise"
+kind   = "raster.fullscreen"
+reads  = ["backdrop"]
+writes = ["@output"]
+shader = "engine://ui/tint_noise"
+[pass.params]
+spec_0 = 0.0   # tint.r = 0
+spec_1 = 0.0   # tint.g = 0
+spec_2 = 0.0   # tint.b = 0
+spec_3 = 0.0   # tint.a = 0  ⇒ TexSample(backdrop) * tint = 0
+spec_4 = 1.0   # amp = 1     ⇒ @output = splat(noise) raw, no scaling

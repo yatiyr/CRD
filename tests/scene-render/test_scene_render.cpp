@@ -9,7 +9,8 @@
 #include <crd/lightcook/lighting_asset.hpp>
 #include <crd/matcook/material_asset.hpp>
 #include <crd/vertexcook/vertex_asset.hpp>
-#include <crd/kir/ckir.hpp> // REN-41 velocity: cook the velocity VS assets (exercise the prev:clip chain)
+#include <crd/kir/ckir.hpp>       // REN-41 velocity: cook the velocity VS assets (exercise the prev:clip chain)
+#include <crd/kir/ckir_asset.hpp> // CEIR-31b-3-a-ii: ckir_read — load the committed ui_blur.ckir for the apply_spec_set gate
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -20,6 +21,8 @@
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
+#include "asset_resolver.hpp" // CEIR-31b-3-a-i-2: the INTERNAL ProgramRegistry, for a white-box spec-const KIND unit test
+#include "spec_apply.hpp"     // CEIR-31b-3-a-ii: apply_spec_set / spec_set_hash / spec_set_equal (the device-free seat)
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -69,6 +72,7 @@ struct StubRaster final : gpu::IRasterContext
     [[nodiscard]] std::unique_ptr<gpu::ICommandEncoder> create_command_encoder() override { return nullptr; }
     [[nodiscard]] std::unique_ptr<gpu::IRasterTarget> create_color_target(u32, u32) override { return nullptr; }
     void clear(gpu::IRasterTarget&, gpu::ClearColor) override {}
+    void clear_scope(const gpu::RenderingDesc&) override {} // CEIR-31b-4-b-i: 0-draw scope clear (no-op on the CPU stub)
     [[nodiscard]] std::unique_ptr<gpu::IRasterProgram> create_raster_program(gpu::IGpuProgram&,
                                                                              gpu::IGpuProgram&) override
     {
@@ -412,6 +416,398 @@ TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[sc
                                     nullptr));
     CHECK_FALSE(r.register_raster_program("no-scheme-here", [](void*) -> gpu::IRasterProgram* { return nullptr; },
                                           nullptr));
+}
+
+// ── CEIR-34 E4: the SET-EQUALITY DRIFT GATE. `assets/scene_programs.manifest` REPLACED the deleted register_default_programs
+// hand-list (the §178 authorable-asset program set). This pins that the manifest enumerates EXACTLY the 40 default program
+// ids the hand-list registered — a dropped / added / renamed program fails HERE by name, device-free, before any render.
+// (Functional equivalence — the manifest renders + reloads the scene on Vulkan AND DX12 — is the RAF-9 + RAF-11 gates; this
+// guards the ASSET against future edit drift. The 0h E4 DoD's "set-equality ctest".)
+TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default program set (no drift)", "[scene-render][ceir34]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator alloc(1U << 20U, nullptr, "e4-manifest-drift");
+    containers::String    path(&alloc);
+    path.append(root);
+    path.append("/scene_programs.manifest");
+    containers::String text(&alloc);
+    REQUIRE(platform::fs::read_file_text(platform::fs::Path(containers::StringView(path.c_str(), path.size())), text));
+
+    // the authoritative default set (== the ids the deleted register_default_programs registered): 14 raster + 5 spec + 21 kernel.
+    static const char* const expected[] = {
+        "engine://scene/tess", "engine://scene/mesh", "engine://scene/visbuffer", "engine://scene/impostor",
+        "engine://scene/hzb_build", "engine://scene/taa_resolve", "engine://scene/velocity_debug",
+        "engine://scene/deferred_lighting", "engine://scene/rt_composite", "engine://post/tonemap_agx",
+        "engine://post/srgb_only", "engine://shadow/moment_convert", "engine://shadow/moment_blur_x",
+        "engine://shadow/moment_blur_y", "engine://ui/backdrop_fetch", "engine://ui/tint_noise", "engine://ui/blur",
+        "engine://ui/composite", "engine://ui/mask_rect", "engine://scene/cull", "engine://scene/cull_mark",
+        "engine://scene/cull_view0", "engine://scene/cull_view1", "engine://scene/cull_view2",
+        "engine://scene/cull_view3", "engine://scene/cull_view4", "engine://scene/cull_reset",
+        "engine://scene/occlusion_cull", "engine://scene/gpu_skin", "engine://scene/palette_snapshot",
+        "engine://scene/light_cull", "engine://scene/light_cull_3d", "engine://scene/rt/raygen",
+        "engine://scene/rt/miss", "engine://scene/rt/chit", "engine://scene/rt/anyhit",
+        "engine://scene/rt/shadow_raygen", "engine://scene/rt/shadow_miss", "engine://scene/rt/shadow_chit",
+        "engine://scene/rt_worldpos"};
+    constexpr int kExpected = 40;
+    int           seen[kExpected] = {};
+    int           lines          = 0;
+
+    const char*       p   = text.c_str();
+    const char* const end = p + text.size();
+    while (p < end)
+    {
+        const char* const ls = p;
+        while (p < end && *p != '\n') { ++p; }
+        containers::StringView line(ls, static_cast<usize>(p - ls));
+        if (p < end) { ++p; }
+        usize a = 0;
+        while (a < line.size() && (line[a] == ' ' || line[a] == '\t' || line[a] == '\r')) { ++a; }
+        if (a >= line.size() || line[a] == '#') { continue; } // blank / comment
+        // second whitespace-delimited token == the id
+        usize j = a;
+        while (j < line.size() && line[j] != ' ' && line[j] != '\t') { ++j; }        // skip kind
+        while (j < line.size() && (line[j] == ' ' || line[j] == '\t')) { ++j; }      // skip gap
+        const usize ids = j;
+        while (j < line.size() && line[j] != ' ' && line[j] != '\t' && line[j] != '\r') { ++j; } // the id
+        const containers::StringView id(line.data() + ids, j - ids);
+        ++lines;
+        int match = -1;
+        for (int k = 0; k < kExpected; ++k)
+        {
+            if (id == containers::StringView(expected[k])) { match = k; break; }
+        }
+        INFO("manifest id: " << (match < 0 ? "<UNKNOWN>" : expected[match]));
+        REQUIRE(match >= 0);   // an id NOT in the expected default set (a rename/addition) fails LOUD
+        CHECK(seen[match] == 0); // no duplicate id
+        seen[match] = 1;
+    }
+    CHECK(lines == kExpected); // no program dropped / added
+    for (int k = 0; k < kExpected; ++k)
+    {
+        INFO("missing expected id: " << expected[k]);
+        CHECK(seen[k] == 1); // every default program still enumerated
+    }
+}
+
+TEST_CASE("CEIR-31b-3-a-i-2: the program registry's spec-const KIND logic (SpecOnOpaqueProgram / unchanged / unregistered)",
+          "[scenerender][ceir31b]")
+{
+    memory::TlsfAllocator        alloc(1U << 20U, nullptr, "ceir31b-registry");
+    scenerender::ProgramRegistry reg(&alloc);
+
+    // A Plain (opaque, no-spec-support) program. `user` carries a bool the provider flips when invoked — so a test can
+    // tell "the provider ran" from "the registry short-circuited" WITHOUT a fake program pointer.
+    const renderasset::AssetId id{1U};
+    bool                       plain_called = false;
+    reg.register_raster(
+        id, [](void* u) -> gpu::IRasterProgram* { *static_cast<bool*>(u) = true; return nullptr; }, &plain_called);
+
+    // 1. a spec-FREE resolve of a Plain entry INVOKES the provider — the unchanged path still works.
+    (void)reg.raster(id);
+    CHECK(plain_called);
+
+    // 2. a spec'd resolve of a Plain program is SpecOnOpaqueProgram — the provider is NOT invoked, so the specs that
+    // would have been silently dropped are instead a NAMED failure.
+    plain_called = false;
+    const framecook::SpecConst one{0U, 1.0};
+    const framecook::SpecSet   specs{&one, 1U};
+    framecook::FrameExecError  err = framecook::FrameExecError::Ok;
+    CHECK(reg.raster(id, specs, &err) == nullptr);
+    CHECK_FALSE(plain_called);
+    CHECK(err == framecook::FrameExecError::SpecOnOpaqueProgram);
+
+    // 3. an UNREGISTERED id + specs → nullptr with err UNTOUCHED (Ok): the record seat maps it to UnresolvedProgram, so
+    // UNREGISTERED wins over spec-on-opaque (a typo'd shader is a missing-program error, never a spec one).
+    err = framecook::FrameExecError::Ok;
+    CHECK(reg.raster(renderasset::AssetId{2U}, specs, &err) == nullptr);
+    CHECK(err == framecook::FrameExecError::Ok);
+
+    // 4. the kernel side mirrors (a Plain kernel + specs → SpecOnOpaqueProgram, provider not invoked).
+    const renderasset::AssetId kid{3U};
+    bool                       kplain = false;
+    reg.register_kernel(
+        kid, [](void* u) -> gpu::IGpuProgram* { *static_cast<bool*>(u) = true; return nullptr; }, &kplain);
+    err = framecook::FrameExecError::Ok;
+    CHECK(reg.kernel(kid, specs, &err) == nullptr);
+    CHECK_FALSE(kplain);
+    CHECK(err == framecook::FrameExecError::SpecOnOpaqueProgram);
+}
+
+// CEIR-31b-3-a-ii: the ui provider's (kind, spec-set) program CACHE KEY. spec_set_hash is the fast bucket key,
+// spec_set_equal the collision backstop; BOTH must be order-INDEPENDENT (set_spec_const patches by id, so the H pass's
+// {dir.x, dir.y} and the same knobs authored in the other order specialize identically) and value-SENSITIVE (a
+// different blur direction is a DIFFERENT program). Device-free + asset-free — no CRD_ASSETS_DIR, always runs.
+TEST_CASE("CEIR-31b-3-a-ii: the ui spec-set cache key is order-independent and value-sensitive",
+          "[scenerender][ceir31b]")
+{
+    const framecook::SpecConst ab[2]{{0U, 1.0}, {1U, 0.0}};  // dir.x=1, dir.y=0 (the H pass)
+    const framecook::SpecConst ba[2]{{1U, 0.0}, {0U, 1.0}};  // the SAME set, authored in reverse order
+    const framecook::SpecConst av[2]{{0U, 1.0}, {1U, 0.5}};  // id 1 differs in VALUE
+    const framecook::SpecSet   sab{ab, 2U};
+    const framecook::SpecSet   sba{ba, 2U};
+    const framecook::SpecSet   sav{av, 2U};
+
+    CHECK(scenerender::spec_set_hash(sab) == scenerender::spec_set_hash(sba)); // order does NOT change the key
+    CHECK(scenerender::spec_set_hash(sab) != scenerender::spec_set_hash(sav)); // a changed value DOES
+    CHECK(scenerender::spec_set_equal(sab, sba));       // the backstop agrees: same set, reordered => equal
+    CHECK_FALSE(scenerender::spec_set_equal(sab, sav)); // one value differs => distinct set (a recook, never a mix-up)
+}
+
+// CEIR-31b-3-a-ii: apply_spec_set on the COMMITTED ui_blur.ckir — the device-free half of the ui provider's specialize
+// seat (create_program is device-gated at 31b-4). Proves (a) a valid set patches EXACTLY its ids and leaves the
+// unnamed spec-const at its authored default, and (b) a set naming an absent id fails SpecConstNotInProgram and patches
+// NOTHING (all-or-nothing — a partial apply would be a silent half-specialization). Reads the real asset so the gate
+// also pins that ui_blur's spec-const ids really are dir.x@0 / dir.y@1 / step@2 (31b-1b).
+TEST_CASE("CEIR-31b-3-a-ii: apply_spec_set patches the committed ui_blur spec-consts all-or-nothing",
+          "[scenerender][ceir31b]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-aii-specapply");
+
+    containers::String text(&alloc);
+    REQUIRE(platform::fs::read_file_text(platform::fs::Path(root) / containers::StringView("ckir/ui_blur.ckir"), text));
+    REQUIRE(text.size() > 0U);
+
+    // Read the current default of the spec-const with `id`; false if it is not a spec-const in the graph.
+    const auto spec_cval = [](const kir::KGraph& g, u32 id, double& out) -> bool
+    {
+        const auto& nodes = g.serial_nodes();
+        for (usize i = 0; i < nodes.size(); ++i)
+        {
+            if (kir::is_spec_const(nodes[i]) && kir::spec_const_id(nodes[i]) == id)
+            {
+                out = nodes[i].cval;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    SECTION("a valid set patches its ids to sentinel values; the unnamed spec-const keeps its default")
+    {
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        REQUIRE(kir::ckir_read(containers::StringView(text.c_str(), text.size()), fg, fe).ok);
+        double step_before = -99.0;
+        REQUIRE(spec_cval(fg, 2U, step_before)); // step (id 2) — NOT in the set below, must survive untouched
+
+        const framecook::SpecConst set[2]{{0U, 0.25}, {1U, 0.75}}; // sentinels distinct from the authored 0/1 defaults
+        framecook::FrameExecError  err = framecook::FrameExecError::Ok;
+        CHECK(scenerender::apply_spec_set(fg, framecook::SpecSet{set, 2U}, &err));
+        CHECK(err == framecook::FrameExecError::Ok);
+
+        double dir_x = -99.0;
+        double dir_y = -99.0;
+        double step  = -99.0;
+        REQUIRE(spec_cval(fg, 0U, dir_x));
+        REQUIRE(spec_cval(fg, 1U, dir_y));
+        REQUIRE(spec_cval(fg, 2U, step));
+        CHECK(dir_x == 0.25);        // patched
+        CHECK(dir_y == 0.75);        // patched
+        CHECK(step == step_before);  // id 2 was not named => not over-patched
+    }
+
+    SECTION("a set naming an absent id is SpecConstNotInProgram and patches nothing (all-or-nothing)")
+    {
+        kir::KGraph fg(&alloc);
+        kir::KEntry fe;
+        REQUIRE(kir::ckir_read(containers::StringView(text.c_str(), text.size()), fg, fe).ok);
+        double x0 = -99.0;
+        double y0 = -99.0;
+        double s0 = -99.0;
+        REQUIRE(spec_cval(fg, 0U, x0));
+        REQUIRE(spec_cval(fg, 1U, y0));
+        REQUIRE(spec_cval(fg, 2U, s0));
+
+        // id 7 is not a spec-const in ui_blur (its ids are 0/1/2). id 0 precedes it in the set — a naive apply would
+        // patch id 0 to 42.0 BEFORE discovering id 7 is missing. All-or-nothing must leave id 0 at its default.
+        const framecook::SpecConst bad[2]{{0U, 42.0}, {7U, 1.0}};
+        framecook::FrameExecError  err = framecook::FrameExecError::Ok;
+        CHECK_FALSE(scenerender::apply_spec_set(fg, framecook::SpecSet{bad, 2U}, &err));
+        CHECK(err == framecook::FrameExecError::SpecConstNotInProgram);
+
+        double x1 = -99.0;
+        double y1 = -99.0;
+        double s1 = -99.0;
+        REQUIRE(spec_cval(fg, 0U, x1));
+        REQUIRE(spec_cval(fg, 1U, y1));
+        REQUIRE(spec_cval(fg, 2U, s1));
+        CHECK(x1 == x0); // id 0 stayed at its default despite preceding the missing id 7 — no partial apply
+        CHECK(y1 == y0);
+        CHECK(s1 == s0);
+    }
+}
+
+// CEIR-31b-3-c-ii: the RECORD-SEAT H!=V spec-set tooth (device-free). `build_pass_spec_set` is the EXACT function the
+// record seat (frame_runtime.cpp:832/:943) calls to turn a pass's `spec_<n>` params into the SpecSet it hands the
+// provider; here we drive it on the SHIPPED ui_frosted_glass.frame.toml's blur passes and prove the horizontal and
+// vertical passes yield DISTINCT spec-sets => distinct provider cache keys => two DIFFERENT specialized programs (H!=V
+// blur direction from ONE ui_blur.ckir), while the two H passes (blur_h1/blur_h2) COLLAPSE to one variant (the
+// device-free half of the 31b-4 cache-hit H==H tooth). ⛔ the SEAT THREADING itself (build -> host.program_spec during
+// record) needs IFrameGraph/IRasterContext = a device => that is the 31b-4 integration tooth; here we prove the exact
+// builder + the cache key it feeds, on the REAL shipped frame (an authoring drift in the toml fails HERE, not on device).
+TEST_CASE("CEIR-31b-3-c-ii: the blur H and V passes build DISTINCT spec-sets; the twin H passes collapse",
+          "[scenerender][ceir31b]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-cii-specseat");
+
+    containers::String text(&alloc);
+    REQUIRE(platform::fs::read_file_text(
+        platform::fs::Path(root) / containers::StringView("frame/ui_frosted_glass.frame.toml"), text));
+    REQUIRE(text.size() > 0U);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), desc)
+            == framecook::FrameCookError::Ok);
+
+    const auto pass_by_name = [&](const char* nm) -> const framecook::FramePassDesc* {
+        for (usize i = 0; i < desc.passes.size(); ++i)
+        {
+            if (containers::StringView(desc.passes[i].name.c_str(), desc.passes[i].name.size())
+                == containers::StringView(nm))
+            {
+                return &desc.passes[i];
+            }
+        }
+        return nullptr;
+    };
+    // read the value stored for spec id `id` in a SpecSet (order-independent); false if the set has no such id.
+    const auto set_val = [](const framecook::SpecSet& s, u32 id, double& out) -> bool {
+        for (u32 i = 0; i < s.count; ++i)
+        {
+            if (s.items[i].id == id) { out = s.items[i].value; return true; }
+        }
+        return false;
+    };
+
+    const framecook::FramePassDesc* h1 = pass_by_name("blur_h1");
+    const framecook::FramePassDesc* v1 = pass_by_name("blur_v1");
+    const framecook::FramePassDesc* h2 = pass_by_name("blur_h2");
+    REQUIRE(h1 != nullptr);
+    REQUIRE(v1 != nullptr);
+    REQUIRE(h2 != nullptr);
+
+    framecook::SpecConst bh1[framecook::kMaxSpecConsts];
+    framecook::SpecConst bv1[framecook::kMaxSpecConsts];
+    framecook::SpecConst bh2[framecook::kMaxSpecConsts];
+    // CEIR-31b-4-b-iv-g-2: build_pass_spec_set now RESOLVES the derived step from a read's extent, so it takes the output
+    // extent. At a SQUARE 1024 the derived 1/extent == the historic PROOF_RES step 1/512, so the exact-set assertions below
+    // are unchanged; the non-square axis split is proven in the dedicated g-2 unit test (below) + on device (31b-4-b-iv-g-2).
+    const framecook::SpecSet sh1 = framecook::detail::build_pass_spec_set(*h1, desc, 1024U, 1024U, bh1);
+    const framecook::SpecSet sv1 = framecook::detail::build_pass_spec_set(*v1, desc, 1024U, 1024U, bv1);
+    const framecook::SpecSet sh2 = framecook::detail::build_pass_spec_set(*h2, desc, 1024U, 1024U, bh2);
+
+    // (1) EXACT sets — count + every (id,value). A V pass typo'd to spec_3 would pass a mere inequality check; not this.
+    const double step = 1.0 / (1024.0 * 0.5); // 1024 output x blur transient scale 0.5 => half-res 512 => derived 1/512
+    double       val  = -99.0;
+    REQUIRE(sh1.count == 3U);
+    REQUIRE(set_val(sh1, 0U, val));
+    CHECK(val == 1.0); // H dir = (1,0)
+    REQUIRE(set_val(sh1, 1U, val));
+    CHECK(val == 0.0);
+    REQUIRE(set_val(sh1, 2U, val));
+    CHECK(val == step);
+    REQUIRE(sv1.count == 3U);
+    REQUIRE(set_val(sv1, 0U, val));
+    CHECK(val == 0.0); // V dir = (0,1) — the ONE axis that differs from H
+    REQUIRE(set_val(sv1, 1U, val));
+    CHECK(val == 1.0);
+    REQUIRE(set_val(sv1, 2U, val));
+    CHECK(val == step);
+
+    // (2) the PROVIDER'S cache key discriminates H from V => two DIFFERENT specialized programs (the point of the frame).
+    CHECK(scenerender::spec_set_hash(sh1) != scenerender::spec_set_hash(sv1));
+    CHECK_FALSE(scenerender::spec_set_equal(sh1, sv1));
+
+    // (3) the two H passes COLLAPSE to ONE variant (same key) — the device-free half of the 31b-4 cache-hit H==H tooth.
+    CHECK(scenerender::spec_set_hash(sh1) == scenerender::spec_set_hash(sh2));
+    CHECK(scenerender::spec_set_equal(sh1, sh2));
+
+    // (4) 31b-4-a: the mask pass (engine://ui/mask_rect) authors 4 rect-bound spec-consts — the record-seat tooth for the
+    // FOURTH spec-carrying kernel. A spec_3 omitted in the toml (the kernel keeps its 0.75 default, the composite still
+    // sees a rect) fails HERE: nothing else proves the FRAME authored the rect bounds.
+    const framecook::FramePassDesc* mask = pass_by_name("mask");
+    REQUIRE(mask != nullptr);
+    framecook::SpecConst     bmask[framecook::kMaxSpecConsts];
+    const framecook::SpecSet smask = framecook::detail::build_pass_spec_set(*mask, desc, 1024U, 1024U, bmask);
+    REQUIRE(smask.count == 4U); // the mask has 4 literal spec-consts + NO derive params — extent is irrelevant here
+    REQUIRE(set_val(smask, 0U, val));
+    CHECK(val == 0.25); // x0
+    REQUIRE(set_val(smask, 1U, val));
+    CHECK(val == 0.25); // y0
+    REQUIRE(set_val(smask, 2U, val));
+    CHECK(val == 0.75); // x1
+    REQUIRE(set_val(smask, 3U, val));
+    CHECK(val == 0.75); // y1
+}
+
+// ── ⭐⭐ CEIR-31b-4-b-iv-g-2: build_pass_spec_set RESOLVES a derived step from a read's pixel extent — device-free, at a
+// NON-SQUARE output so an axis-ignoring resolver is caught (identity, not category). The shipped frame's blur_h1 derives
+// spec_2 off blur_src's X extent, blur_v1 off blur_a's Y extent; at 128x64 (blur transients at scale 0.5 ⇒ 64x32) that is
+// H ⇒ 1/64, V ⇒ 1/32 — DIFFERENT values, the axis split a square render (31b-3-c-ii) cannot see. A resolver that used X for
+// BOTH axes gives V=1/64; a baked / resolution-blind one gives the old 1/512. Both are caught HERE, before any device runs.
+TEST_CASE("CEIR-31b-4-b-iv-g-2: build_pass_spec_set resolves the derived blur step from the read extent (non-square)",
+          "[scenerender][ceir31b]")
+{
+    const char* root = std::getenv("CRD_ASSETS_DIR");
+    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-g2-derive");
+
+    containers::String text(&alloc);
+    REQUIRE(platform::fs::read_file_text(
+        platform::fs::Path(root) / containers::StringView("frame/ui_frosted_glass.frame.toml"), text));
+    REQUIRE(text.size() > 0U);
+
+    framecook::FrameGraphDesc desc(&alloc);
+    REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), desc)
+            == framecook::FrameCookError::Ok);
+
+    const auto pass_by_name = [&](const char* nm) -> const framecook::FramePassDesc* {
+        for (usize i = 0; i < desc.passes.size(); ++i)
+        {
+            if (containers::StringView(desc.passes[i].name.c_str(), desc.passes[i].name.size())
+                == containers::StringView(nm))
+            {
+                return &desc.passes[i];
+            }
+        }
+        return nullptr;
+    };
+    const auto step_of = [](const framecook::SpecSet& s) -> double {
+        for (u32 i = 0; i < s.count; ++i)
+        {
+            if (s.items[i].id == 2U) { return s.items[i].value; }
+        }
+        return -1.0;
+    };
+
+    const framecook::FramePassDesc* h1 = pass_by_name("blur_h1"); // reads blur_src, derive axis x
+    const framecook::FramePassDesc* v1 = pass_by_name("blur_v1"); // reads blur_a,   derive axis y
+    REQUIRE(h1 != nullptr);
+    REQUIRE(v1 != nullptr);
+
+    // ⛔ NON-SQUARE 128x64: blur transients at scale 0.5 ⇒ 64 (x) x 32 (y). H off X ⇒ 1/64; V off Y ⇒ 1/32. Both exact in f32.
+    framecook::SpecConst     bh1[framecook::kMaxSpecConsts];
+    framecook::SpecConst     bv1[framecook::kMaxSpecConsts];
+    const framecook::SpecSet sh1 = framecook::detail::build_pass_spec_set(*h1, desc, 128U, 64U, bh1);
+    const framecook::SpecSet sv1 = framecook::detail::build_pass_spec_set(*v1, desc, 128U, 64U, bv1);
+    REQUIRE(sh1.count == 3U); // dir.x, dir.y, derived step
+    REQUIRE(sv1.count == 3U);
+    CHECK(step_of(sh1) == 1.0 / 64.0);    // H: 1/extent(blur_src, x) = 1/(128*0.5) = 1/64
+    CHECK(step_of(sv1) == 1.0 / 32.0);    // V: 1/extent(blur_a,   y) = 1/(64*0.5)  = 1/32  — the axis split (≠ 1/64)
+    CHECK(step_of(sh1) != step_of(sv1));  // ⛔ the axis MATTERS at a non-square size (a square render hides this)
+
+    // and it TRACKS resolution: at 256x128 the same passes give half those steps (1/128, 1/64) — a baked literal cannot.
+    framecook::SpecConst     bh1b[framecook::kMaxSpecConsts];
+    framecook::SpecConst     bv1b[framecook::kMaxSpecConsts];
+    const framecook::SpecSet sh1b = framecook::detail::build_pass_spec_set(*h1, desc, 256U, 128U, bh1b);
+    const framecook::SpecSet sv1b = framecook::detail::build_pass_spec_set(*v1, desc, 256U, 128U, bv1b);
+    CHECK(step_of(sh1b) == 1.0 / 128.0);
+    CHECK(step_of(sv1b) == 1.0 / 64.0);
 }
 
 // ── ⛔ CEIR-15f-2: the CEIR SEMANTIC VERIFIER is the LIVE cook gate. Before 15f-2 the live renderer routed THROUGH ceir but

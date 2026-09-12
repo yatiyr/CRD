@@ -1,5 +1,8 @@
 # ADR-0107 — Interactive UI + 2D rendering architecture: `UiWorld`, `CanvasCompositor`, and the paint-to-command seam
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Proposed (2026-08-07) — the **I2D-0** gate of the post-RAF **I2D band** (D-007 §UI/2D SUB-PROGRAMME, U-1…U-19).
 The **bespoke retained UiWorld** decision (D2 — reuses ECS *concepts* only, `UiNodeId` ≠ `EntityId`) was user-chosen 2026-08-07,
 superseding REN·B's "UI is ECS entities" premise. Independent design review cleared 2026-08-07 (RAH-1 seam consistent).
@@ -7,6 +10,12 @@ This ADR is the design gate that must be **reviewed and accepted before any I2D/
 depends on RAH-1 (typed attachments) + RAH-2 (resource-table bindless) landing first.
 **Phase:** D-007 (post-RAF programme, I2D band). Source: `CRD_D007_UI_2D_MASTER_ROADMAP_PROMPT` (2026-08-07).
 **Tags:** `[ui]` `[2d]` `[canvas]` `[text]` `[architecture]` `[frame-graph]` `[asset-driven]` `[cr-d007]`
+
+> **2026-09-12 review packet:** [master table](../ROADMAP.md#master-table),
+> [current execution contract](../design/renderer-ui-execution-contract.md) and [source audit](../research/2026-09-12-system-audit.md).
+> Status remains Proposed. The plan restores the full §U-14 I2D-5 (style/themes/materials/animation) and
+> I2D-8 (product library) contracts and accounts for existing app event propagation and new shared UI services.
+> The RAF authoring surfaces now converge through CEIR under ADR-0127; no independent UI scheduler is introduced.
 
 ---
 
@@ -19,7 +28,7 @@ adds them. Before any code, the architecture must be locked, because the failure
 to unwind later: collapsing UI into the gameplay ECS, an untyped command blob, a mini scheduler beside the frame graph,
 "every UI element is a scene entity", or one giant universal 2D object type.
 
-**What already exists (verified 2026-08-07, the seams we build ON, not around):**
+**Source inventory (August snapshot, corrected against the September audit below):**
 
 - `engine/scene` — the gameplay world: an **archetype ECS** keyed by `crd::scene::EntityId` (`entity.hpp`), with
   components/queries/relations/commands. This is `SceneWorld`. It is the WRONG representation for a button, a table cell,
@@ -27,9 +36,9 @@ to unwind later: collapsing UI into the gameplay ECS, an untyped command blob, a
 - `engine/platform` — `Window` (a **single** OS window, GLFW-backed PIMPL: `framebuffer_size`/`window_size`, `native_handle`
   escape hatch; **no DPI-scale query, no multi-monitor, no docking**) and `Input` (a frame-coherent `InputState` snapshot +
   an optional ordered `InputEvent` queue; keyboard-subset + 5 mouse buttons + move + scroll + modifiers). Its comment is
-  explicit: *"No propagation / consumption flags here; that responsibility lives in a future crd-app layer."* There is **no
-  touch, pen/stylus, gamepad, IME, clipboard, or drag/drop.** The `UiInputRouter` **is** that future layer — it builds on
-  `platform::Input`, it does not replace it.
+  historical: the current `crd-app` already has `dispatch_propagated`; reuse that application routing seam.
+  The full touch, pen, gamepad, committed-text/IME, clipboard and drag/drop contracts remain INPUT work.
+  `UiInputRouter` adds retained hit-testing, focus and UI propagation on those services, without a second app event bus.
 - `engine/imgui` + `engine/perf-ui` + `engine/draw-imgui` — Dear ImGui debug UI. **Kept** as debug/recovery UI (§36). It is
   **not** the product/editor UI foundation, and it is **not deleted** when the new UI lands.
 - `engine/draw` — debug visualization (`DebugLine`, `DebugText`, shapes, overlay pass). A **separate debug system**, not the
@@ -37,14 +46,17 @@ to unwind later: collapsing UI into the gameplay ECS, an untyped command blob, a
 - `engine/anim` — animation primitives the UI transition/animation system shares (rather than re-inventing curves).
 - `engine/render-asset-core` — the asset substrate the UI reuses wholesale: `AssetId`/`AssetRef` (`identity.hpp`,
   `engine://`/`app://` schemes), `InterfaceHash`/`ContentHash`/`Generation` (`cooked.hpp`), `DependencyGraph`
-  (`dependency.hpp`), `DiagnosticList`/`DiagCode` (`diagnostic.hpp`). Plus RAF-11's `RenderAssetReloader` +
-  `ReloadableVtbl` + `DeferredReleaseQueue` (transactional, last-good, deferred GPU destruction).
+  (`dependency.hpp`), `DiagnosticList`/`DiagCode` (`diagnostic.hpp`). The existing RAF-11 reloader types are
+  private to `scene-render`, not a shared core service. RAH-7 promotes the reusable dependency/atomic-publication
+  contract without a 3D dependency and replaces frame-count retirement with actual queue completion.
 - `engine/frame-cook` + `engine/render-graph` — the RAF frame-graph runtime (`FrameGraphTemplate → compile → execute`,
-  executors recording the canonical command model). `engine/material-cook` — MAT, the CKIR material cook.
+  executors recording the canonical command model). These authoring surfaces converge through CEIR (ADR-0127),
+  which owns execution; they do not introduce a parallel scheduler. `engine/material-cook` — MAT, the CKIR material cook.
 - `engine/platform/file_watcher.hpp` — the file-change trigger for hot reload.
 
-**No `Sprite`/`Glyph`/`FontAtlas`/`TextLayout`/`Canvas`/`UiNode`/`DisplayList` type exists anywhere** — the UI/2D core
-concepts are genuinely new. This ADR defines their boundaries; it does not duplicate a concept under a new name.
+No complete product UI/Canvas/font module exists in the audited module inventory. Debug drawing types and
+CEIR-33 C2 editor-domain records are prior art, not a finished retained UI. Recheck concrete names before adding
+interfaces. The full retained renderer library must finish before UI implementation (ADR-0129).
 
 ---
 
@@ -79,7 +91,7 @@ flowchart LR
 | Multi-pass compositing effects (glass/blur/glow) | `UiEffectGraph` | compiles to RAF frame graph | see D5 |
 | Scheduling, resource lifetime, sync, transient aliasing, final composition, backend command recording | `FrameGraph` | `engine/render-graph` (RAF) | UI/Scene2D are ordinary participants |
 | OS window + raw input | `platform::Window` / `platform::Input` | `engine/platform` (existing) | UI input router builds ON this |
-| Asset identity/cook/hash/dependency/reload/diagnostics | render-asset-core + RAF-11 reloader | `engine/render-asset-core` | reused, not re-invented |
+| Asset identity/cook/hash/dependency/reload/diagnostics | render-asset-core + shared RAH-7 service | `engine/render-asset-core`; reload placement reviewed at RAH-7 | reuse core; private scene-render reloader is migration input |
 
 **⛔ The rule (recorded verbatim, D-007 U-1):** *A game menu, HUD, inventory, settings screen, dialogue panel, editor
 panel, tooltip, tree view, and text field are UI even when their appearance uses sprites or animated images.* A sprite is
@@ -114,7 +126,7 @@ PushTransform/PopTransform · PushClip{Rect,RoundedRect,Path}/PopClip · BeginLa
 
 **THE SEAM (this is the load-bearing boundary):** `CanvasDisplayList` → a clip/layer/batch compiler → **the RAH-hardened
 canonical GPU command / resource / attachment / binding model**, recorded through RAF executors. This ADR does **not**
-define that command model — it is being hardened in parallel by the RAH-0 canonical-model audit
+define that command model — it is hardened first by the RAH-0 canonical-model audit
 (`docs/systems/rah-0-canonical-model-audit.md`) and the RAH-1/RAH-2 slices. The Canvas layer targets the RAH model as-is;
 concretely, **I2D-1 (Canvas MVP) cannot begin until RAH-1 (typed attachments) and RAH-2 (resource-table bindless) land**,
 because the compositor must lower into typed attachments + a resident resource table, not the current fixed
@@ -151,6 +163,13 @@ All three converge on the same retained structures and behaviour:
   frame-graph work — it reuses the frame graph, it does NOT create a mini scheduler.** It declares required input
   resources, output format, temporaries, bounds expansion, quality tiers, capability requirements, explicit fallback,
   cache policy, update policy. Classification **A+R**; it is the UI-facing analogue of an RPL frame graph.
+  - ⛔ **CEIR-31b evidence note (2026-09-06):** the §141 frosted-glass effect was PROVEN as a plain `.frame.toml` of committed
+    `.ckir` fullscreen kernels on the EXISTING RAF frame graph — ZERO new ops/executors/dialect (the 31b-0 census). The
+    frame-graph half of this bullet is thus confirmed on device (Vk+DX12+llvmpipe): an effect chain (backdrop copy → half-res
+    fetch → separable Gaussian ping-pong → tint/noise → fixed-rect mask → bindless composite) needs no new machinery. What is
+    NOT yet decided: whether I2D-7's per-panel binding (the effect-metadata, backdrop-REGION capture, and cacheability above)
+    needs a distinct `UiEffectGraph` asset type BEYOND a static frame — OPEN. See `assets/frame/ui_frosted_glass.frame.toml`
+    and capability `ui_effect_graph` (status `gate-only`, raf_level L4).
 
 ### D6 — UI and Scene2D are ordinary frame-graph participants
 
@@ -236,6 +255,10 @@ flowchart LR
   E1 -.emits nodes into.-> FG[RAF FrameGraphTemplate → compile → execute]
 ```
 
+> ⛔ **CEIR-31b realization (2026-09-06):** the frosted-glass proof used a FULL-backdrop `transfer.copy` (not a region) and a
+> FULLSCREEN-RASTER separable Gaussian (not `blur compute`). The diagram is the I2D-7 target shape; the 31b proof is the
+> minimal same-shape instance on the existing RAF frame graph — see capability `ui_effect_graph` (`gate-only`, L4).
+
 **Hot-reload lifecycle** (reuses RAF-11 `RenderAssetReloader`; transactional, last-good, deferred destruction):
 
 ```mermaid
@@ -287,8 +310,9 @@ FreeType/HarfBuzz = test oracles only)** — the codec doctrine; the I2D-2 confo
 
 ## Open questions (resolved before or during the named slices, not now)
 
-1. **Text ownership** — Cerid-owned shaping/font-parsing vs. an approved external library (HarfBuzz-class), with a
-   conformance/golden plan. → I2D-2 / I2D-6.
+1. ~~**Text ownership** — Cerid-owned shaping/font-parsing vs. an approved external library.~~ **Already resolved
+   2026-08-07 (§Costs / U-20): Cerid owns both; FreeType/HarfBuzz are test oracles only.** The remaining question is
+   the staged conformance/golden plan and full font-format coverage, not ownership. → I2D-2 / I2D-6.
 2. **`platform` growth** — event-propagation model, touch/pen/gamepad/IME/clipboard/drag-drop, multi-window/docking/
    per-monitor DPI. This ADR fixes that the `UiInputRouter`/windowing layer OWNS routing/capture/focus above `platform`; the
    platform extensions land with I2D-8 (§14/§20). → I2D-3 (basic) / I2D-8 (full).

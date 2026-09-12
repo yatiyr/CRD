@@ -1,5 +1,8 @@
 # ADR-0090 — crd-hesap-opt: the optimization domain (substrate + contracts + module edges, Phase 3.1.6 v7)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-06-07)
 
 **Tags:** arch, hesap, opt, optimization, determinism, module-edges, substrate

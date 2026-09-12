@@ -1,5 +1,8 @@
 # ADR-0058 — Öbek System: cooked entity-graph templates with composition, variation, and AAAA-tier future-proofing
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-08
 **Tags:** scene, ecs, cooker, resources, arch, renderer, networking, determinism

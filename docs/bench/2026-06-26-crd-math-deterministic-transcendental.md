@@ -1,5 +1,8 @@
 # 2026-06-26 — crd-math deterministic transcendental cluster: exp/log/trig/hyperbolic/power/complex
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** i9-14900K, Windows (MSVC 2022). Linux (GCC 13.3) for cross-platform bit-determinism moat validation.

@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1a-material-a — Material API surface
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Lock the public `Material` API surface per ADR-0069 §1-§3 + §11 v1a-

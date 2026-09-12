@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-n-2 ⭐ CLOSE: the filter interior point + the IPOPT probe (same session, part 8)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-n-2 — the third member of the NLP trio (Wächter-Biegler 2006) + the IPOPT install probe.
 Completes v7-n. Continues the v7-f..k, n-1 logs.

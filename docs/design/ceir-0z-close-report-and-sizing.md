@@ -1,5 +1,8 @@
 # CEIR-0z — The §184 close report + honest CEIR-1…13 sizing
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Band:** D-007 · CEIR-0 · slice 0z (the CEIR-0 close). **Tracker:** `docs/detours/D-007-ceir-tracker.md` → CEIR-0z.
 > **Gate:** the mission §184 fifteen items answered FROM EVIDENCE; honest per-band sizing; user sign-off.
 > **Derived from (not estimated fresh):** CEIR-0a (inventory: 14 verbs · 9 `render()` blocks · 5 cookers · the §9.3

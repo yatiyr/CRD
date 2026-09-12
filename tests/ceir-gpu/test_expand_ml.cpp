@@ -142,6 +142,21 @@ TEST_CASE("ceir 24b-3: expand_ml_ops rewrites ml.attention into transpose/gemm/s
     CHECK(r.error == gpu::MlExpandError::None);
     CHECK(r.expanded == 1U);
 
+    // ⛔ CEIR-26d-3a STRUCTURAL WITNESS (advisor): Kᵀ is now a shape-generic `tensor.transpose` (synth), NOT the baked @transpose
+    //    dispatch — so the expanded attention has EXACTLY one tensor.transpose + EXACTLY one compute.dispatch (softmax only). This
+    //    catches a regression to the baked dispatch (which would be 0 transpose ops + 2 dispatches) that the NUMERIC device gate
+    //    cannot (right numbers, wrong plan shape).
+    crd::u32 n_transpose = 0U;
+    crd::u32 n_dispatch  = 0U;
+    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        const containers::StringView nm = ctx.op_name(op->kind());
+        if (nm == containers::StringView("tensor.transpose")) { ++n_transpose; }
+        else if (nm == containers::StringView("compute.dispatch")) { ++n_dispatch; }
+    }
+    CHECK(n_transpose == 1U); // the Kᵀ synth transpose (retired from the baked @transpose dispatch)
+    CHECK(n_dispatch == 1U);  // softmax only (the two gemms are linalg.gemm; transpose is no longer a dispatch)
+
     CHECK(ml::find_ml_misuse(ctx, *m).kind == ml::MlMisuseKind::None);
     CHECK(ctx.find_structure_error(*m).kind == StructureErrorKind::None);
     const gpu::TensorPipelinePlan plan = gpu::plan_tensor_pipeline(ctx, *m, &root);
@@ -231,9 +246,12 @@ Operation* mlp_widths(Context& ctx, const Kit& k, Block* b, ConstSpan<u32> width
 gpu::MlProvider coopvec(bool available)
 {
     gpu::MlProvider p;
-    p.name      = StringView("coopvec");
-    p.available = available;
-    p.advertise = &gpu::coopvec_can_claim_mlp;
+    p.name           = StringView("coopvec");
+    p.available      = available;
+    p.advertise      = &gpu::coopvec_can_claim_mlp;
+    p.provider_class = ProviderClass::Gpu;             // coopvec is a GPU-bridge fused kernel (§69)
+    p.memory_domain  = StringView("device_local");     // its outputs live in device-local memory (§24 vocab)
+    p.determinism    = DeterminismClass::DeterministicWithinTarget; // the fused coopvec MLP is fixed-order (§27)
     return p;
 }
 } // namespace
@@ -447,37 +465,44 @@ TEST_CASE("ceir 24c-2a: the coopvec CLAIM conversion (config + TRANSPOSED fp16 w
     }
 }
 
-TEST_CASE("ceir 24z: expand_ml_ops TYPED-REJECTS a baked-kernel shape mismatch (never a silent OOB/wrong-shape kernel)",
+TEST_CASE("ceir 24z/26d: expand_ml_ops now EXPANDS a non-32-width MLP AND a generic-dims ATTENTION (26d shape-specialization retired the baked rejects)",
           "[ceir][ml][expand]")
 {
-    // ml.mlp whose relu'd intermediate h1 = M·hidden = 4·16 = 64 != 32 (relu.ckir's baked local_size) -> a TYPED reject.
+    // ⭐ CEIR-26d SUPERSEDES the old MLP baked-shape reject (struck in place): an ml.mlp whose relu'd intermediate h1 = M·hidden =
+    //    4·16 = 64 != 32 NOW EXPANDS — relu.ckir ships the shape sentinel (local_size=0) and the VizDispatch resolver cook-binds
+    //    local_size to the intermediate numel (bind_authored_local_size), proven device-resident at 26d-2c. The reject's TEETH
+    //    moved to the resolver's LocalSizeExceedsLimit (numel > the single-workgroup cap), gated by the pure-policy unit +
+    //    the device oversize negative in the 26d-2c cases. (Was: CHECK BakedKernelShapeUnsupported + expanded==0.)
     {
         memory::GrowableTlsfAllocator root;
         Context                       ctx(&root);
         const Kit                     k(ctx);
         Module* const                 m = ctx.create_module();
         Block* const                  b = mkmain(ctx, *m);
-        const u32                     w[3] = {8U, 16U, 4U}; // h1 = 4·16 = 64, not 32
+        const u32                     w[3] = {8U, 16U, 4U}; // h1 = 4·16 = 64 != 32 — LEGAL now (cook-time shape-specialization)
         (void)mlp_widths(ctx, k, b, ConstSpan<u32>(w, 3U));
-        REQUIRE(ml::find_ml_misuse(ctx, *m).kind == ml::MlMisuseKind::None); // verify-clean, but the baked kernel can't take it
-        const gpu::MlExpandResult r = gpu::expand_ml_ops(ctx, *m);
-        CHECK(r.error == gpu::MlExpandError::BakedKernelShapeUnsupported);
-        CHECK(r.expanded == 0U); // rejected BEFORE emitting any ops
-    }
-    // ml.attention with Sk=4 (transpose.ckir/softmax.ckir bake Sk=3) -> a TYPED reject.
-    {
-        memory::GrowableTlsfAllocator root;
-        Context                       ctx(&root);
-        const Kit                     k(ctx);
-        Module* const                 m = ctx.create_module();
-        Block* const                  b = mkmain(ctx, *m);
-        Value* const                  q  = decl(ctx, k, b, tf(ctx, sh2(ctx, 2U, 4U)));
-        Value* const                  ky = decl(ctx, k, b, tf(ctx, sh2(ctx, 4U, 4U))); // Sk=4, not 3
-        Value* const                  v  = decl(ctx, k, b, tf(ctx, sh2(ctx, 4U, 2U)));
-        b->append(ml::build_attention(ctx, q, ky, v, tf(ctx, sh2(ctx, 2U, 2U))));
         REQUIRE(ml::find_ml_misuse(ctx, *m).kind == ml::MlMisuseKind::None);
         const gpu::MlExpandResult r = gpu::expand_ml_ops(ctx, *m);
-        CHECK(r.error == gpu::MlExpandError::BakedKernelShapeUnsupported);
-        CHECK(r.expanded == 0U);
+        CHECK(r.error == gpu::MlExpandError::None); // 26d: a non-32 MLP is no longer a baked-shape reject
+        CHECK(r.expanded == 1U);
+    }
+    // ⛔ CEIR-26d-3c SUPERSEDED-IN-PLACE (was: ml.attention with Sk=4 → BakedKernelShapeUnsupported + expanded==0): the attention
+    //    baked-shape pre-check is RETIRED — 26d-3a made Kᵀ a shape-generic tensor.transpose (synth) and 26d-3b made softmax a
+    //    spec-const loop kernel, so a non-(2,3,4) attention now EXPANDS. Proven device-resident at generic dims (Sq=3,Sk=5,D=4) on
+    //    both backends by the 26d-3c gates (test_ceir_pipeline_{vulkan,dx12}.cpp) — the reject's teeth moved to those POSITIVE gates.
+    {
+        memory::GrowableTlsfAllocator root;
+        Context                       ctx(&root);
+        const Kit                     k(ctx);
+        Module* const                 m = ctx.create_module();
+        Block* const                  b = mkmain(ctx, *m);
+        Value* const                  q  = decl(ctx, k, b, tf(ctx, sh2(ctx, 3U, 4U)));  // Sq=3
+        Value* const                  ky = decl(ctx, k, b, tf(ctx, sh2(ctx, 5U, 4U)));  // Sk=5 (≠3 — was rejected)
+        Value* const                  v  = decl(ctx, k, b, tf(ctx, sh2(ctx, 5U, 2U)));
+        b->append(ml::build_attention(ctx, q, ky, v, tf(ctx, sh2(ctx, 3U, 2U))));
+        REQUIRE(ml::find_ml_misuse(ctx, *m).kind == ml::MlMisuseKind::None);
+        const gpu::MlExpandResult r = gpu::expand_ml_ops(ctx, *m);
+        CHECK(r.error == gpu::MlExpandError::None); // ⛔ 26d-3c: was BakedKernelShapeUnsupported
+        CHECK(r.expanded == 1U);
     }
 }

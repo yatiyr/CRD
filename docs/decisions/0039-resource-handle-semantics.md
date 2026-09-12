@@ -8,6 +8,9 @@ tags: [resources, arch]
 
 # ADR-0039 — `ResourceHandle<T>` semantics
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 Phase 2.6 needs a runtime handle type for loaded resources. The handle is the only thing

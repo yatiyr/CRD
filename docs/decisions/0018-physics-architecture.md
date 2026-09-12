@@ -1,4 +1,7 @@
-﻿# ADR-0018 — Physics architecture
+# ADR-0018 — Physics architecture
+
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-04
 **Status:** ⚠ **Superseded by ADR-0062 (2026-05-10)** — Cerid no longer
@@ -22,4 +25,4 @@ in ADR-0062 + ADR-0063 + `docs/phases/phase-3.1-eylem.md` +
 ## References
 
 - `docs/phases/phase-3-simulation.md`
-- `docs/phases/phase-6-native-physics.md`
+- `docs/archive/2026-09-12-superseded-plans.md#phase-6-native-physics`

@@ -1,5 +1,8 @@
 # v17 CKIR / GPU-compute gotchas
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Banked landmines from building `crd-kir` + `crd-hesap-gpu` (ADR-0098). Read before re-hitting a matching symptom;
 append the moment a new one bites (per the standing rule: log gotchas as you optimize).
 

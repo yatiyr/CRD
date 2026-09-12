@@ -1,5 +1,8 @@
 # 2026-07-19 — B17 OIT tier GPU PERF board (kernel-only cost per tier, high-overdraw)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The companion to the accuracy board (`2026-07-19-oit-tier-scoreboard.md`): *how much each order-independent-transparency
 tier costs on the GPU*. Accuracy tells you which tier is close enough; this tells you what you pay for it. All tiers are
 CKIR compute kernels on Vulkan; GPU-timed with `last_gpu_ms` (brackets only the recorded compute dispatches — upload/readback

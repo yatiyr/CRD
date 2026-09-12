@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-p-1 CLOSE: the direct-search trio (same session, part 11)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slice:** v7-p-1 — derivative-free part 1. **v7-p was DE-SLIPPED by user decision this session**: p/q/r run
 before v7-z, and for v7-p the user explicitly chose the **FULL-PORT path** (BOBYQA/NEWUOA/COBYLA included,

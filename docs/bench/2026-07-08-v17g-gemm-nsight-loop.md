@@ -1,5 +1,8 @@
 # 2026-07-08 — v17-g GEMM optimization: the Nsight profile→diagnose→fix→measure loop
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Board:** CUDA FP32 GEMM (N=2048, square), RTX 4070 Ti SUPER, clock-locked 2610 MHz, GPU-event timed (kernel-only, no
 H2D/D2H), 20-iter average. Bench harness: `external/gemm_lab.cu`. Profiler: Nsight Compute 2026.2.1 (`ncu`), counter
 access unlocked. This is the reference walkthrough for §H.3 of `docs/hints/crush-playbook.md`.

@@ -1,5 +1,8 @@
 # 2026-05-07 — Phase 3.0 v1g: Query DSL
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1f shipped earlier the same day. Six relation built-ins + iterative cascade worklist. Scene tests 135 / 34520, six-config 651/651.
 
 **Status at end:** v1g shipped. `world.query<Cs...>()` is the public composer entry point; `.with<>()` / `.without<>()` / `.with_relation<>()` / `.filter()` chain into `Query<Cs...>` ranges. Range-for yields `(EntityId, Cs&...)` tuples; `for_each_chunk` is the chunk-level primitive that v1h `par_each` will sit on. Six-config 673/673 / 670 release / 17 smokes. Scene tests 157 / 34559.

@@ -1,5 +1,8 @@
 # `crd-shader` API Envelope (strawman)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../../ROADMAP.md); current rules: [AGENTS](../../../AGENTS.md).
+
 Headers only. This is an envelope, not an implementation contract yet.
 
 ```cpp

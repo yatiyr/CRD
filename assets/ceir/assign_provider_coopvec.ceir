@@ -1,0 +1,4 @@
+module {
+  ^bb0:
+    transform.assign_provider() {provider = "coopvec"}
+}

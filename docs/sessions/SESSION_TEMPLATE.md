@@ -1,5 +1,8 @@
 # Session — YYYY-MM-DD — short-topic
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > One file per session. Copy this template, rename to `YYYY-MM-DD-short-topic.md`,
 > and fill in. Keep it short. The point is: a future-me reads this file and
 > understands what was done and why, in five minutes.

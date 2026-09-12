@@ -1,5 +1,8 @@
 # 2026-06-27 — v12 statistics + special functions: samplers · distributions · log-density · descriptive
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).**
 
 - **Machine/config:** i9-14900K, Windows, single-thread (except where stated). Cerid compiled on MSVC 2022 Release.

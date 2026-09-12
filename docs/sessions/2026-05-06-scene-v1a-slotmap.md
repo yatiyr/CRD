@@ -1,5 +1,8 @@
 # 2026-05-06 — Phase 3.0 v1a: `crd-scene` skeleton — `EntityId` + `SlotMap` + `World`
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 2.8 complete. Phase 3.0 architecture locked (ADRs 0049–0057 accepted 2026-05-06). 14 slices planned. `engine/scene/` did not exist.
 
 **Status at end:** Phase 3.0 v1a SHIPPED. `crd-scene` static library exists, six-configuration green, +22 unit tests / +3448 assertions. 13 slices remain in Phase 3.0; next is v1b (`ComponentRegistry` + `IStorageBackend` interface + storage-hint registration grammar).

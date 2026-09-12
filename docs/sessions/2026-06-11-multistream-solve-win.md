@@ -1,5 +1,8 @@
 # 2026-06-11 — the deep-research dig: multi-stream DRAM, and the SOLVE flips to a WIN (part 21)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap`. Directive: "make a deep research and empirically and 100% confidently
 determine and fix the performance issues." Every claim below is a measurement, and the causal chain closes
 with no unexplained residue.

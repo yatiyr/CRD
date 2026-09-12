@@ -1,5 +1,8 @@
 # 2026-07-02 — The CI moat-test hang: a lost wake inside std::counting_semaphore, fixed by owning the primitive
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Session goal was "verify the v13 commit + CI, then open v14-a". The 18-config CI verdict was RED — every run
 > since the v13 close timed out (>1500 s, the ctest default) on a **different** jobs-parallel determinism-moat test
 > (v6-c Arnoldi / v6-h sparse SVD / v7-b FD-gradient / v7-f CG), only on Linux configs (gcc-release / shipping /

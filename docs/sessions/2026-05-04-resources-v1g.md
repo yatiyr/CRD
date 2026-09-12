@@ -1,5 +1,8 @@
 # 2026-05-04 — Phase 2.6 v1g: load_streamed + 2Q LRU eviction + memory budget + pinning
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** SHIPPED — Phase 2.6 COMPLETE
 
 ## What shipped

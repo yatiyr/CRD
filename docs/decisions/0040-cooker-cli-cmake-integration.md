@@ -8,6 +8,9 @@ tags: [resources, cooker, build, arch]
 
 # ADR-0040 — Cooker CLI + CMake integration
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Context
 
 ADR-0013 declared "Asset pipeline is a separate executable (`crd-tools/asset_cooker`). Runtime

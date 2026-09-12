@@ -1,5 +1,8 @@
 # 2026-07-24 — REN-1: the FRAME GRAPH on gpu-context (D-007 row 98)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Slice**: the scheduled render surface — passes declare typed resource reads/writes, the graph orders them +
 inserts barriers automatically, transient images/buffers get created + owned + memory-aliased by lifetime, and
 the whole frame submits ONCE instead of the synchronous submit+wait+readback-per-draw substrate. Landed

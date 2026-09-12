@@ -1,5 +1,8 @@
 # Session: `crd-renderer` v1e+f — Push Constants + Descriptor System + Material Binding
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-05-01
 **Presets at close:** win-debug 248/248, win-release 247/247, win-asan 248/248, win-clang-cl 248/248, win-tidy 248/248
 

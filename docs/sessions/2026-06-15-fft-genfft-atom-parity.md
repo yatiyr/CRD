@@ -1,5 +1,8 @@
 # 2026-06-14/15 — FFT genfft atom: MKL parity + engine build committed
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Live detail + every number: `docs/research/fft-mkl-crush.md` (§1c batched-8 beat, §1d genfft atom + N=512
 > convergence, §11 engine build plan). Memory: `project_v10_fft_plan` Parts 26–27.
 

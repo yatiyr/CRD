@@ -1,5 +1,8 @@
 # Bench — 3D Gaussian Splatting rasteriser @ 1080p (B19 performance)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Date:** 2026-07-21 · **GPU:** NVIDIA GeForce RTX 4070 Ti SUPER (16 GB) · **Backend:** Vulkan (headless), CKIR-emitted
 SPIR-V · **Build:** win-debug (GPU-timestamped `last_gpu_ms()` measures GPU execution only, so it is build-independent).
 **Test:** `tests/gpu-context-vulkan/test_vulkan_gsplat.cpp` → `[.gsplat-bench]` (hidden). Min-of-6, 2 warm-ups.

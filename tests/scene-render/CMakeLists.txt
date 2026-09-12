@@ -1,6 +1,7 @@
 add_executable(crd-scene-render-tests
     test_scene_render.cpp     # GEO-7: chunk-grain extract + THE partial-re-upload gate (stub raster, CPU)
     test_scene_render_gpu.cpp # GEO-7: the 10k-instance cull+draw gate on a real Vulkan device ([gpu])
+    test_ui_frosted_glass_gpu.cpp # CEIR-31b-4-b: the §141 frosted-glass chain's on-device numeric gates (own TU — the big gpu TU ICE'd)
     test_csm.cpp              # REN-3.2-b: CPU cascade fitting + the no-swim stabilization gates
     test_raf10_app.cpp        # RAF-10 (D-007): an APPLICATION customises the renderer ten ways, public headers only
     test_raf11_reload.cpp     # RAF-11 (D-007): dependency-aware hot reload — the reload engine + generations (device-free)
@@ -29,6 +30,11 @@ target_link_libraries(crd-scene-render-tests PRIVATE
 )
 
 crd_enable_default_pch(crd-scene-render-tests)
+# CEIR-31b-3-a-i-2: white-box access to the scene-render INTERNAL ProgramRegistry (src/asset_resolver.hpp) so its
+# spec-const KIND logic (SpecOnOpaqueProgram) is unit-tested directly, not only through a device/record path.
+# ⛔ This opens the WHOLE src/ tree to the test — the ONLY intended reach is asset_resolver.hpp's ProgramRegistry. Do
+# NOT #include other internal headers (reload.hpp, …) from a test on the back of this; test those through public seams.
+target_include_directories(crd-scene-render-tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/scene-render/src)
 target_compile_definitions(crd-scene-render-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv (the drift gate's ctest env)
 target_link_libraries(crd-scene-render-tests PRIVATE crd-material-cook crd-vertex-cook crd-light-cook) # REN-38: the drift gate parses all five vocabularies
 target_link_libraries(crd-scene-render-tests PRIVATE crd-render-graph crd-render-pass) # RAF-10: the app's custom executor names RecordContext / PassPayload / pass_param_id directly

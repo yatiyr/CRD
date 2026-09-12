@@ -1,5 +1,8 @@
 # 2026-07-06 — v15-f: matrix-calculus + suite forward differentials (JVPs) — crush + honesty
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **What shipped:** the matrix-calculus JVP surface (`matrix_jvp.hpp`) + the DSP/FFT/spline suite (`suite_jvp.hpp`),
 self-contained (autodiff sits BELOW the LA solvers, so the rules take the caller's STORED FACTOR + dense row-major
 matrices and use inline gemm / triangular-solve — they never call a factorization). Rules verified vs Giles NA-08/01,

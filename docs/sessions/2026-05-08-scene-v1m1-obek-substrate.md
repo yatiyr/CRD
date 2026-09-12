@@ -1,5 +1,8 @@
 # 2026-05-08 — Phase 3.0 v1m1: Öbek substrate + minimal round-trip
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status at start:** Phase 3.0 v1l shipped 2026-05-08. SceneCooker ships. ADRs 0058/0059/0060 written and accepted. Phase 3.0 expanded from 14 to 17 slices: v1m (Öbek) → v1n (Preset+Profile) → v1o (sandbox integration) → v1p (reserved-slot freeze).
 
 **Status at end:** v1m1 shipped — Öbek substrate (`ObekResource` + `ObekLoader` for FourCC `'OBEK'` + `ObekArtifactBuilder`) plus `World::instantiate_obek` with parent reparenting via ChildOf. 8 round-trip test cases. Six-config 766/766 / 763 release / 17 smokes. Scene tests up to 250 cases (was 242 post-v1l).

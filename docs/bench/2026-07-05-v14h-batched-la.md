@@ -1,5 +1,8 @@
 # 2026-07-05 — v14-h batched LA: peer baselines (torch-CPU / numpy) + boards
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Phase 3.1.6 v14-h (`phase-3.1.6-hesap.md` row; detail `phase-3.1.6-v14.md`). Machine:
 > i9-14900K, WSL2, pinned core 4, **matched threading = 1** (torch.set_num_threads(1); the MT
 > board rides the moat section later). Harness `scripts/v14h_peers.py` (torch 2.12.0+cpu —

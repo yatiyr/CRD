@@ -1,5 +1,8 @@
 # 2026-07-21 — B19-a3: the sort half of 3D Gaussian Splatting runs on-device (CKIR payload radix sort)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) · **Sub-slice:** B19-a3
 **Directive:** "let's go, no defers, no debts, full correct, frontier and performant crushing architecture."
 
@@ -66,7 +69,7 @@ existing caller is untouched (the Vulkan key-only radix gate still passes, 33 as
 ## State
 
 B19-a3 DONE. `ckir_gsplat.hpp`, `ckir_sort.hpp`, and all three touched test files are tidy-clean (pinned
-LLVM 20.1.8 gate). context.md + `docs/detours/D-007-gpu-program-system.md` updated; the B19 row stays `◧`.
+LLVM 20.1.8 gate). context.md + `docs/archive/D-007-gpu-program-system.md` updated; the B19 row stays `◧`.
 
 **Next:** B19-a4 (full GPU tile count+scan+scatter+ranges binning — the last host crutch in the tiled
 render) · or B19-c (2DGS surfels + mesh, the bridge to B1 materials) · or StopThePop per-pixel resort.

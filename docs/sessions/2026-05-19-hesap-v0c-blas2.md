@@ -1,5 +1,8 @@
 # Session 2026-05-19 — Phase 3.1.6 `crd-hesap` v0c BLAS L2
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship Phase 3.1.6 v0c per the 2026-05-19 elite mandate: all 17 BLAS L2

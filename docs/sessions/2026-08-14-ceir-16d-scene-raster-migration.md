@@ -1,5 +1,8 @@
 # 2026-08-14 — CEIR-16d/16z: scene.raster migration + visbuffer dissolution (§128 CLOSED)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Band:** D-007 CEIR detour, CEIR-16 (executor migration → §127/§128). This session drove CEIR-16d's live path to
 completion and dissolved the last composite raster executor (visbuffer.raster) into scene.raster, **closing CEIR-16**:
 every composite raster executor is now a CEIR-authored program recorded through the generic `record_ceir_render`, and

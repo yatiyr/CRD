@@ -1,5 +1,8 @@
 # Reference-Class Benchmarking Policy
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
+
 > **Status**: Accepted 2026-05-20.
 > **Scope**: every performance-critical numerical / parallel kernel Cerid
 > ships from now on.

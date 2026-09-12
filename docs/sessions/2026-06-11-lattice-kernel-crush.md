@@ -1,5 +1,8 @@
 # 2026-06-11 — the lattice kernel dig: syrk pack root cause + merge fix + in-place TRSM (part 19)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` — the named hesap-direct frontier ("I want the lattice crush too"): the
 3D-lattice JᵀJ serial-kernel gap vs CHOLMOD (v7-e-2 STEP 7 verdict: W=1 0.73×, attributed to the ADR-0082
 wall). This session **refuted the "kernel wall" attribution for a second time** — profile-driven, three real

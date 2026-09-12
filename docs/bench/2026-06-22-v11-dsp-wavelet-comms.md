@@ -1,5 +1,8 @@
 # 2026-06-22 — v11 DSP + wavelet + comms cluster: signal processing, wavelets, SDR/communications
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Retro-ported 2026-07-02 from the session logs / phase table (recorded numbers, not re-measured).
 
 - **Machine/config:** i9-14900K, WSL2 Ubuntu 24.04 (gcc 13.3, -O2 release), Linux-gcc-release. Single-threaded except where noted (multi-threaded determinism moat = all routines tested at 1/4/16 threads with bit-identical output). Peers: scipy.signal 1.17.1 (primary, free), **MATLAB R2026a** (all toolboxes: signal/comm/wavelet/ident, the spec-compliance + MKL-perf authority), **liquid-dsp 1.6.0** (installed, the comms/SDR reference), **PyWavelets 1.8.0** (C core). Single-threaded fair comparison (MATLAB multi-threaded FFT by default — benches run MATLAB 1-thread via `feature('numthreads', 1)` where state-recoverable; fair baseline noted).

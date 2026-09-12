@@ -1,5 +1,8 @@
 # Session — 2026-05-14 — Phase 3.1.7 v3c-b — Quickhull main iteration loop
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Ship the algorithmic core of Quickhull: eye-point selection, visible-face DFS, horizon-edge identification, face replacement with neighbor relink, and conflict-list redistribution. Per the per-seam discipline locked in v3c-a, build on the initial-tetrahedron skeleton and add ONLY the iteration loop.

@@ -1,5 +1,8 @@
 # Session 2026-08-03 — RAF band: full command-model close + the desc/cooked/runtime substrate through the frame-graph architecture (RAF-2 completion → RAF-7)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Re-entry pointer: `context.md` §"STATE AT 2026-08-03 SESSION END". Band contract: D-007 "RAF band".
 > Mission constitution: `docs/research/2026-08-03-gold-standard-asset-driven-rendering.md`. Everything below is
 > **green, LLVM-20 tidy-clean, purely additive (sandbox untouched), and uncommitted** (user controls commits).

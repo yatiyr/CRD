@@ -1,5 +1,8 @@
 # Research — 2026-07-16 — AAA ocean water (2026 state of the art)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted** — the B16 4-cascade FFT ocean shipped in CKIR (displaced geometry + meshlets + water shading). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > D-007 / B16 water-ocean. Triggered by: the hand-tuned fragment render kept

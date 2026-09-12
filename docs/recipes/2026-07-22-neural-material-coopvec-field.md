@@ -1,5 +1,8 @@
 # Recipe — A neural material (2-D neural field) on the cooperative-vector tensor path
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > How to build a *learned texture*: a small MLP that maps a uv coordinate to RGB, trained to reproduce a target, then evaluated
 > per pixel inline on the `VK_NV_cooperative_vector` tensor units. The tangible neural-shading deliverable — the substrate for
 > neural textures / materials / BRDFs. Code: `engine/kir/include/crd/kir/ckir_neural.hpp`; gate `[.neural-material]` in

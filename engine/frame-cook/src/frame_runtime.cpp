@@ -473,6 +473,88 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
 
 } // namespace
 
+// CEIR-31b-3-a-i-2: gather a pass's `spec_<n>` params into `buf` as a SpecSet. The cook (pass_contract_diag) has
+// guaranteed <= kMaxSpecConsts, so an overflow here is unreachable-by-contract — a hard assert, never a truncating
+// fallback. `value` = the authored f64 (FrameParam::v[0]); the resolver narrows it to the program's spec dtype.
+// ⛔ CEIR-31b-3-c-ii: lives in `detail::` (declared in frame_runtime.hpp) so the H≠V spec-set tooth can unit-test the
+// EXACT builder the record seat (:832/:943) calls — NOT a public API (a bare `framecook::` name would invite callers).
+namespace detail
+{
+// ⭐⭐ CEIR-31b-4-b-iv-g-2 + REN-41: the ONE sizing formula for a scale-relative frame image — an absolute width/height
+// wins, else the output extent × the resource's `scale`, TRUNCATED to texels (the exact form the transient/persistent
+// creation uses at :649/:698). Kept in one place so a DERIVED spec-const's extent can NEVER drift from the transient it
+// describes (the two-copies-of-a-formula-is-a-drift-gate lesson).
+[[nodiscard]] crd::u32 image_dim_px(crd::u32 absolute, crd::u32 out_dim, float scale) noexcept
+{
+    return absolute != 0U ? absolute : static_cast<crd::u32>(static_cast<float>(out_dim) * scale);
+}
+
+SpecSet build_pass_spec_set(const FramePassDesc& d, const FrameGraphDesc& desc, crd::u32 out_w, crd::u32 out_h,
+                            SpecConst* buf) noexcept
+{
+    crd::u32 n = 0U;
+    for (crd::usize i = 0; i < d.params.size(); ++i)
+    {
+        crd::u32 sid = 0U;
+        if (!parse_spec_param(crd::containers::StringView(d.params[i].name.c_str(), d.params[i].name.size()), sid)) { continue; }
+        CRD_ASSERT_MSG(n < kMaxSpecConsts, "cook guarantees <= kMaxSpecConsts spec params (SpecConstTooMany)");
+        if (n < kMaxSpecConsts)
+        {
+            buf[n].id    = sid;
+            buf[n].value = d.params[i].v[0];
+            ++n;
+        }
+    }
+    // ⭐⭐ CEIR-31b-4-b-iv-g-2: DERIVED spec-consts (`derive_spec_<n>_{read,axis,op}`) resolve at RECORD from the read's
+    // pixel extent along its axis — `op=inv` ⇒ 1/extent, the fullscreen blur's per-texel UV step, RESOLUTION-CORRECT at
+    // every output size (the baked literal was only correct at PROOF_RES). The cook (pass_contract_diag) already proved
+    // read/axis/op are present + valid + the read is one of this pass's IMAGE reads, so we trust it here; a resource that
+    // cannot be found or a 0 extent yields a 0 step (an identity blur — harmless), never a crash.
+    for (crd::usize i = 0; i < d.params.size(); ++i)
+    {
+        crd::u32        did = 0U;
+        DeriveSpecField fi{};
+        if (!parse_derive_spec_param(crd::containers::StringView(d.params[i].name.c_str(), d.params[i].name.size()), did, fi)
+            || fi != DeriveSpecField::Read)
+        {
+            continue; // resolve ONCE per id, at its `_read` param (the `_axis`/`_op` fields are gathered below)
+        }
+        const char* const read_name = d.params[i].str.c_str();
+        bool              axis_x    = true;
+        bool              have_axis = false;
+        for (crd::usize k = 0; k < d.params.size(); ++k)
+        {
+            crd::u32        dk = 0U;
+            DeriveSpecField fk{};
+            if (!parse_derive_spec_param(crd::containers::StringView(d.params[k].name.c_str(), d.params[k].name.size()), dk, fk)
+                || dk != did || fk != DeriveSpecField::Axis)
+            {
+                continue;
+            }
+            axis_x    = d.params[k].str.size() == 1U && d.params[k].str.c_str()[0] == 'x';
+            have_axis = true;
+            break;
+        }
+        if (!have_axis) { continue; } // an incomplete derive that slipped past the cook — leave it unresolved
+        const FrameResourceDesc* rd = nullptr;
+        for (crd::usize r = 0; r < desc.resources.size(); ++r)
+        {
+            if (name_is(desc.resources[r].name, read_name)) { rd = &desc.resources[r]; break; }
+        }
+        if (rd == nullptr) { continue; }
+        const crd::u32 ext = axis_x ? image_dim_px(rd->width, out_w, rd->scale) : image_dim_px(rd->height, out_h, rd->scale);
+        CRD_ASSERT_MSG(n < kMaxSpecConsts, "cook guarantees <= kMaxSpecConsts spec params (literals + deriveds union)");
+        if (n < kMaxSpecConsts)
+        {
+            buf[n].id    = did;
+            buf[n].value = ext != 0U ? 1.0 / static_cast<double>(ext) : 0.0;
+            ++n;
+        }
+    }
+    return SpecSet{buf, n};
+}
+} // namespace detail
+
 // ── REN-37.10: the RECORDER. Owns the per-recording storage the graph's user pointers refer to. ──
 struct FrameRecorder::Impl
 {
@@ -620,8 +702,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             // target every build exactly like a transient. On a resize the desc size changes and the device's
             // `create_persistent_image` destroys+recreates it (history discarded for one frame, reconverged in a
             // few) — which is precisely the TAA-history contract. An absolute size still wins when the author gives one.
-            pid.width   = r.width != 0U ? r.width : static_cast<crd::u32>(static_cast<float>(out_target->width()) * r.scale);
-            pid.height  = r.height != 0U ? r.height : static_cast<crd::u32>(static_cast<float>(out_target->height()) * r.scale);
+            pid.width   = detail::image_dim_px(r.width, out_target->width(), r.scale);   // g-2: the ONE sizing formula
+            pid.height  = detail::image_dim_px(r.height, out_target->height(), r.scale); // (shared with the derived-step resolver)
             pid.format  = r.format;
             pid.samples = r.samples;
             pid.sampled = r.sampled;
@@ -669,8 +751,8 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         buffers.push_back(g::FgBuffer{});
         g::FgImageDesc           id{};
         // `scale` is relative to the OUTPUT target; an absolute width/height wins when given.
-        id.width   = r.width != 0U ? r.width : static_cast<crd::u32>(static_cast<float>(out_target->width()) * r.scale);
-        id.height  = r.height != 0U ? r.height : static_cast<crd::u32>(static_cast<float>(out_target->height()) * r.scale);
+        id.width   = detail::image_dim_px(r.width, out_target->width(), r.scale);   // g-2: the ONE sizing formula
+        id.height  = detail::image_dim_px(r.height, out_target->height(), r.scale); // (shared with the derived-step resolver)
         id.format  = r.format;
         id.samples = r.samples;
         id.sampled      = r.sampled;
@@ -810,6 +892,7 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         }
 
         DrawListBinding bind{};
+        bool            resolved_draw_list = false; // CEIR-31b-4-b-i: a draw_list was named AND resolved (may be EMPTY)
         // RAF-12.3 §7 fold: draw_list / shader are STRING PARAMS now. `resolve_query`/`fail` take a `const String&`,
         // so use the param's own stored string (stable in `d.params`) rather than a StringView temporary.
         if (const FrameParam* dlp = find_pass_param(d, SV(pp::kDrawList)); dlp != nullptr && !dlp->str.empty() && !rec.load_override)
@@ -823,15 +906,24 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 return fail(FrameExecError::UnresolvedDrawList, &dlp->str);
             }
-            rec.draws        = bind;
-            rec.program      = bind.at(0).program;
-            rec.vertex_count = bind.at(0).vertex_count;
+            rec.draws          = bind;
+            rec.program        = bind.at(0).program;
+            rec.vertex_count   = bind.at(0).vertex_count;
+            resolved_draw_list = true;
         }
         if (!pass_str(d, SV(pp::kShader)).empty())
         {
-            rec.program = host.program(pass_str(d, SV(pp::kShader)));
-            // a missing program must FAIL, never render something plausible
-            if (rec.program == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kShader))); }
+            // CEIR-31b-3-a-i-2: thread the pass's spec-consts to the resolver so the host can specialize the program.
+            SpecConst      spec_buf[kMaxSpecConsts];
+            FrameExecError perr = FrameExecError::Ok;
+            rec.program = host.program_spec(pass_str(d, SV(pp::kShader)),
+                                            detail::build_pass_spec_set(d, desc, out_target->width(), out_target->height(), spec_buf),
+                                            &perr);
+            // a missing program must FAIL, never render something plausible; a spec-specific failure keeps its own name.
+            if (rec.program == nullptr)
+            {
+                return fail(perr != FrameExecError::Ok ? perr : FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kShader)));
+            }
         }
         // ⛔⛔ REN-38 llvmpipe campaign: a pass that DRAWS with no resolved program used to fall through to
         // `record_pass`, whose program guard returned SILENTLY — a black frame with draws reported and no
@@ -839,7 +931,13 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         // whose host binding carries no program is now the SAME named failure as a missing shader.
         {
             const bool draws_geometry = pass_draws_geometry(d);
-            if (draws_geometry && rec.program == nullptr && !rec.load_override)
+            // ⛔⛔ CEIR-31b-4-b-i: an EMPTY resolved draw list (0 items — an empty world, or a frustum that culled
+            // everything) is a LEGITIMATE clear-only geometry pass, NOT a missing-program bug: with no draw there is no
+            // first item to carry a program (rec.program is bind.at(0).program), and record_ceir_render replays the pass
+            // as clear + zero draws — the program resolver (fs_program) is never invoked. Only a NON-empty binding whose
+            // program is null is the REN-38 silent-black bug this guards; a geometry pass with NO draw list still fails.
+            const bool empty_world = resolved_draw_list && rec.draws.count() == 0U;
+            if (draws_geometry && rec.program == nullptr && !rec.load_override && !empty_world)
             {
                 return fail(FrameExecError::UnresolvedProgram, &d.name);
             }
@@ -940,8 +1038,16 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         }
         if (pass_dispatches_kernel(d))
         {
-            rec.kernel_program = host.kernel(pass_str(d, SV(pp::kKernel)));
-            if (rec.kernel_program == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kKernel))); }
+            // CEIR-31b-3-a-i-2: a compute.dispatch pass may carry spec-consts too — thread them to the kernel resolver.
+            SpecConst      kspec_buf[kMaxSpecConsts];
+            FrameExecError kperr = FrameExecError::Ok;
+            rec.kernel_program = host.kernel_spec(pass_str(d, SV(pp::kKernel)),
+                                                  detail::build_pass_spec_set(d, desc, out_target->width(), out_target->height(), kspec_buf),
+                                                  &kperr);
+            if (rec.kernel_program == nullptr)
+            {
+                return fail(kperr != FrameExecError::Ok ? kperr : FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kKernel)));
+            }
             for (crd::usize pi2 = 0; pi2 < d.params.size(); ++pi2)
             {
                 const FrameParam& prm = d.params[pi2];
@@ -1354,6 +1460,9 @@ const char* frame_exec_error_text(FrameExecError e) noexcept
     case FrameExecError::UnresolvedAccel:       return "a raytrace pass names an acceleration structure the host does not know";
     case FrameExecError::UnresolvedArgs:        return "an indirect pass names an args buffer the graph did not create";
     case FrameExecError::MissingCeirPlan:       return "a migrated executor (record_ceir_render) got no CEIR replay plan — the caller must build_frame_plans and pass them";
+    case FrameExecError::SpecOnOpaqueProgram:   return "a spec'd pass names a program registered without spec support (its specs would be dropped)";
+    case FrameExecError::SpecConstNotInProgram: return "a `spec_<n>` id is not a specialization constant of the resolved program";
+    case FrameExecError::SpecConstUnsupportedByHost: return "the host does not support spec constants, and this pass carries some (they would be dropped)";
     }
     return "unknown error";
 }

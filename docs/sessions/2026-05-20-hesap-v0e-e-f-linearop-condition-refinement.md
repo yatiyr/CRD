@@ -1,5 +1,8 @@
 # 2026-05-20 — Phase 3.1.6 `crd-hesap` v0e-e + v0e-f: LinearOp / condition / iterative refinement
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 Combined session log for v0e-e (LinearOp wrappers + Hager 1-norm
 condition estimator) and v0e-f (iterative refinement, same-precision
 MVP). Both shipped on 2026-05-20 in the same session as v0e-a/b/c/d.

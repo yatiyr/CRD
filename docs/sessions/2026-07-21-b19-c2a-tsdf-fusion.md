@@ -1,5 +1,8 @@
 # 2026-07-21 — B19-c2a: TSDF fusion (the first half of the mesh bridge)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Detour:** D-007 GPU-program-system · **Slice:** B19 (3D Gaussian Splatting) · **Sub-slice:** B19-c2a
 **Directive:** "let's continue" (→ the mesh bridge: turn the 2DGS depth+normal G-buffer into geometry).
 

@@ -1,5 +1,8 @@
 # 2026-06-17 — FFT M2: hierarchical 64×64 generated 4096 sub-FFT POC
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > Module: `crd-hesap-fft` (v10), Fork A (generated-codelet project). Continues
 > `2026-06-16-fft-generated-codelet-m0-m1.md`. Design: `docs/design/hesap_fft_generated_codelets.md` §16.
 > Memory: `project_v10_fft_plan`. All probes in gitignored `build/`; the gated engine path is OFF by default.

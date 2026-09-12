@@ -1,0 +1,171 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+# CEIR-31b-3-b UI-EFFECT COMPOSITE (the S141 frosted-glass chain's LAST pass: lerp the blurred effect over the scene by a
+# panel-quad coverage mask). mask=0 -> scene, mask=1 -> effect: out.rgb = mix(scene.rgb, effect.rgb, mask.r); out.a = 1.
+# MULTI-TEXTURE fullscreen via the BINDLESS idiom (the deferred_lighting.ckir precedent, device-proven both backends): ONE
+# descriptor-array Texture at the bindless heap (set 0, binding 16, count 3) + ONE Sampler (binding 2, the ui-kernel-family
+# slot shared with ui_blur) + three SampleIndexed(tex, samp, uv, layer) at layers 0/1/2. The frame graph binds a fullscreen
+# pass's reads=[...] into the heap in DECLARATION ORDER (the multi-read fullscreen contract; a 1-read pass would bind a
+# single texture at binding 1, NOT the heap) -> the 31b-3-c ui_frosted_glass.frame.toml MUST declare reads = [scene, effect,
+# mask] in THAT order, and its mask pass MUST write coverage to the RED channel (mask.r; a solid vec4(1,1,1,1) quad into a
+# transient the frame CLEARS to 0, so outside-the-quad reads 0). Binding/layer correctness is provable only ON-DEVICE (31b-4 arm (a): far-from-edge ==
+# tint(A/B) fails visibly if a layer or channel is wrong). 0 spec-consts (a pure Mix); a spec_N on the composite pass FAILS
+# SpecConstNotInProgram at the seat, never the kernel. Hand-authored straight-line text; the reading gate is structural.
+schema = 1
+
+[[entry]]
+stage = "Fragment"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 1
+local_size = [1, 1, 1]
+kernel_body_begin = -1
+kernel_body_count = 0
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[out]]
+node = "n15"
+location = 0
+interp = "Smooth"
+
+[[node]]
+id = "n0"
+op = "StageIn"
+tkind = "Vec"
+trows = 2
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "Texture"
+tkind = "Texture"
+trows = 2
+tcols = 0
+tcount = 3
+shape = [1]
+iidx = 16
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 2
+
+[[node]]
+id = "n3"
+op = "Const"
+dtype = "U32"
+shape = [1]
+
+[[node]]
+id = "n4"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n3"]
+
+[[node]]
+id = "n5"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n6"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n5"]
+
+[[node]]
+id = "n7"
+op = "Const"
+dtype = "U32"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n8"
+op = "SampleIndexed"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2", "n0", "n7"]
+
+[[node]]
+id = "n9"
+op = "Swizzle"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n4"]
+perm = [0, 1, 2, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n10"
+op = "Swizzle"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n6"]
+perm = [0, 1, 2, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n11"
+op = "Swizzle"
+shape = [1]
+in = ["n8"]
+perm = [0, 0, 0, 0, 0, 0, 0, 0]
+
+[[node]]
+id = "n12"
+op = "Splat"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n11"]
+
+[[node]]
+id = "n13"
+op = "Mix"
+tkind = "Vec"
+trows = 3
+shape = [1]
+in = ["n9", "n10", "n12"]
+
+[[node]]
+id = "n14"
+op = "Const"
+shape = [1]
+cval = "0x3ff0000000000000"
+
+[[node]]
+id = "n15"
+op = "VecConcat"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n13", "n14"]

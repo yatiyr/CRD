@@ -1,5 +1,8 @@
 # Research — 2026-07-23 — the OWNED MEDIA-CODEC PLATFORM (images · audio · video · transcode)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Outcome:** **adopted (in progress)** — the D-007 MED band executes this plan; Track D is live (MED-1 GIF+LZW landed 2026-08-07). *(stamped 2026-08-07, doc-hygiene pass)*
 
 > The plan for handling EVERY media resource ourselves (user-directed: "videos, sound files, image files… webp avif gif

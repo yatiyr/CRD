@@ -1,6 +1,9 @@
 # 2026-07-30 — REN-40-B, and the shadow bug that four red gates were pointing at
 
-**Row 143 / 40-A (audit) + 40-B (closed) + 40-C2 (data half) in `docs/detours/D-007-gpu-program-system.md`.
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
+**Row 143 / 40-A (audit) + 40-B (closed) + 40-C2 (data half) in `docs/archive/D-007-gpu-program-system.md`.
 Board: `docs/bench/2026-07-30-ren40b-incremental-extract.md`.**
 
 Brief: *audit 40-A, then implement 40-B and 40-C.*

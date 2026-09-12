@@ -1,5 +1,6 @@
 #include <crd/ceir/gpu/tensor_pipeline.hpp>
 
+#include <crd/ceir/gpu/partition_ml.hpp> // CEIR-29c-1: MlPartition — plan_tensor_pipeline_partitioned tags stages by provider
 #include <crd/ceir/attr.hpp>   // AttrValue / AttrKind (the dequantize `scheme` attr — the symmetric-per-tensor plan gate)
 #include <crd/ceir/func.hpp>   // func::func_body_block
 #include <crd/ceir/ir.hpp>     // Block / Operation / Value traversal
@@ -7,6 +8,8 @@
 #include <crd/ceir/quant.hpp>  // find_quant_misuse (CEIR-23b: quant.dequantize is a planned op)
 #include <crd/ceir/tensor.hpp> // find_tensor_misuse
 #include <crd/ceir/type.hpp>   // Type / TypeKind / DimKind
+#include <crd/ceir/gen/transform_ops.hpp> // CEIR-27a: transform.fuse / transform.share_storage directive kinds
+#include <crd/ceir/tune.hpp>              // CEIR-28a: tune.entry cache rows + load_tune_entries (the config-cache replay)
 #include <crd/kir/ckir.hpp>    // kir::KGraph (a scratch graph for the per-stage synth typed-reject check)
 
 namespace crd::ceir::gpu
@@ -142,6 +145,125 @@ bool fusable_dequant_into_gemm_weight(const Context& ctx, const Operation* dequa
     return gemm_is_plain(ctx, g); // ⛔ the fused kernel is alpha=1 β=0 no-transpose — a scaled/accumulating/transposed gemm miscompiles
 }
 
+bool fusable_gemm_into_relu(const Context& ctx, const Operation* gemm_op) noexcept
+{
+    if (gemm_op == nullptr || gemm_op->num_results() < 1U) { return false; }
+    if (ctx.op_name(gemm_op->kind()) != StringView("linalg.gemm")) { return false; }        // (1) op-name (cheapest)
+    if (!gemm_is_plain(ctx, gemm_op)) { return false; }                                     // (2) α=1 β=0 no-transpose (no fused form)
+    // (3) ⛔⛆ the WEIGHT (operand-1) is NOT itself a fusable quant.dequantize — a QuantGemm target's f32 result is never allocated,
+    //     so folding it here → DanglingOperand + the QuantGemm gates go red. The quant MLP `dequant→gemm→relu` is BOTH; f32-weight only.
+    const Operation* const wdq = gemm_op->num_operands() >= 2U ? gemm_op->operand(1U)->defining_op() : nullptr;
+    if (wdq != nullptr && fusable_dequant_into_gemm_weight(ctx, wdq)) { return false; }
+    // (4) result is single-use by a compute.dispatch{kernel=="relu"} reading bind[0] (operand-3), with the {grid×3, r, w} arity.
+    const Value* const r = gemm_op->result(0U);
+    if (r == nullptr || r->num_uses() != 1U) { return false; }
+    const Use* const u = r->first_use();
+    if (u == nullptr || u->owner == nullptr) { return false; }
+    const Operation* const d = u->owner;
+    if (ctx.op_name(d->kind()) != StringView("compute.dispatch")) { return false; }
+    const AttrValue kv = ctx.attr_value(d->attr(StringView("kernel")));
+    if (kv.kind != AttrKind::SymbolRef || kv.s != StringView("relu")) { return false; }
+    return d->num_operands() == 5U && d->operand(3U) == r; // grid×3 + bind[0]=read(gemm result) + bind[1]=write(h)
+}
+
+namespace
+{
+// ⭐ CEIR-26f — SINGLE-PASS free-list buffer-aliasing: a shareable Intermediate freed STRICTLY before another is born lends its
+// physical storage (the tenant's `alias_of` = the LANDLORD root, the landlord's `bytes` grows to max). The plan is a LINEAR CHAIN
+// ⇒ per-buffer [produce_stage, last_read_stage] intervals suffice; NO interval-graph coloring. ⛔ PINS func.return operands (a
+// readback target keeps its OWN buffer — the 25c-2 dW2 named-out trap) + never shares ExternalIn / Output / value==nullptr.
+// ⛔ free_at[L] < produce[B] is STRICT: L's last reader ran at a stage BEFORE B's producing stage, so the per-stage execution
+// barriers serialize L's read before B's write — no in-stage output-aliases-input hazard. PURE (mutates plan.buffers only).
+void assign_shared_storage(const Context& ctx, Block* body, TensorPipelinePlan& plan)
+{
+    const usize nb = plan.buffers.size();
+    if (nb == 0U || nb > 32U) { return; } // >32 ⇒ skip sharing (conservative; matches the executor's buffer cap)
+
+    // func.return operands are PINNED (read back by the caller — never a tenant/landlord).
+    const auto is_returned = [&](const Value* v) -> bool {
+        if (v == nullptr) { return false; }
+        for (Operation* op = body->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            if (ctx.op_name(op->kind()) != StringView("func.return")) { continue; }
+            for (crd::u32 i = 0; i < op->num_operands(); ++i) { if (op->operand(i) == v) { return true; } }
+        }
+        return false;
+    };
+
+    // ⛔ advisor 26f-2b: a stage with n_out==0 (an all-read dispatch) emits NO barrier (the executor's per-stage
+    // ShaderWrite→ShaderRead barrier rides the trailing outputs). So a buffer whose LAST reader is such a stage has no
+    // barrier before a later write to its storage → it must NEVER lend (a WAR that nothing orders). never_free pins its
+    // last_read past every produce stage ⇒ it is never chosen as a landlord. Latent (no corpus has an n_out==0 non-final
+    // stage today) but the free-list would happily alias across one. Every ACTUAL tenancy stays safe: a landlord is chosen
+    // only when its last_read is a real stage < produce[b], and that stage (having a barrier-bearing output) orders the WAR.
+    const crd::i32 never_free = 0x7fffffff;
+
+    crd::i32 produce[32];
+    crd::i32 last_read[32];
+    crd::i32 free_at[32]; // for a ROOT landlord: the stage after which its storage is available (its own or its latest tenant's last read)
+    bool     shareable[32];
+    for (usize i = 0; i < nb; ++i)
+    {
+        produce[i]          = -1;
+        last_read[i]        = -1;
+        const PlanBuffer& b = plan.buffers[i];
+        shareable[i]        = b.role == BufferRole::Intermediate && b.value != nullptr && !is_returned(b.value);
+    }
+    // produce = the stage whose TRAILING output is this buffer; last_read = the MAX stage that binds it as a NON-output (read).
+    for (usize s = 0; s < plan.stages.size(); ++s)
+    {
+        const PlanStage& st        = plan.stages[s];
+        const crd::u32   first_out = st.nbind - st.n_out;
+        for (crd::u32 k = 0; k < st.nbind; ++k)
+        {
+            const crd::i32 bi = st.bind[k];
+            if (bi < 0 || static_cast<usize>(bi) >= nb) { continue; }
+            if (k >= first_out) { produce[static_cast<usize>(bi)] = static_cast<crd::i32>(s); }
+            // n_out==0 reader ⇒ never_free (see the barrier note above); a later normal read overwrites it (max-in-stage-order).
+            else { last_read[static_cast<usize>(bi)] = (st.n_out == 0U) ? never_free : static_cast<crd::i32>(s); }
+        }
+    }
+    for (usize i = 0; i < nb; ++i) { free_at[i] = shareable[i] ? last_read[i] : -1; }
+
+    // The single pass, in PRODUCE (== stage) order. A buffer with no reader (last_read<0) is never a tenant (nothing to alias into)
+    // and never lends (freeing it early gains nothing) — left as its own buffer.
+    for (usize s = 0; s < plan.stages.size(); ++s)
+    {
+        for (usize b = 0; b < nb; ++b)
+        {
+            if (!shareable[b] || produce[b] != static_cast<crd::i32>(s) || last_read[b] < produce[b]) { continue; }
+            // smallest-fit ROOT landlord free strictly before b is born.
+            crd::i32 best = -1;
+            crd::u64 best_bytes = 0;
+            for (usize l = 0; l < nb; ++l)
+            {
+                if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0) { continue; }        // l must be a ROOT
+                if (free_at[l] < 0 || free_at[l] >= produce[b] || plan.buffers[l].bytes < plan.buffers[b].bytes) { continue; }
+                if (best < 0 || plan.buffers[l].bytes < best_bytes) { best = static_cast<crd::i32>(l); best_bytes = plan.buffers[l].bytes; }
+            }
+            if (best < 0) // no fit → largest free root + GROW to b (advisor's smallest-fit-else-largest-and-grow)
+            {
+                crd::u64 big = 0;
+                for (usize l = 0; l < nb; ++l)
+                {
+                    if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0) { continue; }
+                    if (free_at[l] < 0 || free_at[l] >= produce[b]) { continue; }
+                    if (best < 0 || plan.buffers[l].bytes > big) { best = static_cast<crd::i32>(l); big = plan.buffers[l].bytes; }
+                }
+            }
+            if (best >= 0)
+            {
+                const usize land = static_cast<usize>(best);
+                if (plan.buffers[land].bytes < plan.buffers[b].bytes) { plan.buffers[land].bytes = plan.buffers[b].bytes; } // grow to max
+                plan.buffers[b].alias_of = best;         // b tenants the root landlord
+                free_at[land]            = last_read[b]; // the landlord is now occupied until b's last read (a later buffer may take it again)
+                free_at[b]               = -1;           // b is a tenant, not an independent root
+            }
+        }
+    }
+}
+} // namespace
+
 containers::StringView plan_reject_name(PlanReject r) noexcept
 {
     switch (r)
@@ -155,11 +277,103 @@ containers::StringView plan_reject_name(PlanReject r) noexcept
     case PlanReject::NoOutput: return StringView("no-output");
     case PlanReject::DispatchOutputsNotTrailing: return StringView("dispatch-outputs-not-trailing");
     case PlanReject::UnsupportedQuantScheme: return StringView("unsupported-quant-scheme");
+    case PlanReject::TuneCacheLockedMiss: return StringView("tune-cache-locked-miss");
+    case PlanReject::PartitionLineageMismatch: return StringView("partition-lineage-mismatch");
     }
     return StringView("?");
 }
 
-TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::IAllocator* alloc)
+PlanOptions plan_options_from_transform(Context& ctx, const Module& transform_mod, PlanOptions base)
+{
+    // Walk the schedule module's top-level directives; a known directive's required `enable` bool sets its knob (read
+    // defensively — valid + Bool kind), an ABSENT directive keeps `base`, an unknown op is ignored (per-op targeting is
+    // the sec-71 named-forward). ⛔ program-global this slice: no payload handle, so a bare module walk suffices.
+    const OpId fuse_k  = transform::fuse_kind(ctx);
+    const OpId share_k = transform::share_storage_kind(ctx);
+    for (const Block* b = transform_mod.body()->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            const bool is_fuse  = op->kind() == fuse_k;
+            const bool is_share = op->kind() == share_k;
+            if (!is_fuse && !is_share) { continue; }
+            const AttrId a = op->attr(containers::StringView("enable"));
+            if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { continue; }
+            const bool enable = ctx.attr_value(a).b;
+            if (is_fuse) { base.fuse_gemm_relu = enable; }
+            else { base.share_intermediate_storage = enable; }
+        }
+    }
+    return base;
+}
+
+TuneCacheLookup plan_options_from_tune_cache(Context& ctx, const Module& cache_mod, containers::StringView device,
+                                             containers::StringView env, u64 program_hash, containers::StringView shape,
+                                             PlanOptions base)
+{
+    // REPLAY: the FIRST tune.entry whose FULL key (device, env, program_hash, shape) matches — unambiguous on a
+    // find_tune_misuse-clean cache (DuplicateKey = all-four-equal). A HIT returns the row's schedule; a MISS returns `base`
+    // unchanged (the caller — 28c locked mode — chooses fallback-to-default vs typed reject). ⛔ NEVER measures here (sec-80
+    // "tune offline, replay at plan time, never at runtime"; the v17 select_schedule discipline, made portable).
+    containers::Array<tune::TuneEntry> entries(ctx.allocator());
+    (void)tune::load_tune_entries(ctx, cache_mod, entries); // count unused here — we scan for the first key match
+    for (usize i = 0; i < entries.size(); ++i)
+    {
+        const tune::TuneEntry& e = entries[i];
+        if (e.device == device && e.env == env && e.program_hash == program_hash && e.shape == shape)
+        {
+            PlanOptions opts                = base;
+            opts.fuse_gemm_relu             = e.fuse;
+            opts.share_intermediate_storage = e.share;
+            return {true, opts};
+        }
+    }
+    return {false, base};
+}
+
+TensorPipelinePlan plan_tensor_pipeline_cached(Context& ctx, const Module& m, memory::IAllocator* alloc, const Module& cache_mod,
+                                               containers::StringView device, containers::StringView env,
+                                               containers::StringView shape, TunePolicy policy, PlanOptions base)
+{
+    // ⛔ hash the module the PLANNER consumes (`m`, post-expansion) — the SAME producer the 28b measurer emits, so the cache key
+    //    can never drift from the plan. NEVER measure here (replay-only; the v17 discipline made portable).
+    const u64             program_hash = tune::program_hash(ctx, m, alloc);
+    const TuneCacheLookup look         = plan_options_from_tune_cache(ctx, cache_mod, device, env, program_hash, shape, base);
+    if (!look.hit && policy == TunePolicy::Locked)
+    {
+        TensorPipelinePlan plan(alloc); // a LOCKED miss ships nothing unmeasured — a typed reject, no op at fault (reject_op stays null)
+        plan.reject = PlanReject::TuneCacheLockedMiss;
+        return plan;
+    }
+    // HIT → the row's {fuse, share}; MISS + Fallback → `base` (look.opts == base unchanged on a miss). One plan call covers both.
+    return plan_tensor_pipeline(ctx, m, alloc, look.opts);
+}
+
+// CEIR-29c-1 §102 — the SAME plan, plus a per-stage PROVIDER tag from the partition. METADATA-ONLY (stages/buffers unchanged).
+TensorPipelinePlan plan_tensor_pipeline_partitioned(Context& ctx, const Module& m, memory::IAllocator* alloc,
+                                                    const MlPartition&                                     partition,
+                                                    const containers::HashMap<const Operation*, crd::i32>& lineage,
+                                                    PlanOptions                                            opts)
+{
+    TensorPipelinePlan plan = plan_tensor_pipeline(ctx, m, alloc, opts);
+    if (plan.reject != PlanReject::None) { return plan; } // a reject leaves stages partial — nothing to tag
+    const crd::i32 nprov = static_cast<crd::i32>(partition.assignments.size());
+    for (crd::usize s = 0; s < plan.stages.size(); ++s)
+    {
+        const crd::i32* const idx = lineage.find(plan.stages[s].op); // the expanded stage op → its source ml op's pre-order index
+        if (idx == nullptr) { plan.stages[s].provider = -1; continue; } // a non-ml stage carries no lineage entry → the fallback
+        if (*idx < 0 || *idx >= nprov) // a lineage index OUTSIDE the partition: expand_ml_ops and partition_ml disagree on the
+        {                              // ml-op pre-order, or the partition was built on a DIFFERENT module. ⛔ a LOUD typed reject,
+            plan.reject    = PlanReject::PartitionLineageMismatch; // never a silent -1 that would masquerade as "the fallback
+            plan.reject_op = nullptr; // claimed more stages". A KEY-property mismatch between two inputs — no op is at fault.
+            return plan;
+        }
+        plan.stages[s].provider = partition.assignments[static_cast<crd::usize>(*idx)].provider;
+    }
+    return plan;
+}
+
+TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::IAllocator* alloc, PlanOptions opts)
 {
     TensorPipelinePlan plan(alloc);
 
@@ -208,10 +422,23 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
         // arith.const materializes a compute.dispatch grid operand (an SSA index) — a Pure value producer, not a buffer or a
         // dispatched stage; skip it (else the UnsupportedOp fallback would reject the viz stage's grid). ⛔ the RESOLVER reads
         // these consts (defining_op) for the authored grid — the asset-drives-it rule (grid is NOT re-derived from numel).
-        if (nm == StringView("func.return") || nm == StringView("func.func") || nm == StringView("arith.const")) { continue; }
+        // resource.export is a RESULTLESS OUTPUT BOUNDARY (the func.return category — it reads the terminal value, dispatches
+        // nothing): skip it. The Output is still derived from the FINAL stage's trailing write (below), which the export reads —
+        // so they agree. CEIR-30b-3a: the lowered sec-140 reduction ends declare->reduce...->elementwise->export, now plannable.
+        if (nm == StringView("func.return") || nm == StringView("func.func") || nm == StringView("arith.const")
+            || nm == StringView("resource.export"))
+        {
+            continue;
+        }
 
         if (nm == StringView("linalg.gemm"))
         {
+            // ⭐ 26e: a plain f32 gemm whose result is single-use by a @relu dispatch FUSES forward into a GemmRelu stage emitted
+            //    at that dispatch — SKIP it here (no plain Gemm stage; its result buffer z is NEVER allocated). ⛔ BEFORE the
+            //    QuantGemm detect: a gemm cannot be BOTH (fusable_gemm_into_relu excludes a QuantGemm-weight gemm), but the skip
+            //    ordering makes the exclusion ENFORCED, not implied. ⛔ opts.fuse_gemm_relu gates it (the raw-vs-opt differential
+            //    plans the SAME module with the flag OFF — the semantics-preserving witness needs both forms of ONE program).
+            if (opts.fuse_gemm_relu && fusable_gemm_into_relu(ctx, op)) { continue; }
             // ⭐ 23b-2b: if the WEIGHT operand (B, operand-1) is a fusable quant.dequantize, COLLAPSE into a QuantGemm stage —
             //    bind {A, W_q8 (the dequant INPUT, alias-through), scale, D}; the dequantize's f32 output is NEVER allocated (§54).
             //    ⛔ M,K,N/grid come from the GEMM operand types (f32 [.,K,N]) but the stage BINDS the dequant INPUT (int8 [.,K,N])
@@ -285,6 +512,72 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             a.alias_of = bin;
             a.bytes    = plan.buffers[static_cast<usize>(bin)].bytes;
             (void)add_buffer(plan, a);
+            continue;
+        }
+
+        // CEIR-25b-3: tensor.transpose / tensor.broadcast → a graph-tier Permute / Broadcast stage (1 in, 1 out). The synth
+        // envelope-checks (F32/static/rank/perm/same-rank); the resolver (25b-4) re-synthesizes + emits emit_permute/emit_broadcast_nd.
+        if (nm == StringView("tensor.transpose") || nm == StringView("tensor.broadcast"))
+        {
+            const bool       istr = nm == StringView("tensor.transpose");
+            kir::KGraph      g(alloc);
+            const GraphSynth s = istr ? synth_transpose(ctx, *op, g) : synth_broadcast(ctx, *op, g);
+            PlanStage        st;
+            st.op   = op;
+            st.kind = istr ? StageKind::Transpose : StageKind::Broadcast;
+            if (s.reject != SynthReject::None)
+            {
+                st.synth_reject = s.reject;
+                plan.stages.push_back(st);
+                plan.reject    = PlanReject::SynthRejected;
+                plan.reject_op = op;
+                return plan;
+            }
+            const crd::i32 bin = find_buffer(plan, op->operand(0U));
+            if (bin < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            PlanBuffer d;
+            d.value           = op->result(0U);
+            d.role            = BufferRole::Intermediate;
+            d.bytes           = tensor_bytes(ctx, op->result(0U)->type());
+            const crd::i32 bd = add_buffer(plan, d);
+            st.bind[0]        = bin;
+            st.bind[1]        = bd;
+            st.nbind          = 2;
+            st.n_out          = 1;
+            plan.stages.push_back(st);
+            continue;
+        }
+
+        // CEIR-25b-3: tensor.elementwise → a graph-tier binary stage (2 in, 1 out) — the reverse pass's adjoint accumulation (fn=add).
+        if (nm == StringView("tensor.elementwise"))
+        {
+            kir::KGraph      g(alloc);
+            const GraphSynth s = synth_elementwise(ctx, *op, g);
+            PlanStage        st;
+            st.op   = op;
+            st.kind = StageKind::Elementwise;
+            if (s.reject != SynthReject::None)
+            {
+                st.synth_reject = s.reject;
+                plan.stages.push_back(st);
+                plan.reject    = PlanReject::SynthRejected;
+                plan.reject_op = op;
+                return plan;
+            }
+            const crd::i32 ba = find_buffer(plan, op->operand(0U));
+            const crd::i32 bb = find_buffer(plan, op->operand(1U));
+            if (ba < 0 || bb < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            PlanBuffer d;
+            d.value           = op->result(0U);
+            d.role            = BufferRole::Intermediate;
+            d.bytes           = tensor_bytes(ctx, op->result(0U)->type());
+            const crd::i32 bd = add_buffer(plan, d);
+            st.bind[0]        = ba;
+            st.bind[1]        = bb;
+            st.bind[2]        = bd;
+            st.nbind          = 3;
+            st.n_out          = 1;
+            plan.stages.push_back(st);
             continue;
         }
 
@@ -431,6 +724,33 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
                 if (is_write[i]) { plan.reject = PlanReject::DispatchOutputsNotTrailing; plan.reject_op = op; return plan; }
             }
 
+            // ⭐ 26e: a @relu dispatch whose read (bind[0] = operand-3) is a fusable plain f32 gemm result → emit the FUSED
+            //    GemmRelu stage HERE (the gemm was skipped at its site; its z buffer never allocated). binds {A, B, h} where h is
+            //    THIS dispatch's WRITE target; op = the GEMM (the resolver re-synthesizes synth_gemm(op, GemmEpilogue::Relu)). ⛔
+            //    AFTER the trailing-write check (a malformed relu access still rejects DispatchOutputsNotTrailing), BEFORE VizDispatch.
+            const Operation* const gp = (opts.fuse_gemm_relu && nops >= 4U) ? op->operand(3U)->defining_op() : nullptr;
+            if (gp != nullptr && fusable_gemm_into_relu(ctx, gp))
+            {
+                const crd::i32 ba = find_buffer(plan, gp->operand(0U));            // A
+                const crd::i32 bb = find_buffer(plan, gp->operand(1U));            // B (f32 weight — cond (3) guarantees NOT a dequant)
+                const crd::i32 bh = find_buffer(plan, op->operand(nops - 1U));     // h = the relu's WRITE target (trailing operand)
+                if (ba < 0 || bb < 0 || bh < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+                if (plan.buffers[static_cast<usize>(bh)].role == BufferRole::ExternalIn)
+                {
+                    plan.buffers[static_cast<usize>(bh)].role = BufferRole::Intermediate; // device-produced by GemmRelu, not a caller upload
+                }
+                PlanStage gr;
+                gr.op      = gp; // the GEMM — the resolver re-synthesizes synth_gemm(gp, Relu) + emit_contract (Max(Contract,0) unwrap)
+                gr.kind    = StageKind::GemmRelu;
+                gr.bind[0] = ba;
+                gr.bind[1] = bb;
+                gr.bind[2] = bh; // out (h) trailing
+                gr.nbind   = 3;
+                gr.n_out   = 1;
+                plan.stages.push_back(gr);
+                continue;
+            }
+
             PlanStage st;
             st.op   = op;
             st.kind = StageKind::VizDispatch;
@@ -471,6 +791,9 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
         const crd::u32 bi = fin.nbind - fin.n_out + o; // the o-th trailing output bind
         plan.buffers[static_cast<usize>(fin.bind[static_cast<usize>(bi)])].role = BufferRole::Output;
     }
+    // ⭐ 26f: after roles are final (ExternalIn/Intermediate/Output/Alias), share physical storage among disjoint-lifetime
+    //    Intermediates (a free-list pass; the runner honors a tenant's alias_of). Skips func.return-pinned readback targets.
+    if (opts.share_intermediate_storage) { assign_shared_storage(ctx, body, plan); }
     return plan;
 }
 } // namespace crd::ceir::gpu

@@ -1,5 +1,8 @@
 # Session — 2026-05-11 — v1b-d — `crd-eylem-viz` companion module
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 ## Goal
 
 Per phase plan §v1b-d. Companion module bridging eylem POD types

@@ -1,5 +1,8 @@
 # Session 2026-05-18 — geometry-v9e-a formula-IR
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 > **Retroactive log written 2026-05-19** — the slice shipped 2026-05-18 but its session log wasn't authored at the time; this fills the gap so the session-log directory is the complete chronological index promised in `context.md`.
 
 ## Summary

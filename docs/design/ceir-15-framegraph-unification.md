@@ -1,5 +1,8 @@
 # CEIR-15 — FrameGraph unification: the `ceir.frame` dialect (15-0 decision packet)
 
+<!-- doc-role: reference -->
+> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status: ◧ DESIGN-LOCKED 2026-08-11 (advisor-consulted; decision packet — no code this tick).** CEIR-15 is an
 ARCHITECTURE band: it makes the authorable frame graph (REN-36's `.frame.toml` asset system) END at a `ceir.frame`
 dialect (§39), per §126's eight migration steps. This packet reads the canonical sources (master roadmap §39/§126,

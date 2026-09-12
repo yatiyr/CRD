@@ -1,5 +1,8 @@
 # 2026-06-10 — hesap v7-l + v7-m CLOSE: LP (revised simplex + Mehrotra) and conic (SCS-class) (same session, part 9)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Phase:** 3.1.6 `crd-hesap` · v7 optimisation (`crd-hesap-opt`, ADR-0090)
 **Slices:** v7-l LP · v7-m conic — taken after v7-n per user direction ("let's do v7-l and v7-m then"); no
 reorganisation needed, both landed clean on the established v7-k machinery. Continues the v7-f..n logs.

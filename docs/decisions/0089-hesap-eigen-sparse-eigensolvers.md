@@ -1,5 +1,8 @@
 # ADR-0089 — crd-hesap-eigen: sparse eigensolvers + module edges (Phase 3.1.6 v6)
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted (2026-06-07)
 
 **Tags:** arch, hesap, eigen, eigensolver, svd, determinism, module-edges

@@ -1,5 +1,8 @@
 # ADR-0045 — Sandbox executable, asset source layout, cook workflow, crd-meshgen
 
+<!-- doc-role: decision -->
+> Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 **Status:** Accepted
 **Date:** 2026-05-04
 **Tags:** arch, sandbox, resources, cooker, build, meshgen

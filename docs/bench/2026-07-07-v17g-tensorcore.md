@@ -1,5 +1,8 @@
 # 2026-07-07 — v17-g: TF32 tensor-core GEMM (wmma) vs cuBLAS-TF32 — WORKS + CORRECT, crush OPEN (needs mma.sync)
 
+<!-- doc-role: evidence -->
+> Dated evidence; counts, results and Next paragraphs are historical. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+
 The v17-g crown, first cut: a **TF32 tensor-core GEMM** via `nvcuda::wmma` (m16n16k8), naive + a **cp.async multi-stage
 pipelined** variant, benchmarked against cuBLAS at MATCHED TF32 precision (`crd_v17g_gemm_tensorcore.cu`). This is the
 high-FLOP reduced-precision tier — distinct from the bit-exact-f32 tier (the v17-b CUDA-core kernel). 3-run data.
