@@ -1,6 +1,6 @@
 # check_no_std_sort.ps1 — bans std::sort / std::stable_sort / std::nth_element
 # / std::partial_sort / std::push_heap / std::pop_heap / std::make_heap /
-# std::sort_heap in engine/eylem/** + engine/hesap/**.
+# std::sort_heap in engine/physics/eylem/** + engine/numerics/hesap/**.
 #
 # ADR-0063 §3: those modules must use crd::containers::* substitutes for
 # cross-platform deterministic ordering. libc++ / libstdc++ / Microsoft CRT
@@ -29,8 +29,8 @@ $banned = @(
 ) -join '|'
 
 $scopes = @(
-    "$RepoRoot/engine/eylem",
-    "$RepoRoot/engine/hesap"
+    "$RepoRoot/engine/physics/eylem",
+    "$RepoRoot/engine/numerics/hesap"
 )
 
 $failures = @()
@@ -58,5 +58,5 @@ if ($failures.Count -gt 0)
     exit 1
 }
 
-Write-Host "[check_no_std_sort] PASS - no banned std::* sort/heap calls in engine/eylem or engine/hesap"
+Write-Host "[check_no_std_sort] PASS - no banned std::* sort/heap calls in engine/physics/eylem or engine/numerics/hesap"
 exit 0

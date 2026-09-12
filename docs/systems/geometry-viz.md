@@ -5,6 +5,6 @@
 
 **Reference pointer; no live status here.** Track slices/findings in [ROADMAP](../ROADMAP.md).
 
-[Module manifest](../../engine/geometry-viz/CMakeLists.txt); [Current module/source map](../systems/README.md).
+[Module manifest](../../engine/geometry/geometry-viz/CMakeLists.txt); [Current module/source map](../systems/README.md).
 Full technical requirements and dated evidence: [preserved reference](../archive/systems/geometry-viz.md).
 Read the master row and current public source before relying on a historical example.

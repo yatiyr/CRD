@@ -67,7 +67,7 @@ Backend-neutral reserve/commit primitives:
 > allocator's page source had to sit *below* `crd-memory` to avoid a dependency
 > cycle. A new leaf (chosen over folding into `crd-core`) keeps `crd-core` a pure
 > compile-time-only root. Both `crd-memory` and `crd-platform` may depend on
-> `crd-vm`. S1's tests moved to `tests/vm/`; `smoke_virtual_memory` re-links
+> `crd-vm`. S1's tests moved to `tests/foundation/vm/`; `smoke_virtual_memory` re-links
 > `crd-vm`. Research: `docs/research/cerid-streaming-allocators.md`.
 
 ### 2. `VirtualMemoryAllocator` (crd-memory) — the page/region allocator

@@ -7,7 +7,7 @@
 import random
 import opt_einsum as oe
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/ref_einsum_paths.inc"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_einsum_paths.inc"
 rng = random.Random(1407)
 
 cases = []

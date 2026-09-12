@@ -7,10 +7,10 @@
 $ErrorActionPreference = "Stop"
 $root = if ($args.Count -ge 1) { $args[0] } else { (Get-Location).Path }
 $dirs = @(
-    "engine/hesap-quadrature/include",
-    "engine/hesap-interp/include",
-    "engine/hesap-diff/include",
-    "engine/hesap-motion/include")
+    "engine/numerics/hesap-quadrature/include",
+    "engine/numerics/hesap-interp/include",
+    "engine/numerics/hesap-diff/include",
+    "engine/numerics/hesap-motion/include")
 $files = foreach ($d in $dirs) {
     Get-ChildItem -Path (Join-Path $root $d) -Recurse -Include *.hpp, *.cpp -ErrorAction SilentlyContinue
 }

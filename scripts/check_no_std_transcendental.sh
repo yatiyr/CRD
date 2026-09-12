@@ -1,7 +1,7 @@
 #!/bin/bash
 # check_no_std_transcendental.sh [repo-root] — the Cerid Math Mandate guard. Engine + tool code must use crd::math::*
 # (include <crd/math/cmath.hpp>), never std:: transcendentals — for cross-platform bit-determinism (the moat) +
-# speed. Exempts engine/math (the kernel IS the implementation + its std:: edge fallbacks). tests/ (gold oracles)
+# speed. Exempts engine/foundation/math (the kernel IS the implementation + its std:: edge fallbacks). tests/ (gold oracles)
 # and runtime/examples (benchmark peers) keep std:: deliberately and live outside engine/, so they're not scanned.
 #
 # tx-route status: registered as a ctest guard at the route CLOSE, once every module is migrated. Until then this is

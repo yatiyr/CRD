@@ -173,9 +173,9 @@ the surfel's screen radius from the project kernel is the bbox the binner needs.
 
 ## 7. Where the code lives
 
-- `engine/kir/include/crd/kir/ckir_gsplat2d.hpp` — `build_gsplat2d_project_kernel`, `build_gsplat2d_render_kernel`,
+- `engine/gpu/kir/include/crd/kir/ckir_gsplat2d.hpp` — `build_gsplat2d_project_kernel`, `build_gsplat2d_render_kernel`,
   the config structs and buffer layouts.
-- `tests/kir/test_ckir_gsplat2d.cpp` — the closed-form project + facing/slanted/composite render gates (CPU oracle).
-- `tests/gpu-context-vulkan/test_vulkan_gsplat.cpp` — the `[gsplat2d]` Vulkan gate (GPU == oracle).
+- `tests/gpu/kir/test_ckir_gsplat2d.cpp` — the closed-form project + facing/slanted/composite render gates (CPU oracle).
+- `tests/gpu/gpu-context-vulkan/test_vulkan_gsplat.cpp` — the `[gsplat2d]` Vulkan gate (GPU == oracle).
 - 3DGS sibling primitive + the shared sort/bin machinery: `ckir_gsplat.hpp`, `ckir_sort.hpp`, `ckir_scan.hpp`.
 - Frontier dossier: `docs/research/2026-07-21-3dgs-frontier.md`. Session log: `docs/sessions/2026-07-21-b19-c-2dgs-surfels.md`.

@@ -20,7 +20,7 @@
 
 Cerid's rendering is powerful but has **three structural debts** the mission names, all measured here:
 
-### 1.1 Combinatorial GPU verb surface — `engine/gpu-context/include/crd/gpu/raster_context.hpp`
+### 1.1 Combinatorial GPU verb surface — `engine/gpu/gpu-context/include/crd/gpu/raster_context.hpp`
 **~57 `virtual draw_*/dispatch_*/trace_*` methods** on `IRasterContext`, each a hand-cut combination of
 {clear|load} × {1|MRT|depth|depth-only|stencil} × {storage-pull|textured|shadowed|bindless} × {indexed|indirect|
 count|mesh|tess|mrt}. Representative: `draw_storage`, `draw_storage_depth`, `draw_storage_depth_load`,
@@ -31,7 +31,7 @@ count|mesh|tess|mrt}. Representative: `draw_storage`, `draw_storage_depth`, `dra
 this session ADDED verbs (`draw_storage_indexed_mrt`, the synchronous `draw_mesh_storage`). **This is the
 combinatorial explosion DoD #9 / §7.7 eliminates.**
 
-### 1.2 Central pass enum — `engine/frame-cook/include/crd/framecook/frame_asset.hpp:37` `FramePassKind`
+### 1.2 Central pass enum — `engine/assets/frame-cook/include/crd/framecook/frame_asset.hpp:37` `FramePassKind`
 **18 kinds**, every one commented "appended at the END of the enum (a renumbered kind silently reclassifies every
 cooked graph)": `RasterGeometry, RasterDepthOnly, RasterFullscreen, RasterMrt, Compute, Present, Clear, Copy,
 Blit, Resolve, RasterTess, RasterMesh, RasterVisbuffer, RasterComposite, RayTrace, RayTracePipeline,

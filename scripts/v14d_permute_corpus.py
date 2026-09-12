@@ -1,6 +1,6 @@
 """v14-d permute-copy corpus generator (ADR-0096 verification protocol).
 
-Emits tests/hesap-tensor/ref_permute.inc: NumPy `np.transpose(...).copy()` reference
+Emits tests/numerics/hesap-tensor/ref_permute.inc: NumPy `np.transpose(...).copy()` reference
 bits (f64 as crd::u64 bit patterns, plain C arrays — no std containers in refs) for
 three representative permute_copy cases, gated bit-exact by test_permute.cpp:
 
@@ -15,7 +15,7 @@ import os
 
 import numpy as np
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "tests", "hesap-tensor", "ref_permute.inc")
+OUT = os.path.join(os.path.dirname(__file__), "..", "tests", "numerics", "hesap-tensor", "ref_permute.inc")
 
 
 def bits(a):

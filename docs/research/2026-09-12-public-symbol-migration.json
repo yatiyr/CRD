@@ -1,0 +1,95 @@
+{
+  "baseline": "bc8fc1f51226166e539cb8c8f93b1dd829d343ef",
+  "purpose": "User-approved spelling migration; no constant-value or serialized-IR-name changes",
+  "records": [
+    {
+      "file": "engine/foundation/math/include/crd/math/deterministic.hpp",
+      "symbols": {
+        "pi": "kPi",
+        "tau": "kTau",
+        "pi_2": "kHalfPi",
+        "pi_4": "kQuarterPi",
+        "inv_pi": "kInvPi",
+        "inv_2pi": "kInvTwoPi",
+        "e": "kE",
+        "ln2": "kLn2",
+        "inv_ln2": "kInvLn2",
+        "ln10": "kLn10",
+        "inv_ln10": "kInvLn10",
+        "pi64": "kPiF64",
+        "tau64": "kTauF64",
+        "pi_2_64": "kHalfPiF64",
+        "pi_4_64": "kQuarterPiF64",
+        "inv_pi64": "kInvPiF64",
+        "e64": "kEF64",
+        "ln2_64": "kLn2F64",
+        "inv_ln2_64": "kInvLn2F64",
+        "ln10_64": "kLn10F64",
+        "inv_ln10_64": "kInvLn10F64"
+      }
+    },
+    {
+      "file": "engine/geometry/geometry-convex/include/crd/geometry/convex/feature_clip.hpp",
+      "symbols": {
+        "k_invalid_face_u8": "kInvalidFaceU8",
+        "k_invalid_face_u32": "kInvalidFaceU32",
+        "k_obb_face_corner_table": "kObbFaceCornerTable",
+        "k_obb_edge_table": "kObbEdgeTable"
+      }
+    },
+    {
+      "file": "engine/geometry/geometry-delaunay/src/delaunay_2d_internal.hpp",
+      "symbols": {
+        "k_null_tri": "kNullTri"
+      }
+    },
+    {
+      "file": "engine/geometry/geometry-primitives/include/crd/geometry/primitives/predicates.hpp",
+      "symbols": {
+        "epsilon": "kEpsilon",
+        "ccwerrbound_a": "kCcwerrboundA",
+        "ccwerrbound_b": "kCcwerrboundB",
+        "ccwerrbound_c": "kCcwerrboundC",
+        "o3derrbound_a": "kO3derrboundA",
+        "o3derrbound_b": "kO3derrboundB",
+        "o3derrbound_c": "kO3derrboundC",
+        "iccerrbound_a": "kIccerrboundA",
+        "iccerrbound_b": "kIccerrboundB",
+        "iccerrbound_c": "kIccerrboundC",
+        "isperrbound_a": "kIsperrboundA",
+        "isperrbound_b": "kIsperrboundB",
+        "isperrbound_c": "kIsperrboundC"
+      }
+    },
+    {
+      "file": "engine/geometry/geometry-primitives/include/crd/geometry/primitives/primitives.hpp",
+      "symbols": {
+        "k_invalid_vertex": "kInvalidVertex",
+        "k_simd_support_threshold": "kSimdSupportThreshold"
+      }
+    },
+    {
+      "file": "tests/geometry/geometry-primitives/include/test_corpus.hpp",
+      "symbols": {
+        "k_nan": "kNan",
+        "k_inf": "kInf",
+        "k_far_origin_modest": "kFarOriginModest",
+        "k_far_origin_stress": "kFarOriginStress"
+      }
+    },
+    {
+      "file": "engine/geometry/geometry-convex/include/crd/geometry/convex/detail/epa_polytope.hpp",
+      "symbols": {
+        "k_epa_max_vertices": "kEpaMaxVertices",
+        "k_epa_max_faces": "kEpaMaxFaces"
+      }
+    },
+    {
+      "file": "engine/execution/ceir/generated/crd/ceir/gen/transform_ops.hpp",
+      "symbols": {
+        "class_": "class_value"
+      },
+      "note": "Generated C++ accessor only; serialized class key is unchanged."
+    }
+  ]
+}

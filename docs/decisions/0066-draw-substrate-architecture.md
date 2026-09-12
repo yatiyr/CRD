@@ -51,7 +51,7 @@ Same architectural posture as ADR-0062 (eylem) and ADR-0064 (sdf).
 
 ```
 crd-draw                       ← this ADR locks
-  └─ engine/draw/
+  └─ engine/rendering/draw/
        include/crd/draw/       — public headers
        src/                           — RenderBuffer, immediate-mode API,
                                         per-shape tessellators, overlay pass
@@ -59,7 +59,7 @@ crd-draw                       ← this ADR locks
                                         glyph_sdf (reserved Phase 3.1.5+)
 
 crd-eylem-viz                      ← companion module (Phase 3.1 v1a-draw d3)
-  └─ engine/eylem-viz/
+  └─ engine/physics/eylem-viz/
        include/crd/eylem_debug/      — register_eylem_visualizers()
        src/                           — RigidBody / Collider / Joint visualizers
 
@@ -294,7 +294,7 @@ The overlay pass runs in order:
 
 ### 10. Asset shipping — single-path via crd-shader
 
-GLSL source files live in `engine/draw/shaders/`. Asset cooker
+GLSL source files live in `engine/rendering/draw/shaders/`. Asset cooker
 compiles them to SPIR-V at build time. CRDR pack
 `cooked_assets/draw_shaders.crdr` is mounted at
 `crd::draw::init(rm)`. Hot-reload via the existing

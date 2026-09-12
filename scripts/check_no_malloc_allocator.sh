@@ -10,8 +10,8 @@ ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 hits=$(grep -rn "MallocAllocator" "$ROOT/engine" "$ROOT/tests" "$ROOT/runtime" \
         --include='*.cpp' --include='*.hpp' --include='*.h' 2>/dev/null \
-      | grep -vE "/engine/memory/" \
-      | grep -vE "/tests/memory/test_memory\.cpp|/tests/stress/test_allocators_stress\.cpp|/tests/stress/test_allocators_v5_stress\.cpp" \
+      | grep -vE "/engine/foundation/memory/" \
+      | grep -vE "/tests/foundation/memory/test_memory\.cpp|/tests/foundation/stress/test_allocators_stress\.cpp|/tests/foundation/stress/test_allocators_v5_stress\.cpp" \
       | grep -v "crd-lint-allow-malloc-allocator" \
       | awk -F: '{ code=$0; sub(/^[^:]*:[^:]*:/,"",code); t=code; sub(/^[ \t]+/,"",t); if (t ~ /^\/\// || t ~ /^\*/) next; print }' \
       || true)
@@ -21,9 +21,9 @@ if [ -n "$hits" ]; then
     echo "$hits"
     echo ""
     echo "  Use crd::memory::TlsfAllocator (bounded) or GrowableTlsfAllocator (unbounded) instead."
-    echo "  default_allocator() is also discouraged outside engine/memory. Marker: crd-lint-allow-malloc-allocator."
+    echo "  default_allocator() is also discouraged outside engine/foundation/memory. Marker: crd-lint-allow-malloc-allocator."
     exit 1
 fi
 
-echo "[check_no_malloc_allocator] PASS - no MallocAllocator use outside engine/memory + allocator tests"
+echo "[check_no_malloc_allocator] PASS - no MallocAllocator use outside engine/foundation/memory + allocator tests"
 exit 0

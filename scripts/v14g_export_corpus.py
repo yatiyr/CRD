@@ -30,7 +30,7 @@ def _serial_init(self, *a, **k):
 
 pb.RandomGreedyOptimizer.__init__ = _serial_init
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/ref_hyperopt.inc"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_hyperopt.inc"
 
 
 def main():

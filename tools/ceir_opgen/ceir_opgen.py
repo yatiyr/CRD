@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ceir_opgen.py - the CEIR table-driven op-definition generator (CEIR-2, section 8; ADR-0110 section 2.1).
 
-Reads engine/ceir/ops/<dialect>.ceirop.toml (schema in engine/ceir/ops/README.md) and emits COMMITTED C++ into
-engine/ceir/generated/crd/ceir/gen/<dialect>_ops.{hpp,cpp}: op-kind interners, typed wrappers, builders, verifier
+Reads engine/execution/ceir/ops/<dialect>.ceirop.toml (schema in engine/execution/ceir/ops/README.md) and emits COMMITTED C++ into
+engine/execution/ceir/generated/crd/ceir/gen/<dialect>_ops.{hpp,cpp}: op-kind interners, typed wrappers, builders, verifier
 scaffolds, and a register_<dialect>_ops(Context&) that self-registers through the CEIR-1d Dialect::register_op path
 (no central enum/switch - section 7 open-world). Output is DETERMINISTIC (ops sorted by name) so a regen is
 byte-identical. No third-party dependencies (stdlib tomllib, Python >= 3.11).
@@ -29,7 +29,7 @@ REGION_ARG_FIELDS = {"name", "type_hint"}
 NATIVE_PROVIDERS = {"host", "gpu", "npu", "media", "external"}
 # ADR-0098 determinism tiers (§27), in §27 ORDER — the fixed vocabulary BOTH the op-level `determinism` field and the
 # ADR-0110 §2.1 [op.native] `determinism` field draw from. ⛔ tuple index maps to DeterminismClass ordinal (index+1, since
-# Unspecified=0 is the un-declarable default); keep in lockstep with engine/ceir/include/crd/ceir/semantics.hpp (a
+# Unspecified=0 is the un-declarable default); keep in lockstep with engine/execution/ceir/include/crd/ceir/semantics.hpp (a
 # static_assert pins the C++ count). ⛔ verbatim §27 names — `ExternalNondeterminism`, NOT the old short `External`.
 DETERMINISM_TIERS = ("BitExact", "DeterministicWithinTarget", "DeterministicWithinBackend", "Nondeterministic",
                      "ExternalNondeterminism")
@@ -43,9 +43,9 @@ EVAL_DOMAINS = ("CompileTime", "CookTime", "LoadTime", "HostFrameTime", "HostSim
                 "DeviceTime", "OfflineTime", "DistributedTime", "EitherHostOrDevice")
 DEPRECATION_FIELDS = {"since", "replaced_by", "note"}
 # §26 core effect families, in §26 ORDER — the tuple index IS the EffectFamily enum value the generator emits (CEIR-4a);
-# ⛔ APPEND AT END, and keep in lockstep with engine/ceir/include/crd/ceir/effect.hpp (NO subsetting — the NO-FOLLOW
+# ⛔ APPEND AT END, and keep in lockstep with engine/execution/ceir/include/crd/ceir/effect.hpp (NO subsetting — the NO-FOLLOW
 # mandate keeps MemoryReadWrite a family even though it reads as composable).
-# ⛔ LOCKSTEP with engine/ceir/include/crd/ceir/effect.hpp::EffectFamily (identical ORDER — ordinals are the vocabulary;
+# ⛔ LOCKSTEP with engine/execution/ceir/include/crd/ceir/effect.hpp::EffectFamily (identical ORDER — ordinals are the vocabulary;
 # the effect.hpp static_assert + the drift/validator enforce it). CEIR-8c (ADR-0113) appended the 8 U-§19 families.
 EFFECT_FAMILIES = ("MemoryRead", "MemoryWrite", "MemoryReadWrite", "Allocate", "Deallocate", "ResourceResidency",
                    "GPUCommand", "HostStateRead", "HostStateWrite", "SceneRead", "SceneWrite", "EcsRead", "EcsWrite",
@@ -72,11 +72,11 @@ NATIVE_FIELDS = {"provider", "determinism", "thread_safe", "hot_reload_safe", "l
 KERNEL_REF_FIELDS = {"symbol", "interface"}
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-OPS_DIR = os.path.join(REPO_ROOT, "engine", "ceir", "ops")
-GEN_DIR = os.path.join(REPO_ROOT, "engine", "ceir", "generated", "crd", "ceir", "gen")
+OPS_DIR = os.path.join(REPO_ROOT, "engine", "execution", "ceir", "ops")
+GEN_DIR = os.path.join(REPO_ROOT, "engine", "execution", "ceir", "generated", "crd", "ceir", "gen")
 # Generated smoke tests live under the TEST tree (not GEN_DIR) — GEN_DIR is globbed into the crd-ceir LIBRARY, so a
 # test translation unit there would wrongly compile into the engine. This dir is globbed into crd-ceir-tests instead.
-GEN_TEST_DIR = os.path.join(REPO_ROOT, "tests", "ceir", "generated")
+GEN_TEST_DIR = os.path.join(REPO_ROOT, "tests", "execution", "ceir", "generated")
 
 
 class SchemaError(Exception):
@@ -173,6 +173,9 @@ def validate(path, raw, data):
             if a["name"] in accessor_names:
                 _err(path, raw, anchor, "op '%s': duplicate member name '%s'" % (name, a["name"]))
             accessor_names.add(a["name"])
+        cxx_names = [_cxx_ident(member) for member in accessor_names]
+        if len(set(cxx_names)) != len(cxx_names):
+            _err(path, raw, anchor, "op '%s': member names collide after C++ keyword sanitization" % name)
         for t in op.get("traits", []):
             if t not in OP_TRAITS:
                 _err(path, raw, anchor, "op '%s': unknown trait '%s' (known: %s)" % (name, t, ", ".join(OP_TRAITS)))
@@ -368,7 +371,7 @@ def _camel(name):
 # identifier (the _is_ident regex) but need NOT be a valid C++ identifier: a name like `class` becomes `AttrId class` in
 # the generated builder, which does not compile (CEIR-29c-3b: the first keyword-named attr). opgen is the ONE place that
 # turns an authored name into a C++ identifier, so it sanitizes here -- the IR/asset name stays raw (`{class = "gpu"}`),
-# only the emitted C++ identifier gets a trailing `_`. The `attr("%s")` / set_attr string arguments keep the RAW name.
+# only the emitted C++ identifier gets a `_value` suffix. The `attr("%s")` / set_attr string arguments keep the RAW name.
 _CXX_KEYWORDS = frozenset((
     "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char",
     "char8_t", "char16_t", "char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "constinit",
@@ -388,12 +391,21 @@ if "class" not in _CXX_KEYWORDS or "gpu" in _CXX_KEYWORDS:
 
 
 def _cxx_ident(name):
-    """The authored NAME as a legal C++ identifier: a trailing `_` iff it collides with a C++ keyword (else unchanged)."""
-    return name + "_" if name in _CXX_KEYWORDS else name
+    """Keep authored names; use a lower_case value suffix for C++ keyword collisions."""
+    return name + "_value" if name in _CXX_KEYWORDS else name
 
 
 def _cstr(s):
     """A C++ narrow-string literal (UTF-8 body kept as-is; /utf-8 is on)."""
+    if '"' in s and not any(c in s for c in '\r\n\t'):
+        # Authored documentation may itself contain a raw-literal terminator.
+        # Choose a delimiter absent from the body so text cannot close the literal.
+        index = 0
+        delimiter = 'crd'
+        while ')' + delimiter + '"' in s:
+            index += 1
+            delimiter = 'crd' + str(index)
+        return 'R"' + delimiter + '(' + s + ')' + delimiter + '"'
     body = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     return '"' + body + '"'
 

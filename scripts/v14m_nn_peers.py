@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from safetensors.torch import load_file
 
-CORPUS = "/mnt/d/Dev/cerid/tests/hesap-tensor/nn_corpus"
+CORPUS = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/nn_corpus"
 torch.set_num_threads(1)
 
 

@@ -5,6 +5,6 @@
 
 **Reference pointer; no live status here.** Track slices/findings in [ROADMAP](../ROADMAP.md).
 
-[Module manifest](../../engine/hesap-wavelet/CMakeLists.txt); [Current module/source map](../systems/README.md).
+[Module manifest](../../engine/numerics/hesap-wavelet/CMakeLists.txt); [Current module/source map](../systems/README.md).
 Full technical requirements and dated evidence: [preserved reference](../archive/systems/hesap-wavelet.md).
 Read the master row and current public source before relying on a historical example.

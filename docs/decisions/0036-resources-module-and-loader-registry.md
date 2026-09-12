@@ -107,7 +107,7 @@ cooker (the `DEPS` chunk) for eviction-impact analysis.
 - Loaders MUST NOT capture references to `LoadContext`-owned data (the `bytes` span, the
   `manager` pointer) past the end of `load()`. The control block stores only the payload pointer.
 - Type tags (FourCC) must be globally unique across all loaders linked into a binary. A central
-  reserved-FourCC list lives in `engine/resources/include/crd/resources/type_tags.hpp` to prevent
+  reserved-FourCC list lives in `engine/assets/resources/include/crd/resources/type_tags.hpp` to prevent
   collisions across modules.
 - Consumers cannot rely on `ResourceManager` knowing about their type at compile time — they must
   call `register_loader` before any `load_sync<T>` of that type. Failure to register is a

@@ -105,7 +105,7 @@ the per-frame baseline REN-3.2 multiplies by cascade count, so it must exist bef
   the existing `depth_layout` field.
 - `dx12_raster_context.cpp` — `R32_TYPELESS` + DSV heap + `R32_FLOAT` SRV for sampled depth transients;
   `record_depth_only`; the `DEPTH_WRITE → PIXEL_SHADER_RESOURCE` barrier.
-- `tests/gpu-context-vulkan/test_vulkan_frame_graph.cpp`, `tests/gpu-context-dx12/test_dx12_frame_graph.cpp` —
+- `tests/gpu/gpu-context-vulkan/test_vulkan_frame_graph.cpp`, `tests/gpu/gpu-context-dx12/test_dx12_frame_graph.cpp` —
   the `[ren3]` gate above.
 
 ## Risks

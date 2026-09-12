@@ -6,9 +6,9 @@ cmake --build "$HOME/cerid-build/linux-gcc-release" --target crd-hesap-tensor-te
 "$HOME/cerid-build/linux-gcc-release/tests/hesap-tensor/crd-hesap-tensor-tests" > /tmp/t.log 2>&1
 RC=$?; tail -1 /tmp/t.log; echo "gcc_tests_rc=$RC"; [ $RC -ne 0 ] && exit 1
 g++ -O3 -march=native -std=c++20 -DNDEBUG -DCRD_SIMD_TARGET=2 \
-    -I engine/hesap-tensor/include -I engine/hesap-stats/include -I engine/core/include \
-    -I engine/containers/include -I engine/memory/include -I engine/log/include \
-    -I engine/math/include -I engine/units/include \
+    -I engine/numerics/hesap-tensor/include -I engine/numerics/hesap-stats/include -I engine/foundation/core/include \
+    -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include \
+    -I engine/foundation/math/include -I engine/foundation/units/include \
     -I "$HOME/cerid-build/linux-gcc-release/engine/core/include" \
     scripts/bench_elementwise.cpp \
     "$HOME/cerid-build/linux-gcc-release/engine/memory/libcrd-memory.a" \

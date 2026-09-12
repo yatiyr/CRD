@@ -16,7 +16,7 @@
 
 ## Context
 
-The current v1a `Material` struct (`engine/eylem/include/crd/eylem/material.hpp`,
+The current v1a `Material` struct (`engine/physics/eylem/include/crd/eylem/material.hpp`,
 20 bytes) is a placeholder shipped to satisfy linkage at v1a freeze.
 Coverage audit §3.1 marked it **P0 — must close before v1a interface
 freeze** because the public `Material` shape gates the entire
@@ -164,7 +164,7 @@ content-addressing in ADR-0067 §3.
 
 ### 4. Per-collider material assignment
 
-Add to `Collider` struct (per `engine/eylem/include/crd/eylem/collider.hpp`):
+Add to `Collider` struct (per `engine/physics/eylem/include/crd/eylem/collider.hpp`):
 
 ```cpp
 struct Collider

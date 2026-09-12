@@ -137,7 +137,7 @@ variants drop in without changing test code.
 Cerid ships ONE compile-time switch:
 
 ```cpp
-// engine/hesap-dense/include/crd/hesap/dense/detail/microkernel_backend.hpp
+// engine/numerics/hesap-dense/include/crd/hesap/dense/detail/microkernel_backend.hpp
 #define CRD_HESAP_MICROKERNEL_BACKEND_INTRINSICS 1  // default
 #define CRD_HESAP_MICROKERNEL_BACKEND_ASM        2  // reserved
 ```
@@ -177,7 +177,7 @@ If all three are true, the new ADR commits to the per-µarch asm
 maintenance plan (≥6 µarchs from day 1; CI matrix expansion; ABI
 guarantees for the extern asm symbols) and lands a `v0d-asm-microkernel`
 slice that ships:
-- `engine/hesap-dense/src/asm/` directory with per-arch .S files
+- `engine/numerics/hesap-dense/src/asm/` directory with per-arch .S files
 - `CRD_HESAP_MICROKERNEL_BACKEND_ASM` flipped to default
 - New CI matrix entries per arch
 

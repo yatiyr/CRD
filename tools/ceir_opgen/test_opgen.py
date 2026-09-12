@@ -26,7 +26,7 @@ def run(raw):
     """Validate `raw`; return (error_string_or_None). tomllib syntax errors propagate (a separate failure class)."""
     data = tomllib.loads(raw)
     try:
-        og.validate("engine/ceir/ops/mem.ceirop.toml", raw, data)
+        og.validate("engine/execution/ceir/ops/mem.ceirop.toml", raw, data)
         return None
     except og.SchemaError as e:
         return str(e)
@@ -43,9 +43,26 @@ class ValidatorTests(unittest.TestCase):
             self.assertIsNotNone(m, "diagnostic has no line number: %s" % msg)
             self.assertEqual(int(m.group(1)), line, "wrong line in: %s" % msg)
 
+    def test_keyword_accessor_keeps_serialized_name(self):
+        raw = GOOD + 'attributes = [{name = "class", kind = "string"}]\n'
+        model = og.validate("engine/execution/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        hpp = og.emit_hpp(model)
+        self.assertIn("class_value()", hpp)
+        self.assertIn('attr("class")', hpp)
+
+    def test_keyword_sanitizer_rejects_accessor_collision(self):
+        raw = GOOD + ('attributes = [{name = "class", kind = "string"}, '
+                      '{name = "class_value", kind = "string"}]\n')
+        self._assert_error(raw, "member names collide after C++ keyword sanitization")
+
+    def test_authored_string_cannot_close_raw_literal(self):
+        body = 'a "quote" with )crd" and )crd1" terminators'
+        self.assertEqual(og._cstr(body), 'R"crd2(' + body + ')crd2"')
+        self.assertEqual(og._cstr('line\nbreak'), '"line\\nbreak"')
+
     def test_good_schema_validates(self):
         self.assertIsNone(run(GOOD))
-        model = og.validate("engine/ceir/ops/mem.ceirop.toml", GOOD, tomllib.loads(GOOD))
+        model = og.validate("engine/execution/ceir/ops/mem.ceirop.toml", GOOD, tomllib.loads(GOOD))
         self.assertEqual(model["dialect"], "t")
         self.assertEqual(model["ops"][0]["name"], "a")
 
@@ -56,7 +73,7 @@ class ValidatorTests(unittest.TestCase):
                '[[op]]\nname = "plain"\nsummary = "s"\nversion = 1\n\n'
                '[[op]]\nname = "nat"\nsummary = "s"\nversion = 1\n'
                'native = { provider = "host", determinism = "BitExact" }\n')
-        model = og.validate("engine/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        model = og.validate("engine/execution/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
         cpp = og.emit_cpp(model)
         nat_line = [ln for ln in cpp.splitlines() if 'register_op("nat"' in ln][0]
         self.assertIn(".intrinsic = true", nat_line)
@@ -73,7 +90,7 @@ class ValidatorTests(unittest.TestCase):
                '[[op]]\nname = "disp"\nsummary = "s"\nversion = 1\n'
                'attributes = [ { name = "kernel", kind = "symbol" }, { name = "iface", kind = "int" } ]\n'
                'kernel_ref = { symbol = "kernel", interface = "iface" }\n')
-        model = og.validate("engine/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        model = og.validate("engine/execution/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
         cpp = og.emit_cpp(model)
         disp_line = [ln for ln in cpp.splitlines() if 'register_op("disp"' in ln][0]
         self.assertIn('.kernel_ref_symbol = "kernel"', disp_line)
@@ -85,7 +102,7 @@ class ValidatorTests(unittest.TestCase):
         # `interface` is OPTIONAL: a kernel_ref with only `symbol` emits .kernel_ref_symbol and NOT .kernel_ref_interface.
         raw = (GOOD + 'attributes = [ { name = "kernel", kind = "symbol" } ]\n'
                'kernel_ref = { symbol = "kernel" }\n')
-        model = og.validate("engine/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
+        model = og.validate("engine/execution/ceir/ops/mem.ceirop.toml", raw, tomllib.loads(raw))
         line = [ln for ln in og.emit_cpp(model).splitlines() if 'register_op("a"' in ln][0]
         self.assertIn('.kernel_ref_symbol = "kernel"', line)
         self.assertNotIn(".kernel_ref_interface", line)
@@ -368,7 +385,7 @@ class ValidatorTests(unittest.TestCase):
                'deprecation = { since = "v2", replaced_by = "t.b", note = "use b" }\n'
                '\n[op.native]\nprovider = "gpu"\ndeterminism = "DeterministicWithinBackend"\nthread_safe = true\n'
                'capabilities = ["compute"]\n')
-        model = og.validate("engine/ceir/ops/t.ceirop.toml", raw, tomllib.loads(raw))
+        model = og.validate("engine/execution/ceir/ops/t.ceirop.toml", raw, tomllib.loads(raw))
         md = og.emit_md(model)
         self.assertIn("DEPRECATED", md)
         self.assertIn("**Deprecated:** since v2 — replaced by `t.b` — use b", md)

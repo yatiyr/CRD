@@ -6,7 +6,7 @@
 > How to make a whole class of GPU programs differentiable *at the IR level*: `build_gradient` walks a CEIR module in reverse
 > and EMITS the backward pass as ordinary ops in the existing tensor vocab (transpose + gemm + broadcast/reshape + elementwise + a compute.dispatch),
 > which then plan and run device-resident on Vulkan/DX12/llvmpipe like any other program. No tape, no eager engine — the gradient
-> is *another program*, produced by rewriting the forward one. Code: `engine/ceir-gpu/{include/crd/ceir/gpu,src}/grad.{hpp,cpp}`;
+> is *another program*, produced by rewriting the forward one. Code: `engine/execution/ceir-gpu/{include/crd/ceir/gpu,src}/grad.{hpp,cpp}`;
 > board: [`docs/bench/2026-09-04-ceir25-autodiff-scoreboard.md`](../bench/2026-09-04-ceir25-autodiff-scoreboard.md).
 
 ## Parameters
@@ -143,10 +143,10 @@ tensor-vocab crown. Never quote these numbers from memory — read the board.
 
 ## Where the code lives
 
-- `engine/ceir-gpu/include/crd/ceir/gpu/grad.hpp` + `src/grad.cpp` — `build_gradient`, `VjpRegistry`, `vjp_gemm`/`vjp_reduce`/`vjp_mlp`, `register_builtin_vjps`, `GradError`.
-- `engine/ceir-gpu/include/crd/ceir/gpu/tensor_pipeline.hpp` + `src/tensor_pipeline.cpp` — `plan_tensor_pipeline`, `StageKind`, `execute_tensor_pipeline`.
-- `engine/ceir-gpu/src/ckir_synth.cpp` — `synth_transpose`/`synth_broadcast`/`synth_elementwise` (the backward vocab's kernel-tier synth).
+- `engine/execution/ceir-gpu/include/crd/ceir/gpu/grad.hpp` + `src/grad.cpp` — `build_gradient`, `VjpRegistry`, `vjp_gemm`/`vjp_reduce`/`vjp_mlp`, `register_builtin_vjps`, `GradError`.
+- `engine/execution/ceir-gpu/include/crd/ceir/gpu/tensor_pipeline.hpp` + `src/tensor_pipeline.cpp` — `plan_tensor_pipeline`, `StageKind`, `execute_tensor_pipeline`.
+- `engine/execution/ceir-gpu/src/ckir_synth.cpp` — `synth_transpose`/`synth_broadcast`/`synth_elementwise` (the backward vocab's kernel-tier synth).
 - `assets/ckir/relu_vjp.ckir` — the authored ReLU-VJP compute kernel (first with readonly-declared inputs).
-- Gates: `tests/ceir-gpu/test_grad.cpp` (structural + typed rejects), `tests/ceir-gpu/test_tensor_pipeline.cpp` (plan gates),
-  `tests/ceir-gpu-vulkan/test_ceir_pipeline_vulkan.cpp` + `tests/ceir-gpu-dx12/test_ceir_pipeline_dx12.cpp` (device numeric),
-  `tests/gpu-shared/autodiff_fd_functors.hpp` (`SumGemmAA`/`MlpLoss` FD witnesses), `tests/kir/test_ckir_asset.cpp` (the `relu_vjp.ckir` reading gate).
+- Gates: `tests/execution/ceir-gpu/test_grad.cpp` (structural + typed rejects), `tests/execution/ceir-gpu/test_tensor_pipeline.cpp` (plan gates),
+  `tests/execution/ceir-gpu-vulkan/test_ceir_pipeline_vulkan.cpp` + `tests/execution/ceir-gpu-dx12/test_ceir_pipeline_dx12.cpp` (device numeric),
+  `tests/gpu/gpu-shared/autodiff_fd_functors.hpp` (`SumGemmAA`/`MlpLoss` FD witnesses), `tests/gpu/kir/test_ckir_asset.cpp` (the `relu_vjp.ckir` reading gate).

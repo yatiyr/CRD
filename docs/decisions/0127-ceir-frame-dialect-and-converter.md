@@ -15,7 +15,7 @@ durable record: (1) the `ceir.frame` dialect shape, and (2) where the `FrameGrap
 
 ## Decision 1 — the `ceir.frame` dialect (FOUR ops; resources reuse the resource dialect)
 
-`ceir.frame` owns the frame graph's TOPOLOGY as a CEIR dialect (`engine/ceir/ops/frame.ceirop.toml`):
+`ceir.frame` owns the frame graph's TOPOLOGY as a CEIR dialect (`engine/execution/ceir/ops/frame.ceirop.toml`):
 
 - **`frame.graph`** — a REGION op (`render.scope` precedent), the whole-frame container.
 - **`frame.pass`** — ONE op per mechanic. The MECHANIC is the `executor` SYMBOL attr (the executor NAME; `ExecutorTypeId`

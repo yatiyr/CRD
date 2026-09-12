@@ -42,7 +42,7 @@ GPU/live-renderer contact" raises its risk.
 
 | Band | Scope (from the contract) | KLOC (eng+test) | In-tree anchor | Conf. | Risk driver |
 |---|---|---|---|---|---|
-| CEIR-1 | core IR + printer/parser + bytecode + builder + fuzz seed | 4–6 | `engine/kir/…/ckir.hpp` = 2,193 lines is the closest IR-core analog | **Med** | foundational surface; MLIR-core-lite |
+| CEIR-1 | core IR + printer/parser + bytecode + builder + fuzz seed | 4–6 | `engine/gpu/kir/…/ckir.hpp` = 2,193 lines is the closest IR-core analog | **Med** | foundational surface; MLIR-core-lite |
 | CEIR-2 | `*.ceirop.toml` schema + generator tool | 1.5–3 | the `gen_fft_batched.py` codegen precedent | Med-low | codegen tool correctness |
 | CEIR-3 | types (scalar/aggregate/resource/shape/units/ownership/generics) | 3–5 | — | Med | generics + shape reasoning |
 | CEIR-4 | effects + determinism + domains + hazard | 1.5–3 | the frame-graph WAR/lifetime analysis (ported) | Med | effect-analysis correctness |

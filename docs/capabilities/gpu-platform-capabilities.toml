@@ -668,7 +668,7 @@ limitations = "The §134 wavefront path-tracer CONTROL-FLOW (queue/state dynamic
 [feature.platform_windowing_input]
 category = "ui_foundation"
 subcategory = "platform"
-definition = "OS window + input foundation (engine/platform window.hpp + input.hpp: Input/InputEvent/Mouse) the UI input router/windowing build on."
+definition = "OS window + input foundation (engine/foundation/platform window.hpp + input.hpp: Input/InputEvent/Mouse) the UI input router/windowing build on."
 raf_level = 3
 ceir_level = 0    # OS windowing/input foundation, not a CEIR program
 providers = []
@@ -678,7 +678,7 @@ dependencies = []
 ckir_capabilities = []
 command_families = []
 executors = []
-runtime_systems = ["engine/platform window + input"]
+runtime_systems = ["engine/foundation/platform window + input"]
 backend_capabilities = []
 assets = []
 tests_vulkan = []
@@ -695,7 +695,7 @@ limitations = "single-window/basic input today; multi-window/docking/per-monitor
 [feature.imgui_debug_ui]
 category = "ui_foundation"
 subcategory = "debug_ui"
-definition = "Dear ImGui debug/recovery UI (engine/imgui + perf-ui + draw-imgui). KEPT as debug/recovery, never the product UI."
+definition = "Dear ImGui debug/recovery UI (engine/ui/imgui + perf-ui + draw-imgui). KEPT as debug/recovery, never the product UI."
 raf_level = 5
 ceir_level = "n/a"    # T-class: tooling is never a CEIR program (ceir-0g §2a)
 providers = []    # ceir_level "n/a" ⇒ no CEIR provider (ImGui is its own GPU backend, not a CEIR program)
@@ -705,7 +705,7 @@ dependencies = ["platform_windowing_input"]
 ckir_capabilities = []
 command_families = []
 executors = []
-runtime_systems = ["engine/imgui"]
+runtime_systems = ["engine/ui/imgui"]
 backend_capabilities = []
 assets = []
 tests_vulkan = ["imgui gpu backend"]
@@ -722,9 +722,9 @@ limitations = "intentionally NOT the product/editor UI foundation; not deleted w
 [feature.draw_debug_viz]
 category = "ui_foundation"
 subcategory = "debug_viz"
-definition = "engine/draw debug visualization (DebugLine/DebugText/shapes/overlay_pass) — a SEPARATE debug system, not the Canvas compositor."
+definition = "engine/rendering/draw debug visualization (DebugLine/DebugText/shapes/overlay_pass) — a SEPARATE debug system, not the Canvas compositor."
 raf_level = 5
-ceir_level = 0    # engine/draw debug system, not a migrated CEIR program
+ceir_level = 0    # engine/rendering/draw debug system, not a migrated CEIR program
 providers = []    # ceir_level 0 ⇒ no CEIR provider (RAF/gpu-context draw path, not a CEIR program)
 determinism_tier = ""
 classification = "A+R"
@@ -732,7 +732,7 @@ dependencies = []
 ckir_capabilities = ["vs", "fs"]
 command_families = ["raster.draw"]
 executors = ["fullscreen.raster", "scene.raster"]
-runtime_systems = ["engine/draw"]
+runtime_systems = ["engine/rendering/draw"]
 backend_capabilities = []
 assets = []
 tests_vulkan = ["draw [gpu]"]
@@ -881,7 +881,7 @@ quality_perf_gates = []
 fallback = "single-pass UiMaterial"
 band = "CEIR-31b"
 status = "gate-only"
-references = ["D-007 §141", "ADR-0107 §UiEffectGraph", "tests/scene-render/test_ui_frosted_glass_gpu.cpp", "assets/frame/ui_frosted_glass.frame.toml"]
+references = ["D-007 §141", "ADR-0107 §UiEffectGraph", "tests/rendering/scene-render/test_ui_frosted_glass_gpu.cpp", "assets/frame/ui_frosted_glass.frame.toml"]
 limitations = "ONE effect proven — frosted glass / backdrop-blur; glow/bloom/distortion are the SAME authoring recipe (a `.frame.toml` of committed `.ckir` fullscreen kernels on the existing RAF frame graph) but not yet authored. Renders a COMPLETE correct composited image on device (Vk+DX12+llvmpipe) — a fuller gate than scene_rt's cleared-output mechanic — but proven ONLY by device test gates: NO sandbox/app consumer, and the composite reads a fixed spec-const rect, not a live UiPanel/canvas (a parked Track-B/I2D-0 concept, ADR-0107). A distinct `UiEffectGraph` asset/compiler was NOT needed for the proof (31b-0 census: ZERO new ops — the frame IS the authored form); whether I2D-7 per-panel binding needs one beyond a frame is OPEN. L4 (cross-backend proven by device gates) paired with `gate-only` status = proven, not consumed — cf. scene_rt at L3/gate-only; the `level` axis is maturity, the `status` token is evidence-source (gate-proven, no live consumer)."
 
 [feature.ui_style_system]
@@ -1216,8 +1216,8 @@ executors = ["compute.dispatch"]
 runtime_systems = ["VJP registry (vjp_gemm / vjp_reduce / vjp_mlp)"]
 backend_capabilities = ["compute", "storage_buffer"]
 assets = ["assets/ckir/relu_vjp.ckir"]
-tests_vulkan = ["tests/ceir-gpu/test_grad.cpp (MLP backward device, Vulkan)"]
-tests_dx12 = ["tests/ceir-gpu/test_grad.cpp (MLP backward device, DX12)"]
+tests_vulkan = ["tests/execution/ceir-gpu/test_grad.cpp (MLP backward device, Vulkan)"]
+tests_dx12 = ["tests/execution/ceir-gpu/test_grad.cpp (MLP backward device, DX12)"]
 tests_cross_backend = ["25b §139 MLP backward device-resident on Vk + DX12 + llvmpipe == hesap nn_reverse; 25b-4b sum(gemm(A,A)) backward == matmul_vjp + grad_fd tol 1e-4 (docs/sessions/2026-09-04-ceir-25z-band-close.md)"]
 hot_reload_tests = []
 editor_support = "none"
@@ -1287,7 +1287,7 @@ limitations = "Proven on the hardware that exists (ONE RTX 4070 Ti SUPER + WSL2 
 [feature.ceir_audio_dsp]
 category = "audio"
 subcategory = "dsp_graph"
-definition = "ceir.audio — the engine/audio render_graph DSP (source / gain / biquad / delay / compressor / mix) routed through CEIR; execute_audio_graph_ceir walks CEIR block/def-use order, no new scheduler."
+definition = "ceir.audio — the engine/media/audio render_graph DSP (source / gain / biquad / delay / compressor / mix) routed through CEIR; execute_audio_graph_ceir walks CEIR block/def-use order, no new scheduler."
 raf_level = "n/a"
 ceir_level = 3    # reference/one-provider execution: bit-exact vs the render_graph REFERENCE oracle on host. Host/CPU DSP by nature
 providers = ["host"]
@@ -1297,12 +1297,12 @@ dependencies = []
 ckir_capabilities = []
 command_families = []
 executors = ["execute_audio_graph_ceir (host)"]
-runtime_systems = ["engine/audio render_graph (device-free, deterministic, bit-exact CPU DSP; KEPT as the differential oracle + production path)"]
+runtime_systems = ["engine/media/audio render_graph (device-free, deterministic, bit-exact CPU DSP; KEPT as the differential oracle + production path)"]
 backend_capabilities = []
 assets = ["assets/ceir/audio_full_chain.ceir", "assets/ceir/audio_mix3.ceir", "assets/ceir/audio_source_gain_biquad_mix.ceir"]
 tests_vulkan = []
 tests_dx12 = []
-tests_cross_backend = ["[audio][ceir] execute_audio_graph_ceir bit-exact vs render_graph oracle (host; tests/audio/test_ceir_audio_render.cpp)"]
+tests_cross_backend = ["[audio][ceir] execute_audio_graph_ceir bit-exact vs render_graph oracle (host; tests/media/audio/test_ceir_audio_render.cpp)"]
 hot_reload_tests = []
 editor_support = "none"
 quality_perf_gates = []
@@ -1325,12 +1325,12 @@ dependencies = []
 ckir_capabilities = []
 command_families = []
 executors = []
-runtime_systems = ["engine/chir (crd-chir): parser + CHIR->CEIR lowering + the CR-D007 graph-schema projection; host-only, one-way into crd-ceir"]
+runtime_systems = ["engine/execution/chir (crd-chir): parser + CHIR->CEIR lowering + the CR-D007 graph-schema projection; host-only, one-way into crd-ceir"]
 backend_capabilities = []
 assets = ["assets/chir/event_handler.chir", "assets/chir/event_handler.chirgraph"]
 tests_vulkan = []
 tests_dx12 = []
-tests_cross_backend = ["[chir] text+graph -> byte-identical CEIR parity + round-trip (host; tests/chir/test_source_model.cpp, test_chir_lower.cpp)"]
+tests_cross_backend = ["[chir] text+graph -> byte-identical CEIR parity + round-trip (host; tests/execution/chir/test_source_model.cpp, test_chir_lower.cpp)"]
 hot_reload_tests = ["chir [chir] 32e: 6 reload cases on the §143 program (CEIR-10a decision table HotSwap/NoChange/Migrate/Reject; source-derived watermark-safe stable-id pin)"]
 editor_support = "schema-only"    # the CR-D007 graph SCHEMA (nodes/typed-pins/edges/layout) is DEFINED; the editor that RENDERS it is CEIR-33/D7E = I2D-9
 quality_perf_gates = []
@@ -1358,7 +1358,7 @@ backend_capabilities = []
 assets = []
 tests_vulkan = []
 tests_dx12 = []
-tests_cross_backend = ["[ceir][dce] (tests/ceir/test_dce.cpp) + [ceir][cse] (tests/ceir/test_cse.cpp) differential bit-exact: optimized module == unoptimized (host, device-free)"]
+tests_cross_backend = ["[ceir][dce] (tests/execution/ceir/test_dce.cpp) + [ceir][cse] (tests/execution/ceir/test_cse.cpp) differential bit-exact: optimized module == unoptimized (host, device-free)"]
 hot_reload_tests = []
 editor_support = "none"
 quality_perf_gates = []
@@ -1440,8 +1440,8 @@ executors = ["compute.dispatch"]
 runtime_systems = ["ceir.sparse.spmv provider (segmented-sum CSR kernel shape)"]
 backend_capabilities = ["compute", "storage_buffer"]
 assets = ["assets/ckir/spmv_csr.ckir"]
-tests_vulkan = ["tests/ceir-gpu-vulkan/test_ceir_sparse_vulkan.cpp [ceir][ckir][sparse][gpu] (CSR SpMV, Vulkan)"]
-tests_dx12 = ["tests/ceir-gpu-dx12/test_ceir_sparse_dx12.cpp (CSR SpMV, DX12)"]
+tests_vulkan = ["tests/execution/ceir-gpu-vulkan/test_ceir_sparse_vulkan.cpp [ceir][ckir][sparse][gpu] (CSR SpMV, Vulkan)"]
+tests_dx12 = ["tests/execution/ceir-gpu-dx12/test_ceir_sparse_dx12.cpp (CSR SpMV, DX12)"]
 tests_cross_backend = ["23e-b CSR SpMV Vk + DX12 device gates (dispatch_kernel_1wg, u32 row_ptr/col_idx); 23e-a device-free eval == CPU CSR SpMV oracle"]
 hot_reload_tests = []
 editor_support = "none"
@@ -1468,8 +1468,8 @@ executors = ["compute.dispatch"]
 runtime_systems = ["expand_ml (ml.mlp / attention lowering); LocalSizeExceedsLimit resolver reject (device-known-at-cook)"]
 backend_capabilities = ["compute", "storage_buffer"]
 assets = ["assets/ceir/attention.ceir"]
-tests_vulkan = ["tests/ceir-gpu/test_band24_gate.cpp + tests/ceir-gpu/test_expand_ml.cpp (ml.mlp/attention == oracle, Vulkan)"]
-tests_dx12 = ["tests/ceir-gpu-dx12/test_ceir_pipeline_dx12.cpp (ml.mlp/attention == oracle, DX12)"]
+tests_vulkan = ["tests/execution/ceir-gpu/test_band24_gate.cpp + tests/execution/ceir-gpu/test_expand_ml.cpp (ml.mlp/attention == oracle, Vulkan)"]
+tests_dx12 = ["tests/execution/ceir-gpu-dx12/test_ceir_pipeline_dx12.cpp (ml.mlp/attention == oracle, DX12)"]
 tests_cross_backend = ["26d-2c non-32-width ml.mlp Vk+DX12 == float oracle; 26d-3c generic attention (Sq=3,Sk=5,D=4) Vk+DX12 == SDPA oracle (tolerance); [kir][cuda][gpu][attention] CUDA leg"]
 hot_reload_tests = []
 editor_support = "none"

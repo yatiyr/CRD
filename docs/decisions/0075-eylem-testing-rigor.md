@@ -65,7 +65,7 @@ the physical conservation laws within bounded epsilon over a long
 integration window:
 
 ```cpp
-// tests/eylem-rigid3d/conservation/test_si_solver.cpp
+// tests/physics/eylem-rigid3d/conservation/test_si_solver.cpp
 TEST_CASE("SI solver conserves kinetic energy in frictionless free flight",
           "[eylem][solver][conservation]")
 {
@@ -140,7 +140,7 @@ The snapshot system (v1j) already exists; this test consumes it.
 
 Canonical scenes simulated in eylem **and** Box2D **and** Bullet (both
 MIT-licensed; brought in as test-only deps under
-`tests/eylem-rigid3d/cross_engine/`):
+`tests/physics/eylem-rigid3d/cross_engine/`):
 
 | Scene | Metric | Cerid budget |
 |---|---|---|

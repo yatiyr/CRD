@@ -30,29 +30,29 @@ to unwind later: collapsing UI into the gameplay ECS, an untyped command blob, a
 
 **Source inventory (August snapshot, corrected against the September audit below):**
 
-- `engine/scene` — the gameplay world: an **archetype ECS** keyed by `crd::scene::EntityId` (`entity.hpp`), with
+- `engine/world/scene` — the gameplay world: an **archetype ECS** keyed by `crd::scene::EntityId` (`entity.hpp`), with
   components/queries/relations/commands. This is `SceneWorld`. It is the WRONG representation for a button, a table cell,
   or a node-editor socket.
-- `engine/platform` — `Window` (a **single** OS window, GLFW-backed PIMPL: `framebuffer_size`/`window_size`, `native_handle`
+- `engine/foundation/platform` — `Window` (a **single** OS window, GLFW-backed PIMPL: `framebuffer_size`/`window_size`, `native_handle`
   escape hatch; **no DPI-scale query, no multi-monitor, no docking**) and `Input` (a frame-coherent `InputState` snapshot +
   an optional ordered `InputEvent` queue; keyboard-subset + 5 mouse buttons + move + scroll + modifiers). Its comment is
   historical: the current `crd-app` already has `dispatch_propagated`; reuse that application routing seam.
   The full touch, pen, gamepad, committed-text/IME, clipboard and drag/drop contracts remain INPUT work.
   `UiInputRouter` adds retained hit-testing, focus and UI propagation on those services, without a second app event bus.
-- `engine/imgui` + `engine/perf-ui` + `engine/draw-imgui` — Dear ImGui debug UI. **Kept** as debug/recovery UI (§36). It is
+- `engine/ui/imgui` + `engine/ui/perf-ui` + `engine/rendering/draw-imgui` — Dear ImGui debug UI. **Kept** as debug/recovery UI (§36). It is
   **not** the product/editor UI foundation, and it is **not deleted** when the new UI lands.
-- `engine/draw` — debug visualization (`DebugLine`, `DebugText`, shapes, overlay pass). A **separate debug system**, not the
+- `engine/rendering/draw` — debug visualization (`DebugLine`, `DebugText`, shapes, overlay pass). A **separate debug system**, not the
   `CanvasCompositor`. It renders developer overlays in world/screen space; it is not a retained 2D UI engine.
-- `engine/anim` — animation primitives the UI transition/animation system shares (rather than re-inventing curves).
-- `engine/render-asset-core` — the asset substrate the UI reuses wholesale: `AssetId`/`AssetRef` (`identity.hpp`,
+- `engine/world/anim` — animation primitives the UI transition/animation system shares (rather than re-inventing curves).
+- `engine/rendering/render-asset-core` — the asset substrate the UI reuses wholesale: `AssetId`/`AssetRef` (`identity.hpp`,
   `engine://`/`app://` schemes), `InterfaceHash`/`ContentHash`/`Generation` (`cooked.hpp`), `DependencyGraph`
   (`dependency.hpp`), `DiagnosticList`/`DiagCode` (`diagnostic.hpp`). The existing RAF-11 reloader types are
   private to `scene-render`, not a shared core service. RAH-7 promotes the reusable dependency/atomic-publication
   contract without a 3D dependency and replaces frame-count retirement with actual queue completion.
-- `engine/frame-cook` + `engine/render-graph` — the RAF frame-graph runtime (`FrameGraphTemplate → compile → execute`,
+- `engine/assets/frame-cook` + `engine/rendering/render-graph` — the RAF frame-graph runtime (`FrameGraphTemplate → compile → execute`,
   executors recording the canonical command model). These authoring surfaces converge through CEIR (ADR-0127),
-  which owns execution; they do not introduce a parallel scheduler. `engine/material-cook` — MAT, the CKIR material cook.
-- `engine/platform/file_watcher.hpp` — the file-change trigger for hot reload.
+  which owns execution; they do not introduce a parallel scheduler. `engine/assets/material-cook` — MAT, the CKIR material cook.
+- `engine/foundation/platform/file_watcher.hpp` — the file-change trigger for hot reload.
 
 No complete product UI/Canvas/font module exists in the audited module inventory. Debug drawing types and
 CEIR-33 C2 editor-domain records are prior art, not a finished retained UI. Recheck concrete names before adding
@@ -68,7 +68,7 @@ The architecture explicitly separates five concepts that **share lower-level inf
 
 ```mermaid
 flowchart LR
-  SW["SceneWorld<br/>(engine/scene, archetype ECS,<br/>EntityId): 3D/2D gameplay,<br/>cameras, lights, sprites, physics"]
+  SW["SceneWorld<br/>(engine/world/scene, archetype ECS,<br/>EntityId): 3D/2D gameplay,<br/>cameras, lights, sprites, physics"]
   UW["UiWorld (NEW)<br/>retained product/editor UI<br/>semantics + interaction state"]
   CC["CanvasCompositor (NEW)<br/>shared text/image/vector/clip/<br/>layer 2D composition engine"]
   UM["UiMaterial / UiEffectGraph (NEW)<br/>CKIR single-element shading +<br/>multi-pass compositing effects"]
@@ -83,15 +83,15 @@ flowchart LR
 
 | Responsibility | Owner | Module | Notes |
 |---|---|---|---|
-| Gameplay entities, transforms, physics, scene culling | `SceneWorld` | `engine/scene` | `EntityId`; NOT a UI concern |
+| Gameplay entities, transforms, physics, scene culling | `SceneWorld` | `engine/world/scene` | `EntityId`; NOT a UI concern |
 | Stable UI node identity + ordered tree | `UiWorld` | `engine/ui` (new) | `UiNodeId` (≠ `EntityId`) |
 | Widget type/role, local+computed style, layout, interaction/animation/binding state, a11y semantics, paint invalidation, cached display-list fragments | `UiWorld` | `engine/ui` (new) | see D2 |
 | Compiled backend-neutral paint (shapes/images/text/vector/clip/layer/filter) | `CanvasDisplayList` + `CanvasCompositor` | `engine/canvas` (new) | see D3 |
 | Single-element programmable shading + interface/effect metadata | `UiMaterial` | `engine/ui-material` (new, cooks via MAT/CKIR) | see D5 |
 | Multi-pass compositing effects (glass/blur/glow) | `UiEffectGraph` | compiles to RAF frame graph | see D5 |
-| Scheduling, resource lifetime, sync, transient aliasing, final composition, backend command recording | `FrameGraph` | `engine/render-graph` (RAF) | UI/Scene2D are ordinary participants |
-| OS window + raw input | `platform::Window` / `platform::Input` | `engine/platform` (existing) | UI input router builds ON this |
-| Asset identity/cook/hash/dependency/reload/diagnostics | render-asset-core + shared RAH-7 service | `engine/render-asset-core`; reload placement reviewed at RAH-7 | reuse core; private scene-render reloader is migration input |
+| Scheduling, resource lifetime, sync, transient aliasing, final composition, backend command recording | `FrameGraph` | `engine/rendering/render-graph` (RAF) | UI/Scene2D are ordinary participants |
+| OS window + raw input | `platform::Window` / `platform::Input` | `engine/foundation/platform` (existing) | UI input router builds ON this |
+| Asset identity/cook/hash/dependency/reload/diagnostics | render-asset-core + shared RAH-7 service | `engine/rendering/render-asset-core`; reload placement reviewed at RAH-7 | reuse core; private scene-render reloader is migration input |
 
 **⛔ The rule (recorded verbatim, D-007 U-1):** *A game menu, HUD, inventory, settings screen, dialogue panel, editor
 panel, tooltip, tree view, and text field are UI even when their appearance uses sprites or animated images.* A sprite is

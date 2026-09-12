@@ -17,8 +17,7 @@ Universal entry: [START_HERE](START_HERE.md). It routes the same rules and singl
    also read [KERNEL-CRUSH-MANDATE](docs/KERNEL-CRUSH-MANDATE.md) and [crush playbook](docs/hints/crush-playbook.md).
 5. State the task's purpose, exact slice, full deliverable and verification scope before acting.
 
-The user's current request authorizes this documentation refinement. For other work, continue within the user's
-existing authorization; do not ask again merely because an old session ritual says to. Ask when scope/requirements
+Continue within the user's current request and existing authorization; do not ask again merely because an old session ritual says to. Ask when scope/requirements
 are genuinely unresolved or an explicit design gate is still unaccepted. Never invent approval or tool results.
 
 ## One owner for each fact
@@ -83,5 +82,5 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   AI co-author trailer. Do not bypass hooks/signing; solve the underlying issue.
 - Windows uses PowerShell. Use `rg` for searches, UTF-8 for text, absolute paths for executables, and verify
   deletion/move targets remain inside the intended directory. Never overwrite HOME/CODEX_HOME variables.
-- Geometry/physics and other unrelated implementation are outside the current renderer/UI documentation work.
-  Their retained scope lives in ROADMAP. No automatic loop is active merely because a historical CEIR grant says so.
+- Keep implementation within the current authorized scope. Repository organization does not authorize
+  geometry/physics algorithm changes; retained work lives in ROADMAP. No automatic loop is active merely because a historical CEIR grant says so.

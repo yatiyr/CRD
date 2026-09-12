@@ -3,7 +3,7 @@
 # Math Mandate; docs/phases/crd-math-transcendental.md tx-route). Scope: include/ + src/ ONLY — never tests/ (thei
 # std:: is the gold-standard oracle) or runtime/examples (their std:: is the benchmark peer). After running:
 #   rebuild the module's tests and RE-GATE (the ~1-ulp shift must keep every gold gate green); only then is it routed.
-# Proven on engine/hesap-comms (39663-assertion suite green post-route). Idempotent.
+# Proven on engine/numerics/hesap-comms (39663-assertion suite green post-route). Idempotent.
 set -euo pipefail
 dir="${1:?usage: route-to-crd-math.sh <module-dir>}"
 

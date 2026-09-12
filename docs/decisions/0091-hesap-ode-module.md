@@ -29,7 +29,7 @@ Two structural risks had to be settled before the first method shipped:
 
 ## Decision
 
-1. **New module `crd-hesap-ode`** (`engine/hesap-ode/`). v9-a edges: crd-core, crd-containers, crd-memory
+1. **New module `crd-hesap-ode`** (`engine/numerics/hesap-ode/`). v9-a edges: crd-core, crd-containers, crd-memory
    only. Stiff slices add hesap-dense (v9-d LU, v9-e complex LU) and hesap-direct/-iterative (v9-j) at the
    slice that consumes them. NO edge to hesap-opt (opt consumes ode later for shooting — acyclic).
 

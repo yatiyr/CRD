@@ -10,12 +10,12 @@ semantics and lowers into CEIR; CKIR owns device kernels/shaders. See
 
 ## Modules and source
 
-- [ceir](../../engine/ceir/include/crd/ceir/): GPU-independent IR, verifier, dialects and compiler infrastructure.
-- [ceir-host](../../engine/ceir-host/include/): host execution/provider mechanisms.
-- [ceir-gpu](../../engine/ceir-gpu/include/): GPU lowering/materialization/provider bridge, depending on the generic
+- [ceir](../../engine/execution/ceir/include/crd/ceir/): GPU-independent IR, verifier, dialects and compiler infrastructure.
+- [ceir-host](../../engine/execution/ceir-host/include/): host execution/provider mechanisms.
+- [ceir-gpu](../../engine/execution/ceir-gpu/include/): GPU lowering/materialization/provider bridge, depending on the generic
   gpu-context facade and CKIR, not a concrete Vulkan/DX12 backend.
-- [ceir-cook](../../engine/ceir-cook/include/): authored execution assets and cook integration.
-- [Dialect definitions](../../engine/ceir/ops/): generated operations; regenerate through the canonical generator.
+- [ceir-cook](../../engine/execution/ceir-cook/include/): authored execution assets and cook integration.
+- [Dialect definitions](../../engine/execution/ceir/ops/): generated operations; regenerate through the canonical generator.
 
 ## Recorded completion
 

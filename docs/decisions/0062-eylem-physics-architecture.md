@@ -356,8 +356,8 @@ fight Cerid's existing schedule.
   every future consumer (animation, transform propagation, particles,
   audio DSP).
 - New module skeleton:
-  `engine/eylem/include/crd/eylem/...` + `engine/eylem/src/...` +
-  `tests/eylem/...` + `runtime/examples/smoke_eylem*.cpp`.
+  `engine/physics/eylem/include/crd/eylem/...` + `engine/physics/eylem/src/...` +
+  `tests/physics/eylem/...` + `runtime/examples/smoke_eylem*.cpp`.
 - Cooker grows `.collider.toml` handler in v1k; öbek + scene already
   consume eylem components via the existing component-trait grammar.
 - Sandbox grows an eylem-driven demo (stacking + ragdoll + character

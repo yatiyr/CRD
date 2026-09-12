@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check_no_std_sort.sh — bans std::sort / std::stable_sort / std::nth_element
 # / std::partial_sort / std::push_heap / std::pop_heap / std::make_heap /
-# std::sort_heap in engine/eylem/** + engine/hesap/**.
+# std::sort_heap in engine/physics/eylem/** + engine/numerics/hesap/**.
 #
 # ADR-0063 §3 deterministic ordering contract. Lights up when eylem v1a o
 # hesap v0a creates the directory.
@@ -13,8 +13,8 @@ repo_root="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 banned='std::(sort|stable_sort|nth_element|partial_sort|push_heap|pop_heap|make_heap|sort_heap)\b'
 
 scopes=(
-    "$repo_root/engine/eylem"
-    "$repo_root/engine/hesap"
+    "$repo_root/engine/physics/eylem"
+    "$repo_root/engine/numerics/hesap"
 )
 
 failures=()
@@ -35,5 +35,5 @@ if [[ ${#failures[@]} -gt 0 ]]; then
     exit 1
 fi
 
-echo "[check_no_std_sort] PASS - no banned std::* sort/heap calls in engine/eylem or engine/hesap"
+echo "[check_no_std_sort] PASS - no banned std::* sort/heap calls in engine/physics/eylem or engine/numerics/hesap"
 exit 0

@@ -3,10 +3,10 @@
 # NumPy is the semantics oracle — inputs + EXPECTED OUTPUT BITS for a set of
 # broadcast/stride-adversarial cases across add/sub/mul/div/min/max, neg/abs,
 # compare(lt), where, and f32<->f64 casts. Emits plain C arrays to
-# tests/hesap-tensor/ref_elementwise.inc (no std containers in refs).
+# tests/numerics/hesap-tensor/ref_elementwise.inc (no std containers in refs).
 import numpy as np
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/ref_elementwise.inc"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_elementwise.inc"
 rng = np.random.default_rng(1407)
 
 lines = [

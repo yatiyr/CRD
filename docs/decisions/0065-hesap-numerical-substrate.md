@@ -59,7 +59,7 @@ IPOPT, OSQP, Stan, JAX) inform algorithm choice — not source code.
 
 ```
 crd-hesap                                ← this ADR locks
-  └─ engine/hesap/
+  └─ engine/numerics/hesap/
        include/crd/hesap/                — public umbrella headers
        src/                               — top-level glue
        sub-modules (each compiles independently, opt-in link):
@@ -789,7 +789,7 @@ ADR-0083 Accepted**).
 **v0f (test + bench infrastructure):**
 
 - **L54 (property-based test framework).** Seeded `RandomMatrix` factory
-  (`tests/hesap-dense/random_matrix.hpp`) is the consolidated source of test
+  (`tests/numerics/hesap-dense/random_matrix.hpp`) is the consolidated source of test
   matrices (general / diag-dominant / SPD / symmetric-indefinite /
   ill-conditioned-SPD); property tests assert each factorisation's defining
   algebraic identity across seeds × sizes. Realises §13 D15's property tier.

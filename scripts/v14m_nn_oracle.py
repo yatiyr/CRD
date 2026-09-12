@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from safetensors.torch import save_file
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/nn_corpus"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/nn_corpus"
 os.makedirs(OUT, exist_ok=True)
 torch.manual_seed(1407)
 

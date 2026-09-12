@@ -49,7 +49,7 @@ That's the whole thing. Everything below is just detail.
 
 ## 2. The pieces, top to bottom
 
-### 2.1 `LogLevel` — `engine/log/include/crd/log/log_level.hpp`
+### 2.1 `LogLevel` — `engine/foundation/log/include/crd/log/log_level.hpp`
 
 A plain `enum class : u8` with seven values:
 
@@ -66,7 +66,7 @@ trivial. They don't allocate, don't throw, don't depend on locale. The short for
 (`TRC`, `DBG`, `INF`, `WRN`, `ERR`, `CRT`) are what shows up in formatted output —
 fixed-width so columns line up.
 
-### 2.2 `Channel` — `engine/log/include/crd/log/log_channel.hpp`
+### 2.2 `Channel` — `engine/foundation/log/include/crd/log/log_channel.hpp`
 
 Three fields. That's it.
 
@@ -123,7 +123,7 @@ Why a linked list and not a `std::vector`? Three reasons:
 once and walk; no locking. The list is append-only, so iteration is safe even if a
 new channel registers while we walk.
 
-### 2.3 `LogRecord` — `engine/log/include/crd/log/log_record.hpp`
+### 2.3 `LogRecord` — `engine/foundation/log/include/crd/log/log_record.hpp`
 
 A POD that bundles "everything we know about one log call":
 
@@ -144,7 +144,7 @@ points into a temporary on the calling thread's stack; in async mode it points i
 `std::string` owned by the queue entry. Sinks that need to remember it (like
 `RingBufferSink`) must copy.
 
-### 2.4 `ISink` — `engine/log/include/crd/log/log_sink.hpp`
+### 2.4 `ISink` — `engine/foundation/log/include/crd/log/log_sink.hpp`
 
 Three virtuals, one byte of state:
 
@@ -166,7 +166,7 @@ protected:
 That `m_min_level` is the second filter, applied per-sink *after* the channel filter.
 This is how you get "console shows Info+, file captures Trace+" with the same logger.
 
-### 2.5 The Logger globals — `engine/log/src/logger.cpp`
+### 2.5 The Logger globals — `engine/foundation/log/src/logger.cpp`
 
 The "logger" is not a class. It's a set of free functions in `crd::log::` that
 manipulate one hidden `LoggerState` struct. Why no class? Because the logger is a
@@ -247,7 +247,7 @@ The two condition variables serve two different audiences: `queue_cv` is for the
 worker to wake up when work arrives, `drain_cv` is for `flush()` callers (and the
 `drop_on_overflow=false` path) to wake up when there's space again.
 
-### 2.6 The macros — `engine/log/include/crd/log/log_macros.hpp`
+### 2.6 The macros — `engine/foundation/log/include/crd/log/log_macros.hpp`
 
 This file is doing more work than it looks like. Strip away the per-level wrappers
 and the core is:
@@ -375,7 +375,7 @@ that's the whole point of a ring buffer.
 This sink will be the source-of-truth for an in-game console overlay later
 (ImGui's debug UI calls `snapshot()` once per frame, renders the records).
 
-### 2.8 The formatter — `engine/log/src/log_formatter.{hpp,cpp}`
+### 2.8 The formatter — `engine/foundation/log/src/log_formatter.{hpp,cpp}`
 
 `format_record` is a private helper used by Console / File / Debugger sinks. It
 produces:
@@ -621,7 +621,7 @@ Things to notice:
 
 ## 10. Tests reference
 
-`tests/log/test_log.cpp` covers:
+`tests/foundation/log/test_log.cpp` covers:
 
 | Test | Verifies |
 |---|---|

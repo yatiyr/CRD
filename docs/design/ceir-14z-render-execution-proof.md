@@ -7,9 +7,9 @@
 test-surface `execute_render_lowered` driving `ICommandEncoder` (as 13z proved compute on `IComputeContext`); real frame-graph
 integration is DEFERRED to CEIR-15/16. ⭐ **14z-3 is the FIRST render pixels from CEIR** (2026-08-11): the shared CEIR
 `render.scope{render.draw}` renders the shared CKIR triangle RED on a blue clear, pixel-asserted on Windows-Vulkan (real GPU),
-Windows-DX12 (real GPU) AND Linux-Vulkan (llvmpipe), validation-SILENT. Files: `tests/gpu-shared/ceir_render_triangle.hpp`
-(the shared builder + the `run_ceir_render` executor wrapper), `tests/ceir-gpu-vulkan/test_ceir_render_vulkan.cpp` (+ the
-device-free lower-shape guard), `tests/ceir-gpu-dx12/test_ceir_render_dx12.cpp`. ⭐ **PIVOT (user verdict 2026-08-11): the executor DRIVES FRAME-RECORDING MODE (gold-standard, no name-forward) — see the 14z-4 sections below.** ✅ **14z-4 (MRT + typed clears) COMPLETE 2026-08-11 (both backends):** 4a frame-recording drive + 2-scope · 4b per-attachment typed clears (`AttachmentClear`) · 4c(c1) CEIR binding resolver + first CEIR MRT · c2 uint MRT (+DX12 uint-clear value-convert fix) · c3 heterogeneous uint@0+float@1 MRT (+DX12 per-attachment RTV-format fix). NEXT = 14z-5 (depth-only). The test-bridge is a reversible proof harness — shipping render stays authored-graph-only. The technical
+Windows-DX12 (real GPU) AND Linux-Vulkan (llvmpipe), validation-SILENT. Files: `tests/gpu/gpu-shared/ceir_render_triangle.hpp`
+(the shared builder + the `run_ceir_render` executor wrapper), `tests/execution/ceir-gpu-vulkan/test_ceir_render_vulkan.cpp` (+ the
+device-free lower-shape guard), `tests/execution/ceir-gpu-dx12/test_ceir_render_dx12.cpp`. ⭐ **PIVOT (user verdict 2026-08-11): the executor DRIVES FRAME-RECORDING MODE (gold-standard, no name-forward) — see the 14z-4 sections below.** ✅ **14z-4 (MRT + typed clears) COMPLETE 2026-08-11 (both backends):** 4a frame-recording drive + 2-scope · 4b per-attachment typed clears (`AttachmentClear`) · 4c(c1) CEIR binding resolver + first CEIR MRT · c2 uint MRT (+DX12 uint-clear value-convert fix) · c3 heterogeneous uint@0+float@1 MRT (+DX12 per-attachment RTV-format fix). NEXT = 14z-5 (depth-only). The test-bridge is a reversible proof harness — shipping render stays authored-graph-only. The technical
 design-lock below (14z-1 materializers → 14z-2 execute_render_lowered → 14z-3..7 per-shape device proofs) is now the ACTIVE
 plan. (14a–14d — scope/attachments, draw ops, indirect/mesh, resource-table semantics — are all device-FREE + closed.) Proof target (§169): triangle · MRT (typed clears per-target) · depth-only · indexed-indirect(-count) ·
 mesh dispatch — pixel-asserted BOTH backends, ValidationCapture-silent.
@@ -72,7 +72,7 @@ leaves the 15/16 direction decision to the user with the evidence those bands pr
 
 The full headless triangle pattern (B3-e, DX12; the Vulkan mirror is the shared CKIR): `gctx = create_{dx12,vulkan}_gpu_context()`
 → `raster = create_{dx12,vulkan}_raster_context()` → the SHARED CKIR triangle `crd::gputest::build_triangle_vs(vg,ve)` +
-`build_triangle_fs(fg,fe)` (`tests/gpu-shared/verb_packet_helpers.hpp`) → `vs = gctx->create_program(vg,ve)` (KIR→DXIL/SPIRV;
+`build_triangle_fs(fg,fe)` (`tests/gpu/gpu-shared/verb_packet_helpers.hpp`) → `vs = gctx->create_program(vg,ve)` (KIR→DXIL/SPIRV;
 nullptr ⇒ WARN-skip when dxc/glslc absent) + `fs = gctx->create_program(fg,fe)` → `program = raster->create_raster_program(*vs,*fs)`
 → `target = raster->create_color_target(dim,dim)`. The encoder lifecycle (from `enc_fullscreen`): `enc = raster->create_command_encoder()`
 → `enc->begin_rendering(RenderingDesc{color[0]={target, LoadOp::Clear, clear}})` → `enc->draw(RasterDrawPacket{program, Draw,
@@ -81,7 +81,7 @@ GeometryKind::None, vertex_count=3})` → `enc->end_rendering()`; then `target->
 target; `load=clear`, `clear_b=1.0` blue) `{ render.draw(3,1) program=@tri }` → `lower_region` → `execute_render_lowered(ctx,
 cmds, *enc, target_resolver→target, program_resolver→program)` → read_pixel. The GeometryKind None-vs-StoragePull refinement
 (0 bindings ⇒ None) landed 2026-08-11 so the procedural triangle materializes as `None` (gated win 522, linux 527). **NEXT-TICK
-WIRING:** a new device test (mirror `tests/ceir-gpu-vulkan`/`-dx12` — links crd-ceir + crd-ceir-gpu + crd-kir + the raster
+WIRING:** a new device test (mirror `tests/execution/ceir-gpu-vulkan`/`-dx12` — links crd-ceir + crd-ceir-gpu + crd-kir + the raster
 context + gputest helpers) on BOTH backends; the target/program resolvers return the real objects; ValidationCapture-silent
 (Vulkan). ⛔ still device-guarded (WARN-skip no adapter / no dxc) + a device-free always-runs guard.
 
@@ -122,7 +122,7 @@ Both backends expose `IRasterContext::create_frame_graph()` (Vulkan REN-1 + DX12
 "DX12 until its port" header comment was STALE; the port shipped). Frame-graph API: `import_target(IRasterTarget&)→FgImage`
 · `import_storage(IStorageBuffer&)→FgBuffer` · `add_pass(name,kind).writes(img).reads(buf).execute(FgExecuteFn,user)` ·
 `build()` · `execute()` (ONE submission; barriers + end-of-frame readback owned by the graph — mirror
-`crd::rendergraph::execute_frame`, `engine/render-graph/src/frame_graph.cpp:1337`). Record fn = `void(IFrameContext&, void*)`;
+`crd::rendergraph::execute_frame`, `engine/rendering/render-graph/src/frame_graph.cpp:1337`). Record fn = `void(IFrameContext&, void*)`;
 inside it `ctx.raster()` is in frame-recording mode, so the RAF-2 command-model encoder's verbs record into the frame.
 
 - **14z-4a — the drive mechanism. ✅ DONE + gated 2026-08-11.** `execute_render_frame(ctx, cmds, IRasterContext&,
@@ -146,7 +146,7 @@ inside it `ctx.raster()` is in frame-recording mode, so the RAF-2 command-model 
   Vulkan body already builds per-attachment `VkRenderingAttachmentInfo`; the DX12 RTV clear is per-attachment too — just wire
   the value). ⛔ VIRTUAL-SIGNATURE change → widen-audit EVERY override + caller: both backend `draw_storage_mrt`,
   `command_lowering.hpp:139/365`, `enc_draw_storage_mrt` (verb_packet_helpers), stub raster contexts in tests
-  (`tests/scene-render/test_scene_render.cpp` has one), AND `crd::rendergraph` pass recording (grep `engine/render-graph` —
+  (`tests/rendering/scene-render/test_scene_render.cpp` has one), AND `crd::rendergraph` pass recording (grep `engine/rendering/render-graph` —
   the RAF-7 MRT gates run through `crd-render-graph-gpu-tests`, a caller outside the obvious list). ⛔ **PIN BEFORE CODING
   (advisor 2026-08-11):** (1) read DX12's `draw_storage_mrt` body too (only Vulkan's read so far — RTV-clear on
   `OMSetRenderTargets` vs `VkRenderingAttachmentInfo`); (2) the ⛔⛔ WBOIT multiplicative-blend IDENTITY-clear special case
@@ -183,7 +183,7 @@ inside it `ctx.raster()` is in frame-recording mode, so the RAF-2 command-model 
   (it feeds `RenderingDesc`) but gets a per-attachment-clear twin so 14z-4b's proofs can author distinct clears.
   **✅ 14z-4b DONE + gated 2026-08-11.** Engine: `ClearKind` moved to raster_context.hpp + `AttachmentClear` struct; both
   backends' `draw_storage_mrt` take `const AttachmentClear*` (per-attachment kind/color/uint/blend) with the WBOIT identity
-  OVERRIDE; `command_lowering.hpp:355` builds the array. PROOF (strengthened the RAF-7 MRT gate, `tests/render-graph/
+  OVERRIDE; `command_lowering.hpp:355` builds the array. PROOF (strengthened the RAF-7 MRT gate, `tests/rendering/render-graph/
   test_frame_graph_gpu.cpp::run_mrt_gpu`, BOTH backends): c0 clears BLUE + c1 clears RED (DISTINCT) — the corners now read
   blue@0 / red@1 (a shared-clear broadcast would match them), while centres stay RED@0/GREEN@1 (behaviour preserved). Gate:
   win-debug raf7 both backends + Vulkan [frame-graph] 52 cases/884 assertions; win-asan raf7 both; linux-gcc-debug/asan raf7

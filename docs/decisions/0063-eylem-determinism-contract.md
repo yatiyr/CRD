@@ -269,7 +269,7 @@ the PR fails before merge with a clear pointer at the violation.
   reviews check for violations.
 - **`.clang-tidy`** root file gains a custom check (or a curated set of
   `readability-identifier-naming` + `cppcoreguidelines-*` rules) that
-  bans `std::sin` etc. in `engine/eylem/**` paths.
+  bans `std::sin` etc. in `engine/physics/eylem/**` paths.
 - **CMake presets** for `crd-eylem` set `-ffp-contract=off` /
   `/fp:precise` explicitly.
 - **CI v9b** runs the 9-config replay-hash matrix. New job in

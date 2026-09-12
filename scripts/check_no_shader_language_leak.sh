@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check_no_shader_language_leak.sh — Linux mirror of check_no_shader_language_leak.ps1 (ADR-0103 invariant I1).
 # A shading language (GLSL/HLSL) and its vendor compiler (shaderc/dxc) live ONLY inside a backend
-# (engine/gpu-context-vulkan). crd-shader must know no language; the deleted crd::shader::compile_* must not reappear.
+# (engine/gpu/gpu-context-vulkan). crd-shader must know no language; the deleted crd::shader::compile_* must not reappear.
 # Scope: I1 (language) only; I2 (rhi bytecode surface) was closed structurally in D-008 C2-d4 by retiring the rhi
 # ShaderModule surface, and is not re-asserted here.
 # I1 FULLY CLOSED (D-008 C2-e): the allowlist is EMPTY — the Effect frontend (engine/shader/src/runtime.cpp) takes an
@@ -26,10 +26,10 @@ for f in "${files[@]}"; do
     [ -n "$transitional" ] && [ "$rel" = "$transitional" ] && continue  # allowlist (empty since D-008 C2-e)
     # C — shaderc/dxc includes only in the Vulkan backend.
     case "$rel" in
-        engine/gpu-context-vulkan/*) : ;;
+        engine/gpu/gpu-context-vulkan/*) : ;;
         *)
             while IFS=: read -r ln _; do
-                [ -n "$ln" ] && emit "${rel}:${ln}: shaderc/dxc include outside engine/gpu-context-vulkan"
+                [ -n "$ln" ] && emit "${rel}:${ln}: shaderc/dxc include outside engine/gpu/gpu-context-vulkan"
             done < <(grep -nE '#[[:space:]]*include[[:space:]]*[<\"](shaderc/|dxc/)' "$f" 2>/dev/null | cut -d: -f1 | sed 's/$/:/')
             ;;
     esac

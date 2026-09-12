@@ -218,13 +218,13 @@ recipe.
 
 ## 8. Where the code lives
 
-- `engine/kir/include/crd/kir/ckir_hair.hpp` — the BCSDF (Marschner/Chiang, + fur medulla, + Huang)
-- `engine/kir/include/crd/kir/ckir_lss.hpp` — the swept-sphere intersector + AABB build
-- `engine/kir/include/crd/kir/ckir_hair_rt.hpp` — the path tracer
-- `engine/kir/include/crd/kir/ckir.hpp` — `TraceRayCurves` + the curve BLAS statement
+- `engine/gpu/kir/include/crd/kir/ckir_hair.hpp` — the BCSDF (Marschner/Chiang, + fur medulla, + Huang)
+- `engine/gpu/kir/include/crd/kir/ckir_lss.hpp` — the swept-sphere intersector + AABB build
+- `engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp` — the path tracer
+- `engine/gpu/kir/include/crd/kir/ckir.hpp` — `TraceRayCurves` + the curve BLAS statement
 - `engine/gpu-context-*/src/*_ray_tracing_context.cpp` — `build_scene_curves` (both backends)
-- `tests/gpu-context-vulkan/hair_swatch.hpp` — the groom generator
-- Gates: `tests/kir/test_ckir_lss.cpp`, `test_ckir_curve_rt.cpp`, `test_ckir_hair*.cpp`
+- `tests/gpu/gpu-context-vulkan/hair_swatch.hpp` — the groom generator
+- Gates: `tests/gpu/kir/test_ckir_lss.cpp`, `test_ckir_curve_rt.cpp`, `test_ckir_hair*.cpp`
 
 ## 9. Papers
 

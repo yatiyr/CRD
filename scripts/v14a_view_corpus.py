@@ -2,7 +2,7 @@ import numpy as np
 
 # The v14-a view-semantics corpus: element strides (numpy strides are BYTES -> divide by itemsize),
 # shapes, contiguity, and flattened element readouts for a set of view compositions on
-# arange(24, dtype=f64).reshape(2,3,4). Baked into tests/hesap-tensor/test_tensor_view.cpp.
+# arange(24, dtype=f64).reshape(2,3,4). Baked into tests/numerics/hesap-tensor/test_tensor_view.cpp.
 
 a = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
 

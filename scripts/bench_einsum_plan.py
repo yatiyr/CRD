@@ -1,7 +1,7 @@
 import re, timeit
 import opt_einsum as oe
 
-inc = open("/mnt/d/Dev/cerid/tests/hesap-tensor/ref_einsum_paths.inc").read()
+inc = open("/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_einsum_paths.inc").read()
 cases = re.findall(r'\{"([^"]+)", "([^"]+)", kEinSizes(\d+), (\d+)U, (\d+)ULL, (\d+)ULL\},', inc)
 sizes_arrays = {int(m.group(1)): [int(x) for x in m.group(2).replace("ULL", "").split(",")]
                 for m in re.finditer(r'kEinSizes(\d+)\[\] = \{([^}]+)\};', inc)}

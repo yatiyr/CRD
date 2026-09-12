@@ -14,7 +14,7 @@ for d in hesap-quadrature hesap-interp hesap-diff hesap-motion; do
         if echo "$code" | grep -qE "\b(throw|try|catch)\b"; then
             hits+="$line"$'\n'
         fi
-    done < <(grep -rnE "\b(throw|try|catch)\b" "$root/engine/$d/include" --include=*.hpp --include=*.cpp 2>/dev/null || true)
+    done < <(grep -rnE "\b(throw|try|catch)\b" "$root/engine/numerics/$d/include" --include=*.hpp --include=*.cpp 2>/dev/null || true)
 done
 if [ -n "$hits" ]; then
     echo "FAIL: exception constructs in v13 hesap headers -- v13 is status-not-exception (ADR-0095 pillar 3):"

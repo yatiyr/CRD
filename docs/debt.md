@@ -208,16 +208,16 @@ move to a session log entry and remove from here.
 ```
 LINK : ... failed (exit code 0) with the following output:
 Kod üretiliyor
-D:\Dev\cerid\engine\config\src\config.cpp(245) : fatal error C1001: İç derleyici hatası.
+D:\Dev\cerid\engine\foundation\config\src\config.cpp(245) : fatal error C1001: İç derleyici hatası.
 (derleyici dosyası 'D:\a\_work\1\s\src\vctools\Compiler\Utc\src\p2\main.cpp', satır 263)
 ... link!DllGetObjHandler()+0x1fe99 ... CloseTypeServerPDB()+0x19fe ...
 Access violation
 ninja: build stopped: subcommand failed.
 ```
 
-**The C1001 is not in our code.** `engine/config/src/config.cpp(245)` is plain `Config::load_from_file()` — pre-existing, unchanged in this slice. The line pointer is just where MSVC's whole-program optimizer happened to access-violate. Standalone retry of `cmake --build --preset win-shipping --target crd-sandbox` linked clean immediately with **no source change**. `win-clang-cl-shipping` (same shipping flags, different compiler) was green on the same sweep.
+**The C1001 is not in our code.** `engine/foundation/config/src/config.cpp(245)` is plain `Config::load_from_file()` — pre-existing, unchanged in this slice. The line pointer is just where MSVC's whole-program optimizer happened to access-violate. Standalone retry of `cmake --build --preset win-shipping --target crd-sandbox` linked clean immediately with **no source change**. `win-clang-cl-shipping` (same shipping flags, different compiler) was green on the same sweep.
 
-**Verdict:** non-deterministic MSVC LTCG internals bug, likely sensitive to the cross-TU template instantiation graph after v1 cluster's additions (new `BvhViewerCache`, `closest_point(Cylinder3)` + `closest_point(Tetrahedron)`, `tests/sandbox/test_showcase.cpp` adds new TU consumers of the same shared headers). One incident is upstream noise — the slice closes per `feedback_transient_msvc_ltcg_ice_accept.md`.
+**Verdict:** non-deterministic MSVC LTCG internals bug, likely sensitive to the cross-TU template instantiation graph after v1 cluster's additions (new `BvhViewerCache`, `closest_point(Cylinder3)` + `closest_point(Tetrahedron)`, `tests/applications/sandbox/test_showcase.cpp` adds new TU consumers of the same shared headers). One incident is upstream noise — the slice closes per `feedback_transient_msvc_ltcg_ice_accept.md`.
 
 **Trigger to investigate:** recurrence on a subsequent sweep, or the same C1001 pointing at the same line range, would promote this from "transient" to "actionable upstream-workaround". Workaround candidates if it recurs:
 1. `CRD_NOINLINE` on a suspected hot function in `config.cpp` or in the v1-cluster headers that LTO'd into sandbox.
@@ -226,8 +226,8 @@ ninja: build stopped: subcommand failed.
 4. Update MSVC toolchain (the canonical fix path but user-action).
 
 **Recurrences (trigger met — now in "watch, workaround if it gets frequent" territory, still non-blocking per policy):**
-- **2026-05-21 (hesap-sparse v1e-2 close):** same C1001 / Access violation in `link!DllGetObjHandler()`, this time on the `tests\sandbox\crd-sandbox-showcase-tests.exe` LTCG **link** (not config.cpp codegen) under `win-release`. 4/5 per-slice configs PASS; standalone `cmake --build --preset win-release` retry linked the same exe clean with no source change, then `ctest --preset win-release` = 2900/2900. So it remains the same non-deterministic LTCG-internals AV in the link phase, not our code. Pattern holds: it lands on whichever sandbox/showcase exe has the largest LTCG link working set. If it recurs again on the *next* sweep, apply workaround candidate 3 (split the showcase test TU) or 4 (toolchain update).
-- **2026-05-21 (hesap-sparse v1f close), SAME exe again:** identical C1001 / `DllGetObjHandler` AV linking `crd-sandbox-showcase-tests.exe` under `win-release`; retry linked clean, `ctest --preset win-release` = 2909/2909. **Two consecutive win-release DoDs now ICE on the same exe → no longer "random noise"; it is reproducibly the largest-LTCG-link target.** ESCALATION: at the v1-close 18-config full sweep, if `crd-sandbox-showcase-tests` (or `crd-sandbox`) ICEs again, **apply workaround 3 (split `tests/sandbox/test_showcase.cpp` into 2–3 TUs to shrink the LTCG link set)** rather than just retrying — the retry tax is now predictable and will recur every sweep. Still non-blocking for the per-slice DoD (retry-PASS), but the workaround is now warranted, not deferred-by-default.
+- **2026-05-21 (hesap-sparse v1e-2 close):** same C1001 / Access violation in `link!DllGetObjHandler()`, this time on the `tests\applications\sandbox\crd-sandbox-showcase-tests.exe` LTCG **link** (not config.cpp codegen) under `win-release`. 4/5 per-slice configs PASS; standalone `cmake --build --preset win-release` retry linked the same exe clean with no source change, then `ctest --preset win-release` = 2900/2900. So it remains the same non-deterministic LTCG-internals AV in the link phase, not our code. Pattern holds: it lands on whichever sandbox/showcase exe has the largest LTCG link working set. If it recurs again on the *next* sweep, apply workaround candidate 3 (split the showcase test TU) or 4 (toolchain update).
+- **2026-05-21 (hesap-sparse v1f close), SAME exe again:** identical C1001 / `DllGetObjHandler` AV linking `crd-sandbox-showcase-tests.exe` under `win-release`; retry linked clean, `ctest --preset win-release` = 2909/2909. **Two consecutive win-release DoDs now ICE on the same exe → no longer "random noise"; it is reproducibly the largest-LTCG-link target.** ESCALATION: at the v1-close 18-config full sweep, if `crd-sandbox-showcase-tests` (or `crd-sandbox`) ICEs again, **apply workaround 3 (split `tests/applications/sandbox/test_showcase.cpp` into 2–3 TUs to shrink the LTCG link set)** rather than just retrying — the retry tax is now predictable and will recur every sweep. Still non-blocking for the per-slice DoD (retry-PASS), but the workaround is now warranted, not deferred-by-default.
 
 **Where referenced:**
 - `docs/sessions/2026-05-13-v1-debts-paid.md` — the sweep transcript, decision to close on retry-success.
@@ -245,7 +245,7 @@ The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slice
 3. **InheritPolicy CoW: dense-buffer optimization** (v1m4b future) — v1m4b's CoW backend wastes `sizeof(component)` bytes per shared slot in the dense buffer (the bytes are unused for shared slots; only used after CoW write-break). For sizeof(component) >> sizeof(pool_idx), this dilutes the memory savings. A future optimization could allocate dense bytes lazily per-slot (e.g., a separate "owned slots only" dense buffer indexed by per-entity offset). Acceptable trade-off at v1m4b — pool-side dedup still gives N→1 sharing across instances, which is the dominant savings axis for the canonical "10k tree forest" workload.
 
 **Where referenced:**
-- `engine/scene/include/crd/scene/obek.hpp` — doc-block at the top of the file points at this debt entry.
+- `engine/world/scene/include/crd/scene/obek.hpp` — doc-block at the top of the file points at this debt entry.
 - `docs/sessions/2026-05-08-scene-v1m5-revert-batch.md` — v1m closure session log.
 - `docs/sessions/2026-05-08-scene-v1m4b-cow-backend.md` — pin #8 about wasted dense-buffer bytes.
 
@@ -292,7 +292,7 @@ The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slice
 5. **`World::mark_all_transforms_dirty()` helper** — convenience for callers loading a SCEN with stale world matrices who want propagation to re-derive. v1l's cooker bakes world matrices into SCEN bytes, so most callers no longer need this; the helper is still reserved if a use case appears.
 
 **Where referenced:**
-- `engine/scene/include/crd/scene/scene_resource.hpp` — doc-block points at this debt entry.
+- `engine/world/scene/include/crd/scene/scene_resource.hpp` — doc-block points at this debt entry.
 - `docs/sessions/2026-05-07-scene-v1k-scene-resource.md` — full session log with the eight decisions.
 - `docs/sessions/2026-05-08-scene-v1l-cooker.md` — cooker session that closed item #1 and repointed #6/#7.
 
@@ -317,8 +317,8 @@ The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slice
 7. **`set_rotation_look_at` direction convention** — current implementation uses (right, up, -forward) columns matching the right-handed convention. Some domains (aerospace yaw-pitch-roll) need (forward, right, up) variants. Reserved as a follow-up trait or alternative API if a domain needs the explicit convention.
 
 **Where referenced:**
-- `engine/scene/include/crd/scene/transform.hpp` — doc-block points at this debt entry for items 2 and 6.
-- `engine/math/include/crd/math/quat.hpp` — `to_trs` doc-block points at item 1.
+- `engine/world/scene/include/crd/scene/transform.hpp` — doc-block points at this debt entry for items 2 and 6.
+- `engine/foundation/math/include/crd/math/quat.hpp` — `to_trs` doc-block points at item 1.
 - `docs/sessions/2026-05-07-scene-v1j-transform-propagation.md` — full session log with the seven decisions.
 
 ---
@@ -334,14 +334,14 @@ The full Öbek system (ADR-0058) shipped across v1m1–v1m5b in twelve sub-slice
 3. **Multi-threaded TLSF.** `IAllocator` base class documents "not thread-safe by default; hand them out per-thread or wrap them yourself" — this is the engine-wide convention. Lock-based TLSF kills the O(1) latency claim; lock-free TLSF is research-tier (Marotta et al. 2018). The standard scaling pattern is per-thread arenas. Don't pick up — this isn't TLSF-specific debt; it's a project architecture decision.
 
 **Where it's referenced:**
-- `engine/memory/src/allocators/tlsf_allocator.cpp` — current implementation comments document each deferred item at the relevant code site.
+- `engine/foundation/memory/src/allocators/tlsf_allocator.cpp` — current implementation comments document each deferred item at the relevant code site.
 - `docs/sessions/2026-05-07-detour-D-001a-tlsf.md` — full design rationale.
 
 ---
 
 ## Long-term deferred
 
-- **Stress `[.soak]` nightly lane** (deferred by detour D-002, 2026-05-12) — `tests/stress/`
+- **Stress `[.soak]` nightly lane** (deferred by detour D-002, 2026-05-12) — `tests/foundation/stress/`
   ships four `[.soak]`-tagged tests (TLSF churn, freeze + parallel_for, `ConcurrentQueue`
   MPMC, `AtomicArray`) with deliberately huge iteration counts (catch a 1-in-10M torn-write
   / false-share that the bounded variants miss). They're Catch-`[.]`-hidden so CI `ctest`

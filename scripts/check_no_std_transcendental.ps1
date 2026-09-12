@@ -1,6 +1,6 @@
 # check_no_std_transcendental.ps1 -- the Cerid Math Mandate guard (Windows; mirror of the .sh). Engine + tool code
 # must use crd::math::* (include <crd/math/cmath.hpp>), never std:: transcendentals -- for cross-platform bit-
-# determinism (the moat) + speed. Exempts engine/math (the kernel + its std:: edge fallbacks); tests/ and
+# determinism (the moat) + speed. Exempts engine/foundation/math (the kernel + its std:: edge fallbacks); tests/ and
 # runtime/examples live outside engine/ and keep std:: deliberately (gold oracles / bench peers).
 # ASCII-only on purpose: Windows PowerShell 5.1 reads no-BOM scripts as the ANSI code page, so non-ASCII breaks it.
 $ErrorActionPreference = "Stop"

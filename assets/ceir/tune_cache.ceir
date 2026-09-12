@@ -1,4 +1,4 @@
-I Dmodule {
+module {
   ^bb0:
     tune.entry() {device = "vk:NVIDIA GeForce RTX 4070 Ti SUPER", env = "win32", fuse = true, program_hash = -4961225458425459157, shape = "mlp:4x8x16x2", share = true}
     tune.entry() {device = "dx12:NVIDIA GeForce RTX 4070 Ti SUPER", env = "win32", fuse = true, program_hash = -4961225458425459157, shape = "mlp:4x8x16x2", share = true}

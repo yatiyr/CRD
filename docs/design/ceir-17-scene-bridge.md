@@ -197,7 +197,7 @@ Each row gates 2 Win (win-debug + win-asan) + 2 Linux (linux-gcc-debug + linux-g
 >   output, externalized on the DrawItem), pointer-equal, EXHAUSTIVE over phases × fallback arms* — 4 items {both twins /
 >   program_depth null / program_velocity null / both null} × 5 phases {opaque, transparent, shadow, depth, velocity} = 20
 >   chains, each `chain(phase).program == the 192-193 twin` + `chain.geometry == storage`. `ceir 17c` in
->   tests/ceir-gpu/test_execute.cpp (extended the 17b TU — no new file, no reconfigure). Gate: ceir-gpu [scene] 73/3 + full
+>   tests/execution/ceir-gpu/test_execute.cpp (extended the 17b TU — no new file, no reconfigure). Gate: ceir-gpu [scene] 73/3 + full
 >   601/38 on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan; tidy clean; frame-cook + scene-render UNTOUCHED (zero
 >   engine source change). ⇒ **CEIR-17c DONE.**
 >

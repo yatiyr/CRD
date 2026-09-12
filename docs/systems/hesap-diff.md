@@ -5,6 +5,6 @@
 
 **Reference pointer; no live status here.** Track slices/findings in [ROADMAP](../ROADMAP.md).
 
-[Module manifest](../../engine/hesap-diff/CMakeLists.txt); [Current module/source map](../systems/README.md).
+[Module manifest](../../engine/numerics/hesap-diff/CMakeLists.txt); [Current module/source map](../systems/README.md).
 Full technical requirements and dated evidence: [preserved reference](../archive/systems/hesap-diff.md).
 Read the master row and current public source before relying on a historical example.

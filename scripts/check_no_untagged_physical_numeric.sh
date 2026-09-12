@@ -13,7 +13,7 @@ if [[ ! -d "$ENGINE_DIR" ]]; then
 fi
 
 # Scope-out patterns
-EXCLUDE_PATTERN='engine/math/src/simd/|engine/math/include/crd/math/simd/|engine/rhi-vulkan/'
+EXCLUDE_PATTERN='engine/foundation/math/src/simd/|engine/foundation/math/include/crd/math/simd/|engine/rhi-vulkan/'
 
 # Physical-quantity field name patterns
 NAME_PATTERN='length|distance|radius|diameter|width|height|depth|mass|weight|velocity|speed|acceleration|force|torque|pressure|energy|power|temperature|duration|voltage|current|resistance|capacitance|inductance|frequency'

@@ -152,9 +152,9 @@ Output: a triangle soup `[pos.xyz · n.xyz] × 3` per triangle, ready to index/w
 
 ## 7. Where the code lives
 
-- `engine/kir/include/crd/kir/ckir_mesh.hpp` — surface-depth, TSDF integrate/finalise, MC count/emit kernels + the
+- `engine/gpu/kir/include/crd/kir/ckir_mesh.hpp` — surface-depth, TSDF integrate/finalise, MC count/emit kernels + the
   `edge_vertex`/`cube_index` helpers.
-- `engine/kir/include/crd/kir/mc_tables.hpp` — the canonical corner/edge/triangle tables (data only).
-- `tests/kir/test_ckir_mesh.cpp` — TSDF gates + the MC count/emit gates (sphere, vs host reference).
-- `tests/gpu-context-vulkan/test_vulkan_gsplat.cpp` — the `[mesh]` Vulkan gates (TSDF + MC == oracle).
+- `engine/gpu/kir/include/crd/kir/mc_tables.hpp` — the canonical corner/edge/triangle tables (data only).
+- `tests/gpu/kir/test_ckir_mesh.cpp` — TSDF gates + the MC count/emit gates (sphere, vs host reference).
+- `tests/gpu/gpu-context-vulkan/test_vulkan_gsplat.cpp` — the `[mesh]` Vulkan gates (TSDF + MC == oracle).
 - Upstream primitive + its recipe: `ckir_gsplat2d.hpp`, `docs/recipes/2026-07-21-2d-gaussian-splatting-surfels.md`.

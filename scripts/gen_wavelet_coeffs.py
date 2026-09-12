@@ -7,7 +7,7 @@ engine matches pywt to machine precision. Plain C arrays (no STL).
 
 Run from repo root:
   python3 scripts/gen_wavelet_coeffs.py > \
-    engine/hesap-wavelet/include/crd/hesap/wavelet/detail/wavelet_coeffs.inc
+    engine/numerics/hesap-wavelet/include/crd/hesap/wavelet/detail/wavelet_coeffs.inc
 """
 import pywt
 

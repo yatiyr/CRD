@@ -5,12 +5,12 @@
 # (std::sqrt is NOT banned — IEEE-754 mandates correctly-rounded single-rounding
 # sqrt everywhere, so it is deterministic.)
 #
-# Scoped to engine/eylem, engine/hesap (ADR-0063), and engine/geometry-primitives
+# Scoped to engine/physics/eylem, engine/numerics/hesap (ADR-0063), and engine/geometry/geometry-primitives
 # (ADR-0076 §4 — crd-geometry inherits the determinism contract). Sub-modules in
-# sibling directories (engine/eylem-rigid3d, engine/geometry-bvh, ...) are added
+# sibling directories (engine/physics/eylem-rigid3d, engine/geometry/geometry-bvh, ...) are added
 # here as they land.
 #
-# Run as a CTest test (registered in tests/math/CMakeLists.txt next to
+# Run as a CTest test (registered in tests/foundation/math/CMakeLists.txt next to
 # the SIMD-emission check) so any CI build catches the regression.
 
 [CmdletBinding()]
@@ -38,12 +38,12 @@ $banned = @(
 ) -join '|'
 
 $scopes = @(
-    "$RepoRoot/engine/eylem",
-    "$RepoRoot/engine/hesap",
-    "$RepoRoot/engine/geometry-primitives",
-    "$RepoRoot/engine/geometry-bvh",
-    "$RepoRoot/engine/geometry-convex",
-    "$RepoRoot/engine/geometry-shader-helpers"
+    "$RepoRoot/engine/physics/eylem",
+    "$RepoRoot/engine/numerics/hesap",
+    "$RepoRoot/engine/geometry/geometry-primitives",
+    "$RepoRoot/engine/geometry/geometry-bvh",
+    "$RepoRoot/engine/geometry/geometry-convex",
+    "$RepoRoot/engine/geometry/geometry-shader-helpers"
 )
 
 $failures = @()
@@ -72,5 +72,5 @@ if ($failures.Count -gt 0)
     exit 1
 }
 
-Write-Host "[check_no_std_math] PASS - no banned std::* math calls in engine/eylem or engine/hesap"
+Write-Host "[check_no_std_math] PASS - no banned std::* math calls in engine/physics/eylem or engine/numerics/hesap"
 exit 0

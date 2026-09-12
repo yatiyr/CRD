@@ -54,9 +54,9 @@ the FS differs per pass; variants are specialized, lowered, and deduped.
 `build_fs_for_pass` is referenced in exactly three files: its own header, and **two test files**.
 
 ```
-engine/kir/include/crd/kir/ckir_cook.hpp
-tests/gpu-shared/ckir_raster_triangle.hpp
-tests/kir/test_ckir_lighting.cpp
+engine/gpu/kir/include/crd/kir/ckir_cook.hpp
+tests/gpu/gpu-shared/ckir_raster_triangle.hpp
+tests/gpu/kir/test_ckir_lighting.cpp
 ```
 
 `scene_renderer.cpp` references it **zero** times. The real renderer **hand-writes** its vertex and fragment
@@ -411,7 +411,7 @@ Emitted both stages with `emit_stage_glsl` and read them:
 Declarations match, the VS writes, the FS consumes. **The defect is not in CKIR or the emitter.** Together with
 the constant-VS probe, that leaves the **shader-object interface/linkage at runtime**.
 
-**Next action (and it is a small, isolated one):** reproduce minimally in `tests/gpu-context-vulkan` — a VS with
+**Next action (and it is a small, isolated one):** reproduce minimally in `tests/gpu/gpu-context-vulkan` — a VS with
 one `vec3` varying, an FS that outputs it as colour, readback. If that reads zero, the bug is in the
 `VK_EXT_shader_object` raster-program path and affects **every** raster program, which would make it the most
 important bug in the engine, not merely in REN-37. If it reads correctly, the difference is the *extra* VS

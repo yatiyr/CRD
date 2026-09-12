@@ -100,7 +100,7 @@ dangerous accept direction.
 ## 3. Consequences
 
 - **The §118 oracle is byte-matched by the compiled tier** across the corpus: `test_plan.cpp` (`[ceir][plan]`) — the
-  SHARED corpus builder (`tests/ceir/corpus.hpp`, the `rich_graph.hpp`/1f precedent, build-once) runs 5 programs (5z the
+  SHARED corpus builder (`tests/execution/ceir/corpus.hpp`, the `rich_graph.hpp`/1f precedent, build-once) runs 5 programs (5z the
   band-5 gate → 118; 6z non-associative map_reduce → 33930; async → 29; the six task ops → 46; composing all-dialects →
   118) through BOTH engines, comparing VALUES + CELLS + MAP_OUTPUTS. ⛔ `build_5z` is REUSED EXACTLY (`test_band5_gate.cpp`
   refactored to consume it — no drift).
@@ -155,7 +155,7 @@ dangerous accept direction.
 ## Gate
 
 The corpus differential + the §121 plan-layer twin + the nested-cf regression (`test_plan.cpp`, `[ceir][plan]`) + the
-SHARED corpus builder (`tests/ceir/corpus.hpp`) + the extracted 5z (`test_band5_gate.cpp`). **436/436 ctest** across
+SHARED corpus builder (`tests/execution/ceir/corpus.hpp`) + the extracted 5z (`test_band5_gate.cpp`). **436/436 ctest** across
 **win-debug + win-asan + linux-gcc-debug + linux-gcc-asan** (the ASan configs the frame-stack / token-store / map-window
 UAF money configs) + LLVM-20 tidy + GCC `-Werror=switch` + opgen drift/validator + `crd-ceir-invariants` (crd-ceir core
 jobs-free + asset-free). Stage progression: 397 → 400 (2) → 403 (3a) → 407 (3b) → 412 (4a) → 421 (4b) → 429 (4c) → 436

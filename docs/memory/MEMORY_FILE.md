@@ -40,7 +40,7 @@ allocator for the job.
 
 ## 2. The four allocators we have today
 
-### 2.1 `MallocAllocator` — `engine/memory/include/crd/memory/allocators/malloc_allocator.hpp`
+### 2.1 `MallocAllocator` — `engine/foundation/memory/include/crd/memory/allocators/malloc_allocator.hpp`
 
 The boring one. Wraps the OS:
 
@@ -524,7 +524,7 @@ Things to notice:
 
 ## 10. Tests reference
 
-`tests/memory/test_memory.cpp` covers:
+`tests/foundation/memory/test_memory.cpp` covers:
 
 | Group | Tests |
 | --- | --- |

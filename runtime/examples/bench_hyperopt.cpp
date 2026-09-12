@@ -10,7 +10,7 @@
 #include <cmath>
 #include <cstdio>
 
-#include "../../tests/hesap-tensor/ref_hyperopt.inc"
+#include "../../tests/numerics/hesap-tensor/ref_hyperopt.inc"
 
 using crd::hesap::tensor::HyperGreedyOptions;
 using crd::hesap::tensor::HyperOptOptions;

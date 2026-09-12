@@ -16,7 +16,7 @@
 #                        left index sets, R2L updates right sets, first core = raw fibers,
 #                        validation-error convergence, max_sweeps bounded)
 # verifies each against tntorch (TT-SVD/round/point-eval/py_maxvol) on frozen problems,
-# and emits tests/hesap-tensor/ref_tt.inc (plain C arrays — the no-std-containers rule).
+# and emits tests/numerics/hesap-tensor/ref_tt.inc (plain C arrays — the no-std-containers rule).
 #
 # Peers: tntorch 1.1.2 (torch-based, py3.12-safe). ttpy: N/A-WITH-CHECK — `pip3 install
 # --break-system-packages ttpy` fails metadata generation on Python 3.12 (its setup.py
@@ -424,10 +424,10 @@ print(f"[ref] tntorch cross: val_err {tnt_cr_err:.3e} evals {info['nsamples']} "
       f"ranks {[int(x) for x in t_cr.ranks_tt[1:-1]]}")
 
 # ===========================================================================
-# emit tests/hesap-tensor/ref_tt.inc
+# emit tests/numerics/hesap-tensor/ref_tt.inc
 # ===========================================================================
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-out_path = os.path.join(root, "tests", "hesap-tensor", "ref_tt.inc")
+out_path = os.path.join(root, "tests", "numerics", "hesap-tensor", "ref_tt.inc")
 
 
 def arr_u64(name, vals):

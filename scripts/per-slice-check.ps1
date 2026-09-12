@@ -7,7 +7,7 @@
 #
 # Guard tests (crd-no-non-ascii-test-names / crd-simd-emission-check /
 # crd-no-std-math-check / crd-no-std-sort-check / future crd-no-untagged-physical-numeric)
-# are registered as separate ctest tests via add_test(NAME ...) in tests/math/CMakeLists.txt
+# are registered as separate ctest tests via add_test(NAME ...) in tests/foundation/math/CMakeLists.txt
 # and do NOT appear in any test binary's --list-tests output. The test binary saying
 # "All tests passed" can coexist with a failing guard test. Both must be green.
 #

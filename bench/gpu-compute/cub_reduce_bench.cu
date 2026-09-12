@@ -1,7 +1,7 @@
 // cub_reduce_bench.cu — B-cmp compute-primitive crush campaign: the VENDOR reduction baseline. CUB `DeviceReduce::Sum` is
 // NVIDIA's production device-wide reduction (the gold every GPU reduce is measured against). A reduction is MEMORY-BOUND — it
 // reads N elements once and emits one scalar — so the metric is achieved DRAM bandwidth (N·4 bytes / time). We compare our
-// portable CKIR 2-pass reduction ([reduce-bench] in tests/gpu-context-vulkan) against this. N chosen > L2 so it is DRAM-bound.
+// portable CKIR 2-pass reduction ([reduce-bench] in tests/gpu/gpu-context-vulkan) against this. N chosen > L2 so it is DRAM-bound.
 // Build: nvcc -O3 -allow-unsupported-compiler -I"...\include\cccl" cub_reduce_bench.cu -o cub_reduce_bench.exe
 
 #include <cuda_runtime.h>

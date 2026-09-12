@@ -192,7 +192,7 @@ the ORDINARY content-hash cache miss the existing mechanism already handles, NOT
 
 ## 6. Test matrix
 
-`tests/ceir/test_transaction.cpp` (`[ceir][transaction]`, ASCII names): commit applies + `touched`/`removed`
+`tests/execution/ceir/test_transaction.cpp` (`[ceir][transaction]`, ASCII names): commit applies + `touched`/`removed`
 correct; **the A/B money test** — a mid-transaction FAILURE (a poisoned edit) rolls back to a byte-identical module
 (`serialize` before == after); commit-verify-failure auto-rollback byte-identity (a duplicate-`sym_name` commit);
 reverse-replay ordering (interleaved erase/insert of adjacent ops, BOTH orders → exact block order restored); the

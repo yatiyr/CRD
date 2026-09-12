@@ -36,8 +36,8 @@ if (-not (Test-Path $engineDir)) {
 # Scope-out directories where raw scalars are intentional (SIMD kernels,
 # RHI raw-buffer upload).
 $excludePatterns = @(
-    '\\engine\\math\\src\\simd\\',
-    '\\engine\\math\\include\\crd\\math\\simd\\',
+    '\\engine\\foundation\\math\\src\\simd\\',
+    '\\engine\\foundation\\math\\include\\crd\\math\\simd\\',
     '\\engine\\rhi-vulkan\\'
 )
 

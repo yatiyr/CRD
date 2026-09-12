@@ -84,6 +84,6 @@ ported scar cases and `transient_physical < transient_logical` on an aliasable m
 `plan_block_memory` when frame compilation moves onto CEIR.
 
 Gate: **460/460 × 4 configs** (win-debug/win-asan/linux-gcc-debug/linux-gcc-asan); opgen drift/validator, LLVM-20 tidy,
-`crd-ceir-invariants`, `-Werror=switch` all clean. Tests: `tests/ceir/test_planner.cpp` (the physical<logical proof; the
+`crd-ceir-invariants`, `-Werror=switch` all clean. Tests: `tests/execution/ceir/test_planner.cpp` (the physical<logical proof; the
 minimal-coloring + consistency invariant; Latency == the un-aliased baseline; every dedicated reason + the history depth;
 bucket isolation + plan determinism).

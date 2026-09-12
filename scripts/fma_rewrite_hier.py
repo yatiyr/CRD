@@ -14,7 +14,7 @@ Transforms the two generated complex-multiply statement shapes into single-round
 
 Shape-STRICT: only full statements matching these exact forms are touched; everything else is left
 byte-identical. Idempotent (rewritten lines no longer match). Run:
-    python3 scripts/fma_rewrite_hier.py engine/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp
+    python3 scripts/fma_rewrite_hier.py engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp
 """
 import re
 import sys

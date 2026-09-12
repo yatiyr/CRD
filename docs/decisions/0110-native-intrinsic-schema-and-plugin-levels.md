@@ -131,4 +131,4 @@ making the level explicit in CR-D007 + code review (an intrinsic PR must justify
   placement (where the schema vs handler live).
 - ADR-0098 — CKIR determinism tiers (the `determinism` field's vocabulary).
 - `docs/design/ceir-0a-execution-path-inventory.md` §8/§10 — the atomic-capability list this ADR classifies.
-- `engine/render-pass/src/executor_registry.cpp` — the `ExecutorRegistry` pattern `IntrinsicRegistry` mirrors.
+- `engine/rendering/render-pass/src/executor_registry.cpp` — the `ExecutorRegistry` pattern `IntrinsicRegistry` mirrors.

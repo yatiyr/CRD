@@ -6,9 +6,9 @@
 # (std::sqrt is NOT banned — IEEE-754 mandates correctly-rounded single-rounding
 # sqrt everywhere, so it is deterministic.)
 #
-# Scoped to engine/eylem, engine/hesap (ADR-0063), and engine/geometry-primitives
+# Scoped to engine/physics/eylem, engine/numerics/hesap (ADR-0063), and engine/geometry/geometry-primitives
 # (ADR-0076 §4 — crd-geometry inherits the determinism contract). Sub-modules in
-# sibling directories (engine/eylem-rigid3d, engine/geometry-bvh, ...) are added
+# sibling directories (engine/physics/eylem-rigid3d, engine/geometry/geometry-bvh, ...) are added
 # here as they land.
 
 set -uo pipefail
@@ -18,12 +18,12 @@ repo_root="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 banned='std::(sin|cos|tan|asin|acos|atan|atan2|exp|exp2|log|log2|log10|pow|fmod)f?\b'
 
 scopes=(
-    "$repo_root/engine/eylem"
-    "$repo_root/engine/hesap"
-    "$repo_root/engine/geometry-primitives"
-    "$repo_root/engine/geometry-bvh"
-    "$repo_root/engine/geometry-convex"
-    "$repo_root/engine/geometry-shader-helpers"
+    "$repo_root/engine/physics/eylem"
+    "$repo_root/engine/numerics/hesap"
+    "$repo_root/engine/geometry/geometry-primitives"
+    "$repo_root/engine/geometry/geometry-bvh"
+    "$repo_root/engine/geometry/geometry-convex"
+    "$repo_root/engine/geometry/geometry-shader-helpers"
 )
 
 failures=()
@@ -45,5 +45,5 @@ if [[ ${#failures[@]} -gt 0 ]]; then
     exit 1
 fi
 
-echo "[check_no_std_math] PASS - no banned std::* math calls in engine/eylem or engine/hesap"
+echo "[check_no_std_math] PASS - no banned std::* math calls in engine/physics/eylem or engine/numerics/hesap"
 exit 0

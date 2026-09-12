@@ -66,7 +66,7 @@ maths.
      while the camera is still; a history-clamp handles motion. This recipe DEMONSTRATES it: `rt_1frame.bmp` (one
      1-spp frame, noisy) vs `rt_accum.bmp` (96 frames accumulated, clean) — the same result a denoiser produces
      instantly.
-   - **Spatial (SVGF à-trous)**: `engine/kir/include/crd/kir/ckir_svgf.hpp` (B14). The engine's own board measures
+   - **Spatial (SVGF à-trous)**: `engine/gpu/kir/include/crd/kir/ckir_svgf.hpp` (B14). The engine's own board measures
      the à-trous pass at **0.236 ms / 1080p** (`docs/bench/2026-07-15-gi-atmosphere-vulkan.md`) — negligible next
      to the 29 ms trace. Edge-stopping on depth/normal/luminance keeps the fibre detail.
    - **ReSTIR** (`ckir_restir.hpp`, B14) reuses light samples spatiotemporally — a further variance cut for the
@@ -151,10 +151,10 @@ Honest status (2026-07-21):
 
 ## 7. Where the code lives
 
-- `engine/kir/include/crd/kir/ckir_hair_rt.hpp` — the trace kernel (set `bounces=1`, short shadow for real-time)
-- `engine/kir/include/crd/kir/ckir_hair_scatter.hpp` — DOM build/lookup + dual scattering (B18-c)
-- `engine/kir/include/crd/kir/ckir_svgf.hpp`, `ckir_restir.hpp` — the denoisers (B14)
-- `tests/gpu-context-vulkan/test_vulkan_hair_swatch_rt.cpp` — `kRealtime` mode + `kPerfSweep` lever measurement
+- `engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp` — the trace kernel (set `bounces=1`, short shadow for real-time)
+- `engine/gpu/kir/include/crd/kir/ckir_hair_scatter.hpp` — DOM build/lookup + dual scattering (B18-c)
+- `engine/gpu/kir/include/crd/kir/ckir_svgf.hpp`, `ckir_restir.hpp` — the denoisers (B14)
+- `tests/gpu/gpu-context-vulkan/test_vulkan_hair_swatch_rt.cpp` — `kRealtime` mode + `kPerfSweep` lever measurement
 - Board: `docs/bench/2026-07-20-hair-rt-swatch-perf.md`
 
 ## 8. Papers (additional to the offline recipe)

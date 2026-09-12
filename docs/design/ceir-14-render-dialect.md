@@ -139,6 +139,6 @@ rebuild all 3 GPU test targets on BOTH OSes — the harness header changes) + �
 ## DoD / mechanics (each slice)
 
 opgen `--check` + validator (`test_opgen.py` gains render entries) after generating · new test sources listed
-explicitly in `tests/ceir/CMakeLists.txt` · ASCII test names · LLVM-20 tidy per touched file · GCC `-Werror=switch` ·
+explicitly in `tests/execution/ceir/CMakeLists.txt` · ASCII test names · LLVM-20 tidy per touched file · GCC `-Werror=switch` ·
 `crd-ceir-invariants` (I3/I4/I5 — crd-ceir core stays host-only/jobs-free/asset-free; the lowering + tests are the
 bridge/test side) · the 4-config gate (win-debug + win-asan + linux-gcc-debug + linux-gcc-asan).

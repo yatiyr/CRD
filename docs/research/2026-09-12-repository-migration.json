@@ -1,0 +1,450 @@
+{
+  "date": "2026-09-12",
+  "baseline_commit": "bc8fc1f51226166e539cb8c8f93b1dd829d343ef",
+  "note": "Historical path migration, not live status. Public includes, targets and binary directories remain stable. Live rows: REPO.1..3 and REPO in docs/ROADMAP.md.",
+  "directory_moves": {
+    "engine/anim": "engine/world/anim",
+    "engine/app": "engine/foundation/app",
+    "engine/asset-io": "engine/assets/asset-io",
+    "engine/audio": "engine/media/audio",
+    "engine/ceir": "engine/execution/ceir",
+    "engine/ceir-cook": "engine/execution/ceir-cook",
+    "engine/ceir-gpu": "engine/execution/ceir-gpu",
+    "engine/ceir-host": "engine/execution/ceir-host",
+    "engine/chir": "engine/execution/chir",
+    "engine/config": "engine/foundation/config",
+    "engine/containers": "engine/foundation/containers",
+    "engine/core": "engine/foundation/core",
+    "engine/draw": "engine/rendering/draw",
+    "engine/draw-imgui": "engine/rendering/draw-imgui",
+    "engine/eylem": "engine/physics/eylem",
+    "engine/eylem-rigid3d": "engine/physics/eylem-rigid3d",
+    "engine/eylem-viz": "engine/physics/eylem-viz",
+    "engine/frame-cook": "engine/assets/frame-cook",
+    "engine/geometry-bvh": "engine/geometry/geometry-bvh",
+    "engine/geometry-bvh-gpu": "engine/geometry/geometry-bvh-gpu",
+    "engine/geometry-convex": "engine/geometry/geometry-convex",
+    "engine/geometry-curves": "engine/geometry/geometry-curves",
+    "engine/geometry-decomposition": "engine/geometry/geometry-decomposition",
+    "engine/geometry-delaunay": "engine/geometry/geometry-delaunay",
+    "engine/geometry-mesh": "engine/geometry/geometry-mesh",
+    "engine/geometry-mesh-processing": "engine/geometry/geometry-mesh-processing",
+    "engine/geometry-polygon": "engine/geometry/geometry-polygon",
+    "engine/geometry-primitives": "engine/geometry/geometry-primitives",
+    "engine/geometry-shader-helpers": "engine/geometry/geometry-shader-helpers",
+    "engine/geometry-spatial": "engine/geometry/geometry-spatial",
+    "engine/geometry-viz": "engine/geometry/geometry-viz",
+    "engine/gpu-context": "engine/gpu/gpu-context",
+    "engine/gpu-context-cuda": "engine/gpu/gpu-context-cuda",
+    "engine/gpu-context-dx12": "engine/gpu/gpu-context-dx12",
+    "engine/gpu-context-vulkan": "engine/gpu/gpu-context-vulkan",
+    "engine/hesap": "engine/numerics/hesap",
+    "engine/hesap-amg": "engine/numerics/hesap-amg",
+    "engine/hesap-autodiff": "engine/numerics/hesap-autodiff",
+    "engine/hesap-comms": "engine/numerics/hesap-comms",
+    "engine/hesap-dense": "engine/numerics/hesap-dense",
+    "engine/hesap-diff": "engine/numerics/hesap-diff",
+    "engine/hesap-direct": "engine/numerics/hesap-direct",
+    "engine/hesap-dsp": "engine/numerics/hesap-dsp",
+    "engine/hesap-eigen": "engine/numerics/hesap-eigen",
+    "engine/hesap-fft": "engine/numerics/hesap-fft",
+    "engine/hesap-interp": "engine/numerics/hesap-interp",
+    "engine/hesap-iterative": "engine/numerics/hesap-iterative",
+    "engine/hesap-motion": "engine/numerics/hesap-motion",
+    "engine/hesap-ode": "engine/numerics/hesap-ode",
+    "engine/hesap-opt": "engine/numerics/hesap-opt",
+    "engine/hesap-ordering": "engine/numerics/hesap-ordering",
+    "engine/hesap-preconditioners": "engine/numerics/hesap-preconditioners",
+    "engine/hesap-quadrature": "engine/numerics/hesap-quadrature",
+    "engine/hesap-resources": "engine/numerics/hesap-resources",
+    "engine/hesap-sched": "engine/numerics/hesap-sched",
+    "engine/hesap-sparse": "engine/numerics/hesap-sparse",
+    "engine/hesap-special": "engine/numerics/hesap-special",
+    "engine/hesap-stats": "engine/numerics/hesap-stats",
+    "engine/hesap-tensor": "engine/numerics/hesap-tensor",
+    "engine/hesap-wavelet": "engine/numerics/hesap-wavelet",
+    "engine/imgui": "engine/ui/imgui",
+    "engine/jobs": "engine/foundation/jobs",
+    "engine/kir": "engine/gpu/kir",
+    "engine/kir-cuda": "engine/gpu/kir-cuda",
+    "engine/kir-dx12": "engine/gpu/kir-dx12",
+    "engine/kir-hip": "engine/gpu/kir-hip",
+    "engine/kir-metal": "engine/gpu/kir-metal",
+    "engine/kir-vulkan": "engine/gpu/kir-vulkan",
+    "engine/kir-webgpu": "engine/gpu/kir-webgpu",
+    "engine/light-cook": "engine/assets/light-cook",
+    "engine/lod": "engine/geometry/lod",
+    "engine/log": "engine/foundation/log",
+    "engine/material-cook": "engine/assets/material-cook",
+    "engine/math": "engine/foundation/math",
+    "engine/memory": "engine/foundation/memory",
+    "engine/meshgen": "engine/geometry/meshgen",
+    "engine/perf": "engine/foundation/perf",
+    "engine/perf-ui": "engine/ui/perf-ui",
+    "engine/platform": "engine/foundation/platform",
+    "engine/preset": "engine/assets/preset",
+    "engine/profile": "engine/foundation/profile",
+    "engine/render-asset-core": "engine/rendering/render-asset-core",
+    "engine/render-graph": "engine/rendering/render-graph",
+    "engine/render-material": "engine/rendering/render-material",
+    "engine/render-pass": "engine/rendering/render-pass",
+    "engine/render-program": "engine/rendering/render-program",
+    "engine/resources": "engine/assets/resources",
+    "engine/scene": "engine/world/scene",
+    "engine/scene-render": "engine/rendering/scene-render",
+    "engine/shader-cook": "engine/assets/shader-cook",
+    "engine/technique-cook": "engine/assets/technique-cook",
+    "engine/time": "engine/foundation/time",
+    "engine/timeline": "engine/world/timeline",
+    "engine/units": "engine/foundation/units",
+    "engine/vertex-cook": "engine/assets/vertex-cook",
+    "engine/vm": "engine/foundation/vm",
+    "tests/anim": "tests/world/anim",
+    "tests/app": "tests/foundation/app",
+    "tests/asset-io": "tests/assets/asset-io",
+    "tests/audio": "tests/media/audio",
+    "tests/ceir": "tests/execution/ceir",
+    "tests/ceir-cook": "tests/execution/ceir-cook",
+    "tests/ceir-gpu": "tests/execution/ceir-gpu",
+    "tests/ceir-gpu-cuda": "tests/execution/ceir-gpu-cuda",
+    "tests/ceir-gpu-dx12": "tests/execution/ceir-gpu-dx12",
+    "tests/ceir-gpu-vulkan": "tests/execution/ceir-gpu-vulkan",
+    "tests/ceir-host": "tests/execution/ceir-host",
+    "tests/ceridc": "tests/tools/ceridc",
+    "tests/chir": "tests/execution/chir",
+    "tests/config": "tests/foundation/config",
+    "tests/containers": "tests/foundation/containers",
+    "tests/cooker": "tests/assets/cooker",
+    "tests/core": "tests/foundation/core",
+    "tests/draw": "tests/rendering/draw",
+    "tests/eylem": "tests/physics/eylem",
+    "tests/eylem-rigid3d": "tests/physics/eylem-rigid3d",
+    "tests/eylem-viz": "tests/physics/eylem-viz",
+    "tests/frame-cook": "tests/assets/frame-cook",
+    "tests/geometry-bvh": "tests/geometry/geometry-bvh",
+    "tests/geometry-bvh-gpu": "tests/geometry/geometry-bvh-gpu",
+    "tests/geometry-convex": "tests/geometry/geometry-convex",
+    "tests/geometry-curves": "tests/geometry/geometry-curves",
+    "tests/geometry-decomposition": "tests/geometry/geometry-decomposition",
+    "tests/geometry-delaunay": "tests/geometry/geometry-delaunay",
+    "tests/geometry-mesh": "tests/geometry/geometry-mesh",
+    "tests/geometry-mesh-processing": "tests/geometry/geometry-mesh-processing",
+    "tests/geometry-polygon": "tests/geometry/geometry-polygon",
+    "tests/geometry-primitives": "tests/geometry/geometry-primitives",
+    "tests/geometry-shader-helpers": "tests/geometry/geometry-shader-helpers",
+    "tests/geometry-spatial": "tests/geometry/geometry-spatial",
+    "tests/geometry-viz": "tests/geometry/geometry-viz",
+    "tests/gpu-context": "tests/gpu/gpu-context",
+    "tests/gpu-context-cuda": "tests/gpu/gpu-context-cuda",
+    "tests/gpu-context-dx12": "tests/gpu/gpu-context-dx12",
+    "tests/gpu-context-vulkan": "tests/gpu/gpu-context-vulkan",
+    "tests/gpu-shared": "tests/gpu/gpu-shared",
+    "tests/hesap": "tests/numerics/hesap",
+    "tests/hesap-amg": "tests/numerics/hesap-amg",
+    "tests/hesap-autodiff": "tests/numerics/hesap-autodiff",
+    "tests/hesap-comms": "tests/numerics/hesap-comms",
+    "tests/hesap-dense": "tests/numerics/hesap-dense",
+    "tests/hesap-diff": "tests/numerics/hesap-diff",
+    "tests/hesap-direct": "tests/numerics/hesap-direct",
+    "tests/hesap-dsp": "tests/numerics/hesap-dsp",
+    "tests/hesap-eigen": "tests/numerics/hesap-eigen",
+    "tests/hesap-fft": "tests/numerics/hesap-fft",
+    "tests/hesap-interp": "tests/numerics/hesap-interp",
+    "tests/hesap-iterative": "tests/numerics/hesap-iterative",
+    "tests/hesap-motion": "tests/numerics/hesap-motion",
+    "tests/hesap-ode": "tests/numerics/hesap-ode",
+    "tests/hesap-opt": "tests/numerics/hesap-opt",
+    "tests/hesap-ordering": "tests/numerics/hesap-ordering",
+    "tests/hesap-quadrature": "tests/numerics/hesap-quadrature",
+    "tests/hesap-resources": "tests/numerics/hesap-resources",
+    "tests/hesap-sched": "tests/numerics/hesap-sched",
+    "tests/hesap-sparse": "tests/numerics/hesap-sparse",
+    "tests/hesap-special": "tests/numerics/hesap-special",
+    "tests/hesap-stats": "tests/numerics/hesap-stats",
+    "tests/hesap-tensor": "tests/numerics/hesap-tensor",
+    "tests/hesap-wavelet": "tests/numerics/hesap-wavelet",
+    "tests/imgui": "tests/ui/imgui",
+    "tests/jobs": "tests/foundation/jobs",
+    "tests/kir": "tests/gpu/kir",
+    "tests/kir-cuda": "tests/gpu/kir-cuda",
+    "tests/kir-dx12": "tests/gpu/kir-dx12",
+    "tests/kir-hip": "tests/gpu/kir-hip",
+    "tests/kir-metal": "tests/gpu/kir-metal",
+    "tests/kir-vulkan": "tests/gpu/kir-vulkan",
+    "tests/kir-webgpu": "tests/gpu/kir-webgpu",
+    "tests/light-cook": "tests/assets/light-cook",
+    "tests/lod": "tests/geometry/lod",
+    "tests/log": "tests/foundation/log",
+    "tests/material-cook": "tests/assets/material-cook",
+    "tests/math": "tests/foundation/math",
+    "tests/memory": "tests/foundation/memory",
+    "tests/meshgen": "tests/geometry/meshgen",
+    "tests/perf": "tests/foundation/perf",
+    "tests/perf-ui": "tests/ui/perf-ui",
+    "tests/platform": "tests/foundation/platform",
+    "tests/preset": "tests/assets/preset",
+    "tests/profile": "tests/foundation/profile",
+    "tests/render-asset-core": "tests/rendering/render-asset-core",
+    "tests/render-graph": "tests/rendering/render-graph",
+    "tests/render-material": "tests/rendering/render-material",
+    "tests/render-pass": "tests/rendering/render-pass",
+    "tests/render-program": "tests/rendering/render-program",
+    "tests/resources": "tests/assets/resources",
+    "tests/sandbox": "tests/applications/sandbox",
+    "tests/scene": "tests/world/scene",
+    "tests/scene-render": "tests/rendering/scene-render",
+    "tests/scene_cooker": "tests/assets/scene_cooker",
+    "tests/stress": "tests/foundation/stress",
+    "tests/technique-cook": "tests/assets/technique-cook",
+    "tests/test_helpers": "tests/support/test_helpers",
+    "tests/time": "tests/foundation/time",
+    "tests/timeline": "tests/world/timeline",
+    "tests/units": "tests/foundation/units",
+    "tests/vertex-cook": "tests/assets/vertex-cook",
+    "tests/vm": "tests/foundation/vm"
+  },
+  "deleted_scratch": [
+    "scratch_head.txt",
+    "scratch_body.txt",
+    "scratch_tail.txt"
+  ],
+  "recovered_artifacts": [
+    {
+      "sha256": "7C56EE14A21510FD756125B5297714C19BABB2295F8754CB900D7E3F46FAC1DD",
+      "path": "a.exe",
+      "bytes": 2143232
+    },
+    {
+      "sha256": "7804FBA359A8137391BB159B4EE921FFAC7E41CAEC1DF218C9F9E84A3CB8942A",
+      "path": "a.pdb",
+      "bytes": 14036992
+    },
+    {
+      "sha256": "80BBC1A1965FA596B17A170970DED4BD05D49ABBD90027987505DBE91B7B96BE",
+      "path": "coopmat_bench.obj",
+      "bytes": 94486
+    },
+    {
+      "sha256": "79541F234D11FFBBF0B3D31ECABFA40F498F49530F27AAE4DD5D7FCDEFAC0676",
+      "path": "build_err.log",
+      "bytes": 422
+    },
+    {
+      "sha256": "3C73260F26698B8E0FD383911F82800EC532661548A9310A823A37ECECFFAA98",
+      "path": "imgui.ini",
+      "bytes": 717
+    },
+    {
+      "sha256": "A4635F9BFD0732ED1C0C618811913640B5E804B14F071777072A2F183D95730A",
+      "path": "sr_ts_mtl.crdr",
+      "bytes": 392
+    },
+    {
+      "sha256": "B9A2CC5753145703313F06CD1A8016120D56E3C941B89B5DDA2D3BF91372FEB6",
+      "path": "sr_ts_quad.crdr",
+      "bytes": 544
+    },
+    {
+      "sha256": "DB2524AE89233608CB2FA67262A2747D88C1142958838BEC05A124FBDE1335C7",
+      "path": "sr_ts_tex.crdr",
+      "bytes": 280
+    },
+    {
+      "sha256": "80DB01EB7BEFCC7D795005BC98D7449B756DCEA96170362C786DEE2A2136E81F",
+      "path": "test_cook_0ddfd002-adfe-4e17-bb41-34b45dc5a64b.tga",
+      "bytes": 82
+    },
+    {
+      "sha256": "80DB01EB7BEFCC7D795005BC98D7449B756DCEA96170362C786DEE2A2136E81F",
+      "path": "test_cook_96d4e76a-af7a-4d4e-8c2d-bffa016f6c22.tga",
+      "bytes": 82
+    },
+    {
+      "sha256": "E215CFA56AEF7B07F828161BA885B1CC4C5B4B93CF36D1C863BB4A5782964BCD",
+      "path": "test_cook_9942902c-b0c3-4809-bd23-da150ee6daba.glb",
+      "bytes": 940
+    },
+    {
+      "sha256": "C9C78478C97187BEFDF0F3ADB7BADC50183CD029BCEA359BE766DDCA0D5080FE",
+      "path": "Testing\\Temporary\\CTestCostData.txt",
+      "bytes": 5
+    },
+    {
+      "sha256": "390F2665E2A4E9032B3B3E035062C8157D114F3E2B8287E295E9863CB838448F",
+      "path": "Testing\\Temporary\\LastTest.log",
+      "bytes": 162
+    },
+    {
+      "sha256": "5ACE1F9D726BE8326919E41A560E440A67EE91A912A7108548ED1E4D323B9335",
+      "path": "crashes\\crash_20260728_052920.dmp",
+      "bytes": 38473376
+    },
+    {
+      "sha256": "DB10A6DA64B84200264DB7B7219FF0F9D1ECDFB044B56B7756D0D12CF926C2F9",
+      "path": "crashes\\crash_20260728_052929.dmp",
+      "bytes": 38475856
+    },
+    {
+      "sha256": "BD6B893E54245810018DA76D076D22C29F697596741A3F33487BF44C8D77DB26",
+      "path": "crashes\\crash_20260728_052937.dmp",
+      "bytes": 38476288
+    },
+    {
+      "sha256": "116DC17462D72689B90594546BB697D5597E46839234B7BBA5C2060EB1DA84A8",
+      "path": "crashes\\crash_20260728_052947.dmp",
+      "bytes": 38474848
+    },
+    {
+      "sha256": "DAA824774B6120A8DA5C113E820F327E5B171488E1162B563E21F5B1E6CC809A",
+      "path": "crashes\\crash_20260729_132435.dmp",
+      "bytes": 11891644
+    },
+    {
+      "sha256": "3B98A822E237A96A9C43D6DD96F333467FD074737BCDF41CEFE456111126EB34",
+      "path": "crashes\\crash_20260729_190408.dmp",
+      "bytes": 12676282
+    },
+    {
+      "sha256": "FBB6D1E39A7F81EB2628CDF1367EF9ED030EF2E3C3A43F667DF15F5127C96E8F",
+      "path": "crashes\\crash_20260729_190430.dmp",
+      "bytes": 12672384
+    },
+    {
+      "sha256": "340E72A0215129F3236BB09C2A73BF39732FC1020A220B82E4B50D32A778BBF3",
+      "path": "crashes\\crash_20260802_160048.dmp",
+      "bytes": 13115454
+    },
+    {
+      "sha256": "CAD2835D9974DF0B2298DAD0C764936B5F24E9B2A2B9773A13A530851CD46301",
+      "path": "crashes\\crash_20260802_233502.dmp",
+      "bytes": 34235785
+    },
+    {
+      "sha256": "D97AFC906D216236FE0A1D1036B8FB6125BA94E2935FDFFD2175620A0DF8D384",
+      "path": "crashes\\crash_20260802_233622.dmp",
+      "bytes": 34239607
+    },
+    {
+      "sha256": "D5872234D44F5DC3B1DC058EE45DA5B68701A4EE839E25783035FDA3DD3F4FD9",
+      "path": "__pycache__\\edit.cpython-314.pyc",
+      "bytes": 1938
+    },
+    {
+      "sha256": "7600FB71395AAA5B21D52448D3AABB36557CFB323CFCBECD097A1A0C416719CD",
+      "path": "scripts\\debt-tmp.bat",
+      "bytes": 557
+    },
+    {
+      "sha256": "DF5FDCB1416FC6691FBC6C16A95B5006ECC687690C05BC5C874E6852D35CCB02",
+      "path": "scripts\\draw-d0-build-tmp.bat",
+      "bytes": 434
+    },
+    {
+      "sha256": "F3E2DC65715CA2FA7D9CDE78E10FE00391AA7C649F2727541FDDEC594D6F132F",
+      "path": "scripts\\draw-d0-c1-tmp.bat",
+      "bytes": 447
+    },
+    {
+      "sha256": "27B786838D07441DC9FF99C3513AD1F78C96804BF9FE22E71C1A30A69972B738",
+      "path": "scripts\\eylem-build-tmp.bat",
+      "bytes": 444
+    },
+    {
+      "sha256": "3829A425C70F1F077497335F3E0D9A71AB47B329A6666B40BB7AC7F0E362FD38",
+      "path": "scripts\\sandbox-smoke-build-tmp.bat",
+      "bytes": 367
+    },
+    {
+      "sha256": "78CF33C78C4B885DBC254D74B1A541985077238C405F806ADAC10597698DEE95",
+      "path": "scripts\\win-sweep-tmp.bat",
+      "bytes": 334
+    },
+    {
+      "sha256": "8304FA683BB640EE27E1EBB132E0EDBC514E2F7FA43D018C29F4F4BF369D010D",
+      "path": "scripts\\win-sweep-tmp.ps1",
+      "bytes": 965
+    },
+    {
+      "sha256": "7CDA7B20DC1039F7DCA0A9BE1F5BF147723BCB183398233797127E7922CD6DED",
+      "path": "scripts\\.fix-min-max-brace-init.ps1",
+      "bytes": 1703
+    },
+    {
+      "sha256": "A6644B3A0509E67F7F0F6FD049A03A11B9383B4370F239007E3E7EE5A41E44C4",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\d4_reverse.crdr",
+      "bytes": 3000
+    },
+    {
+      "sha256": "859DE22C7F075F747EF0F0AE7F22430EE228EA0C822C10D9296FC76E22855CA8",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\reverse.kgph",
+      "bytes": 1334
+    },
+    {
+      "sha256": "E195BABCB419855E0F53E5D0FED3DD5739D377517D49409996FD1618893B4A0E",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\cook-cache\\33f238a5-5842-5497-951e-9fffd262aa7b_0000001f.crdr",
+      "bytes": 8648
+    },
+    {
+      "sha256": "63004A7331233079D6C7EA931DC32E209AF7BA4F1881E38EC7F69F11955A3966",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\cook-parallel\\688830c6-3087-5062-a7b6-9ee9206285c6_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "3FEDA10DB5B5F6AB9C1891D20EE12453707D6A4F232BE884ABD89D3E29FA0AEC",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\cook-parallel\\80b791a3-8c6e-5dae-9f27-956c07c3ce98_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "63004A7331233079D6C7EA931DC32E209AF7BA4F1881E38EC7F69F11955A3966",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\cook-serial\\688830c6-3087-5062-a7b6-9ee9206285c6_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "3FEDA10DB5B5F6AB9C1891D20EE12453707D6A4F232BE884ABD89D3E29FA0AEC",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\cook-serial\\80b791a3-8c6e-5dae-9f27-956c07c3ce98_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "D4BC85A7E3B7D3A3626C247731EC8F8FE8E2B5DA0FD499438B34362DD0E06F17",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\material-cache\\bc9dc0cf-aec0-5ef4-9bf8-6389ddd2e83b_00000001.crdr",
+      "bytes": 7480
+    },
+    {
+      "sha256": "456B5A656A8119F6EEAFC8D994E8CB6A68C60A542674B523E513B0438C3FE9F7",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\material-cache\\c41e24cd-f72b-540f-a863-91ad9a8f8405_00000001.crdr",
+      "bytes": 7320
+    },
+    {
+      "sha256": "63004A7331233079D6C7EA931DC32E209AF7BA4F1881E38EC7F69F11955A3966",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\uber-cache\\688830c6-3087-5062-a7b6-9ee9206285c6_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "3FEDA10DB5B5F6AB9C1891D20EE12453707D6A4F232BE884ABD89D3E29FA0AEC",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\uber-cache\\80b791a3-8c6e-5dae-9f27-956c07c3ce98_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "63004A7331233079D6C7EA931DC32E209AF7BA4F1881E38EC7F69F11955A3966",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\variant-cache\\688830c6-3087-5062-a7b6-9ee9206285c6_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "3FEDA10DB5B5F6AB9C1891D20EE12453707D6A4F232BE884ABD89D3E29FA0AEC",
+      "path": "C\\Users\\abici\\AppData\\Local\\Temp\\claude\\D--Dev-cerid\\b0138d6a-548b-428b-87b2-fe30c9f36f7c\\scratchpad\\variant-cache\\80b791a3-8c6e-5dae-9f27-956c07c3ce98_00000001.crdr",
+      "bytes": 2472
+    },
+    {
+      "sha256": "BAD6F08F6283D1306F48AA14E24BDEDDBEDDE5C3189F1C84E84500EAFB306679",
+      "path": "DDevceridbuilddod_full.log",
+      "bytes": 370259
+    }
+  ],
+  "recovery_directory": "build/repo-cleanup-20260912/recovered",
+  "baseline_backup": "build/repo-cleanup-20260912/before.zip",
+  "local_reference_moves": {
+    "docs/books": "external/research-papers/docs-books",
+    "scripts/.shewchuk-predicates.c": "bench/reference/shewchuk-predicates.c",
+    "scripts/.tidy-rename-helper.ps1": "scripts/tidy-rename-helper.ps1"
+  }
+}

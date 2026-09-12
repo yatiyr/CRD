@@ -92,8 +92,8 @@ Checks: >
 # contract). `std::numbers::*` values are implementation-defined within 1 ULP
 # and load through compiler-specific code paths that defeat the bit-identical
 # guarantee. The hand-tuned Cephes literals in
-# `engine/math/src/deterministic.cpp` and the explicit `kPiD` in
-# `engine/units/src/unit_preferences.cpp` are intentional, not accidental
+# `engine/foundation/math/src/deterministic.cpp` and the explicit `kPiD` in
+# `engine/foundation/units/src/unit_preferences.cpp` are intentional, not accidental
 # "magic numbers."
 WarningsAsErrors: '*'
 
@@ -124,8 +124,6 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.ProtectedMemberPrefix
     value: 'm_'
-  - key: readability-identifier-naming.ConstantCase
-    value: lower_case
   - key: readability-identifier-naming.LocalConstexprVariableCase
     value: CamelCase
   - key: readability-identifier-naming.LocalConstexprVariablePrefix

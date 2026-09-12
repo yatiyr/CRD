@@ -435,7 +435,7 @@ scene → snapshot hash matches across MSVC / clang / gcc × x64 / ARM
 
 Per the research dossier §6, calibrated against published Niagara,
 PhysX, and Box2D v3 numbers. CI assertions in
-`tests/eylem-rigid3d/bench_filter.cpp` shipped with v1d.
+`tests/physics/eylem-rigid3d/bench_filter.cpp` shipped with v1d.
 
 | Workload | Budget |
 |---|---|

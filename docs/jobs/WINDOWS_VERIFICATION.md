@@ -23,7 +23,7 @@ record the results in the session log.
 
 ## Why a Windows check matters here
 
-- `engine/jobs/CMakeLists.txt` still pins `worker_pool.cpp` + `fiber_init.cpp` to `/Od` on MSVC
+- `engine/foundation/jobs/CMakeLists.txt` still pins `worker_pool.cpp` + `fiber_init.cpp` to `/Od` on MSVC
   (was the original masking of bug #1). The source fix makes that unnecessary; once Windows is
   green you can delete that `if(MSVC) set_source_files_properties(... /Od /Y- ...)` block — but
   **only after** running the sweep below with it removed too.
@@ -71,11 +71,11 @@ All from `D:\Dev\cerid` in PowerShell 7 (`$env:VULKAN_SDK` set as usual):
    interesting check is *after* you remove the `/Od` (step 4).
 
 4. **(Optional follow-up) Remove the MSVC `/Od` and re-verify.** Delete the `if(MSVC) ... /Od ...`
-   block in `engine/jobs/CMakeLists.txt`, then redo steps 1–3. If everything stays green, that
+   block in `engine/foundation/jobs/CMakeLists.txt`, then redo steps 1–3. If everything stays green, that
    block is gone for good; if anything regresses, restore it and note it in `docs/debt.md`.
 
 ## Record the result
 
 Append to `docs/sessions/2026-05-12-jobs-fiber-tls-hoist-fix.md` (the "Verification" section has a
 `<fill in exact counts>` placeholder for the Linux sweep too) and, if the `/Od` removal in step 4
-sticks, update the comment in `engine/jobs/CMakeLists.txt` and the note in `docs/debt.md`.
+sticks, update the comment in `engine/foundation/jobs/CMakeLists.txt` and the note in `docs/debt.md`.

@@ -89,12 +89,12 @@ CEIR/CKIR and authored render graphs. Historical contracts retain unique require
 **A04 — RAH-1 parent scope was understated.** `command_model.hpp` retains fixed color/binding arrays, combined depth
 description and legacy G-buffer pointer. Float/Uint clear migration is a subset of the full signed/unsigned/float,
 view/subresource, depth/stencil, resolve and multiview requirements. Owner: RAH-1 and its visible children.
-Evidence: [command model](../../engine/gpu-context/include/crd/gpu/command_model.hpp), [RAH-0 note](../systems/rah-0-canonical-model-audit.md).
+Evidence: [command model](../../engine/gpu/gpu-context/include/crd/gpu/command_model.hpp), [RAH-0 note](../systems/rah-0-canonical-model-audit.md).
 
 <a id="finding-a05"></a>
 **A05 — Resource planning is not resident binding implementation.** CEIR-12d/14d analysis and structural tests do
 not replace provider-managed descriptor lifetimes. `ResourceBinding` still has small pointer arrays and
-[BindingKind](../../engine/render-asset-core/include/crd/renderasset/binding.hpp) has six kinds. Owner: RAH-2.
+[BindingKind](../../engine/rendering/render-asset-core/include/crd/renderasset/binding.hpp) has six kinds. Owner: RAH-2.
 
 <a id="finding-a06"></a>
 **A06 — Untyped geometry and RT/transfer special cases remain.** The canonical model still contains `native_args`,
@@ -103,7 +103,7 @@ contracts are not implied by one working draw or ray-tracing demo. Owner: RAH-3/
 
 <a id="finding-a07"></a>
 **A07 — Reload is not yet generic and granular.** The manifest replaced one imperative list, but
-[scene_renderer.cpp](../../engine/scene-render/src/scene_renderer.cpp) retains `CookTag`, per-technique loaders,
+[scene_renderer.cpp](../../engine/rendering/scene-render/src/scene_renderer.cpp) retains `CookTag`, per-technique loaders,
 `retire_all_programs`, `prepare_reinit` and `rebuild_programs`. Owner: RAH-7. CEIR-34's recorded closure remains valid
 for its scope; it did not claim this complete registry refactor.
 
@@ -114,7 +114,7 @@ backend compile/allocation/link proof. This is a source-observed risk, not a rep
 
 <a id="finding-a09"></a>
 **A09 — Reload service ownership and GPU retirement need completion proofs.**
-[reload.hpp](../../engine/scene-render/src/reload.hpp) lives privately in scene-render and includes a frame-count
+[reload.hpp](../../engine/rendering/scene-render/src/reload.hpp) lives privately in scene-render and includes a frame-count
 retirement queue. UI should consume a shared service without a 3D dependency. Multiple queues/windows need explicit
 completion ownership. Owner: RAH-7.a/b/d.
 
@@ -139,7 +139,7 @@ Evidence: [35 close](../sessions/2026-09-11-ceir-35z-band-close.md), [decisions]
 **A13 — CHIR-0 is not full application programming.** The prototype has no complete type system; `parallel_for`
 does not yield a CEIR result and some feedback resolves to a constant. Multi-handler state and realistic app events
 need work. The text/graph parity and identity/reload proof is valuable but not a complete behaviour language.
-Owner: LANG. Evidence: [lowering](../../engine/chir/src/lower.cpp), [32 close](../sessions/2026-09-06-ceir-32z-band-close.md), ADR-0128.
+Owner: LANG. Evidence: [lowering](../../engine/execution/chir/src/lower.cpp), [32 close](../sessions/2026-09-06-ceir-32z-band-close.md), ADR-0128.
 
 <a id="finding-a14"></a>
 **A14 — UI rendering proof is not a UI framework.** CEIR-31's frosted-glass fixture uses full backdrop copy and a
@@ -148,14 +148,14 @@ Owner: I2D-1/3/7. Evidence: [31 close](../sessions/2026-09-06-ceir-31z-band-clos
 
 <a id="finding-a15"></a>
 **A15 — Input readiness is incomplete, propagation already exists.**
-[platform input](../../engine/platform/include/crd/platform/input.hpp) supplies a limited key/mouse queue.
-[application.cpp](../../engine/app/src/application.cpp) already supplies handled event propagation. Extend these;
+[platform input](../../engine/foundation/platform/include/crd/platform/input.hpp) supplies a limited key/mouse queue.
+[application.cpp](../../engine/foundation/app/src/application.cpp) already supplies handled event propagation. Extend these;
 do not build a duplicate event bus. Text/IME, pointer/touch/pen/gamepad, clipboard/drop and DPI/native accessibility
 require their own public contracts. Owner: INPUT/WINDOW/I2D-8.
 
 <a id="finding-a16"></a>
 **A16 — Command and reflection coverage is partial.**
-[hesap registry](../../engine/hesap/include/crd/hesap/cli/command_registry.hpp) and
+[hesap registry](../../engine/numerics/hesap/include/crd/hesap/cli/command_registry.hpp) and
 [ceridc MCP](../../tools/ceridc/src/mcp.cpp) exist. They do not constitute a full shared command/transaction/reflection
 platform. The old platform plan incorrectly reserved ADR-0084, already used for matrix resources. Owner: REFLECT/CMD/DOC.
 
@@ -184,7 +184,7 @@ legal clearance from them. Owner: MED-REVIEW. Media implementation remains after
 <a id="finding-a21"></a>
 **A21 — Audio CEIR migration is incomplete beyond the proof.** The acyclic CEIR audio proof compares with the kept
 audio graph; feedback execution and full real-time/device deployment are separate. Linux audio and PLG-1…6 remain
-tracked. Owner: AUDIO-CEIR/PLG. Evidence: CEIR-31 close and [audio sources](../../engine/audio/src/audio_graph.cpp).
+tracked. Owner: AUDIO-CEIR/PLG. Evidence: CEIR-31 close and [audio sources](../../engine/media/audio/src/audio_graph.cpp).
 
 <a id="finding-a22"></a>
 **A22 — Stale overview/maturity claims.** The systems index simultaneously said CEIR had no overview and linked
@@ -206,13 +206,13 @@ as successes. Owner: DEBT rows; unrelated code remains untouched.
 The containers comment discusses breaking a direct containers→log link, but the indirect cycle remains in the
 declarations. Static libraries being linkable would not make the one-way-module principle true. This report makes
 no claim of a build failure. Record the ownership problem and resolve it at the authorized foundation slice.
-Evidence: [memory](../../engine/memory/CMakeLists.txt), [log](../../engine/log/CMakeLists.txt),
-[containers](../../engine/containers/CMakeLists.txt), [vm](../../engine/vm/CMakeLists.txt). Owner: FOUNDATION-AUDIT.
+Evidence: [memory](../../engine/foundation/memory/CMakeLists.txt), [log](../../engine/foundation/log/CMakeLists.txt),
+[containers](../../engine/foundation/containers/CMakeLists.txt), [vm](../../engine/foundation/vm/CMakeLists.txt). Owner: FOUNDATION-AUDIT.
 
 <a id="finding-a25"></a>
 **A25 — Generic draw still couples to Vulkan.**
-[draw CMake](../../engine/draw/CMakeLists.txt) publicly links gpu-context-vulkan and
-[renderer.cpp](../../engine/draw/src/renderer.cpp) includes its concrete header; the public constructor now accepts
+[draw CMake](../../engine/rendering/draw/CMakeLists.txt) publicly links gpu-context-vulkan and
+[renderer.cpp](../../engine/rendering/draw/src/renderer.cpp) includes its concrete header; the public constructor now accepts
 the generic `IGpuContext`. Recheck actual uses before removing the edge. This is a modularity concern, not a claim
 that DX12 drawing fails. Owner: RAH-DRAW.
 
@@ -300,99 +300,99 @@ manifest and public source for implementation work.
 
 | Module | Declared Cerid dependencies | Public headers / source TUs | Tests |
 |---|---|---:|---|
-| [anim](../../engine/anim/CMakeLists.txt) | containers, core, hesap-interp, math, memory, resources | 2 / 2 | Present |
-| [app](../../engine/app/CMakeLists.txt) | containers, core, jobs, platform | 10 / 3 | Present |
-| [asset-io](../../engine/asset-io/CMakeLists.txt) | containers, core, geometry-bvh, geometry-mesh, geometry-primitives, math, memory, time, units | 12 / 11 | Present |
-| [audio](../../engine/audio/CMakeLists.txt) | ceir, containers, core, hesap-dsp, hesap-interp, jobs, memory, resources, time | 10 / 9 | Present |
-| [ceir](../../engine/ceir/CMakeLists.txt) | containers, core, log, memory, units | 50 / 28 | Present |
-| [ceir-cook](../../engine/ceir-cook/CMakeLists.txt) | ceir, containers, core, memory, render-asset-core, resources | 4 / 4 | Present |
-| [ceir-gpu](../../engine/ceir-gpu/CMakeLists.txt) | ceir, containers, core, gpu-context, kir, memory | 14 / 13 | Present |
-| [ceir-host](../../engine/ceir-host/CMakeLists.txt) | ceir, containers, core, jobs, memory, perf, time | 2 / 2 | Present |
-| [chir](../../engine/chir/CMakeLists.txt) | ceir, containers, core, log, memory, units | 4 / 4 | Present |
-| [config](../../engine/config/CMakeLists.txt) | containers, core, log, math, platform | 3 / 3 | Present |
-| [containers](../../engine/containers/CMakeLists.txt) | core, memory | 17 / 2 | Present |
-| [core](../../engine/core/CMakeLists.txt) | — | 6 / 3 | Present |
-| [draw](../../engine/draw/CMakeLists.txt) | containers, core, gpu-context, gpu-context-vulkan, kir, log, material-cook, math, memory, scene, vertex-cook | 15 / 9 | Present |
-| [draw-imgui](../../engine/draw-imgui/CMakeLists.txt) | core, draw, imgui | 1 / 1 | No sibling CMake |
-| [eylem](../../engine/eylem/CMakeLists.txt) | containers, core, math, memory | 13 / 3 | Present |
-| [eylem-rigid3d](../../engine/eylem-rigid3d/CMakeLists.txt) | containers, core, eylem, log, math, memory, scene | 5 / 4 | Present |
-| [eylem-viz](../../engine/eylem-viz/CMakeLists.txt) | core, draw, eylem, eylem-rigid3d, math, scene | 1 / 1 | Present |
-| [frame-cook](../../engine/frame-cook/CMakeLists.txt) | ceir, ceir-gpu, containers, core, gpu-context, log, memory, render-asset-core, render-graph, render-pass | 6 / 8 | Present |
-| [geometry-bvh](../../engine/geometry-bvh/CMakeLists.txt) | containers, core, geometry-primitives, jobs, math | 11 / 8 | Present |
-| [geometry-bvh-gpu](../../engine/geometry-bvh-gpu/CMakeLists.txt) | containers, core, geometry-bvh, geometry-primitives, gpu-context, jobs, math, memory, units | 8 / 8 | Present |
-| [geometry-convex](../../engine/geometry-convex/CMakeLists.txt) | containers, core, geometry-primitives, math, memory | 13 / 3 | Present |
-| [geometry-curves](../../engine/geometry-curves/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 15 / 2 | Present |
-| [geometry-decomposition](../../engine/geometry-decomposition/CMakeLists.txt) | containers, core, geometry-convex, geometry-mesh, geometry-primitives, jobs, math, memory, units | 4 / 4 | Present |
-| [geometry-delaunay](../../engine/geometry-delaunay/CMakeLists.txt) | containers, core, geometry-polygon, geometry-primitives, math, memory, units | 11 / 10 | Present |
-| [geometry-mesh](../../engine/geometry-mesh/CMakeLists.txt) | containers, core, geometry-bvh, geometry-primitives, math, memory, units | 9 / 6 | Present |
-| [geometry-mesh-processing](../../engine/geometry-mesh-processing/CMakeLists.txt) | containers, core, geometry-bvh, geometry-mesh, geometry-polygon, geometry-primitives, math, memory, units | 18 / 15 | Present |
-| [geometry-polygon](../../engine/geometry-polygon/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 8 / 5 | Present |
-| [geometry-primitives](../../engine/geometry-primitives/CMakeLists.txt) | containers, core, math | 20 / 4 | Present |
-| [geometry-shader-helpers](../../engine/geometry-shader-helpers/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, platform | 7 / 7 | Present |
-| [geometry-spatial](../../engine/geometry-spatial/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 15 / 8 | Present |
-| [geometry-viz](../../engine/geometry-viz/CMakeLists.txt) | containers, core, draw, geometry-bvh, geometry-curves, geometry-primitives, math | 5 / 4 | Present |
-| [gpu-context](../../engine/gpu-context/CMakeLists.txt) | containers, core, render-asset-core | 8 / 2 | Present |
-| [gpu-context-cuda](../../engine/gpu-context-cuda/CMakeLists.txt) | containers, core, gpu-context, memory | 1 / 1 | Present |
-| [gpu-context-dx12](../../engine/gpu-context-dx12/CMakeLists.txt) | containers, core, gpu-context, kir, memory | 5 / 5 | Present |
-| [gpu-context-vulkan](../../engine/gpu-context-vulkan/CMakeLists.txt) | containers, core, gpu-context, kir, memory, platform | 8 / 9 | Present |
-| [hesap](../../engine/hesap/CMakeLists.txt) | containers, core, math, memory | 11 / 4 | Present |
-| [hesap-amg](../../engine/hesap-amg/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-preconditioners, hesap-sparse, math, memory | 8 / 2 | Present |
-| [hesap-autodiff](../../engine/hesap-autodiff/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 36 / 2 | Present |
-| [hesap-comms](../../engine/hesap-comms/CMakeLists.txt) | containers, core, hesap, hesap-dsp, hesap-fft, hesap-stats, math, memory | 11 / 2 | Present |
-| [hesap-dense](../../engine/hesap-dense/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 48 / 25 | Present |
-| [hesap-diff](../../engine/hesap-diff/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-fft, math, memory | 6 / 2 | Present |
-| [hesap-direct](../../engine/hesap-direct/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-iterative, hesap-ordering, hesap-sched, hesap-sparse, jobs, math, memory | 21 / 13 | Present |
-| [hesap-dsp](../../engine/hesap-dsp/CMakeLists.txt) | containers, core, hesap, hesap-eigen, hesap-fft, hesap-special, jobs, math, memory, units | 30 / 2 | Present |
-| [hesap-eigen](../../engine/hesap-eigen/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-direct, hesap-iterative, hesap-sparse, jobs, math, memory | 12 / 2 | Present |
-| [hesap-fft](../../engine/hesap-fft/CMakeLists.txt) | containers, core, hesap, math, memory | 13 / 2 | Present |
-| [hesap-interp](../../engine/hesap-interp/CMakeLists.txt) | containers, core, geometry-delaunay, hesap, hesap-dense, hesap-fft, math, memory | 13 / 2 | Present |
-| [hesap-iterative](../../engine/hesap-iterative/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-sparse, math, memory | 19 / 1 | Present |
-| [hesap-motion](../../engine/hesap-motion/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-special, math, memory | 10 / 2 | Present |
-| [hesap-ode](../../engine/hesap-ode/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-direct, hesap-iterative, hesap-sparse, memory | 26 / 2 | Present |
-| [hesap-opt](../../engine/hesap-opt/CMakeLists.txt) | containers, core, hesap, hesap-autodiff, hesap-dense, hesap-sparse, hesap-stats, jobs, math, memory | 49 / 2 | Present |
-| [hesap-ordering](../../engine/hesap-ordering/CMakeLists.txt) | containers, core, hesap, hesap-sparse, memory | 9 / 9 | Present |
-| [hesap-preconditioners](../../engine/hesap-preconditioners/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-iterative, hesap-ordering, hesap-sparse, math, memory | 19 / 1 | No sibling CMake |
-| [hesap-quadrature](../../engine/hesap-quadrature/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-special, memory | 16 / 2 | Present |
-| [hesap-resources](../../engine/hesap-resources/CMakeLists.txt) | containers, core, hesap, hesap-sparse, math, memory, resources | 4 / 2 | Present |
-| [hesap-sched](../../engine/hesap-sched/CMakeLists.txt) | containers, core, hesap, jobs, memory | 2 / 1 | Present |
-| [hesap-sparse](../../engine/hesap-sparse/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 29 / 2 | Present |
-| [hesap-special](../../engine/hesap-special/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 19 / 2 | Present |
-| [hesap-stats](../../engine/hesap-stats/CMakeLists.txt) | containers, core, hesap-dense, hesap-quadrature, hesap-special, jobs, memory | 33 / 2 | Present |
-| [hesap-tensor](../../engine/hesap-tensor/CMakeLists.txt) | containers, core, jobs, math, memory, platform | 20 / 3 | Present |
-| [hesap-wavelet](../../engine/hesap-wavelet/CMakeLists.txt) | containers, core, hesap, hesap-fft, jobs, math, memory | 11 / 2 | Present |
-| [imgui](../../engine/imgui/CMakeLists.txt) | config, gpu-context, gpu-context-dx12, gpu-context-vulkan, log, platform, units | 5 / 3 | Present |
-| [jobs](../../engine/jobs/CMakeLists.txt) | containers, core | 4 / 9 | Present |
-| [kir](../../engine/kir/CMakeLists.txt) | containers, core, math, memory | 59 / 1 | Present |
-| [kir-cuda](../../engine/kir-cuda/CMakeLists.txt) | containers, core, kir, memory | 2 / 2 | Present |
-| [kir-dx12](../../engine/kir-dx12/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
-| [kir-hip](../../engine/kir-hip/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
-| [kir-metal](../../engine/kir-metal/CMakeLists.txt) | containers, core, kir, memory | 1 / 0 | Present |
-| [kir-vulkan](../../engine/kir-vulkan/CMakeLists.txt) | containers, core, gpu-context, gpu-context-vulkan, kir, memory | 1 / 1 | Present |
-| [kir-webgpu](../../engine/kir-webgpu/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
-| [light-cook](../../engine/light-cook/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
-| [lod](../../engine/lod/CMakeLists.txt) | containers, core, geometry-mesh-processing, math, memory, resources | 3 / 3 | Present |
-| [log](../../engine/log/CMakeLists.txt) | containers, core | 12 / 10 | Present |
-| [material-cook](../../engine/material-cook/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
-| [math](../../engine/math/CMakeLists.txt) | core, units | 31 / 2 | Present |
-| [memory](../../engine/memory/CMakeLists.txt) | core, log, vm | 21 / 13 | Present |
-| [meshgen](../../engine/meshgen/CMakeLists.txt) | core, math, memory, resources | 1 / 1 | Present |
-| [perf](../../engine/perf/CMakeLists.txt) | containers, core, jobs, memory, time | 13 / 5 | Present |
-| [perf-ui](../../engine/perf-ui/CMakeLists.txt) | core, imgui, memory, perf | 5 / 3 | Present |
-| [platform](../../engine/platform/CMakeLists.txt) | containers, core, jobs, log, memory, time | 10 / 9 | Present |
-| [preset](../../engine/preset/CMakeLists.txt) | containers, core, memory, resources | 10 / 4 | Present |
-| [profile](../../engine/profile/CMakeLists.txt) | containers, core, memory, resources | 8 / 3 | Present |
-| [render-asset-core](../../engine/render-asset-core/CMakeLists.txt) | containers, core, memory | 7 / 6 | Present |
-| [render-graph](../../engine/render-graph/CMakeLists.txt) | ceir-gpu, containers, core, gpu-context, memory, render-asset-core, render-pass | 1 / 1 | Present |
-| [render-material](../../engine/render-material/CMakeLists.txt) | containers, core, memory, render-asset-core, render-program | 1 / 1 | Present |
-| [render-pass](../../engine/render-pass/CMakeLists.txt) | containers, core, memory, render-asset-core | 1 / 1 | Present |
-| [render-program](../../engine/render-program/CMakeLists.txt) | containers, core, memory, render-asset-core | 1 / 1 | Present |
-| [resources](../../engine/resources/CMakeLists.txt) | containers, core, jobs, log, memory, platform | 22 / 20 | Present |
-| [scene](../../engine/scene/CMakeLists.txt) | containers, core, geometry-primitives, geometry-spatial, math, memory, resources | 30 / 18 | Present |
-| [scene-render](../../engine/scene-render/CMakeLists.txt) | anim, containers, core, frame-cook, geometry-primitives, gpu-context, kir, light-cook, lod, log, material-cook, math, memory, render-asset-core, resources, scene, vertex-cook | 2 / 3 | Present |
-| [shader-cook](../../engine/shader-cook/CMakeLists.txt) | containers, core, gpu-context, gpu-context-dx12, gpu-context-vulkan, jobs, kir, memory, platform, resources | 4 / 3 | No sibling CMake |
-| [technique-cook](../../engine/technique-cook/CMakeLists.txt) | containers, core, frame-cook, kir, memory | 1 / 1 | Present |
-| [time](../../engine/time/CMakeLists.txt) | core, units | 11 / 4 | Present |
-| [timeline](../../engine/timeline/CMakeLists.txt) | containers, core, hesap-interp, memory, resources, time | 3 / 3 | Present |
-| [units](../../engine/units/CMakeLists.txt) | containers, core, memory | 13 / 2 | Present |
-| [vertex-cook](../../engine/vertex-cook/CMakeLists.txt) | containers, core, kir, material-cook, memory | 1 / 1 | Present |
-| [vm](../../engine/vm/CMakeLists.txt) | core, log | 2 / 2 | Present |
+| [anim](../../engine/world/anim/CMakeLists.txt) | containers, core, hesap-interp, math, memory, resources | 2 / 2 | Present |
+| [app](../../engine/foundation/app/CMakeLists.txt) | containers, core, jobs, platform | 10 / 3 | Present |
+| [asset-io](../../engine/assets/asset-io/CMakeLists.txt) | containers, core, geometry-bvh, geometry-mesh, geometry-primitives, math, memory, time, units | 12 / 11 | Present |
+| [audio](../../engine/media/audio/CMakeLists.txt) | ceir, containers, core, hesap-dsp, hesap-interp, jobs, memory, resources, time | 10 / 9 | Present |
+| [ceir](../../engine/execution/ceir/CMakeLists.txt) | containers, core, log, memory, units | 50 / 28 | Present |
+| [ceir-cook](../../engine/execution/ceir-cook/CMakeLists.txt) | ceir, containers, core, memory, render-asset-core, resources | 4 / 4 | Present |
+| [ceir-gpu](../../engine/execution/ceir-gpu/CMakeLists.txt) | ceir, containers, core, gpu-context, kir, memory | 14 / 13 | Present |
+| [ceir-host](../../engine/execution/ceir-host/CMakeLists.txt) | ceir, containers, core, jobs, memory, perf, time | 2 / 2 | Present |
+| [chir](../../engine/execution/chir/CMakeLists.txt) | ceir, containers, core, log, memory, units | 4 / 4 | Present |
+| [config](../../engine/foundation/config/CMakeLists.txt) | containers, core, log, math, platform | 3 / 3 | Present |
+| [containers](../../engine/foundation/containers/CMakeLists.txt) | core, memory | 17 / 2 | Present |
+| [core](../../engine/foundation/core/CMakeLists.txt) | — | 6 / 3 | Present |
+| [draw](../../engine/rendering/draw/CMakeLists.txt) | containers, core, gpu-context, gpu-context-vulkan, kir, log, material-cook, math, memory, scene, vertex-cook | 15 / 9 | Present |
+| [draw-imgui](../../engine/rendering/draw-imgui/CMakeLists.txt) | core, draw, imgui | 1 / 1 | No sibling CMake |
+| [eylem](../../engine/physics/eylem/CMakeLists.txt) | containers, core, math, memory | 13 / 3 | Present |
+| [eylem-rigid3d](../../engine/physics/eylem-rigid3d/CMakeLists.txt) | containers, core, eylem, log, math, memory, scene | 5 / 4 | Present |
+| [eylem-viz](../../engine/physics/eylem-viz/CMakeLists.txt) | core, draw, eylem, eylem-rigid3d, math, scene | 1 / 1 | Present |
+| [frame-cook](../../engine/assets/frame-cook/CMakeLists.txt) | ceir, ceir-gpu, containers, core, gpu-context, log, memory, render-asset-core, render-graph, render-pass | 6 / 8 | Present |
+| [geometry-bvh](../../engine/geometry/geometry-bvh/CMakeLists.txt) | containers, core, geometry-primitives, jobs, math | 11 / 8 | Present |
+| [geometry-bvh-gpu](../../engine/geometry/geometry-bvh-gpu/CMakeLists.txt) | containers, core, geometry-bvh, geometry-primitives, gpu-context, jobs, math, memory, units | 8 / 8 | Present |
+| [geometry-convex](../../engine/geometry/geometry-convex/CMakeLists.txt) | containers, core, geometry-primitives, math, memory | 13 / 3 | Present |
+| [geometry-curves](../../engine/geometry/geometry-curves/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 15 / 2 | Present |
+| [geometry-decomposition](../../engine/geometry/geometry-decomposition/CMakeLists.txt) | containers, core, geometry-convex, geometry-mesh, geometry-primitives, jobs, math, memory, units | 4 / 4 | Present |
+| [geometry-delaunay](../../engine/geometry/geometry-delaunay/CMakeLists.txt) | containers, core, geometry-polygon, geometry-primitives, math, memory, units | 11 / 10 | Present |
+| [geometry-mesh](../../engine/geometry/geometry-mesh/CMakeLists.txt) | containers, core, geometry-bvh, geometry-primitives, math, memory, units | 9 / 6 | Present |
+| [geometry-mesh-processing](../../engine/geometry/geometry-mesh-processing/CMakeLists.txt) | containers, core, geometry-bvh, geometry-mesh, geometry-polygon, geometry-primitives, math, memory, units | 18 / 15 | Present |
+| [geometry-polygon](../../engine/geometry/geometry-polygon/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 8 / 5 | Present |
+| [geometry-primitives](../../engine/geometry/geometry-primitives/CMakeLists.txt) | containers, core, math | 20 / 4 | Present |
+| [geometry-shader-helpers](../../engine/geometry/geometry-shader-helpers/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, platform | 7 / 7 | Present |
+| [geometry-spatial](../../engine/geometry/geometry-spatial/CMakeLists.txt) | containers, core, geometry-primitives, math, memory, units | 15 / 8 | Present |
+| [geometry-viz](../../engine/geometry/geometry-viz/CMakeLists.txt) | containers, core, draw, geometry-bvh, geometry-curves, geometry-primitives, math | 5 / 4 | Present |
+| [gpu-context](../../engine/gpu/gpu-context/CMakeLists.txt) | containers, core, render-asset-core | 8 / 2 | Present |
+| [gpu-context-cuda](../../engine/gpu/gpu-context-cuda/CMakeLists.txt) | containers, core, gpu-context, memory | 1 / 1 | Present |
+| [gpu-context-dx12](../../engine/gpu/gpu-context-dx12/CMakeLists.txt) | containers, core, gpu-context, kir, memory | 5 / 5 | Present |
+| [gpu-context-vulkan](../../engine/gpu/gpu-context-vulkan/CMakeLists.txt) | containers, core, gpu-context, kir, memory, platform | 8 / 9 | Present |
+| [hesap](../../engine/numerics/hesap/CMakeLists.txt) | containers, core, math, memory | 11 / 4 | Present |
+| [hesap-amg](../../engine/numerics/hesap-amg/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-preconditioners, hesap-sparse, math, memory | 8 / 2 | Present |
+| [hesap-autodiff](../../engine/numerics/hesap-autodiff/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 36 / 2 | Present |
+| [hesap-comms](../../engine/numerics/hesap-comms/CMakeLists.txt) | containers, core, hesap, hesap-dsp, hesap-fft, hesap-stats, math, memory | 11 / 2 | Present |
+| [hesap-dense](../../engine/numerics/hesap-dense/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 48 / 25 | Present |
+| [hesap-diff](../../engine/numerics/hesap-diff/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-fft, math, memory | 6 / 2 | Present |
+| [hesap-direct](../../engine/numerics/hesap-direct/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-iterative, hesap-ordering, hesap-sched, hesap-sparse, jobs, math, memory | 21 / 13 | Present |
+| [hesap-dsp](../../engine/numerics/hesap-dsp/CMakeLists.txt) | containers, core, hesap, hesap-eigen, hesap-fft, hesap-special, jobs, math, memory, units | 30 / 2 | Present |
+| [hesap-eigen](../../engine/numerics/hesap-eigen/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-direct, hesap-iterative, hesap-sparse, jobs, math, memory | 12 / 2 | Present |
+| [hesap-fft](../../engine/numerics/hesap-fft/CMakeLists.txt) | containers, core, hesap, math, memory | 13 / 2 | Present |
+| [hesap-interp](../../engine/numerics/hesap-interp/CMakeLists.txt) | containers, core, geometry-delaunay, hesap, hesap-dense, hesap-fft, math, memory | 13 / 2 | Present |
+| [hesap-iterative](../../engine/numerics/hesap-iterative/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-sparse, math, memory | 19 / 1 | Present |
+| [hesap-motion](../../engine/numerics/hesap-motion/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-special, math, memory | 10 / 2 | Present |
+| [hesap-ode](../../engine/numerics/hesap-ode/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-direct, hesap-iterative, hesap-sparse, memory | 26 / 2 | Present |
+| [hesap-opt](../../engine/numerics/hesap-opt/CMakeLists.txt) | containers, core, hesap, hesap-autodiff, hesap-dense, hesap-sparse, hesap-stats, jobs, math, memory | 49 / 2 | Present |
+| [hesap-ordering](../../engine/numerics/hesap-ordering/CMakeLists.txt) | containers, core, hesap, hesap-sparse, memory | 9 / 9 | Present |
+| [hesap-preconditioners](../../engine/numerics/hesap-preconditioners/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-iterative, hesap-ordering, hesap-sparse, math, memory | 19 / 1 | No sibling CMake |
+| [hesap-quadrature](../../engine/numerics/hesap-quadrature/CMakeLists.txt) | containers, core, hesap, hesap-dense, hesap-special, memory | 16 / 2 | Present |
+| [hesap-resources](../../engine/numerics/hesap-resources/CMakeLists.txt) | containers, core, hesap, hesap-sparse, math, memory, resources | 4 / 2 | Present |
+| [hesap-sched](../../engine/numerics/hesap-sched/CMakeLists.txt) | containers, core, hesap, jobs, memory | 2 / 1 | Present |
+| [hesap-sparse](../../engine/numerics/hesap-sparse/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 29 / 2 | Present |
+| [hesap-special](../../engine/numerics/hesap-special/CMakeLists.txt) | containers, core, hesap, jobs, math, memory | 19 / 2 | Present |
+| [hesap-stats](../../engine/numerics/hesap-stats/CMakeLists.txt) | containers, core, hesap-dense, hesap-quadrature, hesap-special, jobs, memory | 33 / 2 | Present |
+| [hesap-tensor](../../engine/numerics/hesap-tensor/CMakeLists.txt) | containers, core, jobs, math, memory, platform | 20 / 3 | Present |
+| [hesap-wavelet](../../engine/numerics/hesap-wavelet/CMakeLists.txt) | containers, core, hesap, hesap-fft, jobs, math, memory | 11 / 2 | Present |
+| [imgui](../../engine/ui/imgui/CMakeLists.txt) | config, gpu-context, gpu-context-dx12, gpu-context-vulkan, log, platform, units | 5 / 3 | Present |
+| [jobs](../../engine/foundation/jobs/CMakeLists.txt) | containers, core | 4 / 9 | Present |
+| [kir](../../engine/gpu/kir/CMakeLists.txt) | containers, core, math, memory | 59 / 1 | Present |
+| [kir-cuda](../../engine/gpu/kir-cuda/CMakeLists.txt) | containers, core, kir, memory | 2 / 2 | Present |
+| [kir-dx12](../../engine/gpu/kir-dx12/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
+| [kir-hip](../../engine/gpu/kir-hip/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
+| [kir-metal](../../engine/gpu/kir-metal/CMakeLists.txt) | containers, core, kir, memory | 1 / 0 | Present |
+| [kir-vulkan](../../engine/gpu/kir-vulkan/CMakeLists.txt) | containers, core, gpu-context, gpu-context-vulkan, kir, memory | 1 / 1 | Present |
+| [kir-webgpu](../../engine/gpu/kir-webgpu/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
+| [light-cook](../../engine/assets/light-cook/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
+| [lod](../../engine/geometry/lod/CMakeLists.txt) | containers, core, geometry-mesh-processing, math, memory, resources | 3 / 3 | Present |
+| [log](../../engine/foundation/log/CMakeLists.txt) | containers, core | 12 / 10 | Present |
+| [material-cook](../../engine/assets/material-cook/CMakeLists.txt) | containers, core, kir, memory | 1 / 1 | Present |
+| [math](../../engine/foundation/math/CMakeLists.txt) | core, units | 31 / 2 | Present |
+| [memory](../../engine/foundation/memory/CMakeLists.txt) | core, log, vm | 21 / 13 | Present |
+| [meshgen](../../engine/geometry/meshgen/CMakeLists.txt) | core, math, memory, resources | 1 / 1 | Present |
+| [perf](../../engine/foundation/perf/CMakeLists.txt) | containers, core, jobs, memory, time | 13 / 5 | Present |
+| [perf-ui](../../engine/ui/perf-ui/CMakeLists.txt) | core, imgui, memory, perf | 5 / 3 | Present |
+| [platform](../../engine/foundation/platform/CMakeLists.txt) | containers, core, jobs, log, memory, time | 10 / 9 | Present |
+| [preset](../../engine/assets/preset/CMakeLists.txt) | containers, core, memory, resources | 10 / 4 | Present |
+| [profile](../../engine/foundation/profile/CMakeLists.txt) | containers, core, memory, resources | 8 / 3 | Present |
+| [render-asset-core](../../engine/rendering/render-asset-core/CMakeLists.txt) | containers, core, memory | 7 / 6 | Present |
+| [render-graph](../../engine/rendering/render-graph/CMakeLists.txt) | ceir-gpu, containers, core, gpu-context, memory, render-asset-core, render-pass | 1 / 1 | Present |
+| [render-material](../../engine/rendering/render-material/CMakeLists.txt) | containers, core, memory, render-asset-core, render-program | 1 / 1 | Present |
+| [render-pass](../../engine/rendering/render-pass/CMakeLists.txt) | containers, core, memory, render-asset-core | 1 / 1 | Present |
+| [render-program](../../engine/rendering/render-program/CMakeLists.txt) | containers, core, memory, render-asset-core | 1 / 1 | Present |
+| [resources](../../engine/assets/resources/CMakeLists.txt) | containers, core, jobs, log, memory, platform | 22 / 20 | Present |
+| [scene](../../engine/world/scene/CMakeLists.txt) | containers, core, geometry-primitives, geometry-spatial, math, memory, resources | 30 / 18 | Present |
+| [scene-render](../../engine/rendering/scene-render/CMakeLists.txt) | anim, containers, core, frame-cook, geometry-primitives, gpu-context, kir, light-cook, lod, log, material-cook, math, memory, render-asset-core, resources, scene, vertex-cook | 2 / 3 | Present |
+| [shader-cook](../../engine/assets/shader-cook/CMakeLists.txt) | containers, core, gpu-context, gpu-context-dx12, gpu-context-vulkan, jobs, kir, memory, platform, resources | 4 / 3 | No sibling CMake |
+| [technique-cook](../../engine/assets/technique-cook/CMakeLists.txt) | containers, core, frame-cook, kir, memory | 1 / 1 | Present |
+| [time](../../engine/foundation/time/CMakeLists.txt) | core, units | 11 / 4 | Present |
+| [timeline](../../engine/world/timeline/CMakeLists.txt) | containers, core, hesap-interp, memory, resources, time | 3 / 3 | Present |
+| [units](../../engine/foundation/units/CMakeLists.txt) | containers, core, memory | 13 / 2 | Present |
+| [vertex-cook](../../engine/assets/vertex-cook/CMakeLists.txt) | containers, core, kir, material-cook, memory | 1 / 1 | Present |
+| [vm](../../engine/foundation/vm/CMakeLists.txt) | core, log | 2 / 2 | Present |

@@ -1,18 +1,34 @@
-# Build output
-build/
-out/
-cmake-build-*/
+# Generated builds, dependencies and scratch work. See docs/design/repository-layout.md.
+/build/
+/out/
+/cmake-build-*/
+/_deps/
+/.cpm-cache/
+/external/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+CMakeUserPresets.json
+/Testing/
 
-# Visual studio
+# IDE/user state. Shared .vscode settings and agent entry documents ARE source.
 .vs/
 *.suo
 *.user
-*.sdf
-*.opensdf
 *.VC.db
+*.VC.db-shm
+*.VC.db-wal
 *.VC.VC.opendb
+*.opensdf
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-# Compiled binaries
+# Compiler, linker, coverage and profiler output.
 *.obj
 *.o
 *.lib
@@ -20,92 +36,50 @@ cmake-build-*/
 *.exe
 *.dll
 *.so
+*.so.*
+*.dylib
 *.pdb
 *.ilk
 *.exp
+*.pch
+*.ipch
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+cachegrind.out.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
 
-# CMake files
-CMakeCache.txt
-CMakeFiles/
-compile_commands.json
-_deps/
+# Local tool state and secrets. AGENTS/CLAUDE/context/MEMORY remain versioned.
+/.claude/
+/.codex/
+.env
+.env.local
+.env.*.local
 
-# Local-only, non-distributed reference oracles (non-commercial license — never
-# vendored, never CI, dev-machine benchmarking only). ILUPACK V2.4 precompiled lib
-# (non-commercial/academic use only per ilupack.tu-bs.de/copyright.shtml) lives here
-# behind the CRD_BUILD_HESAP_VS_ILUPACK dev flag. See docs/phases/phase-3.1.6-hesap.md.
-external/
-
-# OS junk
-.DS_Store
-Thumbs.db
-
-# Test / runtime temp dirs
-.crd_cook_test_tmp/
-.crd_platform_test_tmp/
-.crd_shader_cache_tests/
-.crd_shader_reload_smoke/
-
-# Ad-hoc captured runs (build/test/tidy stdout/stderr/logs)
+# Captured runs and cooked caches belong under build/ or OS temporary storage.
 *.log
 *_stdout.txt
 *_stderr.txt
-
-# Ad-hoc one-shot scripts at repo root
-/build_*.bat
-/do_*.bat
-/run_*.bat
-
-# full-sweep.ps1 generated temp shims (created + removed per run; never commit)
+/crashes/
+/review-bundle/
+/.crd_*/
+/imgui.ini
+/assets/cooked/
+/test_pack_*.crdr
+/test_cook_*.tga
+/test_cook_*.glb
+/sr_*.crdr
+/ev_stream_*.crdr
+/scratch_*.txt
+/asan_err.txt
+/PATH-backup-*
 /scripts/.full-sweep-win-tmp.*
 
-# Test artifacts spilled to root
-test_pack_*.crdr
-
-# ASan / cooker / build diagnostic captures
-asan_err.txt
-asan_stdout.txt
-asan_stderr.txt
-
-# Crash dumps + review bundles + tooling caches
-crashes/
-review-bundle/
-.ruff_cache/
-
-# ImGui runtime state (lives next to executable now, not in repo root)
-imgui.ini
-
-# Cooked asset output (now in build/<preset>/runtime/assets/cooked)
-assets/cooked/
-
-# AI tooling — not part of repo
-.claude/
-CLAUDE.md
-CONTEXT.md
-AGENTS.md
-opencode.json
-
-# session/profiler artifacts (2026-07-02 cleanup � never track these again)
-cachegrind.out.*
-ev_stream_*.crdr
-PATH-backup-*
-*.log
-test_pack_body_*.crdr
-# scene-render gates now write their per-run packs to the OS TEMP dir (TempPack RAII, REN-38 hygiene pass);
-# this pattern stays as a belt-and-braces guard for older checkouts and crashed runs.
-sr_*.crdr
-ev_stream_*.crdr
-.crd_*/
-imgui.ini
-crashes/
-out/
-.tmp-*.log
-__pycache__/
-CLAUDE.md
-
-# Research PAPERS are reference material, not source. They are large (GitHub hard-rejects any blob >100 MB, and a
-# 218 MB PDF once made the whole repo unpushable), they never diff usefully, and they live permanently in history
-# after a single commit. Keep them OUT of git and store them alongside the repo instead; docs/research/*.md cites
-# them by title so the knowledge stays version-controlled while the bytes do not.
-docs/research/papers/
+# Downloaded research papers stay outside Git; cite primary sources in research Markdown.
+/docs/research/papers/
 *.pdf

@@ -8,12 +8,12 @@ set -e
 cd /mnt/d/Dev/cerid
 # The gcc .a libs are LTO bytecode (clang's linker can't consume them), so compile the crd sources WITH clang
 # directly into the bench ⇒ the WHOLE binary (incl. the real TlsfAllocator) is clang codegen, single toolchain.
-SRCS="$(find engine/memory/src engine/core/src engine/log/src engine/containers/src engine/vm/src -name '*.cpp')"
+SRCS="$(find engine/foundation/memory/src engine/foundation/core/src engine/foundation/log/src engine/foundation/containers/src engine/foundation/vm/src -name '*.cpp')"
 clang++ -O3 -std=c++20 -mavx2 -mfma -DCRD_SIMD_TARGET=2 -DCRD_DETERMINISTIC_FP=1 \
   -I build/linux-gcc-release/engine/core/include \
-  -I engine/hesap-fft/include -I engine/hesap/include -I engine/core/include \
-  -I engine/containers/include -I engine/memory/include -I engine/log/include -I engine/vm/include \
-  -I engine/math/include -I "$HOME/fft_refs" -I /usr/include/mkl \
+  -I engine/numerics/hesap-fft/include -I engine/numerics/hesap/include -I engine/foundation/core/include \
+  -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include -I engine/foundation/vm/include \
+  -I engine/foundation/math/include -I "$HOME/fft_refs" -I /usr/include/mkl \
   runtime/examples/bench_fft_vs_refs.cpp $SRCS \
   -lfftw3 -lmkl_rt -lpthread \
   -o /tmp/bench_fft_clang

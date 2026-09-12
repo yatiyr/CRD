@@ -1,5 +1,5 @@
 // texture.cpp — GEO-3 stage 2b: the standalone image cook handler on OUR OWN codec family (ldr_decode: PNG · JPEG ·
-// TGA · BMP — engine/resources), stb_image RETIRED. Decode → `.meta` [cook] color-space options (srgb / normal_map;
+// TGA · BMP — engine/assets/resources), stb_image RETIRED. Decode → `.meta` [cook] color-space options (srgb / normal_map;
 // the texture_cook.hpp contract) → the shared mip/encode core (sRGB filtered in LINEAR space) → TXTR CRDR (ADR-0042).
 
 #include <crd/cooker/cook_handler.hpp>

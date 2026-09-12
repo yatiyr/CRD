@@ -24,14 +24,14 @@ compile. Five slices:
   graph, so re-emitting from the loaded graph yields **bit-identical** backend source. Reflection (descriptor-set layout, vertex
   layout, push-constant + workgroup size) is derived **straight from the IR** — no SPIRV-Cross (own-format mandate).
 - **D2 — cook.** ✅ **LANDED 2026-07-22.** IR → SPIR-V / DXIL / MSL / WGSL bytecode/source at build time (module
-  `engine/shader-cook/` = `crd-shader-cook` lib + `shader_cook` CLI). `cook_compute_shader` serializes the IR (D1), derives the
+  `engine/assets/shader-cook/` = `crd-shader-cook` lib + `shader_cook` CLI). `cook_compute_shader` serializes the IR (D1), derives the
   reflection (D1), emits+compiles **SPIR-V** (shaderc) + **DXIL** (dxc) + **real PTX** (CUDA→NVRTC, guarded on CUDAToolkit) to REAL bytecode, emits
   **MSL/WGSL** source, and packs a **CRDR bundle** (ADR-0038, chunks `KIR0·REFL·SPVC·DXIC·PTX·CUDA·MSLC·WGSL`) with a
   **content-hash cache**. The DX12 context grew `create_pipeline_from_dxil` (the zero-runtime-compile load primitive). **Both
   production backends load+run their cooked bytecode 32/32** (`[cook]`), the cooked SPIR-V is byte-identical to the runtime compile,
   real PTX is verified (`.version`/`.target`), and the CLI cooks a `.kgph` → `.crdr`. Parallel cook is a follow-tier enhancement.
   Session `docs/sessions/2026-07-22-d2-shader-cook.md`.
-- **D3 — variants.** ✅ **LANDED 2026-07-22.** `engine/shader-cook/variant.{hpp,cpp}`. A shader is an übershader with feature
+- **D3 — variants.** ✅ **LANDED 2026-07-22.** `engine/assets/shader-cook/variant.{hpp,cpp}`. A shader is an übershader with feature
   toggles; a variant is a `key` bitmask. `cook_variant_matrix(build_fn, keys, opts)` cooks the requested keys via a per-key
   `VariantBuildFn` (emit the live path — how real material compilers cook per-permutation; the honest fit given `KGraph::stmt` is
   const-only), **content-hash dedups** identical specialized IR (cooked once), and returns the manifest (key → bundle hash) +
@@ -45,7 +45,7 @@ compile. Five slices:
   copy), each with `pipeline_cache_data()`/`warm_pipeline_cache()`. `[d4]`: Vulkan loads a `.crdr` zero-compile and dispatches
   32/32, its 111 KB cache warm-starts a fresh context; DX12's 1824 B library warm-starts a fresh context running cooked DXIL 32/32.
   Async warmup + spec-const binding fold in with D5. Session `docs/sessions/2026-07-22-d4-runtime-load-pipeline-cache.md`.
-- **D5 — hot-reload.** ✅ **LANDED 2026-07-22.** `engine/shader-cook/reload.{hpp,cpp}`. `ReloadableCompute::reload(g, e, name,
+- **D5 — hot-reload.** ✅ **LANDED 2026-07-22.** `engine/assets/shader-cook/reload.{hpp,cpp}`. `ReloadableCompute::reload(g, e, name,
   backend, create_fn, user)` recooks + content-hashes the IR: an unchanged graph is a no-op, a changed one builds the new pipeline
   from the cooked bytecode + IR-reflection binding count (via a backend-agnostic create-callback) and **atomically swaps** it in,
   retiring the previous pipeline one generation for in-flight safety. `[d5]`: an IR edit (kernel ×1 → ×2) hot-swaps the live

@@ -5,10 +5,10 @@ cd /mnt/d/Dev/cerid
 B=build/linux-gcc-release/engine
 g++ -O2 -std=c++20 \
   -I build/linux-gcc-release/engine/core/include \
-  -I engine/hesap-ode/include -I engine/hesap/include -I engine/hesap-dense/include \
-  -I engine/hesap-sparse/include -I engine/hesap-direct/include -I engine/hesap-iterative/include \
-  -I engine/core/include -I engine/containers/include -I engine/memory/include \
-  -I engine/log/include -I engine/vm/include -I engine/math/include \
+  -I engine/numerics/hesap-ode/include -I engine/numerics/hesap/include -I engine/numerics/hesap-dense/include \
+  -I engine/numerics/hesap-sparse/include -I engine/numerics/hesap-direct/include -I engine/numerics/hesap-iterative/include \
+  -I engine/foundation/core/include -I engine/foundation/containers/include -I engine/foundation/memory/include \
+  -I engine/foundation/log/include -I engine/foundation/vm/include -I engine/foundation/math/include \
   runtime/examples/bench_ode_imex_vs_arkode.cpp \
   -Wl,--start-group \
     "$B/hesap-dense/libcrd-hesap-dense.a" "$B/hesap-sparse/libcrd-hesap-sparse.a" \

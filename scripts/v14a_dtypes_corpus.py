@@ -6,11 +6,11 @@
 #   2. Exhaustive 256-entry fp8 -> f32 decode tables (both formats) + 96-entry f16/bf16 -> f32.
 #   3. ggml Q8_0 / Q4_0 block-quant parity vectors — the quantize_row_*_ref algorithms
 #      transcribed EXACTLY from ggml-org/ggml src/ggml-quants.c (fetched 2026-07-02).
-# Emits tests/hesap-tensor/ref_dtypes.inc as plain C arrays (no std containers in refs).
+# Emits tests/numerics/hesap-tensor/ref_dtypes.inc as plain C arrays (no std containers in refs).
 import numpy as np
 import ml_dtypes
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/ref_dtypes.inc"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_dtypes.inc"
 
 f32 = np.float32
 

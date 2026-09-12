@@ -3,9 +3,9 @@ set -e
 export CMAKE_BUILD_PARALLEL_LEVEL=16
 cd /mnt/d/Dev/cerid
 g++ -O3 -march=native -std=c++20 -DNDEBUG -DCRD_SIMD_TARGET=2 \
-    -I engine/hesap-tensor/include -I engine/hesap-stats/include -I engine/core/include \
-    -I engine/containers/include -I engine/memory/include -I engine/log/include \
-    -I engine/math/include -I engine/units/include -I engine/jobs/include \
+    -I engine/numerics/hesap-tensor/include -I engine/numerics/hesap-stats/include -I engine/foundation/core/include \
+    -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include \
+    -I engine/foundation/math/include -I engine/foundation/units/include -I engine/foundation/jobs/include \
     -I "$HOME/cerid-build/linux-gcc-release/engine/core/include" \
     scripts/bench_permute.cpp \
     "$HOME/cerid-build/linux-gcc-release/engine/jobs/libcrd-jobs.a" \

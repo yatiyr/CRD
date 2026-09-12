@@ -15,7 +15,7 @@ win-tidy). The lesson, learned 2026-05-15 during Phase 3.1.7 v3-close,
 is that **the test binary saying "All tests passed" can coexist with a
 failing ctest-registered guard test**.
 
-The four guard tests live in `tests/math/CMakeLists.txt` and are
+The four guard tests live in `tests/foundation/math/CMakeLists.txt` and are
 registered via `add_test(NAME …)` — not as Catch2 `TEST_CASE`s, not as
 entries in any test binary's `--list-tests` output:
 
@@ -89,7 +89,7 @@ months of compounded API drift.
 If you add a new lint / policy guard:
 
 1. Drop the guard script in `scripts/check_<name>.ps1` + `.sh`.
-2. Register as a ctest test in `tests/math/CMakeLists.txt` via `add_test(NAME crd-<name>-check COMMAND …)`.
+2. Register as a ctest test in `tests/foundation/math/CMakeLists.txt` via `add_test(NAME crd-<name>-check COMMAND …)`.
 3. **Verify it appears in `ctest --preset win-debug --list-tests`** before declaring the slice that added it closed.
 4. Update `feedback_per_slice_run_ctest.md` if the guard category isn't already covered.
 

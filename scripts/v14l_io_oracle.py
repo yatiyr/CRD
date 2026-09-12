@@ -3,7 +3,7 @@
 #
 # gen   : write the reference corpus (npy / npz / safetensors) + raw-byte
 #         sidecars (<file>.bin per payload) + manifest.json into
-#         tests/hesap-tensor/io_corpus/ref/. The C++ gate (test_io.cpp)
+#         tests/numerics/hesap-tensor/io_corpus/ref/. The C++ gate (test_io.cpp)
 #         round-trips THESE files bit-exactly.
 # check : read the files the C++ gate wrote into io_corpus/out/ back through
 #         numpy / torch / safetensors and verify BIT-EXACT equality against
@@ -23,7 +23,7 @@ import zipfile
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORPUS = os.path.join(REPO, "tests", "hesap-tensor", "io_corpus")
+CORPUS = os.path.join(REPO, "tests", "numerics", "hesap-tensor", "io_corpus")
 REF = os.path.join(CORPUS, "ref")
 OUT = os.path.join(CORPUS, "out")
 

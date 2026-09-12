@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate straight-line FFT codelets (genfft-lite) — v10-b1 of the codelet campaign (beat MKL).
 
-Run (WSL): python3 scripts/gen_fft_codelets.py > engine/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp
+Run (WSL): python3 scripts/gen_fft_codelets.py > engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp
 
 genfft discipline (Frigo-Johnson): for each leaf size N, build the N-point DFT as an operation DAG via
 recursive Cooley-Tukey, apply common-subexpression elimination, NUMERICALLY SELF-CHECK the DAG against numpy

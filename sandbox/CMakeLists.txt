@@ -34,6 +34,8 @@ target_link_libraries(crd-sandbox PRIVATE
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 crd_enable_default_pch(crd-sandbox)
+set_property(TARGET crd-sandbox PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:crd-sandbox>")
+set_property(TARGET crd-sandbox PROPERTY VS_DEBUGGER_ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")
 
 # ── crd-gizmo-probe ─────────────────────────────────────────────────────────
 # REN-39: the axis triad, CLOSE UP — a second, small sandbox whose only subject is the debug-draw overlay, on the
@@ -82,6 +84,9 @@ endif()
 
 set(DEMO_ASSETS_SRC_DIR "${CMAKE_SOURCE_DIR}/assets/source")
 set(DEMO_ASSETS_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets/cooked")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(DEMO_ASSETS_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/assets/cooked")
+endif()
 set(DEMO_ASSETS_PACK    "${DEMO_ASSETS_OUT_DIR}/demo_assets.crdr")
 
 # Glob source files explicitly so add_custom_command's DEPENDS triggers a recook

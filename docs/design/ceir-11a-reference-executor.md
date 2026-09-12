@@ -141,7 +141,7 @@ traits** — it bounds, it doesn't fork.
 
 **Stage split (advisor):**
 - **2a** = the six ops: TOML + opgen regen (drift-clean) + the sequential reference EvalFns (mostly shared, per the table)
-  + `test_task.cpp` (⛔ explicit tests/ceir list). ⭐ **The open-world payoff, ASSERTED:** the 6a token verifier covers
+  + `test_task.cpp` (⛔ explicit tests/execution/ceir list). ⭐ **The open-world payoff, ASSERTED:** the 6a token verifier covers
   every new producer/consumer op with ZERO verifier edits (task.spawn Unconsumed; fiber_wait double-consume); the §32
   audio-RT flip fires on ≥1 task op; sequential exec of a continuation chain; ASCII names.
 - **2b** = the sequential reference for `parallel_for`/`map_reduce` + §112 hooks + the stale-comment fixes. ⭐ **Decide+

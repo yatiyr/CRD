@@ -17,7 +17,7 @@
 // Honest: DWT is short-conv + downsample (sequential, memory-bound) ⇒ parity-to-modest-win vs pywt's C core is the
 // real ceiling (like the IIR cascade) — EARNED via the reversed-filter branch-free interior (the first cut, switch-
 // per-tap, was 7-8x SLOWER). The differentiator is the moat: run-twice bit-identical, single thread (pywt/MATLAB lack
-// it). MATLAB wavedec (1-thread) runs on Windows — tests/hesap-wavelet/bench_wavelet_matlab.m.
+// it). MATLAB wavedec (1-thread) runs on Windows — tests/numerics/hesap-wavelet/bench_wavelet_matlab.m.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -96,7 +96,8 @@ static void run_cwt(crd::memory::IAllocator* a, crd::usize n, const char* name, 
     {
         scales[s] = std::pow(128.0, static_cast<double>(s) / static_cast<double>(nscales - 1)); // 1..128 geometric
     }
-    const cont::ConstSpan<double> xs(x.data(), n), sc(scales.data(), nscales);
+    const cont::ConstSpan<double> xs(x.data(), n);
+    const cont::ConstSpan<double> sc(scales.data(), nscales);
     const auto w = wv::continuous_wavelet(name);
     auto warm = wv::cwt<double>(a, xs, sc, w);
     const double chk = warm.coeffs[(nscales / 2) * n + n / 2].re;

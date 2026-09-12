@@ -13,7 +13,7 @@ int main()
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
     crd::config::Config config;
-    if (!config.load_from_file(crd::platform::fs::Path("engine/config/sample.toml")))
+    if (!config.load_from_file(crd::platform::fs::Path("engine/foundation/config/sample.toml")))
     {
         CRD_LOG_ERROR(g_log_smoke_config, "Failed to load sample config");
         return 1;

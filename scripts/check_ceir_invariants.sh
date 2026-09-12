@@ -5,7 +5,7 @@
 # (crd-ceir-host / crd-ceir-gpu), NEVER a link edge into the core.
 set -euo pipefail
 root="${1:-.}"
-ceir="$root/engine/ceir"
+ceir="$root/engine/execution/ceir"
 violations=()
 
 # ── I5: link edges ──

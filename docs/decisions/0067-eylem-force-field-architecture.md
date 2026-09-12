@@ -248,7 +248,7 @@ are blocked at the architecture level:
    öbek serialisation path), NOT a sequential counter. Identical field
    sets produce identical ids regardless of insertion order.
 
-The bench suite (`tests/eylem/bench_fields.cpp`, lands with v1f-fields-i)
+The bench suite (`tests/physics/eylem/bench_fields.cpp`, lands with v1f-fields-i)
 runs the replay-hash check at every CI tier.
 
 ### 8. Spatial dispatch
@@ -379,7 +379,7 @@ hardware). Cerid's targets at 8-lane SIMD on a modern x64:
 | 1 (Noise) | 10k | ≤ 2.0 ms (curl-noise is cycle-heavy) |
 | 1 (Script) | 1k | ≤ 4.0 ms (script overhead dominates) |
 
-These become hard CI assertions in `tests/eylem-rigid3d/bench_fields.cpp`
+These become hard CI assertions in `tests/physics/eylem-rigid3d/bench_fields.cpp`
 shipped with v1f-fields-i. Regressions fail the build — same model the
 Phase 2.5 jobs benchmarks use.
 

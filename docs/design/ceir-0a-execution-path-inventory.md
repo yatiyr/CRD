@@ -52,13 +52,13 @@ into authored CEIR assets, with the scene resolvers becoming host intrinsics.
 
 | Element | Location | Currency in → out | Class |
 |---|---|---|---|
-| Authored frontend | `.frame.toml` → `FrameGraphDesc` (`engine/frame-cook/include/crd/framecook/frame_asset.hpp`) | TOML → `FrameGraphDesc` | **frontend** → `ceir.frame` (§39 §126.1) |
-| Cooked→Template bridge | `build_frame_graph_template` — `engine/frame-cook/src/frame_template_bridge.cpp:717`; `map_raster`:277 · `map_compute`:441 · `map_rt_common`:565 · `map_mesh_indirect`:669 | `FrameGraphDesc` → `rg::FrameGraphTemplate` (per-pass `PassPayload`) | **composite lowering** → subsumed by CEIR-12 scheduling |
-| Programmatic construction | `FrameGraphTemplate::add_pass` — `engine/render-graph/include/crd/rendergraph/frame_graph.hpp:134` | C++ calls → `FrameGraphTemplate` | **frontend** → CEIR builder (§126.2 §121) |
-| Runtime execution (ONE submission) | `execute_frame` — `engine/render-graph/src/frame_graph.cpp:1337`; `RecordContext`:76 | `CompiledFrameGraph` + `GraphExecutorTable` → device commands | **runtime** → executes CEIR plans (§126.5) |
+| Authored frontend | `.frame.toml` → `FrameGraphDesc` (`engine/assets/frame-cook/include/crd/framecook/frame_asset.hpp`) | TOML → `FrameGraphDesc` | **frontend** → `ceir.frame` (§39 §126.1) |
+| Cooked→Template bridge | `build_frame_graph_template` — `engine/assets/frame-cook/src/frame_template_bridge.cpp:717`; `map_raster`:277 · `map_compute`:441 · `map_rt_common`:565 · `map_mesh_indirect`:669 | `FrameGraphDesc` → `rg::FrameGraphTemplate` (per-pass `PassPayload`) | **composite lowering** → subsumed by CEIR-12 scheduling |
+| Programmatic construction | `FrameGraphTemplate::add_pass` — `engine/rendering/render-graph/include/crd/rendergraph/frame_graph.hpp:134` | C++ calls → `FrameGraphTemplate` | **frontend** → CEIR builder (§126.2 §121) |
+| Runtime execution (ONE submission) | `execute_frame` — `engine/rendering/render-graph/src/frame_graph.cpp:1337`; `RecordContext`:76 | `CompiledFrameGraph` + `GraphExecutorTable` → device commands | **runtime** → executes CEIR plans (§126.5) |
 | Validation | the 38-D4-class cook checks (varying contract, declared-header words) in the cookers | desc → diagnostics | **verifier** → CEIR verifiers (§126.3 §115) |
 
-**One runtime, verified from code (ADR-0106 holds).** `engine/frame-cook/src/frame_runtime.cpp` (1,388 lines) is
+**One runtime, verified from code (ADR-0106 holds).** `engine/assets/frame-cook/src/frame_runtime.cpp` (1,388 lines) is
 **not a second execution path** — it is the frame-cook ADAPTER that drives a cooked `FrameGraphDesc` *through* the
 render-graph runtime. Its header comment (`frame_runtime.hpp:3-9`) is STALE ("record the right `draw_*` per
 `FramePassKind`"), but the code is current: `:109` "RAF-8a (ADR-0106) the migration adapter … records through the
@@ -75,8 +75,8 @@ The `frame-cook ⊥ crd-scene` isolation is held by the `IFrameGraphHost` seam (
 
 ## 3. The 14 executors — atomic capability verbs (→ `ceir.render`/`compute`/`transfer`/`rt`)
 
-Schema: `register_builtin_executors` — `engine/render-pass/src/executor_registry.cpp:79`. Command lowering: the
-`record_*` functions — `engine/render-graph/src/frame_graph.cpp`. Every one is an **atomic verb** (a draw, a
+Schema: `register_builtin_executors` — `engine/rendering/render-pass/src/executor_registry.cpp:79`. Command lowering: the
+`record_*` functions — `engine/rendering/render-graph/src/frame_graph.cpp`. Every one is an **atomic verb** (a draw, a
 dispatch, a copy, a trace, a present) — none is a composite algorithm. Header comment "8 executors" is stale;
 there are **14**.
 
@@ -116,14 +116,14 @@ with resident resource tables.
 
 ## 4. `scene_renderer.cpp` — the orchestrator + hand-list (the real CEIR-13 target)
 
-`engine/scene-render/src/scene_renderer.cpp` (6610 lines). Programs are authored in CKIR (good — those are kernels/
+`engine/rendering/scene-render/src/scene_renderer.cpp` (6610 lines). Programs are authored in CKIR (good — those are kernels/
 `ceir.compute`); the **orchestration and the program hand-list** are the composite C++ that CEIR-13/14 migrate.
 
 | Element | Location | Class → CEIR |
 |---|---|---|
 | Program hand-list + `engine://` registry | `register_default_programs`:2863 · `init_programs` (raster programs :2867, kernels :2892) | **composite (hand-listed)** → RAH-7 dependency-driven registry, then CEIR-7 asset deps. The code SAYS SO: `:1050-1053` "bespoke and hand-listed; the dependency-driven Program Registry that replaces it is post-RAF band RAH-7." |
 | Frame-graph contribution/orchestration | `SceneRenderer::contribute`:3132 (builds + runs the frame graph) | **composite algorithm** → a `ceir.frame` asset (CEIR-13d, the §128 `scene.raster` proof) |
-| CSM cascade setup + shadow config | `set_csm_config`:3021, `cascades()`:3144, the shadow setters :3015-3099; `engine/scene-render/src/csm.cpp` | **composite algorithm** → an authored CEIR shadow asset (CEIR-15 shadow corpus §88) |
+| CSM cascade setup + shadow config | `set_csm_config`:3021, `cascades()`:3144, the shadow setters :3015-3099; `engine/rendering/scene-render/src/csm.cpp` | **composite algorithm** → an authored CEIR shadow asset (CEIR-15 shadow corpus §88) |
 | Program families (authored CKIR, C++-sequenced) — TAA resolve :1772, HZB build :1986, impostor billboard :2055, moment atlas :1768, cluster mesh (S4-0) :1606, skinning palette :2616/:2684, velocity/motion :429/:2011 | throughout `Impl` | **kernels = atomic** (`ceir.compute`, unchanged); **their sequencing = composite** → CEIR assets (CEIR-14/15) |
 | Scene resolvers | `asset_resolver.hpp`; resolve material/technique/program/geometry | **atomic host capability** → host intrinsics (§45's replaceable convenience tier, §100) |
 | Hot reload | RAF-11 `init_programs` re-run guard :943-1136 | **runtime** → CEIR-7 hot-reload machinery (reuse verbatim; the reentrant guard scar applies) |
@@ -156,7 +156,7 @@ authored assets + a handful of host-resolver intrinsics.
 
 ## 5. `IComputeContext` — the atomic compute dispatch surface + its consumers (→ `ceir.compute` provider, §42 §85)
 
-`engine/gpu-context/include/crd/gpu/compute.hpp` (ADR-0100). Kernel-source-agnostic: pipelines requested BY NAME
+`engine/gpu/gpu-context/include/crd/gpu/compute.hpp` (ADR-0100). Kernel-source-agnostic: pipelines requested BY NAME
 (`create_pipeline`:132), a record/copy/barrier/dispatch recorder (`ComputeRecorder`:94, `dispatch`:104,
 `dispatch_indirect`:109), `submit_and_wait`:137, `last_gpu_ms` (CGP-0). Three backends implement it: Vulkan · DX12 ·
 **CUDA** (`gpu-context-{vulkan,dx12,cuda}`). **This IS the provider `ceir.compute` lowers onto** (§42 §85); it does
@@ -164,9 +164,9 @@ not change. The consumers (each → a CEIR compute program at CEIR-10/19):
 
 | Consumer | Location | Class → CEIR |
 |---|---|---|
-| CKIR compute dispatch backend | `engine/kir-vulkan/src/backend_vulkan.cpp` | **the CKIR→device bridge** — how every CKIR kernel runs; CEIR-10c references CKIR programs by identity through this |
-| GPU BVH (Morton · radix sort · LBVH build/refit) | `engine/geometry-bvh-gpu/src/{dispatch,dispatch_60bit,radix_sort,lbvh_gpu}.cpp` — **24 `create_pipeline`/`dispatch` sites** | **compute programs** → CEIR-10 (LBVH) / CEIR-14 (geometry) assets |
-| CKIR compute proof harnesses (reduce/scan/sort/FFT/NRC/RT/gsplat/hair/visbuffer/abuffer) | `tests/**` — **258 `IComputeContext`/`create_pipeline`/`dispatch` occurrences across 14 files** (heaviest: `test_vulkan_context.cpp` 148 · `test_dx12_compute.cpp` 48 · `tests/gpu-shared/ckir_*.hpp`) | **test-only** → become CEIR compute-program tests at CEIR-10/19 (the bit-exact oracles the proofs reuse) |
+| CKIR compute dispatch backend | `engine/gpu/kir-vulkan/src/backend_vulkan.cpp` | **the CKIR→device bridge** — how every CKIR kernel runs; CEIR-10c references CKIR programs by identity through this |
+| GPU BVH (Morton · radix sort · LBVH build/refit) | `engine/geometry/geometry-bvh-gpu/src/{dispatch,dispatch_60bit,radix_sort,lbvh_gpu}.cpp` — **24 `create_pipeline`/`dispatch` sites** | **compute programs** → CEIR-10 (LBVH) / CEIR-14 (geometry) assets |
+| CKIR compute proof harnesses (reduce/scan/sort/FFT/NRC/RT/gsplat/hair/visbuffer/abuffer) | `tests/**` — **258 `IComputeContext`/`create_pipeline`/`dispatch` occurrences across 14 files** (heaviest: `test_vulkan_context.cpp` 148 · `test_dx12_compute.cpp` 48 · `tests/gpu/gpu-shared/ckir_*.hpp`) | **test-only** → become CEIR compute-program tests at CEIR-10/19 (the bit-exact oracles the proofs reuse) |
 
 **Verdict:** `IComputeContext` is atomic + stays; every consumer is a compute *program* (bvh, ckir kernels) or a
 *test* — none is composite orchestration. So CEIR-10 wraps them with `ceir.compute` ops without touching the
@@ -193,9 +193,9 @@ CKIR helper programs — they are **NOT** collapsed into CEIR; only the frame co
 
 | Element | Location | Class |
 |---|---|---|
-| `.crdr` 'SHDR'/VART cook (ADR-0104) | `engine/shader-cook/src/cook.cpp`, `variant.cpp` | **unchanged** — CEIR references CKIR programs by content-hash identity (§85); the interface-hash split (§107) is added at CEIR-7 |
-| Overlay/debug draw | `crd-draw` `submit_overlay` — `engine/draw/include/crd/draw/overlay_pass.hpp:85` (→ `IRasterContext::draw_overlay`) | **atomic debug capability** → a `ceir.render` overlay op or a native intrinsic (debug viz) |
-| Media codecs | `engine/resources/src/{bmp,gif,jpeg,png,hdr,deflate,…}_image.cpp` | **native capabilities forever** (§177 — codecs stay native); the media WORKFLOW becomes `ceir.media` (CEIR-28 §62) |
+| `.crdr` 'SHDR'/VART cook (ADR-0104) | `engine/assets/shader-cook/src/cook.cpp`, `variant.cpp` | **unchanged** — CEIR references CKIR programs by content-hash identity (§85); the interface-hash split (§107) is added at CEIR-7 |
+| Overlay/debug draw | `crd-draw` `submit_overlay` — `engine/rendering/draw/include/crd/draw/overlay_pass.hpp:85` (→ `IRasterContext::draw_overlay`) | **atomic debug capability** → a `ceir.render` overlay op or a native intrinsic (debug viz) |
+| Media codecs | `engine/assets/resources/src/{bmp,gif,jpeg,png,hdr,deflate,…}_image.cpp` | **native capabilities forever** (§177 — codecs stay native); the media WORKFLOW becomes `ceir.media` (CEIR-28 §62) |
 
 ---
 
@@ -223,9 +223,9 @@ turning `contribute`'s C++ sequencing into a `ceir.frame` asset that names `scen
    set (smallest composite first, block 7's program-variant ladder is the §128 core).
 3. ✅ **Programmatic / builder frame-construction sites** — `FrameGraphTemplate::add_pass` (`frame_graph.hpp:134`)
    is the programmatic seam; the sites are: `SceneRenderer::contribute` (the engine path) + the tests
-   `tests/render-graph/test_frame_graph{,_gpu}.cpp` · `tests/gpu-context-vulkan/test_vulkan_frame_graph.cpp` ·
-   `tests/gpu-context-dx12/test_dx12_frame_graph.cpp` · `tests/scene-render/test_scene_render_gpu.cpp` ·
-   `tests/frame-cook/test_frame_template_bridge.cpp`. All construct `FrameGraphTemplate` directly → **CEIR-12b's
+   `tests/rendering/render-graph/test_frame_graph{,_gpu}.cpp` · `tests/gpu/gpu-context-vulkan/test_vulkan_frame_graph.cpp` ·
+   `tests/gpu/gpu-context-dx12/test_dx12_frame_graph.cpp` · `tests/rendering/scene-render/test_scene_render_gpu.cpp` ·
+   `tests/assets/frame-cook/test_frame_template_bridge.cpp`. All construct `FrameGraphTemplate` directly → **CEIR-12b's
    builder frontend must cover this exact `add_pass` shape** (semantic-equality ctest vs the `.frame.toml` path).
 4. ✅ **`frame_runtime.cpp` FramePassKind cross-check** — done (§2): mega-switch retired; cook-side adapter into the
    ONE render-graph runtime; residual `:426` switch is a benign param-type marshal. (Doc-hygiene note left: the
@@ -235,7 +235,7 @@ turning `contribute`'s C++ sequencing into a `ceir.frame` asset that names `scen
 
 ## 10. Open questions this inventory raises for the CEIR-0 ADRs
 
-- **0c (ownership) — WORKING POSITION (constrained by the tracker's locked module placement):** `engine/ceir` is
+- **0c (ownership) — WORKING POSITION (constrained by the tracker's locked module placement):** `engine/execution/ceir` is
   host-only (deps `core/log/memory/containers/units` ONLY), so it CANNOT own GPU lowering. Therefore **gpu-context +
   render-graph are the render/compute PROVIDER (§69); the executor `record_*` functions STAY in `render-graph`** and
   become the render-provider's op-lowering implementations — they do not move. `ceir` holds the dialect/IR/verifier

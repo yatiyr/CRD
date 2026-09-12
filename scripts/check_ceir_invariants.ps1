@@ -5,7 +5,7 @@ param([string]$Root = ".")
 # bridges (crd-ceir-host / crd-ceir-gpu), NEVER a link edge into the core.
 # ASCII-ONLY on purpose: Windows PowerShell 5.1 mangles UTF-8 in string literals (see docs/BUILDING.md Platform notes).
 $ErrorActionPreference = "Stop"
-$ceir = Join-Path $Root "engine/ceir"
+$ceir = Join-Path $Root "engine/execution/ceir"
 $violations = @()
 
 # ---- I5: link edges ----

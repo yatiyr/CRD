@@ -68,7 +68,7 @@ Two-session split:
 
 - Masmano, Ripoll, Crespo, Real (2008). "TLSF: A New Dynamic Memory Allocator for Real-Time Systems." [paper / journal version]
 - Matt Conte's reference implementation (BSD): https://github.com/mattconte/tlsf
-- `engine/memory/include/crd/memory/allocators/` — existing allocator inventory (Malloc / Linear / Stack / Pool)
+- `engine/foundation/memory/include/crd/memory/allocators/` — existing allocator inventory (Malloc / Linear / Stack / Pool)
 - `docs/memory/MEMORY_FILE.md` — long-form module deep-dive (will be amended after D-001-a + D-001-b)
 - `docs/sessions/2026-05-07-scene-v1c1-chunk-layout.md` — flagged the O(N) `ChunkAllocator::free` debt that D-001-b closes
 - ADR-0049 / ADR-0050 — `crd-scene` storage layer that consumes this allocator infrastructure

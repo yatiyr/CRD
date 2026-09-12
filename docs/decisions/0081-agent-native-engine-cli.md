@@ -238,7 +238,7 @@ layer, so spec drift is one-module work.
 Every Cerid module registers CLI commands via a static-init hook:
 
 ```cpp
-// engine/hesap-dense/src/cli_register.cpp
+// engine/numerics/hesap-dense/src/cli_register.cpp
 CRD_CLI_REGISTER_MODULE("hesap.dense", [](cli::Registry& r) {
     r.command("matrix.create")
         .description("Create a dense matrix")

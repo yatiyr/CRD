@@ -56,7 +56,7 @@ CEIR   ──lower──▶  CKIR (by identity / generated)   ∥   execution pr
 ## 4. Module placement — `crd-ceir`, host-only, and provider dependency-inversion (the acyclicity argument)
 
 ### 4.1 The core module
-**`engine/ceir` (`crd-ceir`)** — a **host-only foundational module**. Dependencies, and ONLY these:
+**`engine/execution/ceir` (`crd-ceir`)** — a **host-only foundational module**. Dependencies, and ONLY these:
 
 ```
 crd-ceir → crd-core · crd-log · crd-memory · crd-containers · crd-units

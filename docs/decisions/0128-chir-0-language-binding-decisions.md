@@ -142,7 +142,7 @@ produce the byte-identical CEIR module (printer-canonical, the anti-drift mold).
 
 ### D6 — Module placement: `crd-chir`, host-only, one-way into `crd-ceir`
 
-A NEW module `engine/chir` (`crd-chir`), a host-only compiler frontend. Dependencies, and ONLY these: `crd-ceir` +
+A NEW module `engine/execution/chir` (`crd-chir`), a host-only compiler frontend. Dependencies, and ONLY these: `crd-ceir` +
 `crd-core`/`crd-log`/`crd-memory`/`crd-containers`/`crd-units` (the ADR-0109 §4 foundational set). It **lowers one-way**
 into CEIR (never sideways, never up — CEIR does not call CHIR). This fills the ADR-0109 gap (that ADR sited `crd-ceir`
 + the `crd-ceir-host`/`crd-ceir-gpu` bridges but left CHIR "design-only until CEIR-29/32", unsited). ⛔ **The CR-D007

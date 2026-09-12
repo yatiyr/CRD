@@ -77,7 +77,7 @@ are the starting evidence. **Recommendation:** QUAL records workload/platform tu
 source census and release qualification are separate activities. Retain every original master ID.
 
 <a id="finding-g02"></a>
-**G02 — Job portability has a concrete source gap.** [Jobs CMake](../../engine/jobs/CMakeLists.txt) chooses
+**G02 — Job portability has a concrete source gap.** [Jobs CMake](../../engine/foundation/jobs/CMakeLists.txt) chooses
 `fiber_switch_win64.asm` for Windows and `fiber_switch_lin64.S` otherwise, using an OS branch rather than an ISA
 matrix. It also documents compiler-specific context-switch/TLS restrictions. This does not establish ARM64, macOS
 ABI or WASM support. **Recommendation:** explicit OS/ABI/ISA selection, architecture guards, native ARM64 qualification
@@ -86,16 +86,16 @@ Emscripten documents main-browser-thread blocking hazards and cross-origin isola
 Browser execution therefore needs a real lifecycle design, not a renamed native fiber file. [S01](#source-s01)
 
 <a id="finding-g03"></a>
-**G03 — Scratch and task ownership need consumer proof.** [Jobs](../../engine/jobs/include/crd/jobs/jobs.hpp)
+**G03 — Scratch and task ownership need consumer proof.** [Jobs](../../engine/foundation/jobs/include/crd/jobs/jobs.hpp)
 requires counters to be waited, and frame marks belong to the current worker's arena.
-[HostProvider](../../engine/ceir-host/include/crd/ceir/host/host_provider.hpp) already uses jobs-backed parallel work,
+[HostProvider](../../engine/execution/ceir-host/include/crd/ceir/host/host_provider.hpp) already uses jobs-backed parallel work,
 per-execution cancellation and owned scratch; do not add a duplicate executor. Migrating fibers and long-lived
 application operations need explicit arena ownership, drain-on-cancel, callback epochs and fairness. Audit actual
 consumers under nested/suspended work before claiming a race. CORE-USE covers the renderer/editor consumer path;
 JOBS-HARD carries the broader substrate work at its authorized resume.
 
 <a id="finding-g04"></a>
-**G04 — Allocator richness is not application integration.** [IAllocator](../../engine/memory/include/crd/memory/allocator.hpp)
+**G04 — Allocator richness is not application integration.** [IAllocator](../../engine/foundation/memory/include/crd/memory/allocator.hpp)
 provides explicit ownership and `try_allocate`; its earlier fatal-OOM summary coexists with later recoverable paths.
 The allocator family includes TLSF, growable pools, streaming and thread-safe wrappers. Qualification needs a lifecycle
 map for document, frame, job, persistent asset, streaming, plugin and GPU memory; no hidden default-allocator escape
@@ -104,9 +104,9 @@ pool integrity. Resolve the documented dependency-cycle concern through FOUNDATI
 
 <a id="finding-g05"></a>
 **G05 — Native/CHIR scripting and reflection are not complete from reserved fields.**
-[ScriptComponent](../../engine/scene/include/crd/scene/script_component.hpp) explicitly reserves a handle/storage
-contract. [Component registration](../../engine/scene/include/crd/scene/component_registry.hpp) exposes traits and
-an address-based C++ type key; [component reflection](../../engine/scene/include/crd/scene/component.hpp) is a seam,
+[ScriptComponent](../../engine/world/scene/include/crd/scene/script_component.hpp) explicitly reserves a handle/storage
+contract. [Component registration](../../engine/world/scene/include/crd/scene/component_registry.hpp) exposes traits and
+an address-based C++ type key; [component reflection](../../engine/world/scene/include/crd/scene/component.hpp) is a seam,
 not proof of portable generated metadata. REFLECT/SCRIPT must join C++ annotations, authored schemas, ECS bindings,
 commands, inspectors and serialization. LibTooling is a primary reference for compilation-database-aware C++ AST
 tools; a regex over headers is insufficient for templates, aliases and conditional compilation. [S02](#source-s02)
@@ -118,16 +118,16 @@ extensions and isolated untrusted processes need different admission modes. Brow
 code/WASM/remote providers, not desktop DLL semantics.
 
 <a id="finding-g06"></a>
-**G06 — ECS needs a product workload audit.** The [World](../../engine/scene/include/crd/scene/world.hpp),
-[system](../../engine/scene/include/crd/scene/system.hpp), registration and retained debt contracts are substantial
+**G06 — ECS needs a product workload audit.** The [World](../../engine/world/scene/include/crd/scene/world.hpp),
+[system](../../engine/world/scene/include/crd/scene/system.hpp), registration and retained debt contracts are substantial
 reuse. Qualify stable entity/component identity, stale-handle rejection, schema migration, deferred structural edits,
 query invalidation, hierarchy changes, parallel access declarations and deterministic command application. Benchmark
 editor bursts, streaming worlds and large homogeneous simulations separately. Do not duplicate scene storage in a
 notebook or put UiWorld nodes into SceneWorld; shared reflection/documents connect the independent owners.
 
 <a id="finding-g07"></a>
-**G07 — CHIR is still a small language foundation.** Its [node kinds](../../engine/chir/include/crd/chir/node.hpp)
-and [lowering](../../engine/chir/src/lower.cpp) establish the CEIR-32 path, not MATLAB semantics. LANG retains full
+**G07 — CHIR is still a small language foundation.** Its [node kinds](../../engine/execution/chir/include/crd/chir/node.hpp)
+and [lowering](../../engine/execution/chir/src/lower.cpp) establish the CEIR-32 path, not MATLAB semantics. LANG retains full
 application behaviour. CHIR-SCI adds specified array indexing/slicing, broadcasting, matrix versus elementwise
 operators, complex/precision rules, functions/modules, units, tables, plotting, debugger/source maps, package/import
 rules and interactive execution. Choose compatibility deliberately: pin a MATLAB-like supported surface and explicit
@@ -143,7 +143,7 @@ capabilities and ECS bindings; no second language runtime or notebook-specific s
 <a id="finding-g08"></a>
 **G08 — Existing MCP verbs are a seed, not whole-product control.**
 [ceridc verbs](../../tools/ceridc/include/crd/ceridc/verbs.hpp) and its [MCP dispatcher](../../tools/ceridc/src/mcp.cpp)
-already share command implementations. The [hesap registry](../../engine/hesap/include/crd/hesap/cli/command_registry.hpp)
+already share command implementations. The [hesap registry](../../engine/numerics/hesap/include/crd/hesap/cli/command_registry.hpp)
 is another reuse source. CMD/AGENT must expose discoverable typed schemas, capabilities, units, progress, cancellation,
 transactional previews and structured errors. An agent must inspect a project, propose a patch, execute it under its
 grant, observe real state/pixels/results, compare an objective and restore a checkpoint through public services.
@@ -155,8 +155,8 @@ grant and validated arguments, not a prompt asking the model to behave. [S03](#s
 
 <a id="finding-g09"></a>
 **G09 — Full AI requires model, training and deployment contracts.** The
-[tensor](../../engine/hesap-tensor/include/), [autodiff](../../engine/hesap-autodiff/include/),
-[CKIR](../../engine/kir/include/) and [CEIR](../../engine/ceir/include/) layers supply building blocks. MLR-render
+[tensor](../../engine/numerics/hesap-tensor/include/), [autodiff](../../engine/numerics/hesap-autodiff/include/),
+[CKIR](../../engine/gpu/kir/include/) and [CEIR](../../engine/execution/ceir/include/) layers supply building blocks. MLR-render
 must provide every inference/training dependency used by the pre-UI neural renderer. The later complete AI programme
 qualifies **inference and training together**, including full training of a scoped model, fine-tuning, distillation,
 evaluation and deployment; it cannot close on inference alone. No model-size or universal hardware promise is inferred.
@@ -180,7 +180,7 @@ Record model/seed/results when bitwise replay is unavailable; do not label stoch
 
 <a id="finding-g10"></a>
 **G10 — Arbitrary-skeleton posing needs its own programme.** Existing
-[pose sampling](../../engine/anim/include/crd/anim/pose.hpp) provides clip sampling, composition and skinning palettes.
+[pose sampling](../../engine/world/anim/include/crd/anim/pose.hpp) provides clip sampling, composition and skinning palettes.
 It is not full IK, learned posing or physics-assisted motion. Cascadeur's documented AutoPosing supports humanoid and
 quadruped characters with its standard rig; that reference does not establish arbitrary topology. [S06](#source-s06)
 
@@ -233,8 +233,8 @@ audio session also distinguishes shared DAW edits from low-latency live audio, w
 
 <a id="finding-g13"></a>
 **G13 — Units need a boundary census, plus frames and time scales.**
-[Units](../../engine/units/include/) is a real shared substrate. Raw public examples such as `sample_clip(..., f32 t,...)`
-in [pose](../../engine/anim/include/crd/anim/pose.hpp) need a classified boundary review: internal numerical lanes may
+[Units](../../engine/foundation/units/include/) is a real shared substrate. Raw public examples such as `sample_clip(..., f32 t,...)`
+in [pose](../../engine/world/anim/include/crd/anim/pose.hpp) need a classified boundary review: internal numerical lanes may
 stay raw; public physical quantities require the existing typed rule. Do not mechanically wrap every dimensionless
 number. Add coordinate frame/handedness/origin, timestamp epoch/scale, uncertainty and calibration metadata where a
 dimension alone cannot prevent a wrong answer. Distinguish points/vectors and absolute temperature/differences.
@@ -245,8 +245,8 @@ alone is insufficient for aerospace data. Pin data versions as part of reproduci
 
 <a id="finding-g14"></a>
 **G14 — Audio has a precise remaining gap.**
-[AudioCommand](../../engine/audio/include/crd/audio/audio_realtime.hpp) carries `at_frame` but documents block-start
-application in v1; its voice pool is bounded. The [offline graph](../../engine/audio/include/crd/audio/audio_graph.hpp)
+[AudioCommand](../../engine/media/audio/include/crd/audio/audio_realtime.hpp) carries `at_frame` but documents block-start
+application in v1; its voice pool is bounded. The [offline graph](../../engine/media/audio/include/crd/audio/audio_graph.hpp)
 has per-sample automation and a separate real-time path. AUDIO-CEIR must close these into a qualified authored graph
 with feedback/delay semantics, sample-offset events, latency compensation, variable block sizes, streaming/recording,
 device change and no-allocation/no-lock execution. This source distinction is not a report of an observed dropout.
@@ -269,7 +269,7 @@ authoring and capabilities without leaking vendor types or overriding applicatio
 
 <a id="finding-g16"></a>
 **G16 — Web requires application services, not just shader emission.**
-[kir-webgpu](../../engine/kir-webgpu/CMakeLists.txt) is an emitter module; the current GPU-context manifests are
+[kir-webgpu](../../engine/gpu/kir-webgpu/CMakeLists.txt) is an emitter module; the current GPU-context manifests are
 Vulkan/DX12/CUDA. WEB must establish the actual provider, asset installation, asynchronous execution, persistent
 documents, offline recovery, browser permissions/lifecycle, accessible UI projection, input/IME and audio. Test
 threaded and single-thread deployments with explicit service fallbacks. WebGPU features and limits are adapter-specific;

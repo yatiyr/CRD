@@ -39,12 +39,12 @@ gate**, and a **hot-reload path**? Grades are contract-side only (the widget tha
 
 | D8 domain | Authorable schema | Round-trip / cook gate | Grade |
 |---|---|---|---|
-| frame-graph editor | `.frame.toml` — 23 assets (ADR-0127 `ceir.frame`) | `validate_ceir_frame` cook gate; `tests/frame-cook/test_frame_ceir.cpp` | **DONE** |
-| material editor | `.crdm` — 6 assets (MaterialX arg-order contract) | `tests/material-cook/`, `tests/draw/test_ckir_draw_shaders.cpp` | **DONE** |
+| frame-graph editor | `.frame.toml` — 23 assets (ADR-0127 `ceir.frame`) | `validate_ceir_frame` cook gate; `tests/assets/frame-cook/test_frame_ceir.cpp` | **DONE** |
+| material editor | `.crdm` — 6 assets (MaterialX arg-order contract) | `tests/assets/material-cook/`, `tests/rendering/draw/test_ckir_draw_shaders.cpp` | **DONE** |
 | CKIR editor | `.ckir` — 42 assets (⛔ authored direct, no C++ KGraph) | pipeline roundtrip `test_ceir_pipeline_vulkan.cpp`; 35b malformed-reject hardening | **DONE** |
 | CEIR/CHIR program-graph editor | `.chirgraph`/`.ceir` — 17 assets (CEIR-32b schema) | printer/parser byte-stable; band gates `test_band*_gate.cpp` | **DONE** |
 | geometry-graph editor | — (only `rt`/`scene` ops; no `ceir.geom` graph dialect) | — | **GAP** (demand-driven by I2D-9) |
-| inspectors (frame/resource/program/material/hot-reload) | hot-reload = CEIR-10a decision table (`engine/ceir-cook/…/hot_reload.hpp/.cpp`) | HotSwap/NoChange/NeedsMigration/ContractChange-reject | **PARTIAL** (hot-reload DONE; the rest are runtime introspection, not asset contracts) |
+| inspectors (frame/resource/program/material/hot-reload) | hot-reload = CEIR-10a decision table (`engine/execution/ceir-cook/…/hot_reload.hpp/.cpp`) | HotSwap/NoChange/NeedsMigration/ContractChange-reject | **PARTIAL** (hot-reload DONE; the rest are runtime introspection, not asset contracts) |
 | capture / regression / profiling | test harnesses + RenderDoc tooling (`reference_renderdoc_headless_capture`), no D7E-consumable contract asset | (tooling exists; not a contract) | **GAP** (demand-driven) |
 
 **Reading:** 4 DONE, 1 PARTIAL, 2 GAP. The four DONE domains are exactly the substrate the user's

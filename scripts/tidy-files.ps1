@@ -6,21 +6,25 @@
 #
 # Usage (from repo root) -- pass BOTH the .cpp TUs AND any new/edited .hpp headers (each is checked as its own TU;
 # self-contained headers compile standalone):
-#   powershell -File scripts/tidy-files.ps1 tests/hesap-autodiff/test_foo.cpp engine/hesap-autodiff/include/crd/hesap/autodiff/foo.hpp
+#   powershell -File scripts/tidy-files.ps1 tests/numerics/hesap-autodiff/test_foo.cpp engine/numerics/hesap-autodiff/include/crd/hesap/autodiff/foo.hpp
 # Exit code = number of files with issues (0 = clean).
 #
 # SCAR (2026-07-09, D-007 B0-1): this gate reported "clean" for files it had never PARSED. The `-I` set was a
-# hand-maintained list that omitted whole modules (e.g. engine/kir/include), so `#include <crd/kir/ckir.hpp>` failed;
+# hand-maintained list that omitted whole modules (e.g. engine/gpu/kir/include), so `#include <crd/kir/ckir.hpp>` failed;
 # "file not found" was then FILTERED OUT of the diagnostics, and a TU that fails to parse emits no check diagnostics at
-# all -- so a blind file was indistinguishable from a clean one. `engine/kir-vulkan/src/backend_vulkan.cpp` passed the
+# all -- so a blind file was indistinguishable from a clean one. `engine/gpu/kir-vulkan/src/backend_vulkan.cpp` passed the
 # gate without a single line of it ever being analysed, and 89 real violations across crd-kir were invisible.
 # Two root fixes, both here:
 #   1. UNRESOLVED INCLUDES ARE A HARD FAILURE (never filtered into silence). A file we cannot parse is UNGATED, and an
 #      ungated file is a DoD failure -- it must never read as green.
 #   2. The include set is DERIVED, not hand-listed: `.cpp` files use the real compile database (exact per-TU flags);
-#      headers get every `engine/*/include` dir globbed automatically, so a new module can never silently fall out.
+#      headers get every `engine/*/*/include` dir globbed automatically, so a new module can never silently fall out.
 
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Files)
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)][string[]]$Files,
+    [string]$ExportFixesDirectory
+)
 
 # NOTE: default ErrorActionPreference (Continue) on purpose -- clang-tidy writes "N warnings generated." to stderr,
 # and PS5.1 would treat that as a terminating NativeCommandError under 'Stop'.
@@ -48,10 +52,10 @@ if ($hasDb) {
 # Header include set: GLOB every engine module's include dir, so adding a module never silently un-gates it.
 $inc = @("-I$buildDir\engine\core\include",
          "-I$buildDir\_deps\catch2-src\src", "-I$buildDir\_deps\catch2-build\generated-includes")
-$inc += (Get-ChildItem "$repo\engine" -Directory | ForEach-Object { "-I$($_.FullName)\include" } | Where-Object { Test-Path ($_ -replace '^-I','') })
-# opgen-GENERATED headers (e.g. engine/ceir/generated/crd/ceir/gen/*.hpp) are real includes a header can pull in — glob the
+$inc += (Get-ChildItem "$repo\engine\*\*" -Directory | ForEach-Object { "-I$($_.FullName)\include" } | Where-Object { Test-Path ($_ -replace '^-I','') })
+# opgen-GENERATED headers (e.g. engine/execution/ceir/generated/crd/ceir/gen/*.hpp) are real includes a header can pull in — glob the
 # generated roots too, else a header that includes a generated engine header parses to UNGATED (the CEIR-13z-1b gap).
-$inc += (Get-ChildItem "$repo\engine" -Directory | ForEach-Object { "-I$($_.FullName)\generated" } | Where-Object { Test-Path ($_ -replace '^-I','') })
+$inc += (Get-ChildItem "$repo\engine\*\*" -Directory | ForEach-Object { "-I$($_.FullName)\generated" } | Where-Object { Test-Path ($_ -replace '^-I','') })
 if ($env:VULKAN_SDK) { $inc += "-I$env:VULKAN_SDK\Include" }
 
 $dirty   = 0
@@ -76,13 +80,26 @@ foreach ($f in $Files) {
   # clang-tidy honors; restate them here so this gate sees the configuration we actually ship. (Same fix as the
   # CRD_ENABLE_CLANG_TIDY block in the root CMakeLists -- keep the two in step.)
   if ($inDb) {
-    $raw = & $tidy $path --warnings-as-errors="*" --quiet -p $dbDir `
+    $extraOptions = @()
+    if ($ExportFixesDirectory) {
+      New-Item -ItemType Directory -Force -Path $ExportFixesDirectory | Out-Null
+      $fixName = ($f -replace '[:/\\]', '_') + '.yaml'
+      $extraOptions += "--export-fixes=$(Join-Path $ExportFixesDirectory $fixName)"
+    }
+    $raw = & $tidy $path @extraOptions --warnings-as-errors="*" --quiet -p $dbDir `
         --extra-arg=/EHsc --extra-arg=/arch:AVX2 --extra-arg=-Wno-unused-command-line-argument 2>&1
   }
   else {
-    $raw = & $tidy $path --warnings-as-errors="*" --quiet -- `
+    $extraOptions = @()
+    if ($ExportFixesDirectory) {
+      New-Item -ItemType Directory -Force -Path $ExportFixesDirectory | Out-Null
+      $fixName = ($f -replace '[:/\\]', '_') + '.yaml'
+      $extraOptions += "--export-fixes=$(Join-Path $ExportFixesDirectory $fixName)"
+    }
+    $raw = & $tidy $path @extraOptions --warnings-as-errors="*" --quiet -- `
         -std=c++20 -xc++ -mavx2 -mfma -mf16c -DCRD_DETERMINISTIC_FP=1 -DCRD_SIMD_TARGET=2 $inc 2>&1
   }
+  $toolExit = $LASTEXITCODE
 
   # (1) An unresolved include means the TU never parsed -> ZERO checks ran -> this file is UNGATED, not clean.
   # NOTE: a DISTINCT name from the `$missing` file COUNTER (line 59) — reusing `$missing` here clobbered the counter with a
@@ -97,6 +114,7 @@ foreach ($f in $Files) {
 
   $out = $raw | Select-String "warning:|error:"
   if ($out) { Write-Host "TIDY ISSUES  $f" -ForegroundColor Red; $out | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }; $dirty++ }
+  elseif ($toolExit -ne 0) { Write-Host "UNGATED      $f  <-- clang-tidy exited $toolExit without a recognized diagnostic" -ForegroundColor Magenta; $ungated++ }
   else { Write-Host "clean        $f" -ForegroundColor Green }
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate erk_tableaus.hpp from the INSTALLED scipy's Butcher tableaus (v9-b, ADR-0091).
 
-Run (WSL): python3 scripts/gen_erk_tableaus.py > engine/hesap-ode/include/crd/hesap/ode/detail/erk_tableaus.hpp
+Run (WSL): python3 scripts/gen_erk_tableaus.py > engine/numerics/hesap-ode/include/crd/hesap/ode/detail/erk_tableaus.hpp
 
 Extraction beats transcription: RK23/RK45/DOP853 constants are read from scipy's own arrays
 (the trajectory-exactness oracle), printed at 17 significant digits (f64 round-trip exact).

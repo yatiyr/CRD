@@ -66,6 +66,17 @@
             "CRD_ENABLE_PROFILING": "ON"
           }
         },
+        { "name": "win-vs-debug",
+          "displayName": "Visual Studio 2026 x64 Debug solution (CMake 4.2+)",
+          "inherits": "win-debug",
+          "generator": "Visual Studio 18 2026",
+          "architecture": "x64",
+          "cacheVariables": {
+            "CMAKE_C_COMPILER": null,
+            "CMAKE_CXX_COMPILER": null,
+            "CMAKE_CONFIGURATION_TYPES": "Debug"
+          }
+        },
         { "name": "win-release",
           "displayName": "Windows Release",
           "inherits": "win-base",
@@ -101,7 +112,7 @@
           }
         },
         { "name": "win-tidy-local",
-          "displayName": "Windows + clang-tidy (relaxed: warnings reported, not fatal -- mirrors the CI win-tidy job)",
+          "displayName": "Windows + clang-tidy diagnostic preview (non-gating; CI uses strict win-tidy)",
           "inherits": "win-tidy",
           "cacheVariables": {
             "CRD_CLANG_TIDY_WARNINGS_AS_ERRORS": "OFF"
@@ -140,7 +151,7 @@
             "CRD_BUILD_TESTS": "ON",
             "CRD_BUILD_BENCHMARKS": "OFF",
             "CRD_SHIPPING": "ON",
-            "_NOTE_lto_isolation": "engine/resources/CMakeLists.txt isolates crdr.cpp from clang-cl thin-LTO (single-file -fno-lto, mirrors crd-jobs worker_pool.cpp/Od pattern); rest of shipping module gets full LTO"
+            "_NOTE_lto_isolation": "engine/assets/resources/CMakeLists.txt isolates crdr.cpp from clang-cl thin-LTO (single-file -fno-lto, mirrors crd-jobs worker_pool.cpp/Od pattern); rest of shipping module gets full LTO"
           }
         },
         { "name": "win-shipping-profile",
@@ -237,6 +248,7 @@
     "buildPresets":
     [
         { "name": "win-debug",           "configurePreset": "win-debug" },
+        { "name": "win-vs-debug",        "configurePreset": "win-vs-debug", "configuration": "Debug", "targets": ["crd-sandbox"], "jobs": 2 },
         { "name": "win-release",         "configurePreset": "win-release" },
         { "name": "win-relwithdebinfo",  "configurePreset": "win-relwithdebinfo" },
         { "name": "win-asan",            "configurePreset": "win-asan" },
@@ -260,6 +272,11 @@
     [
         { "name": "win-debug",
           "configurePreset": "win-debug",
+          "output": { "outputOnFailure": true }
+        },
+        { "name": "win-vs-debug",
+          "configurePreset": "win-vs-debug",
+          "configuration": "Debug",
           "output": { "outputOnFailure": true }
         },
         { "name": "win-release",

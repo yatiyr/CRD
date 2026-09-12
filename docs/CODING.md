@@ -12,7 +12,8 @@ was superseded by the user's recorded formatting directive. Run incremental LLVM
 | Namespace, function, local variable | lower_case | `crd`, `platform_name`, `max_size` |
 | Class, struct, enum and enum value | CamelCase | `LogManager`, `LogLevel::Trace` |
 | Member | m_lower_case | `m_name` |
-| Constexpr/local constant | lower_case | `default_capacity` |
+| Non-constexpr local constant | lower_case | `default_capacity` |
+| Constexpr variable / static constant | kCamelCase | `kDefaultCapacity` |
 | Global constant | kCamelCase | `kMaxLogFiles` |
 | Template parameter | CamelCase | `ValueType` |
 | Macro | UPPER_CASE | `CRD_ASSERT`, `CRD_OS_WINDOWS` |
@@ -31,5 +32,5 @@ includes in project → `<crd/...>` → standard/external order. Preserve establ
 - Append new virtual methods at the **end** of an interface. Reordering requires deliberate ABI/migration work
   and the affected clean/LTCG checks; never silently shift vtable slots.
 - Tests use ASCII names; brackets belong in Catch2 tags, not test names. Keep registration and guard coverage.
-- Code lives in its owning `engine/<module>/include/crd/...` and `src/`; tests in `tests/<module>/`.
+- Code lives in `engine/<family>/<module>/include/crd/...` and `src/`; tests in `tests/<family>/<module>/`.
   Public API/dependency changes update the source map and relevant contract. No vendor types cross public boundaries.

@@ -5,8 +5,8 @@
 
 > How to build a *learned texture*: a small MLP that maps a uv coordinate to RGB, trained to reproduce a target, then evaluated
 > per pixel inline on the `VK_NV_cooperative_vector` tensor units. The tangible neural-shading deliverable — the substrate for
-> neural textures / materials / BRDFs. Code: `engine/kir/include/crd/kir/ckir_neural.hpp`; gate `[.neural-material]` in
-> `tests/gpu-context-vulkan/test_vulkan_context.cpp` → `neural_material.bmp` / `neural_target.bmp`.
+> neural textures / materials / BRDFs. Code: `engine/gpu/kir/include/crd/kir/ckir_neural.hpp`; gate `[.neural-material]` in
+> `tests/gpu/gpu-context-vulkan/test_vulkan_context.cpp` → `neural_material.bmp` / `neural_target.bmp`.
 
 ## Parameters
 

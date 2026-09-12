@@ -25,7 +25,7 @@ namespace
 const char* corpus_root()
 {
     const char* root = std::getenv("CRD_NN_CORPUS");
-    return root != nullptr ? root : "tests/hesap-tensor/nn_corpus";
+    return root != nullptr ? root : "tests/numerics/hesap-tensor/nn_corpus";
 }
 
 bool read_file(crd::memory::IAllocator* alloc, const char* file, crd::containers::Array<crd::u8>& out)
@@ -47,6 +47,8 @@ void fill_rand(crd::f32* p, crd::u64 n, crd::u64 seed)
     }
 }
 
+// Repeated calls use the same lvalue; never consume an rvalue callable on each iteration.
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
 template <typename F> double best_of_ns(F&& f, int reps, int warm)
 {
     for (int i = 0; i < warm; ++i)

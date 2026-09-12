@@ -119,7 +119,7 @@ literal site.
 
 ### D8. `crd-no-untagged-physical-numeric` CI guard
 
-Registered as a ctest test in `tests/math/CMakeLists.txt` (alongside
+Registered as a ctest test in `tests/foundation/math/CMakeLists.txt` (alongside
 `crd-no-non-ascii-test-names`, `crd-simd-emission-check`, `crd-no-std-math-check`,
 `crd-no-std-sort-check`). Flags struct/class field declarations of bare
 `f32` / `f64` / `float` / `double` whose name contains a physical-quantity
@@ -257,7 +257,7 @@ SIMD / GPU / Mat4 boundary. `from_trs` gains an overload accepting a
 
 ### D16. `crd-config` ships unit-tagged TOML accessors
 
-`engine/config/include/crd/config/unit_accessor.hpp` exposes 13 typed
+`engine/foundation/config/include/crd/config/unit_accessor.hpp` exposes 13 typed
 accessors: `get_length`, `get_mass`, `get_time`, `get_angle`,
 `get_velocity`, `get_force`, `get_pressure`, `get_energy`,
 `get_power`, `get_voltage`, `get_current`, `get_frequency`,
@@ -300,7 +300,7 @@ position_scale` knob.
 
 Parser is pure string processing (`parse_mesh_cook_options(StringView)`),
 testable without filesystem access; 12 cases / 15 assertions in
-`tests/cooker/test_mesh_cook_options.cpp`. Non-positive / non-finite
+`tests/assets/cooker/test_mesh_cook_options.cpp`. Non-positive / non-finite
 values fall back to `1.0F` with a warning.
 
 ### D19. Per-slice DoD = 5 configs (carried forward from D-003)
@@ -363,7 +363,7 @@ orthogonal to dimension (D12). The 80-byte API freeze pin (ADR-0062
 
 ### D21. Cross-Dim `Vec<Q1> * Q2 -> Vec<DimMul<Q1, Q2>>` overloads
 
-`engine/math/include/crd/math/vec.hpp` gains six overloads
+`engine/foundation/math/include/crd/math/vec.hpp` gains six overloads
 (Vec2/Vec3/Vec4 × {mul, div}) for cross-Dim element-wise scalar product.
 Previously `Vec3<Velocity> * Time` failed the same-result-type constraint;
 the new overload returns `Vec3<Length>`. Integrator math now composes
@@ -463,11 +463,11 @@ Quantity-overload wrappers (`closest_point`, `distance`, `distance_squared`)
 that strip-compute-retag at the call boundary.
 
 Files touched:
-- `engine/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` (95 sites widened).
-- `engine/geometry-primitives/include/crd/geometry/primitives/{closest_point,intersect,barycentric,formulary,plucker,watertight_ray_tri,robust_ray_aabb,is_finite,constants}.hpp` reverted to MathScalar (algorithms stay raw).
-- `engine/geometry-primitives/include/crd/geometry/primitives/queries_typed.hpp` (NEW — strip helpers + 8 closest_point + 5 distance + 4 distance_squared typed-overload wrappers).
-- `engine/math/include/crd/math/scalar.hpp` — Quantity overloads for `abs`/`min`/`max`/`clamp`/`is_finite`/`is_nan`/`default_epsilon<Q>` + new `sqrt_as<D, T>(Quantity<DimMul<D,D>, T>) → Quantity<D, T>` helper.
-- `engine/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` — `Plane::d` default `static_cast<T>(0)` → `T{}` (works for both raw and Quantity).
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` (95 sites widened).
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/{closest_point,intersect,barycentric,formulary,plucker,watertight_ray_tri,robust_ray_aabb,is_finite,constants}.hpp` reverted to MathScalar (algorithms stay raw).
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/queries_typed.hpp` (NEW — strip helpers + 8 closest_point + 5 distance + 4 distance_squared typed-overload wrappers).
+- `engine/foundation/math/include/crd/math/scalar.hpp` — Quantity overloads for `abs`/`min`/`max`/`clamp`/`is_finite`/`is_nan`/`default_epsilon<Q>` + new `sqrt_as<D, T>(Quantity<DimMul<D,D>, T>) → Quantity<D, T>` helper.
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/primitives.hpp` — `Plane::d` default `static_cast<T>(0)` → `T{}` (works for both raw and Quantity).
 
 Cost-benefit pin: the alternative (widen every algorithm template +
 sqrt/numeric_limits/cast patterns through closest_point.hpp + intersect.hpp
@@ -508,7 +508,7 @@ Documented as a contract pin in `mesh_resource.hpp`.
 
 ### D30. Layer-6 `UnitPreferences` + format/parse + 11-discipline preset table
 
-`engine/units/include/crd/units/unit_preferences.hpp` ships the runtime-
+`engine/foundation/units/include/crd/units/unit_preferences.hpp` ships the runtime-
 selectable display-unit-per-Dim layer:
 
 ```cpp

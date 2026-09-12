@@ -7,9 +7,9 @@ cd /mnt/d/Dev/cerid
 B=build/linux-gcc-release/engine
 g++ -O3 -std=c++20 -mavx2 -mfma -DCRD_SIMD_TARGET=2 -DNDEBUG \
   -I build/linux-gcc-release/engine/core/include \
-  -I engine/hesap-dsp/include -I engine/hesap-fft/include -I engine/hesap-dense/include \
-  -I engine/hesap/include -I engine/core/include -I engine/containers/include -I engine/memory/include \
-  -I engine/log/include -I engine/vm/include -I engine/math/include -I engine/units/include \
+  -I engine/numerics/hesap-dsp/include -I engine/numerics/hesap-fft/include -I engine/numerics/hesap-dense/include \
+  -I engine/numerics/hesap/include -I engine/foundation/core/include -I engine/foundation/containers/include -I engine/foundation/memory/include \
+  -I engine/foundation/log/include -I engine/foundation/vm/include -I engine/foundation/math/include -I engine/foundation/units/include \
   runtime/examples/bench_dsp_windows_vs_refs.cpp \
   -Wl,--start-group \
     "$B/hesap-dsp/libcrd-hesap-dsp.a" "$B/hesap-fft/libcrd-hesap-fft.a" "$B/hesap-dense/libcrd-hesap-dense.a" \

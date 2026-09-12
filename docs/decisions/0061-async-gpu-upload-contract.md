@@ -216,7 +216,7 @@ v1o1+v1o2 are independent of Preset/Profile work — they could in principle lan
 
 - `docs/debt.md` → "Async GPU upload (`GpuUploader`)" — original debt entry, this ADR closes the design half.
 - `engine/renderer/src/gpu_uploader.cpp` — current synchronous implementation; v1o1+v1o2 add async siblings.
-- `engine/scene/include/crd/scene/async_aware_index.hpp` — consumer-facing index this contract feeds into.
+- `engine/world/scene/include/crd/scene/async_aware_index.hpp` — consumer-facing index this contract feeds into.
 - `engine/rhi/include/crd/rhi/queue.hpp` — current `submit_and_wait` and per-frame `submit` paths; v1o1 adds the third variant.
 - `docs/phases/phase-3.0-scene-ecs.md` — Pulled-forward prerequisites section now points here.
 - ADR-0042 — texture cooked format + GPU upload strategy (synchronous variant).

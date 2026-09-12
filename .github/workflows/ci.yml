@@ -12,10 +12,50 @@ on:
 # can't fail the suite; the measured work + inner asserts still run. Local dev
 # (this var unset) keeps hard enforcement. GitHub also sets CI=true, which the
 # macro honors, but we set this explicitly for clarity + non-GitHub runners.
+permissions:
+  contents: read
+
 env:
   CRD_PERF_BUDGET_SOFT: '1'
+  PYTHONUTF8: '1'
 
 jobs:
+  repository:
+    name: Repository checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate workflows (actionlint 1.7.12)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+      - name: Repository hygiene and layout
+        run: python scripts/check-repository.py
+      - name: Documentation and roadmap
+        run: python scripts/check-master-plan.py
+      - name: Build tooling regression checks
+        run: python scripts/test-repository-tools.py
+      - name: Generated CEIR artifacts
+        run: python tools/ceir_opgen/ceir_opgen.py --check
+      - name: Capability source references
+        run: python tools/ceir_capability_matrix/gen_matrix.py --check
+
   windows:
     runs-on: windows-latest
     env:
@@ -33,9 +73,15 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -59,8 +105,8 @@ jobs:
         run: |
           Invoke-WebRequest `
             -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile VulkanSDK.exe
-          Start-Process -FilePath ".\VulkanSDK.exe" `
+            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
             -Wait -NoNewWindow
 
@@ -77,7 +123,15 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn
 
   clang-tidy:
     runs-on: windows-latest
@@ -90,9 +144,15 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
       # Pin clang-tidy version (LLVM 20.1.8) to match local dev (VS2026 ships
       # LLVM 20.1.8). LLVM 19 and 20 differ in `readability-identifier-naming`
@@ -112,11 +172,18 @@ jobs:
         uses: KyleMayes/install-llvm-action@v2.0.9
         with:
           version: '20.1.8'
+          directory: ${{ runner.temp }}/llvm-20.1.8
 
       - name: Verify clang-tidy version
         shell: pwsh
         run: |
-          clang-tidy --version
+          $tidyPath = Join-Path $env:LLVM_PATH 'bin/clang-tidy.exe'
+          $version = & $tidyPath --version
+          if ($LASTEXITCODE -ne 0 -or "$version" -notmatch '\b20\.1\.8\b') {
+            throw "Expected LLVM 20.1.8 at $tidyPath; got $version"
+          }
+          Write-Output $version
+          "CRD_CI_TIDY=$tidyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -140,8 +207,8 @@ jobs:
         run: |
           Invoke-WebRequest `
             -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile VulkanSDK.exe
-          Start-Process -FilePath ".\VulkanSDK.exe" `
+            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
             -Wait -NoNewWindow
 
@@ -152,14 +219,8 @@ jobs:
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
-        # CI relaxed mode for clang-tidy: warnings are still reported but not
-        # fatal. Reason: LLVM-version skew between CI runner (resolves
-        # C:/Program Files/LLVM ahead of the action's pinned install, gets
-        # LLVM 19) and local dev (VS2026 ships LLVM 20.1.8). Pre-merge gate
-        # via local `scripts/per-slice-check.ps1 -Parallel win-tidy` enforces
-        # strict mode, so violations cannot land. See CMakeLists.txt option
-        # `CRD_CLANG_TIDY_WARNINGS_AS_ERRORS` for the mechanism.
-        run: cmake --preset win-tidy -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=OFF
+        shell: pwsh
+        run: cmake --preset win-tidy -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=ON "-DCLANG_TIDY_EXE=$env:CRD_CI_TIDY"
 
       - name: Build
         run: cmake --build --preset win-tidy
@@ -175,9 +236,15 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -224,8 +291,8 @@ jobs:
         run: |
           Invoke-WebRequest `
             -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile VulkanSDK.exe
-          Start-Process -FilePath ".\VulkanSDK.exe" `
+            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
             -Wait -NoNewWindow
 
@@ -240,6 +307,19 @@ jobs:
 
       - name: Build
         run: cmake --build --preset win-clang-cl
+
+      - name: Test
+        env:
+          CRD_PLATFORM_HEADLESS: '1'
+        run: ctest --preset win-clang-cl --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn
 
   linux-gcc:
     runs-on: ubuntu-latest
@@ -258,6 +338,8 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Install system dependencies
         run: |
@@ -300,6 +382,13 @@ jobs:
             https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
           cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
 
+      - name: Install matching Vulkan validation layer
+        run: |
+          validation_dir="$RUNNER_TEMP/cerid-vulkan-validation"
+          python3 scripts/install-vulkan-validation.py --destination "$validation_dir"
+          echo "VK_LAYER_PATH=$validation_dir/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$validation_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Cache CPM downloads
         uses: actions/cache@v4
         with:
@@ -316,7 +405,15 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn
 
   windows-shipping:
     runs-on: windows-latest
@@ -330,9 +427,15 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -356,8 +459,8 @@ jobs:
         run: |
           Invoke-WebRequest `
             -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile VulkanSDK.exe
-          Start-Process -FilePath ".\VulkanSDK.exe" `
+            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
             -Wait -NoNewWindow
 
@@ -374,7 +477,15 @@ jobs:
         run: cmake --build --preset win-shipping
 
       - name: Test
-        run: ctest --preset win-shipping --output-on-failure
+        run: ctest --preset win-shipping --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn
 
   windows-clang-cl-shipping:
     # clang-cl shipping verification config. thin-LTO is currently DISABLED
@@ -392,9 +503,15 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
       - name: Cache CPM downloads
         uses: actions/cache@v4
@@ -441,8 +558,8 @@ jobs:
         run: |
           Invoke-WebRequest `
             -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile VulkanSDK.exe
-          Start-Process -FilePath ".\VulkanSDK.exe" `
+            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
             -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
             -Wait -NoNewWindow
 
@@ -459,7 +576,15 @@ jobs:
         run: cmake --build --preset win-clang-cl-shipping
 
       - name: Test
-        run: ctest --preset win-clang-cl-shipping --output-on-failure
+        run: ctest --preset win-clang-cl-shipping --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn
 
   linux-gcc-shipping:
     runs-on: ubuntu-latest
@@ -473,6 +598,8 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
+        with:
+          destination: ${{ runner.temp }}/ninja
 
       - name: Install system dependencies
         run: |
@@ -515,6 +642,13 @@ jobs:
             https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
           cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
 
+      - name: Install matching Vulkan validation layer
+        run: |
+          validation_dir="$RUNNER_TEMP/cerid-vulkan-validation"
+          python3 scripts/install-vulkan-validation.py --destination "$validation_dir"
+          echo "VK_LAYER_PATH=$validation_dir/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$validation_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Cache CPM downloads
         uses: actions/cache@v4
         with:
@@ -531,4 +665,12 @@ jobs:
         run: cmake --build --preset linux-gcc-shipping
 
       - name: Test
-        run: ctest --preset linux-gcc-shipping --output-on-failure
+        run: ctest --preset linux-gcc-shipping --output-on-failure --no-tests=error
+
+      - name: Preserve CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          path: build/**/Testing/Temporary/*.log
+          if-no-files-found: warn

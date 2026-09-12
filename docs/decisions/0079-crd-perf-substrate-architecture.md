@@ -200,18 +200,18 @@ the detour.
 
 ## References
 
-- `engine/perf/` — substrate (gate + sample + profiler + scope +
+- `engine/foundation/perf/` — substrate (gate + sample + profiler + scope +
   counters + frame_record + gpu_scope + jobs_adapter + memory +
   capture + capture_view).
-- `engine/perf-ui/` — ImGui frontend
+- `engine/ui/perf-ui/` — ImGui frontend
   (profiler_source + capture_view_source + panel_helpers + profiler_panel).
 - `engine/rhi-vulkan/.../vulkan_profiler_backend.{hpp,cpp}` — Vulkan
   GPU timestamp backend.
-- `engine/jobs/include/crd/jobs/observer.hpp` + `src/observer.cpp` —
+- `engine/foundation/jobs/include/crd/jobs/observer.hpp` + `src/observer.cpp` —
   jobs hook.
-- `engine/memory/include/crd/memory/memory_stats.hpp` — widened gate.
-- `tests/perf/` (14 files / 83 cases / 280 assertions),
-  `tests/perf-ui/` (2 files / 14 cases / 56 assertions).
+- `engine/foundation/memory/include/crd/memory/memory_stats.hpp` — widened gate.
+- `tests/foundation/perf/` (14 files / 83 cases / 280 assertions),
+  `tests/ui/perf-ui/` (2 files / 14 cases / 56 assertions).
 - `CMakePresets.json` — `win-shipping-profile` preset.
 - Session logs: `docs/sessions/2026-05-15-d003-v0a/b/c/d/e/f/g/h-*.md`.
 - Memory: `[[feedback_per_slice_run_ctest]]` (4 → 5 configs codified).

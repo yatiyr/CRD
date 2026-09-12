@@ -12,7 +12,7 @@
 # 3. Freezes inputs + FIT VALUES + reconstruction errors + orthonormalized
 #    generating-factor bases (subspace-angle gates — factors only match up to
 #    sign/permutation, so gates ride fit + rec-error + subspace angles, never raw
-#    factor bits) into tests/hesap-tensor/ref_decomp.inc as plain C arrays
+#    factor bits) into tests/numerics/hesap-tensor/ref_decomp.inc as plain C arrays
 #    (NO std containers in refs — the house rule).
 #
 # Run (WSL): python3 scripts/v14j_decomp_oracle.py
@@ -20,7 +20,7 @@ import numpy as np
 import tensorly as tl
 from tensorly.decomposition import parafac, tucker
 
-OUT = "/mnt/d/Dev/cerid/tests/hesap-tensor/ref_decomp.inc"
+OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_decomp.inc"
 
 
 # ---------------------------------------------------------------- helpers

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # v14-i SPARSE tensor oracle — reconstruct-verify-first (SANITY doctrine).
 #
-# Default mode: generate tests/hesap-tensor/ref_sparse.inc — frozen corpora
+# Default mode: generate tests/numerics/hesap-tensor/ref_sparse.inc — frozen corpora
 # (random COO rank-3/4 with duplicate raw triplets, a structured FROSTT-like
 # fiber pattern with an all-empty mode-0 slice, a dense-as-sparse cube) plus
 # expected values computed with numpy DENSE semantics (the scipy/torch
@@ -28,7 +28,7 @@ import numpy as np
 
 SEED = 20260705
 OUT_INC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "tests", "hesap-tensor", "ref_sparse.inc")
+                       "tests", "numerics", "hesap-tensor", "ref_sparse.inc")
 BENCH_DIR = os.path.join(os.path.expanduser("~"), "cerid-bench-data")
 
 

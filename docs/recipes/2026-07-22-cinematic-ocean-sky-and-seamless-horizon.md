@@ -7,8 +7,8 @@
 > hard part — a **seamless horizon** where a displaced projected-grid meets the sky with no dark sawtooth outline. All in CKIR,
 > portable to GLSL + HLSL, rendering identically across the fragment / vertex-pull / mesh-shader paths.
 >
-> Code: `engine/kir/include/crd/kir/ckir_water_render.hpp` (`analytic_sky`, `ocean_projected_vertex`, `build_ocean_water_geo_fs`)
-> and the sky pass `build_ocean_frame_fft_fs` in `tests/gpu-shared/ckir_raster_triangle.hpp`. Deliverable: `[.ocean-frame]` →
+> Code: `engine/gpu/kir/include/crd/kir/ckir_water_render.hpp` (`analytic_sky`, `ocean_projected_vertex`, `build_ocean_water_geo_fs`)
+> and the sky pass `build_ocean_frame_fft_fs` in `tests/gpu/gpu-shared/ckir_raster_triangle.hpp`. Deliverable: `[.ocean-frame]` →
 > `ocean_{frame,geo,mesh}_*.bmp`.
 
 ## Parameters (the dials that matter)

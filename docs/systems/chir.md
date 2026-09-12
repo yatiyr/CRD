@@ -9,7 +9,7 @@ Text and CR-D007 graph documents are two projections of one source model.
 
 ## What exists
 
-[SourceModel](../../engine/chir/include/crd/chir/node.hpp) carries semantic nodes, stable identity, typed-pin names,
+[SourceModel](../../engine/execution/chir/include/crd/chir/node.hpp) carries semantic nodes, stable identity, typed-pin names,
 attributes, regions and source locations; presentation layout is separate. The text parser/printer and graph-schema
 reader/writer round-trip the committed event-handler example. Both projections lower to the same CEIR module.
 Source-derived identity preserves compatible state across reorder/body edits and supports migration/rejection checks.
@@ -25,7 +25,7 @@ CHIR-0 does not have the complete language type system. Modules, generics, ADTs,
 ownership/event semantics are the intended language scope, not a claim of shipped completeness. The prototype
 parallel-for does not produce a CEIR result, and some unbacked consumers/feedback use constants; real multi-handler
 state and behaviours require the LANG rows before UI depends on them. See
-[lower.cpp](../../engine/chir/src/lower.cpp) for the actual current lowering.
+[lower.cpp](../../engine/execution/chir/src/lower.cpp) for the actual current lowering.
 
 The graph document is a data format, not a finished node-editor widget. CEIR-33 closed C2 domain contracts;
 I2D-9 builds real visual editing, diagnostics, undo/redo and preview in CR-D007.

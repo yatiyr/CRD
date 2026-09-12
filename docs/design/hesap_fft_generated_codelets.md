@@ -78,7 +78,7 @@ shuffles + llvm-mca, under the existing MKL comparison harness (core-pinned, MKL
 beat thermal drift).
 
 ## 13. Integration strategy
-Generated codelets emit to `engine/hesap-fft/include/crd/hesap/fft/detail/`; the planner dispatches to them by
+Generated codelets emit to `engine/numerics/hesap-fft/include/crd/hesap/fft/detail/`; the planner dispatches to them by
 (N, dtype, batch) with the current path as fallback. Gated until a size wins ≥1.10× sub-FFT AND ≥1.05× full 8M.
 
 ## 14. Milestones

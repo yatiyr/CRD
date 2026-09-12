@@ -51,11 +51,11 @@ The asset replacement and builder-deletion law is pinned in PRINCIPLES and AGENT
 CEIR-34 moved the program hand-list to [scene_programs.manifest](../../assets/scene_programs.manifest) and removed
 its residual overlay verb path. That does not imply a complete generic program registry: specialized recipe dispatch,
 retire-all caches and source-reload reinitialization still exist in
-[scene_renderer.cpp](../../engine/scene-render/src/scene_renderer.cpp). RAH-7 owns their completion.
+[scene_renderer.cpp](../../engine/rendering/scene-render/src/scene_renderer.cpp). RAH-7 owns their completion.
 
 ## Remaining boundary work
 
-The [command model](../../engine/gpu-context/include/crd/gpu/command_model.hpp) still has attachment/binding limits,
+The [command model](../../engine/gpu/gpu-context/include/crd/gpu/command_model.hpp) still has attachment/binding limits,
 legacy G-buffer and opaque command seams. RAH-1…8 complete typed views, resident tables, strong commands, RT,
 transfers, validation, granular reload and capability evidence. The
 [audit](../research/2026-09-12-system-audit.md) names exact findings and limits.

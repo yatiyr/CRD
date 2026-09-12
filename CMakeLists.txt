@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+    message(FATAL_ERROR "In-source builds are unsupported. Use a preset under build/<preset>.")
+endif()
+
 project(CRD
     VERSION 0.1.0
     DESCRIPTION "CRD Game/Simulation Engine"
@@ -10,6 +14,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+include(cmake/CrdIdeFolders.cmake)
 
 option(CRD_BUILD_TESTS      "Build test executables"           ON)
 option(CRD_BUILD_BENCHMARKS "Build benchmark executable"       ON)
@@ -292,12 +298,11 @@ if(TARGET zstd_static)
 endif()
 
 # stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
-# Phase 2.7: stb_image used by the texture cook handler. GIT_TAG master because
-# stb has no semver tags (see docs/debt.md).
+# Pin the previously checked-out revision: configure must not follow a moving branch.
 CPMAddPackage(
     NAME stb
     GITHUB_REPOSITORY nothings/stb
-    GIT_TAG master
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
     DOWNLOAD_ONLY YES
 )
 add_library(stb INTERFACE)
@@ -320,7 +325,7 @@ target_include_directories(cgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
 CPMAddPackage(
     NAME MikkTSpace
     GITHUB_REPOSITORY mmikk/MikkTSpace
-    GIT_TAG master
+    GIT_TAG 3e895b49d05ea07e4c2133156cfa94369e19e409
     DOWNLOAD_ONLY YES
 )
 add_library(mikktspace INTERFACE)
@@ -454,6 +459,7 @@ function(crd_collect_sources out_var directory)
     "${directory}/*.hpp"
     "${directory}/*.h"
     )
+    source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${sources})
     set(${out_var} ${sources} PARENT_SCOPE)
 endfunction()
 
@@ -501,7 +507,7 @@ if(CRD_ENABLE_CLANG_TIDY)
         # spells `-I` and `-D<user macro>` with dashes, which is why most of the build looked fine.) Two
         # silent consequences:
         #   1. Exceptions look DISABLED, so any `try` is a hard `clang-diagnostic-error` — which is exactly
-        #      why `engine/platform/src/filesystem.cpp` (the std::filesystem noexcept wrappers) failed the
+        #      why `engine/foundation/platform/src/filesystem.cpp` (the std::filesystem noexcept wrappers) failed the
         #      win-tidy build. A real, deterministic failure that sat hidden behind an unrelated crash.
         #   2. `__AVX2__` is UNDEFINED, so every AVX2-guarded SIMD path is preprocessed out and NEVER
         #      ANALYSED — the gate reads green on code it never looked at. Same disease as the
@@ -521,130 +527,125 @@ if(CRD_ENABLE_CLANG_TIDY)
             set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} ${_crd_tidy_extra_args})
             message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=ON; strict mode)")
         else()
-            # CI relaxed mode: override `.clang-tidy` WarningsAsErrors via
-            # `--warnings-as-errors=-*` (command-line wins; tidy still RUNS and
-            # reports warnings to the log, but does not fail the build). Used
-            # by CI to bypass LLVM-version-skew false positives (LLVM 19 vs 20
-            # categorise function-local `constexpr` differently — see
-            # .github/workflows/ci.yml clang-tidy job notes). Local pre-slice
-            # DoD via `scripts/per-slice-check.ps1 -Parallel` still gates on
-            # the strict `win-tidy` preset, so violations are caught
-            # pre-merge by the user's local gate.
+            # Explicit local diagnostic preview only. This mode cannot qualify a slice;
+            # CI selects pinned LLVM and requires warnings-as-errors=ON.
             set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE} ${_crd_tidy_extra_args} --warnings-as-errors=-*)
-            message(STATUS "[crd] clang-tidy ENABLED (warnings-as-errors=OFF; CI relaxed mode — warnings reported but non-fatal)")
+            message(STATUS "[crd] clang-tidy diagnostic preview only (warnings-as-errors=OFF)")
         endif()
+    else()
+        message(FATAL_ERROR "CRD_ENABLE_CLANG_TIDY requires a clang-tidy executable; analysis cannot silently skip.")
     endif()
 endif()
 
 
 # ----- Engine Modules ------------------------------------------------------
 
-add_subdirectory(engine/core)
-add_subdirectory(engine/vm)  # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
-add_subdirectory(engine/units)
-add_subdirectory(engine/ceir)  # D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
-add_subdirectory(engine/ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
-add_subdirectory(engine/ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
-add_subdirectory(engine/ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
-add_subdirectory(engine/chir)  # D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
-add_subdirectory(engine/time)
-add_subdirectory(engine/perf)
-add_subdirectory(engine/memory)
+add_subdirectory(engine/foundation/core engine/core)
+add_subdirectory(engine/foundation/vm engine/vm)  # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
+add_subdirectory(engine/foundation/units engine/units)
+add_subdirectory(engine/execution/ceir engine/ceir)  # D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
+add_subdirectory(engine/execution/ceir-host engine/ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
+add_subdirectory(engine/execution/ceir-cook engine/ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
+add_subdirectory(engine/execution/ceir-gpu engine/ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
+add_subdirectory(engine/execution/chir engine/chir)  # D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
+add_subdirectory(engine/foundation/time engine/time)
+add_subdirectory(engine/foundation/perf engine/perf)
+add_subdirectory(engine/foundation/memory engine/memory)
 # crd-perf-ui depends on crd-imgui (which depends on crd-rhi-vulkan/crd-app/crd-config);
 # declared further below after those modules are added.
-add_subdirectory(engine/math)
-add_subdirectory(engine/geometry-primitives)
-add_subdirectory(engine/geometry-bvh)
-add_subdirectory(engine/geometry-convex)
-add_subdirectory(engine/geometry-mesh)
-add_subdirectory(engine/geometry-spatial)
-add_subdirectory(engine/geometry-polygon)
-add_subdirectory(engine/geometry-mesh-processing)
-add_subdirectory(engine/geometry-delaunay)
-add_subdirectory(engine/geometry-decomposition)
-add_subdirectory(engine/geometry-bvh-gpu)
-add_subdirectory(engine/geometry-shader-helpers)
-add_subdirectory(engine/geometry-curves)
-add_subdirectory(engine/asset-io)  # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
-add_subdirectory(engine/hesap)
-add_subdirectory(engine/hesap-special)  # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
-add_subdirectory(engine/hesap-dense)
-add_subdirectory(engine/hesap-quadrature)  # v12-c; Gauss quadrature via Golub-Welsch (REUSES hesap-dense eig_sym + hesap-special recurrences); ADR-0094
-add_subdirectory(engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
-add_subdirectory(engine/hesap-ordering)  # v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
-add_subdirectory(engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
-add_subdirectory(engine/hesap-iterative)  # v4a; Krylov solvers (CG/PCG) over LinearOp
-add_subdirectory(engine/hesap-preconditioners)  # v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
-add_subdirectory(engine/hesap-amg)  # v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
+add_subdirectory(engine/foundation/math engine/math)
+add_subdirectory(engine/geometry/geometry-primitives engine/geometry-primitives)
+add_subdirectory(engine/geometry/geometry-bvh engine/geometry-bvh)
+add_subdirectory(engine/geometry/geometry-convex engine/geometry-convex)
+add_subdirectory(engine/geometry/geometry-mesh engine/geometry-mesh)
+add_subdirectory(engine/geometry/geometry-spatial engine/geometry-spatial)
+add_subdirectory(engine/geometry/geometry-polygon engine/geometry-polygon)
+add_subdirectory(engine/geometry/geometry-mesh-processing engine/geometry-mesh-processing)
+add_subdirectory(engine/geometry/geometry-delaunay engine/geometry-delaunay)
+add_subdirectory(engine/geometry/geometry-decomposition engine/geometry-decomposition)
+add_subdirectory(engine/geometry/geometry-bvh-gpu engine/geometry-bvh-gpu)
+add_subdirectory(engine/geometry/geometry-shader-helpers engine/geometry-shader-helpers)
+add_subdirectory(engine/geometry/geometry-curves engine/geometry-curves)
+add_subdirectory(engine/assets/asset-io engine/asset-io)  # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
+add_subdirectory(engine/numerics/hesap engine/hesap)
+add_subdirectory(engine/numerics/hesap-special engine/hesap-special)  # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
+add_subdirectory(engine/numerics/hesap-dense engine/hesap-dense)
+add_subdirectory(engine/numerics/hesap-quadrature engine/hesap-quadrature)  # v12-c; Gauss quadrature via Golub-Welsch (REUSES hesap-dense eig_sym + hesap-special recurrences); ADR-0094
+add_subdirectory(engine/numerics/hesap-sparse engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
+add_subdirectory(engine/numerics/hesap-ordering engine/hesap-ordering)  # v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
+add_subdirectory(engine/numerics/hesap-resources engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
+add_subdirectory(engine/numerics/hesap-iterative engine/hesap-iterative)  # v4a; Krylov solvers (CG/PCG) over LinearOp
+add_subdirectory(engine/numerics/hesap-preconditioners engine/hesap-preconditioners)  # v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
+add_subdirectory(engine/numerics/hesap-amg engine/hesap-amg)  # v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
 # crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
 # crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
-# down to engine/eylem-viz neighbourhood. See the second add_subdirectory below.
-add_subdirectory(engine/containers)
-add_subdirectory(engine/render-asset-core)  # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
-add_subdirectory(engine/render-program)     # RAF-4 (D-007 "RAF band"): the shader + program contract (deps: render-asset-core)
-add_subdirectory(engine/render-material)    # RAF-5 (D-007 "RAF band"): the material + technique contract (deps: render-asset-core, render-program)
-add_subdirectory(engine/render-pass)        # RAF-6 (D-007 "RAF band"): the pass-executor registry (deps: render-asset-core)
-add_subdirectory(engine/render-graph)       # RAF-7 (D-007 "RAF band"): the unified frame-graph runtime (deps: render-asset-core, render-pass, gpu-context)
-add_subdirectory(engine/log)
-add_subdirectory(engine/platform)
-add_subdirectory(engine/app)
-add_subdirectory(engine/config)
-add_subdirectory(engine/imgui)
-add_subdirectory(engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
+# down to engine/physics/eylem-viz neighbourhood. See the second add_subdirectory below.
+add_subdirectory(engine/foundation/containers engine/containers)
+add_subdirectory(engine/rendering/render-asset-core engine/render-asset-core)  # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
+add_subdirectory(engine/rendering/render-program engine/render-program)     # RAF-4 (D-007 "RAF band"): the shader + program contract (deps: render-asset-core)
+add_subdirectory(engine/rendering/render-material engine/render-material)    # RAF-5 (D-007 "RAF band"): the material + technique contract (deps: render-asset-core, render-program)
+add_subdirectory(engine/rendering/render-pass engine/render-pass)        # RAF-6 (D-007 "RAF band"): the pass-executor registry (deps: render-asset-core)
+add_subdirectory(engine/rendering/render-graph engine/render-graph)       # RAF-7 (D-007 "RAF band"): the unified frame-graph runtime (deps: render-asset-core, render-pass, gpu-context)
+add_subdirectory(engine/foundation/log engine/log)
+add_subdirectory(engine/foundation/platform engine/platform)
+add_subdirectory(engine/foundation/app engine/app)
+add_subdirectory(engine/foundation/config engine/config)
+add_subdirectory(engine/ui/imgui engine/imgui)
+add_subdirectory(engine/ui/perf-ui engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
 # RET-8 (ADR-0105, 2026-07-23): crd-rhi · crd-rhi-vulkan · crd-renderer · crd-shader · crd-shader-vulkan are
 # DELETED — gpu-context IS the graphics layer. Their capabilities were absorbed across RET-2..7 (present ·
 # resources · allocator/capture · ImGui · draw · consumers); the parity audit lives in D-007 rows 89-96.
-add_subdirectory(engine/lod) # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
-add_subdirectory(engine/meshgen)
-add_subdirectory(engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
-add_subdirectory(engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context
-add_subdirectory(engine/gpu-context-dx12)     # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
-add_subdirectory(engine/gpu-context-cuda)     # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
-add_subdirectory(engine/jobs)
-add_subdirectory(engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
-add_subdirectory(engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
-add_subdirectory(engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
-add_subdirectory(engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
-add_subdirectory(engine/kir)  # v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
-add_subdirectory(engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
-add_subdirectory(engine/kir-cuda)  # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
-add_subdirectory(engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
-add_subdirectory(engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
-add_subdirectory(engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
-add_subdirectory(engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
-add_subdirectory(engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
+add_subdirectory(engine/geometry/lod engine/lod) # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
+add_subdirectory(engine/geometry/meshgen engine/meshgen)
+add_subdirectory(engine/gpu/gpu-context engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
+add_subdirectory(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context
+add_subdirectory(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12)     # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
+add_subdirectory(engine/gpu/gpu-context-cuda engine/gpu-context-cuda)     # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
+add_subdirectory(engine/foundation/jobs engine/jobs)
+add_subdirectory(engine/numerics/hesap-sched engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
+add_subdirectory(engine/numerics/hesap-direct engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
+add_subdirectory(engine/numerics/hesap-eigen engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
+add_subdirectory(engine/numerics/hesap-autodiff engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
+add_subdirectory(engine/gpu/kir engine/kir)  # v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
+add_subdirectory(engine/gpu/kir-vulkan engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
+add_subdirectory(engine/gpu/kir-cuda engine/kir-cuda)  # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
+add_subdirectory(engine/gpu/kir-dx12 engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
+add_subdirectory(engine/gpu/kir-webgpu engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
+add_subdirectory(engine/gpu/kir-hip engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
+add_subdirectory(engine/gpu/kir-metal engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
+add_subdirectory(engine/assets/frame-cook engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
                                       # pipelines and whole rendering architectures as cooked, API-agnostic assets
-add_subdirectory(engine/technique-cook) # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
-add_subdirectory(engine/material-cook)  # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
-add_subdirectory(engine/vertex-cook)    # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
-add_subdirectory(engine/light-cook)     # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
+add_subdirectory(engine/assets/technique-cook engine/technique-cook) # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
+add_subdirectory(engine/assets/material-cook engine/material-cook)  # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
+add_subdirectory(engine/assets/vertex-cook engine/vertex-cook)    # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
+add_subdirectory(engine/assets/light-cook engine/light-cook)     # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
                                       # asset + the BINDING CONTRACT verified against a frame-graph pass
-add_subdirectory(engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
-add_subdirectory(engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
-add_subdirectory(engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
-add_subdirectory(engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
-add_subdirectory(engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
-add_subdirectory(engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
-add_subdirectory(engine/hesap-wavelet)  # v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
-add_subdirectory(engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
-add_subdirectory(engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
-add_subdirectory(engine/hesap-diff)  # v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
-add_subdirectory(engine/hesap-motion)  # v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
-add_subdirectory(engine/hesap-tensor)  # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
-add_subdirectory(engine/resources)
-add_subdirectory(engine/scene)
-add_subdirectory(engine/preset)
-add_subdirectory(engine/profile)
-add_subdirectory(engine/eylem)
-add_subdirectory(engine/eylem-rigid3d)
-add_subdirectory(engine/anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
-add_subdirectory(engine/timeline)      # GEO-9 (D-007 row 74): the TIMELINE resource — OTIO-shaped, RATIONAL time, deterministic eval, EXR-sequence render
-add_subdirectory(engine/audio)         # GEO-10 (D-007 row 75): the DAW substrate — own WAV/AIFF/FLAC, audio-graph resource, MIDI 2.0, realtime
-add_subdirectory(engine/draw)
-add_subdirectory(engine/scene-render)  # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
-add_subdirectory(engine/draw-imgui)
-add_subdirectory(engine/eylem-viz)
-add_subdirectory(engine/geometry-viz)
+add_subdirectory(engine/assets/shader-cook engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
+add_subdirectory(engine/numerics/hesap-opt engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
+add_subdirectory(engine/numerics/hesap-stats engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
+add_subdirectory(engine/numerics/hesap-ode engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
+add_subdirectory(engine/numerics/hesap-fft engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
+add_subdirectory(engine/numerics/hesap-dsp engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
+add_subdirectory(engine/numerics/hesap-wavelet engine/hesap-wavelet)  # v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
+add_subdirectory(engine/numerics/hesap-comms engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
+add_subdirectory(engine/numerics/hesap-interp engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
+add_subdirectory(engine/numerics/hesap-diff engine/hesap-diff)  # v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
+add_subdirectory(engine/numerics/hesap-motion engine/hesap-motion)  # v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
+add_subdirectory(engine/numerics/hesap-tensor engine/hesap-tensor)  # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
+add_subdirectory(engine/assets/resources engine/resources)
+add_subdirectory(engine/world/scene engine/scene)
+add_subdirectory(engine/assets/preset engine/preset)
+add_subdirectory(engine/foundation/profile engine/profile)
+add_subdirectory(engine/physics/eylem engine/eylem)
+add_subdirectory(engine/physics/eylem-rigid3d engine/eylem-rigid3d)
+add_subdirectory(engine/world/anim engine/anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
+add_subdirectory(engine/world/timeline engine/timeline)      # GEO-9 (D-007 row 74): the TIMELINE resource — OTIO-shaped, RATIONAL time, deterministic eval, EXR-sequence render
+add_subdirectory(engine/media/audio engine/audio)         # GEO-10 (D-007 row 75): the DAW substrate — own WAV/AIFF/FLAC, audio-graph resource, MIDI 2.0, realtime
+add_subdirectory(engine/rendering/draw engine/draw)
+add_subdirectory(engine/rendering/scene-render engine/scene-render)  # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
+add_subdirectory(engine/rendering/draw-imgui engine/draw-imgui)
+add_subdirectory(engine/physics/eylem-viz engine/eylem-viz)
+add_subdirectory(engine/geometry/geometry-viz engine/geometry-viz)
 # add_subdirectory(engine/graphics)
 # add_subdirectory(engine/scripting)
 
@@ -680,4 +681,9 @@ endif()
 if(CRD_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+crd_organize_targets("${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET crd-sandbox)
+    set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT crd-sandbox)
 endif()

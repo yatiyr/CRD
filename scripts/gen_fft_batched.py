@@ -8,7 +8,7 @@ generated kernels in hier_codelets.hpp (loads first, plain V(const) mul/add pair
 last => in-place-safe by construction). Numerically validated vs numpy IN this script; the
 engine's four-step oracle gates it end-to-end.
 
-Run (WSL): python3 scripts/gen_fft_batched.py > engine/hesap-fft/include/crd/hesap/fft/detail/batched_codelets_gen.hpp
+Run (WSL): python3 scripts/gen_fft_batched.py > engine/numerics/hesap-fft/include/crd/hesap/fft/detail/batched_codelets_gen.hpp
 (optional argv[1] = scheduler mode: hybrid2 [tracked default] | hybrid | greedy | belady — see SCHED_VARIANT)
 """
 import cmath

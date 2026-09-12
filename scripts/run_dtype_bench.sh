@@ -8,9 +8,9 @@ cmake --build "$HOME/cerid-build/linux-gcc-release" --target crd-hesap-tensor-te
 echo "gcc_tests_rc=$?"
 # probe bench (release flags + AVX2 like the engine; TLSF from the built tree)
 g++ -O3 -march=native -std=c++20 -DNDEBUG \
-    -I engine/hesap-tensor/include -I engine/hesap-stats/include -I engine/core/include \
-    -I engine/math/include \
-    -I engine/containers/include -I engine/memory/include -I engine/log/include \
+    -I engine/numerics/hesap-tensor/include -I engine/numerics/hesap-stats/include -I engine/foundation/core/include \
+    -I engine/foundation/math/include \
+    -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include \
     -I "$HOME/cerid-build/linux-gcc-release/engine/core/include" \
     scripts/bench_dtypes.cpp \
     "$HOME/cerid-build/linux-gcc-release/engine/memory/libcrd-memory.a" \

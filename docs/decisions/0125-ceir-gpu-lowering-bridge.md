@@ -19,13 +19,13 @@ list through a live `IComputeContext` / the `IExecutionProvider` seam).
 CEIR-13a/b/c built the host-authorable `ceir.compute` + `ceir.transfer` op vocabulary in `crd-ceir` core; the ops
 reference kernels by identity and declare 4d effects, but nothing yet turns a CEIR region into GPU commands. 13d is that
 lowering. ⛔ ADR-0109 §4.2 forbids `crd-ceir` core from linking gpu-context (I4/I5) — so the lowering lives in a NEW bridge
-module, `crd-ceir-gpu`, that depends on BOTH `crd-ceir` and the backend. `engine/ceir-gpu` did not exist before this slice.
+module, `crd-ceir-gpu`, that depends on BOTH `crd-ceir` and the backend. `engine/execution/ceir-gpu` did not exist before this slice.
 
 ## 2. Decision
 
 ### 2.1 The module births — `crd-ceir-gpu` (ADR-0109 §4.2), edges added AS CONSUMED
 
-A new static library `engine/ceir-gpu` (`crd-ceir-gpu`), the `crd-ceir-host` template. ADR-0109 §4.2 lists its eventual
+A new static library `engine/execution/ceir-gpu` (`crd-ceir-gpu`), the `crd-ceir-host` template. ADR-0109 §4.2 lists its eventual
 deps as `crd-ceir + crd-gpu-context + crd-render-graph + crd-kir`. ⛔ **Amendment-by-narrowing (per the I5 acyclic gate):**
 the lowering pass needs ONLY `crd-ceir` + `crd-gpu-context` (the `command_model.hpp` value types) — the `crd-render-graph`
 and `crd-kir` edges are added WHEN a consumer arrives (the render dialect / kernel-program resolution, 14 / 13z). A link

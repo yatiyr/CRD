@@ -21,7 +21,7 @@ through is the central decision:
 
 | surface | types | role | who uses it |
 |---|---|---|---|
-| **ADR-0100 `IComputeContext`** | `ComputePipeline` (by-name), `ComputeBuffer`, `ComputeRecorder` | the **standalone compute-kernel execution** surface | the CKIR kernels + their CPU oracles + `tests/gpu-shared/ckir_kernel_dispatch.hpp`; every device CKIR compute test (Vulkan + DX12) |
+| **ADR-0100 `IComputeContext`** | `ComputePipeline` (by-name), `ComputeBuffer`, `ComputeRecorder` | the **standalone compute-kernel execution** surface | the CKIR kernels + their CPU oracles + `tests/gpu/gpu-shared/ckir_kernel_dispatch.hpp`; every device CKIR compute test (Vulkan + DX12) |
 | **RAF-2 `command_model.hpp` `DispatchDesc`/`ICommandEncoder`** | `IGpuProgram`, `IStorageBuffer` (render-asset) | the **raster/frame-graph declarative** command model | `render-graph/frame_graph.cpp::record_compute_dispatch` (a DispatchDesc into a frame's raster command buffer); both raster contexts' `create_command_encoder()` |
 
 ⛔ `DispatchDesc` is NOT dead code (a false "unwired" claim would be its own source≠scoreboard bug — verified: the render

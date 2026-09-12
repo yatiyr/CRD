@@ -54,7 +54,7 @@ places for every future capability (bindless, async compute, video, …).
   slice's gate — coverage parity is a DELETION precondition, not an afterthought.
 - Consumers to migrate: crd-imgui → perf-ui · crd-draw → geometry-viz/eylem-viz/draw-imgui · crd-shader
   (mostly superseded by ADR-0104 deploy — expected to retire WITH the band) · crd-meshgen · geometry-bvh-gpu
-  Morton pipeline · sandbox + runtime smokes · tests/resources loader coverage.
+  Morton pipeline · sandbox + runtime smokes · tests/assets/resources loader coverage.
 
 ## Alternatives not taken
 

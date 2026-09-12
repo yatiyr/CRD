@@ -9,9 +9,9 @@
 # See memory/project_no_malloc_sweep_before_v5 + feedback_no_malloc_no_stdvector_in_benches.
 #
 # Allowed:
-#   - engine/memory/**        (defines MallocAllocator + default_allocator)
-#   - tests/memory/test_memory.cpp, tests/stress/test_allocators_stress.cpp,
-#     tests/stress/test_allocators_v5_stress.cpp  (test the allocators themselves)
+#   - engine/foundation/memory/**        (defines MallocAllocator + default_allocator)
+#   - tests/foundation/memory/test_memory.cpp, tests/foundation/stress/test_allocators_stress.cpp,
+#     tests/foundation/stress/test_allocators_v5_stress.cpp  (test the allocators themselves)
 #   - a 'crd-lint-allow-malloc-allocator' marker on the same line (justified exception)
 #   - comment lines (doc mentions of the type name)
 
@@ -30,10 +30,10 @@ $scopes = @(
 
 # Path fragments that are allowed to reference MallocAllocator.
 $allowedPathFragments = @(
-    '\engine\memory\',
-    '\tests\memory\test_memory.cpp',
-    '\tests\stress\test_allocators_stress.cpp',
-    '\tests\stress\test_allocators_v5_stress.cpp'
+    '\engine\foundation\memory\',
+    '\tests\foundation\memory\test_memory.cpp',
+    '\tests\foundation\stress\test_allocators_stress.cpp',
+    '\tests\foundation\stress\test_allocators_v5_stress.cpp'
 )
 
 $failures = @()
@@ -62,9 +62,9 @@ if ($failures.Count -gt 0)
     Write-Host ""
     Write-Host "  Use a named pooled allocator instead: crd::memory::TlsfAllocator (bounded working set)"
     Write-Host "  or crd::memory::GrowableTlsfAllocator (unbounded). default_allocator() is also discouraged"
-    Write-Host "  outside engine/memory. Justified exceptions: add a 'crd-lint-allow-malloc-allocator' marker."
+    Write-Host "  outside engine/foundation/memory. Justified exceptions: add a 'crd-lint-allow-malloc-allocator' marker."
     exit 1
 }
 
-Write-Host "[check_no_malloc_allocator] PASS - no MallocAllocator use outside engine/memory + allocator tests"
+Write-Host "[check_no_malloc_allocator] PASS - no MallocAllocator use outside engine/foundation/memory + allocator tests"
 exit 0

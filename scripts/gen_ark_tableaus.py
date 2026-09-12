@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate ark_tableaus.hpp from ARKODE's OWN Butcher tables (v9-i, ADR-0091).
 
-Run (WSL): python3 scripts/gen_ark_tableaus.py > engine/hesap/ode/include/crd/hesap/ode/detail/ark_tableaus.hpp
-  (path: engine/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp)
+Run (WSL): python3 scripts/gen_ark_tableaus.py > engine/numerics/hesap/ode/include/crd/hesap/ode/detail/ark_tableaus.hpp
+  (path: engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp)
 
 Extraction beats transcription. The IMEX additive-RK pairs (Kennedy & Carpenter 2003 — the
 ARK[2]SA family ARKODE's ARKStep IMEX integrator ships) are parsed straight out of SUNDIALS'

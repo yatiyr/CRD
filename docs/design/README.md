@@ -12,6 +12,7 @@ and verification evidence in the linked note; its live status belongs only to th
 
 | Reference | Purpose |
 |---|---|
+| [Repository layout](repository-layout.md) | Physical/IDE families, hygiene, preservation and build/CI verification |
 | [System qualification contract](system-quality-contract.md) | Cross-platform, ownership, correctness, security, agent access and complete document/session close-out |
 | [ceir-0a-execution-path-inventory](ceir-0a-execution-path-inventory.md) | CEIR-0a — Execution-path inventory (FROM CODE) |
 | [ceir-0e-chir-0-language-design-note](ceir-0e-chir-0-language-design-note.md) | CEIR-0e — CHIR-0: the Cerid high-level language design note (DESIGN-ONLY) |

@@ -12,14 +12,14 @@
 #
 # I1 FULLY CLOSED (D-008 C2-e): the allowlist is now EMPTY. The Effect/Module RENDERING frontend
 # (`engine/shader/src/runtime.cpp`) no longer compiles GLSL — it takes an injected `crd::shader::ISpirvCompiler`
-# (crd-shader-vulkan wraps `crd::gpu::compile_glsl_to_spirv`). No module outside `engine/gpu-context-vulkan` names a
+# (crd-shader-vulkan wraps `crd::gpu::compile_glsl_to_spirv`). No module outside `engine/gpu/gpu-context-vulkan` names a
 # shading language or a vendor compiler. If a NEW leak is ever a genuine, tracked transition, add it here with a reason
 # and a removal slice — never silently.
 #
 # Checks:
 #   A. `crd::shader::compile_glsl` / `crd::shader::compile_hlsl` appear NOWHERE (the deleted API is not referenced).
 #   B. engine/shader/** contains no shaderc/dxc identifier (crd-shader owns no language compiler) — except the allowlist.
-#   C. `#include <shaderc/...>` / `<dxc/...>` appear ONLY under engine/gpu-context-vulkan/ (or the allowlist).
+#   C. `#include <shaderc/...>` / `<dxc/...>` appear ONLY under engine/gpu/gpu-context-vulkan/ (or the allowlist).
 
 [CmdletBinding()]
 param([string] $RepoRoot = '')
@@ -42,7 +42,7 @@ foreach ($r in $roots) {
 $failures = @()
 foreach ($f in $files) {
     $rel  = $f.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
-    $isVulkanBackend = $rel -like 'engine/gpu-context-vulkan/*'
+    $isVulkanBackend = $rel -like 'engine/gpu/gpu-context-vulkan/*'
     $isShaderModule  = $rel -like 'engine/shader/*'
     $isTransitional  = $transitional -contains $rel
     $lineNo = 0
@@ -55,7 +55,7 @@ foreach ($f in $files) {
         # C — shaderc/dxc includes only in the Vulkan backend (or a tracked transitional site).
         if ($line -match '#\s*include\s*[<"](shaderc/|dxc/)') {
             if (-not $isVulkanBackend -and -not $isTransitional) {
-                $failures += "  ${rel}:${lineNo}: shaderc/dxc include outside engine/gpu-context-vulkan (the language compiler's only home)"
+                $failures += "  ${rel}:${lineNo}: shaderc/dxc include outside engine/gpu/gpu-context-vulkan (the language compiler's only home)"
             }
         }
         # B — crd-shader must name no shaderc/dxc symbol (except the tracked transitional Effect frontend).
@@ -70,7 +70,7 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host $_ }
     Write-Host ""
     Write-Host "  A shading language (GLSL/HLSL) and its vendor compiler (shaderc/dxc) live ONLY inside a backend"
-    Write-Host "  (engine/gpu-context-vulkan). crd-shader must not know any language; the graph→program seam is"
+    Write-Host "  (engine/gpu/gpu-context-vulkan). crd-shader must not know any language; the graph→program seam is"
     Write-Host "  crd::gpu::IGpuContext / crd::gpu::compile_*_to_spirv. See ADR-0103 / docs/detours/D-008."
     exit 1
 }

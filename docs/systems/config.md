@@ -5,6 +5,6 @@
 
 **Reference pointer; no live status here.** Track slices/findings in [ROADMAP](../ROADMAP.md).
 
-[Module manifest](../../engine/config/CMakeLists.txt); [Current module/source map](../systems/README.md).
+[Module manifest](../../engine/foundation/config/CMakeLists.txt); [Current module/source map](../systems/README.md).
 Full technical requirements and dated evidence: [preserved reference](../archive/systems/config.md).
 Read the master row and current public source before relying on a historical example.

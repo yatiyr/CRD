@@ -7,21 +7,21 @@ cmake --build "$HOME/cerid-build/linux-gcc-release" --target crd-hesap-tensor-ei
 RC=$?; grep -m1 -o "All tests passed.*" /tmp/t.log; echo "gcc_exec_rc=$RC"; [ $RC -ne 0 ] && exit 1
 B=$HOME/cerid-build/linux-gcc-release
 g++ -O3 -march=native -std=c++20 -DNDEBUG -DCRD_SIMD_TARGET=2 \
-    -I engine/hesap-tensor/include -I engine/hesap-dense/include -I engine/hesap/include -I engine/hesap-stats/include \
-    -I engine/core/include -I engine/containers/include -I engine/memory/include -I engine/log/include \
-    -I engine/math/include -I engine/units/include -I engine/jobs/include \
-    -I "$B/engine/core/include" \
+    -I engine/numerics/hesap-tensor/include -I engine/numerics/hesap-dense/include -I engine/numerics/hesap/include -I engine/numerics/hesap-stats/include \
+    -I engine/foundation/core/include -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include \
+    -I engine/foundation/math/include -I engine/foundation/units/include -I engine/foundation/jobs/include \
+    -I "$B/engine/foundation/core/include" \
     scripts/bench_einsum.cpp \
-    "$B/engine/hesap-dense/libcrd-hesap-dense.a" \
-    "$B/engine/hesap/libcrd-hesap.a" \
-    "$B/engine/hesap-tensor/libcrd-hesap-tensor.a" \
-    "$B/engine/jobs/libcrd-jobs.a" \
-    "$B/engine/math/libcrd-math.a" \
-    "$B/engine/containers/libcrd-containers.a" \
-    "$B/engine/memory/libcrd-memory.a" \
-    "$B/engine/vm/libcrd-vm.a" \
-    "$B/engine/log/libcrd-log.a" \
-    "$B/engine/core/libcrd-core.a" \
+    "$B/engine/numerics/hesap-dense/libcrd-hesap-dense.a" \
+    "$B/engine/numerics/hesap/libcrd-hesap.a" \
+    "$B/engine/numerics/hesap-tensor/libcrd-hesap-tensor.a" \
+    "$B/engine/foundation/jobs/libcrd-jobs.a" \
+    "$B/engine/foundation/math/libcrd-math.a" \
+    "$B/engine/foundation/containers/libcrd-containers.a" \
+    "$B/engine/foundation/memory/libcrd-memory.a" \
+    "$B/engine/foundation/vm/libcrd-vm.a" \
+    "$B/engine/foundation/log/libcrd-log.a" \
+    "$B/engine/foundation/core/libcrd-core.a" \
     -o build/bench_einsum_bin
 echo "--- cerid (1T pinned) ---"
 taskset -c 4 ./build/bench_einsum_bin

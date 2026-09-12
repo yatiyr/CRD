@@ -24,7 +24,7 @@ dep-edit recompiles exactly the affected region** (cache-hit counts are 10b/10z 
 
 **A — migration is a structural DECISION *and* a live-value MOVE.** The decision engine (compare old/new state schemas →
 `CompatibleReuse / Migrate / Reject`) is unambiguously 10a. A live value store **does exist**: the CEIR-5z reference
-`exec::Interpreter` (`engine/ceir/include/crd/ceir/exec.hpp`) holds §20 cells (`m_cells`). "Never level down" → migrate
+`exec::Interpreter` (`engine/execution/ceir/include/crd/ceir/exec.hpp`) holds §20 cells (`m_cells`). "Never level down" → migrate
 **real** cell values, not just decide structurally. Wrinkle: the Interpreter keys cells by **op pointer** (does not
 survive round-trip / differs across generations) with no set-by-id surface → 10a adds a **snapshot/restore-by-stable-id**
 surface to the Interpreter (a crd-ceir core change; §3).
@@ -155,7 +155,7 @@ scope); 10a's own DoD is "a live hot-swap works end-to-end," delivered + gated a
 
 ## 8. Stage 2 detailed design — the reload supervisor (API-LOCKED 2026-08-10, 3rd advisor consult)
 
-`engine/ceir-cook/{include/crd/ceir/cook,src}/hot_reload.{hpp,cpp}`. crd-ceir-cook already links crd-ceir +
+`engine/execution/ceir-cook/{include/crd/ceir/cook,src}/hot_reload.{hpp,cpp}`. crd-ceir-cook already links crd-ceir +
 crd-render-asset-core + crd-resources + crd-containers (7a/7b) — no new module edge.
 
 ### Ownership (the push-back-UAF scar drives the shape)

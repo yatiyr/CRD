@@ -7,7 +7,7 @@
 > `scene.raster` decisive proof); `## CEIR-13` band section (L4576, old numbering); `docs/design/ceir-0a-execution-path-inventory.md`
 > §1–4a (the tree reality, "final list from 0a, not from docs"); `docs/design/ceir-0h-migration-and-deletion-tables.md`
 > §3 (the E-series deletion list = 16z checklist); ADR-0106 Decision #4 (the parity-gate template); `record_scene_raster`
-> (`engine/render-graph/src/frame_graph.cpp:283`, read to verify the atomic-vs-composite reading). **Substrate: RUN this
+> (`engine/rendering/render-graph/src/frame_graph.cpp:283`, read to verify the atomic-vs-composite reading). **Substrate: RUN this
 > session, GREEN** (engine-first). Advisor-consulted 2026-08-12.
 
 > **⛔⛔ STATUS 2026-08-12 — 16b FULLSCREEN EXECUTOR MIGRATED + gated 4-config (deletion-is-the-proof).** `fullscreen.raster`
@@ -332,7 +332,7 @@ render.end
 The "execute a `ceir.render` draw on device" on-ramp was built in the (closed) execution bands and is a verified
 foundation — **not** something 16 must build:
 
-- **The render dialect is complete** (`engine/ceir/ops/render.ceirop.toml`): `render.scope` (the pass region, carries a
+- **The render dialect is complete** (`engine/execution/ceir/ops/render.ceirop.toml`): `render.scope` (the pass region, carries a
   draw region), `render.color_attachment` / `render.depth_attachment`, `render.draw` / `draw_indexed` / `draw_indirect`
   / `draw_indirect_count`, `render.mesh_dispatch` / `mesh_dispatch_indirect`. Plus `compute.dispatch`, the `transfer.*`
   ops, and `rt.*` (the atomic verbs already have ops).
@@ -463,7 +463,7 @@ scar governs: **coverage before inline deletion** — the E-table IS that covera
 > non-null default → ONE coalesced DrawMulti, resolved program non-null, both paths) + a universal `progs[i] != nullptr`
 > invariant. Gate: crd-render-graph 363/14 (167 in the 3a case) on win-debug + win-asan + linux-gcc-debug + linux-gcc-asan;
 > tidy clean. **Named-forward:** `scene.resolve_program`'s formal DECLARATION in the CEIR-0d native-intrinsic registry
-> (ADR-0110) is deferred — that registry is NOT built as code yet (grep: only `engine/ceir/ops/README.md` names it); building
+> (ADR-0110) is deferred — that registry is NOT built as code yet (grep: only `engine/execution/ceir/ops/README.md` names it); building
 > a registry for one entry is speculative infra, so the declaration lands WHEN the 0d registry lands (a later band). Until
 > then the ladder IS the host resolver behind `IFrameGraphHost` — the ratified fork-(c) shape.
 
@@ -473,7 +473,7 @@ Each migrated executor/asset passes, before ANY legacy deletion: **(a) command-p
 asserts the old `record_*` canonical command stream ≡ the new CEIR-lowered stream; **(b) pixel-parity readback**;
 **(c) `crd-sandbox --smoke-test` green both backends** at every increment. One kind at a time (the RAF-8 discipline).
 
-⭐ **The command-capturing encoder EXISTS** (engine-first, don't rebuild): `tests/render-graph/test_frame_graph.cpp`
+⭐ **The command-capturing encoder EXISTS** (engine-first, don't rebuild): `tests/rendering/render-graph/test_frame_graph.cpp`
 **`MockEncoder : ICommandEncoder`** — records the canonical stream as a `String ops` (`B`egin_rendering / `D`raw /
 `E`nd / `C`ompute-dispatch / `T`ransfer / `R`trace) + per-verb counts; the RAF-7 gate ("hand-built == authored records
 identical commands") asserts `ea.ops == eb.ops`. That IS the command-parity instrument, reused per migrated executor:

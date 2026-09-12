@@ -16,12 +16,12 @@ strike) as ONE commit — THIS is the "first CEIR vertical slice" (§5 gate 2).
 
 ## What already exists (13z WIRES, does not build)
 
-- **The kernels + CPU oracles:** `engine/kir/include/crd/kir/ckir_{reduce,scan,fft}.hpp` — the CKIR imperative compute
+- **The kernels + CPU oracles:** `engine/gpu/kir/include/crd/kir/ckir_{reduce,scan,fft}.hpp` — the CKIR imperative compute
   kernels AND their CPU oracles (`eval_cpu_kernel` / the direct-DFT reference). `add` is the trivial element-wise kernel.
-- **The both-backend dispatch harness:** `tests/gpu-shared/ckir_kernel_dispatch.hpp` — uploads host buffers → GpuOnly device
+- **The both-backend dispatch harness:** `tests/gpu/gpu-shared/ckir_kernel_dispatch.hpp` — uploads host buffers → GpuOnly device
   buffers, dispatches over the portable `crd::gpu::IComputeContext` / `ComputeRecorder` surface, reads back. Multi-pass FFT
   driver (`dispatch_fft2d`) with the explicit upload→pass-0 barrier already handled. This is the harness 13z mirrors.
-- **The device suites + skip idiom:** `tests/gpu-context-vulkan/*`, `tests/gpu-context-dx12/test_dx12_compute.cpp` — the
+- **The device suites + skip idiom:** `tests/gpu/gpu-context-vulkan/*`, `tests/gpu/gpu-context-dx12/test_dx12_compute.cpp` — the
   `if (ctx == nullptr) { WARN("no ... device; skipping"); return; }` soft-skip.
 - **The lowering seam:** 13d `lower_region(ctx, block) → Array<LoweredCommand>` — the unresolved kernel-ref + binding Value*s
   ride each command's `op` back-pointer; `validate_dispatch` rejects a null program at execute (the 13d-1b pin).
@@ -88,7 +88,7 @@ strike) as ONE commit — THIS is the "first CEIR vertical slice" (§5 gate 2).
 ## Mechanical gate items (before checkpoint 1 — the sandbox-false-green guards)
 
 - **New device-test target** → add to `gate6b.sh`'s HARDCODED build list (else the Linux gate silently never builds it — the
-  1a scar) AND list its sources explicitly in the tests CMake (tests/ceir-gpu lists sources explicitly).
+  1a scar) AND list its sources explicitly in the tests CMake (tests/execution/ceir-gpu lists sources explicitly).
 - **Guard the all-skip false-green:** a device suite that skips every case reads as PASS. Every checkpoint MUST include
   always-runs, device-free tests (resolver-fails → typed error; null-program → `NullProgram`; the lowered-list shape) so the
   target has real assertions even with no GPU. (The 4-config gate's win-debug/win-asan likely have a real GPU; linux-gcc via
@@ -110,7 +110,7 @@ The §129 row lists six requirements; a gate is surprised by an UNPLACED leg, so
 
 | §129 DoD leg | owned by | how |
 |---|---|---|
-| dispatched Vulkan AND DX12 | **13z-1b** (`add`) → all kernels by 13z-z | `tests/ceir-gpu-vulkan` + `tests/ceir-gpu-dx12` (per-backend, mirroring kir-vulkan/dx12; shared harness in `tests/gpu-shared/`; only the Vulkan target → gate6b.sh, DX12 Windows-only) |
+| dispatched Vulkan AND DX12 | **13z-1b** (`add`) → all kernels by 13z-z | `tests/execution/ceir-gpu-vulkan` + `tests/execution/ceir-gpu-dx12` (per-backend, mirroring kir-vulkan/dx12; shared harness in `tests/gpu/gpu-shared/`; only the Vulkan target → gate6b.sh, DX12 Windows-only) |
 | bit-exact vs the CPU oracles | **13z-1b+** | CEIR-path output byte-identical to the direct-CKIR-path (`dispatch_kernel_1wg`) on the SAME KGraph+buffers+device; each kernel's math keeps its convention (int/f32 add `==`; FFT f32-tol) |
 | authored text AND builder | **13z-2** (reduce/scan) | the §121 text≡builder discipline for the CEIR asset |
 | **ValidationCapture-silent** | **13z-1b (Vulkan)** | `crd::gpu::ValidationCapture capture(*vk); … CHECK(capture.error_count() == 0U)` under `cfg.enable_validation=true` — the RET-4 idiom; the DX12 info-queue equivalent when that backend lands. ⛔ was UNPLACED — pinned here (advisor). |
@@ -119,11 +119,11 @@ The §129 row lists six requirements; a gate is surprised by an UNPLACED leg, so
 
 ## 13z-1b implementation notes (advisor-settled structure)
 
-- **Per-backend targets** `tests/ceir-gpu-vulkan` + `tests/ceir-gpu-dx12` (NOT one both-backend target — a dx12-linked
+- **Per-backend targets** `tests/execution/ceir-gpu-vulkan` + `tests/execution/ceir-gpu-dx12` (NOT one both-backend target — a dx12-linked
   target cannot build on Linux, forfeiting the WSL llvmpipe Vulkan run, a standing project value). Copy the conditional dx12
   wiring from `tests/CMakeLists.txt`. Only the Vulkan target → gate6b.sh. Prove **Vulkan first, then DX12** (the DX12 scar
   density). 1b closes only when BOTH pass on a real device; Vulkan-green / DX12-pending is fine tick pacing.
-- **The harness = clone the bracket, swap one line.** A `dispatch_ceir_1wg` in `tests/gpu-shared/` mirrors `dispatch_kernel_1wg`
+- **The harness = clone the bracket, swap one line.** A `dispatch_ceir_1wg` in `tests/gpu/gpu-shared/` mirrors `dispatch_kernel_1wg`
   EXACTLY (buffer creation, upload copies, `TransferDst→ShaderRead` barriers, readback) with `execute_lowered(...)` replacing
   ONLY the `rec.dispatch(...)` line. SAME pipeline object on both paths (the resolver returns the direct path's pipeline);
   separate output buffers; byte-compare. ⛔ CONTRACT: CEIR binding-operand order = KGraph `buffer_decl` binding indices

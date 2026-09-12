@@ -832,7 +832,7 @@ any future addition to either side risks tripping a new cycle.
 
 `g_log_containers` is *declared* in `<crd/containers/log_channel.hpp>`
 (an `extern` reference) but *defined* by
-`engine/log/src/log_channels_first_party.cpp`. Now:
+`engine/foundation/log/src/log_channels_first_party.cpp`. Now:
 
 - `crd-log` depends on `crd-containers` (containers headers, Array<T>
   storage for RingBufferSink, plus the channel decl).
@@ -912,7 +912,7 @@ ImGui debug overlay. Internal storage, public API: separate concerns.
 
 ## 11. Tests reference
 
-`tests/containers/test_containers.cpp` — **76 cases**:
+`tests/foundation/containers/test_containers.cpp` — **76 cases**:
 
 | Group | Count |
 | --- | --- |

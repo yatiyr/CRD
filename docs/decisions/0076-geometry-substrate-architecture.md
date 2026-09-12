@@ -328,7 +328,7 @@ Per research dossier §8 + phase plan `docs/phases/phase-3.1.7-geometry.md`:
 
 | Slice | Scope | LOC | Calendar |
 |---|---|---|---|
-| **v0a** | `crd-geometry-primitives` skeleton + primitive types (`Line`/`Segment`/`Ray`/`Plane`/`AABB`/`OBB`/`Sphere`/`Capsule`/`Triangle3`/`Frustum`). **§13 move-and-delete:** absorbs `crd::math::geometry` (types + ~16 helpers → `crd::geometry::primitives::*`), deletes `engine/math/include/crd/math/geometry.hpp`, repoints ~9 consumers; `crd-math` thereafter lean | ~700 + refactor | ~3 days |
+| **v0a** | `crd-geometry-primitives` skeleton + primitive types (`Line`/`Segment`/`Ray`/`Plane`/`AABB`/`OBB`/`Sphere`/`Capsule`/`Triangle3`/`Frustum`). **§13 move-and-delete:** absorbs `crd::math::geometry` (types + ~16 helpers → `crd::geometry::primitives::*`), deletes `engine/foundation/math/include/crd/math/geometry.hpp`, repoints ~9 consumers; `crd-math` thereafter lean | ~700 + refactor | ~3 days |
 | **v0b** | closest-point formulas (point → everything) + Ericson Voronoi-region closest-point-on-triangle | ~800 | ~3 days |
 | **v0c** | intersection tests (everything-vs-everything: ray-X, AABB-tri Akenine-Möller 2001, OBB-OBB 15-axis SAT, tri-tri Möller 1997, sphere-X, capsule-capsule, frustum-X) | ~1500 | ~4 days |
 | **v0d** | barycentric + 3-tetrahedron utilities | ~200 | ~1 day |
@@ -520,14 +520,14 @@ v0a kickoff).**
 
 ### 13.1 `crd::math::geometry` → `crd-geometry-primitives` (move-and-delete)
 
-`engine/math/include/crd/math/geometry.hpp` (404 LOC) already ships
+`engine/foundation/math/include/crd/math/geometry.hpp` (404 LOC) already ships
 `Ray<T>` / `Plane<T>` / `Sphere<T>` / `AABB<T>` / `Triangle<T>` /
 `Frustum<T>` plus ~16 helpers (`closest_point`, `intersects`,
 `contains`, `signed_distance`, `intersect_ray_plane`,
 `intersect_ray_sphere`, `intersect_ray_triangle`, `intersects(Frustum,
 AABB|Sphere)`), consumed by ~9 files (`crd-scene` `world.hpp` +
 `query.hpp` — the reserved spatial-DSL operators; `crd-math` umbrella +
-`format.hpp`; `tests/math`, `tests/bench`, `tests/scene`,
+`format.hpp`; `tests/foundation/math`, `tests/bench`, `tests/world/scene`,
 `runtime/examples/smoke_math.cpp`).
 
 **Decision: move-and-delete** (option (a) of the three the user was
@@ -535,7 +535,7 @@ shown — vs (b) thin alias shim, (c) coexist additive). v0a of
 `crd-geometry-primitives` absorbs these types + helpers as
 `crd::geometry::primitives::*` (extended with the dossier's full v0
 catalogue — `Line`/`Segment`, `OBB`, `Capsule`, `Triangle3` etc.);
-`engine/math/include/crd/math/geometry.hpp` is **deleted**; the ~9
+`engine/foundation/math/include/crd/math/geometry.hpp` is **deleted**; the ~9
 consumers are repointed to `<crd/geometry/primitives/*.hpp>`. After
 v0a, `crd-math` ships **only** Vec / Mat / Quat / Transform / SIMD
 wrappers / `crd::math::deterministic` — the lean leaf substrate its
@@ -803,7 +803,7 @@ sub-module and the `queries.hpp` / `constants.hpp` / `is_finite.hpp` /
 `crd-geometry-convex` v2 (v2a–v2j + v2-close, 11 slices) shipped
 2026-05-14. The locked substrate decisions from §4 pin #14 are now
 exercised by 146 test cases / 20624 assertions; the tiebreak conformance
-sweep (`tests/geometry-convex/test_tiebreak_conformance.cpp`) forces every
+sweep (`tests/geometry/geometry-convex/test_tiebreak_conformance.cpp`) forces every
 rule with adversarial inputs designed to trigger ties.
 
 Two additions to the determinism contract land with v2j:
@@ -815,7 +815,7 @@ Two additions to the determinism contract land with v2j:
     (a vertex emitted as "exit" by plane k is input to plane k+1; if
     both planes intersect at the same point, both must compute the same
     vertex bit-for-bit). Locked by
-    `tests/geometry-convex/test_feature_clip.cpp::clip seam vertex
+    `tests/geometry/geometry-convex/test_feature_clip.cpp::clip seam vertex
     bit-equal across plane orderings` (clips `(plane_A → plane_B)` vs
     `(plane_B → plane_A)` and `memcmp`s the seam vertex).
 
@@ -881,7 +881,7 @@ FEA / CAD / V-HACD / Vatti / Bowyer-Watson):
 conditioned on sdf v2 mesh-bake stress data. **Decision (2026-05-14):** ship
 Shewchuk 1997 adaptive predicates AT v3a, BEFORE Quickhull, not after.
 
-**Where they live:** `engine/geometry-primitives/include/crd/geometry/primitives/predicates.hpp` (the leaf substrate). Every higher-tier module — `-convex` v3, `-polygon` v6 (Vatti / Bentley-Ottmann), `-delaunay` v8 (Bowyer-Watson), `-decomposition` v9c (V-HACD), `crd-cfd` (Phase 3.1.10 AMR), `crd-fea` (Phase 3.1.12 contact), `crd-brep` (Phase 3.1.8 exact boolean) — consumes them without depending on `-convex`.
+**Where they live:** `engine/geometry/geometry-primitives/include/crd/geometry/primitives/predicates.hpp` (the leaf substrate). Every higher-tier module — `-convex` v3, `-polygon` v6 (Vatti / Bentley-Ottmann), `-delaunay` v8 (Bowyer-Watson), `-decomposition` v9c (V-HACD), `crd-cfd` (Phase 3.1.10 AMR), `crd-fea` (Phase 3.1.12 contact), `crd-brep` (Phase 3.1.8 exact boolean) — consumes them without depending on `-convex`.
 
 **What ships:** `orient2d` / `orient3d` / `incircle` / `insphere` with adaptive expansion arithmetic per Shewchuk "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates" (1997). Replaces the existing float-based `intersect.hpp::orient2d` (line 83-86, a plain `cross(b-a, c-a)`) — the float version stays but the adaptive version is preferred for builder code paths.
 
@@ -938,7 +938,7 @@ All v3 slices shipped on the 2026-05-14 / 2026-05-15 dates:
 - **v3b 2D convex hull (Andrew's monotone chain)** ✅ 2026-05-14 (lex-sort + dedup + lower/upper-hull sweeps; v3a `orient2d` for left-turn decisions; output is CCW polygon; bit-exact determinism on identical input).
 - **v3c 3D Quickhull (Barber-Dobkin-Huhdanpaa 1996)** ✅ 2026-05-14 (3 sub-slices a + b + c same day: skeleton + iteration + enrich-for-gjk + coplanar reconstruction; honest 1500-LOC sizing came in under budget at ~1020 LOC; `QuickhullResult` owning-arrays form + `convex_hull_view_of` non-owning helper + `enrich_for_gjk` mutator).
 - **v3d hull simplification** ✅ 2026-05-15 (greedy vertex-removal + shrinkage-distance cost + convexity guard + `keep_vertex_indices` locked-vertex constraint multi-domain pin for eylem / CAD / FEA / robotics; first-test-run bug caught + fixed: ring walk direction CW-vs-CCW from `(k+1)%3` → `(k+2)%3`).
-- **v3-close** ✅ 2026-05-15 (tiebreak conformance under input permutations + 2D cross-check + large-coord 1e6/1e7 stability + v3d threshold-respect + v3d locked-vertex interaction; `tests/geometry-convex/test_v3_close.cpp` 9 cases / 243 assertions; `tests/bench/test_bench_quickhull.cpp` 8 benchmarks).
+- **v3-close** ✅ 2026-05-15 (tiebreak conformance under input permutations + 2D cross-check + large-coord 1e6/1e7 stability + v3d threshold-respect + v3d locked-vertex interaction; `tests/geometry/geometry-convex/test_v3_close.cpp` 9 cases / 243 assertions; `tests/bench/test_bench_quickhull.cpp` 8 benchmarks).
 
 **Locked substrate decisions** (carried forward from §18.1–§18.4
 recommendations, validated in flight):
@@ -961,9 +961,9 @@ the v3 cluster + v3-close conformance corpus.
 
 **Drive-by debts paid en route:**
 
-1. **`engine/geometry-primitives/src/predicates.cpp::two_two_sum`** — Shewchuk-primitive helper was unused on live code paths (only `two_two_diff` is reached); clang-cl `-Werror=unused-function` failed both `win-clang-cl` and `win-clang-cl-shipping`. Marked `[[maybe_unused]]` with a documentation comment that it stays as a Shewchuk-expansion helper for the future Stage D `insphere` consumer. This was latent v3a debt — MSVC was lenient about unused static functions, clang-cl is strict.
+1. **`engine/geometry/geometry-primitives/src/predicates.cpp::two_two_sum`** — Shewchuk-primitive helper was unused on live code paths (only `two_two_diff` is reached); clang-cl `-Werror=unused-function` failed both `win-clang-cl` and `win-clang-cl-shipping`. Marked `[[maybe_unused]]` with a documentation comment that it stays as a Shewchuk-expansion helper for the future Stage D `insphere` consumer. This was latent v3a debt — MSVC was lenient about unused static functions, clang-cl is strict.
 
-2. **Non-ASCII characters in v3b/v3c TEST_CASE names** — 19 test names containing `→` / `—` mojibaked through Windows ctest argv via the Active Code Page (Turkish CP1254 → `ÔåÆ` / `ÔÇö`), exactly the bug class the `crd-no-non-ascii-test-names` guard was created for in v1i-c. The guard was wired correctly into ctest at v1i-c but v3b/v3c shipped past it (the v3b/v3c per-slice verification was test-binary-direct, not ctest, per the in-flight `-bvh` verification directive). v3-close ran ctest, exposed it, and `→` / `—` were mechanically replaced with `->` / `--`. Guard now green across `tests/geometry-convex/`.
+2. **Non-ASCII characters in v3b/v3c TEST_CASE names** — 19 test names containing `→` / `—` mojibaked through Windows ctest argv via the Active Code Page (Turkish CP1254 → `ÔåÆ` / `ÔÇö`), exactly the bug class the `crd-no-non-ascii-test-names` guard was created for in v1i-c. The guard was wired correctly into ctest at v1i-c but v3b/v3c shipped past it (the v3b/v3c per-slice verification was test-binary-direct, not ctest, per the in-flight `-bvh` verification directive). v3-close ran ctest, exposed it, and `→` / `—` were mechanically replaced with `->` / `--`. Guard now green across `tests/geometry/geometry-convex/`.
 
 **ADR-0076 §18.5 outcome:** v3 substrate is the **4th of 11 sub-modules
 COMPLETE** (`-primitives` ✅ + `-bvh` ✅ + `-convex` ✅ + v3 convex-hull
@@ -976,7 +976,7 @@ validation pass).
 
 ## 19. Amendment 2026-05-16 — `-mesh` v4 cluster CLOSED + locked decisions
 
-All v4 slices shipped 2026-05-16 in a single session — `engine/geometry-mesh/`
+All v4 slices shipped 2026-05-16 in a single session — `engine/geometry/geometry-mesh/`
 module + 5 queries + typed wrapper layer per ADR-0078 §5.
 
 ### 19.1 Slice ledger
@@ -1022,7 +1022,7 @@ module + 5 queries + typed wrapper layer per ADR-0078 §5.
   `docs/sessions/2026-05-16-geometry-v4-validate.md`.
 
 **Cluster totals:** 5 slices · 39 cases / 503 assertions · new
-`engine/geometry-mesh/` module (1 umbrella + 6 logical headers + 5 .cpp
+`engine/geometry/geometry-mesh/` module (1 umbrella + 6 logical headers + 5 .cpp
 files) · typed-wrapper layer (`mesh_queries_typed.hpp`) covering
 closest_point + raycast + winding per ADR-0078 §5 D32-D36.
 
@@ -1092,7 +1092,7 @@ closest_point + raycast + winding per ADR-0078 §5 D32-D36.
 
 ### 19.3 What is not affected
 
-- §1–§17 architecture: no module-split changes. `engine/geometry-mesh/`
+- §1–§17 architecture: no module-split changes. `engine/geometry/geometry-mesh/`
   added as the 5th sub-module per §15 (mesh sub-module was reserved in
   the slice catalog; now realised).
 - §6 sequencing: geometry still executes before Phase 3.1 v1c resume.
@@ -1120,7 +1120,7 @@ consumption from ADR-0053).
 ## 20. Amendment 2026-05-16 — `-spatial` v5 cluster CLOSED + locked decisions
 
 All v5 slices shipped 2026-05-16 in a single session — new
-`engine/geometry-spatial/` module (5 backends + facade) + `crd-scene`
+`engine/geometry/geometry-spatial/` module (5 backends + facade) + `crd-scene`
 `SpatialBVHIndex` promotion. 6th of 11 geometry sub-modules complete.
 
 ### 20.1 Slice ledger
@@ -1205,7 +1205,7 @@ All v5 slices shipped 2026-05-16 in a single session — new
   + 18-config full sweep PASS.
 
 **Cluster totals:** 8 slices · ~4900 LOC engine + ~4330 LOC tests · new
-`engine/geometry-spatial/` module + `crd-scene::SpatialBVHIndex`
+`engine/geometry/geometry-spatial/` module + `crd-scene::SpatialBVHIndex`
 promotion + `crd::geometry::*` facade extension. Full project ctest:
 1952 (v4 close) to **2093** (v5 close) = +141 cases across the v5
 cluster.
@@ -1213,7 +1213,7 @@ cluster.
 ### 20.2 Locked substrate decisions
 
 1. **5 backends, ONE substrate.** Five v5 spatial backends ship from
-   one module `engine/geometry-spatial/`, each chosen for a distinct
+   one module `engine/geometry/geometry-spatial/`, each chosen for a distinct
    workload (point-cloud k-NN vs dynamic AABB broadphase vs static-
    cooked-level AABB vs particle / swarm hash vs bounded uniform-density
    grid). Same module, same `crd::geometry::spatial` namespace, one
@@ -1748,7 +1748,7 @@ at v9a.)
 
 | Slice | Engine LOC | Test LOC | Decisions | What |
 |---|---|---|---|---|
-| v9c-a `voxelize_mesh` | ~580 | ~470 | D123-D128 | New module `engine/geometry-decomposition/`. Two strictly non-overlapping passes (D126): (1) parallel SAT surface marking via Akenine-Möller 2001 13-axis exact triangle/AABB test + `std::atomic_ref<u8>::fetch_or(Surface)` race-free union via `crd::jobs::parallel_for`; (2) classification of still-Unknown voxels via WindingNumber (default, robust on non-watertight via Jacobson 2013) OR FloodFill (fast, requires watertight; leaks documented). `VoxelGrid` opaque dense `Array<u8>` + `atomic_ref` accessors (future bricked/sparse non-breaking). Sizing precedence (D125'): `fixed_resolution` wins, else `target_voxel_count`. Divergence from Mamou (D124): exact SAT not centroid-classification (substrate must serve CAD/SDF too). f32 only (matches `mesh_winding_number`); f64 follow-on. |
+| v9c-a `voxelize_mesh` | ~580 | ~470 | D123-D128 | New module `engine/geometry/geometry-decomposition/`. Two strictly non-overlapping passes (D126): (1) parallel SAT surface marking via Akenine-Möller 2001 13-axis exact triangle/AABB test + `std::atomic_ref<u8>::fetch_or(Surface)` race-free union via `crd::jobs::parallel_for`; (2) classification of still-Unknown voxels via WindingNumber (default, robust on non-watertight via Jacobson 2013) OR FloodFill (fast, requires watertight; leaks documented). `VoxelGrid` opaque dense `Array<u8>` + `atomic_ref` accessors (future bricked/sparse non-breaking). Sizing precedence (D125'): `fixed_resolution` wins, else `target_voxel_count`. Divergence from Mamou (D124): exact SAT not centroid-classification (substrate must serve CAD/SDF too). f32 only (matches `mesh_winding_number`); f64 follow-on. |
 | v9c-b `vhacd_decompose` | ~750 | ~280 | D129-D131 | Mamou §3.2-3.4 recursive plane-search. Pick worst-concavity cluster → `find_best_split` (3 axes × `splits_per_axis` evenly-spaced positions; cost = `concavity(L)+concavity(R) + α·imbalance + β·symmetry`; β=0 default — principal-axis detection deferred to v9c-b-symmetry follow-on) → `apply_split` partitions cluster.voxel_indices into LEFT (kept) + RIGHT (new id) + updates per-voxel sidecar + recomputes AABBs → terminate at min_concavity / max_parts / no usable split → Quickhull on each leaf cluster's surface voxel centres. **Concavity D129 = voxel-fraction NOT Hausdorff**: `1 - \|C_voxels\| / \|hull_voxels(C)\|` clamped to [0,1]; divergence from Mamou's original Hausdorff explicitly documented (modern V-HACD implementations universal). Output `VhacdResult { Array<QuickhullResult<f32>> parts; ... }` per advisor (each part owns its arrays + builds `ConvexHullView` via existing `convex_hull_view_of(parts[i])`). Module gains PUBLIC dep on `crd-geometry-convex`. |
 | v9c-close | — | ~70 | — | This §24 amendment + `docs/systems/geometry-decomposition.md` updated + 18-config full sweep + eylem v1c convex-collider-conditioning **stub integration smoke** (validates the full pipeline end-to-end as eylem v1c will call it: triangle mesh → voxelize → vhacd_decompose → per-part `ConvexHullView<f32>` → centroid-contains sanity) + roadmap/context/MEMORY final sync. |
 | **Total** | **~1330** | **~820** | **D123-D131 (9 decisions)** | **~2150 LOC across 3 slices** |
@@ -1851,7 +1851,7 @@ overview (`docs/systems/geometry-decomposition.md`). This §24 indexes them.
   triangle mesh → voxelize → vhacd_decompose → per-part
   `ConvexHullView<f32>` → centroid-contains sanity, mimicking eylem
   v1c's `Collider::ConvexHull` consumer flow. Lives in
-  `tests/geometry-decomposition/test_vhacd.cpp` under tag
+  `tests/geometry/geometry-decomposition/test_vhacd.cpp` under tag
   `[eylem-stub]`. Per [[per-slice-run-ctest]] per-sub-module eylem-stub
   practice.
 - **18-config full sweep** at v9c-close — PASS.
@@ -2572,11 +2572,11 @@ primitive catalog: 14 3D + 7 2D + `TransformedShape<Shape>` composition
 wrapper + typed boundary.
 
 Files:
-- `engine/geometry-primitives/include/crd/geometry/primitives/transform.hpp`
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/transform.hpp`
   (~600 LOC engine; 14 3D transforms + 7 2D transforms + helpers).
-- `engine/geometry-primitives/include/crd/geometry/primitives/transform_typed.hpp`
+- `engine/geometry/geometry-primitives/include/crd/geometry/primitives/transform_typed.hpp`
   (~430 LOC; Quantity-aware wrappers for every transform helper).
-- `tests/geometry-primitives/test_transform.cpp` (26 cases / 95
+- `tests/geometry/geometry-primitives/test_transform.cpp` (26 cases / 95
   assertions; includes the 5 advisor-pinned discriminators).
 
 ### Locked design decisions
@@ -2686,7 +2686,7 @@ Files:
 
 ### Test corpus
 
-26 cases / 95 assertions in `tests/geometry-primitives/test_transform.cpp`:
+26 cases / 95 assertions in `tests/geometry/geometry-primitives/test_transform.cpp`:
 
 **Discriminators (advisor-pinned, must-have):**
 

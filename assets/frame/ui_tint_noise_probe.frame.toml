@@ -4,7 +4,7 @@
 # beyond recovery (you would be inverting a pipeline to read back a bit pattern). Here the tint spec-consts are set to 0,
 # which ZEROES the `TexSample(backdrop) * tint` term, and amp (spec 4) is 1, so the fragment output is the RAW noise:
 #   @output.rgba = splat( noise( hash( (u32)FragCoord.xy ) ) )   in [0,1)
-# The arm (e) gate reads @output and compares each pixel to the lifted `ref_hash` oracle (tests/gpu-shared/ui_tint_noise_
+# The arm (e) gate reads @output and compares each pixel to the lifted `ref_hash` oracle (tests/gpu/gpu-shared/ui_tint_noise_
 # oracle.hpp). ⭐ The noise keys on FragCoord (window-space, top-origin on BOTH backends) and tint=0 removes the only UV-
 # dependent term, so the output is Y-FLIP-INVARIANT and BACKEND-AGNOSTIC — cross-backend equality of the bytes is a free
 # tooth, and the frosted-glass fullscreen-VS flip question (ensure_ui_program passes no ndc_y_points_down) is untouched

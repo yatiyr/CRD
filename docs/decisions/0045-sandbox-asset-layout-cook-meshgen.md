@@ -102,7 +102,7 @@ The procedural geometry module is named **`crd-meshgen`**, namespace **`crd::mes
   LOD or displacement-mapping consumers materialise. No specific phase is committed.
 - Mesh shaders reserved for Phase 5 alongside hardware RT.
 
-**Module location:** `engine/meshgen/`
+**Module location:** `engine/geometry/meshgen/`
 **Phase:** 2.7 v1e (after GPU upload in v1d)
 
 ---
@@ -112,7 +112,7 @@ The procedural geometry module is named **`crd-meshgen`**, namespace **`crd::mes
 - New top-level directories: `sandbox/`, `assets/source/`
 - `sandbox/src/main.cpp` + `sandbox/src/sandbox_layer.hpp/.cpp` + `sandbox/src/asset_browser.hpp/.cpp`
 - `sandbox/CMakeLists.txt` links: `crd-app`, `crd-resources`, `crd-renderer`, `crd-imgui`, `crd-rhi`, `crd-rhi-vulkan`, `crd-jobs`, `crd-meshgen`
-- `engine/meshgen/` module follows standard layout (include/crd/meshgen/, src/, CMakeLists.txt)
+- `engine/geometry/meshgen/` module follows standard layout (include/crd/meshgen/, src/, CMakeLists.txt)
 - `assets/source/LICENSES.md` must be updated when any asset is added
 - `build/<preset>/assets/cooked/` is created by the cook step; CI matrix with `CRD_BUILD_SANDBOX=OFF` never touches it
 - `docs/systems/sandbox.md` created to document sandbox scope contract
