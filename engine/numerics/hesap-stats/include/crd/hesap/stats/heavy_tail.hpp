@@ -59,11 +59,11 @@ template <Real T>
     const T hh = static_cast<T>(0.5) * h * h;
     // Composite over 4 panels (≈64-pt effective) — the skew-normal cdf is Φ(z)−2T(z,α), a near-cancellation in the
     // tail, so plain 16-pt (~1e-11 abs) loses too many relative digits; 4 panels push the abs error to ~1e-15.
-    constexpr int kPanels = 4;
-    const T pw = b / static_cast<T>(kPanels);
+    constexpr int panels = 4;
+    const T pw = b / static_cast<T>(panels);
     const T half = static_cast<T>(0.5) * pw;
     T sum = static_cast<T>(0);
-    for (int m = 0; m < kPanels; ++m)
+    for (int m = 0; m < panels; ++m)
     {
         const T c0 = static_cast<T>(m) * pw + half; // panel center
         for (int i = 0; i < 8; ++i)

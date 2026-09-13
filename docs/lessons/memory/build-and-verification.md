@@ -3503,3 +3503,120 @@ run `scripts/test-repository-tools.py`, and record the hosted run whose failing 
 evidence. Widening an entry is a documented decision with a reproduction, never a convenience.
 
 <!-- end-memory:feedback_third_party_defects_register_two_sided_gate -->
+
+<a id="memory-feedback_portable_strict_gate_real_database_flags"></a>
+## feedback_portable_strict_gate_real_database_flags
+
+---
+name: feedback_portable_strict_gate_real_database_flags
+description: "The strict LLVM-20 gate (scripts/tidy-files.py, cerid_dev/tidy.py) drives every changed file from the configured build's compile_commands.json on any host: only PCH inputs are stripped, MSVC /EHsc and the cache's CRD_SIMD_MSVC_ARCH_FLAG are restated through --extra-arg, a tool that does not report LLVM 20 is unavailable (check incomplete, never passed), and headers run as main files of an owning translation unit with only -Wno-pragma-once-outside-header relaxed."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** Strict analysis of changed C++ uses one portable helper on every host. Flags come from the configured
+build's compile database, never a hand-listed include set; only precompiled-header inputs are removed. The compiler
+in the database decides the restated `--extra-arg` set (MSVC: `/EHsc` and the cache's ISA flag; GCC:
+`-Wno-unknown-warning-option` and `-Wno-error`, because GCC is that configuration's compiler of record and
+clang's own warnings under GCC's flags, measured on `-Wpedantic` nested-anon-types and `-Wsign-conversion`, are
+not the gate; tidy checks stay errors). clang-tidy must report LLVM major 20; an explicit `--clang-tidy`/`CRD_CLANG_TIDY`
+is the only candidate and a wrong version never falls through to another tool. Unavailable, wrong-major, unparsed,
+missing and diagnostic-less nonzero exits leave the check `incomplete`; only findings are `failed`; neither is a pass.
+
+**Why.** Under the real database flags (`/WX`, `-Werror`) every clang diagnostic in the main file is an error that
+clang-tidy must display, which matches the hosted strict lane. The previous `--`-driven header path ran without
+`-Werror`, and the `.clang-tidy` `Checks` glob hides plain clang warnings, so a header could carry clang diagnostics
+and still read "clean" (2026-09-13: `#pragma once in main file` surfaced only under the database flags). A header
+analysed as a main file legitimately carries `#pragma once`, so that single diagnostic is disabled for header units
+only; everything else stays strict.
+
+**How to apply.** Run `python scripts/tidy-files.py <changed files>` (Windows: `scripts/tidy-files.ps1` wraps it) or
+let `dev.py check` run it; read the JSON summary's `source` per file (`database`, `owner:<target>`, `module:<dir>`)
+to know which flags analysed a header. On a host without clang-tidy 20 the result is `unavailable`, exit 99, every
+file `UNGATED`; install the pinned release rather than accepting another major.
+
+<!-- end-memory:feedback_portable_strict_gate_real_database_flags -->
+
+<a id="memory-feedback_job_end_hook_precedes_counter_release"></a>
+## feedback_job_end_hook_precedes_counter_release
+
+---
+name: feedback_job_end_hook_precedes_counter_release
+description: "crd-jobs runs the observer's on_job_end inside the trampoline BEFORE the job counter is decremented, so `wait` returning means every per-job observation (crd-perf Sample and tallies) is complete. A jobs-adapter count that is short by exactly one right after `wait`, with all samples present, is an ordering defect between hook and counter release, not a tally race and never a flake."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** A job's completion signal (the counter decrement that wakes waiters) is the last thing the trampoline does
+for that job. Observer hooks that describe the job (`on_job_end`) run before it, on the fiber's stack and on whichever
+OS thread finished the callable, with every thread-local read routed through the `CRD_JOBS_TLS_OPAQUE` accessors.
+`observer.hpp` states the guarantee; keep it when touching `worker_pool.cpp`.
+
+**Why.** Hosted `linux-gcc-debug` at `a0419cf` (2026-09-13) failed `parallel_for captures one sample per job` with
+`jobs_ended == 7` for eight jobs while `count_job_samples() == 8` passed a few instructions later: the eighth
+decrement had released the waiter before the eighth `on_job_end` ran on the scheduler stack. The 2026-05-20 record
+fixed the non-atomic tallies; this is the other half, the order between hook and release. The window is one fiber
+switch, so it shows up on a hosted runner once in thousands of tests and never in a local loop.
+
+**How to apply.** When a per-job observer count or sample is short by one immediately after `wait`, read the trampoline
+order first, not the counters. Repair the order in the scheduler, never by sleeping or retrying in the test; then run the
+scoped check on `crd-jobs-tests` and `crd-perf-tests` on both hosts and repeat the adapter cases `--repeat until-fail:50`.
+
+<!-- end-memory:feedback_job_end_hook_precedes_counter_release -->
+
+<a id="memory-feedback_clang_tidy_header_filter_regex_never_matches_windows_paths"></a>
+## feedback_clang_tidy_header_filter_regex_never_matches_windows_paths
+
+---
+name: feedback_clang_tidy_header_filter_regex_never_matches_windows_paths
+description: "The repository .clang-tidy HeaderFilterRegex '.*\/crd\/.*' uses forward slashes, so on Windows (hosted strict lane and local helper) it matches nothing and only main-file diagnostics have ever been enforced; on Linux the same regex matches and surfaces hundreds of macro-check hits in shared headers. The portable gate passes --header-filter= on every host so every lane enforces the same main-file contract; enabling header diagnostics is a separate, costed decision."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** Treat the strict gate as a main-file gate on every host, and gate a header by naming it (it becomes its
+own main file). Do not "fix" the regex to match backslashes without a row that owns the fallout: measured 2026-09-13,
+`--header-filter=.*` on one jobs unit produced 53 macro-usage/macro-to-enum diagnostics on Windows and the Linux gate
+reported 235 in 27 units, all in shared headers (`crd/core/platform.hpp`, the generated `build_config.hpp`).
+
+**Why.** clang-tidy matches the regex against the diagnosed file's path as spelled by the host; `D:\Dev\cerid\...`
+never contains `/crd/`. The hosted lane has therefore never enforced header diagnostics, and a Linux gate that did
+would fail nearly every C++ change against a contract no lane has ever held.
+
+**How to apply.** `scripts/tidy-files.py` already passes `--header-filter=`; keep it. To widen the contract, do it
+as a roadmap row: fix the regex for both separators, measure the hosted lane, and repair before turning it on.
+
+<!-- end-memory:feedback_clang_tidy_header_filter_regex_never_matches_windows_paths -->
+
+<a id="memory-feedback_check_git_budget_on_9p_checkout"></a>
+## feedback_check_git_budget_on_9p_checkout
+
+---
+name: feedback_check_git_budget_on_9p_checkout
+description: "dev.py plan/check run every Git command under --git-timeout (default 60 s, recorded in evidence). A checkout on a 9p mount (WSL reading a Windows drive) needs more: the first `git diff HEAD` took 98 s cold and a few seconds afterwards; the doc-validator CTest guard runs 57 to 64 s there, which exceeded its former 60 s CTest budget; the three repository guards now carry a 300 s ceiling. Exhausting a budget is an instrument failure, never a pass."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** On a 9p-mounted checkout pass `--git-timeout 600` (or more) to `plan` and `check`, and do not run other
+tree-wide I/O (gate runs, greps over the tree) while a check runs; a native-ext4 checkout is the better instrument
+for sustained Linux work.
+
+**Why.** Git must stat every file through 9p; the first call after a Windows-side index write re-checks everything
+(98 s measured 2026-09-13), and `crd-master-plan` walks 1,000 documents (57 to 64 s alone against a former 60 s CTest budget). The first
+Linux `check` ended `instrument_failure` on the 60 s default; two pinned-tool runs then failed honestly when the
+validator guard timed out at 60.06 s, with 119 of 120 tests passed and nothing skipped, before the guard budget
+was raised to 300 s (a ceiling against hangs, seconds on a native disk).
+
+**How to apply.** Read `git_timeout` in the sealed record; when a Linux check reports the validator guard as a
+timeout, rerun without concurrent I/O before suspecting the code.
+
+<!-- end-memory:feedback_check_git_budget_on_9p_checkout -->

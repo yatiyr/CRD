@@ -75,15 +75,15 @@ static thread_local FrameArena*    tl_frame_arena {nullptr};
 static thread_local PendingPark    tl_pending_park{};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-// The first three are CRD_JOBS_TLS_OPAQUE because job_fiber_trampoline reads
+// The first four are CRD_JOBS_TLS_OPAQUE because job_fiber_trampoline reads
 // them on the far side of a fiber resume that may have migrated this fiber to a
-// different OS thread — see the macro comment above. tl_thread_index /
-// tl_frame_arena_ref / the pending-park slot are only ever touched on the same
-// thread that set them.
+// different OS thread — see the macro comment above (the thread index feeds the
+// observer's on_job_end there). tl_frame_arena_ref / the pending-park slot are
+// only ever touched on the same thread that set them.
 CRD_JOBS_TLS_OPAQUE FiberContext& tl_scheduler_context() noexcept { return tl_sched_ctx; }
 CRD_JOBS_TLS_OPAQUE Fiber*&       tl_current_fiber_ref() noexcept { return tl_fiber; }
 CRD_JOBS_TLS_OPAQUE WorkerPool*   tl_worker_pool()       noexcept { return tl_pool_ptr; }
-crd::u32      tl_thread_index()      noexcept { return tl_idx; }
+CRD_JOBS_TLS_OPAQUE crd::u32      tl_thread_index()      noexcept { return tl_idx; }
 FrameArena&   tl_frame_arena_ref()    noexcept
 {
     CRD_ASSERT_MSG(tl_frame_arena != nullptr,
@@ -152,11 +152,27 @@ static void job_fiber_trampoline() noexcept
         tl_job_fn(tl_job_data);
         // --- past this line we may be on a different OS thread (see above) ---
 
-        // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
         // Read the fiber pointer from this thread's slot via the opaque accessor;
         // the counter is read off the fiber struct so it survives suspension + resume.
         Fiber*& cur_fiber = tl_current_fiber_ref();
         Fiber* const done = cur_fiber;
+
+        // Observer end hook BEFORE the counter release. The decrement below can wake
+        // a waiter on another thread immediately, and `wait` returning must mean the
+        // job's observation is complete (crd-perf's per-job Sample and its tallies).
+        // Hosted linux-gcc-debug at a0419cf caught the old order: `jobs_ended == 7`
+        // for an 8-job parallel_for while the eighth on_job_end was still pending on
+        // the scheduler stack. Runs on the fiber stack (64 KiB minimum) on whichever
+        // OS thread finished the callable; every TLS read here goes through the
+        // opaque accessors for that reason.
+        const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
+        if (obs != nullptr && obs->on_job_end != nullptr)
+        {
+            obs->on_job_end(static_cast<crd::jobs::FiberHandle>(done),
+                            static_cast<crd::u8>(tl_thread_index()));
+        }
+
+        // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
         cur_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
         Counter* const c = done->job_counter;
         done->job_counter = nullptr;
@@ -284,13 +300,9 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
 
     if (tl_fiber == nullptr)
     {
-        // Job completed — the trampoline already cleared target->job_counter
-        // *and* tl_fiber. Rebuild the initial stack frame so the fiber is clean
-        // on re-use.
-        if (obs != nullptr && obs->on_job_end != nullptr)
-        {
-            obs->on_job_end(static_cast<crd::jobs::FiberHandle>(target), post_thread_idx);
-        }
+        // Job completed — the trampoline already ran the observer's on_job_end,
+        // released the counter and cleared target->job_counter *and* tl_fiber.
+        // Rebuild the initial stack frame so the fiber is clean on re-use.
         fiber_init_stack(target->context, target->usable_base, target->usable_size, target->trampoline);
         m_fiber_pool.release(target);
     }

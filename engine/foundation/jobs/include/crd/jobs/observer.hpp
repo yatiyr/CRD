@@ -7,7 +7,8 @@
 // by the scheduler at well-defined points in a job's lifetime:
 //
 //   on_job_begin    -- the job's callable is about to run on this OS thread
-//   on_job_end      -- the callable returned (fiber will be recycled / suspended)
+//   on_job_end      -- the callable returned, before the job's counter releases
+//                      any waiter (fiber will be recycled afterwards)
 //   on_fiber_yield  -- the fiber is leaving this OS thread (counter_wait suspend)
 //   on_fiber_resume -- the fiber is re-entering an OS thread after yield
 //
@@ -15,14 +16,16 @@
 // profiler (crd-perf) is the intended consumer; tests / debug tooling may
 // also temporarily install one. The observer is set via `set_observer(*)`
 // before scheduler init or while the scheduler is quiescent; setting it
-// during a running scheduler is permitted but the in-flight jobs already
-// past `on_job_begin` will not see a matching `on_job_end` from the new
-// observer (the prior one ran).
+// during a running scheduler is permitted, but a job that began under the
+// previous observer delivers its `on_job_end` to the observer current when
+// the callable returns (the trampoline re-reads it there), so a swap in
+// flight yields an end without a matching begin (crd-perf counts that as a
+// missing token; its uninstall drains parked tokens).
 //
 // Cost when no observer is installed: one nullptr load + branch-not-taken
-// per scheduler entry. The scheduler caches the observer pointer locally
-// for the duration of `run_job_in_fiber` so the compiler can hoist the
-// null check.
+// per scheduler entry. `run_job_in_fiber` caches the observer pointer for
+// begin/yield/resume so the compiler can hoist the null check; the
+// trampoline loads it once more for `on_job_end`.
 //
 // FiberHandle is an opaque `void*` (the underlying Fiber* in the scheduler).
 // Use it as an identity key only -- the observer must not dereference it.
@@ -45,7 +48,10 @@ struct JobObserver
     void (*on_job_begin)(FiberHandle fiber, crd::u8 thread_index,
                          crd::u8 priority, crd::u8 stack_tier) noexcept = nullptr;
 
-    // Called after the job callable returns (job done; fiber will be recycled).
+    // Called after the job callable returns and BEFORE the job's counter is
+    // decremented, on the OS thread that finished the callable (still on the
+    // fiber's stack). A waiter that `wait` releases for this job therefore
+    // observes everything the observer recorded here.
     void (*on_job_end)(FiberHandle fiber, crd::u8 thread_index) noexcept = nullptr;
 
     // Called when the fiber is about to suspend (counter_wait park). The OS

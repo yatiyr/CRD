@@ -3682,6 +3682,26 @@
       "path": "docs/lessons/memory/build-and-verification.md",
       "anchor": "memory-feedback_third_party_defects_register_two_sided_gate",
       "description": "A failure reproduced outside Cerid code (no Cerid frame, runtime-owned memory, SDK-only reproduction) is closed by registering its exact CTest names per lane in docs/third-party-defects.md; the lane's last step compares the failing set with the register in both directions (scripts/check-registered-failures.py). Never suppress, filter or skip it, and never leave a lane permanently red."
+    },
+    "feedback_portable_strict_gate_real_database_flags": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_portable_strict_gate_real_database_flags",
+      "description": "The strict LLVM-20 gate (scripts/tidy-files.py, cerid_dev/tidy.py) drives every changed file from the configured build's compile_commands.json on any host: only PCH inputs are stripped, MSVC /EHsc and the cache's CRD_SIMD_MSVC_ARCH_FLAG are restated through --extra-arg, a tool that does not report LLVM 20 is unavailable (check incomplete, never passed), and headers run as main files of an owning translation unit with only -Wno-pragma-once-outside-header relaxed."
+    },
+    "feedback_job_end_hook_precedes_counter_release": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_job_end_hook_precedes_counter_release",
+      "description": "crd-jobs runs the observer's on_job_end inside the trampoline BEFORE the job counter is decremented, so `wait` returning means every per-job observation (crd-perf Sample and tallies) is complete. A jobs-adapter count that is short by exactly one right after `wait`, with all samples present, is an ordering defect between hook and counter release, not a tally race and never a flake."
+    },
+    "feedback_clang_tidy_header_filter_regex_never_matches_windows_paths": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_clang_tidy_header_filter_regex_never_matches_windows_paths",
+      "description": "The repository .clang-tidy HeaderFilterRegex '.*\\/crd\\/.*' uses forward slashes, so on Windows (hosted strict lane and local helper) it matches nothing and only main-file diagnostics have ever been enforced; on Linux the same regex matches and surfaces hundreds of macro-check hits in shared headers. The portable gate passes --header-filter= on every host so every lane enforces the same main-file contract; enabling header diagnostics is a separate, costed decision."
+    },
+    "feedback_check_git_budget_on_9p_checkout": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_check_git_budget_on_9p_checkout",
+      "description": "dev.py plan/check run every Git command under --git-timeout (default 60 s, recorded in evidence). A checkout on a 9p mount (WSL reading a Windows drive) needs more: the first `git diff HEAD` took 98 s cold and a few seconds afterwards; the doc-validator CTest guard runs 57 to 64 s there, which exceeded its former 60 s CTest budget; the three repository guards now carry a 300 s ceiling. Exhausting a budget is an instrument failure, never a pass."
     }
   },
   "aliases": {

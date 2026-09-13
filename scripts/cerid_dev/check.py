@@ -17,8 +17,8 @@ from .selection import (SelectionError, buildable_targets, changes_from_git, con
                         select_tests)
 
 
-def source_identity(root):
-    changes, revision = changes_from_git(root)
+def source_identity(root, git_timeout=None):
+    changes, revision = changes_from_git(root, timeout=git_timeout)
     return {'revision': revision, 'content': content_identity(root, changes, revision)}
 
 
@@ -89,6 +89,32 @@ def execution_doctor(root, build, configuration):
     return report
 
 
+def tidy_outcome(summary_path, result):
+    """Map the strict-analysis summary onto the check record: findings fail, anything short of every file parsed
+    and analysed by LLVM 20 is incomplete, and a run without a summary is an instrument failure. Never a pass."""
+    summary = None
+    if Path(summary_path).is_file():
+        try:
+            summary = json.loads(Path(summary_path).read_text(encoding='utf-8'))
+        except ValueError:
+            summary = None
+    if not isinstance(summary, dict) or result['status'] in ('budget_exhausted', 'interrupted', 'instrument_failure'):
+        return {'summary': summary or {'status': 'instrument_failure'}, 'status': 'instrument_failure',
+                'exit_code': result['exit_code'] or 2,
+                'message': f'Strict analysis produced no usable summary ({result["status"]}); inspect {result["log"]}'}
+    counts = summary.get('counts') or {}
+    detail = ', '.join(f'{name} {counts.get(name, 0)}' for name in ('clean', 'issues', 'ungated', 'missing'))
+    if summary.get('status') == 'passed' and result['exit_code'] == 0 and summary.get('exit_code') == 0:
+        return {'summary': summary, 'status': None, 'exit_code': 0, 'message': None}
+    if summary.get('status') == 'failed':
+        return {'summary': summary, 'status': 'failed', 'exit_code': 1,
+                'message': f'Changed C++ has strict-analysis findings ({detail}); inspect {result["log"]}'}
+    reason = summary.get('tool_reason') or summary.get('error') or detail
+    return {'summary': summary, 'status': 'incomplete', 'exit_code': 3,
+            'message': f'Strict LLVM-20 analysis did not qualify every changed C++ file ({reason}); '
+                       'changed C++ remains ungated, never passed'}
+
+
 def native_configure_reason(root, build):
     """A readable File API model does not prove the synchronizer finalized this source projection."""
     from project_sync.service import generation_idle, needs_generation, registrations, state_dir
@@ -112,15 +138,18 @@ def check(args, make_plan):
     build = (args.build if args.build.is_absolute() else root / args.build).resolve()
     if build == root or root.is_relative_to(build):
         raise SelectionError('Build directory must not contain the source checkout')
-    for name in ('build_timeout', 'discovery_timeout', 'test_timeout'):
-        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
+    git_timeout = getattr(args, 'git_timeout', 60)
+    budgets = {'build_timeout': args.build_timeout, 'discovery_timeout': args.discovery_timeout,
+               'test_timeout': args.test_timeout, 'git_timeout': git_timeout}
+    for name, value in budgets.items():
+        if not math.isfinite(value) or value <= 0:
             raise SelectionError(f'{name} must be finite and positive')
     if args.jobs not in (1, 2):
         raise SelectionError('Local builds use one or two compile workers')
     if args.dry_run:
         plan = make_plan(args)
         return {'version': 1, 'kind': 'check', 'status': 'dry_run', 'exit_code': 0, 'plan': plan,
-                'requested_targets': sorted(set(args.target)), 'jobs': args.jobs,
+                'requested_targets': sorted(set(args.target)), 'jobs': args.jobs, 'git_timeout': git_timeout,
                 'qualification': 'no commands executed; build and fresh discovery are required'}
     # Separate OS-backed lock from the synchronizer's writer lock, which configure must acquire itself.
     ws = Workspace(root)
@@ -129,6 +158,7 @@ def check(args, make_plan):
         directory.mkdir(parents=True, exist_ok=False)
         record = {'version': 1, 'kind': 'check', 'root': str(root), 'build': str(build), 'status': 'instrument_failure',
                   'exit_code': 2, 'phases': [], 'evidence_directory': str(directory), 'jobs': args.jobs,
+                  'git_timeout': git_timeout,
                   'qualification': 'none; no remote or unavailable-hardware qualification'}
 
         def save(name, value):
@@ -153,10 +183,10 @@ def check(args, make_plan):
             sync_ready(root, build)
             initial_plan = make_plan(args)
             if initial_plan['scope'] == 'documentation' and not args.target:
-                record.update(scope='documentation', scenario=bool(args.path), source_before=source_identity(root))
+                record.update(scope='documentation', scenario=bool(args.path), source_before=source_identity(root, git_timeout))
                 save('plan.json', initial_plan)
                 guards(initial_plan, dict(os.environ, PYTHONUTF8='1'))
-                record['source_after'] = source_identity(root)
+                record['source_after'] = source_identity(root, git_timeout)
                 if record['source_after'] != record['source_before']:
                     raise SelectionError('Checkout/revision changed during documentation verification')
                 record.update(status='passed', exit_code=0, qualification='documentation guards passed')
@@ -197,7 +227,7 @@ def check(args, make_plan):
             save('doctor.json', report)
             if report['issues']:
                 raise SelectionError('Environment is not ready: ' + '; '.join(report['issues']))
-            record['source_before'] = source_identity(root)
+            record['source_before'] = source_identity(root, git_timeout)
             record['model_sha256'] = model['sha256']
             plan = make_plan(args)
             save('plan.json', plan)
@@ -260,11 +290,17 @@ def check(args, make_plan):
                     raise SelectionError('Skipped/disabled tests retain an unqualified gate')
             guards(plan, environment)
             if plan['tidy_files']:
-                if os.name != 'nt':
-                    raise SelectionError('Portable strict-analysis execution is not yet qualified; changed C++ remains ungated')
-                run('tidy', ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                             str(root / 'scripts/tidy-files.ps1'), *plan['tidy_files']], args.build_timeout, environment)
-            record['source_after'] = source_identity(root)
+                summary = directory / 'tidy.json'
+                result = run('tidy', [sys.executable, str(root / 'scripts/tidy-files.py'), '--root', str(root),
+                                      '--build', str(build), '--plan', str(directory / 'plan.json'),
+                                      '--summary', str(summary), '--', *plan['tidy_files']],
+                             args.build_timeout, environment, require_success=False)
+                outcome = tidy_outcome(summary, result)
+                record['tidy'] = outcome['summary']
+                if outcome['status']:
+                    record.update(status=outcome['status'], exit_code=outcome['exit_code'])
+                    raise SelectionError(outcome['message'])
+            record['source_after'] = source_identity(root, git_timeout)
             if record['source_after'] != record['source_before']:
                 raise SelectionError('Checkout/revision changed during execution; results cannot qualify mixed source states')
             if load_model(root, build, args.config)['sha256'] != model['sha256']:

@@ -15,8 +15,11 @@ add_test(NAME crd-project-structure-sync
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync.py")
 add_test(NAME crd-build-profiles
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
+# The document validator walks about a thousand documents; on a native disk that is seconds, on a checkout read
+# through a 9p mount (WSL on a Windows drive) it measured 57 to 64 s and the former 60 s budget failed it honestly.
+# The budget is a ceiling against hangs, not a performance contract, so it covers the slowest supported instrument.
 set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools
-    PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
+    PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")

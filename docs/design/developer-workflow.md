@@ -51,8 +51,32 @@ guarded configuration, retaining the existing toolchain. Local jobs are one/two;
 a smaller explicitly diagnostic `--target` scope and CI. `--path`/`--target` never claim whole-tree coverage. It builds
 required fixture owners and requires exact selected/JUnit names and counts, with zero skipped/disabled requirements.
 Source/revision and model changes invalidate a run. Its OS-backed lock serializes checks; coordination with raw
-external builds and other hosts still requires qualification. Windows uses the existing LLVM-20 helper; portable
-strict-analysis execution retains REPO.DEV.3b.3. A Linux C++ check currently reports that gap rather than passing.
+external builds and other hosts still requires qualification. Every Git command runs under an explicit budget
+(`--git-timeout`, default 60 s, recorded in the evidence); a checkout on a network or 9p mount (WSL reading a Windows
+drive: the first `git diff` took 98 s cold, a few seconds afterwards) needs a larger budget, and exhausting it is an
+instrument failure, never a pass.
+
+## Strict analysis
+
+Changed C++ is analysed by one portable helper, `scripts/tidy-files.py` (`cerid_dev/tidy.py`; `tidy-files.ps1` wraps
+it on Windows), on every host. clang-tidy must report LLVM 20: an explicit `--clang-tidy`/`CRD_CLANG_TIDY` is the
+only candidate, otherwise the pinned Windows install, then `clang-tidy-20` and `clang-tidy` on PATH; `doctor`
+reports the resolution. The configured build's `compile_commands.json` supplies every flag; only precompiled-header
+inputs are stripped (MSVC `/Yu`, `/Fp`, `/FI cmake_pch`; GCC `-include cmake_pch.hxx`, `-Winvalid-pch`). The MSVC
+flags clang-tidy drops are restated through `--extra-arg` (`/EHsc` and the cache's `CRD_SIMD_MSVC_ARCH_FLAG`, never a
+literal); a GCC database adds `-Wno-unknown-warning-option` so `-Werror` cannot turn unknown warning names into parse
+failures, and `-Wno-error` because GCC is that configuration's compiler of record: clang's own warnings under GCC's
+flags stay warnings, every tidy check stays an error and every hard error still fails. A `.cpp` runs from its own entry; a header, or a source the configuration does not compile, runs as the main
+file of a translation unit of its owning target (the plan's owners, the defining module's target first), then of a
+sibling in the same module, with `-Wno-pragma-once-outside-header` for header units only. Diagnostics are main-file
+only on every host (`--header-filter=`): the repository's `HeaderFilterRegex` is spelled with `/` separators, which
+never match the backslash paths of the hosted strict lane or the Windows helper, so the main file is the contract
+every lane has ever enforced; a header is gated by naming it, which makes it its own main file. Enabling header
+diagnostics is a separate decision with a measured cost (hundreds of macro-check hits in shared headers). `check` records the JSON summary (tool, version, database
+digests, per-file status and source of flags) in the sealed evidence. Findings fail the check; a missing or
+wrong-major tool, a file with no usable command, an unresolved include, a missing file or a tool exit without
+diagnostics leaves it incomplete, never passed. The hosted strict lane analyses the Windows configuration and the
+Linux helper the Linux configuration's flags; neither qualifies the other. A hosted Linux strict lane belongs to REPO.DEV.5.
 
 Execution owns its process tree before starting native tools. Preserve native exits separately from supervisor
 cleanup; capture logs and stop descendants on explicit budget expiry/interruption. Unavailable containment is an

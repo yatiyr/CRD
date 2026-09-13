@@ -94,6 +94,46 @@ def resolve_tool(name, environment):
     return shutil.which(name, path=env_value(environment, 'PATH'))
 
 
+REQUIRED_TIDY_MAJOR = 20
+PINNED_WINDOWS_TIDY = 'C:/LLVM-20.1.8/bin/clang-tidy.exe'
+TIDY_CANDIDATES = ('clang-tidy-20', 'clang-tidy')
+LLVM_VERSION = re.compile(r'LLVM version (\d+)\.(\d+)\.(\d+)')
+
+
+def probe_llvm_version(path, environment):
+    """The tool's own --version report; a probe that names no LLVM version is a rejection, not a guess."""
+    try:
+        result = subprocess.run([path, '--version'], capture_output=True, env=environment, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f'{path}: version probe failed ({error.__class__.__name__})'
+    match = LLVM_VERSION.search(result.stdout.decode('utf-8', errors='replace'))
+    if result.returncode or not match:
+        return None, f'{path}: version probe exited {result.returncode} without an LLVM version'
+    return '.'.join(match.groups()), None
+
+
+def resolve_clang_tidy(environment, override=None):
+    """First candidate whose reported LLVM major is the gate's: an explicit tool (argument or CRD_CLANG_TIDY) is the
+    only candidate; otherwise the pinned Windows install, then the PATH names. Any other version is unavailable,
+    never a substitute; the reason names each rejection."""
+    explicit = override or env_value(environment, 'CRD_CLANG_TIDY')
+    searched = [explicit] if explicit else [PINNED_WINDOWS_TIDY if os.name == 'nt' else None, *TIDY_CANDIDATES]
+    candidates = []
+    for name in searched:
+        path = resolve_tool(name, environment) if name else None
+        if path and path not in [candidate for _, candidate in candidates]:
+            candidates.append((name, path))
+    rejected = []
+    for name, path in candidates:
+        version, error = probe_llvm_version(path, environment)
+        if version and int(version.split('.')[0]) == REQUIRED_TIDY_MAJOR:
+            return {'path': path, 'version': version, 'candidate': name, 'rejected': rejected, 'reason': None}
+        rejected.append(error or f'{path} reports LLVM {version}; the gate is LLVM {REQUIRED_TIDY_MAJOR}')
+    detail = '; '.join(rejected) if rejected else 'no candidate (' + ', '.join(filter(None, searched)) + ')'
+    return {'path': None, 'version': None, 'candidate': None, 'rejected': rejected,
+            'reason': f'clang-tidy {REQUIRED_TIDY_MAJOR} is unavailable: {detail}'}
+
+
 def runtime_file(name, environment):
     # DLLs are data loaded by the executable; PATHEXT/shutil.which is the wrong existence test.
     for entry in (env_value(environment, 'PATH') or '').split(os.pathsep):
@@ -203,13 +243,9 @@ def doctor(root, build, configuration=None, initialize_msvc=True):
         if instance:
             make_name = str(Path(instance) / 'MSBuild/Current/Bin/MSBuild.exe')
     make = resolve_tool(make_name or ('MSBuild.exe' if native else 'ninja'), environment)
+    analysis = resolve_clang_tidy(environment)
     tools = {'cmake': cmake, 'ctest': ctest, 'compiler': compiler, 'build_tool': make,
-             'python': sys.executable, 'clang_tidy_20': None}
-    tidy = Path('C:/LLVM-20.1.8/bin/clang-tidy.exe') if os.name == 'nt' else None
-    if tidy and tidy.is_file():
-        tools['clang_tidy_20'] = str(tidy)
-    elif os.name != 'nt':
-        tools['clang_tidy_20'] = resolve_tool('clang-tidy-20', environment)
+             'python': sys.executable, 'clang_tidy_20': analysis['path']}
     if not cmake or not ctest:
         issues.append('Matching CMake/CTest executables are unavailable')
     if compiler_name and not compiler:
@@ -255,6 +291,7 @@ def doctor(root, build, configuration=None, initialize_msvc=True):
             'tools': tools, 'versions': versions, 'compiler_metadata': compiler_metadata(build),
             'generator': cache.get('CMAKE_GENERATOR'), 'eligible_configure_presets': presets,
             'cache_sha256': hashlib.sha256(cache_path.read_bytes()).hexdigest() if cache_path.is_file() else None,
+            'strict_analysis': analysis,
             'environment_source': environment_source, 'runtime': runtime, 'ram_bytes': ram_bytes(),
             'disk_bytes': {'path': str(location), 'total': disk.total, 'free': disk.free},
             'synchronization': sync, 'issues': issues, 'environment_ready': bool(cache) and not issues,

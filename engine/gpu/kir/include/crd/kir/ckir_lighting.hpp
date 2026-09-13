@@ -609,12 +609,12 @@ namespace detail
     const int  v1pre = nd::detail::bin(g, KOp::Mul, g.splat(ks(0.5), 3), nd::detail::bin(g, KOp::Sub, ll1, ll2)); // V1 = ½(L1−L2)
     const int  v2pre = nd::detail::bin(g, KOp::Mul, g.splat(ks(0.5), 3), nd::detail::bin(g, KOp::Sub, ll1, ll0)); // V2 = ½(L1−L0)
     const int  cc = g.mat_mul_vec(minv, cpre);
-    const int  V1 = g.mat_mul_vec(minv, v1pre);
-    const int  V2 = g.mat_mul_vec(minv, v2pre);
-    const int  cull = g.binary(KOp::CmpLt, g.dot(g.cross(V1, V2), cc), ks(0.0)); // dot(cross(V1,V2),C) < 0
-    const int  d11 = g.dot(V1, V1);
-    const int  d22 = g.dot(V2, V2);
-    const int  d12 = g.dot(V1, V2);
+    const int  v1 = g.mat_mul_vec(minv, v1pre);
+    const int  v2 = g.mat_mul_vec(minv, v2pre);
+    const int  cull = g.binary(KOp::CmpLt, g.dot(g.cross(v1, v2), cc), ks(0.0)); // dot(cross(v1,v2),C) < 0
+    const int  d11 = g.dot(v1, v1);
+    const int  d22 = g.dot(v2, v2);
+    const int  d12 = g.dot(v1, v2);
     // GENERAL ellipse path (|d12| not negligible): eigenvalues of the 2×2 form.
     const int  tr   = g.binary(KOp::Add, d11, d22);
     const int  det  = g.unary(KOp::Sqrt, g.binary(KOp::Add, g.unary(KOp::Neg, g.binary(KOp::Mul, d12, d12)), g.binary(KOp::Mul, d11, d22)));
@@ -623,10 +623,10 @@ namespace detail
     const int  emax = detail::sq(g, g.binary(KOp::Add, u, vv));
     const int  emin = detail::sq(g, g.binary(KOp::Sub, u, vv));
     const int  d11gt = g.binary(KOp::CmpGt, d11, d22);
-    const int  v1a = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), V1), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emax, d11), 3), V2));
-    const int  v2a = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), V1), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emin, d11), 3), V2));
-    const int  v1b = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), V2), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emax, d22), 3), V1));
-    const int  v2b = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), V2), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emin, d22), 3), V1));
+    const int  v1a = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), v1), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emax, d11), 3), v2));
+    const int  v2a = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), v1), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emin, d11), 3), v2));
+    const int  v1b = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), v2), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emax, d22), 3), v1));
+    const int  v2b = nd::detail::bin(g, KOp::Add, nd::detail::bin(g, KOp::Mul, g.splat(d12, 3), v2), nd::detail::bin(g, KOp::Mul, g.splat(g.binary(KOp::Sub, emin, d22), 3), v1));
     const int  v1gen = g.normalize(g.select(d11gt, v1a, v1b));
     const int  v2gen = g.normalize(g.select(d11gt, v2a, v2b));
     const int  agen = g.binary(KOp::Div, ks(1.0), emax);
@@ -634,8 +634,8 @@ namespace detail
     // AXIS-ALIGNED path (|d12| negligible).
     const int  aax = g.binary(KOp::Div, ks(1.0), d11);
     const int  bax = g.binary(KOp::Div, ks(1.0), d22);
-    const int  v1ax = nd::detail::bin(g, KOp::Mul, V1, g.splat(g.unary(KOp::Sqrt, aax), 3));
-    const int  v2ax = nd::detail::bin(g, KOp::Mul, V2, g.splat(g.unary(KOp::Sqrt, bax), 3));
+    const int  v1ax = nd::detail::bin(g, KOp::Mul, v1, g.splat(g.unary(KOp::Sqrt, aax), 3));
+    const int  v2ax = nd::detail::bin(g, KOp::Mul, v2, g.splat(g.unary(KOp::Sqrt, bax), 3));
     const int  ecc = g.binary(KOp::CmpGt, g.binary(KOp::Div, g.unary(KOp::Abs, d12), g.unary(KOp::Sqrt, g.binary(KOp::Mul, d11, d22))), ks(0.0001));
     const int  aa = g.select(ecc, agen, aax);
     const int  bb = g.select(ecc, bgen, bax);
@@ -866,9 +866,9 @@ namespace detail
 // the fixed 8-tap Poisson disk (unit) used by PCF/PCSS.
 [[nodiscard]] inline int poisson8(KGraph& g, int like, int i)
 {
-    static constexpr double px[8] = {-0.7071, 0.0, -0.5303, 0.6187, 0.8750, -0.8750, 0.3536, -0.3536};
-    static constexpr double py[8] = {0.7071, -0.8750, -0.5303, 0.6187, 0.0, 0.0, -0.3536, 0.3536};
-    return g.vec2(kf(g, like, px[i]), kf(g, like, py[i]));
+    static constexpr double kPoissonX[8] = {-0.7071, 0.0, -0.5303, 0.6187, 0.8750, -0.8750, 0.3536, -0.3536};
+    static constexpr double kPoissonY[8] = {0.7071, -0.8750, -0.5303, 0.6187, 0.0, 0.0, -0.3536, 0.3536};
+    return g.vec2(kf(g, like, kPoissonX[i]), kf(g, like, kPoissonY[i]));
 }
 } // namespace detail
 
@@ -974,12 +974,12 @@ namespace detail
     const int z1 = g.binary(KOp::Sub, g.binary(KOp::Mul, g.unary(KOp::Neg, p), ks(0.5)), r);
     const int z2 = g.binary(KOp::Add, g.binary(KOp::Mul, g.unary(KOp::Neg, p), ks(0.5)), r);
     // 3-case shadow intensity (Peters-Klein): switch on (z2<z0) / (z1<z0).
-    const int caseA = g.binary(KOp::CmpLt, z2, z0);
-    const int caseB = g.binary(KOp::CmpLt, z1, z0);
-    const int sA = g.vec4(z1, z0, ks(1.0), ks(1.0));
-    const int sB = g.vec4(z0, z1, ks(0.0), ks(1.0));
-    const int sC = g.vec4(ks(0.0), ks(0.0), ks(0.0), ks(0.0));
-    const int sw = g.select(caseA, sA, g.select(caseB, sB, sC));
+    const int case_a = g.binary(KOp::CmpLt, z2, z0);
+    const int case_b = g.binary(KOp::CmpLt, z1, z0);
+    const int s_a = g.vec4(z1, z0, ks(1.0), ks(1.0));
+    const int s_b = g.vec4(z0, z1, ks(0.0), ks(1.0));
+    const int s_c = g.vec4(ks(0.0), ks(0.0), ks(0.0), ks(0.0));
+    const int sw = g.select(case_a, s_a, g.select(case_b, s_b, s_c));
     const int s0 = g.swizzle(sw, 0);
     const int quotient = g.binary(KOp::Div, g.binary(KOp::Add, g.binary(KOp::Sub, g.binary(KOp::Mul, s0, z2), g.binary(KOp::Mul, b0, g.binary(KOp::Add, s0, z2))), b1), g.binary(KOp::Mul, g.binary(KOp::Sub, z2, g.swizzle(sw, 1)), g.binary(KOp::Sub, z0, z1)));
     const int intensity = g.binary(KOp::Add, g.swizzle(sw, 2), g.binary(KOp::Mul, g.swizzle(sw, 3), quotient));

@@ -23,6 +23,8 @@ def parser():
     command.add_argument('--head', help='Actual CI checkout commit; must accompany --base')
     command.add_argument('--path', action='append', default=[], help='Explicit diagnostic scenario; not whole-tree coverage')
     command.add_argument('--full', action='store_true', help='Explain the full CI requirement; never execute it locally')
+    command.add_argument('--git-timeout', type=float, default=60,
+                         help='Budget in seconds per Git command; raise it for a checkout on a network or 9p mount')
     command.add_argument('--json', action='store_true')
     command = commands.add_parser('check', help='Bounded focused local verification; never a whole-repository sweep')
     command.add_argument('--build', type=Path, required=True)
@@ -36,6 +38,8 @@ def parser():
     command.add_argument('--build-timeout', type=float, default=900)
     command.add_argument('--discovery-timeout', type=float, default=120)
     command.add_argument('--test-timeout', type=float, default=180)
+    command.add_argument('--git-timeout', type=float, default=60,
+                         help='Budget in seconds per Git command; raise it for a checkout on a network or 9p mount')
     command.add_argument('--dry-run', action='store_true')
     command.add_argument('--json', action='store_true')
     command = commands.add_parser('doctor', help='Read-only toolchain, presets, runtime and synchronization diagnosis')
@@ -59,7 +63,7 @@ def make_plan(args):
                    for path in sorted(set(args.path))]
         revision = {'mode': 'scenario', 'base': None, 'head': None}
     else:
-        changes, revision = changes_from_git(root, args.base, args.head)
+        changes, revision = changes_from_git(root, args.base, args.head, timeout=getattr(args, 'git_timeout', None))
     model, model_error = None, None
     try:
         model = load_model(root, build, args.config)

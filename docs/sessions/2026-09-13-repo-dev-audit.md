@@ -1,7 +1,8 @@
 # Sequential acceptance audit of the parked REPO.DEV rows
 
 <!-- doc-role: historical -->
-> Dated evidence. Live owners: [REPO.DEV.2](../ROADMAP.md#slice-repo.dev.2) through [REPO.DEV.3b.2](../ROADMAP.md#slice-repo.dev.3b.2).
+> Dated evidence. Live owners: [REPO.DEV.2](../ROADMAP.md#slice-repo.dev.2) through [REPO.DEV.3b.2](../ROADMAP.md#slice-repo.dev.3b.2),
+> then [REPO.DEV.3b.4](../ROADMAP.md#slice-repo.dev.3b.4) and [REPO.DEV.3b.5](../ROADMAP.md#slice-repo.dev.3b.5) ([below](#rows-3b4-3b5)).
 > Rules: [AGENTS](../../AGENTS.md). Preceding batches: [guard/tidy repairs](2026-09-13-ci-guard-tidy-repairs.md),
 > [route and pinned WARP](2026-09-13-inner-coverage-route-and-pinned-warp.md).
 
@@ -61,6 +62,42 @@ Accepted: Done.
 The acceptance above is retained proof. Later the same day the whole-suite qualification withdrew the WARP 1.0.20 pin
 from CI ([evidence](2026-09-13-inner-coverage-route-and-pinned-warp.md#whole-suite-qualification-and-withdrawal)), so
 REPO.3c.10 holds Partial again and the order rule returns these four rows to Partial behind it; nothing in their
-implementation or evidence changed. REPO.DEV.3b.3 (portable strict LLVM-20 analysis on Linux and other hosts) remains
-the first Open row after them: no implementation exists and none is claimed; REPO.DEV.3b.4 and 3b.5 keep their retained
-proof as Partial behind it. The pointer is REPO.3c.10.
+implementation or evidence changed. REPO.DEV.3b.3 (portable strict LLVM-20 analysis on Linux and other hosts) was the
+first Open row after them at that time; it gained its implementation later the same day
+([portable strict analysis](2026-09-13-portable-strict-analysis.md)) and holds Partial until its Linux positive arm
+runs. REPO.DEV.3b.4 and 3b.5 are audited below and wait behind it in table order. The pointer is REPO.DEV.3b.3.
+
+<a id="rows-3b4-3b5"></a>
+## REPO.DEV.3b.4 and REPO.DEV.3b.5
+
+Audited the same evening against the current tree. Shared evidence, Windows Python 3.14: `test-dev-workflow.py`
+**53/53** (including `test_simd_guard_preserves_decoder_failures_and_explicit_skips`, the nine controlled decoder
+scenarios), `test-project-sync.py` **52/52**, `test-native-build-profiles.py` **7/7**, `test-repository-tools.py`
+**21/21**. Hosted revision `ae44264` ([run 34757652779](https://github.com/yatiyr/CRD/actions/runs/34757652779)):
+every Linux and Windows compiler lane green, each running `crd-simd-emission-check` against its own configuration's
+object, and both repository jobs green.
+
+**REPO.DEV.3b.4 — native cache defaults and CMake-owned SIMD object paths.** `doctor` still rejects empty native
+compiler defaults (`native_profile_issues` in [environment.py](../../scripts/cerid_dev/environment.py): `CMAKE_CXX_FLAGS`
+and the Debug/Release/RelWithDebInfo entries) and names guarded configuration as the repair; the
+[scoped-check session](2026-09-12-scoped-check-and-native-discovery.md#subsequent-scoped-proof) records the five-entry
+repair through the synchronizer, the frame-cooker check 127/127 (`20260912T192212-a68e5af9be9a`) and the native math
+check 184/184 with the guard inspecting the actual Debug object (`20260912T193158-e10820814c01`). The guard's
+arguments are CMake-owned in [tests/foundation/math/CMakeLists.txt](../../tests/foundation/math/CMakeLists.txt): the
+object is `$<FILTER:$<TARGET_OBJECTS:crd-math-tests>,…>`, the ISA is `CRD_SIMD_LEVEL_RESOLVED` with per-configuration
+scalar/SSE2 profile overrides, and IPO is the target's per-configuration `INTERPROCEDURAL_OPTIMIZATION` property; the
+[final guard proof](2026-09-12-scoped-check-and-native-discovery.md#final-bounded-guard-proof) records the projected
+native commands (Debug/ASan/scalar/SSE2 IPO 0; Release/RelWithDebInfo/Shipping/ShippingProfile IPO 1). Today on the
+current tree: Windows `ctest -R simd` on `build/win-debug` **40/40**, including `crd-simd-emission-check` on the current
+Debug object; on Linux (WSL, `build/linux-gcc-debug` reconfigured today through its preset) the guard first **failed**
+on the stale August object path ("obj not found", never a pass) and then **passed 1/1** after compiling only
+`test_simd.cpp.o` for the current tree: 23,212 instructions, 445 YMM references. Accepted; Done once REPO.DEV.3b.3 closes.
+
+**REPO.DEV.3b.5 — decoder errors, IPO/unsupported skips, generator-owned arguments, no skip-as-pass.**
+[check_simd_emission.ps1](../../scripts/check_simd_emission.ps1) captures native stderr only around the decoder call,
+saves `dumpbin`'s exit before restoring the preference, and exits 2 on a decoder failure or a missing tool;
+[check_simd_emission.sh](../../scripts/check_simd_emission.sh) mirrors it with `objdump`. NEON is an explicit exit 77
+skip ("not implemented"); insufficient native code is exit 77 only when the configured target has IPO and exit 1
+otherwise. CTest maps 77 through `SKIP_RETURN_CODE 77`, and `check` turns any skipped or disabled test into
+`incomplete` (exit 3), so a skip never reads as a pass. The generator-owned arguments are the CMake expressions above;
+today's Windows and Linux guard runs consumed them unchanged. Accepted; Done once REPO.DEV.3b.3 closes.

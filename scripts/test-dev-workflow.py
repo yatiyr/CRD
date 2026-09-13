@@ -15,14 +15,48 @@ from unittest.mock import patch
 
 from cerid_dev.selection import (SelectionError, changes_from_git, content_identity, load_model, parse_changes,
                                  select_targets, select_tests)
-from cerid_dev.environment import (build_environment, cache_values, compiler_metadata, env_value, native_profile_issues, runtime_file,
-                                  synchronization_state)
+from cerid_dev.environment import (build_environment, cache_values, compiler_metadata, env_value, native_profile_issues,
+                                  resolve_clang_tidy, runtime_file, synchronization_state)
 from cerid_dev.process import ProcessError, run_command
 from cerid_dev.evidence import EvidenceError, inspect as inspect_evidence, seal
-from cerid_dev.check import check, execution_doctor, junit_counts, native_configure_reason, test_indices
+from cerid_dev.check import check, execution_doctor, junit_counts, native_configure_reason, test_indices, tidy_outcome
+from cerid_dev.tidy import (analyse, classify, compiler_family, extra_arguments, prepare, strip_pch_arguments,
+                            strip_pch_command)
 from dev import make_plan, parser as dev_parser
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# A clang-tidy stand-in: reports the configured LLVM version, logs every argv, and answers each analysed file with
+# canned output and exit code, so the gate's classification and refusal paths run without a compiler.
+STUB_SOURCE = '''import json, os, sys
+config = json.load(open(os.environ["CRD_TIDY_STUB"], encoding="utf-8"))
+with open(config["argv_log"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if "--version" in sys.argv:
+    print("LLVM (http://llvm.org/):\\n  LLVM version " + config["version"])
+    sys.exit(0)
+positional = [token for index, token in enumerate(sys.argv[1:]) if not token.startswith("-") and sys.argv[index] != "-p"]
+spec = config.get("files", {}).get(os.path.basename(positional[0]), {}) if positional else {}
+sys.stdout.write(spec.get("output", ""))
+sys.exit(spec.get("exit", 0))
+'''
+
+
+def stub_clang_tidy(directory, version, files=None):
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / 'stub.py'
+    script.write_text(STUB_SOURCE, encoding='utf-8')
+    config = directory / 'stub.json'
+    config.write_text(json.dumps({'version': version, 'files': files or {}, 'argv_log': str(directory / 'argv.log')}),
+                      encoding='utf-8')
+    if os.name == 'nt':
+        launcher = directory / 'clang-tidy.cmd'
+        launcher.write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding='utf-8')
+    else:
+        launcher = directory / 'clang-tidy'
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding='utf-8')
+        launcher.chmod(0o755)
+    return launcher, config
 
 
 def fixture_process_running(pid):
@@ -647,6 +681,23 @@ run_command([sys.executable, '-c',
         with self.assertRaisesRegex(SelectionError, 'indices'):
             test_indices(inventory, [{'name': 'absent'}])
 
+    def test_git_budget_is_explicit_threaded_and_validated(self):
+        # A checkout on a 9p mount (WSL reading a Windows drive, 2026-09-13) needs more than the 60 s default.
+        arguments = dev_parser().parse_args(['plan', '--build', str(self.build), '--git-timeout', '600'])
+        self.assertEqual(arguments.git_timeout, 600)
+        self.assertEqual(self.check_arguments('--git-timeout', '900').git_timeout, 900)
+        self.assertEqual(self.check_arguments().git_timeout, 60)
+        with patch('cerid_dev.selection.subprocess.run') as run:
+            run.return_value = subprocess.CompletedProcess(['git'], 0, b'abc\n', b'')
+            from cerid_dev.selection import git as git_command
+            git_command(self.root, 'rev-parse', 'HEAD', timeout=7)
+        self.assertEqual(run.call_args.kwargs['timeout'], 7)
+        for bad in (0, -1, float('inf'), float('nan')):
+            with self.assertRaisesRegex(SelectionError, 'git_timeout'):
+                changes_from_git(self.root, timeout=bad)
+        with self.assertRaisesRegex(SelectionError, 'git_timeout'):
+            check(self.check_arguments('--git-timeout', '0'), make_plan)
+
     def check_arguments(self, *extra):
         return dev_parser().parse_args(['--root', str(self.root), 'check', '--build', str(self.build),
                                         '--path', 'docs/sample.md', *extra])
@@ -824,6 +875,225 @@ crd_discover_tests(other)
         print(f'PASS: {generator} unbuilt ownership, fixture expansion, properties and configuration-specific discovery')
 
 
+class TidyTests(unittest.TestCase):
+    MSVC = ('C:\\PROGRA~1\\MICROS~1\\18\\COMMUN~1\\VC\\Tools\\MSVC\\1451~1.362\\bin\\Hostx64\\x64\\cl.exe  /nologo /TP '
+            '-DCRD_SIMD_TARGET=2 -ID:\\Dev\\cerid\\engine\\gpu\\kir\\include -external:IC:\\VulkanSDK\\1.4.341.1\\include '
+            '/EHsc /W4 /WX -std:c++20 /arch:AVX2 /YuD:/Dev/cerid/build/win-debug/engine/kir/CMakeFiles/crd-kir.dir/cmake_pch.hxx '
+            '/FpD:/Dev/cerid/build/win-debug/engine/kir/CMakeFiles/crd-kir.dir/.//cmake_pch.cxx.pch '
+            '/FID:/Dev/cerid/build/win-debug/engine/kir/CMakeFiles/crd-kir.dir/cmake_pch.hxx '
+            '/Foengine\\kir\\CMakeFiles\\crd-kir.dir\\src\\kir.cpp.obj /FS -c D:\\Dev\\cerid\\engine\\gpu\\kir\\src\\kir.cpp')
+    GNU = ('/usr/bin/g++ -DCRD_SIMD_TARGET=2 -I/mnt/d/Dev/cerid/engine/gpu/kir/include -g -std=c++20 -Wall -Werror -mavx2 '
+           '-ffp-contract=off -mfpmath=sse -Winvalid-pch '
+           '-include /mnt/d/Dev/cerid/build/linux-gcc-debug/engine/kir/CMakeFiles/crd-kir.dir/cmake_pch.hxx '
+           '-o engine/kir/CMakeFiles/crd-kir.dir/src/kir.cpp.o -c /mnt/d/Dev/cerid/engine/gpu/kir/src/kir.cpp')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve() / 'source'
+        self.build = Path(self.temp.name).resolve() / 'build'
+        self.root.mkdir()
+        self.build.mkdir()
+
+    def database(self):
+        root, build = self.root, self.build
+        a, b, o = root / 'engine/a/src/a.cpp', root / 'tests/b/b.cpp', root / 'engine/other/src/o.cpp'
+        for path in (a, b, o, root / 'engine/a/include/crd/a/x.hpp', root / 'engine/a/src/new.cpp',
+                     root / 'engine/z/include/crd/z/z.hpp', root / 'tests/b/helper.hpp'):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('', encoding='utf-8')
+        pch = f'{build.as_posix()}/engine/a/CMakeFiles/crd-a.dir/cmake_pch.hxx'
+        consumer = root / 'tests/aaa/main.cpp'
+        consumer.parent.mkdir(parents=True, exist_ok=True)
+        consumer.write_text('', encoding='utf-8')
+        return [{'directory': str(build), 'file': consumer.as_posix(),
+                 'output': f'{build.as_posix()}/tests/aaa/CMakeFiles/aaa-consumer.dir/main.cpp.o',
+                 'command': f'/usr/bin/g++ -DCONSUMER=1 -I{root.as_posix()}/engine/a/include -c {consumer.as_posix()}'},
+                {'directory': str(build), 'file': a.as_posix(),
+                 'output': f'{build.as_posix()}/engine/a/CMakeFiles/crd-a.dir/src/a.cpp.o',
+                 'command': f'/usr/bin/g++ -DA=1 -I{root.as_posix()}/engine/a/include -Winvalid-pch -include {pch} '
+                            f'-o engine/a/CMakeFiles/crd-a.dir/src/a.cpp.o -c {a.as_posix()}'},
+                {'directory': str(build), 'file': b.as_posix(),
+                 'output': f'{build.as_posix()}/tests/b/CMakeFiles/crd-b-tests.dir/b.cpp.obj',
+                 'command': 'C:\\PROGRA~1\\cl.exe /nologo -DB=1 /EHsc /YuD:/x/cmake_pch.hxx /FpD:/x/cmake_pch.cxx.pch '
+                            f'/FID:/x/cmake_pch.hxx /Fotests\\b.obj -c {b}'},
+                {'directory': str(build), 'file': o.as_posix(),
+                 'output': f'{build.as_posix()}/engine/other/CMakeFiles/crd-other.dir/src/o.cpp.o',
+                 'command': f'/usr/bin/g++ -DO=1 -c {o.as_posix()}'}]
+
+    def test_only_precompiled_header_inputs_are_stripped(self):
+        msvc = strip_pch_command(self.MSVC)
+        for token in ('/Yu', '/Fp', 'cmake_pch'):
+            self.assertNotIn(token, msvc)
+        for token in ('/TP', '-DCRD_SIMD_TARGET=2', '-external:IC:\\VulkanSDK\\1.4.341.1\\include', '/EHsc', '/WX',
+                      '/arch:AVX2', '/Foengine\\kir\\CMakeFiles\\crd-kir.dir\\src\\kir.cpp.obj',
+                      '-c D:\\Dev\\cerid\\engine\\gpu\\kir\\src\\kir.cpp'):
+            self.assertIn(token, msvc)
+        gnu = strip_pch_command(self.GNU)
+        for token in ('cmake_pch', '-Winvalid-pch', '-include'):
+            self.assertNotIn(token, gnu)
+        for token in ('-Werror', '-mfpmath=sse', '-ffp-contract=off',
+                      '-o engine/kir/CMakeFiles/crd-kir.dir/src/kir.cpp.o -c /mnt/d/Dev/cerid/engine/gpu/kir/src/kir.cpp'):
+            self.assertIn(token, gnu)
+        arguments = ['g++', '-Winvalid-pch', '-include', '/b/cmake_pch.hxx', '-include', 'other.hpp', '/YuX', '-c', 'a.cpp']
+        self.assertEqual(strip_pch_arguments(arguments), ['g++', '-include', 'other.hpp', '-c', 'a.cpp'])
+        self.assertEqual(compiler_family({'command': self.MSVC}), 'msvc')
+        self.assertEqual(compiler_family({'command': self.GNU}), 'gnu')
+        self.assertEqual(compiler_family({'arguments': ['clang-cl.exe', '/c']}), 'msvc')
+        self.assertEqual(compiler_family({'command': '"C:\\Program Files\\LLVM\\bin\\clang++.exe" -c a.cpp'}), 'gnu')
+
+    def test_extra_arguments_come_from_the_database_compiler_and_the_cmake_cache(self):
+        self.assertEqual(extra_arguments('msvc', {'CRD_SIMD_MSVC_ARCH_FLAG': '/arch:AVX2'}),
+                         ['--extra-arg=/EHsc', '--extra-arg=/arch:AVX2', '--extra-arg=-Wno-unused-command-line-argument'])
+        self.assertEqual(extra_arguments('msvc', {}), ['--extra-arg=/EHsc', '--extra-arg=-Wno-unused-command-line-argument'])
+        gnu = extra_arguments('gnu', {'CRD_SIMD_MSVC_ARCH_FLAG': '/arch:AVX2'})
+        self.assertNotIn('--extra-arg=/EHsc', gnu)
+        self.assertNotIn('--extra-arg=/arch:AVX2', gnu)
+        self.assertIn('--extra-arg=-Wno-unknown-warning-option', gnu)
+        # GCC is the compiler of record for its database: clang's compiler warnings under GCC's flags are not errors
+        # there, while the MSVC database keeps /WX semantics exactly as the hosted strict lane runs them.
+        self.assertIn('--extra-arg=-Wno-error', gnu)
+        self.assertNotIn('--extra-arg=-Wno-error', extra_arguments('msvc', {}))
+        self.assertEqual(extra_arguments('msvc', {}, header=True)[-1], '--extra-arg=-Wno-pragma-once-outside-header')
+        self.assertEqual(classify('', 0), ('clean', None, []))
+        self.assertEqual(classify("a.cpp:1:10: fatal error: 'crd/x.hpp' file not found\n", 1)[0], 'ungated')
+        self.assertEqual(classify('3 warnings generated.\nSuppressed 3 warnings (3 in non-user code).\n', 0)[0], 'clean')
+        self.assertEqual(classify('Error while processing a.cpp.\n', 1)[0], 'ungated')
+        self.assertEqual(classify('a.cpp:2:3: error: bad name [readability-identifier-naming,-warnings-as-errors]\n', 1)[0],
+                         'issues')
+
+    def test_headers_use_an_owning_translation_unit_then_a_module_sibling(self):
+        entries = self.database()
+        files = ['engine/a/include/crd/a/x.hpp', 'engine/a/include/crd/a/y.hpp', 'tests/b/helper.hpp',
+                 'engine/a/src/new.cpp', 'engine/z/include/crd/z/z.hpp', 'engine/a/src/a.cpp', 'engine/missing.cpp',
+                 'engine/a/notes.txt']
+        (self.root / 'engine/a/notes.txt').write_text('', encoding='utf-8')
+        (self.root / 'engine/a/include/crd/a/y.hpp').write_text('', encoding='utf-8')
+        # Owners arrive in the plan's alphabetical order; the defining module's target must win over a consumer.
+        jobs, mirrored = prepare(self.root, entries, files, {'engine/a/include/crd/a/x.hpp': ['aaa-consumer', 'crd-a'],
+                                                             'engine/a/include/crd/a/y.hpp': ['aaa-consumer']})
+        by_path = {job['path']: job for job in jobs}
+        self.assertEqual(by_path['engine/a/include/crd/a/x.hpp']['source'], 'owner:crd-a')
+        self.assertEqual(by_path['engine/a/include/crd/a/y.hpp']['source'], 'owner:aaa-consumer')
+        self.assertEqual(by_path['tests/b/helper.hpp']['source'], 'module:tests/b')
+        self.assertEqual(by_path['tests/b/helper.hpp']['family'], 'msvc')
+        self.assertEqual(by_path['engine/a/src/new.cpp']['source'], 'module:engine/a/src')
+        self.assertEqual(by_path['engine/z/include/crd/z/z.hpp']['status'], 'ungated')
+        self.assertIn('no translation unit', by_path['engine/z/include/crd/z/z.hpp']['reason'])
+        self.assertEqual((by_path['engine/a/src/a.cpp']['source'], by_path['engine/a/src/a.cpp']['target']),
+                         ('database', 'crd-a'))
+        self.assertEqual(by_path['engine/missing.cpp']['status'], 'missing')
+        self.assertEqual(by_path['engine/a/notes.txt']['status'], 'ungated')
+        synthesized = {entry['file']: entry for entry in mirrored[len(entries):]}
+        x = synthesized[str(self.root / 'engine/a/include/crd/a/x.hpp')]
+        self.assertTrue(x['command'].endswith('-x c++ ' + str(self.root / 'engine/a/include/crd/a/x.hpp')), x['command'])
+        self.assertIn('-DA=1', x['command'])
+        self.assertNotIn('-DCONSUMER=1', x['command'])
+        self.assertIn('-DCONSUMER=1', synthesized[str(self.root / 'engine/a/include/crd/a/y.hpp')]['command'])
+        self.assertNotIn('output', x)
+        helper = synthesized[str(self.root / 'tests/b/helper.hpp')]
+        self.assertIn('/TP', helper['command'])
+        self.assertNotIn('-x c++', helper['command'])
+        self.assertTrue(helper['command'].endswith('-c ' + str(self.root / 'tests/b/helper.hpp')), helper['command'])
+        self.assertTrue(all('cmake_pch' not in entry['command'] and '-Winvalid-pch' not in entry['command']
+                            for entry in mirrored))
+
+    def test_analysis_classifies_clean_issues_ungated_and_missing(self):
+        entries = self.database()
+        write_json(self.build / 'compile_commands.json', entries)
+        (self.build / 'CMakeCache.txt').write_text('CRD_SIMD_MSVC_ARCH_FLAG:INTERNAL=/arch:AVX2\n', encoding='utf-8')
+        stub = Path(self.temp.name) / 'stub'
+        launcher, config = stub_clang_tidy(stub, '20.1.8', {
+            'b.cpp': {'output': 'tests/b/b.cpp:3:5: error: invalid case style [readability-identifier-naming,'
+                                '-warnings-as-errors]\n1 warning treated as error\n', 'exit': 1},
+            'o.cpp': {'output': "engine/other/src/o.cpp:1:10: fatal error: 'crd/missing.hpp' file not found\n", 'exit': 1},
+            'x.hpp': {'output': '', 'exit': 2}})
+        environment = dict(os.environ, CRD_TIDY_STUB=str(config))
+        scratch = Path(self.temp.name) / 'scratch'
+        files = ['engine/a/src/a.cpp', 'tests/b/b.cpp', 'engine/other/src/o.cpp', 'engine/a/include/crd/a/x.hpp',
+                 'engine/missing.cpp']
+        summary = analyse(self.root, self.build, files, environment, owners={'engine/a/include/crd/a/x.hpp': ['crd-a']},
+                          tool=str(launcher), scratch=scratch)
+        statuses = {item['path']: item['status'] for item in summary['files']}
+        self.assertEqual(statuses, {'engine/a/src/a.cpp': 'clean', 'tests/b/b.cpp': 'issues',
+                                    'engine/other/src/o.cpp': 'ungated', 'engine/a/include/crd/a/x.hpp': 'ungated',
+                                    'engine/missing.cpp': 'missing'})
+        self.assertEqual(summary['counts'], {'clean': 1, 'issues': 1, 'ungated': 2, 'missing': 1})
+        self.assertEqual((summary['status'], summary['exit_code'], summary['tool_version']), ('failed', 4, '20.1.8'))
+        self.assertEqual(summary['cache_arch_flag'], '/arch:AVX2')
+        mirror = json.loads((scratch / 'compile_commands.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(mirror), len(entries) + 1)
+        self.assertTrue(all('cmake_pch' not in entry['command'] for entry in mirror))
+        invocations = [json.loads(line) for line in (stub / 'argv.log').read_text(encoding='utf-8').splitlines()]
+        analysed = {os.path.basename(argv[0]): argv for argv in invocations if '--version' not in argv}
+        self.assertEqual(sorted(analysed), ['a.cpp', 'b.cpp', 'o.cpp', 'x.hpp'])
+        for argv in analysed.values():
+            self.assertIn('--warnings-as-errors=*', argv)
+            self.assertIn('--header-filter=', argv, 'main-file diagnostics only, the contract every lane enforces')
+            self.assertEqual(Path(argv[argv.index('-p') + 1]), scratch)
+        self.assertIn('--extra-arg=/EHsc', analysed['b.cpp'])
+        self.assertIn('--extra-arg=/arch:AVX2', analysed['b.cpp'])
+        self.assertNotIn('--extra-arg=/EHsc', analysed['a.cpp'])
+        self.assertIn('--extra-arg=-Wno-unknown-warning-option', analysed['a.cpp'])
+        self.assertIn('--extra-arg=-Wno-unknown-warning-option', analysed['x.hpp'])
+        self.assertIn('--extra-arg=-Wno-pragma-once-outside-header', analysed['x.hpp'])
+        self.assertTrue(all('--extra-arg=-Wno-pragma-once-outside-header' not in analysed[name]
+                            for name in ('a.cpp', 'b.cpp', 'o.cpp')), 'only header units relax the main-file pragma')
+        issue = next(item for item in summary['files'] if item['path'] == 'tests/b/b.cpp')
+        self.assertTrue(issue['diagnostics'][0].startswith('tests/b/b.cpp:3:5: error:'))
+        self.assertEqual(next(item for item in summary['files'] if item['path'].endswith('x.hpp'))['exit_code'], 2)
+        summary_path = self.build / 'tidy.json'
+        write_json(summary_path, summary)
+        outcome = tidy_outcome(summary_path, {'status': 'failed', 'exit_code': 4, 'log': 'tidy.log'})
+        self.assertEqual((outcome['status'], outcome['exit_code']), ('failed', 1))
+        summary.update(status='incomplete', exit_code=2, counts={'clean': 3, 'issues': 0, 'ungated': 2, 'missing': 0})
+        write_json(summary_path, summary)
+        outcome = tidy_outcome(summary_path, {'status': 'failed', 'exit_code': 2, 'log': 'tidy.log'})
+        self.assertEqual((outcome['status'], outcome['exit_code']), ('incomplete', 3))
+        summary.update(status='passed', exit_code=0, counts={'clean': 5, 'issues': 0, 'ungated': 0, 'missing': 0})
+        write_json(summary_path, summary)
+        self.assertIsNone(tidy_outcome(summary_path, {'status': 'passed', 'exit_code': 0, 'log': 'tidy.log'})['status'])
+        outcome = tidy_outcome(self.build / 'absent.json', {'status': 'budget_exhausted', 'exit_code': 124, 'log': 'x'})
+        self.assertEqual((outcome['status'], outcome['exit_code']), ('instrument_failure', 124))
+
+    def test_unavailable_or_wrong_version_tool_never_qualifies_changed_cpp(self):
+        write_json(self.build / 'compile_commands.json', self.database())
+        stub18, config18 = stub_clang_tidy(Path(self.temp.name) / 'stub18', '18.1.3')
+        environment = dict(os.environ, CRD_TIDY_STUB=str(config18))
+        summary = analyse(self.root, self.build, ['engine/a/src/a.cpp', 'tests/b/b.cpp'], environment, tool=str(stub18))
+        self.assertEqual((summary['status'], summary['exit_code'], summary['tool']), ('unavailable', 99, None))
+        self.assertIn('18.1.3', summary['tool_reason'])
+        self.assertIn('LLVM 20', summary['tool_reason'])
+        self.assertEqual([item['status'] for item in summary['files']], ['ungated', 'ungated'])
+        invocations = (Path(self.temp.name) / 'stub18/argv.log').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(len(invocations), 1, 'a refused tool must not analyse anything')
+        summary_path = self.build / 'tidy.json'
+        write_json(summary_path, summary)
+        outcome = tidy_outcome(summary_path, {'status': 'failed', 'exit_code': 99, 'log': 'tidy.log'})
+        self.assertEqual((outcome['status'], outcome['exit_code']), ('incomplete', 3))
+        self.assertIn('never passed', outcome['message'])
+        # An explicit tool is the only candidate: a wrong version is refused without falling through.
+        resolution = resolve_clang_tidy(environment, str(stub18))
+        self.assertIsNone(resolution['path'])
+        self.assertEqual(len(resolution['rejected']), 1)
+        stub20, config20 = stub_clang_tidy(Path(self.temp.name) / 'stub20', '20.1.8')
+        resolution = resolve_clang_tidy(dict(os.environ, CRD_TIDY_STUB=str(config20)), str(stub20))
+        self.assertEqual((resolution['version'], resolution['candidate']), ('20.1.8', str(stub20)))
+        # Without an explicit tool: the pinned install, then PATH names; nothing found is unavailable with reasons.
+        empty = Path(self.temp.name) / 'empty'
+        empty.mkdir()
+        bare = {key: value for key, value in os.environ.items() if key.upper() not in ('PATH', 'CRD_CLANG_TIDY')}
+        with patch('cerid_dev.environment.PINNED_WINDOWS_TIDY', str(empty / 'absent-clang-tidy.exe')):
+            resolution = resolve_clang_tidy(dict(bare, PATH=str(empty)))
+            self.assertIsNone(resolution['path'])
+            self.assertIn('no candidate', resolution['reason'])
+            resolution = resolve_clang_tidy(dict(bare, PATH=str(stub20.parent), CRD_TIDY_STUB=str(config20)))
+            self.assertEqual((resolution['candidate'], resolution['version']), ('clang-tidy', '20.1.8'))
+        with self.assertRaises(SelectionError):
+            analyse(self.root, Path(self.temp.name) / 'unconfigured', ['engine/a/src/a.cpp'],
+                    dict(os.environ, CRD_TIDY_STUB=str(config20)), tool=str(stub20))
+
+
 def integration(generator):
     """Actual propagated INTERFACE include, generated header, reverse link and CTest artifacts."""
     cmake, ctest = shutil.which('cmake'), shutil.which('ctest')
@@ -917,7 +1187,9 @@ if __name__ == '__main__':
     args.add_argument('--generator', default='Ninja')
     args.add_argument('--catch-dir', type=Path, help='Actual Catch2 extras directory for discovery integration')
     options = args.parse_args()
-    outcome = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SelectionTests))
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite([loader.loadTestsFromTestCase(SelectionTests), loader.loadTestsFromTestCase(TidyTests)])
+    outcome = unittest.TextTestRunner(verbosity=2).run(suite)
     if not outcome.wasSuccessful():
         raise SystemExit(1)
     if options.integration:

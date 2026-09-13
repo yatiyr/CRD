@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -25,8 +26,14 @@ def run_json(command, root, timeout=60):
         raise SelectionError(f'{command[0]} did not return valid JSON: {error}') from error
 
 
-def git(root, *args):
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, timeout=60)
+GIT_TIMEOUT = 60.0
+
+
+def git(root, *args, timeout=None):
+    """One Git command with a budget. A checkout on a network or 9p mount (WSL reading a Windows drive) needs a
+    larger budget than a native disk because Git must stat every file; the caller records the budget it used."""
+    timeout = GIT_TIMEOUT if timeout is None else timeout
+    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, timeout=timeout)
     if result.returncode:
         raise SelectionError('Git discovery failed: ' + result.stderr.decode('utf-8', errors='replace'))
     return result.stdout
@@ -61,24 +68,26 @@ def parse_changes(raw):
     return changes
 
 
-def changes_from_git(root, base=None, head=None):
+def changes_from_git(root, base=None, head=None, timeout=None):
     if bool(base) != bool(head):
         raise SelectionError('CI discovery needs both --base and --head')
-    current = git(root, 'rev-parse', '--verify', 'HEAD').decode().strip()
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise SelectionError('git_timeout must be finite and positive')
+    current = git(root, 'rev-parse', '--verify', 'HEAD', timeout=timeout).decode().strip()
     if base:
-        base = git(root, 'rev-parse', '--verify', '--end-of-options', base + '^{commit}').decode().strip()
-        head = git(root, 'rev-parse', '--verify', '--end-of-options', head + '^{commit}').decode().strip()
+        base = git(root, 'rev-parse', '--verify', '--end-of-options', base + '^{commit}', timeout=timeout).decode().strip()
+        head = git(root, 'rev-parse', '--verify', '--end-of-options', head + '^{commit}', timeout=timeout).decode().strip()
         if head != current:
             raise SelectionError('CI head differs from the configured checkout; check out the actual candidate first')
         # A dirty candidate cannot stand in for an exact published revision.
-        if git(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'):
+        if git(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all', timeout=timeout):
             raise SelectionError('CI revision selection requires a clean working tree')
         raw = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--name-status', '-z',
-                  '--no-renames', base, head, '--')
+                  '--no-renames', base, head, '--', timeout=timeout)
         return parse_changes(raw), {'mode': 'ci', 'base': base, 'head': head}
     changes = parse_changes(git(root, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--name-status', '-z',
-                               '--no-renames', 'HEAD', '--'))
-    for path in git(root, 'ls-files', '-z', '--others', '--exclude-standard').decode('utf-8').split('\0'):
+                               '--no-renames', 'HEAD', '--', timeout=timeout))
+    for path in git(root, 'ls-files', '-z', '--others', '--exclude-standard', timeout=timeout).decode('utf-8').split('\0'):
         if path:
             changes.append({'path': relative_name(path), 'status': '?'})
     return sorted(changes, key=lambda change: change['path']), {'mode': 'worktree', 'base': current, 'head': current}

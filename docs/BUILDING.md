@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 & ./scripts/run-ctest.ps1 --test-dir build/win-debug -R '<specific-test-regex>' --timeout 180 --no-tests=error --output-on-failure
 if ($LASTEXITCODE -ne 0) { throw 'CTest failed' }
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tidy-files.ps1 <changed.cpp> <changed.hpp>
+python scripts/tidy-files.py <changed.cpp> <changed.hpp>
 if ($LASTEXITCODE -ne 0) { throw 'Tidy failed' }
 ```
 
@@ -50,7 +50,8 @@ unfiltered [wsl-build](../scripts/wsl-build.ps1) is not scoped. WSL does not qua
 ## Qualification
 
 Keep warnings zero and hand formatting consistent; **never run `clang-format -i`**. Run
-[LLVM-20 tidy](../scripts/tidy-files.ps1) on changed headers/TUs and confirm parsing. Unparsed files are ungated.
+[LLVM-20 tidy](../scripts/tidy-files.py) on changed headers/TUs on any host; confirm parsing. Unparsed files and
+hosts without clang-tidy 20 are ungated, never clean.
 GPU checks require `ValidationCapture` or the DX12 debug-layer counterpart, validation silence, bit/ULP or declared
 quality oracles, and three repetitions when claiming determinism. Asset changes need source/cook/execute,
 replacement/deletion and failure/reload lifetime proof. Save measured performance boards at measurement time.

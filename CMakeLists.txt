@@ -527,7 +527,7 @@ if(CRD_ENABLE_CLANG_TIDY)
         #      win-tidy build. A real, deterministic failure that sat hidden behind an unrelated crash.
         #   2. `__AVX2__` is UNDEFINED, so every AVX2-guarded SIMD path is preprocessed out and NEVER
         #      ANALYSED — the gate reads green on code it never looked at. Same disease as the
-        #      "tidy gate clean on unparsed files" scar (see scripts/tidy-files.ps1's header).
+        #      "tidy gate clean on unparsed files" scar (see scripts/cerid_dev/tidy.py, which restates the same flags).
         # Fix: re-state the analysis-relevant flags through `--extra-arg`, the one channel clang-tidy honors.
         # The ISA flag comes from CRD_SIMD_MSVC_ARCH_FLAG — set by the same CrdSimd.cmake branch that adds the
         # real compile option — so the two cannot drift apart.

@@ -60,6 +60,8 @@ TP-1 signature. The register's set is therefore the hosted failing set, which is
 
 ## State
 
-REPO.3c.3 through REPO.3c.9 are Done on that run. REPO.3c.10 stays Needs CI: the engine contracts are proven, the
-residual is registered and confirmed on the hosted lane, and the remaining confirmation is the gate's first hosted run
-after the next push. REPO.3c stays Needs CI behind it; the audited REPO.DEV rows are Done; the pointer is REPO.DEV.3b.3.
+REPO.3c.3 through REPO.3c.9 are Done on that run. REPO.3c.10 held Needs CI until the gate's first hosted run:
+[run 34766787633](https://github.com/yatiyr/CRD/actions/runs/34766787633) at `a0419cf` ended `win-asan` with
+"registered failures for this lane: 4; observed failures: 4; results: 6789; ctest exit: 8" and `gate: PASS`, the lane
+green with the sanitizer unsuppressed, so REPO.3c.10 is Done. The same run turned `linux-gcc-debug` red on an
+unrelated jobs ordering race ([repair](2026-09-13-jobs-end-hook-ordering.md)), so REPO.3c stays Needs CI for the next push.

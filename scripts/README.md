@@ -8,7 +8,8 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `CMAKE_BUILD_PARALLEL_LEVEL` can set a smaller/larger justified cap.
 - Tests: invoke CTest directly with a scoped regex, `--timeout` and `--no-tests=error` as BUILDING shows.
   Do not send regex alternation through a `.bat` invocation from PowerShell: cmd reparses metacharacters.
-- Changed C++: `tidy-files.ps1`; `tidy-rename-helper.ps1 -LogFile <capture> -DryRun` previews mechanical fixes.
+- Changed C++: `tidy-files.py` on any host (`tidy-files.ps1` wraps it on Windows); `tidy-rename-helper.ps1 -LogFile
+  <capture> -DryRun` previews mechanical fixes.
 - Repository/docs: `check-repository.py`, `check-master-plan.py`, `test-repository-tools.py`.
 - Native Visual Studio: `project-sync.py open --preset win-vs-debug` starts saved structure synchronization.
   `status`, `stop`, `sync` preview and `edit --operations <json> --apply --regenerate` share one portable transaction path.

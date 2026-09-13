@@ -190,7 +190,7 @@ template <typename T>
 
 // Integrate f over [a,b]^d with the precomputed Smolyak grid (mapped from [-1,1]^d). f: callable (const T*)->T.
 template <typename T, typename F>
-[[nodiscard]] QuadResult<T> integrate_smolyak(const SmolyakGrid<T>& grid, F&& f, crd::containers::ConstSpan<T> a,
+[[nodiscard]] QuadResult<T> integrate_smolyak(const SmolyakGrid<T>& grid, const F& f, crd::containers::ConstSpan<T> a,
                                               crd::containers::ConstSpan<T> b)
 {
     const int d = grid.d;

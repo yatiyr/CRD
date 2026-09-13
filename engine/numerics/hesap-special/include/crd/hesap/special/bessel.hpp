@@ -47,22 +47,46 @@ inline constexpr int kBesMaxIt = 10000;
 // without the 0/0 cancellation at x→0 (needed for integer orders, where the base order is exactly 0).
 inline void bes_beschb(double x, double& gam1, double& gam2, double& gampl, double& gammi) noexcept
 {
-    static const double c1[] = {-1.142022680371168e0,  6.5165112670737e-3,  3.087090173086e-4, -3.4706269649e-6,
-                                6.9437664e-9,           3.67795e-11,         -1.356e-13};
-    static const double c2[] = {1.843740587300905e0,   -7.68528408447867e-2, 1.2719271366546e-3, -4.9717367042e-6,
-                                -3.31261198e-8,         2.423096e-10,         -1.702e-13,          -1.49e-15};
+    static const double kGam1Coeff[] = {-1.142022680371168e0, 6.5165112670737e-3, 3.087090173086e-4,
+                                        -3.4706269649e-6,     6.9437664e-9,       3.67795e-11,       -1.356e-13};
+    static const double kGam2Coeff[] = {1.843740587300905e0,  -7.68528408447867e-2, 1.2719271366546e-3,
+                                        -4.9717367042e-6,     -3.31261198e-8,       2.423096e-10,      -1.702e-13,
+                                        -1.49e-15};
     const double xx = 8.0 * x * x - 1.0; // map |x|≤½ → [−1,1] for the fits (argument 2x, squared)
-    gam1 = bes_chebev(-1.0, 1.0, c1, 7, xx);
-    gam2 = bes_chebev(-1.0, 1.0, c2, 8, xx);
+    gam1 = bes_chebev(-1.0, 1.0, kGam1Coeff, 7, xx);
+    gam2 = bes_chebev(-1.0, 1.0, kGam2Coeff, 8, xx);
     gampl = gam2 - x * gam1;
     gammi = gam2 + x * gam1;
+}
+
+// nl = (int)(xnu + 0.5) in NR's bessjy/bessik: the downward-recurrence count that puts the base order μ = ν − nl in
+// [−½, ½]. The C cast truncates the half-offset sum toward zero, which is round-half-up for ν ≥ 0. It is kept exactly,
+// as an explicit trunc of the same sum, rather than replaced by lround: ν = 0.49999999999999994 gives ν + 0.5 == 1.0 in
+// binary64 (cast → 1, lround → 0), and the cyl_*_prime entry points pass a negative ν through unreflected, where
+// lround's half-away-from-zero differs from truncation. Either substitution moves μ for those orders and changes the
+// results bit for bit, which the hesap bit-exact contract forbids.
+[[nodiscard]] inline int bes_base_steps(double xnu) noexcept
+{
+    return static_cast<int>(crd::math::trunc(xnu + 0.5));
+}
+
+// bessjy's step count, NR `nl = x < XMIN ? (int)(xnu+0.5) : IMAX(0, (int)(xnu−x+1.5))`: for x ≥ XMIN the recurrence
+// starts from an order below x so that CF2 converges quickly. The 1.5 offset is a shift, not a rounding, and stays as
+// written.
+[[nodiscard]] inline int bessjy_steps(double x, double xnu) noexcept
+{
+    if (x < kBesXMin)
+    {
+        return bes_base_steps(xnu);
+    }
+    const int shifted = static_cast<int>(xnu - x + 1.5);
+    return (shifted > 0) ? shifted : 0;
 }
 
 // Steed/Temme J_ν, Y_ν, J'_ν, Y'_ν for x > 0, ν ≥ 0.
 inline void bessjy(double x, double xnu, double& rj, double& ry, double& rjp, double& ryp) noexcept
 {
-    const int nl = (x < kBesXMin) ? static_cast<int>(xnu + 0.5)
-                                  : ((static_cast<int>(xnu - x + 1.5) > 0) ? static_cast<int>(xnu - x + 1.5) : 0);
+    const int nl = bessjy_steps(x, xnu);
     const double xmu = xnu - nl;
     const double xmu2 = xmu * xmu;
     const double xi = 1.0 / x;
@@ -104,8 +128,8 @@ inline void bessjy(double x, double xnu, double& rj, double& ry, double& rjp, do
     }
     double rjl = isign * kBesFpMin;
     double rjpl = h * rjl;
-    const double rjl1 = rjl;
-    const double rjp1 = rjpl;
+    const double rjl_nu = rjl;
+    const double rjpl_nu = rjpl;
     double fact = xnu * xi;
     for (int l = nl; l >= 1; --l) // downward recurrence to order xmu
     {
@@ -224,8 +248,8 @@ inline void bessjy(double x, double xnu, double& rj, double& ry, double& rjp, do
         ry1 = xmu * xi * rymu - rymup;
     }
     fact = rjmu / rjl;
-    rj = rjl1 * fact;
-    rjp = rjp1 * fact;
+    rj = rjl_nu * fact;
+    rjp = rjpl_nu * fact;
     for (int i = 1; i <= nl; ++i) // upward recurrence for Y
     {
         const double rytemp = (xmu + i) * xi2 * ry1 - rymu;
@@ -239,7 +263,7 @@ inline void bessjy(double x, double xnu, double& rj, double& ry, double& rjp, do
 // Steed/Temme I_ν, K_ν, I'_ν, K'_ν for x > 0, ν ≥ 0.
 inline void bessik(double x, double xnu, double& ri, double& rk, double& rip, double& rkp) noexcept
 {
-    const int nl = static_cast<int>(xnu + 0.5);
+    const int nl = bes_base_steps(xnu);
     const double xmu = xnu - nl;
     const double xmu2 = xmu * xmu;
     const double xi = 1.0 / x;
@@ -266,8 +290,8 @@ inline void bessik(double x, double xnu, double& ri, double& rk, double& rip, do
     }
     double ril = kBesFpMin;
     double ripl = h * ril;
-    const double ril1 = ril;
-    const double rip1 = ripl;
+    const double ril_nu = ril;
+    const double ripl_nu = ripl;
     double fact = xnu * xi;
     for (int l = nl; l >= 1; --l)
     {
@@ -358,8 +382,8 @@ inline void bessik(double x, double xnu, double& ri, double& rk, double& rip, do
     }
     const double rkmup = xmu * xi * rkmu - rk1;
     const double rimu = xi / (f * rkmu - rkmup); // normalise I via the Wronskian
-    ri = (rimu * ril1) / ril;
-    rip = (rimu * rip1) / ril;
+    ri = (rimu * ril_nu) / ril;
+    rip = (rimu * ripl_nu) / ril;
     for (int i = 1; i <= nl; ++i)
     {
         const double rktemp = (xmu + i) * xi2 * rk1 + rkmu;
@@ -690,7 +714,8 @@ inline cplx besselik_asymp(double nu, cplx z, double kind) noexcept
     {
         ak *= (mu - (2.0 * k - 1.0) * (2.0 * k - 1.0)) / (8.0 * k);
         xpow *= inv;
-        const cplx term = (kind < 0.0 ? ak : ((k & 1) ? -ak : ak)) * xpow; // K: +a_k ; I: (−1)^k a_k
+        const double coeff = (kind < 0.0 || (k & 1) == 0) ? ak : -ak; // K: +a_k ; I: (−1)^k a_k
+        const cplx term = coeff * xpow;
         sum += term;
         if (std::abs(term) > prev)
         {
