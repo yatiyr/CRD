@@ -122,8 +122,7 @@ preset after a preset-less configure attempt had left `CMAKE_MAKE_PROGRAM` unset
 - After the withdrawal: the workflow parses with only the clang-tidy comment left changed; tooling 16/16 including the
   `EXCLUDE_FROM_ALL` staging cases; validator PASS (863 rows, 1,029 documents, 8,867 local links); `git diff --check`
   clean; D3DConfig restored (`<no apps>`, `force-warp=false`); no `d3d10warp.dll` left under `build/win-debug`.
-- State: REPO.3c.7 is Needs CI with this evidence and run 34726528230; REPO.3c.10 is Partial after the withdrawal
-  above, so REPO.3c and the audited REPO.DEV rows hold Partial behind it. The next human publication must show the
-  tidy lane completing and B1-f passing on every Windows lane through the barycentric route on the OS WARP
-  (census `driver=10.0.26100.*`); the ASan lane is expected to fail exactly the four DXR gates until the provider
-  question is decided. No commit or push occurred.
+- State: REPO.3c.7 held Needs CI with this evidence until [run 34757652779](https://github.com/yatiyr/CRD/actions/runs/34757652779)
+  at `ae44264` passed B1-f on every Windows lane through the barycentric route on the OS WARP (census
+  `driver=10.0.26100.33296`); it is Done. The ASan lane failed exactly the four DXR gates, which the
+  [third-party register](2026-09-13-third-party-defect-register.md) now owns under REPO.3c.10. No commit or push by the agent.

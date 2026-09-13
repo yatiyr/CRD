@@ -16,6 +16,7 @@ This applies to every human and agent, regardless of tool/model. No host-specifi
 | Current slice | [context](../context.md), then its one [master row](ROADMAP.md) |
 | Architecture and ownership | [PRINCIPLES](PRINCIPLES.md), then the row's ADR |
 | Bug diagnosis and evidence standard | [SANITY](SANITY.md) |
+| Third-party defects and the registered-failure gate | [Register](third-party-defects.md) |
 | Build/test/tidy commands | [BUILDING](BUILDING.md); style in [CODING](CODING.md) |
 | Full renderer/UI/editor scope | [Execution contract](design/renderer-ui-execution-contract.md), [catalogue](design/rendering-ui-contracts.md) |
 | Whole-system vision, classified gaps, AI/collaboration/science | [System review](research/2026-09-12-cerid-whole-system-review.md) |

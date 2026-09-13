@@ -142,17 +142,24 @@ jobs:
         run: |
           ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+          $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
-          exit $testExit
+          # Two-sided register gate (docs/third-party-defects.md): the lane is green only when the failing set equals
+          # the registered third-party failures for this preset; lanes without entries require zero failures and
+          # propagate CTest's exit code. Nothing is suppressed; the sanitizer reports stay in this log.
+          python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
+          exit $LASTEXITCODE
 
       - name: Preserve CTest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
+          path: |
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
   clang-tidy:

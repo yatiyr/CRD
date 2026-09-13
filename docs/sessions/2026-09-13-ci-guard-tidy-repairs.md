@@ -95,7 +95,8 @@ TU changed today parses clean under the same helper after one repair of a nested
 Close-out: validator PASS (863 rows, 1,029 documents, 8,863 local links), hygiene guard 96 modules, tooling tests
 16/16, `git diff --check` clean.
 
-REPO.3c.3 holds Needs CI with this evidence and the published run. REPO.3c.4.a, 3c.4, 3c.5.a through 3c.5.d, 3c.5,
-3c.6 and 3c.8 also stay Needs CI: their hosted evidence is positive at `0b858a6`, but the validator closes a row only
-after its prerequisite, and 3c.3 needs the next published tidy lane. The pointer moved on through the
-[route/provider session](2026-09-13-inner-coverage-route-and-pinned-warp.md) and the [REPO.DEV audit](2026-09-13-repo-dev-audit.md).
+REPO.3c.3 held Needs CI with this evidence until the user published `ae44264`: [run 34757652779](https://github.com/yatiyr/CRD/actions/runs/34757652779)
+completed the clang-tidy lane, passed every Linux lane's guards and every non-ASan Windows lane, and closed REPO.3c.3,
+3c.4.a, 3c.4, 3c.5.a through 3c.5.d, 3c.5, 3c.6, 3c.7, 3c.8 and 3c.9 as Done in order. The pointer moved on through the
+[route/provider session](2026-09-13-inner-coverage-route-and-pinned-warp.md), the [REPO.DEV audit](2026-09-13-repo-dev-audit.md)
+and the [third-party register](2026-09-13-third-party-defect-register.md).

@@ -3474,3 +3474,32 @@ fast or prints PASS for a known violation has not scanned. Prove a fixed regex w
 allow marker.
 
 <!-- end-memory:feedback_repository_guard_parity_windows_linux -->
+
+
+<a id="memory-feedback_third_party_defects_register_two_sided_gate"></a>
+## feedback_third_party_defects_register_two_sided_gate
+
+---
+name: feedback_third_party_defects_register_two_sided_gate
+description: "A failure reproduced outside Cerid code (no Cerid frame, runtime-owned memory, SDK-only reproduction) is closed by registering its exact CTest names per lane in docs/third-party-defects.md; the lane's last step compares the failing set with the register in both directions (scripts/check-registered-failures.py). Never suppress, filter or skip it, and never leave a lane permanently red."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** When a hosted failure is proven third-party (2026-09-13: the OS WARP reads 8 bytes past the runtime's DXIL
+copy in CreateStateObject under ASan), do not choose between a suppression and a red lane. Register the defect with
+its reproduction, exact affected tests and lanes, engine handling and retirement trigger, and let the lane's final
+step compare the observed failing set with the registered set in both directions. Lanes without entries require zero
+failures and propagate CTest's exit code.
+
+**Why.** A suppression hides the class of defect the sanitizer lane exists for; a permanently red lane hides every
+new failure behind a known one. A two-sided register keeps the sanitizer strict, keeps the reports in the log, and
+forces the entry out when the provider is fixed, because an unexpected pass is also a failure of the gate.
+
+**How to apply.** Add the entry and its names to the register's fenced JSON block, keep the anchors the gate checks,
+run `scripts/test-repository-tools.py`, and record the hosted run whose failing set equals the register as the row's
+evidence. Widening an entry is a documented decision with a reproduction, never a convenience.
+
+<!-- end-memory:feedback_third_party_defects_register_two_sided_gate -->

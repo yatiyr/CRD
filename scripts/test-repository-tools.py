@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib.util
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -21,6 +22,9 @@ spec.loader.exec_module(hygiene)
 master_spec = importlib.util.spec_from_file_location('master_plan', ROOT / 'scripts/check-master-plan.py')
 master = importlib.util.module_from_spec(master_spec)
 master_spec.loader.exec_module(master)
+gate_spec = importlib.util.spec_from_file_location('registered_failures', ROOT / 'scripts/check-registered-failures.py')
+gate = importlib.util.module_from_spec(gate_spec)
+gate_spec.loader.exec_module(gate)
 
 
 class MasterPlanSequence(unittest.TestCase):
@@ -293,6 +297,89 @@ class PinnedWarp(unittest.TestCase):
                                      capture_output=True, text=True, timeout=300)
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn('CRD_WARP_DLL does not exist', missing.stdout + missing.stderr)
+
+
+class RegisteredFailures(unittest.TestCase):
+    """The third-party register gate is two-sided: unexpected failures and unexpected passes both fail the lane."""
+
+    @staticmethod
+    def register_text(lanes):
+        block = json.dumps({'lanes': lanes}, indent=2)
+        return ('# Register\n\n<!-- doc-role: reference -->\n\n<!-- registered-failures -->\n```json\n' + block
+                + '\n```\n\n<a id="tp-1"></a>\n## TP-1: a provider defect\n\n<a id="tp-2"></a>\n## TP-2: another\n')
+
+    @staticmethod
+    def junit_text(states):
+        cases = []
+        for name, state in states.items():
+            child = {'passed': '', 'failed': '<failure message="x"/>', 'skipped': '<skipped message="s"/>'}[state]
+            status = {'passed': 'run', 'failed': 'fail', 'skipped': 'notrun'}[state]
+            cases.append(f'<testcase name="{name}" classname="{name}" time="0" status="{status}">{child}</testcase>')
+        return '<?xml version="1.0"?><testsuite name="s" tests="%d">%s</testsuite>' % (len(states), ''.join(cases))
+
+    def gate(self, lanes, lane, states, ctest_exit):
+        with tempfile.TemporaryDirectory() as temp:
+            register = Path(temp) / 'register.md'
+            register.write_text(self.register_text(lanes), encoding='utf-8')
+            junit = Path(temp) / 'ctest.xml'
+            junit.write_text(self.junit_text(states), encoding='utf-8')
+            expected = gate.registered(gate.load_register(register), lane)
+            return gate.evaluate(expected, gate.junit_results(junit), ctest_exit)
+
+    LANES = {'win-asan': [{'test': 'A (DX12)', 'defect': 'TP-1'}, {'test': 'B (DX12)', 'defect': 'TP-1'}]}
+
+    def test_exact_registered_set_passes_and_is_reported(self):
+        code, lines = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'failed', 'C': 'passed'}, 8)
+        self.assertEqual(code, 0, lines)
+        self.assertTrue(any('registered TP-1: failed  A (DX12)' in line for line in lines), lines)
+        self.assertTrue(lines[-1].startswith('gate: PASS'), lines)
+
+    def test_unexpected_failure_and_unexpected_pass_both_fail(self):
+        code, lines = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'passed', 'C': 'failed'}, 8)
+        self.assertEqual(code, 1, lines)
+        self.assertTrue(any(line.startswith('  UNEXPECTED FAILURE: C') for line in lines), lines)
+        self.assertTrue(any('UNEXPECTED PASSED: registered TP-1 did not fail: B (DX12)' in line for line in lines), lines)
+        code, _ = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'failed', 'C': 'failed'}, 8)
+        self.assertEqual(code, 1)
+        code, _ = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'passed', 'B (DX12)': 'passed', 'C': 'passed'}, 0)
+        self.assertEqual(code, 1)
+
+    def test_registered_test_skipped_or_absent_fails(self):
+        code, lines = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'skipped'}, 8)
+        self.assertEqual(code, 1, lines)
+        self.assertTrue(any('UNEXPECTED SKIPPED' in line for line in lines), lines)
+        code, lines = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'C': 'passed'}, 8)
+        self.assertEqual(code, 1, lines)
+        self.assertTrue(any('UNEXPECTED ABSENT' in line for line in lines), lines)
+
+    def test_lane_without_entries_requires_zero_failures_and_propagates_ctest_exit(self):
+        self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 0)[0], 0)
+        self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 3)[0], 3)
+        self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'failed'}, 8)[0], 1)
+        self.assertEqual(self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'failed'}, 255)[0], 255)
+
+    def test_register_and_junit_evidence_are_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'register.md'
+            path.write_text('# no marker\n', encoding='utf-8')
+            with self.assertRaisesRegex(gate.RegisterError, 'marker'):
+                gate.load_register(path)
+            path.write_text(self.register_text({'win-asan': [{'test': 'A', 'defect': 'TP-9'}]}), encoding='utf-8')
+            with self.assertRaisesRegex(gate.RegisterError, 'TP-9 has no'):
+                gate.load_register(path)
+            path.write_text(self.register_text({'win-asan': [{'test': 'A', 'defect': 'TP-1'}, {'test': 'A', 'defect': 'TP-2'}]}),
+                            encoding='utf-8')
+            with self.assertRaisesRegex(gate.RegisterError, 'duplicate'):
+                gate.load_register(path)
+            junit = Path(temp) / 'empty.xml'
+            junit.write_text('<testsuite tests="0"></testsuite>', encoding='utf-8')
+            with self.assertRaisesRegex(gate.RegisterError, 'Zero CTest results'):
+                gate.junit_results(junit)
+        real = gate.load_register(ROOT / 'docs/third-party-defects.md')
+        self.assertIn('win-asan', real['lanes'])
+        self.assertEqual({entry['defect'] for entry in real['lanes']['win-asan']}, {'TP-1'})
+        presets = {p['name'] for p in json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))['configurePresets']}
+        self.assertTrue(set(real['lanes']) <= presets, set(real['lanes']) - presets)
 
 
 if __name__ == '__main__':

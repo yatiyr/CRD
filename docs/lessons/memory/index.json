@@ -3677,6 +3677,11 @@
       "path": "docs/lessons/memory/device-programs.md",
       "anchor": "memory-reference_warp_1_0_20_package_diverges_on_bit_exact_compute",
       "description": "Microsoft.Direct3D.WARP 1.0.20 fixes the OS WARP DXR over-read but fails 13 of the DX12 bit-exact compute oracles (precise FP kernels and two wave-shaped kernels) that hardware and the OS build pass, and reports wave_max=128 where the OS build reports 4. Qualify a replacement provider on the whole test executables before wiring it into any lane; a four-gate arm is not a provider qualification."
+    },
+    "feedback_third_party_defects_register_two_sided_gate": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_third_party_defects_register_two_sided_gate",
+      "description": "A failure reproduced outside Cerid code (no Cerid frame, runtime-owned memory, SDK-only reproduction) is closed by registering its exact CTest names per lane in docs/third-party-defects.md; the lane's last step compares the failing set with the register in both directions (scripts/check-registered-failures.py). Never suppress, filter or skip it, and never leave a lane permanently red."
     }
   },
   "aliases": {

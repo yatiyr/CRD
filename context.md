@@ -3,8 +3,8 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: REPO.3c.10 -->
-**Current work:** [REPO.3c.10](docs/ROADMAP.md#slice-repo.3c.10): the hosted ASan lane's four DXR gates; OS WARP over-read isolated, 1.0.20 pin withdrawn.
+<!-- current-slice: REPO.DEV.3b.3 -->
+**Current work:** [REPO.DEV.3b.3](docs/ROADMAP.md#slice-repo.dev.3b.3), the first truly Open row: portable strict LLVM-20 analysis.
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction
@@ -25,6 +25,6 @@ Entry: [START_HERE](START_HERE.md). Architecture findings: [A01–A27](docs/rese
 Collaboration and multiplayer contracts: [ADR-0130](docs/decisions/0130-system-qualification-and-agent-driven-products.md).
 
 User assignment 2026-09-13: fix every CI failure, then complete every row before the first truly Open slice, in
-[order](docs/ROADMAP.md#strict-sequential-execution), driven by a per-minute session loop. REPO.3c.3, 3c.7, 3c.8 and
-3c.9 wait only for the next published run; REPO.3c.10 needs the user's provider decision (see handoff). The full
-ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.
+[order](docs/ROADMAP.md#strict-sequential-execution), driven by a per-minute session loop. REPO.3c.3 through 3c.9 closed
+on run 34757652779; REPO.3c.10 and REPO.3c wait for the [third-party register](docs/third-party-defects.md) gate's first
+hosted run. The full ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.

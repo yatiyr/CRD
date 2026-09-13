@@ -81,7 +81,7 @@ Native build `--config` and CTest `-C` must match; pass PowerShell arguments exp
 
 Linux: export the [validation installer](../scripts/install-vulkan-validation.py)'s layer/library paths; inspect startup
 diagnostics. `VULKAN_SDK` alone does not select runtime layers. Keep the system driver.
-WARP pin (opt-in, CI unset): [recipe](recipes/2026-09-13-dx12-pinned-warp.md).
+Third-party defects and the ASan gate: [register](third-party-defects.md).
 
 ## Troubleshooting
 
