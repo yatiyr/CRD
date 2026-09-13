@@ -1357,7 +1357,19 @@ inline bool stage_output_order(const KEntry& entry, int (&order)[kMaxStageOutput
 // `emit_value_stmt_hlsl` for the value ops. HLSL raster I/O is STRUCT-based with `SV_` semantics; `[[vk::location(N)]]`
 // pins the SPIR-V location so it matches the GLSL emitter. The RASTER LEAF resolves stage values: `StageIn`→`i.aL`,
 // `Builtin`→`i.biN`, UBO `FieldGet`→a cbuffer member `uS_B_fN`. An unlowerable builtin/op returns false.
-inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
+// B1-f: how the fragment stage realizes `KBuiltin::InnerCoverage`. Native reads SV_InnerCoverage (conservative
+// Tier 3). Barycentric declares `noperspective float3 : SV_Barycentrics` (shader model 6.1) and lowers the builtin to
+// the exact pixel-corner test: screen-space-linear barycentrics are affine, so their ddx/ddy are exact and the minimum
+// over the four pixel corners is b - 0.5*(|ddx b| + |ddy b|); the pixel is fully inside iff every component stays >= 0.
+// The provider chooses the route (dx12_inner_coverage_route); the emitted HLSL is otherwise identical.
+enum class HlslInnerCoverage : crd::u8
+{
+    Native = 0,
+    Barycentric
+};
+
+inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out,
+                            HlslInnerCoverage inner_coverage = HlslInnerCoverage::Native)
 {
     int output_order[kMaxStageOutputs]{};
     if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
@@ -1423,12 +1435,20 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
             break; // ⛔ ONE member per location (injected + real StageIns at a location collapse to one decl)
         }
     }
+    bool bary_declared = false; // B1-f fallback: SV_Barycentrics is declared once however many reads exist
     for (int i = 0; i < n; ++i)
     {
         if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::Builtin) { continue; }
         // REN-38: DrawIndex is NOT a system value — it arrives as a ROOT CONSTANT (b7), declared in the
         // prologue and read as `pc_draw_index`; ExecuteIndirect's command signature varies it per command.
         if (static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex) { continue; }
+        if (!is_vertex && inner_coverage == HlslInnerCoverage::Barycentric
+            && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::InnerCoverage)
+        {
+            if (!bary_declared) { s.append("  noperspective float3 bary_ic : SV_Barycentrics;\n"); }
+            bary_declared = true;
+            continue;
+        }
         const char* bt = nullptr;
         const char* sv = nullptr;
         if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(g.node(i).iidx), bt, sv)) { return false; } // unsupported builtin
@@ -1552,6 +1572,11 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
         if (iv2) { s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n"); }
         if (iv) { s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n"); }
     }
+    if (bary_declared) // B1-f fallback: exact pixel-corner test on screen-space-linear barycentrics (HlslInnerCoverage)
+    {
+        s.append("uint crd_inner_coverage_bary(float3 b){float3 r=0.5*(abs(ddx(b))+abs(ddy(b)));"
+                 "return all(b-r>=0.0)?1u:0u;}\n");
+    }
     if (!is_vertex && entry.early_fragment_tests) { s.append("[earlydepthstencil]\n"); } // B1-d: force early-Z
     s.append(is_vertex ? "VSOut main(VSIn i) {\n  VSOut o;\n" : "PSOut main(PSIn i) {\n  PSOut o;\n");
 
@@ -1574,6 +1599,11 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
             if (static_cast<KBuiltin>(lnd.iidx) == KBuiltin::DrawIndex) // REN-38: the root constant, not an SV
             {
                 emit_stmt_prefix_hlsl(gg, li, ss); ss.append("pc_draw_index;\n"); return true;
+            }
+            if (!is_vertex && inner_coverage == HlslInnerCoverage::Barycentric
+                && static_cast<KBuiltin>(lnd.iidx) == KBuiltin::InnerCoverage)
+            {
+                emit_stmt_prefix_hlsl(gg, li, ss); ss.append("crd_inner_coverage_bary(i.bary_ic);\n"); return true;
             }
             const char* bt = nullptr;
             const char* sv = nullptr;

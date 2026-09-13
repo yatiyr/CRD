@@ -69,11 +69,29 @@ statement about every WARP/runtime release. A different runtime/provider combina
 - Masking the native bit field was tested; it did not repair the reproduced false interior result.
 - Switching DXIL to DXBC was tested; it did not repair this reproduction.
 - A newer signed WARP package was tested in isolation and removed afterward. Its presence is not proof of a fix.
-- Do not silently report Tier 2, add a software skip, suppress diagnostics, or replace the shader with an analytical
-  approximation to close this native-feature contract. A proposed capability/fallback contract requires explicit review
-  and its own end-to-end qualification; it is not implemented here.
+- Do not silently report Tier 2, add a software skip or suppress diagnostics to close this native-feature contract.
+  The route contract below is the reviewed capability/fallback contract; it is qualified end to end on both providers
+  and never replaces the native bit where that bit is qualified.
 
 No performance benchmark or speed claim is made. This is correctness and provider-isolation evidence.
+
+## Route contract (implemented 2026-09-13)
+
+`IRasterContext::inner_coverage_route()` reports `Native`, `Barycentric` or `Unsupported`; `supports_inner_coverage()`
+is true for either route. DX12 (`dx12_inner_coverage_route`) keeps the native `SV_InnerCoverage` on conservative Tier 3
+unless the selected adapter is the documented software provider; that provider, and Tier 1/2 providers, take the
+barycentric route when OPTIONS3 barycentrics and shader model 6.1 exist (both providers here report `barycentrics=1`,
+`highest=0x66`); otherwise program creation is refused. The emitter (`HlslInnerCoverage::Barycentric`) declares
+`noperspective float3 bary_ic : SV_Barycentrics`, compiles as `ps_6_1`, and lowers the builtin to
+`all(b - 0.5*(abs(ddx(b)) + abs(ddy(b))) >= 0)`: screen-space-linear barycentrics are affine, so the derivatives are
+exact and the expression is the minimum over the four pixel corners. The same conservative overestimate draw feeds it.
+
+The public test is three cases against one CPU oracle that classifies every pixel by separating axes (fully covered,
+touched, untouched; corners within 1/64 px of an edge or vertex excluded): the public route, the forced barycentric route
+(`dx12_override_inner_coverage_route`, a test-only override), and native conformance through direct HLSL, which skips
+with its reason where the native route is unqualified. Hardware and WARP 10.0.26100.8972 both render interior 220, edge
+92, background 3,784 with zero ambiguous or mismatching pixels ([evidence](../sessions/2026-09-13-inner-coverage-route-and-pinned-warp.md)).
+Unknown adapters keep the D3D12 contract; the oracle, not the identity, decides whether such a provider is correct.
 
 ## Code and reproduction
 

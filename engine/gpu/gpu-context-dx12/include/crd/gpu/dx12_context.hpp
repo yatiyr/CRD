@@ -37,6 +37,8 @@ public:
 [[nodiscard]] std::unique_ptr<IGpuContext>
 create_dx12_gpu_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
+enum class InnerCoverageRoute : u8; // B1-f: defined in raster_context.hpp
+
 enum class Dx12AdapterKind : u8
 {
     Unknown,
@@ -52,6 +54,21 @@ enum class Dx12AdapterKind : u8
 // Compatibility query for existing numerical consumers: true only for positively identified software execution.
 // Unknown returns false, retaining the stricter oracle; qualification also requires the device census to succeed.
 [[nodiscard]] bool dx12_default_adapter_is_software() noexcept;
+
+// B1-f: the inner-coverage route the DEFAULT device qualifies. Native needs conservative Tier 3 on a provider whose
+// SV_InnerCoverage is qualified. The documented software provider is not: every WARP build tested (OS 10.0.26100.8972
+// and 10.0.26100.33296, signed package 1.0.20) reports Tier 3 yet sets bit 0 on partially covered pixels
+// (docs/recipes/2026-09-13-dx12-inner-coverage.md), so it takes the Barycentric route, which any provider with
+// conservative Tier >= 1, OPTIONS3 barycentrics and shader model 6.1 can run. Unknown adapters keep the D3D12 contract
+// and the pixel-corner oracle in the raster tests checks them.
+[[nodiscard]] InnerCoverageRoute dx12_default_inner_coverage_route() noexcept;
+
+// Diagnostic/test override of that decision for every DX12 program compiled and raster context created afterwards.
+// Returns false, and sets nothing, when the default device cannot run `route`; clear it with
+// dx12_clear_inner_coverage_route_override(). Not a shipping setting: tests use it to qualify the fallback on a
+// provider whose native route is also qualified.
+[[nodiscard]] bool dx12_override_inner_coverage_route(InnerCoverageRoute route) noexcept;
+void dx12_clear_inner_coverage_route_override() noexcept;
 
 // Mint a Dx12GpuProgram from cooked DXIL — the ONE program constructor (mirror of make_vulkan_program). DXIL is device-
 // independent bytecode, so no device is needed: the program just copies + owns the bytes. Returns nullptr on empty input.

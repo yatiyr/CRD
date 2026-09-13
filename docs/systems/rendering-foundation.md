@@ -8,7 +8,9 @@ modules are retired ([ADR-0105](../decisions/0105-retire-rhi-renderer-gpu-contex
 This overview describes ownership; [ROADMAP](../ROADMAP.md#master-table) alone tracks remaining work.
 
 Feature queries require behavioural evidence: the [inner-coverage recipe](../recipes/2026-09-13-dx12-inner-coverage.md)
-shows exact pixel probes and native provider isolation. Adapter identity alone never qualifies feature semantics.
+shows exact pixel probes, native provider isolation and the native/barycentric route a raster context reports through
+`inner_coverage_route()`. Adapter identity alone never qualifies feature semantics; hosted lanes keep the OS WARP, the
+[pinned-WARP experiment](../recipes/2026-09-13-dx12-pinned-warp.md) records why the 1.0.20 package was withdrawn.
 
 ## Asset to frame
 

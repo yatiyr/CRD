@@ -2,12 +2,15 @@
 """Regression checks for hygiene rejection and CMake's generated IDE model."""
 from pathlib import Path
 import importlib.util
+import hashlib
 import io
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -204,6 +207,92 @@ class RepositoryTools(unittest.TestCase):
             result = subprocess.run([cmake, '-S', str(source), '-B', str(build), '-G', 'Ninja',
                                      f'-DCMAKE_MAKE_PROGRAM={ninja}'], capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class PinnedWarp(unittest.TestCase):
+    @staticmethod
+    def installer():
+        spec = importlib.util.spec_from_file_location('warp', ROOT / 'scripts/install-warp.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_warp_request_identifies_client_and_still_checks_bytes(self):
+        installer = self.installer()
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / 'warp'
+            with patch.object(installer.urllib.request, 'urlopen', return_value=io.BytesIO(b'untrusted response')) as fetch:
+                with self.assertRaisesRegex(ValueError, 'package checksum mismatch'):
+                    installer.install(destination, None)
+            request = fetch.call_args.args[0]
+            self.assertEqual(request.full_url, installer.URL)
+            self.assertEqual(request.get_header('User-agent'), installer.USER_AGENT)
+            self.assertEqual(fetch.call_args.kwargs['timeout'], 60)
+            self.assertFalse((destination / installer.OUTPUT).exists())
+
+    def test_warp_package_and_member_checksums_are_both_required(self):
+        installer = self.installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / 'warp.nupkg'
+            archive.write_bytes(b'not the pinned package')
+            destination = root / 'warp'
+            with self.assertRaisesRegex(ValueError, 'package checksum mismatch'):
+                installer.install(destination, archive)
+            self.assertEqual(list(destination.iterdir()), [])
+            with zipfile.ZipFile(archive, 'w') as package:
+                package.writestr(installer.MEMBER, b'not the signed rasterizer')
+                package.writestr('build/native/bin/arm64/d3d10warp.dll', b'wrong architecture')
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with patch.object(installer, 'SHA256', digest):
+                with self.assertRaisesRegex(ValueError, 'DLL checksum mismatch'):
+                    installer.install(destination, archive)
+            self.assertFalse((destination / installer.OUTPUT).exists())
+
+    def test_staging_copies_the_dll_beside_every_executable(self):
+        cmake = shutil.which('cmake')
+        if cmake is None or os.name != 'nt':
+            self.skipTest('Windows CMake unavailable')
+        # Ninja needs a compiler already in the environment; otherwise CMake's default Visual Studio generator locates
+        # the toolchain itself (the hosted repository job has CMake but no developer command prompt).
+        ninja = shutil.which('ninja') if shutil.which('cl') is not None else None
+        generator = ['-G', 'Ninja', f'-DCMAKE_MAKE_PROGRAM={ninja}'] if ninja is not None else []
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'source'
+            (source / 'nested').mkdir(parents=True)
+            (source / 'optional').mkdir()
+            dll = root / 'd3d10warp.dll'
+            dll.write_bytes(b'pinned rasterizer stand-in')
+            (source / 'main.c').write_text('int main(void) { return 0; }\n', encoding='utf-8')
+            (source / 'CMakeLists.txt').write_text('\n'.join([
+                'cmake_minimum_required(VERSION 3.25)', 'project(staging C)',
+                f'list(APPEND CMAKE_MODULE_PATH "{(ROOT / "cmake").as_posix()}")', 'include(CrdWarp)',
+                'add_executable(top main.c)', 'add_library(helper STATIC main.c)', 'add_subdirectory(nested)',
+                'add_executable(bench EXCLUDE_FROM_ALL main.c)', 'add_subdirectory(optional EXCLUDE_FROM_ALL)',
+                'crd_stage_warp_dll("${CMAKE_CURRENT_SOURCE_DIR}")', '']), encoding='utf-8')
+            (source / 'nested/CMakeLists.txt').write_text('add_executable(inner ../main.c)\n', encoding='utf-8')
+            (source / 'optional/CMakeLists.txt').write_text('add_executable(tool ../main.c)\n', encoding='utf-8')
+            build = root / 'build'
+            configure = subprocess.run([cmake, '-S', str(source), '-B', str(build), *generator, f'-DCRD_WARP_DLL={dll}'],
+                                       capture_output=True, text=True, timeout=300)
+            self.assertEqual(configure.returncode, 0, configure.stdout + configure.stderr)
+            built = subprocess.run([cmake, '--build', str(build), '--config', 'Debug'],
+                                   capture_output=True, text=True, timeout=600)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            staged = sorted(build.rglob('d3d10warp.dll'))
+            self.assertEqual(len(staged), 2, staged) # one per ALL executable output directory, none for the library
+            for copy in staged:
+                self.assertEqual(copy.read_bytes(), dll.read_bytes(), copy)
+                self.assertTrue(any(exe.suffix == '.exe' for exe in copy.parent.iterdir()), copy)
+            # Executables excluded from ALL (target and directory forms) are neither staged nor forced to build.
+            self.assertEqual([exe.name for exe in build.rglob('*.exe')].count('bench.exe'), 0)
+            self.assertEqual([exe.name for exe in build.rglob('*.exe')].count('tool.exe'), 0)
+            missing = subprocess.run([cmake, '-S', str(source), '-B', str(root / 'missing'), *generator,
+                                      f'-DCRD_WARP_DLL={root / "absent.dll"}'],
+                                     capture_output=True, text=True, timeout=300)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn('CRD_WARP_DLL does not exist', missing.stdout + missing.stderr)
 
 
 if __name__ == '__main__':

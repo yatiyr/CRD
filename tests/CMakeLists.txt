@@ -1,5 +1,6 @@
 include(CTest)
 include(CrdTestDiscovery)
+include(CrdWarp) # pinned app-local WARP staging (CRD_WARP_DLL), applied at the end of this file
 
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
 add_test(NAME crd-repository-hygiene
@@ -141,3 +142,7 @@ add_subdirectory(applications/sandbox sandbox)
 if(CRD_BUILD_BENCHMARKS)
     add_subdirectory(bench)
 endif()
+
+# Pinned WARP (scripts/install-warp.py): copy the verified DLL beside every test executable when CRD_WARP_DLL is
+# set. Hosted Windows lanes set it; local builds leave it empty and use the OS WARP or the reversible diagnostic.
+crd_stage_warp_dll("${CMAKE_CURRENT_SOURCE_DIR}")

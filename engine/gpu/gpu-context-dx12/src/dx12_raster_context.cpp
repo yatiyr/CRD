@@ -1056,6 +1056,7 @@ public:
             m_rov               = opt.ROVsSupported != FALSE;
             m_binding_tier      = opt.ResourceBindingTier; // B2-d: Tier 2+ = dynamic/non-uniform descriptor-array indexing
         }
+        m_inner_coverage = detail::dx12_inner_coverage_route(m_device.Get()); // B1-f: the qualified route, not the raw tier
         // A shader-visible CBV/SRV/UAV heap: slot 0 = storage UAV (draw_storage) · slot 1 = a texture SRV (draw_textured) ·
         // slots 2..2+kBindlessMax-1 = the bindless SRV array (draw_bindless, B2-d) · slot 2+kBindlessMax = the
         // SHADOW-ATLAS SRV (REN-38 — appended at the END so the bindless slot math is untouched). Plus a
@@ -1154,8 +1155,9 @@ public:
     }
     [[nodiscard]] bool supports_inner_coverage() const noexcept override
     {
-        return m_conservative_tier >= D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;
+        return m_inner_coverage != InnerCoverageRoute::Unsupported;
     }
+    [[nodiscard]] InnerCoverageRoute inner_coverage_route() const noexcept override { return m_inner_coverage; }
     [[nodiscard]] bool supports_fragment_interlock() const noexcept override { return m_rov; }
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_target(crd::u32 width, crd::u32 height) override
@@ -6874,6 +6876,7 @@ private:
     D3D12_VARIABLE_SHADING_RATE_TIER            m_vrs_tier      = D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED; // B1-e
     UINT                               m_vrs_tile_size = 0;                                     // B1-e: square tile edge
     D3D12_CONSERVATIVE_RASTERIZATION_TIER m_conservative_tier = D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED; // B1-f
+    InnerCoverageRoute                 m_inner_coverage    = InnerCoverageRoute::Unsupported; // B1-f: qualified route
     bool                               m_rov           = false; // B1-f: rasterizer-ordered views (fragment interlock analog)
     D3D12_RESOURCE_BINDING_TIER        m_binding_tier  = D3D12_RESOURCE_BINDING_TIER_1; // B2-d: Tier 2+ ⇒ bindless
     // REN-38-A2: the kernel root signature + a DXIL-keyed compute PSO cache (a kernel dispatches every frame,

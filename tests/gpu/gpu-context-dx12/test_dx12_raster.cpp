@@ -23,6 +23,9 @@
 #include <verb_packet_helpers.hpp>  // RAF-12.4: crd::gputest::enc_draw* (fullscreen verbs recorded via the encoder)
 #include <win32_test_window.hpp>    // RET-2: the isolated real-window helper for the present gate
 
+#include <algorithm> // B1-f oracle: std::min
+#include <cmath>     // B1-f oracle: std::sqrt
+
 namespace g = crd::gpu;
 
 // B1-e: count horizontal even-x neighbour pairs whose R channel is EQUAL — a coarse VRS rate makes each 2x2 block share
@@ -1604,8 +1607,171 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (DX12
     CHECK(n_over > n_norm); // overestimate additionally covers the partially-touched edge pixels
 }
 
+namespace
+{
+// B1-f CPU oracle: the shared small triangle in pixel space. A pixel is fully covered iff all four of its corners lie
+// inside the triangle. Corners closer than `band` pixels to an edge are ambiguous under the provider's fixed-point
+// raster snapping (1/256 px) and are excluded rather than guessed; the probes below sit far outside that band.
+struct InnerCoverageOracle
+{
+    float px[3]{};
+    float py[3]{};
+    float band;
+
+    InnerCoverageOracle(crd::u32 dim, float band_pixels) noexcept : band(band_pixels)
+    {
+        // Clip-space vertices of build_small_triangle_vs: (0,-0.35), (0.35,0.35), (-0.35,0.35); viewport y points down.
+        constexpr float cx[3] = {0.0F, 0.35F, -0.35F};
+        constexpr float cy[3] = {-0.35F, 0.35F, 0.35F};
+        for (int v = 0; v < 3; ++v)
+        {
+            px[v] = (cx[v] + 1.0F) * 0.5F * static_cast<float>(dim);
+            py[v] = (1.0F - cy[v]) * 0.5F * static_cast<float>(dim);
+        }
+    }
+
+    // Signed distance in pixels from (x, y) to edge v -> v+1, positive inside (orientation fixed from the centroid).
+    [[nodiscard]] float edge_distance(int v, float x, float y) const noexcept
+    {
+        const int   w        = (v + 1) % 3;
+        const float ex       = px[w] - px[v];
+        const float ey       = py[w] - py[v];
+        const float length   = std::sqrt(ex * ex + ey * ey);
+        const float e        = (ex * (y - py[v]) - ey * (x - px[v])) / length;
+        const float ccx      = (px[0] + px[1] + px[2]) / 3.0F;
+        const float ccy      = (py[0] + py[1] + py[2]) / 3.0F;
+        const float centroid = ex * (ccy - py[v]) - ey * (ccx - px[v]);
+        return centroid < 0.0F ? -e : e;
+    }
+
+    // +1 fully covered, -1 touched but not fully covered, -2 untouched, 0 ambiguous (a corner or the square's own
+    // edges within `band` of the triangle's edges or extreme vertices). Separating-axis test for a convex triangle
+    // against an axis-aligned square: the three edge normals plus the square's two axes decide exactly.
+    [[nodiscard]] int classify(crd::u32 x, crd::u32 y) const noexcept
+    {
+        const float x0 = static_cast<float>(x);
+        const float y0 = static_cast<float>(y);
+        const float x1 = x0 + 1.0F;
+        const float y1 = y0 + 1.0F;
+        float min_x = px[0];
+        float max_x = px[0];
+        float min_y = py[0];
+        float max_y = py[0];
+        for (int v = 1; v < 3; ++v)
+        {
+            min_x = std::min(min_x, px[v]); max_x = std::max(max_x, px[v]);
+            min_y = std::min(min_y, py[v]); max_y = std::max(max_y, py[v]);
+        }
+        const float extremes[4] = {x0 - max_x, min_x - x1, y0 - max_y, min_y - y1}; // > 0 = separated on that axis
+        for (const float gap : extremes)
+        {
+            if (gap > -band && gap < band) { return 0; }
+        }
+        float worst    = 1.0e9F; // min over corners and edges: > 0 means every corner inside every half-plane
+        bool  outside  = false;  // some edge has all four corners outside it: separated by that edge normal
+        for (int v = 0; v < 3; ++v)
+        {
+            float corner_max = -1.0e9F;
+            for (int c = 0; c < 4; ++c)
+            {
+                const float qx = (c & 1) != 0 ? x1 : x0;
+                const float qy = (c >> 1) != 0 ? y1 : y0;
+                const float d  = edge_distance(v, qx, qy);
+                if (d > -band && d < band) { return 0; }
+                worst      = std::min(worst, d);
+                corner_max = std::max(corner_max, d);
+            }
+            if (corner_max < 0.0F) { outside = true; }
+        }
+        if (worst > 0.0F) { return 1; }
+        for (const float gap : extremes)
+        {
+            if (gap > 0.0F) { outside = true; }
+        }
+        return outside ? -2 : -1;
+    }
+};
+
+// The CKIR fragment every route shares: white where the inner-coverage bit is set, red on other emitted fragments.
+[[nodiscard]] std::unique_ptr<g::IGpuProgram> make_inner_coverage_fs(crd::memory::IAllocator* alloc, g::IGpuContext& gctx)
+{
+    namespace kir = crd::kir;
+    kir::KGraph fg(alloc);
+    kir::KEntry fe;
+    const auto  shape = kir::make_shape({1});
+    const int   inner = fg.builtin(kir::KBuiltin::InnerCoverage);
+    const int   bit   = fg.constant(1.0, shape, kir::DType::U32);
+    const int   full  = fg.cast(fg.binary(kir::KOp::BitAnd, inner, bit), kir::DType::F32);
+    const int   one   = fg.constant(1.0, shape, kir::DType::F32);
+    fe.stage          = kir::KStage::Fragment;
+    fe.n_out          = 1;
+    fe.out[0]         = {fg.vec4(one, full, full, one), 0}; // white interior, red edge, black background
+    return gctx.create_program(fg, fe);
+}
+
+// Draws the shared triangle with `fs` under conservative overestimate and checks EVERY pixel against the oracle:
+// white must be fully covered, red touched but not fully covered, black untouched; any other colour is wrong.
+void check_inner_coverage(g::IRasterContext& raster, g::IGpuProgram& vs, g::IGpuProgram& fs)
+{
+    auto program = raster.create_raster_program(vs, fs);
+    REQUIRE(program != nullptr);
+    constexpr crd::u32 dim = 64U;
+    auto target = raster.create_color_target(dim, dim);
+    REQUIRE(target != nullptr);
+    crd::gputest::enc_draw_conservative(raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F},
+                                        g::ConservativeMode::Overestimate, 3U);
+    const InnerCoverageOracle oracle(dim, 1.0F / 64.0F);
+    int white      = 0;
+    int edge       = 0;
+    int background = 0;
+    int ambiguous  = 0;
+    int mismatches = 0;
+    for (crd::u32 y = 0; y < dim; ++y)
+    {
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            const crd::u32 pixel    = target->read_pixel(x, y);
+            int            rendered = 0; // the oracle's classes: +1 full, -1 touched, -2 untouched
+            if (pixel == 0xffffffffU) { ++white; rendered = 1; }
+            else if (pixel == 0xff0000ffU) { ++edge; rendered = -1; }
+            else if (pixel == 0xff000000U) { ++background; rendered = -2; }
+            else { ++mismatches; continue; }
+            const int expected = oracle.classify(x, y);
+            if (expected == 0) { ++ambiguous; continue; }
+            if (rendered != expected) { ++mismatches; }
+        }
+    }
+    WARN("[inner coverage dx12] interior=" << white << " edge=" << edge << " background=" << background
+                                            << " ambiguous=" << ambiguous << " mismatches=" << mismatches);
+    CHECK(white > 0);
+    CHECK(edge > 0); // The same contract applies to hardware and software adapters and to both routes.
+    CHECK(white + edge + background == static_cast<int>(dim * dim));
+    CHECK(mismatches == 0);
+    CHECK(ambiguous < static_cast<int>(dim * dim / 16U)); // the snapping band stays a thin strip along the edges
+    CHECK(target->read_pixel(32U, 30U) == 0xffffffffU);
+    // Horizontal edge is at y=20.8 pixels: [20,21] intersects it far beyond the 1/256 uncertainty region.
+    CHECK(target->read_pixel(32U, 20U) == 0xff0000ffU);
+    CHECK(target->read_pixel(0U, 0U) == 0xff000000U);
+}
+
+// Scoped test override of the DX12 route decision; `active` is false when the default device cannot run the route.
+struct InnerCoverageRouteOverride
+{
+    bool active;
+    explicit InnerCoverageRouteOverride(g::InnerCoverageRoute route) noexcept
+        : active(g::dx12_override_inner_coverage_route(route))
+    {
+    }
+    ~InnerCoverageRouteOverride() { g::dx12_clear_inner_coverage_route_override(); }
+    InnerCoverageRouteOverride(const InnerCoverageRouteOverride&)            = delete;
+    InnerCoverageRouteOverride& operator=(const InnerCoverageRouteOverride&) = delete;
+};
+} // namespace
+
 TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixels (DX12)", "[dx12][raster][gpu][ir]")
 {
+    // The public route: whatever this provider qualifies (native bit on hardware, the barycentric corner test on the
+    // documented software provider). A provider with no route is a real skip; a wrong bit is a failure on any route.
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::gpu_test::qualify_dx12_workload(&alloc, [&]
@@ -1614,68 +1780,90 @@ TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixe
         if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
         auto raster = g::create_dx12_raster_context(&alloc);
         REQUIRE(raster != nullptr);
-        if (!raster->supports_inner_coverage()) { SKIP("adapter has no Tier-3 conservative raster"); }
+        const g::InnerCoverageRoute route = raster->inner_coverage_route();
+        if (route == g::InnerCoverageRoute::Unsupported)
+        {
+            SKIP("adapter has neither Tier-3 inner coverage nor conservative raster with barycentrics");
+        }
+        INFO("inner coverage route: " << (route == g::InnerCoverageRoute::Native ? "native SV_InnerCoverage"
+                                                                                  : "barycentric corner test"));
+        CHECK(raster->supports_inner_coverage());
+        CHECK(raster->supports_conservative_raster());
 
         kir::KGraph vg(&alloc);
         kir::KEntry ve;
         crd::gputest::build_small_triangle_vs(vg, ve);
         auto vs = gctx->create_program(vg, ve);
         REQUIRE(vs != nullptr);
-        std::unique_ptr<g::IGpuProgram> fs;
-        SECTION("CKIR fragment")
-        {
-            kir::KGraph fg(&alloc);
-            kir::KEntry fe;
-            const auto shape = kir::make_shape({1});
-            const int inner = fg.builtin(kir::KBuiltin::InnerCoverage);
-            const int bit = fg.constant(1.0, shape, kir::DType::U32);
-            const int full = fg.cast(fg.binary(kir::KOp::BitAnd, inner, bit), kir::DType::F32);
-            const int one = fg.constant(1.0, shape, kir::DType::F32);
-            fe.stage = kir::KStage::Fragment;
-            fe.n_out = 1;
-            fe.out[0] = {fg.vec4(one, full, full, one), 0}; // white interior, red edge, black background
-            fs = gctx->create_program(fg, fe);
-        }
-        SECTION("Direct DXIL conformance fragment")
-        {
-            // Independent native-semantic oracle isolates CKIR emission from provider behaviour.
-            const auto result = g::compile_hlsl_to_dxil(g::ShaderStage::Fragment,
-                "float4 main(nointerpolation uint inner : SV_InnerCoverage) : SV_Target { "
-                "float full = float(inner & 1u); return float4(1, full, full, 1); }", "inner", &alloc);
-            INFO(result.error_message.c_str());
-            REQUIRE(result.ok);
-            fs = gctx->create_program(g::ShaderStage::Fragment,
-                crd::containers::ConstSpan<crd::u8>(result.dxil.data(), result.dxil.size()));
-        }
+        auto fs = make_inner_coverage_fs(&alloc, *gctx);
         REQUIRE(fs != nullptr);
-        auto program = raster->create_raster_program(*vs, *fs);
-        REQUIRE(program != nullptr);
-        constexpr crd::u32 dim = 64U;
-        auto target = raster->create_color_target(dim, dim);
-        REQUIRE(target != nullptr);
-        crd::gputest::enc_draw_conservative(*raster, *target, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F},
-                                          g::ConservativeMode::Overestimate, 3U);
-        int white = 0;
-        int edge = 0;
-        int background = 0;
-        for (crd::u32 y = 0; y < dim; ++y)
+        check_inner_coverage(*raster, *vs, *fs);
+    });
+}
+
+TEST_CASE("D-007 B1-f: the barycentric inner-coverage route matches the pixel-corner oracle (DX12)",
+          "[dx12][raster][gpu][ir]")
+{
+    // Forces the fallback on every provider that can run it, so hardware qualifies the route the software provider
+    // must take, against the same oracle the native route is held to.
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::gpu_test::qualify_dx12_workload(&alloc, [&]
+    {
+        const InnerCoverageRouteOverride forced(g::InnerCoverageRoute::Barycentric);
+        if (!forced.active)
         {
-            for (crd::u32 x = 0; x < dim; ++x)
-            {
-                const crd::u32 pixel = target->read_pixel(x, y);
-                if (pixel == 0xffffffffU) { ++white; }
-                else if (pixel == 0xff0000ffU) { ++edge; }
-                else if (pixel == 0xff000000U) { ++background; }
-            }
+            SKIP("adapter cannot run the barycentric route (needs conservative Tier 1, barycentrics and SM 6.1)");
         }
-        INFO("inner coverage: interior=" << white << " edge=" << edge << " background=" << background);
-        CHECK(white > 0);
-        CHECK(edge > 0); // The same Tier-3 contract applies to hardware and software adapters.
-        CHECK(white + edge + background == static_cast<int>(dim * dim));
-        CHECK(target->read_pixel(32U, 30U) == 0xffffffffU);
-        // Horizontal edge is at y=20.8 pixels: [20,21] intersects it far beyond the 1/256 uncertainty region.
-        CHECK(target->read_pixel(32U, 20U) == 0xff0000ffU);
-        CHECK(target->read_pixel(0U, 0U) == 0xff000000U);
+        auto gctx = g::create_dx12_gpu_context(&alloc);
+        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        auto raster = g::create_dx12_raster_context(&alloc);
+        REQUIRE(raster != nullptr);
+        REQUIRE(raster->inner_coverage_route() == g::InnerCoverageRoute::Barycentric);
+
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        crd::gputest::build_small_triangle_vs(vg, ve);
+        auto vs = gctx->create_program(vg, ve);
+        REQUIRE(vs != nullptr);
+        auto fs = make_inner_coverage_fs(&alloc, *gctx);
+        REQUIRE(fs != nullptr);
+        check_inner_coverage(*raster, *vs, *fs);
+    });
+}
+
+TEST_CASE("D-007 B1-f: native SV_InnerCoverage conforms on a qualified provider (DX12)", "[dx12][raster][gpu][ir]")
+{
+    // Independent native-semantic oracle isolates CKIR emission from provider behaviour. The documented software
+    // provider is diverted to the barycentric route because its Tier-3 bit is wrong
+    // (docs/recipes/2026-09-13-dx12-inner-coverage.md); it skips here and is qualified by the two cases above.
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::gpu_test::qualify_dx12_workload(&alloc, [&]
+    {
+        auto gctx = g::create_dx12_gpu_context(&alloc);
+        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        auto raster = g::create_dx12_raster_context(&alloc);
+        REQUIRE(raster != nullptr);
+        if (raster->inner_coverage_route() != g::InnerCoverageRoute::Native)
+        {
+            SKIP("native SV_InnerCoverage is unqualified on this provider; the barycentric route is qualified separately");
+        }
+
+        kir::KGraph vg(&alloc);
+        kir::KEntry ve;
+        crd::gputest::build_small_triangle_vs(vg, ve);
+        auto vs = gctx->create_program(vg, ve);
+        REQUIRE(vs != nullptr);
+        const auto result = g::compile_hlsl_to_dxil(g::ShaderStage::Fragment,
+            "float4 main(nointerpolation uint inner : SV_InnerCoverage) : SV_Target { "
+            "float full = float(inner & 1u); return float4(1, full, full, 1); }", "inner", &alloc);
+        INFO(result.error_message.c_str());
+        REQUIRE(result.ok);
+        auto fs = gctx->create_program(g::ShaderStage::Fragment,
+            crd::containers::ConstSpan<crd::u8>(result.dxil.data(), result.dxil.size()));
+        REQUIRE(fs != nullptr);
+        check_inner_coverage(*raster, *vs, *fs);
     });
 }
 

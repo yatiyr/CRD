@@ -62,6 +62,13 @@ The table owns status; this section defines requirements only.
    Assert nonzero execution, correct cull counts and visible pixels, validation silence and truthful skip accounting.
    Rebuild every affected executable, run incremental LLVM-20 analysis and applicable adjacent consumers. Retain missing
    CI evidence as Needs CI, never Done. Parent closure requires all children and its original complete contract.
+5. **REPO.3c.7 — inner coverage as a qualified route.** The native bit stays the contract on qualified Tier-3
+   providers; the documented software provider takes the barycentric pixel-corner route; both are held to one CPU
+   oracle by the [route recipe](../recipes/2026-09-13-dx12-inner-coverage.md). No software skip, tier lie or oracle change.
+6. **REPO.3c.10 — provider, not suppression; still open.** The DXR over-read reproduces only in the OS WARP build. The
+   hash-verified 1.0.20 package fixes it but fails 13 bit-exact compute gates the OS build passes, so it was withdrawn
+   from CI ([pinned-WARP recipe](../recipes/2026-09-13-dx12-pinned-warp.md)); ASan stays unsuppressed and the four
+   hosted DXR gates remain open.
 
 The persistent [validation implementation](../recipes/2026-09-12-dx12-validation-and-command-lifetimes.md) now owns
 startup, callbacks, teardown and checked command completion across gpu-context-dx12 factories. Its

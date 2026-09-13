@@ -124,24 +124,20 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.ProtectedMemberPrefix
     value: 'm_'
-  - key: readability-identifier-naming.LocalConstexprVariableCase
-    value: CamelCase
-  - key: readability-identifier-naming.LocalConstexprVariablePrefix
-    value: 'k'
   - key: readability-identifier-naming.GlobalConstantCase
     value: CamelCase
   - key: readability-identifier-naming.GlobalConstantPrefix
     value: 'k'
-  # Defensive duplicates for CI clang-tidy version skew (added 2026-05-17):
-  # older clang-tidy (LLVM 17 on `windows-latest` VS2022) categorises
-  # function-local `static constexpr` and `constexpr` as the generic
-  # `Constant` / `StaticConstant` categories instead of the more granular
-  # `LocalConstexprVariable`. Newer clang-tidy (LLVM 19+ on local VS2026)
-  # uses the granular category. Setting BOTH the granular and the generic
-  # rules to the same kCamelCase form makes the configuration version-
-  # independent — any clang-tidy categorisation produces the same expected
-  # name. LocalConstant (function-local non-constexpr `const T`) is
-  # explicitly held to lower_case so `const u32 n = ...` style stays valid.
+  # Constant categories (added 2026-05-17, corrected 2026-09-13). The pinned
+  # LLVM 20.1.8 readability-identifier-naming has no `LocalConstexprVariable`
+  # or `StaticConstexprVariable` option; the former keys were ignored. A
+  # function-local `constexpr` resolves to `ConstexprVariable` when that rule
+  # is set and otherwise to `LocalConstant`; a function-local `static const`
+  # resolves to `StaticConstant`; namespace-scope constants are
+  # `GlobalConstant`. Convention: namespace-scope and function-local `static`
+  # constants are `kCamelCase`; every other function-local constant,
+  # including `constexpr`, is lower_case (`constexpr u32 expected_count`).
+  # `ConstexprVariable` stays unset so it cannot override the local rule.
   - key: readability-identifier-naming.ConstantCase
     value: CamelCase
   - key: readability-identifier-naming.ConstantPrefix
@@ -149,10 +145,6 @@ CheckOptions:
   - key: readability-identifier-naming.StaticConstantCase
     value: CamelCase
   - key: readability-identifier-naming.StaticConstantPrefix
-    value: 'k'
-  - key: readability-identifier-naming.StaticConstexprVariableCase
-    value: CamelCase
-  - key: readability-identifier-naming.StaticConstexprVariablePrefix
     value: 'k'
   - key: readability-identifier-naming.LocalConstantCase
     value: lower_case

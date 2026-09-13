@@ -135,7 +135,7 @@ TEST_CASE(
     auto pipe_consume = load_kernel_pipe(CRD_REPO_DIR "/assets/ckir/work_smoke_consume.ckir", 2, compute, &alloc);
 
     // (b) buffers (the portable dev/up/rb mold).
-    constexpr crd::u32 kN = 5U;
+    constexpr crd::u32 expected_count = 5U;
     constexpr crd::u64 q_bytes = (3U + 16U) * 4U;
     constexpr crd::u64 o_bytes = 2U * 4U;
     using gpu::compute_usage::indirect;
@@ -230,9 +230,9 @@ TEST_CASE(
     // ⭐ the DEVICE PROOF (distinct non-overwritten slots — single-submit end-of-run readback == per-stage).
     auto* const qout = static_cast<crd::u32*>(q_rb->map());
     auto* const oout = static_cast<crd::u32*>(o_rb->map());
-    CHECK(qout[0] == kN); // produce wrote the DEVICE count into the queue header
-    CHECK(oout[0] == kN); // ⭐ consume ran N invocations — the ExecuteIndirect was DEVICE-COUNT-sized, not host-sized
-    CHECK(oout[1] == kN); // each invocation read queue[0] == the device count
+    CHECK(qout[0] == expected_count); // produce wrote the DEVICE count into the queue header
+    CHECK(oout[0] == expected_count); // ⭐ consume ran N invocations — the ExecuteIndirect was DEVICE-COUNT-sized, not host-sized
+    CHECK(oout[1] == expected_count); // each invocation read queue[0] == the device count
     q_rb->unmap();
     o_rb->unmap();
 }

@@ -58,10 +58,10 @@ replacement/deletion and failure/reload lifetime proof. Save measured performanc
 Record revision/tree identity, command, toolchain, selected/executed counts, exit and relevant adapter/driver.
 Distinguish executed, failed, skipped and unsupported; a compile/emitter/missing-device return is not runtime proof.
 
-CI failure: inspect exact job/revision, verify setup, reproduce narrowly, fix the mechanism/regression, and verify the
-next human-published revision. Never weaken checks, ignore older failures or substitute a retry-pass for diagnosis.
+CI failure: inspect the exact job/revision, reproduce narrowly, fix the mechanism and verify the next published
+revision. Never weaken checks, ignore older failures or substitute a retry-pass for diagnosis.
 **Agents never commit or push, directly or through automation/helpers.** Continue independent work while publication
-waits; local passes cannot qualify unpublished changes remotely. Missing required evidence keeps its gate open.
+waits; local passes cannot qualify unpublished changes. Missing evidence keeps its gate open.
 
 Never run [per-slice-check](../scripts/per-slice-check.ps1)/[full-sweep](../scripts/full-sweep.ps1) or unfiltered local
 build/test sweeps. CI tiers: preflight, affected Windows/Linux on changes, nightly/manual full matrix. Preserve all
@@ -81,6 +81,7 @@ Native build `--config` and CTest `-C` must match; pass PowerShell arguments exp
 
 Linux: export the [validation installer](../scripts/install-vulkan-validation.py)'s layer/library paths; inspect startup
 diagnostics. `VULKAN_SDK` alone does not select runtime layers. Keep the system driver.
+WARP pin (opt-in, CI unset): [recipe](recipes/2026-09-13-dx12-pinned-warp.md).
 
 ## Troubleshooting
 
@@ -90,8 +91,8 @@ diagnostics. `VULKAN_SDK` alone does not select runtime layers. Keep the system 
   MSVC PCH; the tidy helper uses real compile flags and strips incompatible PCH inputs.
 - LTCG: diagnose the optimized artifact; ASan/non-LTCG cannot qualify it. Preserve ABI/noinline boundaries.
 - PowerShell: capture native completion/exit before filtering; never pipe to `Select-Object -First`. Use UTF-8.
-  Slow is not hung: check process/progress/duration before termination.
-- Resource unload/free order, single jobs-init owner, String capacity and append-only vtables: [MEMORY](../MEMORY.md).
+  Slow is not hung: check progress/duration before termination.
+- Unload/free order, single jobs-init owner, String capacity, append-only vtables: [MEMORY](../MEMORY.md).
 
 Docs: `python scripts/check-master-plan.py`. Tool/layout changes: also `python scripts/check-repository.py`,
 `python scripts/test-repository-tools.py` and affected fixtures.

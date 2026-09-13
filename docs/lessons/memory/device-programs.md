@@ -14,7 +14,7 @@
 ---
 name: feedback_as_ms_payload_contract_dx12_pso
 description: "D3D12 rejects a task+mesh PSO whose AS→MS payload sizes disagree — HLSL DispatchMesh ALWAYS passes a payload, so a mesh that reads none must still DECLARE it ([mesh] payload = true → KEntry.mesh_payload_in); Vulkan tolerates absence and hides the bug"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 31e31376-4d57-4a00-b30c-77365444ac88
@@ -50,7 +50,7 @@ plain for the standalone claim, `payload = true` for the task claim (REN-38-F16 
 ---
 name: feedback_ckir_1d_broadcast_aligns_first_axis_bias_needs_reshape
 description: "CKIR's 1-D broadcast([N],[M,N]) aligns the FIRST axis (per-ROW), NOT numpy trailing (per-column) — a linear-layer/per-column bias MUST reshape [N]→[1,N] first, or a square M==N silently gives a per-row bias"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -84,7 +84,7 @@ so it was never exposed to this; the graph-level `broadcast` eval is where it bi
 ---
 name: feedback_ckir_asset_param_specialization_via_spec_consts
 description: "Convert a PARAMETERIZED ckir program (per-cascade/per-variant) to assets via D12 SPEC-CONST nodes patched at load time — NOT bake-all, NOT a constants buffer, NOT TexSize on an arrayed texture"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -149,7 +149,7 @@ Related: [feedback_everything_is_an_authorable_asset_ceir](execution-ir.md#memor
 ---
 name: feedback_ckir_binary_vec_scalar_shape_mismatch_gpu_broadcasts_oracle_oob
 description: "CKIR g.binary(Mul,vecN,scalar) is a SHAPE MISMATCH — GPU broadcasts vec·float, the same-shape oracle reads OOB"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 40e3ad67-a505-447d-89df-272b48c237f6
@@ -207,7 +207,7 @@ it's language-level scalar broadcast — both classes of "the GPU is lenient, th
 ---
 name: feedback_ckir_dispatch_groups_not_threads_plus_bounds_guard
 description: "eval_cpu_kernel's last arg is WORKGROUPS not threads — passing the element count runs local_size x too much work and mimics an exponential hang; every kernel also needs an explicit tid<N guard"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -245,7 +245,7 @@ per top-level statement); it was never the problem.
 ---
 name: feedback_ckir_emitter_decl_needs_dag_memo
 description: "CKIR compute emitters' decl() had no visit memo — exponential re-traversal on deep diamond DAGs hung emission outright; fixed with declseen in both GLSL and HLSL"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -288,7 +288,7 @@ explode emit" scar is the same family — but its real mechanism is likely this 
 ---
 name: feedback_ckir_eval_for_bound_is_uniform_use_max_plus_forbreakif
 description: "eval_cpu_kernel (and the GPU) runs the workgroup in LOCKSTEP — a For loop's trip count is UNIFORM (eval reads active[0]'s count for ALL threads). A per-thread DIVERGENT count silently reads as thread-0's. Express divergent loops as a uniform max bound + a per-thread ForBreakIf."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -340,7 +340,7 @@ Pins the 23e authored SpMV `.ckir` kernel shape. Related: [feedback_eval_cpu_ker
 ---
 name: feedback_ckir_fft_batched_radix_dispatch_breaks_fixed_twiddle_contract
 description: "CKIR build_fft1d_batched picks the FFT radix by log2(n) (radix16/8/4/2), each with a DIFFERENT twiddle layout + local_size; a caller that provisions a FIXED radix-2 twiddle table (n/2) + local_size must use build_fft1d_radix2, else eval_cpu_kernel mis-simulates and HANGS (not a clean fail)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -383,7 +383,7 @@ device catches it" scar), [feedback_native_gpucommand_capability_tier_kernel_ref
 ---
 name: feedback_ckir_gpu_dispatch_binding_cap_and_sort_unroll_explosion
 description: "Two B17-scalable gotchas — the compute descriptor cap is 8 bindings (>8 → null pipeline → silent segfault; pack into a node pool), and the unrolled sort-network's INLINE selects explode the emit at high layer count."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -422,7 +422,7 @@ HLSL `RWByteAddressBuffer.InterlockedAdd/Exchange(off,val,ORIG)` (out-param form
 ---
 name: feedback_ckir_host_config_bakes_into_shader_variant_explosion
 description: CKIR host-config doubles bake into the emitted shader as literals — varying one per draw makes every instance a distinct shader and turns a GPU render compile-bound; put per-instance authoring params in BUFFERS
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -461,7 +461,7 @@ Related: [project_gpu_context_owns_every_gpu_program](project-history.md#memory-
 ---
 name: feedback_ckir_inline_buffer_load_read_after_write
 description: CKIR buffer loads are INLINE (re-read at each use) — an expression that loads slot k silently reads MUTATED memory if an earlier store in the same sequence overwrote k; materialize raw values before any store
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -504,7 +504,7 @@ scope, not ordering); [feedback_ckir_emitter_decl_needs_dag_memo](device-program
 ---
 name: feedback_ckir_kernel_eval_is_scalar_vec3_evaluates_to_garbage
 description: eval_cpu_kernel is SCALAR - Vec3/VecComp/Swizzle/Dot/Cross had no case and silently evaluated to garbage; compute kernels must write vector maths component-wise on scalar nodes
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -543,7 +543,7 @@ shape, not a one-off), [feedback_ckir_emitter_decl_needs_dag_memo](device-progra
 ---
 name: feedback_ckir_node_refs_are_positional_n_index_id_ignored
 description: "Hand-authored .ckir node refs are \"n<POOL-INDEX>\" (position = identity); the id string is ignored, so non-n / non-positional ids silently break ckir_read"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -588,7 +588,7 @@ with idx == pool slot. Authoring by hand must match that canonical form exactly.
 ---
 name: feedback_ckir_oracle_u32_arithmetic_must_wrap_mod32
 description: "CKIR CPU oracle did u32/i32 Add/Sub/Mul/Shl in f64 — no mod-2^32 wrap, bit-loss above 2^53; full-width hash multiplies diverge from every GPU. Fixed with apply_binary_typed."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -625,7 +625,7 @@ bit-exact GPU==oracle, take the **top 24 bits** (`float(h >> 8) * (1.0/16777216.
 ---
 name: feedback_ckir_rt_inline_rayquery_scars
 description: RT-1 inline ray query (CKIR + Vulkan) scars — GL_EXT_ray_query needs
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -865,7 +865,7 @@ authored asset only needs to PARSE into the right graph; the load gate asserts C
 ---
 name: feedback_ckir_tiled_gemm_occupancy_not_free
 description: "CKIR GEMM — the \"tiled is 4x SLOWER\" finding was a MEASUREMENT ARTIFACT; properly profiled, register-tiling is 6-8x FASTER"
-metadata: 
+metadata:
   node_type: memory
   type: project
   originSessionId: 934ee96e-34fa-4239-87ad-44921a7d5a19
@@ -905,7 +905,7 @@ is this file; playbook §H.3.
 ---
 name: feedback_cuda_emitter_signature_is_a_contract_shared_by_every_launch_site
 description: A ckir emit_*_cuda kernel signature is consumed by MULTIPLE launch paths with DIFFERENT param ABIs; changing it must audit every site.
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -962,7 +962,7 @@ RTX AND WSL2 RTX (linux-gcc-debug, NON-ASan; the ASan config self-skips). See
 ---
 name: feedback_cuda_is_a_required_gpu_compute_backend
 description: "User directive: CUDA is a first-class GPU-compute backend alongside Vulkan + DX12 (capability-gated); implement it for compute work."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 5e246e18-f18e-42d4-98d8-211bd1f81568
@@ -993,7 +993,7 @@ Related: [feedback_mission_portable_gpu_compute_all_backends](device-programs.md
 ---
 name: feedback_cuda_multipass_fft_broken_single_workgroup_ok
 description: "CUDA blockDim MUST equal a shared-memory kernel's local_size (was a fixed 256 → FFT garbage+segfault); FIXED"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -1034,7 +1034,7 @@ compute pipeline now carries TWO explicit launch/compile facts the shader-baked 
 ---
 name: cuda-subgroup-sync-divergence-and-lookback-scars
 description: Three CUDA-backend scars — lazy emitters inline *_sync ops into divergent ifs (data-dependent warp HANG; materialize in uniform flow); blockIdx-based lookback deadlocks (atomic ticket required); __threadfence-in-spin = L2 livelock
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 1487a581-3392-44fb-bc9e-ebeaffd19da5
@@ -1070,7 +1070,7 @@ methods are the ones that work. Related: [integer-lookback-is-bit-exact-sort-not
 ---
 name: feedback_device_skin_passes_both_need_khdrgpuskinactive_gate
 description: gpu_skin CKIR kernel lacked the kHdrGpuSkinActive gate its sibling palette_snapshot has; a cull graph clobbered the CPU palette — caught only by the SHIPPED-config gate
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1137,7 +1137,7 @@ CEIR-31b-4-b-iii-2, 2026-09-06. The frosted-glass device gate rendered a geometr
 ---
 name: feedback_dx12_hlsl_masks_type_bugs_run_vulkan
 description: HLSL/DX12 coerces types and MASKS CKIR emitter bugs; only type-strict GLSL/Vulkan catches them — always run the Vulkan leg
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9b330af5-88bb-499e-a92a-1752e160e0ba
@@ -1174,7 +1174,7 @@ only the Vulkan test failed. The bug had been latent since B3-c because no earli
 ---
 name: feedback_dx12_hlsl_svposition_last_register_packing
 description: "DXIL packs inter-stage varyings by DECLARATION ORDER: VSOut emits SV_Position LAST, and PSIn declares StageIns SORTED BY LOCATION — either violation E_INVALIDARGs the DX12 graphics PSO while Vulkan renders fine"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 40e3ad67-a505-447d-89df-272b48c237f6
@@ -1219,7 +1219,7 @@ Windows optional feature installed, absent on this host).
 ---
 name: feedback_dx12_startvertexlocation_not_reaching_sv_vertexid_use_identity_ib
 description: DX12 non-indexed DrawInstanced first_vertex (StartVertexLocation) does NOT reach SV_VertexID on the tested NVIDIA adapter — a ranged storage-pull/overlay draw renders nothing; fix at the backend seam via an identity index buffer (SV_VertexID = index value).
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 1ee3538a-02f5-4f4b-b78e-1b1cbb6687ab
@@ -1261,7 +1261,7 @@ behavior on WARP / Intel / AMD (the identity-IB fix is portable regardless). Rel
 ---
 name: feedback_dx12_upload_needs_batch_not_per_call_submit_wait
 description: DX12 upload_storage did a CreateCommittedResource + submit_and_wait PER CALL (~36ms/frame at 1M); the fix is the upload BATCH Vulkan already had
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 4e6ed9c1-65ab-4a33-8421-6aaa2743a4c2
@@ -1303,7 +1303,7 @@ Related: [feedback_upload_storage_per_call_wait_batch_contract](workflow-and-cor
 ---
 name: feedback_glsl_writeonly_buffer_readback_portability
 description: GLSL rejects reading a writeonly storage buffer; HLSL/WGSL/MSL silently allow it — a Vulkan-only compile fail in CKIR
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 934ee96e-34fa-4239-87ad-44921a7d5a19
@@ -1344,7 +1344,7 @@ that's wrong. Same session: `KOp::Cast` turned out to be unimplemented in the WG
 ---
 name: feedback_gpu_cost_model_must_include_register_occupancy
 description: "A GPU GEMM/kernel cost model that ranks schedules MUST include register-file occupancy — a fat register tile hits the 64K/SM register file before smem, and omitting it ranks slow tiles best"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -1386,7 +1386,7 @@ registers/thread against the SM register file, integer-floored, before trusting 
 ---
 name: gpu-kernel-profiling-standalone-not-skip-diag
 description: "Skip-a-kernel GPU pipeline diagnosis is CONTAMINATED — profile each kernel standalone on valid precomputed inputs; and empirically test every \"better\" variant (3 paper-wins measured WORSE)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 1487a581-3392-44fb-bc9e-ebeaffd19da5
@@ -1420,7 +1420,7 @@ Related: [bit-exact-scan-cannot-crush-decoupled-lookback](numerics-and-performan
 ---
 name: feedback_gpu_memory_allocator_lessons
 description: "Two GPU-memory-allocator constraints — free VkDeviceMemory before vkDestroyDevice, and TLSF can't manage VRAM (needs external-metadata OffsetAllocator)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 7b0bb65d-6788-4a80-96e7-82e1072ab242
@@ -1464,7 +1464,7 @@ for the broader allocator family. ADR-0085 §6.
 ---
 name: feedback_gpu_pipeline_cache_key_by_content_not_pointer
 description: "GPU pipeline/PSO/state-object caches MUST key by CONTENT hash, never a pointer/handle — caches outlive programs and addresses+handles get recycled"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -1502,7 +1502,7 @@ scar: [feedback_struct_padding_in_content_hash_and_cooked_blobs](workflow-and-co
 ---
 name: gpu-timing-asserts-same-pass-only
 description: GPU perf assertions must compare timings from the SAME measurement pass — cross-call comparisons and argmin-equality vs a checked-in DB are noise-fragile and fail under sweep load
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -1523,7 +1523,7 @@ The AS-4 flash-attention autotuner test failed in a full per-slice sweep (passed
 ---
 name: feedback_mesh_shader_device_scars
 description: "Vulkan mesh-shader (VK_EXT_mesh_shader) device scars — NO_TASK_SHADER, nonuniform-on-constant, VUID-08690, 128 cap"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9d587ba2-dba2-4939-baa4-c0515d41bdbe
@@ -1571,7 +1571,7 @@ clear), check the submit/wait result for DEVICE_LOST before hunting shader logic
 ---
 name: feedback_migrated_executor_gate_runs_both_gpu_backends
 description: "A CEIR/§128 executor-migration slice's gate MUST run gpu-context on BOTH Vulkan AND DX12 — a Vulkan-only gpu-context pass hides a DX12-only MissingCeirPlan/record hole for a whole band."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1595,7 +1595,7 @@ metadata:
 ---
 name: feedback_mission_portable_gpu_compute_all_backends
 description: "THE v17 mission — portable GPU compute system, all backends perfect + performant + bit-exact; don't rabbit-hole one vendor kernel"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 934ee96e-34fa-4239-87ad-44921a7d5a19
@@ -1628,7 +1628,7 @@ When tempted to grind one vendor number, stop and ask: does this make the whole 
 ---
 name: feedback_native_gpucommand_capability_tier_kernel_ref_is_cooktime_not_execution_tier
 description: "CEIR op classification — native{provider=host}+GPUCommand = a host-orchestrated DEVICE-CAPABILITY tier; kernel_ref is a cook-time dependency marker, NOT an execution-tier flag (so native+kernel_ref is legal, not a contradiction)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1658,7 +1658,7 @@ When declaring a new CEIR dialect whose ops drive the DEVICE via host-recorded c
 ---
 name: feedback_parallel_cook_shaderc_threadhostile_and_fiber_stack
 description: Parallel shader cook on crd-jobs — shaderc compiler is thread-hostile AND the cook overflows the 64KB Small fiber; both crash as silent 0xC0000005
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -1699,7 +1699,7 @@ Related: [feedback_reflect_needs_unoptimized_spirv_and_compiler_injection](build
 ---
 name: feedback_shader_capability_needs_device_feature_run_validation
 description: "A new shader/raster feature needs BOTH a matching device feature AND draw-time state, and its PSO/shader may only be legal with a matching raster state — NVIDIA/DX12 run the happy path anyway, so a green gpu-context test is NOT validation-clean; run the Vulkan validation layer AND the DX12 debug layer on every emitter/state change"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 40e3ad67-a505-447d-89df-272b48c237f6
@@ -1748,7 +1748,7 @@ ValidationCapture into the gpu-context raster suite so this becomes an automatic
 ---
 name: feedback_shader_frag_xy_unit_conflict_pixel_vs_normalized
 description: "A shared shader-input field (frag_xy) consumed by two callers wanting OPPOSITE units silently defaulted to a const and broke clustering; normalize AT the consumer, keep the field's documented unit"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1796,7 +1796,7 @@ class), [feedback_new_execution_path_must_run_the_full_suite_on_a_real_device_no
 ---
 name: feedback_shader_pair_disagreement_needs_declared_cooktime_contract
 description: "A VS/FS varying mismatch links, binds and renders the wrong field — no validation layer on either backend can see it, so the agreement must be a DECLARED contract checked at cook time"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: a3482f73-d858-400b-816d-942216e20052
@@ -1836,7 +1836,7 @@ See [feedback_authored_asset_slice_done_only_when_cpp_deleted_and_renders](rende
 ---
 name: v9-gpu-sanity-harness
 description: "Phase 3.1.7 v9 GPU geometry slices follow a 4-piece sanity discipline using the v9-prereq-test-harness helpers — ValidationCapture, ulp/bit_compare, gpu_determinism_check, CRD_PERF_BUDGET_LE"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -1912,7 +1912,7 @@ Related: [feedback_use_every_api_ability_never_level_down_to_the_common_denomina
 ---
 name: reference_ckir_bootstrap_via_write_eval_verify_before_commit
 description: "How to author a COMPLEX .ckir kernel (For loops, data-dependent control flow, dozens of nodes) — bootstrap it via ckir_write, EVAL-VERIFY it before committing, then delete the builder (the 18a-1 mold + an eval-verify step)."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1964,7 +1964,7 @@ keep the builder as an anti-drift oracle; a `.ceir` module has no author-then-de
 ---
 name: reference_cuda_graphs_capture_recipe
 description: "The gold-standard CUDA-Graphs stream-capture recipe (instantiate-once/launch-many, dispatches-only, THREAD_LOCAL, completeness guard) as built for CEIR-29b-2a."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2017,7 +2017,7 @@ OWN timing bracket — the captured region's events are INSIDE the graph, launch
 ---
 name: scars_ckir_emitter_eval
 description: Scars for CKIR emitter / oracle / eval / IR→GPU lowering (u32-wrap, broadcast, materialize-out-of-scope, sentinel-by-asset-path, decl-DAG, hoist-RAW, scalar-eval, fixed-radix fft, For-bound uniform) — relocated out of MEMORY.md; open before "fixing" a CKIR emit/eval/lowering symptom.
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2050,7 +2050,7 @@ CKIR emitter / oracle / eval / lowering scars, moved out of the always-loaded `M
 ---
 name: scars_gpu_device_dx12
 description: Scars for GPU device execution — dispatch binding caps, reflection, occupancy, ray-query/mesh-shader/AS→MS, feature-validation, MRT/indirect, DX12 register-packing / PSO-format / ClearRTV, and GLSL/HLSL portability — relocated out of MEMORY.md; open before "fixing" a device dispatch / DX12 / cross-backend symptom.
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2075,3 +2075,60 @@ portability. Read before "fixing" a matching symptom.
 
 <!-- end-memory:scars_gpu_device_dx12 -->
 
+
+<a id="memory-reference_warp_os_build_overreads_dxr_state_objects_under_asan"></a>
+## reference_warp_os_build_overreads_dxr_state_objects_under_asan
+
+---
+name: reference_warp_os_build_overreads_dxr_state_objects_under_asan
+description: "The Windows 10.0.26100 WARP reads 8 bytes past a D3D12Core allocation in CreateStateObject (ASan heap-buffer-overflow in every DXR gate, also in an SDK-only program); the signed Microsoft.Direct3D.WARP 1.0.20 package does not, but it fails 13 bit-exact compute oracles the OS build passes, so it stays an opt-in experiment (scripts/install-warp.py, CRD_WARP_DLL); never suppress ASan for it."
+metadata:
+  node_type: memory
+  type: reference
+  recorded: 2026-09-13
+---
+
+**Rule.** When an ASan report points into `d3d10warp.dll` with a D3D12Core allocation stack and no Cerid frame, reduce
+to an SDK-only program first (done 2026-09-12: `dxr-asan-probe`), then compare providers with the same executables:
+the OS build 10.0.26100.8972/33296 fails the four DXR gates, the app-local 1.0.20 package passes them
+(`warp-134948-07eef4` vs `warp-135107-ac7699`, census `driver=1.0.20.0`). The candidate engine answer was a hash-verified provider
+pin staged beside every test executable (`cmake/CrdWarp.cmake`), not an ASan suppression,
+message filter or skip.
+
+**Why.** ASan suppressions hide the exact class of defect the sanitizer lane exists for; a provider pin keeps the
+sanitizer strict and makes the qualified software tuple explicit in every lane log.
+
+**How to apply.** Prove which DLL executed through the census driver field, keep the DLL out of PATH and products, and
+re-verify the cached package on every run. The 1.0.20 build still misreports inner coverage; that contract is the
+barycentric route, see the inner-coverage recipe. The whole-suite qualification withdrew the pin from CI the same day;
+see reference_warp_1_0_20_package_diverges_on_bit_exact_compute.
+
+<!-- end-memory:reference_warp_os_build_overreads_dxr_state_objects_under_asan -->
+
+
+<a id="memory-reference_warp_1_0_20_package_diverges_on_bit_exact_compute"></a>
+## reference_warp_1_0_20_package_diverges_on_bit_exact_compute
+
+---
+name: reference_warp_1_0_20_package_diverges_on_bit_exact_compute
+description: "Microsoft.Direct3D.WARP 1.0.20 fixes the OS WARP DXR over-read but fails 13 of the DX12 bit-exact compute oracles (precise FP kernels and two wave-shaped kernels) that hardware and the OS build pass, and reports wave_max=128 where the OS build reports 4. Qualify a replacement provider on the whole test executables before wiring it into any lane; a four-gate arm is not a provider qualification."
+metadata:
+  node_type: memory
+  type: reference
+  recorded: 2026-09-13
+---
+
+**Rule.** A provider substitution changes every test in every process that loads it. Before a pin reaches a hosted
+lane, run every DX12 executable whole on the candidate and on the incumbent with the same binaries and CTest parity
+(working directory, `CRD_ASSETS_DIR`), and compare per-executable counts. On 2026-09-13 the four-gate ASan arm passed
+on 1.0.20 while the whole suites showed 12 of 177 and 1 of 46 bit-exact failures (`warp-145345-ab068e` vs
+`warp-145917-2e693c`); the CI wiring was withdrawn the same day.
+
+**Why.** The 1.0.20 package differs from the OS build beyond the defect it fixes (`wave_max` 128 vs 4, `rt_tier` 12
+vs 11, `precise` FP results); a pin that turns four red gates into thirteen is a regression, not a repair.
+
+**How to apply.** Keep `CRD_WARP_DLL` empty on hosted lanes; use the harness (`scripts/install-warp.py`,
+`cmake/CrdWarp.cmake`, `run-warp-diagnostics-pinned.py`) for experiments; state observed failure classes, not a
+mechanism, unless a probe established it.
+
+<!-- end-memory:reference_warp_1_0_20_package_diverges_on_bit_exact_compute -->

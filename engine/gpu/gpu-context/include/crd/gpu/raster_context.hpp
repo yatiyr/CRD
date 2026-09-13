@@ -120,6 +120,17 @@ struct SamplerDesc
 // not keep the opaque depth read-only, a shadow pass could not bias or front-face-cull, and the decal/portal/
 // outline techniques B7's stencil formats exist for were still inexpressible. Every default below is the
 // exact behaviour the backends hardwired, so every existing asset and every existing gate is byte-unchanged.
+// B1-f: how a raster context realizes the INNER-COVERAGE input. Native = the provider's own fully-covered bit (DX12
+// SV_InnerCoverage, Vulkan FullyCoveredEXT). Barycentric = the analytic pixel-corner test lowered from noperspective
+// barycentrics under the same conservative overestimate draw; a program compiled for it never reads the native bit.
+// Chosen where the native bit is unavailable or unqualified on the provider. Unsupported = no route can run.
+enum class InnerCoverageRoute : crd::u8
+{
+    Unsupported = 0,
+    Native,
+    Barycentric
+};
+
 enum class FaceCull : crd::u8
 {
     None = 0, // the historical hardwired value — vertex-pulled geometry has no authored winding guarantee
@@ -383,8 +394,16 @@ public:
     [[nodiscard]] virtual bool supports_conservative_raster() const noexcept = 0;
 
     // True iff the INNER-COVERAGE input (`KBuiltin::InnerCoverage`) under UNDERESTIMATE conservative raster is usable
-    // (Vulkan: VK_EXT_conservative_rasterization ⇒ FullyCoveredEXT; DX12: conservative Tier 3, which adds SV_InnerCoverage).
+    // through `inner_coverage_route()` (Vulkan: VK_EXT_conservative_rasterization ⇒ FullyCoveredEXT; DX12: the native
+    // SV_InnerCoverage bit on a qualified Tier-3 provider, else the barycentric pixel-corner lowering).
     [[nodiscard]] virtual bool supports_inner_coverage() const noexcept = 0;
+
+    // B1-f: which route realizes the inner-coverage input on this device. Backends without a fallback derive it from
+    // `supports_inner_coverage()`; DX12 overrides it with its per-provider decision.
+    [[nodiscard]] virtual InnerCoverageRoute inner_coverage_route() const noexcept
+    {
+        return supports_inner_coverage() ? InnerCoverageRoute::Native : InnerCoverageRoute::Unsupported;
+    }
 
 
     // --- B1-f: fragment-shader storage buffer + interlock (ROV) ---------------------------------------------------------

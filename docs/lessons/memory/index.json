@@ -3657,6 +3657,26 @@
       "source_sha256": "b84a7f59f024f3547fa136382b2ccdee7febcb3ca2e726f346f0e630675df262",
       "description": "Who yatiyr is and how to collaborate effectively",
       "source_code_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "feedback_clang_tidy_local_constexpr_is_local_constant": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_clang_tidy_local_constexpr_is_local_constant",
+      "description": "Pinned LLVM 20.1.8 readability-identifier-naming has no LocalConstexprVariable category: a non-static function-local constexpr is a LocalConstant (lower_case); static locals, namespace and class constants stay kCamelCase. Verified 2026-09-13 against the binary and hosted job 103641498236."
+    },
+    "feedback_repository_guard_parity_windows_linux": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_repository_guard_parity_windows_linux",
+      "description": "Repository guard scripts run as .ps1 on Windows and .sh on Linux; both must resolve the repo root in the body, use the same field regex and give the same verdict on either host. On 2026-09-13 three Windows guards had scanned nothing since May and one bash regex could not match a field named exactly like its token."
+    },
+    "reference_warp_os_build_overreads_dxr_state_objects_under_asan": {
+      "path": "docs/lessons/memory/device-programs.md",
+      "anchor": "memory-reference_warp_os_build_overreads_dxr_state_objects_under_asan",
+      "description": "The Windows 10.0.26100 WARP reads 8 bytes past a D3D12Core allocation in CreateStateObject (ASan heap-buffer-overflow in every DXR gate, also in an SDK-only program); the signed Microsoft.Direct3D.WARP 1.0.20 package does not, but it fails 13 bit-exact compute oracles the OS build passes, so it stays an opt-in experiment (scripts/install-warp.py, CRD_WARP_DLL); never suppress ASan for it."
+    },
+    "reference_warp_1_0_20_package_diverges_on_bit_exact_compute": {
+      "path": "docs/lessons/memory/device-programs.md",
+      "anchor": "memory-reference_warp_1_0_20_package_diverges_on_bit_exact_compute",
+      "description": "Microsoft.Direct3D.WARP 1.0.20 fixes the OS WARP DXR over-read but fails 13 of the DX12 bit-exact compute oracles (precise FP kernels and two wave-shaped kernels) that hardware and the OS build pass, and reports wave_max=128 where the OS build reports 4. Qualify a replacement provider on the whole test executables before wiring it into any lane; a four-gate arm is not a provider qualification."
     }
   },
   "aliases": {

@@ -12,8 +12,8 @@ was superseded by the user's recorded formatting directive. Run incremental LLVM
 | Namespace, function, local variable | lower_case | `crd`, `platform_name`, `max_size` |
 | Class, struct, enum and enum value | CamelCase | `LogManager`, `LogLevel::Trace` |
 | Member | m_lower_case | `m_name` |
-| Non-constexpr local constant | lower_case | `default_capacity` |
-| Constexpr variable / static constant | kCamelCase | `kDefaultCapacity` |
+| Function-local constant, `const` or `constexpr` | lower_case | `default_capacity`, `expected_count` |
+| Namespace/class-scope constexpr, `static` constant | kCamelCase | `kDefaultCapacity` |
 | Global constant | kCamelCase | `kMaxLogFiles` |
 | Template parameter | CamelCase | `ValueType` |
 | Macro | UPPER_CASE | `CRD_ASSERT`, `CRD_OS_WINDOWS` |

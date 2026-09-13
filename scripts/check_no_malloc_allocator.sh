@@ -13,7 +13,7 @@ hits=$(grep -rn "MallocAllocator" "$ROOT/engine" "$ROOT/tests" "$ROOT/runtime" \
       | grep -vE "/engine/foundation/memory/" \
       | grep -vE "/tests/foundation/memory/test_memory\.cpp|/tests/foundation/stress/test_allocators_stress\.cpp|/tests/foundation/stress/test_allocators_v5_stress\.cpp" \
       | grep -v "crd-lint-allow-malloc-allocator" \
-      | awk -F: '{ code=$0; sub(/^[^:]*:[^:]*:/,"",code); t=code; sub(/^[ \t]+/,"",t); if (t ~ /^\/\// || t ~ /^\*/) next; print }' \
+      | awk -F: '{ code=$0; sub(/^([A-Za-z]:)?[^:]*:[0-9]+:/,"",code); t=code; sub(/^[ \t]+/,"",t); if (t ~ /^\/\// || t ~ /^\*/) next; print }' \
       || true)
 
 if [ -n "$hits" ]; then

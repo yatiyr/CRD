@@ -7,11 +7,14 @@
 #include "dx12_device_scope.hpp"
 
 #include "dx12_adapter_classification.hpp"
+#include "dx12_execution.hpp" // B1-f: dx12_inner_coverage_route shared with the raster context
 
 #include <crd/gpu/dx12_context.hpp>
 
 #include <crd/kir/ckir_hlsl.hpp> // emit_stage_hlsl (+ ckir.hpp: KGraph/KEntry/KStage, and ckir_glsl.hpp: GlslKernel)
+#include <crd/gpu/raster_context.hpp> // InnerCoverageRoute (B1-f): the per-provider inner-coverage decision
 
+#include <atomic>
 #include <cstring>
 
 #include <d3d12.h>
@@ -23,6 +26,11 @@
 
 namespace crd::gpu
 {
+// B1-f: one stage compile with an explicit dxc profile; compile_hlsl_to_dxil uses the stage's default profile.
+[[nodiscard]] static DxilCompileResult compile_stage_dxil(const wchar_t* profile, ShaderStage stage,
+                                                          crd::containers::StringView source,
+                                                          crd::memory::IAllocator* a);
+
 
 using Microsoft::WRL::ComPtr;
 
@@ -194,6 +202,23 @@ public:
         // IR on-ramp: crd-kir emits the stage HLSL (refuses a vertex with no clip position), dxc lowers it to DXIL. The
         // HLSL text lives only across this call; the DXIL never surfaces beyond the returned opaque program.
         crd::kir::GlslKernel kern(m_alloc);
+        // B1-f: does this fragment program read InnerCoverage? Then its PSO must be conservative (the raster context
+        // prebuilds it conservative — the D3D12 rasterizer rejects SV_InnerCoverage with conservative OFF, and the corner
+        // test only sees edge pixels under overestimate) and its emitted route follows the device (below).
+        bool wants_conservative = false;
+        if (entry.stage == crd::kir::KStage::Fragment)
+        {
+            for (int i = 0; i < graph.size(); ++i)
+            {
+                if (graph.node(i).op == crd::kir::KOp::Builtin
+                    && static_cast<crd::kir::KBuiltin>(graph.node(i).iidx) == crd::kir::KBuiltin::InnerCoverage)
+                {
+                    wants_conservative = true;
+                    break;
+                }
+            }
+        }
+        const wchar_t* profile = dxil_profile(stage);
         if (entry.stage == crd::kir::KStage::Mesh)
         {
             // B4: a mesh KEntry → SM6.5 mesh HLSL (SetMeshOutputCounts + out vertices/indices). emit_stage_hlsl refuses
@@ -233,26 +258,26 @@ public:
             // Vulkan kernel path (emit_compute_kernel_hlsl), so create_program(g, e) lowers a kernel on BOTH backends.
             if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
         }
-        else if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
-        const auto dxil = compile_hlsl_to_dxil(stage, crd::containers::to_view(kern.source), "ckir_stage", m_alloc);
-        if (!dxil.ok) { return nullptr; }
-
-        // B1-f: does this fragment program read SV_InnerCoverage? If so its PSO must be conservative (the raster context
-        // prebuilds it conservative — the D3D12 rasterizer rejects SV_InnerCoverage with conservative OFF, and the failed
-        // non-conservative PSO build is a debug-layer error). Detect the InnerCoverage builtin in the graph.
-        bool wants_conservative = false;
-        if (entry.stage == crd::kir::KStage::Fragment)
+        else
         {
-            for (int i = 0; i < graph.size(); ++i)
+            // B1-f: a fragment reading InnerCoverage is lowered through the route this device qualifies: the native
+            // SV_InnerCoverage bit or the barycentric pixel-corner test (SV_Barycentrics, shader model 6.1). Neither
+            // qualified means no program: the caller sees the refusal instead of a wrong fully-covered bit.
+            crd::kir::HlslInnerCoverage inner = crd::kir::HlslInnerCoverage::Native;
+            if (wants_conservative)
             {
-                if (graph.node(i).op == crd::kir::KOp::Builtin
-                    && static_cast<crd::kir::KBuiltin>(graph.node(i).iidx) == crd::kir::KBuiltin::InnerCoverage)
+                const InnerCoverageRoute route = detail::dx12_inner_coverage_route(m_device.Get());
+                if (route == InnerCoverageRoute::Unsupported) { return nullptr; }
+                if (route == InnerCoverageRoute::Barycentric)
                 {
-                    wants_conservative = true;
-                    break;
+                    inner   = crd::kir::HlslInnerCoverage::Barycentric;
+                    profile = L"ps_6_1"; // SV_Barycentrics
                 }
             }
+            if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern, inner)) { return nullptr; }
         }
+        const auto dxil = compile_stage_dxil(profile, stage, crd::containers::to_view(kern.source), m_alloc);
+        if (!dxil.ok) { return nullptr; }
         if (dxil.dxil.size() == 0U) { return nullptr; }
         return std::make_unique<Dx12GpuProgramImpl>(
             stage, crd::containers::ConstSpan<crd::u8>(dxil.dxil.data(), dxil.dxil.size()), m_alloc, wants_conservative);
@@ -323,6 +348,84 @@ Dx12AdapterKind dx12_default_adapter_kind() noexcept
 bool dx12_default_adapter_is_software() noexcept
 {
     return dx12_default_adapter_kind() == Dx12AdapterKind::Software;
+}
+
+namespace
+{
+// B1-f: -1 = no override, else the forced InnerCoverageRoute (dx12_override_inner_coverage_route).
+std::atomic<int> s_inner_coverage_override{-1};
+
+[[nodiscard]] bool inner_coverage_route_runnable(ID3D12Device* device, InnerCoverageRoute route) noexcept
+{
+    if (device == nullptr) { return false; }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) { return false; }
+    switch (route)
+    {
+    case InnerCoverageRoute::Native:
+        return options.ConservativeRasterizationTier >= D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;
+    case InnerCoverageRoute::Barycentric:
+    {
+        if (options.ConservativeRasterizationTier < D3D12_CONSERVATIVE_RASTERIZATION_TIER_1) { return false; }
+        D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
+        if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3)))
+            || options3.BarycentricsSupported == FALSE)
+        {
+            return false;
+        }
+        D3D12_FEATURE_DATA_SHADER_MODEL model{D3D_SHADER_MODEL_6_1}; // the runtime lowers it to the highest supported
+        return SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof(model)))
+            && model.HighestShaderModel >= D3D_SHADER_MODEL_6_1;
+    }
+    default: return false;
+    }
+}
+} // namespace
+
+bool detail::dx12_inner_coverage_route_runnable(ID3D12Device* device, InnerCoverageRoute route) noexcept
+{
+    return inner_coverage_route_runnable(device, route);
+}
+
+InnerCoverageRoute detail::dx12_inner_coverage_route(ID3D12Device* device) noexcept
+{
+    const int forced = s_inner_coverage_override.load(std::memory_order_relaxed);
+    if (forced >= 0) { return static_cast<InnerCoverageRoute>(forced); }
+    if (device == nullptr) { return InnerCoverageRoute::Unsupported; }
+    if (inner_coverage_route_runnable(device, InnerCoverageRoute::Native))
+    {
+        // Only the documented software provider is diverted: its Tier-3 claim is contradicted by the reproduced false
+        // interior bit. Hardware and unclassifiable adapters keep the D3D12 contract; the pixel-corner oracle checks them.
+        const LUID luid = device->GetAdapterLuid();
+        if (detail::query_dx12_adapter_kind(luid.LowPart, luid.HighPart) != Dx12AdapterKind::Software)
+        {
+            return InnerCoverageRoute::Native;
+        }
+    }
+    return inner_coverage_route_runnable(device, InnerCoverageRoute::Barycentric) ? InnerCoverageRoute::Barycentric
+                                                                                   : InnerCoverageRoute::Unsupported;
+}
+
+InnerCoverageRoute dx12_default_inner_coverage_route() noexcept
+{
+    detail::Dx12DeviceScope validation;
+    ComPtr<ID3D12Device> device;
+    if (FAILED(validation.create(device))) { return InnerCoverageRoute::Unsupported; }
+    return detail::dx12_inner_coverage_route(device.Get());
+}
+
+bool dx12_override_inner_coverage_route(InnerCoverageRoute route) noexcept
+{
+    detail::Dx12DeviceScope validation;
+    ComPtr<ID3D12Device> device;
+    if (FAILED(validation.create(device)) || !inner_coverage_route_runnable(device.Get(), route)) { return false; }
+    s_inner_coverage_override.store(static_cast<int>(route), std::memory_order_relaxed);
+    return true;
+}
+
+void dx12_clear_inner_coverage_route_override() noexcept
+{
+    s_inner_coverage_override.store(-1, std::memory_order_relaxed);
 }
 
 // The shared dxc HLSL->DXIL core: lazy-load dxcompiler.dll, compile `source` with the caller's `args` (the -T/-E flags),
@@ -403,7 +506,13 @@ static DxilCompileResult compile_dxil_core(crd::containers::StringView source, c
 DxilCompileResult compile_hlsl_to_dxil(ShaderStage stage, crd::containers::StringView source,
                                        crd::containers::StringView /*name*/, crd::memory::IAllocator* a)
 {
-    const wchar_t* args[] = {L"-T", dxil_profile(stage), L"-E", dxil_entry(stage)}; // no -spirv ⇒ signed DXIL
+    return compile_stage_dxil(dxil_profile(stage), stage, source, a);
+}
+
+static DxilCompileResult compile_stage_dxil(const wchar_t* profile, ShaderStage stage,
+                                            crd::containers::StringView source, crd::memory::IAllocator* a)
+{
+    const wchar_t* args[] = {L"-T", profile, L"-E", dxil_entry(stage)}; // no -spirv ⇒ signed DXIL
     return compile_dxil_core(source, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])), a);
 }
 

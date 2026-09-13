@@ -50,7 +50,8 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
-- [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, native shader controls and SDK-only provider isolation.
+- [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, the native/barycentric route contract, one CPU corner oracle and SDK-only provider isolation.
+- [Pinned WARP provider](2026-09-13-dx12-pinned-warp.md) — hash-verified app-local Microsoft WARP 1.0.20 staged beside test executables; hosted lanes qualify one software tuple.
 - [DX12 validation and command lifetimes](2026-09-12-dx12-validation-and-command-lifetimes.md) — bounded startup-to-teardown capture, checked submission and truthful fence failures.
 - [CKIR snapshots and bounded compute emission](2026-09-12-kernel-snapshot-ordering.md) — shared declaration ordering, live loads, Boolean value types and the atomic A-buffer regression.
 - [DX12 adapter classification](2026-09-12-dx12-adapter-classification.md) — selected-LUID evidence, BasicRender and explicit unknown query outcomes.

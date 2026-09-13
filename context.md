@@ -3,8 +3,8 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: REPO.3c.7 -->
-**Review handoff:** [REPO.3c.7](docs/ROADMAP.md#slice-repo.3c.7), native inner-coverage mismatch and exact reproduction.
+<!-- current-slice: REPO.3c.10 -->
+**Current work:** [REPO.3c.10](docs/ROADMAP.md#slice-repo.3c.10): the hosted ASan lane's four DXR gates; OS WARP over-read isolated, 1.0.20 pin withdrawn.
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction
@@ -16,17 +16,15 @@ CHIR authors behaviour, CEIR executes, CKIR expresses device programs. Every shi
 
 ## Evidence and boundaries
 
-Last engine milestone: [CEIR-35 close](docs/sessions/2026-09-11-ceir-35z-band-close.md). This establishes its recorded
-execution-foundation contract, not complete renderer/UI/editor quality. The old CEIR autonomous grant is complete.
-Latest handoff: [Atomic/coverage verification](docs/sessions/2026-09-13-atomic-and-coverage-verification.md).
+Last engine milestone: [CEIR-35 close](docs/sessions/2026-09-11-ceir-35z-band-close.md); execution foundation only.
+Latest handoffs: [guard/tidy repairs](docs/sessions/2026-09-13-ci-guard-tidy-repairs.md),
+[route + pinned WARP](docs/sessions/2026-09-13-inner-coverage-route-and-pinned-warp.md), [REPO.DEV audit](docs/sessions/2026-09-13-repo-dev-audit.md).
 IDE: [CMake configurations](docs/design/visual-studio-configurations.md); [sync/recovery](docs/design/project-structure-sync.md).
 Entry: [START_HERE](START_HERE.md). Architecture findings: [A01–A27](docs/research/2026-09-12-system-audit.md) and
 [G01–G30](docs/research/2026-09-12-cerid-whole-system-review.md). All owners are in ROADMAP.
-AI inference/training qualify together. Project collaboration and multiplayer have separate authoritative contracts
-([ADR-0130](docs/decisions/0130-system-qualification-and-agent-driven-products.md)); detailed mechanisms remain proposals.
+Collaboration and multiplayer contracts: [ADR-0130](docs/decisions/0130-system-qualification-and-agent-driven-products.md).
 
-The full ADR-0107 and RAH-0 migration review remain gates. No unavailable approval or test is invented.
-[Large-C++ research](docs/research/2026-09-12-large-cpp-development-and-ci.md) decomposes remaining work in the same table.
-User stopped this repository loop on 2026-09-13; its heartbeat is paused. This Codex task is now review-only.
-Future implementation needs a new user assignment and follows [order](docs/ROADMAP.md#strict-sequential-execution).
-Retain every pending gate. Existing hardware; no renderer implementation. User alone commits/pushes.
+User assignment 2026-09-13: fix every CI failure, then complete every row before the first truly Open slice, in
+[order](docs/ROADMAP.md#strict-sequential-execution), driven by a per-minute session loop. REPO.3c.3, 3c.7, 3c.8 and
+3c.9 wait only for the next published run; REPO.3c.10 needs the user's provider decision (see handoff). The full
+ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.

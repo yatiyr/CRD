@@ -12,10 +12,18 @@
 
 [CmdletBinding()]
 param(
-    [string] $RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
+    [string] $RepoRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolve RepoRoot in the script body, never in the param default: PowerShell evaluates that default
+# where $PSScriptRoot is empty, so `Resolve-Path "/.."` silently became the drive root, every scope
+# was skipped and the guard printed PASS without scanning (hosted CI, 2026-09-13; same defect first
+# recorded in check_no_non_ascii_test_names.ps1 on 2026-05-13).
+if ([string]::IsNullOrEmpty($RepoRoot)) {
+    $RepoRoot = (Resolve-Path "$PSScriptRoot/..").Path
+}
 
 $banned = @(
     'std::sort\b',

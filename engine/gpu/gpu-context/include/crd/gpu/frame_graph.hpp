@@ -177,7 +177,7 @@ enum class FgImageKind : crd::u8
 struct FgClearHint
 {
     float color[4] = {0.0F, 0.0F, 0.0F, 1.0F};
-    float depth    = 0.0F;
+    float depth    = 0.0F; // crd-lint-allow-untagged-physical: normalized [0,1] depth-clear value, no unit
 };
 
 struct FgImageDesc

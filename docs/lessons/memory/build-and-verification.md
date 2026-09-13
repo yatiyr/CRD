@@ -115,7 +115,7 @@ Installed via `winget install Microsoft.WinDbg` (Microsoft Store WinDbg appx shi
 ---
 name: test-case-names-must-be-ascii-only-never-em-dash-never-math-glyphs
 description: "Cerid's `crd-no-non-ascii-test-names` CI guard fails any TEST_CASE name containing characters outside 0x00-0x7F. Em-dash, equivalent (≡), degree (°), arrows, etc. are all blocked"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 307daaf4-04ca-4f85-b2f3-6606266d6f97
@@ -192,7 +192,7 @@ char foot-gun in the same `catch_discover_tests` pipeline).
 ---
 name: feedback_band_close_reclassify_every_ensure_star_builder_vs_loader
 description: "At a band CLOSE that claims 'everything converted to authored assets', RE-CLASSIFY every ensure_*/builder candidate (don't inherit the conversion slice's 'all done' claim) — the discriminator is hardcoded output STRUCTURE vs disk-derived; a hand-built FS with authorable choices is a BUILDER even if commented 'fixed pass contract'"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -234,7 +234,7 @@ add a committed-asset load gate, and re-run the BEHAVIORAL device gate that rend
 ---
 name: feedback_build_grep_hides_link_errors
 description: "Filtering build output with grep \"error C|Linking\" silently hides linker failures (fatal error LNK…) and reads them as success; check the exit status, and never rebuild a target while a background run holds its executable"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b0138d6a-548b-428b-87b2-fe30c9f36f7c
@@ -273,7 +273,7 @@ first and run second. Related: [reference_build_test_workflow](build-and-verific
 ---
 name: catch-discover-tests-bracket-comma
 description: "TEST_CASE names containing `[xyz)` bracket-comma patterns fuse multiple Catch2 cases into one CTest entry — avoid them"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 4b3c3c8b-65fa-4775-a24e-20d4c6d74b02
@@ -301,7 +301,7 @@ Related: [per-slice-run-ctest](build-and-verification.md#memory-feedback_per_sli
 ---
 name: feedback_ceir_deserialize_build_raw_graceful_reject_never_factory_assert
 description: "CEIR deserialization (binary decoder + text parser) must build the value RAW and check canonicality GRACEFULLY, never route hostile input through a canonicalizing factory whose intern() asserts"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -339,7 +339,7 @@ canonicality-guard discipline and [project_ceir_master_spine_locked](project-his
 ---
 name: clang-tidy-after-every-slice
 description: "User mandate 2026-05-14 — run clang-tidy (`win-tidy` preset) after every slice as part of the per-slice verification, not just at sub-phase close."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 3c7d76c4-dcca-4d23-a491-f532640abae7
@@ -372,7 +372,7 @@ Run clang-tidy after every slice. Standard per-slice verification is now: win-de
 ---
 name: feedback-clang-tidy-ci-local-version-skew
 description: "clang-tidy categorisation of identifier kinds (Constant vs LocalConstexprVariable vs StaticConstant) varies by version. CI uses LLVM 17 by default; local uses LLVM 19. Pin both, AND set explicit ConstantCase + StaticConstant + LocalConstant rules in .clang-tidy as defensive duplicates so the config is version-independent."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -493,7 +493,7 @@ made these CI failures surface. [feedback-gcc-linux-double-to-float-narrowing](n
 ---
 name: feedback_clang_tidy_drops_slash_flags_and_ooms_under_commit_pressure
 description: "The win-tidy 'AVX-512 clang-tidy crash' is COMMIT EXHAUSTION, not a matcher bug; and clang-tidy silently DROPS every /-spelled MSVC flag, so the gate analysed a config we do not ship"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: a3482f73-d858-400b-816d-942216e20052
@@ -555,7 +555,7 @@ Related: [feedback_transient_clang_tidy_crash](build-and-verification.md#memory-
 ---
 name: feedback_clang_tidy_must_be_llvm_20_not_22
 description: win-tidy gate is LLVM 20.1.8 (VS2026/CI-pinned) — a stray standalone LLVM 22 on PATH fires spurious failures; never debug tidy with the wrong version
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 7b0bb65d-6788-4a80-96e7-82e1072ab242
@@ -587,7 +587,7 @@ See [reference_build_test_workflow](build-and-verification.md#memory-reference_b
 ---
 name: feedback-clang-tidy-warnings-are-errors
 description: "clang-tidy warnings are project-policy build failures. .clang-tidy has WarningsAsErrors '*' set 2026-05-17. Surfaced by user during v8d-2d slice close."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -690,7 +690,7 @@ correction that reinforced this one).
 ---
 name: feedback_concurrent_tests_use_crd_jobs
 description: "Concurrency tests must drive threads through crd-jobs (the fiber job system), never raw std::thread; and Catch2 REQUIRE is not thread-safe"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 7b0bb65d-6788-4a80-96e7-82e1072ab242
@@ -730,7 +730,7 @@ in [project_browser_wasm_deployment_goal](project-history.md#memory-project_brow
 ---
 name: feedback_ctest_not_built_sentinel_axis_and_cuda_linux_asan_leak
 description: catch_discover_tests _NOT_BUILT fires in BOTH discovery modes (built-vs-configured is the axis); CUDA under Linux-ASan needs detect_leaks=0 for the WSL libcuda cuInit leak
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -770,7 +770,7 @@ the physical device. See [feedback_cuda_multipass_fft_broken_single_workgroup_ok
 ---
 name: feedback_cuda_test_target_missing_crd_repo_dir_is_cwd_luck
 description: "A test target that never loaded an asset may lack CRD_REPO_DIR; its #ifndef \".\" fallback works only when CWD==repo root (Windows luck), fails under WSL/CI ctest."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -813,7 +813,7 @@ every other test target already has) — and strike any `#ifndef CRD_REPO_DIR ".
 ---
 name: feedback_decompose_before_deferring_analytic_core_is_buildable
 description: NEVER defer a feature because ONE leaf needs later infra — decompose; the analytic core is buildable NOW
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 40e3ad67-a505-447d-89df-272b48c237f6
@@ -847,7 +847,7 @@ Related: [feedback_close_the_slice_never_claim_done_when_partial](workflow-and-c
 ---
 name: feedback_deleting_reference_in_ab_parity_test_degrades_to_can_t_fail
 description: "When you delete the reference impl an A/B parity test compares against, the test silently degrades to A==A (can't-fail) — convert to ABSOLUTE asserts in the SAME change"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -903,7 +903,7 @@ tests would have gone vacuous had only the 4 device-free ones been converted. Re
 ---
 name: dx12-pso-format-must-match-rt
 description: DX12 PSO must carry the actual render target format — defaulting to RGBA8 when the target is R11G11B10F/RGBA16F produces a completely black screen (silent no-op draws)
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: dd844f83-0821-41ab-8607-fa93ccf37a76
@@ -927,7 +927,7 @@ Related: [dx12-hlsl-svposition-last-register-packing](device-programs.md#memory-
 ---
 name: feedback_full_sweep_after_uncommitted_work_peels_tidy_onion
 description: A full per-slice sweep after a long uncommitted stretch + a toolchain bump surfaces a TAIL of pre-existing failures; use ninja -k 0 to see it all at once
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9b330af5-88bb-499e-a92a-1752e160e0ba
@@ -964,7 +964,7 @@ failures that targeted builds never caught:
 ---
 name: feedback-full-sweep-catches-cross-config-simd
 description: "The 5-config per-slice DoD only builds MSVC+AVX2, so SIMD/intrinsic code that breaks on gcc/clang/scalar/SSE2 stays latent until the 18-config full sweep (or CI). Run the full sweep / CI before declaring a SIMD-touching cluster closed."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 8232c613-08b5-412f-9d51-73f8c05a65d9
@@ -1090,7 +1090,7 @@ This rule is permanent and applies to every Phase 3.1+ slice.
 ---
 name: feedback_host_14900k_cap_builds
 description: "Dev host is an i9-14900K with Raptor Lake instability — run DoD sequentially + Ninja-capped, never all-core, to avoid 0xA bugchecks"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b634ffd2-741c-489f-ac53-646bfcaf6fc4
@@ -1118,7 +1118,7 @@ Full write-up + tuning ladder lives in CLAUDE.md → Troubleshooting → "Host i
 ---
 name: feedback-iterate-local-test-only
 description: "During slice iteration, build + run only the directly-affected module's tests. Reserve per-slice-check.ps1 (4-config DoD) for slice close."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -1158,7 +1158,7 @@ time verification.
 ---
 name: feedback_local_test_only_ci_owns_sweep
 description: Local verification = only the touched module; CI owns the full multi-config DoD sweep
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 39e451a2-e1fa-4ae3-aeca-e932082a1962
@@ -1179,7 +1179,7 @@ For local slice verification, build + test ONLY the module(s) actually touched �
 ---
 name: msvc-autovec-conditional-two-array-update
 description: "MSVC /O1+/O2 auto-vectorizes per-lane `if (cond) { a[q]=x; b[q]=y; }` loops with wrong masked blends — write lane logic as manual vector select chains; repro+flag-bisect recipe inside"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 5aa5bcfe-3ae0-4422-8b9c-79726201dd8e
@@ -1218,7 +1218,7 @@ repro with the exact flag set + flag bisection (/GL on/off, /O2 vs /O1) pins the
 ---
 name: msvc-c4127-ci-local-version-skew
 description: "CI MSVC (14.44) and local MSVC (14.50) differ on warnings under /WX — notably C4127 \"conditional expression is constant\". A constexpr comparison in a runtime `if` passes locally but fails CI. Fix with static_assert / `if constexpr`, not local-only verification."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 8232c613-08b5-412f-9d51-73f8c05a65d9
@@ -1267,7 +1267,7 @@ template). Newer MSVC (14.50) already relaxed it.
 ---
 name: feedback_msvc_hides_switch_gaps_gcc_werror_switch_catches_real_bugs
 description: "MSVC does not warn on a switch missing an enum case, so a new enum value silently falls through to default/nothing — a real latent bug. gcc -Werror=switch catches it. Build RAF/REN on Linux gcc regularly, not just Windows."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: bf0ab64f-0cb7-4b04-970c-78c4f58c02b9
@@ -1317,7 +1317,7 @@ prevent. Related scars: [feedback_post_color_ops_must_be_vec4_robust_sampled_inp
 ---
 name: msvc-ltcg-forceinline-codelets-c1002
 description: "MSVC honors __forceinline under LTCG — force-inlined giant generated kernels detonate link-time codegen (C1002 heap exhaustion, pass 2); demote at the emitter, MSVC-scoped"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 5aa5bcfe-3ae0-4422-8b9c-79726201dd8e
@@ -1354,7 +1354,7 @@ deterministic, not a transient ICE, so don't retry a 40-minute link hoping.
 ---
 name: feedback_msvc_o2_miscompiles_fp_conditional_nan_branch
 description: MSVC /O2 mis-selects a not-taken FP conditional branch that computes NaN; make the expression branchless
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: d095b72d-cb68-40b1-aaa2-1147516ea4fd
@@ -1386,7 +1386,7 @@ Windows build or ninja says "no work to do" and you test a STALE binary (cost se
 ---
 name: msvc-od-straightline-kernel-stack-bomb
 description: "MSVC /Od gives every expression temporary its own stack slot — a ~2600-statement generated SIMD kernel needs a 1.2-1.4MB frame and overflows the 1MB Windows default stack; fix = dual-body emission (SIMD under NDEBUG||__OPTIMIZE__, bit-identical lane-scalar otherwise)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: e7db65f6-278a-4511-ab2e-13d86ad02005
@@ -1480,7 +1480,7 @@ just v1b-d / eylem-viz.
 ---
 name: never-simplify-gate-tests-frontier-always
 description: "NEVER simplify, dumb down, or toy-ify gate tests or implementations — always build the full frontier-level pipeline"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: dd844f83-0821-41ab-8607-fa93ccf37a76
@@ -1502,7 +1502,7 @@ NEVER replace a real pipeline with a simplified/toy version to make a test pass.
 ---
 name: feedback_never_throwaway_compiles_use_build_bat_flow
 description: "NEVER verify with ad-hoc cl.exe/dxc.exe/standalone .exe compiles — they trip the permission sandbox and block the autonomous loop waiting for the user's approval. Verify ONLY through the build system (build-target.bat + run-ctest.bat / wsl-build.ps1)."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1552,7 +1552,7 @@ through build-target.bat / run-ctest.bat / wsl-build.ps1.
 ---
 name: feedback_new_source_file_needs_preset_reconfigure_not_bare_cmake
 description: A new .cpp/.hpp needs reconfigure-preset.bat <preset> per config before build-target sees it; bare cmake -S -B breaks the cache
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -1579,7 +1579,7 @@ See [reference_build_test_workflow](build-and-verification.md#memory-reference_b
 ---
 name: feedback_no_cpp_kgraph_builders_author_ckir_directly
 description: "⛔⛔⛔ TOP ORDER (user 2026-08-16, emphatic) — NEVER write a C++ KGraph builder (build_X) for a rendering algorithm, not even as [.emitckir] regen tooling; the .ckir/.crdv (CKIR)/CHIR asset is the SOLE source, authored/edited DIRECTLY; scene_renderer gets ZERO new rendering-technique C++"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1607,7 +1607,7 @@ metadata:
 ---
 name: feedback_no_malloc_in_probes_even_to_dodge_toolchain
 description: Never use a malloc-based IAllocator in benches/probes — not even to dodge a toolchain/link error; use crd TLSF
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: c87579b0-4445-4ff8-9af0-cf67eaa15cb6
@@ -1641,7 +1641,7 @@ probe. Related: [reference_sanity_doctrine](workflow-and-correctness.md#memory-r
 ---
 name: feedback_no_std_containers_anywhere_incl_tests
 description: NO owning STL containers ANYWHERE incl. tests + generated .inc reference data — std::vector/map/string forbidden
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: deb11ae2-46e2-4805-9918-89f237d06d9b
@@ -1676,7 +1676,7 @@ tests still pull `<map>`/`<vector>`/`<string>` and the owning-allocator pattern 
 ---
 name: feedback_per_slice_binary_direct_misses_ctest_and_crossconfig
 description: Iterating on the test BINARY with tag filters (not ctest) + MSVC-only misses two whole defect classes; run one ctest + one clang-cl + one gcc build before slice close
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 178961b8-0463-4615-82ce-96bde42457f0
@@ -1725,7 +1725,7 @@ just-committed v3c+v3d body, none caught by the per-slice MSVC-binary checks acr
 ---
 name: per-slice-run-ctest-not-test-binary
 description: "Per-slice verification must run `ctest --preset <X>` not just the test binary directly; guard tests like crd-no-non-ascii-test-names / crd-simd-emission-check / crd-no-std-math-check / crd-no-std-sort-check are registered as ctest tests and don't appear in the test binary's case list; also covers per-sub-module eylem-stub integration smoke during geometry phase"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: aa515082-af9b-4f04-a36f-377aeabe6e4a
@@ -1911,7 +1911,7 @@ post-`on_job_end`).
 ---
 name: feedback_plan_table_must_rebuild_at_every_frame_install_site
 description: "A plan-driven executor's per-pass plan table must be rebuilt at EVERY frame-install site, not just the obvious one; the flag-ON sweep of the REAL renderer finds the null-plan holes that execute_frame A/B tests miss."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -1953,7 +1953,7 @@ Related: [feedback_new_execution_path_must_run_the_full_suite_on_a_real_device_n
 ---
 name: feedback_powershell_file_on_a_bat_is_a_silent_noop_use_cmd_c
 description: "`powershell -File script.bat` does NOT run a .bat — it errors \"does not have a .ps1 extension\" yet the OUTER powershell exits 0, so the build silently never runs and you gate a STALE binary"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -1993,7 +1993,7 @@ runs because the emit code was never compiled in. Only when I finally read the b
 ---
 name: feedback_powershell_select_first_kills_native_exe_exit_code
 description: "PowerShell `native.exe | ... | Select-Object -First N` closes the pipe early → kills the exe mid-teardown → $LASTEXITCODE reads 255/-1 even when the program passed; use -Last / collect-then-filter / Out-Null to read the true exit code."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -2029,7 +2029,7 @@ Relates to [feedback_timeout_is_not_a_hang_proof](workflow-and-correctness.md#me
 ---
 name: feedback_project_is_hand_formatted_never_run_clang_format
 description: "The cerid repo is HAND-formatted, NOT clang-format-clean — running clang-format -i reflows ~2000 lines on a pristine file (strips declaration alignment, expands single-line blocks). Never run it to \"fix\" formatting; there is no CI format gate."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -2074,7 +2074,7 @@ whitespace explosion mixed into the semantic change.
 ---
 name: feedback_raf_ren_bands_test_one_linux_one_windows_after_raf_close
 description: "After the RAF band (D-007) is finished, test the RAF and REN bands in just ONE Linux + ONE Windows config — not the full multi-config per-slice sweep. The user does not want to lose time to full sweeps every slice."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: bf0ab64f-0cb7-4b04-970c-78c4f58c02b9
@@ -2115,7 +2115,7 @@ hesap, and toolchain-sensitive slices.
 ---
 name: feedback_reflect_needs_unoptimized_spirv_and_compiler_injection
 description: SPIR-V you plan to REFLECT must be compiled unoptimized (level_zero); performance passes strip OpNames + dead bindings
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9b330af5-88bb-499e-a92a-1752e160e0ba
@@ -2148,7 +2148,7 @@ tests. See [project_gpu_context_owns_every_gpu_program](project-history.md#memor
 ---
 name: feedback_run_only_the_tests_you_added
 description: "Run ONLY the specific tests just added; a full-suite sweep is at most ONE run at the end, never a per-iteration habit"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: a3482f73-d858-400b-816d-942216e20052
@@ -2197,7 +2197,7 @@ Related: [feedback_iterate_local_test_only](build-and-verification.md#memory-fee
 ---
 name: feedback_run_tidy_per_slice_never_accumulate
 description: "Run clang-tidy on each new file DURING the slice (scripts/tidy-files.ps1), never accumulate; win-tidy-local breaks when the VS-bundled CMake rewrites CMAKE_COMMAND."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 934ee96e-34fa-4239-87ad-44921a7d5a19
@@ -2240,7 +2240,7 @@ Related: [feedback_clang_tidy_after_every_slice](build-and-verification.md#memor
 ---
 name: feedback_search_engine_before_building
 description: "STANDING RULE — before building any solver/kernel/utility, FIRST grep the engine for an existing one; reuse > reimplement"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: dbe6c571-c4b1-4769-8980-fa6818c253e7
@@ -2273,7 +2273,7 @@ RESOLUTION 2026-06-23: (1) f64 SIMD log/exp MOVED to `crd/math/simd/transcendent
 ---
 name: feedback_semantics_preserving_pass_differential_test_is_bit_exact_vs_unoptimized_program
 description: "A semantics-preserving pass (DCE/CSE/canonicalize/...) is differential-tested BIT-EXACT vs the unoptimized program's own device output, never tolerance-vs-oracle"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2308,7 +2308,7 @@ or it deletes them: [feedback_plan_output_by_traversal_is_not_ssa_liveness_pin_r
 ---
 name: feedback_shared_test_helper_inherits_first_callers_fixed_buffers
 description: "When hoisting a test helper to a shared header, guard or template its fixed-size stack buffers — they carry the first caller's assumption"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2337,7 +2337,7 @@ and name the cap in the header comment. Or template the bound (`MlpLoss<Cap=64>`
 ---
 name: feedback_stale_toolset_path_in_build_dir_wipe_dont_sed
 description: "A cross-config build dir can hardcode an OLD MSVC toolset ml64 path; reconfigure won't refresh it — wipe, never sed"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9b330af5-88bb-499e-a92a-1752e160e0ba
@@ -2371,7 +2371,7 @@ specified`, pointing at an MSVC toolset version (e.g. `14.50.35717`) that no lon
 ---
 name: skip-re-sweep-when-a-targeted-fix-is-locally-verified-on-the-failing-config
 description: "When the full-sweep is 17/18 PASS, the remaining failure has been root-caused + locally verified on the failing config, and the fix is small/contained, deferring the full re-sweep to CI is acceptable"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 307daaf4-04ca-4f85-b2f3-6606266d6f97
@@ -2431,7 +2431,7 @@ Links: [full_sweep_required](build-and-verification.md#memory-feedback_full_swee
 ---
 name: feedback_test_eigensolvers_on_random_not_smooth
 description: "Eigensolver/Schur unit tests must use GENERIC random matrices, not smooth sin/cos — smooth spectra deflate without exercising the hard paths"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 178961b8-0463-4615-82ce-96bde42457f0
@@ -2472,7 +2472,7 @@ because its tests didn't cover partial deflation. See
 ---
 name: feedback_tidy_gate_clean_on_unparsed_files
 description: "scripts/tidy-files.ps1 reported \"clean\" for files it never PARSED (missing -I ⇒ include not found ⇒ 0 checks ran ⇒ looked identical to clean); hard-fail on unresolved includes."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 9b330af5-88bb-499e-a92a-1752e160e0ba
@@ -2524,7 +2524,7 @@ Related: [feedback_run_tidy_per_slice_never_accumulate](build-and-verification.m
 ---
 name: feedback_transient_aliaser_must_check_slot_size_and_borrowed_bundle_format
 description: "Two latent frame-graph defects the moment atlas exposed — the aliaser chose freed slots by lifetime alone (heap cannot grow), and the borrowed transient bundle carried no format (is_depth answered \"colour\" for the depth atlas)"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: dd844f83-0821-41ab-8607-fa93ccf37a76
@@ -2578,7 +2578,7 @@ Related: [feedback_pcss_three_defects_unbound_sampler_ring_search_receiver_plane
 ---
 name: feedback-transient-clang-tidy-crash
 description: "Transient clang-tidy access-violation crashes (most often in `bugprone-reserved-identifier` matcher) on a single per-slice DoD run that build clean on retry are an upstream LLVM bug, not a code-side DoD failure — close on retry-PASS, do not re-sweep"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -2644,7 +2644,7 @@ attempt at win-tidy build; retry PASS in elapsed 03:13.
 ---
 name: feedback-transient-msvc-ltcg-ice-accept
 description: "When full-sweep fails only on a transient MSVC LTCG ICE that retries clean, do not re-run the full sweep — close the slice on retry-success evidence and file the ICE as new debt"
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 72f1d11d-1798-4b4b-9943-ba63ab54bb2e
@@ -2672,7 +2672,7 @@ This is the SAME family as `feedback_full_sweep_required.md` — that rule says 
 ---
 name: feedback-vtable-stability-append-at-end
 description: "When extending a virtual interface (Device/Queue/CommandBuffer/any polymorphic base), ALWAYS append new pure-virtuals at the END of the class declaration. Inserting in the middle shifts every subsequent vtable slot and silently mis-dispatches downstream callers in win-release."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -2732,7 +2732,7 @@ interface, documented vtable-stability discipline IN the class.
 ---
 name: feedback_whole_repo_build_and_test_is_cis_job_not_local
 description: "⛔⛔⛔ USER DIRECTIVE: NEVER run whole-repo builds/test sweeps locally (per-slice-check across the whole repo, whole-repo win-asan/win-tidy) — that is CI's job. Locally build+run ONLY the module(s) you actually touched."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -2785,7 +2785,7 @@ and query the ACTUALLY-running binary. This was one of THREE self-inflicted phan
 ---
 name: feedback_wsl_ninja_pipe_masks_build_exit_stale_exe_false_green
 description: "WSL `ninja … | tail && ctest` masks the build failure (pipe returns tail's exit 0) so ctest runs a STALE exe and false-greens; capture the build rc BEFORE any pipe. The WSL twin of the grep/Select-First exit-code scars."
-metadata: 
+metadata:
   node_type: memory
   type: feedback
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -2811,7 +2811,7 @@ Or run the build and the test as SEPARATE tool calls, reading the build's real r
 ---
 name: reference_bat_helpers_need_powershell_tool_not_bash
 description: "The Windows .bat build helpers must run via the PowerShell tool, NOT the Bash tool (silent no-op)"
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: fade8ea4-87ca-470f-83e0-cdfe82a44e7f
@@ -2865,7 +2865,7 @@ See [reference_build_test_workflow](build-and-verification.md#memory-reference_b
 ---
 name: reference-build-test-workflow
 description: "Cerid build + test workflow — vcvars sourcing, single-target build, single-test-binary run, per-slice DoD gate, parallel-mode hooks."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -3019,7 +3019,7 @@ Related: [feedback-iterate-local-test-only](build-and-verification.md#memory-fee
 ---
 name: reference_build_toolchain_vs18_vcvarsall_path
 description: "The correct vcvarsall.bat path for building this repo (VS 18, Ninja generator)"
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 5c1488ab-fa28-4925-ae3b-29d69f5ca31c
@@ -3049,7 +3049,7 @@ auto-detection. If a build returns exit 1 with empty output, suspect a stale vcv
 ---
 name: cholmod-oracle-and-wsl-build
 description: "How to build+run the CHOLMOD supernodal oracle bench (WSL), and the WSL2 v9fs build-dir gotcha (never fresh-build on /mnt/d)."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: a9e2b042-249d-4290-abf9-3c707236fa70
@@ -3081,7 +3081,7 @@ This also serves as the **gcc `-Werror` cross-config check** on whatever hesap-d
 ---
 name: reference_ctest_regex_pipe_is_a_cmd_pipe
 description: "A `|` in a ctest -R regex passed through cmd /c is a CMD PIPE, not alternation — use two single-term calls"
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: cb9df3b8-2389-479b-9d99-d3d6ce3ba327
@@ -3107,7 +3107,7 @@ outer `cmd /c "..."` command line on `|` first. Same shell-parsing family as [re
 ---
 name: reference_cuda133_cub_cublas_bench_build_flags
 description: CUDA 13.3 CUB/cuBLAS gold benches need -arch=sm_89 (driver rejects 13.3 PTX JIT) + -std=c++17 -Xcompiler /Zc:preprocessor
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 1487a581-3392-44fb-bc9e-ebeaffd19da5
@@ -3153,7 +3153,7 @@ L2-resident, 1.05× DRAM-bound). See [feedback_bit_exact_fft_crushes_only_when_d
 ---
 name: reference_manual_header_filter_tidy_stricter_than_gate_on_shared_test_headers
 description: "A manual `clang-tidy --header-filter=<x>` run on a SHARED TEST header (tests/gpu-shared/*.hpp) reports naming/style errors the REAL gate does NOT enforce — verify against a shipped sibling before 'fixing' them."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -3200,7 +3200,7 @@ including latent debt in a file your slice touched ([feedback_full_sweep_after_u
 ---
 name: reference-tests-clang-tidy-exclusions
 description: "Tests have a dedicated .clang-tidy with 3 check exclusions for Catch2/test patterns that don't apply to production code. Created 2026-05-17 during the policy-flip cleanup."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: b24674c3-970b-481c-a127-bf4231bceca3
@@ -3272,7 +3272,7 @@ Symptom → cause map (check BEFORE suspecting code):
 ---
 name: reference_wsl2_perf_unavailable_use_objdump
 description: perf hardware counters are unavailable in this WSL2 (vPMU not virtualized — all events <not supported>); use objdump static instruction-mix instead for kernel analysis
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: d8c20658-f5fe-496c-941d-3a18ffad3cdd
@@ -3320,7 +3320,7 @@ or measure on a bare-metal Linux box. Context: [project_v10_fft_plan](project-hi
 ---
 name: reference_wsl_lc_loop_var_expands_empty_use_literal_paths
 description: "`wsl bash -lc '...'` from the Bash tool expands SHELL/LOOP variables ($p, $x) to EMPTY (env vars like $HOME survive) — a for-loop no-ops and exits 0, a FALSE GREEN; spell out literal paths, echo a variable-bearing sentinel to verify"
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 192f4d9e-b3f7-485b-a775-5391bcd4183c
@@ -3369,7 +3369,7 @@ builds the command Windows-side). Related: [feedback_powershell_file_on_a_bat_is
 ---
 name: reference_wsl_linux_sweep_and_llvmpipe_exposure
 description: "WSL Linux runs MORE than CI (llvmpipe = a real Vulkan device; CI has loader only, no ICD — GPU tests skip there). CI-mirror locally with VK_DRIVER_FILES=/nonexistent. Vulkan headers PINNED via FetchContent (distro 1.3.27x lacks the 2025 NV extensions). the B19 SIGSEGVs turned out to be REAL kernel defects — FIXED, see feedback_llvmpipe_campaign_three_kernel_defects."
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 31e31376-4d57-4a00-b30c-77365444ac88
@@ -3409,3 +3409,68 @@ runs ctest SERIALLY anyway — if you hand-run `-j N`, set that cap yourself or 
 
 <!-- end-memory:reference_wsl_linux_sweep_and_llvmpipe_exposure -->
 
+
+<a id="memory-feedback_clang_tidy_local_constexpr_is_local_constant"></a>
+## feedback_clang_tidy_local_constexpr_is_local_constant
+
+---
+name: feedback_clang_tidy_local_constexpr_is_local_constant
+description: "Pinned LLVM 20.1.8 readability-identifier-naming has no LocalConstexprVariable category: a non-static function-local constexpr is a LocalConstant (lower_case); static locals, namespace and class constants stay kCamelCase. Verified 2026-09-13 against the binary and hosted job 103641498236."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** With the repository `.clang-tidy`, LLVM 20.1.8 reports `constexpr int kX = 1;` inside a function as
+`invalid case style for local constant`. The option names `LocalConstexprVariable` and `StaticConstexprVariable` do not
+exist in that binary (zero string matches); the two keys were dead and were removed on 2026-09-13. Resolution order in
+the check: `ConstexprVariable` (deliberately unset) → `ClassConstant` → `GlobalConstant` → `StaticConstant` →
+`LocalConstant`. Probe with the repository config: namespace `kA`, class `static constexpr kB`, function-local
+`static constexpr kC` and `static const kD` all pass; function-local `constexpr kE` and `const kF` fail; lower_case
+locals pass.
+
+**Why.** The earlier records claimed LLVM 20 had a granular local-constexpr category and that `kMaxPrec`-style locals
+must not be renamed. Hosted job 103641498236 (revision 0b858a6) and the local helper both contradicted that, and the
+previous CI run had already forced a rename in `test_work_smoke_vulkan.cpp`.
+
+**How to apply.** Name non-static function-local constants lower_case whether `const` or `constexpr`
+(`constexpr u32 expected_count = 5U;`). Keep `kCamelCase` for namespace/class-scope constexpr and `static` locals.
+Run `scripts/tidy-files.ps1` on changed TUs; CI stops at the first failing TU, so tidy every TU a hosted job never
+reached before publishing. CODING carries the same table.
+
+<!-- end-memory:feedback_clang_tidy_local_constexpr_is_local_constant -->
+
+<a id="memory-feedback_repository_guard_parity_windows_linux"></a>
+## feedback_repository_guard_parity_windows_linux
+
+---
+name: feedback_repository_guard_parity_windows_linux
+description: "Repository guard scripts run as .ps1 on Windows and .sh on Linux; both must resolve the repo root in the body, use the same field regex and give the same verdict on either host. On 2026-09-13 three Windows guards had scanned nothing since May and one bash regex could not match a field named exactly like its token."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-09-13
+---
+
+**Rule.** Every CTest guard registered in `tests/foundation/math/CMakeLists.txt` has a PowerShell and a bash body.
+Resolve the repository root in the script body (`if ([string]::IsNullOrEmpty($RepoRoot)) { ... }`), never in a
+`param` default: PowerShell evaluates that default where `$PSScriptRoot` is empty, `Resolve-Path "/.."` becomes the
+drive root, every scope is skipped and the guard prints PASS having scanned nothing. Keep the regexes identical:
+the untagged-numeric field test is `\w*TOKEN\w*`, so a field named exactly `depth` matches on both hosts. Strip an
+optional drive letter before the line number when a bash guard post-processes `grep -n` output, so a Windows host
+run gives the Linux verdict.
+
+**Why.** Hosted run 34726528230 failed `crd-no-malloc-allocator` on all six Linux lanes while every Windows lane
+passed it, and failed `crd-no-untagged-physical-numeric` on every Windows lane while Linux passed. Both were
+script-parity defects exposed by new code: `check_no_malloc_allocator.ps1`, `check_no_std_math.ps1` and
+`check_no_std_sort.ps1` carried the `param` default since 2026-05-28 (the non-ASCII guard had documented the same
+bug on 2026-05-13), and `check_no_untagged_physical_numeric.sh` required one character before the token since
+2026-05-15.
+
+**How to apply.** After touching a guard, run it through CTest on Windows with no arguments from a build directory
+and run the bash sibling with an explicit root; both must report the same files. A guard that passes suspiciously
+fast or prints PASS for a known violation has not scanned. Prove a fixed regex with a probe copy that removes the
+allow marker.
+
+<!-- end-memory:feedback_repository_guard_parity_windows_linux -->

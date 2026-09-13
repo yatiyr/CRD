@@ -159,6 +159,25 @@ int main()
     const HRESULT rt_result = device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &ray_tracing, sizeof(ray_tracing));
     std::printf("DX12 census: rt_hr=0x%08lx rt_tier=%u\n", static_cast<unsigned long>(rt_result),
                 static_cast<unsigned int>(ray_tracing.RaytracingTier));
+    // B1-f fallback evidence: SV_Barycentrics needs OPTIONS3.BarycentricsSupported and shader model 6.1. The
+    // shader-model query rejects a model the runtime does not know, so probe from the newest known downwards.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
+    const HRESULT options3_result = device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3));
+    std::printf("DX12 census: options3_hr=0x%08lx barycentrics=%d\n", static_cast<unsigned long>(options3_result),
+                static_cast<int>(options3.BarycentricsSupported));
+    const D3D_SHADER_MODEL candidates[] = {D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_5, D3D_SHADER_MODEL_6_4,
+                                           D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_1,
+                                           D3D_SHADER_MODEL_6_0};
+    HRESULT shader_model_result = E_FAIL;
+    D3D12_FEATURE_DATA_SHADER_MODEL shader_model{};
+    for (const D3D_SHADER_MODEL candidate : candidates)
+    {
+        shader_model.HighestShaderModel = candidate;
+        shader_model_result = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model));
+        if (SUCCEEDED(shader_model_result)) { break; }
+    }
+    std::printf("DX12 census: shader_model_hr=0x%08lx highest=0x%02x\n", static_cast<unsigned long>(shader_model_result),
+                static_cast<unsigned int>(shader_model.HighestShaderModel));
 
     // Unknown feature queries retain their HRESULT; zero-initialized values alone do not mean unsupported.
     const bool expected_software = basic_render || (kernel_available && kernel_software) || software;

@@ -176,14 +176,13 @@ jobs:
         shell: pwsh
         run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
 
-      # Pin clang-tidy version (LLVM 20.1.8) to match local dev (VS2026 ships
-      # LLVM 20.1.8). LLVM 19 and 20 differ in `readability-identifier-naming`
-      # categorisation of function-local `constexpr` (LLVM 19 lumps them into
-      # `LocalConstant`; LLVM 20 has a separate `LocalConstexprVariable`
-      # category — `.clang-tidy` sets `LocalConstexprVariableCase = CamelCase + k`
-      # for the project convention `kMaxPrec`-style names). Pinning eliminates
-      # the skew that produced silent CI-only failures on patterns the local
-      # gate accepted.
+      # Pin clang-tidy to LLVM 20.1.8, the version VS2026 ships locally, so hosted
+      # and local analysis agree on every check. Constant naming follows
+      # `.clang-tidy` (corrected 2026-09-13): 20.1.8 has no
+      # `LocalConstexprVariable` option, a non-static function-local `constexpr`
+      # is a `LocalConstant` (lower_case) and namespace/class/static constants
+      # are `kCamelCase`; see docs/CODING.md. Pinning eliminates the skew that
+      # produced silent CI-only failures on patterns the local gate accepted.
       #
       # Why @v2.0.9 not @v2: the `@v2` tag was silently resolving to an older
       # v2.0.x that pre-dated LLVM 20 support (added in v2.0.7, additional 20.x

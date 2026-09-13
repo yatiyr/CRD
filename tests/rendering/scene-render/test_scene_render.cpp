@@ -435,7 +435,7 @@ TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default pr
     REQUIRE(platform::fs::read_file_text(platform::fs::Path(containers::StringView(path.c_str(), path.size())), text));
 
     // the authoritative default set (== the ids the deleted register_default_programs registered): 14 raster + 5 spec + 21 kernel.
-    static const char* const expected[] = {
+    static const char* const kExpectedIds[] = {
         "engine://scene/tess", "engine://scene/mesh", "engine://scene/visbuffer", "engine://scene/impostor",
         "engine://scene/hzb_build", "engine://scene/taa_resolve", "engine://scene/velocity_debug",
         "engine://scene/deferred_lighting", "engine://scene/rt_composite", "engine://post/tonemap_agx",
@@ -449,9 +449,9 @@ TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default pr
         "engine://scene/rt/miss", "engine://scene/rt/chit", "engine://scene/rt/anyhit",
         "engine://scene/rt/shadow_raygen", "engine://scene/rt/shadow_miss", "engine://scene/rt/shadow_chit",
         "engine://scene/rt_worldpos"};
-    constexpr int kExpected = 40;
-    int           seen[kExpected] = {};
-    int           lines          = 0;
+    constexpr int expected_count = 40;
+    int           seen[expected_count] = {};
+    int           lines               = 0;
 
     const char*       p   = text.c_str();
     const char* const end = p + text.size();
@@ -473,19 +473,19 @@ TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default pr
         const containers::StringView id(line.data() + ids, j - ids);
         ++lines;
         int match = -1;
-        for (int k = 0; k < kExpected; ++k)
+        for (int k = 0; k < expected_count; ++k)
         {
-            if (id == containers::StringView(expected[k])) { match = k; break; }
+            if (id == containers::StringView(kExpectedIds[k])) { match = k; break; }
         }
-        INFO("manifest id: " << (match < 0 ? "<UNKNOWN>" : expected[match]));
+        INFO("manifest id: " << (match < 0 ? "<UNKNOWN>" : kExpectedIds[match]));
         REQUIRE(match >= 0);   // an id NOT in the expected default set (a rename/addition) fails LOUD
         CHECK(seen[match] == 0); // no duplicate id
         seen[match] = 1;
     }
-    CHECK(lines == kExpected); // no program dropped / added
-    for (int k = 0; k < kExpected; ++k)
+    CHECK(lines == expected_count); // no program dropped / added
+    for (int k = 0; k < expected_count; ++k)
     {
-        INFO("missing expected id: " << expected[k]);
+        INFO("missing expected id: " << kExpectedIds[k]);
         CHECK(seen[k] == 1); // every default program still enumerated
     }
 }

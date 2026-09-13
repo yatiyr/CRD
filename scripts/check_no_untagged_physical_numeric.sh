@@ -21,10 +21,12 @@ NAME_PATTERN='length|distance|radius|diameter|width|height|depth|mass|weight|vel
 # Bare-scalar type tokens
 TYPE_PATTERN='\b(f32|f64|float|double)\b'
 
-# Field-declaration heuristic. See the .ps1 sibling for the rationale: only
+# Field-declaration heuristic, identical to the .ps1 sibling's `\w*NAME\w*` name test: the
+# quantity token may start the field name (`float depth;`). Until 2026-09-13 this regex
+# demanded one leading character, so such fields passed here and failed on Windows. Only
 # match real struct/class field decls, not function-parameter list members
 # (which end with `,` or `);` and contain `(` / `)` on the line).
-FIELD_REGEX="^[[:space:]]*${TYPE_PATTERN}[[:space:]]+[a-zA-Z_][a-zA-Z_0-9]*(${NAME_PATTERN})[a-zA-Z_0-9]*[[:space:]]*(=[[:space:]]*[^;()]*)?;[[:space:]]*(//.*)?$"
+FIELD_REGEX="^[[:space:]]*${TYPE_PATTERN}[[:space:]]+[a-zA-Z_0-9]*(${NAME_PATTERN})[a-zA-Z_0-9]*[[:space:]]*(=[[:space:]]*[^;()]*)?;[[:space:]]*(//.*)?$"
 
 failures=()
 while IFS= read -r -d '' file; do

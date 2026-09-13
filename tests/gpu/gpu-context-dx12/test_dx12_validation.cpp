@@ -4,7 +4,7 @@
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
 #include <crd/gpu/dx12_validation_capture.hpp>
 #include <crd/gpu/dx12_work_graph_context.hpp>
-#include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/gpu/frame_graph.hpp>
 
 #include <ckir_vertex_pull.hpp>
@@ -64,7 +64,7 @@ public:
     }
     [[nodiscard]] bool owns(const void* storage) const noexcept override { return m_backing.owns(storage); }
 private:
-    crd::memory::MallocAllocator m_backing{"descriptor test pages"};
+    crd::memory::TlsfAllocator m_backing{crd::usize{4} << 20U, nullptr, "descriptor test pages"};
 };
 
 void build_increment_kernel(crd::kir::KGraph& graph, crd::kir::KEntry& entry)
@@ -121,7 +121,7 @@ TEST_CASE("DX12 validation rejects invalid capacity and allocation failure", "[d
 
 TEST_CASE("DX12 validation captures invalid command close without submitting it", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -158,7 +158,7 @@ TEST_CASE("DX12 validation captures invalid command close without submitting it"
 
 TEST_CASE("DX12 validation refuses late enablement without removing a live device", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 late validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 late validation test");
     g::detail::Dx12DeviceScope lifetime;
     ComPtr<ID3D12Device> device;
     REQUIRE(SUCCEEDED(lifetime.create(device)));
@@ -170,7 +170,7 @@ TEST_CASE("DX12 validation refuses late enablement without removing a live devic
 
 TEST_CASE("DX12 validation distinguishes removed device from fence completion", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 lost device validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 lost device validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -205,7 +205,7 @@ TEST_CASE("DX12 validation rejects timeout and premature fence wakeup", "[dx12][
     bool premature = false;
     SECTION("unsignalled completion expires within the caller budget") {}
     SECTION("premature event cannot masquerade as completed GPU work") { premature = true; }
-    crd::memory::MallocAllocator allocator("DX12 bounded wait test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 bounded wait test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -231,7 +231,7 @@ TEST_CASE("DX12 validation rejects timeout and premature fence wakeup", "[dx12][
 
 TEST_CASE("DX12 validation bounds concurrent callbacks and observer lifetimes", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 concurrent validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 concurrent validation test");
     g::Dx12ValidationCapture bounded(&allocator, 2U);
     g::Dx12ValidationCapture complete(&allocator, 1024U);
     REQUIRE(bounded.report().readiness == g::Dx12ValidationReadiness::Ready);
@@ -291,7 +291,7 @@ TEST_CASE("DX12 validation bounds concurrent callbacks and observer lifetimes", 
 
 TEST_CASE("DX12 validation covers separate default and WARP devices", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 device validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 device validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -321,7 +321,7 @@ TEST_CASE("DX12 validation covers separate default and WARP devices", "[dx12][va
 
 TEST_CASE("DX12 validation qualifies production compute copy and context teardown", "[dx12][validation]")
 {
-    crd::memory::MallocAllocator allocator("DX12 production validation test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 production validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     CHECK_FALSE(capture.report().complete_and_silent());
@@ -361,7 +361,7 @@ TEST_CASE("DX12 resource states restore indexed indirect buffers before compute 
           "[dx12][validation][resource-states]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("DX12 resource state test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 resource state test");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -530,7 +530,7 @@ TEST_CASE("DX12 resource states preserve image state while reactivating aliased 
           "[dx12][validation][resource-states]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("DX12 alias state test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 alias state test");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -617,7 +617,7 @@ TEST_CASE("DX12 resource states initialize and reuse sampled depth aliases",
           "[dx12][validation][resource-states]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("DX12 depth state test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 depth state test");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -702,7 +702,7 @@ TEST_CASE("DX12 resource states activate aliased compute buffers before consumin
           "[dx12][validation][resource-states]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("DX12 buffer alias test");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 buffer alias test");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -776,7 +776,7 @@ TEST_CASE("DX12 resource states activate aliased compute buffers before consumin
 TEST_CASE("DX12 descriptors bound contiguous ranges and preserve allocation failure state",
           "[dx12][validation][descriptors]")
 {
-    crd::memory::MallocAllocator allocator("descriptor capture");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "descriptor capture");
     g::Dx12ValidationCapture capture(&allocator, 512U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     DescriptorAllocator pages;
@@ -841,7 +841,7 @@ TEST_CASE("DX12 descriptors preserve queued compute bindings beyond capacity and
           "[dx12][validation][descriptors]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("descriptor compute capture");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "descriptor compute capture");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     DescriptorAllocator pages;
@@ -915,7 +915,7 @@ TEST_CASE("DX12 descriptors keep storage and full bindless tables together throu
           "[dx12][validation][descriptors]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("descriptor graphics capture");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "descriptor graphics capture");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     DescriptorAllocator pages;
@@ -1042,7 +1042,7 @@ TEST_CASE("DX12 stage interfaces link authored output locations independently of
           "[dx12][validation][raster]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("DX12 varying capture");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 varying capture");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     {
@@ -1087,7 +1087,7 @@ TEST_CASE("DX12 descriptors cancel an unsubmitted frame on allocator failure",
           "[dx12][validation][descriptors]")
 {
     namespace k = crd::kir;
-    crd::memory::MallocAllocator allocator("descriptor failure capture");
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "descriptor failure capture");
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
     DescriptorAllocator pages;
