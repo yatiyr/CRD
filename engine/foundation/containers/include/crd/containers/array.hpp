@@ -61,6 +61,17 @@ public:
         }
     }
 
+    // Iterator-range copy (std::vector-compatible). Deduction fails for a
+    // (usize, IAllocator*) pair, so it never shadows the capacity ctor.
+    template <typename It, typename = decltype(*std::declval<It>())>
+    Array(It first, It last, memory::IAllocator* alloc = memory::default_allocator()) : m_alloc(alloc)
+    {
+        for (It it = first; it != last; ++it)
+        {
+            push_back(*it);
+        }
+    }
+
     // Copy: RHS's allocator unless an explicit one is provided.
     Array(const Array& other, memory::IAllocator* alloc = nullptr) : m_alloc(alloc ? alloc : other.m_alloc)
     {

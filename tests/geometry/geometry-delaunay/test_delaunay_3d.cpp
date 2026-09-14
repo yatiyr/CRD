@@ -18,6 +18,7 @@
 //   - Large-coord f32 stability.
 //   - f64 precision tier.
 
+#include <crd/containers/fixed_array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/containers/array.hpp>
@@ -271,8 +272,8 @@ TEST_CASE("delaunay_3d: insertion-order determinism (shuffled input)",
     // canonicalisation = same triangulation.
     auto sorted_tet_positions = [](const crd::containers::Array<Vec3<f32>>& pts,
                                      const crd::containers::Array<u32>&     idx,
-                                     u32                                     t) -> std::array<Vec3<f32>, 4> {
-        std::array<Vec3<f32>, 4> tp = {pts[idx[4U * t + 0]], pts[idx[4U * t + 1]],
+                                     u32                                     t) -> crd::containers::FixedArray<Vec3<f32>, 4> {
+        crd::containers::FixedArray<Vec3<f32>, 4> tp = {pts[idx[4U * t + 0]], pts[idx[4U * t + 1]],
                                         pts[idx[4U * t + 2]], pts[idx[4U * t + 3]]};
         std::sort(tp.begin(), tp.end(), [](const Vec3<f32>& l, const Vec3<f32>& r) {
             if (l.x != r.x) return l.x < r.x;

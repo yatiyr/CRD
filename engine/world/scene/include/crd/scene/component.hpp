@@ -3,7 +3,6 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 
-#include <array>
 
 namespace crd::scene
 {
@@ -33,7 +32,7 @@ inline constexpr crd::u32 kMaxComponents = 256;
 // (v1i) consume this for archetype identity and observer matching.
 struct ComponentMask
 {
-    std::array<crd::u64, 4> bits{};
+    crd::u64 bits[4]{};
 
     constexpr void set(ComponentId id) noexcept
     {

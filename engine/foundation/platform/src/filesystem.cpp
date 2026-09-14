@@ -6,7 +6,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <string>
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+
+#include <string_view>
 
 #if CRD_OS_WINDOWS
 #include <windows.h>
@@ -23,35 +26,31 @@ namespace
 namespace stdfs = std::filesystem;
 
 #if CRD_OS_WINDOWS
-[[nodiscard]] std::wstring utf8_to_wide(containers::StringView sv) noexcept
+[[nodiscard]] crd::containers::Array<wchar_t> utf8_to_wide(containers::StringView sv) noexcept
 {
-    try
+    // crd::Array uses CRD_FATAL on OOM (never throws). A single L'\0' is the valid-empty default.
+    crd::containers::Array<wchar_t> out;
+    out.push_back(L'\0');
+    if (sv.empty())
     {
-        if (sv.empty())
-        {
-            return {};
-        }
-        const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
-        if (needed <= 0)
-        {
-            return {};
-        }
-        std::wstring out(static_cast<crd::usize>(needed), L'\0');
-        const int written =
-            MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-        if (written != needed)
-        {
-            return {};
-        }
         return out;
     }
-    catch (...)
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
+    if (needed <= 0)
     {
-        return {}; // allocation failure under noexcept: an empty path, never std::terminate
+        return out;
     }
+    out.resize(static_cast<crd::usize>(needed) + 1);
+    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
+    if (written != needed)
+    {
+        out.clear();
+        out.push_back(L'\0');
+    }
+    return out;
 }
 
-[[nodiscard]] containers::String wide_to_utf8(const std::wstring& ws) noexcept
+[[nodiscard]] containers::String wide_to_utf8(std::wstring_view ws) noexcept
 {
     if (ws.empty())
     {
@@ -76,7 +75,7 @@ namespace stdfs = std::filesystem;
 
 [[nodiscard]] stdfs::path to_native_path(const Path& path)
 {
-    return stdfs::path(utf8_to_wide(path.generic()));
+    return stdfs::path(utf8_to_wide(path.generic()).data());
 }
 
 [[nodiscard]] Path from_native_path(const stdfs::path& path)
@@ -192,7 +191,8 @@ Path executable_dir() noexcept
     try
     {
 #if CRD_OS_WINDOWS
-    std::wstring buffer(512, L'\0');
+    crd::containers::Array<wchar_t> buffer;
+    buffer.resize(512);
     for (;;)
     {
         const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -203,8 +203,7 @@ Path executable_dir() noexcept
         }
         if (written < buffer.size())
         {
-            buffer.resize(written);
-            return from_native_path(stdfs::path(buffer).parent_path());
+            return from_native_path(stdfs::path(buffer.data()).parent_path());
         }
         buffer.resize(buffer.size() * 2);
     }
@@ -213,7 +212,8 @@ Path executable_dir() noexcept
     // the required size via the in/out length on the first (failing) call.
     std::uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
-    std::string buffer(size, '\0');
+    crd::containers::String buffer;
+    buffer.resize(size);
     if (_NSGetExecutablePath(buffer.data(), &size) != 0)
     {
         CRD_LOG_ERROR(g_log_platform, "_NSGetExecutablePath failed");
@@ -223,7 +223,8 @@ Path executable_dir() noexcept
     const stdfs::path resolved = stdfs::canonical(stdfs::path(buffer.c_str()), ec);
     return from_native_path((ec ? stdfs::path(buffer.c_str()) : resolved).parent_path());
 #else // Linux / other POSIX with /proc
-    std::string buffer(1024, '\0');
+    crd::containers::String buffer;
+    buffer.resize(1024);
     for (;;)
     {
         const ssize_t written = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
@@ -235,7 +236,7 @@ Path executable_dir() noexcept
         if (static_cast<std::size_t>(written) < buffer.size())
         {
             buffer.resize(static_cast<std::size_t>(written));
-            return from_native_path(stdfs::path(buffer).parent_path());
+            return from_native_path(stdfs::path(buffer.c_str()).parent_path());
         }
         buffer.resize(buffer.size() * 2); // truncated — grow and retry
     }

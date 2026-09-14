@@ -10,6 +10,7 @@
 // `DynamicBvh::closest_point` get dedicated correctness coverage against the
 // brute-force reference too.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp> // umbrella — bvh_build / BvhBuildOptions / bvh4_collapse / DynamicBvh / closest_point fns
 #include <crd/geometry/queries.hpp>
 #include <crd/math/vec.hpp>
@@ -66,7 +67,7 @@ AABB3<f32> random_box(Rng& rng, f32 world, f32 max_size)
     return AABB3<f32>(Vec3<f32>(c.x - h.x, c.y - h.y, c.z - h.z), Vec3<f32>(c.x + h.x, c.y + h.y, c.z + h.z));
 }
 
-std::optional<BvhClosestPoint> brute_closest(const std::vector<AABB3<f32>>& prims, const Vec3<f32>& q, f32 max_dist)
+std::optional<BvhClosestPoint> brute_closest(const crd::containers::Array<AABB3<f32>>& prims, const Vec3<f32>& q, f32 max_dist)
 {
     f32 best =
         (max_dist >= std::numeric_limits<f32>::infinity()) ? std::numeric_limits<f32>::infinity() : max_dist * max_dist;
@@ -119,7 +120,7 @@ TEST_CASE("queries.raycast(BvhTree) == bvh_raycast on a random corpus", "[geomet
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "queries-test");
     Rng rng(0xCAFE);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 300; ++i)
     {
         prims.push_back(random_box(rng, 80.0F, 4.0F));
@@ -148,7 +149,7 @@ TEST_CASE("queries.raycast(Bvh4Tree) == bvh4_raycast and == queries.raycast(BvhT
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "queries-test");
     Rng rng(0xBEEF);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 300; ++i)
     {
         prims.push_back(random_box(rng, 80.0F, 4.0F));
@@ -183,7 +184,7 @@ TEST_CASE("queries.overlap(BvhTree) and overlap(Bvh4Tree) match brute force", "[
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "queries-test");
     Rng rng(0xF00D);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 200; ++i)
     {
         prims.push_back(random_box(rng, 60.0F, 4.0F));
@@ -201,8 +202,8 @@ TEST_CASE("queries.overlap(BvhTree) and overlap(Bvh4Tree) match brute force", "[
         crd::containers::Array<u32> quad_facade(&alloc);
         crd::geometry::overlap(quad, pspan, q, quad_facade);
 
-        std::vector<u32> bin_vec;
-        std::vector<u32> quad_vec;
+        crd::containers::Array<u32> bin_vec;
+        crd::containers::Array<u32> quad_vec;
         for (usize i = 0; i < bin_facade.size(); ++i)
         {
             bin_vec.push_back(bin_facade[i]);
@@ -214,7 +215,7 @@ TEST_CASE("queries.overlap(BvhTree) and overlap(Bvh4Tree) match brute force", "[
         std::sort(bin_vec.begin(), bin_vec.end());
         std::sort(quad_vec.begin(), quad_vec.end());
 
-        std::vector<u32> brute;
+        crd::containers::Array<u32> brute;
         for (usize i = 0; i < prims.size(); ++i)
         {
             if (crd::geometry::primitives::intersects(prims[i], q))
@@ -228,7 +229,7 @@ TEST_CASE("queries.overlap(BvhTree) and overlap(Bvh4Tree) match brute force", "[
         REQUIRE(quad_vec == brute);
 
         // Callback form agrees with Array form.
-        std::vector<u32> cb;
+        crd::containers::Array<u32> cb;
         crd::geometry::overlap(binary, pspan, q, [&cb](u32 p) { cb.push_back(p); });
         std::sort(cb.begin(), cb.end());
         REQUIRE(cb == brute);
@@ -248,13 +249,13 @@ TEST_CASE("queries.overlap(DynamicBvh) visits fat AABBs by user_data", "[geometr
 
     crd::containers::Array<u32> out(&alloc);
     crd::geometry::overlap(dt, AABB3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(6, 6, 6)), out);
-    std::vector<u32> got;
+    crd::containers::Array<u32> got;
     for (usize i = 0; i < out.size(); ++i)
     {
         got.push_back(out[i]);
     }
     std::sort(got.begin(), got.end());
-    REQUIRE(got == std::vector<u32>{100U, 200U}); // user_data for a and b, not c
+    REQUIRE(got == crd::containers::Array<u32>{100U, 200U}); // user_data for a and b, not c
 }
 
 // ---- closest_point facade ---------------------------------------------------
@@ -263,7 +264,7 @@ TEST_CASE("queries.closest_point(BvhTree) == bvh_closest_point on random corpus"
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "queries-test");
     Rng rng(0xC0FFEE);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 250; ++i)
     {
         prims.push_back(random_box(rng, 60.0F, 4.0F));
@@ -294,7 +295,7 @@ TEST_CASE("bvh4_closest_point matches brute force and BvhTree closest_point", "[
     for (usize trial = 0; trial < 3; ++trial)
     {
         const usize n = 80U + (rng.next() % 400U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 70.0F, 4.0F));
@@ -353,7 +354,7 @@ TEST_CASE("bvh4_closest_point: empty / single-prim / cutoff", "[geometry][querie
     REQUIRE(got->point == closest_point(box, Vec3<f32>(100, 0, 0)));
 
     // max_dist cutoff (closest face at x=9)
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
     const auto pspan2 = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree bin2 = bvh_build(pspan2, &alloc);
     const Bvh4Tree quad2 = bvh4_collapse(bin2, &alloc);
@@ -373,7 +374,7 @@ TEST_CASE("DynamicBvh::closest_point matches the closest fat-AABB by user_data",
         u32 ud;
         AABB3<f32> fat;
     };
-    std::vector<Entry> entries;
+    crd::containers::Array<Entry> entries;
     const usize n = 250;
     for (usize i = 0; i < n; ++i)
     {

@@ -25,6 +25,7 @@
 // Plus FACADE: `crd::geometry::cast_convex(...)` returns just the TOI and
 // matches the rich `shapecast_convex` result.
 
+#include <crd/containers/string.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/geometry/convex/convex.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
@@ -299,8 +300,14 @@ TEST_CASE("shapecast_convex: agrees with bisection of GJK distance on random pai
         if (!sc.has_value() || bisect < 0)
         {
             // One reports hit, the other doesn't - mismatch.
-            INFO("trial " << trial << ", shapecast=" << (sc.has_value() ? std::to_string(sc->toi) : std::string("nullopt"))
-                          << ", bisect=" << bisect);
+            if (sc.has_value())
+            {
+                INFO("trial " << trial << ", shapecast=" << sc->toi << ", bisect=" << bisect);
+            }
+            else
+            {
+                INFO("trial " << trial << ", shapecast=nullopt, bisect=" << bisect);
+            }
             ++significant_disagreements;
             // For corner cases (bisection precision close to no-impact),
             // accept small mismatches. Hard fail only if both disagree

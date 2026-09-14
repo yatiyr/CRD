@@ -10,6 +10,7 @@
 //     state.
 //   * Callback and Array forms produce the same set.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/queries.hpp>
 #include <crd/math/vec.hpp>
@@ -55,9 +56,9 @@ AABB3<f32> random_box(Rng& rng, f32 world, f32 max_size)
 // Brute-force O(n²) reference: every (i<j) leaf pair whose fat AABBs overlap.
 // `fats` provides the *fat* AABBs (`DynamicBvh` inflates tight AABBs by
 // `fat_margin` on insert; the BVH self-overlap is over the fat AABBs).
-std::vector<DynamicBvhPair> brute(const std::vector<AABB3<f32>>& fats, const std::vector<u32>& user_data)
+crd::containers::Array<DynamicBvhPair> brute(const crd::containers::Array<AABB3<f32>>& fats, const crd::containers::Array<u32>& user_data)
 {
-    std::vector<DynamicBvhPair> pairs;
+    crd::containers::Array<DynamicBvhPair> pairs;
     for (usize i = 0; i < fats.size(); ++i)
     {
         for (usize j = i + 1; j < fats.size(); ++j)
@@ -121,8 +122,8 @@ TEST_CASE("find_overlapping_pairs: matches brute force on random corpus", "[geom
         const f32 world = 10.0F + rng.range(0.0F, 40.0F);
         const usize n = 30U + (rng.next() % 220U); // 30..250 leaves
         DynamicBvh dt(&alloc);
-        std::vector<AABB3<f32>> fats;
-        std::vector<u32> ud;
+        crd::containers::Array<AABB3<f32>> fats;
+        crd::containers::Array<u32> ud;
         for (usize i = 0; i < n; ++i)
         {
             const AABB3<f32> tight = random_box(rng, world, 3.0F);
@@ -134,13 +135,13 @@ TEST_CASE("find_overlapping_pairs: matches brute force on random corpus", "[geom
 
         crd::containers::Array<DynamicBvhPair> got(&alloc);
         crd::geometry::find_overlapping_pairs(dt, got);
-        std::vector<DynamicBvhPair> got_v;
+        crd::containers::Array<DynamicBvhPair> got_v;
         for (usize i = 0; i < got.size(); ++i)
         {
             got_v.push_back(got[i]);
         }
         std::sort(got_v.begin(), got_v.end());
-        const std::vector<DynamicBvhPair> ref = brute(fats, ud);
+        const crd::containers::Array<DynamicBvhPair> ref = brute(fats, ud);
         REQUIRE(got_v == ref);
         // Each emitted pair must be in `(min, max)` order.
         for (const DynamicBvhPair& p : got_v)
@@ -161,7 +162,7 @@ TEST_CASE("find_overlapping_pairs: callback form matches Array form", "[geometry
     }
     crd::containers::Array<DynamicBvhPair> via_array(&alloc);
     crd::geometry::find_overlapping_pairs(dt, via_array);
-    std::vector<DynamicBvhPair> via_callback;
+    crd::containers::Array<DynamicBvhPair> via_callback;
     crd::geometry::find_overlapping_pairs(dt, [&via_callback](u32 a, u32 b) {
         via_callback.push_back(DynamicBvhPair{a, b});
     });
@@ -206,8 +207,8 @@ TEST_CASE("find_overlapping_pairs: n=10000 dense corpus does not exhaust the all
     Rng rng(0x5EEDED);
     const usize n = 10000;
     DynamicBvh dt(&alloc);
-    std::vector<AABB3<f32>> fats;
-    std::vector<u32> ud;
+    crd::containers::Array<AABB3<f32>> fats;
+    crd::containers::Array<u32> ud;
     fats.reserve(n);
     ud.reserve(n);
     for (usize i = 0; i < n; ++i)
@@ -227,10 +228,10 @@ TEST_CASE("find_overlapping_pairs: n=10000 dense corpus does not exhaust the all
     // right test here because a sampling check could miss the BVH silently
     // dropping a fraction of pairs at scale, which is exactly the class of
     // bug this soak is designed to catch.
-    const std::vector<DynamicBvhPair> ref = brute(fats, ud);
+    const crd::containers::Array<DynamicBvhPair> ref = brute(fats, ud);
     REQUIRE(got.size() == ref.size());
     // Spot-check a sorted slice matches.
-    std::vector<DynamicBvhPair> got_v(got.data(), got.data() + got.size());
+    crd::containers::Array<DynamicBvhPair> got_v(got.data(), got.data() + got.size());
     std::sort(got_v.begin(), got_v.end());
     REQUIRE(got_v == ref);
 }
@@ -247,7 +248,7 @@ TEST_CASE("find_overlapping_pairs: caller-owned scratch reuse matches alloc-per-
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "scratch-test");
     Rng rng(0x5C7A7C8);
     DynamicBvh dt(&alloc);
-    std::vector<crd::geometry::bvh::DynamicBvhNodeId> ids;
+    crd::containers::Array<crd::geometry::bvh::DynamicBvhNodeId> ids;
     for (usize i = 0; i < 150; ++i)
     {
         ids.push_back(dt.insert(random_box(rng, 12.0F, 2.0F), static_cast<u32>(i + 1U)));
@@ -256,7 +257,7 @@ TEST_CASE("find_overlapping_pairs: caller-owned scratch reuse matches alloc-per-
     crd::geometry::bvh::DynamicBvhPairScratch scratch(&alloc);
 
     auto sorted_pairs = [&](crd::containers::Array<DynamicBvhPair>& a) {
-        std::vector<DynamicBvhPair> v(a.data(), a.data() + a.size());
+        crd::containers::Array<DynamicBvhPair> v(a.data(), a.data() + a.size());
         std::sort(v.begin(), v.end());
         return v;
     };

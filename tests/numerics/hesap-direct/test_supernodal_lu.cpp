@@ -8,6 +8,7 @@
 // (min_diag_dominance → 1 ⇒ MC64 made the diagonal the column-max ⇒ static pivot is
 // exact — the foundation of v5b-2's parallel-deterministic numeric).
 
+#include <crd/containers/fixed_array.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/direct/frontal.hpp>
 #include <crd/hesap/direct/lu_symbolic.hpp>
@@ -1038,9 +1039,9 @@ TEST_CASE("v5b-3b-2 factor_front: blocked partial-LU reconstructs the dense fron
     crd::memory::TlsfAllocator alloc(8ULL * 1024 * 1024);
     // Square fronts (the multifrontal usage), partial + full; one wider than the panel block (48) to
     // exercise the blocked rank-nb TRSM+GEMM path; npiv < n (Schur present) + npiv == n (full LU).
-    for (auto mnp : {std::array<crd::u32, 3>{6, 6, 4}, std::array<crd::u32, 3>{8, 8, 8},
-                     std::array<crd::u32, 3>{5, 5, 2}, std::array<crd::u32, 3>{60, 60, 40},
-                     std::array<crd::u32, 3>{64, 64, 64}})
+    for (auto mnp : {crd::containers::FixedArray<crd::u32, 3>{6, 6, 4}, crd::containers::FixedArray<crd::u32, 3>{8, 8, 8},
+                     crd::containers::FixedArray<crd::u32, 3>{5, 5, 2}, crd::containers::FixedArray<crd::u32, 3>{60, 60, 40},
+                     crd::containers::FixedArray<crd::u32, 3>{64, 64, 64}})
     {
         check_factor_front<crd::f64>(&alloc, mnp[0], mnp[1], mnp[2]);
         check_factor_front<crd::hesap::Complex64>(&alloc, mnp[0], mnp[1], mnp[2]);

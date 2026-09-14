@@ -12,6 +12,7 @@
 //   9. Deterministic handle sequence.
 //  10. Per-kind size + total size accounting.
 
+#include <crd/containers/array.hpp>
 #include <crd/eylem/collider.hpp>
 #include <crd/eylem/types.hpp>
 #include <crd/eylem_rigid3d/collider_pool.hpp>
@@ -296,7 +297,7 @@ TEST_CASE("ColliderPool: deterministic handle sequence",
         ColliderPool pool(&alloc, 32);
         BodyId body = BodyId::make(1U, 1U);
 
-        std::vector<ColliderId> ids;
+        crd::containers::Array<ColliderId> ids;
         ids.push_back(pool.insert(body, make_sphere(1.0F)));
         ids.push_back(pool.insert(body, make_box({1.0F, 1.0F, 1.0F})));
         ids.push_back(pool.insert(body, make_sphere(2.0F)));

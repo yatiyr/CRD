@@ -1,5 +1,6 @@
 // crd-perf v0b -- counters are safe to write concurrently from any thread.
 
+#include <crd/containers/array.hpp>
 #include <crd/perf/perf.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -31,7 +32,7 @@ TEST_CASE("Add-kind i64 counter is atomic under concurrent writers",
     constexpr crd::u32 threads     = 4U;
     constexpr crd::u32 per_thread   = 25000U;
     std::atomic<bool> go{false};
-    std::vector<std::thread> ts;
+    crd::containers::Array<std::thread> ts;
     ts.reserve(threads);
     for (crd::u32 t = 0U; t < threads; ++t)
     {
@@ -63,7 +64,7 @@ TEST_CASE("Add-kind f64 counter is consistent under concurrent CAS-loop writers"
 
     constexpr crd::u32 threads   = 4U;
     constexpr crd::u32 per_thread = 5000U;
-    std::vector<std::thread> ts;
+    crd::containers::Array<std::thread> ts;
     ts.reserve(threads);
     for (crd::u32 t = 0U; t < threads; ++t)
     {

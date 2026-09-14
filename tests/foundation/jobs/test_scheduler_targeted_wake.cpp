@@ -12,6 +12,7 @@
 // Default-path tests live in test_scheduler.cpp; these tests never set
 // targeted_wake=false and never touch the shared m_semaphore.
 
+#include <crd/containers/array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../../engine/foundation/jobs/src/scheduler.hpp"
@@ -159,7 +160,7 @@ TEST_CASE("scheduler-tw: wake_all unblocks every parked worker", "[jobs][schedul
     REQUIRE(sched.init(targeted_cfg(kThreads)));
 
     std::atomic<int> woke_count{0};
-    std::vector<std::thread> waiters;
+    crd::containers::Array<std::thread> waiters;
     waiters.reserve(kThreads);
     for (crd::u32 t = 0U; t < kThreads; ++t)
     {
@@ -221,7 +222,7 @@ TEST_CASE("scheduler-tw: concurrent producer/consumer stress", "[jobs][scheduler
     std::atomic<bool> stop{false};
 
     // Workers: drain-then-park loop. Exit on `stop` flag.
-    std::vector<std::thread> workers;
+    crd::containers::Array<std::thread> workers;
     workers.reserve(kThreads);
     for (crd::u32 t = 0U; t < kThreads; ++t)
     {

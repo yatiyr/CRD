@@ -10,7 +10,7 @@
 #include <atomic>
 #include <memory>
 #include <thread>
-#include <vector>
+#include <crd/containers/array.hpp>
 
 namespace crd::jobs::detail
 {
@@ -107,7 +107,7 @@ private:
     std::unique_ptr<FrameArena[]> m_frame_arenas;
     crd::u32                      m_frame_arena_count = 0U;
 
-    std::vector<std::thread> m_threads;
+    crd::containers::Array<std::thread> m_threads;
     std::atomic<bool>        m_stopping{false};
     crd::u32                 m_num_threads = 0U;
     bool                     m_initialized = false;

@@ -4,6 +4,7 @@
 // the inner side of every outward-facing face plane). Ray-vs-hull /
 // closest-point-on-hull arrive with GJK/EPA in -convex (Phase 3.1.7 v2).
 
+#include <crd/containers/fixed_array.hpp>
 #include <crd/geometry/primitives/is_finite.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 
@@ -20,17 +21,17 @@ namespace
 // A unit cube [-1,1]^3 as a ConvexHullView. 8 verts, 6 outward-facing faces.
 struct CubeHull
 {
-    std::array<Vec3<f32>, 8> verts{
+    crd::containers::FixedArray<Vec3<f32>, 8> verts{
         Vec3<f32>(-1, -1, -1), Vec3<f32>(1, -1, -1), Vec3<f32>(1, 1, -1), Vec3<f32>(-1, 1, -1),
         Vec3<f32>(-1, -1, 1),  Vec3<f32>(1, -1, 1),  Vec3<f32>(1, 1, 1),  Vec3<f32>(-1, 1, 1),
     };
-    std::array<Plane<f32>, 6> faces{
+    crd::containers::FixedArray<Plane<f32>, 6> faces{
         Plane<f32>(Vec3<f32>(1, 0, 0), -1),  Plane<f32>(Vec3<f32>(-1, 0, 0), -1), Plane<f32>(Vec3<f32>(0, 1, 0), -1),
         Plane<f32>(Vec3<f32>(0, -1, 0), -1), Plane<f32>(Vec3<f32>(0, 0, 1), -1),  Plane<f32>(Vec3<f32>(0, 0, -1), -1),
     };
     // All 6 faces' vertex lists (4 each, CCW) — the fixture satisfies its own
     // type's invariant: offsets has size faces+1, face f owns indices[f][..].
-    std::array<u32, 24> face_verts{
+    crd::containers::FixedArray<u32, 24> face_verts{
         1, 2, 6, 5, // +x
         0, 3, 7, 4, // -x
         3, 2, 6, 7, // +y
@@ -38,7 +39,7 @@ struct CubeHull
         4, 5, 6, 7, // +z
         0, 3, 2, 1, // -z
     };
-    std::array<u32, 7> offsets{0, 4, 8, 12, 16, 20, 24};
+    crd::containers::FixedArray<u32, 7> offsets{0, 4, 8, 12, 16, 20, 24};
 
     [[nodiscard]] ConvexHullView<f32> view() const noexcept
     {

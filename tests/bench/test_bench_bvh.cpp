@@ -13,6 +13,7 @@
 //   * bvh4_collapse, 100k-AABB binary tree  small constant-factor of the build
 //   * bvh_closest_point, 100k-AABB tree     ≪ 1 µs/query average
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/vec.hpp>
@@ -48,10 +49,10 @@ struct Rng
     f32 range(f32 lo, f32 hi) { return lo + (hi - lo) * unit(); }
 };
 
-std::vector<AABB3<f32>> make_corpus(usize n, crd::u64 seed)
+crd::containers::Array<AABB3<f32>> make_corpus(usize n, crd::u64 seed)
 {
     Rng rng(seed);
-    std::vector<AABB3<f32>> v;
+    crd::containers::Array<AABB3<f32>> v;
     v.reserve(n);
     for (usize i = 0; i < n; ++i)
     {
@@ -68,10 +69,10 @@ Vec3<f32> normalized(const Vec3<f32>& v)
     return Vec3<f32>(v.x / l, v.y / l, v.z / l);
 }
 
-std::vector<Ray3<f32>> make_rays(usize n, crd::u64 seed)
+crd::containers::Array<Ray3<f32>> make_rays(usize n, crd::u64 seed)
 {
     Rng rng(seed);
-    std::vector<Ray3<f32>> v;
+    crd::containers::Array<Ray3<f32>> v;
     v.reserve(n);
     for (usize i = 0; i < n; ++i)
     {
@@ -87,8 +88,8 @@ TEST_CASE("bench BVH build -- serial vs parallel", "[bench][bench-bvh][!benchmar
 {
     crd::jobs::init();
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 27, nullptr, "bench-bvh"); // 128 MB
-    const std::vector<AABB3<f32>> c100k = make_corpus(100000, 0xB14C00);
-    const std::vector<AABB3<f32>> c1m = make_corpus(1000000, 0xB14C01);
+    const crd::containers::Array<AABB3<f32>> c100k = make_corpus(100000, 0xB14C00);
+    const crd::containers::Array<AABB3<f32>> c1m = make_corpus(1000000, 0xB14C01);
     const auto s100k = crd::containers::ConstSpan<AABB3<f32>>(c100k.data(), c100k.size());
     const auto s1m = crd::containers::ConstSpan<AABB3<f32>>(c1m.data(), c1m.size());
 
@@ -116,11 +117,11 @@ TEST_CASE("bench BVH build -- serial vs parallel", "[bench][bench-bvh][!benchmar
 TEST_CASE("bench BVH raycast -- binary vs BVH4, 100k rays vs a 100k-AABB tree", "[bench][bench-bvh][!benchmark]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 25, nullptr, "bench-bvh");
-    const std::vector<AABB3<f32>> prims = make_corpus(100000, 0xB14C10);
+    const crd::containers::Array<AABB3<f32>> prims = make_corpus(100000, 0xB14C10);
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const Bvh4Tree quad = bvh4_collapse(tree, &alloc);
-    const std::vector<Ray3<f32>> rays = make_rays(100000, 0xB14C11);
+    const crd::containers::Array<Ray3<f32>> rays = make_rays(100000, 0xB14C11);
 
     BENCHMARK("bvh_raycast  x100k  (binary)")
     {
@@ -155,11 +156,11 @@ TEST_CASE("bench BVH raycast -- binary vs BVH4, 100k rays vs a 100k-AABB tree", 
 TEST_CASE("bench BVH closest-point -- 100k queries vs a 100k-AABB tree", "[bench][bench-bvh][!benchmark]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 25, nullptr, "bench-bvh");
-    const std::vector<AABB3<f32>> prims = make_corpus(100000, 0xB14C20);
+    const crd::containers::Array<AABB3<f32>> prims = make_corpus(100000, 0xB14C20);
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     Rng rng(0xB14C21);
-    std::vector<Vec3<f32>> queries;
+    crd::containers::Array<Vec3<f32>> queries;
     queries.reserve(100000);
     for (usize i = 0; i < 100000; ++i)
     {

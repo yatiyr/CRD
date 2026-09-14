@@ -4,7 +4,7 @@
 #include <crd/platform/filesystem.hpp>
 
 #include <functional>
-#include <vector>
+#include <crd/containers/array.hpp>
 
 namespace crd::platform
 {
@@ -56,7 +56,7 @@ private:
     };
 
     u64                m_next_handle = 1U;
-    std::vector<Entry> m_entries;
+    crd::containers::Array<Entry> m_entries;
 };
 
 } // namespace crd::platform

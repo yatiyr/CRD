@@ -14,6 +14,8 @@
 //   * determinism: shuffled input ⇒ same triangle set
 //   * f64 precision tier ships
 
+#include <bit>
+#include <crd/containers/hash_set.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/geometry/polygon/polygon.hpp>
 #include <crd/geometry/primitives/predicates.hpp>
@@ -442,7 +444,7 @@ TEST_CASE("constrained_delaunay: insertion-order determinism (shuffled vs sorted
     // Build edge set for each — should be identical mod vertex remap.
     auto edge_set = [](const crd::containers::Array<u32>& tris,
                         const crd::containers::Array<Vec2<f32>>& pts) {
-        std::set<std::pair<f32, f32>> edges;
+        crd::containers::HashSet<crd::u64> edges;
         for (usize i = 0; i + 3U <= tris.size(); i += 3U)
         {
             for (u32 e = 0; e < 3U; ++e)
@@ -456,13 +458,22 @@ TEST_CASE("constrained_delaunay: insertion-order determinism (shuffled vs sorted
                 std::pair<f32, f32> p0{pa.x, pa.y};
                 std::pair<f32, f32> p1{pb.x, pb.y};
                 if (p1 < p0) { auto tmp = p0; p0 = p1; p1 = tmp; }
-                // Hash pair of pairs by encoding into a single key.
-                edges.insert({p0.first + p1.first * 7.13F, p0.second + p1.second * 3.17F});
+                // Encode the two position keys into a single hashable u64 key.
+                const f32 kx = p0.first + p1.first * 7.13F;
+                const f32 ky = p0.second + p1.second * 3.17F;
+                const auto bx = static_cast<crd::u64>(std::bit_cast<crd::u32>(kx));
+                const auto by = static_cast<crd::u64>(std::bit_cast<crd::u32>(ky));
+                edges.insert((bx << 32) | by);
             }
         }
         return edges;
     };
     auto ea = edge_set(ra.triangle_indices, pts_a);
     auto eb = edge_set(rb.triangle_indices, pts_b);
-    CHECK(ea == eb);
+    bool sets_equal = ea.size() == eb.size();
+    for (const auto& e : ea)
+    {
+        if (!eb.contains(e)) { sets_equal = false; break; }
+    }
+    CHECK(sets_equal);
 }

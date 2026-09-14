@@ -11,7 +11,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
-#include <vector>
+#include <crd/containers/array.hpp>
 
 // MSVC C4324: structure padded due to alignment specifier. Expected — alignas(64) on
 // ThreadState::pinned_available is intentional (separate cache line for the pinned slot).
@@ -170,7 +170,7 @@ private:
     std::unique_ptr<JobInjectionQueue> m_low_injection;
 
     // Per-thread state, indexed by thread_index.
-    std::vector<std::unique_ptr<ThreadState>> m_thread_states;
+    crd::containers::Array<std::unique_ptr<ThreadState>> m_thread_states;
 
     // Counting semaphore: posted once per push/push_local; workers acquire() to sleep. (Default-path wake.)
     // Cerid-owned futex/WaitOnAddress primitive — std::counting_semaphore lost wakes on the CI's libstdc++

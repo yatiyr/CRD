@@ -12,7 +12,7 @@
 
 #include <cstring>
 #include <string>
-#include <vector>
+#include <crd/containers/array.hpp>
 
 using Microsoft::WRL::ComPtr;
 
@@ -129,10 +129,16 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
 {
     auto& impl = *m_impl;
     if (!impl.ok || node_dxil.size() == 0U || program_name == nullptr || bindings.size() == 0U) { return false; }
-    const std::wstring wprog(program_name, program_name + std::strlen(program_name));
+    crd::containers::Array<wchar_t> wprog;
+    for (const char* pc = program_name; *pc != '\0'; ++pc)
+    {
+        wprog.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*pc)));
+    }
+    wprog.push_back(L'\0');
 
     // ── global root signature: one root UAV descriptor per binding (register u<reg>) ──
-    std::vector<D3D12_ROOT_PARAMETER1> params(bindings.size());
+    crd::containers::Array<D3D12_ROOT_PARAMETER1> params;
+    params.resize(bindings.size());
     for (crd::u32 i = 0; i < static_cast<crd::u32>(bindings.size()); ++i)
     {
         params[i]                             = {};
@@ -162,7 +168,7 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     D3D12_GLOBAL_ROOT_SIGNATURE grs{};
     grs.pGlobalRootSignature = root_sig.Get();
     D3D12_WORK_GRAPH_DESC wg{};
-    wg.ProgramName = wprog.c_str();
+    wg.ProgramName = wprog.data();
     wg.Flags       = D3D12_WORK_GRAPH_FLAG_INCLUDE_ALL_AVAILABLE_NODES;
     D3D12_STATE_SUBOBJECT sub[3]{};
     sub[0].Type  = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -181,8 +187,8 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     ComPtr<ID3D12StateObjectProperties1> props1;
     ComPtr<ID3D12WorkGraphProperties>    wgprops;
     if (FAILED(state.As(&props1)) || FAILED(state.As(&wgprops))) { return false; }
-    const D3D12_PROGRAM_IDENTIFIER prog_id = props1->GetProgramIdentifier(wprog.c_str());
-    const UINT                     wg_index = wgprops->GetWorkGraphIndex(wprog.c_str());
+    const D3D12_PROGRAM_IDENTIFIER prog_id = props1->GetProgramIdentifier(wprog.data());
+    const UINT                     wg_index = wgprops->GetWorkGraphIndex(wprog.data());
     D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS mem{};
     wgprops->GetWorkGraphMemoryRequirements(wg_index, &mem);
     ComPtr<ID3D12Resource> backing;
@@ -195,9 +201,12 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
 
     // ── device UAV buffers (+ UPLOAD staging: memcpy the input, or zeros, then copy in) ──
     const crd::u32                      nb = static_cast<crd::u32>(bindings.size());
-    std::vector<ComPtr<ID3D12Resource>> dev_bufs(nb);
-    std::vector<ComPtr<ID3D12Resource>> up_bufs(nb);
-    std::vector<ComPtr<ID3D12Resource>> rb_bufs(nb);
+    crd::containers::Array<ComPtr<ID3D12Resource>> dev_bufs;
+    dev_bufs.resize(nb);
+    crd::containers::Array<ComPtr<ID3D12Resource>> up_bufs;
+    up_bufs.resize(nb);
+    crd::containers::Array<ComPtr<ID3D12Resource>> rb_bufs;
+    rb_bufs.resize(nb);
     for (crd::u32 i = 0; i < nb; ++i)
     {
         const UINT64 bytes = bindings[i].bytes != 0U ? bindings[i].bytes : 4U;

@@ -1,3 +1,4 @@
+#include <crd/containers/array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../../engine/foundation/jobs/src/scheduler.hpp"
@@ -257,10 +258,10 @@ TEST_CASE("scheduler: local deque drains LIFO", "[jobs][scheduler]")
     struct PushData
     {
         int                  m_value{0};
-        std::vector<int>*    m_result{nullptr};
+        crd::containers::Array<int>*    m_result{nullptr};
     };
 
-    std::vector<int> executed_values;
+    crd::containers::Array<int> executed_values;
     PushData pd[3];
     for (int i = 0; i < 3; ++i)
     {
@@ -284,9 +285,9 @@ TEST_CASE("scheduler: local deque drains LIFO", "[jobs][scheduler]")
     CHECK_FALSE(sched.execute_one(0U));
 
     REQUIRE(executed_values.size() == 3U);
-    CHECK(executed_values.at(0) == 3); // last-in
-    CHECK(executed_values.at(1) == 2);
-    CHECK(executed_values.at(2) == 1); // first-in
+    CHECK(executed_values[0] == 3); // last-in
+    CHECK(executed_values[1] == 2);
+    CHECK(executed_values[2] == 1); // first-in
 }
 
 // ---------------------------------------------------------------------------
@@ -496,7 +497,7 @@ TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress
     }
 
     // Workers loop until all kTotalJobs have been run.
-    std::vector<std::thread> workers;
+    crd::containers::Array<std::thread> workers;
     workers.reserve(kNumWorkers);
     for (crd::u32 t = 0U; t < kNumWorkers; ++t)
     {

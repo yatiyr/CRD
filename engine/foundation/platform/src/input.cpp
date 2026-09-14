@@ -21,10 +21,10 @@ bool Input::try_pop_event(InputEvent& out) noexcept
 void Input::on_poll_begin() noexcept
 {
     // Edge state lives for exactly one frame.
-    m_state.m_key_pressed.fill(false);
-    m_state.m_key_released.fill(false);
-    m_state.m_mouse_pressed.fill(false);
-    m_state.m_mouse_released.fill(false);
+    for (auto& b : m_state.m_key_pressed) { b = false; }
+    for (auto& b : m_state.m_key_released) { b = false; }
+    for (auto& b : m_state.m_mouse_pressed) { b = false; }
+    for (auto& b : m_state.m_mouse_released) { b = false; }
     m_state.m_mouse_dx = 0.0F;
     m_state.m_mouse_dy = 0.0F;
     m_state.m_scroll_dx = 0.0F;

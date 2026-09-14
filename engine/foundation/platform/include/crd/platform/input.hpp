@@ -4,7 +4,6 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <array>
 #include <new>
 
 namespace crd::platform
@@ -203,13 +202,13 @@ public:
     friend class Input;
 
 private:
-    std::array<bool, static_cast<crd::usize>(Key::Count)> m_key_down{};
-    std::array<bool, static_cast<crd::usize>(Key::Count)> m_key_pressed{};
-    std::array<bool, static_cast<crd::usize>(Key::Count)> m_key_released{};
+    bool m_key_down[static_cast<crd::usize>(Key::Count)]{};
+    bool m_key_pressed[static_cast<crd::usize>(Key::Count)]{};
+    bool m_key_released[static_cast<crd::usize>(Key::Count)]{};
 
-    std::array<bool, static_cast<crd::usize>(MouseButton::Count)> m_mouse_down{};
-    std::array<bool, static_cast<crd::usize>(MouseButton::Count)> m_mouse_pressed{};
-    std::array<bool, static_cast<crd::usize>(MouseButton::Count)> m_mouse_released{};
+    bool m_mouse_down[static_cast<crd::usize>(MouseButton::Count)]{};
+    bool m_mouse_pressed[static_cast<crd::usize>(MouseButton::Count)]{};
+    bool m_mouse_released[static_cast<crd::usize>(MouseButton::Count)]{};
 
     crd::f32 m_mouse_x = 0.0F;
     crd::f32 m_mouse_y = 0.0F;

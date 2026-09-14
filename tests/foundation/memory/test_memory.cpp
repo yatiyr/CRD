@@ -1,3 +1,4 @@
+#include <crd/containers/array.hpp>
 #include <crd/memory/memory.hpp>
 #include <crd/memory/ref_counted.hpp>
 
@@ -63,7 +64,7 @@ TEST_CASE("MallocAllocator: allocate returns aligned memory", "[memory][malloc]"
 TEST_CASE("MallocAllocator: round-trip many allocations", "[memory][malloc]")
 {
     MallocAllocator a;
-    std::vector<void*> ptrs;
+    crd::containers::Array<void*> ptrs;
     for (int i = 0; i < 50; ++i)
     {
         void* p = a.allocate(static_cast<usize>(i + 1) * 8, 16);
@@ -253,7 +254,7 @@ TEST_CASE("PoolAllocator: hands out distinct slots", "[memory][pool]")
     REQUIRE(pool.slot_size() == 64);
     REQUIRE(pool.slot_count() == 8);
 
-    std::vector<void*> ptrs;
+    crd::containers::Array<void*> ptrs;
     for (usize i = 0; i < 8; ++i)
     {
         void* p = pool.allocate(64, 16);
@@ -414,7 +415,7 @@ TEST_CASE("RefCounted: concurrent add_ref/release preserves count", "[memory][re
 
     w.add_ref(); // bump to 2 so we never hit 0 during the parallel ops
     {
-        std::vector<std::thread> threads;
+        crd::containers::Array<std::thread> threads;
         threads.reserve(k_threads);
         for (int i = 0; i < k_threads; ++i)
         {

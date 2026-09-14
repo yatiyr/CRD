@@ -42,6 +42,8 @@ namespace crd::containers
 class String
 {
 public:
+    using value_type = char; // enables std::back_inserter / std algorithm interop
+
     // ---- Ctors ----------------------------------------------------
 
     explicit String(memory::IAllocator* alloc = memory::default_allocator()) noexcept : m_alloc(alloc) { init_empty(); }
@@ -60,6 +62,13 @@ public:
     String(const char* cstr, usize n, memory::IAllocator* alloc = memory::default_allocator()) : m_alloc(alloc)
     {
         init_from(cstr, n);
+    }
+
+    // Fill ctor (std::string-compatible): count copies of c.
+    String(usize count, char c, memory::IAllocator* alloc = memory::default_allocator()) : m_alloc(alloc)
+    {
+        init_empty();
+        resize(count, c);
     }
 
     explicit String(std::string_view sv, memory::IAllocator* alloc = memory::default_allocator()) : m_alloc(alloc)
@@ -234,6 +243,9 @@ public:
     }
 
     void append(std::string_view sv) { append(sv.data(), sv.size()); }
+    String& operator+=(std::string_view sv) { append(sv); return *this; }
+    String& operator+=(const char* cstr) { append(cstr); return *this; }
+    String& operator+=(char c) { push_back(c); return *this; }
 
     void append(const char* cstr) { append(cstr, cstr ? std::char_traits<char>::length(cstr) : 0); }
 

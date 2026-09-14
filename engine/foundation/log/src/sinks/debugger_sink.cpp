@@ -1,3 +1,4 @@
+#include <crd/containers/string.hpp>
 #include "../log_formatter.hpp"
 
 #include <crd/log/sinks/debugger_sink.hpp>
@@ -17,7 +18,7 @@ namespace crd::log
 void DebuggerSink::write(const LogRecord& rec)
 {
 #if defined(_WIN32)
-    std::string line = detail::format_record(rec, /*color*/ false, /*short*/ true);
+    crd::containers::String line = detail::format_record(rec, /*color*/ false, /*short*/ true);
     line.push_back('\n');
     ::OutputDebugStringA(line.c_str());
 #else

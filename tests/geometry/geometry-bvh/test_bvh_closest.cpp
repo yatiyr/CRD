@@ -1,6 +1,7 @@
 // crd-geometry-bvh v1e — bvh_closest_point tests: matches brute force over the
 // prim AABBs, the max_dist cutoff, query-inside-a-box, empty / single-prim.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -48,7 +49,7 @@ AABB3<f32> random_box(Rng& rng, f32 world, f32 max_size)
 }
 
 // Brute-force closest prim using the exact same per-box test the BVH uses.
-std::optional<BvhClosestPoint> brute_closest(const std::vector<AABB3<f32>>& prims, const Vec3<f32>& q, f32 max_dist)
+std::optional<BvhClosestPoint> brute_closest(const crd::containers::Array<AABB3<f32>>& prims, const Vec3<f32>& q, f32 max_dist)
 {
     f32 best =
         (max_dist >= std::numeric_limits<f32>::infinity()) ? std::numeric_limits<f32>::infinity() : max_dist * max_dist;
@@ -91,7 +92,7 @@ TEST_CASE("BVH closest-point: matches brute force on a random corpus", "[geometr
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 50U + (rng.next() % 600U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 80.0F, 4.0F));
@@ -125,7 +126,7 @@ TEST_CASE("BVH closest-point: matches brute force on a random corpus", "[geometr
 TEST_CASE("BVH closest-point: query inside a box gives distance 0 at the query point", "[geometry][bvh][closest]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(-2, -2, -2), Vec3<f32>(2, 2, 2)),
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(-2, -2, -2), Vec3<f32>(2, 2, 2)),
                                      AABB3<f32>(Vec3<f32>(10, 10, 10), Vec3<f32>(12, 12, 12))};
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
@@ -140,7 +141,7 @@ TEST_CASE("BVH closest-point: query inside a box gives distance 0 at the query p
 TEST_CASE("BVH closest-point: max_dist cutoff", "[geometry][bvh][closest]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))}; // closest face at x=9
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))}; // closest face at x=9
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const Vec3<f32> q(0, 0, 0); // distance to the box is 9

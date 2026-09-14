@@ -1,3 +1,4 @@
+#include <crd/containers/string.hpp>
 #include "../log_formatter.hpp"
 
 #include <crd/log/sinks/console_sink.hpp>
@@ -74,7 +75,7 @@ ConsoleSink::ConsoleSink(bool force_color) noexcept
 
 void ConsoleSink::write(const LogRecord& rec)
 {
-    const std::string line = detail::format_record(rec, m_color, /*short_path*/ true);
+    const crd::containers::String line = detail::format_record(rec, m_color, /*short_path*/ true);
     std::FILE* dst = (rec.level >= LogLevel::Error) ? stderr : stdout;
     std::fwrite(line.data(), 1, line.size(), dst);
     std::fputc('\n', dst);

@@ -124,9 +124,9 @@ template <typename ValueType> [[nodiscard]] bool read_scalar(const toml::node& n
     }
     else if constexpr (std::is_same_v<ValueType, crd::containers::String>)
     {
-        if (auto value = node.value<std::string>())
+        if (auto value = node.value<std::string_view>())
         {
-            out = crd::containers::String(value->c_str());
+            out = crd::containers::String(*value);
             return true;
         }
     }
@@ -182,7 +182,7 @@ template <typename ValueType> void write_scalar(toml::table& table, const char* 
 {
     if constexpr (std::is_same_v<ValueType, crd::containers::String>)
     {
-        table.insert_or_assign(key, std::string(value.c_str()));
+        table.insert_or_assign(key, value.c_str());
     }
     else
     {
@@ -197,7 +197,7 @@ template <typename ValueType> void write_array(toml::table& table, const char* k
     {
         if constexpr (std::is_same_v<typename ValueType::value_type, crd::containers::String>)
         {
-            arr.push_back(std::string(element.c_str()));
+            arr.push_back(element.c_str());
         }
         else
         {

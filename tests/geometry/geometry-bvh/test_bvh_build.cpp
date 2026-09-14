@@ -1,6 +1,7 @@
 // crd-geometry-bvh v1a — binned-SAH builder tests: structural invariants,
 // leaf-size cap, degenerate corpora, deterministic replay, SAH quality.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -53,7 +54,7 @@ bool encloses(const AABB3<f32>& outer, const AABB3<f32>& inner) noexcept
 }
 
 // Walks the tree and checks every structural invariant against `prims`.
-void validate_tree(const BvhTree& tree, const std::vector<AABB3<f32>>& prims, u32 max_leaf)
+void validate_tree(const BvhTree& tree, const crd::containers::Array<AABB3<f32>>& prims, u32 max_leaf)
 {
     REQUIRE(tree.prim_count() == prims.size());
     if (prims.empty())
@@ -68,7 +69,8 @@ void validate_tree(const BvhTree& tree, const std::vector<AABB3<f32>>& prims, u3
     REQUIRE(nodes.size() >= 1U);
     REQUIRE(nodes.size() <= 2U * prims.size());
 
-    std::vector<u32> ref_count(prims.size(), 0);
+    crd::containers::Array<u32> ref_count;
+    ref_count.resize(prims.size(), 0);
     usize total_leaf_prims = 0;
     for (usize ni = 0; ni < nodes.size(); ++ni)
     {
@@ -147,7 +149,7 @@ TEST_CASE("BVH build: structural invariants on a random corpus", "[geometry][bvh
     for (usize trial = 0; trial < 6; ++trial)
     {
         const usize n = 1U + (rng.next() % 700U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         prims.reserve(n);
         for (usize i = 0; i < n; ++i)
         {
@@ -165,7 +167,8 @@ TEST_CASE("BVH build: structural invariants on a random corpus", "[geometry][bvh
 TEST_CASE("BVH build: coincident centroids do not blow the stack and leaves stay capped", "[geometry][bvh][build]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims(1000, AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)));
+    crd::containers::Array<AABB3<f32>> prims;
+    prims.resize(1000, AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)));
     BvhBuildOptions opts;
     opts.max_leaf_prims = 4;
     const BvhTree tree = bvh_build(crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size()), &alloc, opts);
@@ -175,7 +178,7 @@ TEST_CASE("BVH build: coincident centroids do not blow the stack and leaves stay
 TEST_CASE("BVH build: long-thin row stays well-balanced", "[geometry][bvh][build]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     constexpr usize k_n = 256;
     for (usize i = 0; i < k_n; ++i)
     {
@@ -196,7 +199,7 @@ TEST_CASE("BVH build: deterministic replay (same input -> bit-identical tree)", 
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0xDE7E47);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 400; ++i)
     {
         prims.push_back(random_box(rng, 50.0F, 2.0F));
@@ -215,7 +218,7 @@ TEST_CASE("BVH build: SAH builder beats a single-leaf tree", "[geometry][bvh][bu
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x5A4C05);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     constexpr usize k_n = 500;
     for (usize i = 0; i < k_n; ++i)
     {
@@ -239,7 +242,7 @@ TEST_CASE("BVH build: sah_bins below 2 is clamped, not a crash", "[geometry][bvh
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "bvh-test");
     Rng rng(0x11B5);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 200; ++i)
     {
         prims.push_back(random_box(rng, 30.0F, 1.0F));

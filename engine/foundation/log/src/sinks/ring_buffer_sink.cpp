@@ -18,7 +18,7 @@ void RingBufferSink::write(const LogRecord& rec)
     StoredLogRecord stored;
     stored.level = rec.level;
     stored.channel_name = (rec.channel && rec.channel->name) ? rec.channel->name : "";
-    stored.message.assign(rec.message.data(), rec.message.size());
+    stored.message = rec.message;
     const char* file = rec.loc.file_name() ? rec.loc.file_name() : "";
     stored.file = file;
     stored.line = static_cast<u32>(rec.loc.line());
@@ -34,10 +34,10 @@ void RingBufferSink::write(const LogRecord& rec)
     }
 }
 
-std::vector<StoredLogRecord> RingBufferSink::snapshot() const
+crd::containers::Array<StoredLogRecord> RingBufferSink::snapshot() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::vector<StoredLogRecord> out;
+    crd::containers::Array<StoredLogRecord> out;
     out.reserve(m_count);
     // Oldest entry is m_count items behind m_head (mod capacity).
     const usize start = (m_head + m_capacity - m_count) % m_capacity;

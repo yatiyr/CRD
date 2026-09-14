@@ -57,7 +57,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <array>
+#include <crd/containers/fixed_array.hpp>
 #include <cmath>
 #include <functional>
 #include <optional>
@@ -99,7 +99,7 @@ inline crd::u32 canonical_he(const HalfEdgeMesh<T>& mesh, crd::u32 h) noexcept
 // Compute plane (a, b, c, d) for face f. Returns nullopt for degenerate
 // faces (|cross| < 1e-20).
 template <crd::math::MathScalar T>
-std::optional<std::array<T, 4>> face_plane(const HalfEdgeMesh<T>& mesh, crd::u32 f) noexcept
+std::optional<crd::containers::FixedArray<T, 4>> face_plane(const HalfEdgeMesh<T>& mesh, crd::u32 f) noexcept
 {
     const crd::u32 h0  = mesh.face(f).first_he;
     const crd::u32 h1  = mesh.he(h0).next;
@@ -117,7 +117,7 @@ std::optional<std::array<T, 4>> face_plane(const HalfEdgeMesh<T>& mesh, crd::u32
     const T b       = n.y * inv_len;
     const T c       = n.z * inv_len;
     const T d       = -(a * p0.x + b * p0.y + c * p0.z);
-    return std::array<T, 4>{a, b, c, d};
+    return crd::containers::FixedArray<T, 4>{a, b, c, d};
 }
 
 // ⭐⭐ REN-40-C1: the quadric is now an ATTRIBUTE quadric with `M` channels, and

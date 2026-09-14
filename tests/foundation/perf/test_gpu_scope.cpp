@@ -10,6 +10,7 @@
 //   - CRD_PERF_GPU_SCOPE macro produces matched begin/end via the backend
 //   - When no backend is installed, the macro is a no-op
 
+#include <crd/containers/array.hpp>
 #include <crd/perf/perf.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -115,8 +116,8 @@ public:
     std::atomic<crd::u32> end_frame_calls{0U};
     std::atomic<crd::u32> resolve_calls{0U};
     void*                  last_cmd_buffer = nullptr;
-    std::vector<Span>      spans;
-    std::vector<crd::u32>  ended_indices;
+    crd::containers::Array<Span>      spans;
+    crd::containers::Array<crd::u32>  ended_indices;
 
 private:
     crd::u64 m_current_frame = 0U;

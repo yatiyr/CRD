@@ -1,6 +1,7 @@
 // crd-geometry-bvh v1b — bvh_refit tests: idempotent on a static set, bounds
 // correctness + query correctness after moving primitives, topology untouched.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/primitives/robust_ray_aabb.hpp>
 #include <crd/math/vec.hpp>
@@ -61,7 +62,7 @@ AABB3<f32> translated(const AABB3<f32>& b, const Vec3<f32>& d)
                       Vec3<f32>(b.max.x + d.x, b.max.y + d.y, b.max.z + d.z));
 }
 
-AABB3<f32> exact_union(const std::vector<AABB3<f32>>& prims, const u32* idx, u32 first, u32 count)
+AABB3<f32> exact_union(const crd::containers::Array<AABB3<f32>>& prims, const u32* idx, u32 first, u32 count)
 {
     AABB3<f32> b(Vec3<f32>(1e30F, 1e30F, 1e30F), Vec3<f32>(-1e30F, -1e30F, -1e30F));
     for (u32 i = first; i < first + count; ++i)
@@ -89,7 +90,7 @@ Vec3<f32> normalized(const Vec3<f32>& v)
     return Vec3<f32>(v.x / len, v.y / len, v.z / len);
 }
 
-std::optional<BvhRayHit> brute_raycast(const std::vector<AABB3<f32>>& prims, const Ray3<f32>& ray, f32 tmax)
+std::optional<BvhRayHit> brute_raycast(const crd::containers::Array<AABB3<f32>>& prims, const Ray3<f32>& ray, f32 tmax)
 {
     f32 best_t = tmax;
     u32 best_p = 0;
@@ -112,7 +113,7 @@ std::optional<BvhRayHit> brute_raycast(const std::vector<AABB3<f32>>& prims, con
 }
 
 // Validates that every node's bounds match the exact union it should hold, given `prims`.
-void check_bounds_consistent(const BvhTree& tree, const std::vector<AABB3<f32>>& prims)
+void check_bounds_consistent(const BvhTree& tree, const crd::containers::Array<AABB3<f32>>& prims)
 {
     const auto nodes = tree.nodes();
     const auto idx = tree.prim_indices();
@@ -148,7 +149,7 @@ TEST_CASE("BVH refit: same prims leaves the tree byte-identical", "[geometry][bv
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x12F17);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 400; ++i)
     {
         prims.push_back(random_box(rng, 50.0F, 2.0F));
@@ -169,7 +170,7 @@ TEST_CASE("BVH refit: bounds and queries stay correct after moving primitives", 
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 50U + (rng.next() % 500U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 60.0F, 3.0F));
@@ -179,7 +180,7 @@ TEST_CASE("BVH refit: bounds and queries stay correct after moving primitives", 
         BvhTree tree = bvh_build(crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size()), &alloc, opts);
 
         // Move every box — some by a little, some far enough to leave their old leaf entirely.
-        std::vector<AABB3<f32>> moved;
+        crd::containers::Array<AABB3<f32>> moved;
         moved.reserve(n);
         for (usize i = 0; i < n; ++i)
         {
@@ -206,7 +207,7 @@ TEST_CASE("BVH refit: bounds and queries stay correct after moving primitives", 
         for (usize q = 0; q < 150; ++q)
         {
             const AABB3<f32> box = random_box(rng, 100.0F, 8.0F);
-            std::vector<u32> refset;
+            crd::containers::Array<u32> refset;
             for (usize i = 0; i < n; ++i)
             {
                 if (intersects(moved[i], box))
@@ -214,7 +215,7 @@ TEST_CASE("BVH refit: bounds and queries stay correct after moving primitives", 
                     refset.push_back(static_cast<u32>(i));
                 }
             }
-            std::vector<u32> gotset;
+            crd::containers::Array<u32> gotset;
             bvh_overlap(tree, mspan, box, [&](u32 p) { gotset.push_back(p); });
             std::sort(refset.begin(), refset.end());
             std::sort(gotset.begin(), gotset.end());
@@ -227,7 +228,7 @@ TEST_CASE("BVH refit: topology is untouched (only bounds change)", "[geometry][b
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x70905);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 300; ++i)
     {
         prims.push_back(random_box(rng, 40.0F, 2.0F));
@@ -236,20 +237,20 @@ TEST_CASE("BVH refit: topology is untouched (only bounds change)", "[geometry][b
 
     const usize node_count = tree.node_count();
     const u32 root = tree.root();
-    std::vector<u32> idx_before(tree.prim_indices().data(), tree.prim_indices().data() + tree.prim_indices().size());
+    crd::containers::Array<u32> idx_before(tree.prim_indices().data(), tree.prim_indices().data() + tree.prim_indices().size());
     struct TopoBit
     {
         u32 left_first;
         crd::u16 prim_count;
         crd::u8 split_axis;
     };
-    std::vector<TopoBit> topo_before;
+    crd::containers::Array<TopoBit> topo_before;
     for (const BvhNode& n : tree.nodes())
     {
         topo_before.push_back(TopoBit{n.left_first, n.prim_count, n.split_axis});
     }
 
-    std::vector<AABB3<f32>> moved;
+    crd::containers::Array<AABB3<f32>> moved;
     for (usize i = 0; i < prims.size(); ++i)
     {
         moved.push_back(translated(prims[i], Vec3<f32>(rng.range(-5, 5), rng.range(-5, 5), rng.range(-5, 5))));
@@ -258,7 +259,7 @@ TEST_CASE("BVH refit: topology is untouched (only bounds change)", "[geometry][b
 
     REQUIRE(tree.node_count() == node_count);
     REQUIRE(tree.root() == root);
-    std::vector<u32> idx_after(tree.prim_indices().data(), tree.prim_indices().data() + tree.prim_indices().size());
+    crd::containers::Array<u32> idx_after(tree.prim_indices().data(), tree.prim_indices().data() + tree.prim_indices().size());
     REQUIRE(idx_after == idx_before);
     const auto nodes = tree.nodes();
     for (usize i = 0; i < nodes.size(); ++i)

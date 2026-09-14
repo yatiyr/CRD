@@ -9,7 +9,7 @@
 
 #include <crd/core/types.hpp>
 
-#include <array>
+#include <crd/containers/fixed_array.hpp>
 #include <cstring>
 
 namespace crd::resources::detail
@@ -87,7 +87,7 @@ inline void process_block(const crd::u8* block, crd::u32 (&h)[5]) noexcept
 
 // Compute SHA-1 of the two-part message [part_a (na bytes) || part_b (nb bytes)].
 // Returns the 20-byte digest.
-inline std::array<crd::u8, 20> sha1_compute(
+inline crd::containers::FixedArray<crd::u8, 20> sha1_compute(
     const void* part_a, crd::usize na,
     const void* part_b, crd::usize nb) noexcept
 {
@@ -168,13 +168,13 @@ inline std::array<crd::u8, 20> sha1_compute(
     }
 
     // Pack hash words into the output digest (big-endian).
-    std::array<crd::u8, 20> digest{};
+    crd::containers::FixedArray<crd::u8, 20> digest;
     for (int word = 0; word < 5; ++word)
     {
         for (int byte_idx = 0; byte_idx < 4; ++byte_idx)
         {
-            digest[static_cast<crd::usize>(word * 4 + byte_idx)] =
-                static_cast<crd::u8>(h[word] >> (24U - static_cast<crd::u32>(byte_idx) * 8U));
+            // push_back in index order (word*4 + byte_idx) yields digest[0..19].
+            digest.push_back(static_cast<crd::u8>(h[word] >> (24U - static_cast<crd::u32>(byte_idx) * 8U)));
         }
     }
     return digest;

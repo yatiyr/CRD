@@ -121,7 +121,7 @@ emit_camera(const toml::table& root, const CookContext& ctx)
 
     if (const toml::node* n = root.get("lens_model"); n != nullptr)
     {
-        if (auto s = n->value<std::string>(); s.has_value())
+        if (auto s = n->value<std::string_view>(); s.has_value())
         {
             const auto& v = *s;
             if (v == "Perspective")       c.lens_model = crd::preset::LensModel::Perspective;
@@ -130,7 +130,7 @@ emit_camera(const toml::table& root, const CookContext& ctx)
     }
     if (const toml::node* n = root.get("exposure_mode"); n != nullptr)
     {
-        if (auto s = n->value<std::string>(); s.has_value())
+        if (auto s = n->value<std::string_view>(); s.has_value())
         {
             const auto& v = *s;
             if (v == "Manual")         c.exposure_mode = crd::preset::ExposureMode::Manual;
@@ -175,7 +175,7 @@ CookResult preset_handler(const CookContext& ctx)
                      static_cast<int>(ctx.source_path.size()), ctx.source_path.data());
         return result;
     }
-    auto type_str = type_node->value<std::string>();
+    auto type_str = type_node->value<std::string_view>();
     if (!type_str.has_value())
     {
         std::fprintf(stderr, "preset cook: %.*s `type` must be a string\n",
@@ -198,9 +198,9 @@ CookResult preset_handler(const CookContext& ctx)
     else
     {
         std::fprintf(stderr,
-                     "preset cook: %.*s unknown type='%s' (supported: Quality, Camera)\n",
+                     "preset cook: %.*s unknown type='%.*s' (supported: Quality, Camera)\n",
                      static_cast<int>(ctx.source_path.size()),
-                     ctx.source_path.data(), type_str->c_str());
+                     ctx.source_path.data(), static_cast<int>(type_str->size()), type_str->data());
         return result;
     }
 

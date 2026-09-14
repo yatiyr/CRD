@@ -8,39 +8,36 @@
 #include <dlfcn.h>
 #endif
 
+#include <crd/containers/array.hpp>
+
 namespace crd::platform
 {
 namespace
 {
 #if CRD_OS_WINDOWS
-[[nodiscard]] std::wstring utf8_to_wide(containers::StringView sv) noexcept
+[[nodiscard]] crd::containers::Array<wchar_t> utf8_to_wide(containers::StringView sv) noexcept
 {
+    // crd::Array uses CRD_FATAL on OOM (never throws), so nothing escapes this noexcept.
+    // A single L'\0' is the valid-empty default and this function's failure signal.
+    crd::containers::Array<wchar_t> out;
+    out.push_back(L'\0');
     if (sv.empty())
     {
-        return {};
+        return out;
     }
     const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
     if (needed <= 0)
     {
-        return {};
-    }
-    // The std::wstring allocation can throw bad_alloc, and this is `noexcept` — an escape would be
-    // std::terminate instead of a failed library open. An empty result is already this function's
-    // documented failure signal, so degrade to it. (bugprone-exception-escape.)
-    try
-    {
-        std::wstring out(static_cast<crd::usize>(needed), L'\0');
-        const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-        if (written != needed)
-        {
-            return {};
-        }
         return out;
     }
-    catch (...)
+    out.resize(static_cast<crd::usize>(needed) + 1); // content + trailing null (value-initialised)
+    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
+    if (written != needed)
     {
-        return {};
+        out.clear();
+        out.push_back(L'\0');
     }
+    return out;
 }
 #endif
 } // namespace
@@ -48,7 +45,7 @@ namespace
 DynamicLibrary DynamicLibrary::open(const fs::Path& path, bool log_on_failure) noexcept
 {
 #if CRD_OS_WINDOWS
-    HMODULE handle = LoadLibraryW(utf8_to_wide(path.generic()).c_str());
+    HMODULE handle = LoadLibraryW(utf8_to_wide(path.generic()).data());
     if (handle == nullptr)
     {
         if (log_on_failure)

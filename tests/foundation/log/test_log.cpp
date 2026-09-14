@@ -1,3 +1,6 @@
+#include <string_view>
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/log/log.hpp>
 
 #include <atomic>
@@ -32,9 +35,9 @@ struct LoggerScope
 
 TEST_CASE("LogLevel string round-trip", "[log][level]")
 {
-    REQUIRE(std::string("Trace") == to_string(LogLevel::Trace));
-    REQUIRE(std::string("Critical") == to_string(LogLevel::Critical));
-    REQUIRE(std::string("INF") == to_short_string(LogLevel::Info));
+    REQUIRE(crd::containers::String("Trace") == to_string(LogLevel::Trace));
+    REQUIRE(crd::containers::String("Critical") == to_string(LogLevel::Critical));
+    REQUIRE(crd::containers::String("INF") == to_short_string(LogLevel::Info));
     REQUIRE(from_string("warn") == LogLevel::Warn);
     REQUIRE(from_string("WARNING") == LogLevel::Warn);
     REQUIRE(from_string("fatal") == LogLevel::Critical);
@@ -126,7 +129,7 @@ TEST_CASE("Async logging delivers all records", "[log][async]")
     g_log_test.runtime_level = LogLevel::Trace;
     constexpr int threads = 4;
     constexpr int messages_per_thread = 100;
-    std::vector<std::thread> ts;
+    crd::containers::Array<std::thread> ts;
     for (int t = 0; t < threads; ++t)
     {
         ts.emplace_back(
@@ -249,10 +252,10 @@ struct CapturedAssert
 {
     std::atomic<int> fire_count{0};
     std::atomic<int> capture_alloc_failures{0}; // set when the handler could not store the strings
-    std::string expression;
-    std::string file;
+    crd::containers::String expression;
+    crd::containers::String file;
     int line = 0;
-    std::string message;
+    crd::containers::String message;
 };
 
 CapturedAssert g_capture;
@@ -333,9 +336,9 @@ TEST_CASE("crd-log init installs default assert handler that emits Critical", "[
     auto records = ring->snapshot();
     REQUIRE(records.size() == 1);
     REQUIRE(records[0].level == LogLevel::Critical);
-    REQUIRE(records[0].message.find("simulated_expr") != std::string::npos);
-    REQUIRE(records[0].message.find("bridge smoke") != std::string::npos);
-    REQUIRE(records[0].message.find("1234") != std::string::npos);
+    REQUIRE(std::string_view{records[0].message}.find("simulated_expr") != std::string_view::npos);
+    REQUIRE(std::string_view{records[0].message}.find("bridge smoke") != std::string_view::npos);
+    REQUIRE(std::string_view{records[0].message}.find("1234") != std::string_view::npos);
     // shutdown() (by LoggerScope dtor) will uninstall the handler.
 }
 
@@ -359,8 +362,8 @@ TEST_CASE("CRD_ASSERT(false) reaches log bridge without platform UI", "[log][bri
     auto records = ring->snapshot();
     REQUIRE(records.size() == 1);
     REQUIRE(records[0].level == LogLevel::Critical);
-    REQUIRE(records[0].message.find("ASSERT: false") != std::string::npos);
-    REQUIRE(records[0].message.find("bridge end-to-end") != std::string::npos);
+    REQUIRE(std::string_view{records[0].message}.find("ASSERT: false") != std::string_view::npos);
+    REQUIRE(std::string_view{records[0].message}.find("bridge end-to-end") != std::string_view::npos);
 
     crd::set_assert_platform_handler(nullptr);
 #endif

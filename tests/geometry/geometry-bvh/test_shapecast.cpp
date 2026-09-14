@@ -17,6 +17,7 @@
 //     `cast_sphere(BvhTree) == cast_sphere(Bvh4Tree)` (collapse changes only
 //     fan-out).
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp> // umbrella — bvh_build / bvh4_collapse / shapecast funcs
 #include <crd/geometry/queries.hpp>
 #include <crd/math/vec.hpp>
@@ -77,7 +78,7 @@ AABB3<f32> inflate_box(const AABB3<f32>& a, const Vec3<f32>& pad)
 // Brute-force inflated-AABB raycast over all prims (the *same* algorithmic
 // kernel the BVH traversal applies per node/leaf — catches traversal bugs
 // but not closed-form derivation bugs; the bisection test catches those).
-std::optional<BvhRayHit> brute_inflated(const std::vector<AABB3<f32>>& prims, const Vec3<f32>& origin,
+std::optional<BvhRayHit> brute_inflated(const crd::containers::Array<AABB3<f32>>& prims, const Vec3<f32>& origin,
                                         const Vec3<f32>& dir, const Vec3<f32>& pad, f32 tmax)
 {
     f32 best_t = tmax;
@@ -283,7 +284,7 @@ TEST_CASE("cast_sphere(BvhTree) and cast_sphere(Bvh4Tree) match brute force", "[
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "shapecast-test");
     Rng rng(0xDEAF);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 200; ++i)
     {
         prims.push_back(random_box(rng, 60.0F, 4.0F));
@@ -326,7 +327,7 @@ TEST_CASE("cast_box(BvhTree) and cast_box(Bvh4Tree) match brute force", "[geomet
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "shapecast-test");
     Rng rng(0xBEEFCAFE);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 200; ++i)
     {
         prims.push_back(random_box(rng, 60.0F, 4.0F));
@@ -361,7 +362,7 @@ TEST_CASE("cast_box(BvhTree) and cast_box(Bvh4Tree) match brute force", "[geomet
 TEST_CASE("BVH cast_sphere(radius=0) returns same t as raycast", "[geometry][shapecast]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "shapecast-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(5, -1, -1), Vec3<f32>(7, 1, 1)),
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(5, -1, -1), Vec3<f32>(7, 1, 1)),
                                      AABB3<f32>(Vec3<f32>(15, -1, -1), Vec3<f32>(17, 1, 1))};
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
@@ -378,7 +379,7 @@ TEST_CASE("BVH cast_sphere(radius=0) returns same t as raycast", "[geometry][sha
 TEST_CASE("BVH cast_box(half=0) returns same t as raycast", "[geometry][shapecast]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "shapecast-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(5, -1, -1), Vec3<f32>(7, 1, 1))};
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(5, -1, -1), Vec3<f32>(7, 1, 1))};
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const Ray3<f32> ray(Vec3<f32>(0, 0, 0), Vec3<f32>(1, 0, 0));
@@ -396,7 +397,7 @@ TEST_CASE("BVH cast_box(half=0) returns same t as raycast", "[geometry][shapecas
 TEST_CASE("BVH cast_sphere respects tmax", "[geometry][shapecast]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "shapecast-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const Sphere<f32> moving(Vec3<f32>(0, 0, 0), 0.5F); // inflated face at x = 8.5

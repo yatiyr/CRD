@@ -19,7 +19,7 @@ void FileWatcher::remove(u64 handle) noexcept
                            [handle](const Entry& e) { return e.handle == handle; });
     if (it != m_entries.end())
     {
-        m_entries.erase(it);
+        m_entries.erase(static_cast<crd::usize>(it - m_entries.begin()));
     }
 }
 

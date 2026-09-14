@@ -2,6 +2,7 @@
 // equal to the serial bvh_build (any num_jobs), incl. the default-threshold
 // large-corpus path and the degenerate cases. Hosts the binary's jobs listener.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/vec.hpp>
@@ -98,7 +99,7 @@ TEST_CASE("bvh_build_parallel: bit-identical to the serial build (random corpora
     for (usize trial = 0; trial < 5; ++trial)
     {
         const usize n = 200U + (rng.next() % 800U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 100.0F, 3.0F));
@@ -122,7 +123,7 @@ TEST_CASE("bvh_build_parallel: large corpus above the default threshold matches 
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 24, nullptr, "bvh-test");
     Rng rng(0xB16C04);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     constexpr usize k_n = 20000; // > the 8192 default parallel_threshold
     for (usize i = 0; i < k_n; ++i)
     {
@@ -148,7 +149,8 @@ TEST_CASE("bvh_build_parallel: degenerate inputs match the serial build", "[geom
                       bvh_build_parallel(crd::containers::ConstSpan<AABB3<f32>>(&one, 1), &alloc, {}, 4U, 1U));
 
     // Coincident centroids (forces the median-by-index fallback at every split).
-    std::vector<AABB3<f32>> coincident(800, AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)));
+    crd::containers::Array<AABB3<f32>> coincident;
+    coincident.resize(800, AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)));
     BvhBuildOptions opts;
     opts.max_leaf_prims = 4;
     const auto cspan = crd::containers::ConstSpan<AABB3<f32>>(coincident.data(), coincident.size());
@@ -159,7 +161,7 @@ TEST_CASE("bvh_build_parallel: num_jobs=1 and small-input both take the serial f
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "bvh-test");
     Rng rng(0x5A4EFA57);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 300; ++i)
     {
         prims.push_back(random_box(rng, 50.0F, 2.0F));

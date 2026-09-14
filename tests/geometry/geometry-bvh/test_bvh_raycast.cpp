@@ -1,6 +1,7 @@
 // crd-geometry-bvh v1a — query tests: nearest-hit raycast vs a brute-force
 // reference, AABB-overlap vs brute force, and the degenerate cases.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/primitives/robust_ray_aabb.hpp>
 #include <crd/math/vec.hpp>
@@ -59,7 +60,7 @@ Vec3<f32> normalized(const Vec3<f32>& v)
 }
 
 // Brute-force nearest hit using the exact same per-box test the BVH uses.
-std::optional<BvhRayHit> brute_raycast(const std::vector<AABB3<f32>>& prims, const Ray3<f32>& ray, f32 tmax)
+std::optional<BvhRayHit> brute_raycast(const crd::containers::Array<AABB3<f32>>& prims, const Ray3<f32>& ray, f32 tmax)
 {
     f32 best_t = tmax;
     u32 best_p = 0;
@@ -100,7 +101,7 @@ TEST_CASE("BVH raycast: matches brute force on a random corpus", "[geometry][bvh
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 50U + (rng.next() % 600U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 80.0F, 4.0F));
@@ -136,7 +137,7 @@ TEST_CASE("BVH raycast: matches brute force on a random corpus", "[geometry][bvh
 TEST_CASE("BVH raycast: ray origin inside a box hits at t = 0", "[geometry][bvh][query]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)),
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1)),
                                      AABB3<f32>(Vec3<f32>(5, 5, 5), Vec3<f32>(7, 7, 7))};
     const BvhTree tree = bvh_build(crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size()), &alloc);
     const Ray3<f32> ray{Vec3<f32>(0, 0, 0), Vec3<f32>(1, 0, 0)};
@@ -150,7 +151,7 @@ TEST_CASE("BVH raycast: ray origin inside a box hits at t = 0", "[geometry][bvh]
 TEST_CASE("BVH raycast: tmax clamps out a far hit", "[geometry][bvh][query]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(9, -1, -1), Vec3<f32>(11, 1, 1))};
     const BvhTree tree = bvh_build(crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size()), &alloc);
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const Ray3<f32> ray{Vec3<f32>(0, 0, 0), Vec3<f32>(1, 0, 0)};
@@ -161,7 +162,7 @@ TEST_CASE("BVH raycast: tmax clamps out a far hit", "[geometry][bvh][query]")
 TEST_CASE("BVH raycast: axis-aligned grazing ray along an edge", "[geometry][bvh][query]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 16, nullptr, "bvh-test");
-    std::vector<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(2, 0, 0), Vec3<f32>(4, 2, 2))};
+    crd::containers::Array<AABB3<f32>> prims = {AABB3<f32>(Vec3<f32>(2, 0, 0), Vec3<f32>(4, 2, 2))};
     const BvhTree tree = bvh_build(crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size()), &alloc);
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     // Ray grazing the y=0,z=0 edge of the box — the robust slab keeps boundary contact.
@@ -179,7 +180,7 @@ TEST_CASE("BVH overlap: matches brute force, callback and Array forms agree", "[
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 30U + (rng.next() % 500U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 60.0F, 3.0F));
@@ -193,7 +194,7 @@ TEST_CASE("BVH overlap: matches brute force, callback and Array forms agree", "[
         for (usize q = 0; q < 200; ++q)
         {
             const AABB3<f32> box = random_box(rng, 60.0F, 8.0F);
-            std::vector<u32> ref;
+            crd::containers::Array<u32> ref;
             for (usize i = 0; i < n; ++i)
             {
                 if (intersects(prims[i], box))
@@ -203,10 +204,10 @@ TEST_CASE("BVH overlap: matches brute force, callback and Array forms agree", "[
             }
             crd::containers::Array<u32> got_arr(&alloc);
             bvh_overlap(tree, pspan, box, got_arr);
-            std::vector<u32> got_cb;
+            crd::containers::Array<u32> got_cb;
             bvh_overlap(tree, pspan, box, [&](u32 p) { got_cb.push_back(p); });
 
-            std::vector<u32> got_v(got_arr.data(), got_arr.data() + got_arr.size());
+            crd::containers::Array<u32> got_v(got_arr.data(), got_arr.data() + got_arr.size());
             std::sort(ref.begin(), ref.end());
             std::sort(got_v.begin(), got_v.end());
             std::sort(got_cb.begin(), got_cb.end());

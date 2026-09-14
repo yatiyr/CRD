@@ -2,6 +2,7 @@
 // invariants, queries match the binary tree they were collapsed from,
 // deterministic collapse, edge cases.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/primitives/robust_ray_aabb.hpp>
 #include <crd/math/simd/vec4f.hpp>
@@ -97,7 +98,8 @@ void validate_bvh4(const Bvh4Tree& tree, usize prim_count, usize binary_node_cou
     REQUIRE(nodes.size() <= binary_node_count); // the collapse never makes more nodes than the binary tree
     REQUIRE(tree.root() == 0U);
 
-    std::vector<u32> ref_count(prim_count, 0);
+    crd::containers::Array<u32> ref_count;
+    ref_count.resize(prim_count, 0);
     usize leaf_prims_total = 0;
     for (usize ni = 0; ni < nodes.size(); ++ni)
     {
@@ -155,7 +157,7 @@ TEST_CASE("BVH4 collapse: structural invariants on random corpora", "[geometry][
     for (usize trial = 0; trial < 6; ++trial)
     {
         const usize n = 1U + (rng.next() % 700U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 100.0F, 3.0F));
@@ -181,7 +183,7 @@ TEST_CASE("BVH4 raycast matches the binary tree it was collapsed from", "[geomet
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 50U + (rng.next() % 600U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 80.0F, 4.0F));
@@ -219,7 +221,7 @@ TEST_CASE("BVH4 overlap matches the binary tree it was collapsed from", "[geomet
     for (usize trial = 0; trial < 4; ++trial)
     {
         const usize n = 30U + (rng.next() % 500U);
-        std::vector<AABB3<f32>> prims;
+        crd::containers::Array<AABB3<f32>> prims;
         for (usize i = 0; i < n; ++i)
         {
             prims.push_back(random_box(rng, 60.0F, 3.0F));
@@ -231,13 +233,13 @@ TEST_CASE("BVH4 overlap matches the binary tree it was collapsed from", "[geomet
         for (usize q = 0; q < 250; ++q)
         {
             const AABB3<f32> box = random_box(rng, 80.0F, 10.0F);
-            std::vector<u32> set2;
+            crd::containers::Array<u32> set2;
             bvh_overlap(binary, pspan, box, [&](u32 p) { set2.push_back(p); });
-            std::vector<u32> set4;
+            crd::containers::Array<u32> set4;
             bvh4_overlap(quad, pspan, box, [&](u32 p) { set4.push_back(p); });
             crd::containers::Array<u32> arr4(&alloc);
             bvh4_overlap(quad, pspan, box, arr4);
-            std::vector<u32> arr4v(arr4.data(), arr4.data() + arr4.size());
+            crd::containers::Array<u32> arr4v(arr4.data(), arr4.data() + arr4.size());
             std::sort(set2.begin(), set2.end());
             std::sort(set4.begin(), set4.end());
             std::sort(arr4v.begin(), arr4v.end());
@@ -251,7 +253,7 @@ TEST_CASE("BVH4 collapse: deterministic (same binary tree -> bit-identical quad 
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0xDE7E44);
-    std::vector<AABB3<f32>> prims;
+    crd::containers::Array<AABB3<f32>> prims;
     for (usize i = 0; i < 400; ++i)
     {
         prims.push_back(random_box(rng, 50.0F, 2.0F));
@@ -282,7 +284,7 @@ TEST_CASE("BVH4 collapse: empty, single-leaf, two-prim trees", "[geometry][bvh][
     REQUIRE(one.nodes()[0].children[0].count == 1U);
     REQUIRE(one.bounds() == box0);
 
-    std::vector<AABB3<f32>> two = {AABB3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(1, 1, 1)),
+    crd::containers::Array<AABB3<f32>> two = {AABB3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(1, 1, 1)),
                                    AABB3<f32>(Vec3<f32>(10, 0, 0), Vec3<f32>(11, 1, 1))};
     BvhBuildOptions leaf1;
     leaf1.max_leaf_prims = 1; // forces two leaves under one interior node

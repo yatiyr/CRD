@@ -2,7 +2,7 @@
 
 #include <crd/log/log_record.hpp>
 
-#include <string>
+#include <crd/containers/string.hpp>
 
 namespace crd::log::detail
 {
@@ -11,7 +11,7 @@ namespace crd::log::detail
 //
 // 'with_color' adds ANSI escape sequences around the [LEVEL] tag (and resets at end).
 // 'short_path' strips directory prefix from the source file for readability.
-std::string format_record(const LogRecord& rec, bool with_color, bool short_path);
+crd::containers::String format_record(const LogRecord& rec, bool with_color, bool short_path);
 
 // Just the basename portion of a file path: last '/' or '\\' tail.
 const char* basename_of(const char* path) noexcept;

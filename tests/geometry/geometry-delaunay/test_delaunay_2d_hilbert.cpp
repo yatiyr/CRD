@@ -17,6 +17,7 @@
 //   - **Scale test**: 1024-point grid completes without error (verifies
 //     Hilbert sort + jump-walk handle larger inputs cleanly).
 
+#include <crd/containers/fixed_array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/containers/array.hpp>
@@ -75,27 +76,27 @@ bool verify_delaunay(const crd::containers::Array<Vec2<T>>& pts,
 // vertex POSITIONS (not indices, since two different orderings may produce
 // different index orders that still describe the same triangulation).
 template <typename T>
-crd::containers::Array<std::array<Vec2<T>, 3>>
+crd::containers::Array<crd::containers::FixedArray<Vec2<T>, 3>>
 canonicalize(const crd::containers::Array<Vec2<T>>& pts,
               const crd::containers::Array<u32>&     tris,
               crd::memory::IAllocator*               alloc)
 {
     const u32 tri_count = static_cast<u32>(tris.size() / 3U);
-    crd::containers::Array<std::array<Vec2<T>, 3>> out(alloc);
+    crd::containers::Array<crd::containers::FixedArray<Vec2<T>, 3>> out(alloc);
     out.reserve(tri_count);
     auto vec_less = [](const Vec2<T>& l, const Vec2<T>& r) {
         return l.x < r.x || (l.x == r.x && l.y < r.y);
     };
     for (u32 t = 0; t < tri_count; ++t)
     {
-        std::array<Vec2<T>, 3> tp = {pts[tris[3U * t + 0]],
+        crd::containers::FixedArray<Vec2<T>, 3> tp = {pts[tris[3U * t + 0]],
                                       pts[tris[3U * t + 1]],
                                       pts[tris[3U * t + 2]]};
         std::sort(tp.begin(), tp.end(), vec_less);
         out.push_back(tp);
     }
     std::sort(out.begin(), out.end(),
-              [&](const std::array<Vec2<T>, 3>& a, const std::array<Vec2<T>, 3>& b) {
+              [&](const crd::containers::FixedArray<Vec2<T>, 3>& a, const crd::containers::FixedArray<Vec2<T>, 3>& b) {
                   for (int i = 0; i < 3; ++i)
                   {
                       if (a[i].x != b[i].x) { return a[i].x < b[i].x; }

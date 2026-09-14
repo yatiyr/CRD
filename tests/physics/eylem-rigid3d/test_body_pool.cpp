@@ -13,6 +13,7 @@
 //   9. resolve(): correct (chunk_idx, lane_idx) for valid handles, (0,0) for
 //      stale handles.
 
+#include <crd/containers/array.hpp>
 #include <crd/eylem/rigid_body.hpp>
 #include <crd/eylem_rigid3d/body_pool.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -152,7 +153,7 @@ TEST_CASE("BodyPool: AoSoA storage grows in lane-sized chunks",
     // taking lane 0). kLane_count + 1 should require a second chunk.
     constexpr crd::usize lane = BodyPool::kLane;
 
-    std::vector<BodyId> ids;
+    crd::containers::Array<BodyId> ids;
     ids.reserve(lane * 3);
     for (crd::usize i = 0; i < lane * 3; ++i)
     {
@@ -182,7 +183,7 @@ TEST_CASE("BodyPool: deterministic handle sequence + readback",
 
     auto run_sequence = [&alloc]() {
         BodyPool pool(&alloc, 32);
-        std::vector<BodyId> ids;
+        crd::containers::Array<BodyId> ids;
         for (int i = 0; i < 12; ++i)
         {
             ids.push_back(pool.insert(make_body(static_cast<crd::f32>(i))));

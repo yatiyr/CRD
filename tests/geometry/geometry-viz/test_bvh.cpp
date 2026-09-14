@@ -1,5 +1,6 @@
 // crd-geometry-viz v1j-a — BVH traversal visualisation tests.
 
+#include <crd/containers/array.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/viz/bvh.hpp>
@@ -26,7 +27,7 @@ using crd::geometry::primitives::Plane;
 using crd::math::Vec3f;
 namespace viz = crd::geometry::viz;
 
-std::vector<AABB3<f32>> small_corpus()
+crd::containers::Array<AABB3<f32>> small_corpus()
 {
     return {AABB3<f32>(Vec3f(0, 0, 0), Vec3f(1, 1, 1)), AABB3<f32>(Vec3f(2, 0, 0), Vec3f(3, 1, 1)),
             AABB3<f32>(Vec3f(0, 2, 0), Vec3f(1, 3, 1)), AABB3<f32>(Vec3f(5, 0, 0), Vec3f(6, 1, 1))};
@@ -44,7 +45,7 @@ TEST_CASE("viz::depth_color cycles every 8 depths", "[geometry][viz][bvh]")
 TEST_CASE("viz::draw_bvh(BvhTree) emits an AABB per node", "[geometry][viz][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "viz-test");
-    const std::vector<AABB3<f32>> prims = small_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = small_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     RenderBuffer buf(&alloc);
@@ -56,7 +57,7 @@ TEST_CASE("viz::draw_bvh(BvhTree) emits an AABB per node", "[geometry][viz][bvh]
 TEST_CASE("viz::draw_bvh(BvhTree, depth_limit=1) caps the walk", "[geometry][viz][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "viz-test");
-    const std::vector<AABB3<f32>> prims = small_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = small_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     RenderBuffer buf(&alloc);
@@ -69,7 +70,7 @@ TEST_CASE("viz::draw_bvh(BvhTree, depth_limit=1) caps the walk", "[geometry][viz
 TEST_CASE("viz::draw_bvh(Bvh4Tree) emits AABBs for nodes + children", "[geometry][viz][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 20, nullptr, "viz-test");
-    const std::vector<AABB3<f32>> prims = small_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = small_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree binary = bvh_build(pspan, &alloc);
     const Bvh4Tree quad = bvh4_collapse(binary, &alloc);
@@ -147,7 +148,7 @@ TEST_CASE("viz::draw_frustum_cull: kept vs culled per prim", "[geometry][viz][bv
     fr.planes[5] = Plane<f32>(Vec3f(0, 0, -1), 1.0F);
 
     // Two prims: one inside the unit cube, one well outside.
-    const std::vector<AABB3<f32>> prims = {
+    const crd::containers::Array<AABB3<f32>> prims = {
         AABB3<f32>(Vec3f(-0.5F, -0.5F, -0.5F), Vec3f(0.5F, 0.5F, 0.5F)), // kept
         AABB3<f32>(Vec3f(10, 10, 10), Vec3f(11, 11, 11)),                  // culled
     };

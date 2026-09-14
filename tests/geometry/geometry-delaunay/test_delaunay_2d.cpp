@@ -16,6 +16,7 @@
 //   - Large-coord (1e6) f32 stability
 //   - f64 precision tier
 
+#include <crd/containers/fixed_array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/containers/array.hpp>
@@ -218,8 +219,8 @@ TEST_CASE("delaunay_2d: insertion-order determinism (shuffled input)",
     // (modulo CCW rotation).
     auto sorted_triangle_positions = [](const crd::containers::Array<Vec2<f32>>& pts,
                                           const crd::containers::Array<u32>&     idx,
-                                          u32                                     t) -> std::array<Vec2<f32>, 3> {
-        std::array<Vec2<f32>, 3> tp = {pts[idx[3U * t + 0]], pts[idx[3U * t + 1]], pts[idx[3U * t + 2]]};
+                                          u32                                     t) -> crd::containers::FixedArray<Vec2<f32>, 3> {
+        crd::containers::FixedArray<Vec2<f32>, 3> tp = {pts[idx[3U * t + 0]], pts[idx[3U * t + 1]], pts[idx[3U * t + 2]]};
         std::sort(tp.begin(), tp.end(), [](const Vec2<f32>& l, const Vec2<f32>& r) {
             return l.x < r.x || (l.x == r.x && l.y < r.y);
         });

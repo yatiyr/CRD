@@ -5,7 +5,9 @@
 
 #include <cstdio>
 #include <mutex>
-#include <string>
+#include <crd/containers/string.hpp>
+
+#include <string_view>
 
 namespace crd::log
 {
@@ -20,7 +22,7 @@ namespace crd::log
 class FileSink : public ISink
 {
 public:
-    FileSink(std::string path, u64 max_bytes = 10ULL * 1024ULL * 1024ULL, u32 max_files = 5) noexcept;
+    FileSink(std::string_view path, u64 max_bytes = 10ULL * 1024ULL * 1024ULL, u32 max_files = 5) noexcept;
     ~FileSink() override;
 
     FileSink(const FileSink&) = delete;
@@ -30,14 +32,14 @@ public:
     void flush() override;
 
     bool is_open() const noexcept { return m_file != nullptr; }
-    const std::string& path() const noexcept { return m_path; }
+    const crd::containers::String& path() const noexcept { return m_path; }
 
 private:
     void open_file() noexcept;
     void close_file() noexcept;
     void rotate_if_needed(u64 next_write_size) noexcept;
 
-    std::string m_path;
+    crd::containers::String m_path;
     u64 m_max_bytes;
     u32 m_max_files;
     std::FILE* m_file = nullptr;

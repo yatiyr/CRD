@@ -13,6 +13,7 @@
 //   - Determinism: same TOML cooked twice → bit-exact bytes.
 //   - 100-entity stress.
 
+#include <crd/containers/string.hpp>
 #include <crd/cooker/scene_cooker.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/resources/loader.hpp>
@@ -516,7 +517,7 @@ ChildOf = "parent"
 TEST_CASE("100-entity TOML cooks + round-trips correctly",
           "[scene-cooker][stress]")
 {
-    std::string toml_text;
+    crd::containers::String toml_text;
     for (int i = 0; i < 100; ++i)
     {
         toml_text += "[entity.e";

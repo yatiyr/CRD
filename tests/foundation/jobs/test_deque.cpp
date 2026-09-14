@@ -1,3 +1,4 @@
+#include <crd/containers/array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../../engine/foundation/jobs/src/work_stealing_deque.hpp"
@@ -109,7 +110,7 @@ TEST_CASE("work_stealing_deque: FIFO ordering via steal", "[jobs][deque]")
     }
 
     // Steal from a separate thread to avoid the "owner" restriction.
-    std::vector<crd::u32> stolen;
+    crd::containers::Array<crd::u32> stolen;
     stolen.reserve(kN);
     std::thread thief([&]()
     {
@@ -127,7 +128,7 @@ TEST_CASE("work_stealing_deque: FIFO ordering via steal", "[jobs][deque]")
     REQUIRE(stolen.size() == kN);
     for (crd::u32 i = 0U; i < kN; ++i)
     {
-        CHECK(stolen.at(i) == i); // first pushed is first stolen (FIFO)
+        CHECK(stolen[i] == i); // first pushed is first stolen (FIFO)
     }
 }
 
@@ -298,7 +299,7 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
     }
 
     // Track how many times each item value was consumed.
-    std::vector<std::atomic<int>> seen(kItems);
+    std::atomic<int> seen[kItems]{};
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
@@ -307,7 +308,7 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
     std::atomic<bool> done{false};
 
     // Phase 2: thieves drain concurrently.
-    std::vector<std::thread> thief_threads;
+    crd::containers::Array<std::thread> thief_threads;
     thief_threads.reserve(kThieves);
     for (crd::u32 t = 0U; t < kThieves; ++t)
     {
@@ -344,7 +345,7 @@ TEST_CASE("work_stealing_deque: concurrent steal from pre-filled deque (stress)"
     // Every item must have been consumed exactly once.
     for (crd::u32 i = 0U; i < kItems; ++i)
     {
-        CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
+        CHECK(seen[i].load(std::memory_order_relaxed) == 1);
     }
 }
 
@@ -367,7 +368,7 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
 
     WorkStealingDeque<crd::u32> deque(kCap);
 
-    std::vector<std::atomic<int>> seen(kItems);
+    std::atomic<int> seen[kItems]{};
     for (auto& a : seen)
     {
         a.store(0, std::memory_order_relaxed);
@@ -375,7 +376,7 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
 
     std::atomic<bool> done{false};
 
-    std::vector<std::thread> thief_threads;
+    crd::containers::Array<std::thread> thief_threads;
     thief_threads.reserve(kThieves);
     for (crd::u32 t = 0U; t < kThieves; ++t)
     {
@@ -422,6 +423,6 @@ TEST_CASE("work_stealing_deque: concurrent push pop steal stress",
 
     for (crd::u32 i = 0U; i < kItems; ++i)
     {
-        CHECK(seen.at(i).load(std::memory_order_relaxed) == 1);
+        CHECK(seen[i].load(std::memory_order_relaxed) == 1);
     }
 }

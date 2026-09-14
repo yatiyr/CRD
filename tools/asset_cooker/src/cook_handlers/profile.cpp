@@ -161,26 +161,26 @@ CookResult profile_handler(const CookContext& ctx)
                 crd::profile::PredicateRecord rec{};
                 if (auto fnode = pt->get("field"); fnode != nullptr)
                 {
-                    if (auto s = fnode->value<std::string>(); s.has_value())
+                    if (auto s = fnode->value<std::string_view>(); s.has_value())
                     {
                         if (!parse_predicate_field(*s, rec.field))
                         {
                             std::fprintf(stderr,
-                                         "profile cook: unknown predicate field='%s'\n",
-                                         s->c_str());
+                                         "profile cook: unknown predicate field='%.*s'\n",
+                                         static_cast<int>(s->size()), s->data());
                             return result;
                         }
                     }
                 }
                 if (auto onode = pt->get("op"); onode != nullptr)
                 {
-                    if (auto s = onode->value<std::string>(); s.has_value())
+                    if (auto s = onode->value<std::string_view>(); s.has_value())
                     {
                         if (!parse_predicate_op(*s, rec.op))
                         {
                             std::fprintf(stderr,
-                                         "profile cook: unknown predicate op='%s'\n",
-                                         s->c_str());
+                                         "profile cook: unknown predicate op='%.*s'\n",
+                                         static_cast<int>(s->size()), s->data());
                             return result;
                         }
                     }
@@ -200,7 +200,7 @@ CookResult profile_handler(const CookContext& ctx)
         {
             for (const auto& en : *bn->as_array())
             {
-                auto s = en.value<std::string>();
+                auto s = en.value<std::string_view>();
                 if (!s.has_value())
                 {
                     std::fprintf(stderr, "profile cook: bundle entries must be strings\n");
@@ -210,9 +210,9 @@ CookResult profile_handler(const CookContext& ctx)
                 if (id.is_null())
                 {
                     std::fprintf(stderr,
-                                 "profile cook: failed to resolve bundle entry '%s' "
+                                 "profile cook: failed to resolve bundle entry '%.*s' "
                                  "(missing/malformed .meta sidecar)\n",
-                                 s->c_str());
+                                 static_cast<int>(s->size()), s->data());
                     return result;
                 }
                 bundle.push_back(id);

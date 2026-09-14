@@ -8,8 +8,8 @@
 
 #include <chrono>
 #include <mutex>
-#include <string>
-#include <vector>
+#include <crd/containers/string.hpp>
+#include <crd/containers/array.hpp>
 
 namespace crd::log
 {
@@ -17,16 +17,16 @@ namespace crd::log
 // memory; we keep a self-contained struct so users can read it long after
 // write() returned.
 //
-// NOTE: we deliberately keep std::string here. crd-containers::String
+// NOTE: we deliberately keep crd::containers::String here. crd-containers::String
 // works too, but log records are populated from `std::source_location`
-// and other std-typed sources, and a heap-backed std::string is exactly
+// and other std-typed sources, and a heap-backed crd::containers::String is exactly
 // what we want for "owns its bytes, prints fine, no surprises".
 struct StoredLogRecord
 {
     LogLevel level;
-    std::string channel_name;
-    std::string message;
-    std::string file;
+    crd::containers::String channel_name;
+    crd::containers::String message;
+    crd::containers::String file;
     u32 line;
     u64 thread_id;
     std::chrono::system_clock::time_point time;
@@ -55,7 +55,7 @@ public:
     void flush() override {}
 
     // Returns a copy of the records in chronological order (oldest first).
-    std::vector<StoredLogRecord> snapshot() const;
+    crd::containers::Array<StoredLogRecord> snapshot() const;
 
     usize size() const noexcept;
     usize capacity() const noexcept { return m_capacity; }

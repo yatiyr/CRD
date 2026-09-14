@@ -1,3 +1,4 @@
+#include <crd/containers/string.hpp>
 #include <crd/containers/spsc_queue.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -54,11 +55,11 @@ TEST_CASE("SpscQueue fills to capacity then refuses", "[containers][spsc_queue]"
 
 TEST_CASE("SpscQueue try_emplace constructs in place", "[containers][spsc_queue]")
 {
-    SpscQueue<std::string> q(8U);
+    SpscQueue<crd::containers::String> q(8U);
     REQUIRE(q.try_emplace("hello"));
-    REQUIRE(q.try_emplace(5U, 'x')); // std::string(5,'x') = "xxxxx"
+    REQUIRE(q.try_emplace(5U, 'x')); // crd::containers::String(5,'x') = "xxxxx"
 
-    std::string s;
+    crd::containers::String s;
     REQUIRE(q.try_pop(s));
     REQUIRE(s == "hello");
     REQUIRE(q.try_pop(s));

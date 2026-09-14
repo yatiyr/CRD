@@ -1,3 +1,4 @@
+#include <crd/containers/array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../../engine/foundation/jobs/src/fiber_pool.hpp"
@@ -127,7 +128,7 @@ TEST_CASE("fiber_pool: pool_index is unique and in range", "[jobs][fiber_pool]")
     FiberPool pool;
     REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
-    std::vector<Fiber*> acquired;
+    crd::containers::Array<Fiber*> acquired;
     acquired.reserve(kCount);
     for (crd::u32 i = 0; i < kCount; ++i)
     {
@@ -137,7 +138,7 @@ TEST_CASE("fiber_pool: pool_index is unique and in range", "[jobs][fiber_pool]")
     }
 
     // All indices must be in [0, kCount) and pairwise distinct.
-    std::vector<crd::u32> indices;
+    crd::containers::Array<crd::u32> indices;
     indices.reserve(kCount);
     for (Fiber* f : acquired)
     {
@@ -166,7 +167,7 @@ TEST_CASE("fiber_pool: available_count tracks acquires", "[jobs][fiber_pool]")
 
     CHECK(pool.available_count(FiberTier::Small) == kCount);
 
-    std::vector<Fiber*> held;
+    crd::containers::Array<Fiber*> held;
     for (crd::u32 i = 0; i < kCount; ++i)
     {
         held.push_back(pool.acquire(FiberTier::Small));
@@ -195,7 +196,7 @@ TEST_CASE("fiber_pool: full acquire-release cycle is repeatable", "[jobs][fiber_
 
     for (int cycle = 0; cycle < 3; ++cycle)
     {
-        std::vector<Fiber*> held;
+        crd::containers::Array<Fiber*> held;
         held.reserve(kCount);
         for (crd::u32 i = 0; i < kCount; ++i)
         {
@@ -223,7 +224,7 @@ TEST_CASE("fiber_pool: tiers are independent", "[jobs][fiber_pool]")
     REQUIRE(pool.init(make_test_config(4U, 3U, 2U)));
 
     // Exhaust the Small tier.
-    std::vector<Fiber*> smalls;
+    crd::containers::Array<Fiber*> smalls;
     for (crd::u32 i = 0; i < 4U; ++i)
         smalls.push_back(pool.acquire(FiberTier::Small));
     CHECK(pool.available_count(FiberTier::Small) == 0U);
@@ -262,7 +263,7 @@ TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
     FiberPool pool;
     REQUIRE(pool.init(make_test_config(kCount, 1U, 1U)));
 
-    std::vector<Fiber*> held;
+    crd::containers::Array<Fiber*> held;
     for (crd::u32 i = 0; i < kCount; ++i)
         held.push_back(pool.acquire(FiberTier::Small));
 
@@ -316,7 +317,7 @@ TEST_CASE("fiber_pool: peak usage tracking", "[jobs][fiber_pool]")
     CHECK(pool.peak_acquired(FiberTier::Small) == 0U);
 
     // Acquire half the tier.
-    std::vector<Fiber*> batch1;
+    crd::containers::Array<Fiber*> batch1;
     for (crd::u32 i = 0; i < 3U; ++i)
         batch1.push_back(pool.acquire(FiberTier::Small));
     CHECK(pool.peak_acquired(FiberTier::Small) == 3U);
@@ -325,7 +326,7 @@ TEST_CASE("fiber_pool: peak usage tracking", "[jobs][fiber_pool]")
     for (Fiber* f : batch1)
         pool.release(f);
 
-    std::vector<Fiber*> batch2;
+    crd::containers::Array<Fiber*> batch2;
     for (crd::u32 i = 0; i < kCount; ++i)
         batch2.push_back(pool.acquire(FiberTier::Small));
     CHECK(pool.peak_acquired(FiberTier::Small) == kCount);
@@ -393,13 +394,13 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
     REQUIRE(pool.init(make_test_config(kSmallCount, 1U, 1U)));
 
     // One flag per fiber index; true while that fiber is held by a thread.
-    std::vector<std::atomic<bool>> in_use(kSmallCount);
+    std::atomic<bool> in_use[kSmallCount]{};
     for (auto& b : in_use)
         b.store(false, std::memory_order_relaxed);
 
     std::atomic<bool> corruption_detected{false};
 
-    std::vector<std::thread> threads;
+    crd::containers::Array<std::thread> threads;
     threads.reserve(kThreadCount);
 
     for (crd::u32 t = 0; t < kThreadCount; ++t)

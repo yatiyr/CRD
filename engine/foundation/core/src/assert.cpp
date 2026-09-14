@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
-#include <set>
 #include <utility>
 
 #if CRD_OS_WINDOWS
@@ -28,7 +27,18 @@ std::atomic<AssertPlatformHandler> g_assert_platform_handler{nullptr};
 // __FILE__ string literals have static lifetime so pointer comparison is stable
 // within a single process image.
 std::mutex g_ignore_mutex;
-std::set<std::pair<const char*, int>> g_ignored_sites;
+constexpr crd::usize kMaxIgnoredSites = 256U;
+std::pair<const char*, int> g_ignored_sites[kMaxIgnoredSites];
+crd::usize g_ignored_count = 0U;
+
+bool ignored_contains(const char* file, int line) noexcept
+{
+    for (crd::usize i = 0U; i < g_ignored_count; ++i)
+    {
+        if (g_ignored_sites[i].first == file && g_ignored_sites[i].second == line) { return true; }
+    }
+    return false;
+}
 } // namespace
 
 void set_assert_handler(AssertHandler h) noexcept
@@ -83,7 +93,7 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     // Per-site ignore: if this (file, line) was previously ignored, skip silently.
     {
         std::lock_guard<std::mutex> lock(g_ignore_mutex);
-        if (g_ignored_sites.contains({file, line}))
+        if (ignored_contains(file, line))
             return 0;
     }
 
@@ -128,7 +138,10 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     if (result == IDIGNORE)
     {
         std::lock_guard<std::mutex> lock(g_ignore_mutex);
-        g_ignored_sites.insert({file, line});
+        if (g_ignored_count < kMaxIgnoredSites)
+        {
+            g_ignored_sites[g_ignored_count++] = {file, line};
+        }
         return 0;
     }
     return (result == IDRETRY) ? 2 : 0;

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <ctime>
 #include <format>
+#include <iterator>
 #include <thread>
 
 namespace crd::log::detail
@@ -65,7 +66,7 @@ u64 current_thread_id() noexcept
     return cached;
 }
 
-std::string format_record(const LogRecord& rec, bool with_color, bool short_path)
+crd::containers::String format_record(const LogRecord& rec, bool with_color, bool short_path)
 {
     // Timestamp components.
     const auto sys_time = std::chrono::system_clock::to_time_t(rec.time);
@@ -89,9 +90,12 @@ std::string format_record(const LogRecord& rec, bool with_color, bool short_path
     const char* color_open = with_color ? color_for(rec.level) : "";
     const char* color_close = with_color ? kReset : "";
 
-    return std::format("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {}[{}]{} [{}] tid={} {}:{} - {}",
-                       tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday, tm_buf.tm_hour, tm_buf.tm_min,
-                       tm_buf.tm_sec, static_cast<int>(subsecond.count()), color_open, level_short, color_close,
-                       channel_name, rec.thread_id, file_str, static_cast<unsigned>(rec.loc.line()), rec.message);
+    crd::containers::String out;
+    std::format_to(std::back_inserter(out),
+                   "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {}[{}]{} [{}] tid={} {}:{} - {}",
+                   tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday, tm_buf.tm_hour, tm_buf.tm_min,
+                   tm_buf.tm_sec, static_cast<int>(subsecond.count()), color_open, level_short, color_close,
+                   channel_name, rec.thread_id, file_str, static_cast<unsigned>(rec.loc.line()), rec.message);
+    return out;
 }
 } // namespace crd::log::detail

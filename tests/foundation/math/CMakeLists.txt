@@ -80,6 +80,11 @@ if(WIN32)
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_std_sort.ps1"
     )
     add_test(
+        NAME    crd-no-std-containers-check
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/check_no_std_containers.ps1"
+    )
+    add_test(
         NAME    crd-no-non-ascii-test-names
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_SOURCE_DIR}/scripts/check_no_non_ascii_test_names.ps1"
@@ -133,6 +138,11 @@ elseif(UNIX)
     add_test(
         NAME    crd-no-std-sort-check
         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_std_sort.sh"
+                "${CMAKE_SOURCE_DIR}"
+    )
+    add_test(
+        NAME    crd-no-std-containers-check
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_no_std_containers.sh"
                 "${CMAKE_SOURCE_DIR}"
     )
     add_test(

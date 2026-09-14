@@ -75,3 +75,64 @@ the applicable user decision. Existing human-only commit/push and no-delegation 
 
 No implementation/provider selection or runtime qualification was performed by this planning change. Append numbered,
 dated evidence-backed decisions here as the owning slices settle the mechanisms; status remains solely in ROADMAP.
+
+### ID-1 (2026-09-14, DIAG.0) — schema name and migration
+
+The diagnostic event, capture and bundle schema is **`cerid-diagnostics/1`**, in the repository's `cerid-<name>/N`
+convention (alongside `cerid-ci-evidence/1`, `cerid-pins/1`, `cerid-build-bench/1`). It is a bounded, versioned,
+POD-pinned format in the manner of [CPROF capture](../../engine/foundation/perf/include/crd/perf/capture.hpp): a
+layout change bumps `N` and ships a reader for `N-1`; an offline export declares the schema version it wrote. This
+resolves the "public schema compatibility" question the [contract](../design/runtime-diagnostics.md#diag-0) assigns to
+DIAG.0. The unified crash+symbol+generation+capture bundle that consumes this schema remains `unsupported` today
+(DG14) and is built by DIAG.5d/6c.
+
+### ID-2 (2026-09-14, DIAG.0) — qualification tool tuples
+
+DIAG qualifies against these exact tuples, recorded so later slices measure and detect against fixed versions:
+GCC 13.3 (Linux, the sole ASan+UBSan-no-recover lane), Clang 22.1.3 (clang-cl lanes), MSVC 19.51 / Visual Studio 18
+2026 (native), pinned LLVM 20.1.8 (clang-format, clang-tidy), CMake 4.3.2 local and 4.4.3 hosted. TSan and MSVC
+use-after-return are **not** qualified in the presets (DG01); DIAG.1b and DIAG.3f own adding and qualifying them. No
+new compiler, sanitizer or hardware target is asserted by this entry.
+
+### ID-3 (2026-09-14, DIAG.0) — module placement
+
+Concrete owners, extending existing modules per Decision 2 (no new top-level module): engine-facing profiling and the
+capture/counter surfaces in **crd-perf** (`engine/foundation/perf`); ordinary logging in **crd-log**
+(`engine/foundation/log`); allocation contracts and per-allocation instrumentation in **memory**
+(`engine/foundation/memory`); lifecycle, scheduling and observers in **jobs** (`engine/foundation/jobs`); the fatal
+path (crash and assert) in **crd-core** (`engine/foundation/core`); source provenance in the **CEIR/CKIR** owners;
+GPU fault depth in the **gpu-context** backends; and the reusable per-host diagnostics lifecycle composed in
+**crd-app** (`engine/foundation/app`). The **doctor** is a public query service whose interface lives in crd-perf (the
+diagnostics-facing foundation module); each owning module contributes its mode status through a small registration
+hook and hosts compose the report — no module gains a private profiler or a second crash path. The exact header home
+of the doctor interface is settled in DIAG.0 increment two with the harness.
+
+### ID-4 (2026-09-14, DIAG.0) — provider choices within authorized scope
+
+No external, paid or newly-installed crash/telemetry backend is selected; none is authorized by this ADR. The
+qualified baseline is the in-tree path: on Windows the existing `MiniDumpWriteDump` route
+([crash.cpp](../../engine/foundation/core/src/crash.cpp)) hardened to check its return and avoid second-resolution
+filename collisions (DIAG.5a); on Linux `sigaction`/`backtrace` with `SA_ONSTACK` installed and install failures
+reported (DIAG.5b). The emergency recorder is a bounded in-tree recorder, distinct from the allocating queued
+[logger](../../engine/foundation/log/src/logger.cpp) (DG10). GPU fault providers are DX12 DRED and Vulkan device-fault
+extraction, extending the existing [DX12](../../engine/gpu/gpu-context-dx12/src/dx12_validation_capture.cpp) and
+[Vulkan](../../engine/gpu/gpu-context-vulkan/src/vulkan_validation_capture.cpp) validation capture (DIAG.7b/7c). A
+healthy external collector (Decision 3) stays a separate future capability requiring its own user decision.
+
+### ID-5 (2026-09-14, DIAG.0) — numeric budgets bound to named acceptance workloads
+
+The [runtime-diagnostics targets](../design/runtime-diagnostics.md#modes-budgets-and-evidence-of-cost) are frozen here
+as **engineering targets, not measurements**, each bound to a committed workload that DIAG.11b/11c will measure (with
+variance and tails, recording the exact host tuple):
+
+| Mode | Budget (target) | Acceptance workload |
+|---|---|---|
+| disabled | no event allocations, worker threads or exporter I/O; no regression statistically above 1% | perf zero-overhead gate ([test_zero_overhead_gate](../../tests/foundation/perf/test_zero_overhead_gate.cpp)) + jobs suite ([tests/foundation/jobs](../../tests/foundation/jobs)) |
+| basic recording | ≤2% CPU/frame, ≤32 MiB process storage | jobs scheduler ([test_scheduler](../../tests/foundation/jobs/test_scheduler.cpp)) + a CEIR corpus replay (the [fuzz corpus CTests](../../tests/support/fuzz)) |
+| emergency | ≤1 MiB default storage | the crash specimen harness (DIAG.0 increment two) |
+| event payload | ≤256 bytes each, explicit truncation | perf capture round-trip ([test_capture_roundtrip](../../tests/foundation/perf/test_capture_roundtrip.cpp)) |
+| bundle quota | ≤256 MiB and ≤10 bundles (excluding separately authorized full dumps) | the CPROF capture path ([capture.hpp](../../engine/foundation/perf/include/crd/perf/capture.hpp)) |
+| hot recording | after registration: no allocation, blocking, symbolization, network I/O or global locking | perf zero-overhead gate + a KIR eval case ([test_ckir_asset](../../tests/gpu/kir/test_ckir_asset.cpp)) + an asset cook ([test_mesh_cook_options](../../tests/assets/cooker/test_mesh_cook_options.cpp)) |
+
+Applications may author stricter budgets. Full dumps and GPU-assisted validation account their cost separately and are
+not held to the basic-recorder budget. Evidence for these frozen numbers: the [capability census](../sessions/2026-09-14-diag-0-capability-census.md).

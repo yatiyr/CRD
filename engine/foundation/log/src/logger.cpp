@@ -7,16 +7,16 @@
 #include <crd/log/logger.hpp>
 #include <crd/log/sinks/console_sink.hpp>
 #include <crd/log/sinks/debugger_sink.hpp>
+#include <crd/containers/array.hpp>
+#include <crd/containers/ring_buffer.hpp>
+#include <crd/containers/string.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
-#include <vector>
 
 namespace crd::log
 {
@@ -26,6 +26,13 @@ Channel g_log_default{"Default", LogLevel::Trace, nullptr};
 
 namespace
 {
+usize next_pow2_at_least(usize n) noexcept
+{
+    usize p = 1;
+    while (p < n) { p <<= 1U; }
+    return p;
+}
+
 // ----------------------------------------------------------------
 // Async queue entry. Each entry owns its formatted message string
 // because the producer's per-thread scratch buffer is not safe
@@ -38,7 +45,7 @@ struct QueuedRecord
     std::source_location loc;
     std::chrono::system_clock::time_point time;
     u64 thread_id;
-    std::string message;
+    crd::containers::String message;
 };
 
 // ----------------------------------------------------------------
@@ -49,11 +56,11 @@ struct QueuedRecord
 struct LoggerState
 {
     LoggerConfig config;
-    std::vector<std::unique_ptr<ISink>> sinks;
+    crd::containers::Array<std::unique_ptr<ISink>> sinks;
     std::mutex sinks_mutex;
 
     // ---- async machinery --------------------------------------
-    std::deque<QueuedRecord> queue;
+    crd::containers::RingBuffer<QueuedRecord> queue{8192};
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
     std::condition_variable drain_cv; // for flush()
@@ -125,8 +132,7 @@ void worker_main(LoggerState* st_ptr) noexcept
                 continue;
             }
 
-            q = std::move(st.queue.front());
-            st.queue.pop_front();
+            (void)st.queue.try_pop(q);
         }
         deliver_queued(st, q);
 
@@ -177,6 +183,7 @@ void init(const LoggerConfig& cfg) noexcept
 
     if (st.config.async)
     {
+        st.queue = crd::containers::RingBuffer<QueuedRecord>(next_pow2_at_least(st.config.async_queue_capacity + 1));
         st.running.store(true, std::memory_order_release);
         st.worker = std::thread(&worker_main, &st);
     }
@@ -341,7 +348,7 @@ void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, 
     q.loc = loc;
     q.time = now;
     q.thread_id = tid;
-    q.message.assign(message.data(), message.size());
+    q.message = message;
 
     {
         std::unique_lock<std::mutex> lock(st.queue_mutex);
@@ -354,7 +361,7 @@ void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, 
             }
             st.drain_cv.wait(lock, [&] { return st.queue.size() < st.config.async_queue_capacity; });
         }
-        st.queue.push_back(std::move(q));
+        (void)st.queue.try_push(std::move(q));
     }
     st.queue_cv.notify_one();
 }

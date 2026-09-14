@@ -7,6 +7,8 @@
 // A crash, a fatal, a sanitizer report or an oracle failure ends the process, which is the failure the CTest sees;
 // a target returning non-zero counts as "rejected by the target" and is reported, never hidden. Timing per input is
 // measured and the slowest input is named, so a slow loader path is visible before it becomes a libFuzzer timeout.
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/fuzz/harness.hpp>
 
 #include <algorithm>
@@ -30,18 +32,18 @@ struct Outcome
     std::size_t bytes    = 0U;
     std::size_t rejected = 0U;
     double      slowest_ms = 0.0;
-    std::string slowest_name;
+    crd::containers::String slowest_name;
 };
 
-[[nodiscard]] std::vector<std::uint8_t> read_file(const fs::path& path)
+[[nodiscard]] crd::containers::Array<std::uint8_t> read_file(const fs::path& path)
 {
     std::ifstream stream(path, std::ios::binary);
-    return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    return crd::containers::Array<std::uint8_t>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
 }
 
 void replay_one(const fs::path& path, bool verbose, Outcome& outcome)
 {
-    const std::vector<std::uint8_t> bytes = read_file(path);
+    const crd::containers::Array<std::uint8_t> bytes = read_file(path);
     const auto                      started = std::chrono::steady_clock::now();
     const int result = LLVMFuzzerTestOneInput(bytes.data(), bytes.size());
     const double ms  = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -78,7 +80,9 @@ public:
         }
         char digits[17];
         std::snprintf(digits, sizeof(digits), "%016llx", static_cast<unsigned long long>(hash));
-        const fs::path path = m_directory / (std::string("seed-") + digits);
+        crd::containers::String seed_name("seed-");
+        seed_name.append(digits);
+        const fs::path path = m_directory / seed_name.c_str();
         std::ofstream  stream(path, std::ios::binary | std::ios::trunc);
         stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
         std::printf("seed %-28s %6zu bytes  %s\n", name, static_cast<std::size_t>(size), path.filename().string().c_str());
@@ -95,7 +99,7 @@ private:
 int run(int argc, char** argv)
 {
     bool                  verbose = false;
-    std::vector<fs::path> inputs;
+    crd::containers::Array<fs::path> inputs;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--verbose") == 0)
@@ -126,7 +130,7 @@ int run(int argc, char** argv)
     {
         if (fs::is_directory(input))
         {
-            std::vector<fs::path> files;
+            crd::containers::Array<fs::path> files;
             for (const auto& entry : fs::recursive_directory_iterator(input))
             {
                 if (entry.is_regular_file())

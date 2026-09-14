@@ -8,6 +8,7 @@
 // sweep: build a clean tree at the origin and at a +1e6 origin, query at
 // matching offsets, results should agree within f32-ULP tolerance.
 
+#include <crd/containers/array.hpp>
 #include "test_corpus.hpp"
 
 #include <crd/geometry/bvh/bvh.hpp>
@@ -36,7 +37,7 @@ using crd::math::Vec3;
 namespace tc = crd::geometry::test_corpus;
 
 // A small clean corpus shared across the large-coordinate tests.
-std::vector<AABB3<f32>> clean_corpus()
+crd::containers::Array<AABB3<f32>> clean_corpus()
 {
     return {
         AABB3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(1, 1, 1)),
@@ -47,9 +48,9 @@ std::vector<AABB3<f32>> clean_corpus()
     };
 }
 
-std::vector<AABB3<f32>> shifted(const std::vector<AABB3<f32>>& prims, const Vec3<f32>& offset)
+crd::containers::Array<AABB3<f32>> shifted(const crd::containers::Array<AABB3<f32>>& prims, const Vec3<f32>& offset)
 {
-    std::vector<AABB3<f32>> out;
+    crd::containers::Array<AABB3<f32>> out;
     out.reserve(prims.size());
     for (const AABB3<f32>& a : prims)
     {
@@ -65,7 +66,7 @@ std::vector<AABB3<f32>> shifted(const std::vector<AABB3<f32>>& prims, const Vec3
 TEST_CASE("validation: BVH raycast tolerates degenerate rays", "[geometry][validation][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     for (const Ray3<f32>& ray : tc::degenerate_rays())
@@ -79,7 +80,7 @@ TEST_CASE("validation: BVH raycast tolerates degenerate rays", "[geometry][valid
 TEST_CASE("validation: BVH overlap tolerates degenerate query AABBs", "[geometry][validation][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     for (const AABB3<f32>& q : tc::degenerate_aabbs())
@@ -93,10 +94,10 @@ TEST_CASE("validation: BVH overlap tolerates degenerate query AABBs", "[geometry
 TEST_CASE("validation: BVH closest_point tolerates degenerate query points", "[geometry][validation][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
-    const std::vector<Vec3<f32>> queries = {
+    const crd::containers::Array<Vec3<f32>> queries = {
         Vec3<f32>(tc::kNan, 0, 0), Vec3<f32>(0, tc::kNan, 0), Vec3<f32>(0, 0, tc::kNan),
         Vec3<f32>(+tc::kInf, 0, 0), Vec3<f32>(-tc::kInf, 0, 0),
     };
@@ -110,7 +111,7 @@ TEST_CASE("validation: BVH closest_point tolerates degenerate query points", "[g
 TEST_CASE("validation: BVH shapecast tolerates degenerate moving shapes", "[geometry][validation][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     // Degenerate sphere shapes (negative / NaN / ∞ radius) — shapecast must
@@ -143,7 +144,7 @@ TEST_CASE("validation: DynamicBvh find_overlapping_pairs tolerates an empty tree
 TEST_CASE("validation: BVH raycast is shift-invariant at +1e6 origin", "[geometry][validation][bvh]")
 {
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const Ray3<f32> ray(Vec3<f32>(-5, 0.5F, 0.5F), Vec3<f32>(1, 0, 0));
@@ -151,7 +152,7 @@ TEST_CASE("validation: BVH raycast is shift-invariant at +1e6 origin", "[geometr
     REQUIRE(hit_origin.has_value());
 
     const Vec3<f32> offset(tc::kFarOriginModest, tc::kFarOriginModest, tc::kFarOriginModest);
-    const std::vector<AABB3<f32>> prims_far = shifted(prims, offset);
+    const crd::containers::Array<AABB3<f32>> prims_far = shifted(prims, offset);
     const auto pspan_far = crd::containers::ConstSpan<AABB3<f32>>(prims_far.data(), prims_far.size());
     const BvhTree tree_far = bvh_build(pspan_far, &alloc);
     const Ray3<f32> ray_far = tc::shift(ray, offset);
@@ -186,7 +187,7 @@ TEST_CASE("validation: BVH overlap is shift-invariant at +1e7 origin", "[geometr
     // after the shift (they do — the gap is O(1), the precision loss is
     // O(1)).
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 18, nullptr, "val-test");
-    const std::vector<AABB3<f32>> prims = clean_corpus();
+    const crd::containers::Array<AABB3<f32>> prims = clean_corpus();
     const auto pspan = crd::containers::ConstSpan<AABB3<f32>>(prims.data(), prims.size());
     const BvhTree tree = bvh_build(pspan, &alloc);
     const AABB3<f32> query(Vec3<f32>(0.5F, 0.5F, 0.5F), Vec3<f32>(3.5F, 0.7F, 0.7F)); // overlaps prims 0 and 1
@@ -194,7 +195,7 @@ TEST_CASE("validation: BVH overlap is shift-invariant at +1e7 origin", "[geometr
     crd::geometry::overlap(tree, pspan, query, out_origin);
 
     const Vec3<f32> offset(tc::kFarOriginStress, tc::kFarOriginStress, tc::kFarOriginStress);
-    const std::vector<AABB3<f32>> prims_far = shifted(prims, offset);
+    const crd::containers::Array<AABB3<f32>> prims_far = shifted(prims, offset);
     const auto pspan_far = crd::containers::ConstSpan<AABB3<f32>>(prims_far.data(), prims_far.size());
     const BvhTree tree_far = bvh_build(pspan_far, &alloc);
     const AABB3<f32> query_far = tc::shift(query, offset);
@@ -203,8 +204,8 @@ TEST_CASE("validation: BVH overlap is shift-invariant at +1e7 origin", "[geometr
 
     // Sort both for comparison — overlap iteration order is deterministic
     // per tree but the two trees may differ in node-array layout.
-    std::vector<u32> a(out_origin.data(), out_origin.data() + out_origin.size());
-    std::vector<u32> b(out_far.data(), out_far.data() + out_far.size());
+    crd::containers::Array<u32> a(out_origin.data(), out_origin.data() + out_origin.size());
+    crd::containers::Array<u32> b(out_far.data(), out_far.data() + out_far.size());
     std::sort(a.begin(), a.end());
     std::sort(b.begin(), b.end());
     REQUIRE(a == b);

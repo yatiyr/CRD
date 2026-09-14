@@ -1,11 +1,14 @@
 #include "../log_formatter.hpp"
 
+#include <crd/containers/string.hpp>
 #include <crd/log/sinks/file_sink.hpp>
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <string_view>
+#include <iterator>
 #include <utility>
 
 namespace crd::log
@@ -15,19 +18,25 @@ namespace
 // Path of "name.N.ext" given the base path "name.ext".
 // We treat the substring after the final dot as the extension; if there's
 // no dot, we just append ".N".
-std::string rotated_path(const std::string& base, u32 idx)
+crd::containers::String rotated_path(const crd::containers::String& base, u32 idx)
 {
-    const usize dot = base.find_last_of('.');
-    if (dot == std::string::npos)
+    const std::string_view b{base};
+    const usize dot = b.find_last_of('.');
+    crd::containers::String out;
+    if (dot == std::string_view::npos)
     {
-        return std::format("{}.{}", base, idx);
+        std::format_to(std::back_inserter(out), "{}.{}", b, idx);
     }
-    return std::format("{}.{}{}", base.substr(0, dot), idx, base.substr(dot));
+    else
+    {
+        std::format_to(std::back_inserter(out), "{}.{}{}", b.substr(0, dot), idx, b.substr(dot));
+    }
+    return out;
 }
 } // namespace
 
-FileSink::FileSink(std::string path, u64 max_bytes, u32 max_files) noexcept
-    : m_path(std::move(path)), m_max_bytes(max_bytes), m_max_files(max_files == 0 ? 1 : max_files)
+FileSink::FileSink(std::string_view path, u64 max_bytes, u32 max_files) noexcept
+    : m_path(crd::containers::String{path}), m_max_bytes(max_bytes), m_max_files(max_files == 0 ? 1 : max_files)
 {
     open_file();
 }
@@ -77,7 +86,7 @@ void FileSink::rotate_if_needed(u64 next_write_size) noexcept
 
     close_file();
 
-    // Every `rotated_path` below builds a std::string, so rotation can throw bad_alloc — and this is
+    // Every `rotated_path` below builds a crd::String, so rotation can throw bad_alloc — and this is
     // `noexcept`, which would make that std::terminate. A rotation we cannot perform must degrade to
     // "keep writing to the current file", never to a crash. (bugprone-exception-escape; the check only
     // became visible once the tidy gate stopped dropping `/EHsc` — see CMakeLists.)
@@ -85,18 +94,18 @@ void FileSink::rotate_if_needed(u64 next_write_size) noexcept
     {
         // Shift: oldest gets removed, others shift up by one.
         // file.log -> file.1.log -> file.2.log -> ...
-        const std::string oldest = rotated_path(m_path, m_max_files);
+        const crd::containers::String oldest = rotated_path(m_path, m_max_files);
         std::remove(oldest.c_str()); // ignore failure (may not exist)
 
         for (u32 i = m_max_files; i > 1; --i)
         {
-            const std::string src = rotated_path(m_path, i - 1);
-            const std::string dst = rotated_path(m_path, i);
+            const crd::containers::String src = rotated_path(m_path, i - 1);
+            const crd::containers::String dst = rotated_path(m_path, i);
             std::remove(dst.c_str());
             std::rename(src.c_str(), dst.c_str()); // ok if src missing
         }
 
-        const std::string first_rot = rotated_path(m_path, 1);
+        const crd::containers::String first_rot = rotated_path(m_path, 1);
         std::remove(first_rot.c_str());
         std::rename(m_path.c_str(), first_rot.c_str());
     }
@@ -120,7 +129,7 @@ void FileSink::write(const LogRecord& rec)
     {
         return;
     }
-    std::string line = detail::format_record(rec, /*color*/ false, /*short*/ true);
+    crd::containers::String line = detail::format_record(rec, /*color*/ false, /*short*/ true);
     line.push_back('\n');
 
     rotate_if_needed(line.size());

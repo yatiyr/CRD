@@ -390,7 +390,7 @@ namespace
 {
 // ADR-0094 affinity. Build a P-cores-first CPU order and pin the main thread (index 0) + each worker (index i) to
 // order[i]. No-op when topology is unknown (e.g. WSL) ⇒ unsupported hosts and the default path are unaffected.
-void pin_pool_to_pcores([[maybe_unused]] std::vector<std::thread>& workers,
+void pin_pool_to_pcores([[maybe_unused]] crd::containers::Array<std::thread>& workers,
                         [[maybe_unused]] crd::u32 num_threads) noexcept
 {
     crd::u32 pids[64];

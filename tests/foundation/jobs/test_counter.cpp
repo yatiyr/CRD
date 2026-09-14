@@ -1,3 +1,4 @@
+#include <crd/containers/array.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../../engine/foundation/jobs/src/counter.hpp"
@@ -564,7 +565,7 @@ TEST_CASE("counter_decrement: concurrent decrements, exactly one caller reaches 
 
     std::atomic<int> zero_count{0};  // how many threads received a non-null woken list
 
-    std::vector<std::thread> threads;
+    crd::containers::Array<std::thread> threads;
     threads.reserve(kN);
     for (crd::u32 i = 0U; i < kN; ++i)
     {
@@ -601,7 +602,7 @@ TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][st
     REQUIRE(pool.init(kPoolSize));
 
     // Each thread repeatedly: acquire 4 counters, do some work, release them.
-    std::vector<std::thread> threads;
+    crd::containers::Array<std::thread> threads;
     threads.reserve(kThreads);
     std::atomic<int> errors{0};
 

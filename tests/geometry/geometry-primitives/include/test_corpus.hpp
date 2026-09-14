@@ -20,6 +20,7 @@
 // `engine/geometry/geometry-bvh/src/bvh_build.cpp` etc., tested elsewhere.
 // ---------------------------------------------------------------------------
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 #include <crd/math/vec.hpp>
 
@@ -46,7 +47,7 @@ inline constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 // kernels — point box (min == max), inverted box (min > max — the empty
 // sentinel that `aabb_empty()` produces), NaN-component, ±∞-component.
 
-[[nodiscard]] inline std::vector<AABB3<f32>> degenerate_aabbs()
+[[nodiscard]] inline crd::containers::Array<AABB3<f32>> degenerate_aabbs()
 {
     return {
         // Point box (min == max) — zero-volume but otherwise well-formed.
@@ -65,7 +66,7 @@ inline constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 
 // ---- Degenerate triangles -------------------------------------------------
 
-[[nodiscard]] inline std::vector<Triangle3<f32>> degenerate_triangles()
+[[nodiscard]] inline crd::containers::Array<Triangle3<f32>> degenerate_triangles()
 {
     return {
         // Coincident vertices (zero area, zero "edge1").
@@ -83,7 +84,7 @@ inline constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 
 // ---- Degenerate spheres ---------------------------------------------------
 
-[[nodiscard]] inline std::vector<Sphere<f32>> degenerate_spheres()
+[[nodiscard]] inline crd::containers::Array<Sphere<f32>> degenerate_spheres()
 {
     return {
         Sphere<f32>(Vec3<f32>(0, 0, 0), 0.0F),                  // point sphere
@@ -97,7 +98,7 @@ inline constexpr f32 kInf = std::numeric_limits<f32>::infinity();
 
 // ---- Degenerate rays ------------------------------------------------------
 
-[[nodiscard]] inline std::vector<Ray3<f32>> degenerate_rays()
+[[nodiscard]] inline crd::containers::Array<Ray3<f32>> degenerate_rays()
 {
     return {
         Ray3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(0, 0, 0)),           // zero direction

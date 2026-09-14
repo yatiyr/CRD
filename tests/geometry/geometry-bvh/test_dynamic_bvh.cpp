@@ -2,6 +2,7 @@
 // vs brute force (over fat AABBs), structural validity after random op sequences,
 // height/SAH stay bounded, fat-margin no-op behaviour, handle stability.
 
+#include <crd/containers/array.hpp>
 #include <crd/geometry/bvh/bvh.hpp>
 #include <crd/geometry/primitives/robust_ray_aabb.hpp>
 #include <crd/math/vec.hpp>
@@ -62,10 +63,10 @@ struct TrackedLeaf
     bool live{true};
 };
 
-std::vector<u32> sorted_set(std::vector<u32> v)
+crd::containers::Array<u32> sorted_set(crd::containers::Array<u32> v)
 {
     std::sort(v.begin(), v.end());
-    v.erase(std::unique(v.begin(), v.end()), v.end());
+    v.resize(static_cast<crd::usize>(std::unique(v.begin(), v.end()) - v.begin()));
     return v;
 }
 
@@ -107,7 +108,7 @@ TEST_CASE("DynamicBvh: query overlap matches brute force over fat AABBs", "[geom
     Rng rng(0xD7A1C);
     DynamicBvh tree(&alloc, DynamicBvhConfig{0.25F});
     constexpr usize n = 600;
-    std::vector<DynamicBvhNodeId> ids;
+    crd::containers::Array<DynamicBvhNodeId> ids;
     for (usize i = 0; i < n; ++i)
     {
         ids.push_back(tree.insert(random_box(rng, 80.0F, 3.0F), static_cast<u32>(i)));
@@ -117,7 +118,7 @@ TEST_CASE("DynamicBvh: query overlap matches brute force over fat AABBs", "[geom
     for (usize q = 0; q < 300; ++q)
     {
         const AABB3<f32> box = random_box(rng, 100.0F, 10.0F);
-        std::vector<u32> refset;
+        crd::containers::Array<u32> refset;
         for (usize i = 0; i < n; ++i)
         {
             if (intersects(tree.fat_aabb(ids[i]), box))
@@ -125,12 +126,12 @@ TEST_CASE("DynamicBvh: query overlap matches brute force over fat AABBs", "[geom
                 refset.push_back(static_cast<u32>(i));
             }
         }
-        std::vector<u32> gotset;
+        crd::containers::Array<u32> gotset;
         tree.query(box, [&](u32 ud) { gotset.push_back(ud); });
         // (also exercise the Array<u32> overload)
         crd::containers::Array<u32> got_arr(&alloc);
         tree.query(box, got_arr);
-        std::vector<u32> got_arr_v(got_arr.data(), got_arr.data() + got_arr.size());
+        crd::containers::Array<u32> got_arr_v(got_arr.data(), got_arr.data() + got_arr.size());
         REQUIRE(sorted_set(gotset) == sorted_set(refset));
         REQUIRE(sorted_set(got_arr_v) == sorted_set(refset));
     }
@@ -142,7 +143,7 @@ TEST_CASE("DynamicBvh: raycast visits exactly the leaves whose fat AABB the ray 
     Rng rng(0x7A4CE);
     DynamicBvh tree(&alloc);
     constexpr usize n = 400;
-    std::vector<DynamicBvhNodeId> ids;
+    crd::containers::Array<DynamicBvhNodeId> ids;
     for (usize i = 0; i < n; ++i)
     {
         ids.push_back(tree.insert(random_box(rng, 60.0F, 3.0F), static_cast<u32>(i)));
@@ -151,7 +152,7 @@ TEST_CASE("DynamicBvh: raycast visits exactly the leaves whose fat AABB the ray 
     {
         const Ray3<f32> ray{Vec3<f32>(rng.range(-120, 120), rng.range(-120, 120), rng.range(-120, 120)),
                             normalized(Vec3<f32>(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)))};
-        std::vector<u32> refset;
+        crd::containers::Array<u32> refset;
         for (usize i = 0; i < n; ++i)
         {
             f32 t = 0.0F;
@@ -160,7 +161,7 @@ TEST_CASE("DynamicBvh: raycast visits exactly the leaves whose fat AABB the ray 
                 refset.push_back(static_cast<u32>(i));
             }
         }
-        std::vector<u32> gotset;
+        crd::containers::Array<u32> gotset;
         tree.raycast(ray, [&](u32 ud) { gotset.push_back(ud); });
         REQUIRE(sorted_set(gotset) == sorted_set(refset));
     }
@@ -186,10 +187,10 @@ TEST_CASE("DynamicBvh: update is a no-op inside the margin, reinserts when it es
     REQUIRE(tree.fat_aabb(a).max.x >= 102.0F);
     tree.validate();
     // Found at the new location, not the old.
-    std::vector<u32> hit_new;
+    crd::containers::Array<u32> hit_new;
     tree.query(AABB3<f32>(Vec3<f32>(99, 99, 99), Vec3<f32>(103, 103, 103)), [&](u32 ud) { hit_new.push_back(ud); });
     REQUIRE(std::find(hit_new.begin(), hit_new.end(), 0U) != hit_new.end());
-    std::vector<u32> hit_old;
+    crd::containers::Array<u32> hit_old;
     tree.query(AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(3, 3, 3)), [&](u32 ud) { hit_old.push_back(ud); });
     REQUIRE(std::find(hit_old.begin(), hit_old.end(), 0U) == hit_old.end());
     // b untouched.
@@ -201,7 +202,7 @@ TEST_CASE("DynamicBvh: structural validity + query correctness across a random o
     crd::memory::TlsfAllocator alloc(crd::usize{1} << 22, nullptr, "bvh-test");
     Rng rng(0x09E5E9);
     DynamicBvh tree(&alloc, DynamicBvhConfig{0.5F});
-    std::vector<TrackedLeaf> leaves; // index == user_data
+    crd::containers::Array<TrackedLeaf> leaves; // index == user_data
 
     for (usize step = 0; step < 4000; ++step)
     {
@@ -260,7 +261,7 @@ TEST_CASE("DynamicBvh: structural validity + query correctness across a random o
     for (usize q = 0; q < 200; ++q)
     {
         const AABB3<f32> box = random_box(rng, 90.0F, 10.0F);
-        std::vector<u32> refset;
+        crd::containers::Array<u32> refset;
         for (usize i = 0; i < leaves.size(); ++i)
         {
             if (leaves[i].live && intersects(tree.fat_aabb(leaves[i].id), box))
@@ -268,7 +269,7 @@ TEST_CASE("DynamicBvh: structural validity + query correctness across a random o
                 refset.push_back(static_cast<u32>(i));
             }
         }
-        std::vector<u32> gotset;
+        crd::containers::Array<u32> gotset;
         tree.query(box, [&](u32 ud) { gotset.push_back(ud); });
         REQUIRE(sorted_set(gotset) == sorted_set(refset));
     }
@@ -308,7 +309,7 @@ TEST_CASE("DynamicBvh: handles stay valid after operations on other leaves", "[g
     REQUIRE(tree.update(a, AABB3<f32>(Vec3<f32>(0, 0, 0), Vec3<f32>(5, 5, 5))));
     REQUIRE(tree.user_data(a) == 100U);
     REQUIRE(tree.user_data(c) == 300U);
-    std::vector<u32> hit;
+    crd::containers::Array<u32> hit;
     tree.query(AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(25, 25, 25)), [&](u32 ud) { hit.push_back(ud); });
     REQUIRE(std::find(hit.begin(), hit.end(), 100U) != hit.end());
     REQUIRE(std::find(hit.begin(), hit.end(), 300U) != hit.end());
