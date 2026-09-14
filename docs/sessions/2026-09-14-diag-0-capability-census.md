@@ -161,3 +161,38 @@ Increment two builds, and every later DIAG leaf reuses:
 
 Budgets, module placement, schema name, tool tuples and provider choices are frozen in
 [ADR-0133 → Implementation decisions](../decisions/0133-runtime-diagnostics-and-instrumentation.md#implementation-decisions).
+
+## Increment two: the fixture (doctor + specimen harness)
+
+The second DIAG.0 increment builds the fixture the rest of DIAG inherits, and closes the acceptance.
+
+- **Specimen harness** ([tests/support/diag](../../tests/support/diag), `crd-diag-harness`): a bounded child-process
+  runner that classifies a specimen against an expectation into one Verdict, distinguishing an expected detection
+  (Clean / Crashed / SanitizerCaught) from an instrument failure (Timeout / MissingExecutable / InstrumentAbsent /
+  DeniedOutput / MismatchedBinary / ZeroSelection / Unexpected) -- never a silent pass. Timeout is the mandatory
+  bound; no address-space rlimit is set (it would break ASan's shadow), recorded honestly. It records the
+  OS/ISA/compiler tuple per run.
+- **Specimens** ([tests/support/diag/specimens](../../tests/support/diag/specimens), built by
+  [crd_diag_specimen](../../cmake/CrdDiag.cmake) with a compile-stamped identity): a clean exit, a headless hard
+  crash (null write, no Windows error dialog), and a heap-buffer-overflow that a sanitizer build catches and a
+  non-sanitized build reports absent.
+- **The doctor** ([crd/perf/doctor.hpp](../../engine/foundation/perf/include/crd/perf/doctor.hpp)): reports each
+  diagnostic mode as compiled / enabled / usable with a census-sourced disposition (most `unqualified` or
+  `unsupported` at DIAG.0), tagged schema `cerid-diagnostics/1`, plus three live-probed dependencies (sanitizer
+  runtime, symbolizer, output path). It states a route is unsupported rather than pretending it is a command.
+
+The five negative controls are all detected, in dated evidence on `win-debug`:
+
+| Negative | Detected as | Where |
+|---|---|---|
+| missing symbolizer | `symbolizer` dependency not present (bogus `ASAN_SYMBOLIZER_PATH`) | doctor |
+| wrong / absent sanitizer runtime | `InstrumentAbsent` (a sanitizer catch expected of a non-sanitized specimen) | harness |
+| zero test selection | `ZeroSelection` (a filter matching no specimen) | harness |
+| denied output | `DeniedOutput` (a file used as an output directory) | harness + doctor |
+| mismatched binary | `MismatchedBinary` (echoed identity != expected) | harness |
+
+Positives pass too: the clean specimen is `Clean`, the crash specimen `Crashed`, and the sanitizer specimen is
+`SanitizerCaught` on a sanitizer build (`InstrumentAbsent` on `win-debug`, which has none). Local proof: the 7
+`crd-diag-harness` controls and the 4 doctor controls pass under `ctest` on `win-debug`. No source-runtime failure
+was invented from the census; every gap it recorded routes to its owning DIAG child. The hosted sanitizer lanes turn
+the sanitizer positive from `InstrumentAbsent` into `SanitizerCaught` -- the CI half of this slice.

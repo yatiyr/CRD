@@ -318,7 +318,7 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 # D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
-crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf)
+crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf support/diag)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math

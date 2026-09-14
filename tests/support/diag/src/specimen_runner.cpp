@@ -99,7 +99,15 @@ bool output_writable(const cont::String& dir)
     }
     cont::String probe = dir;
     probe.append("/.crd-diag-write-probe");
-    std::FILE* f = std::fopen(probe.c_str(), "wb");
+    std::FILE* f = nullptr;
+#if defined(_WIN32)
+    if (::fopen_s(&f, probe.c_str(), "wb") != 0)
+    {
+        f = nullptr;
+    }
+#else
+    f = std::fopen(probe.c_str(), "wb");
+#endif
     if (f == nullptr)
     {
         return false;

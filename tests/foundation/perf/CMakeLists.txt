@@ -18,6 +18,8 @@ add_executable(crd-perf-tests
     test_memory_tracking.cpp
     test_capture_roundtrip.cpp
     test_perf_budget_soft.cpp
+    test_diag_harness.cpp
+    test_doctor.cpp
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -27,9 +29,19 @@ target_link_libraries(crd-perf-tests PRIVATE
     crd-jobs
     crd-memory
     crd-perf
+    crd-diag-harness
     Catch2::Catch2WithMain
 )
 
 crd_enable_default_pch(crd-perf-tests)
+
+add_dependencies(crd-perf-tests
+    crd-diag-clean-specimen
+    crd-diag-crash-specimen
+    crd-diag-heap-overflow-specimen)
+target_compile_definitions(crd-perf-tests PRIVATE
+    CRD_DIAG_CLEAN_SPECIMEN="$<TARGET_FILE:crd-diag-clean-specimen>"
+    CRD_DIAG_CRASH_SPECIMEN="$<TARGET_FILE:crd-diag-crash-specimen>"
+    CRD_DIAG_HEAP_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-heap-overflow-specimen>")
 
 crd_discover_tests(crd-perf-tests)

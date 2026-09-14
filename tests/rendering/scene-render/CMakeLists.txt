@@ -53,7 +53,7 @@ endif()
 # the skip scores ***Failed). So: keep the ONE shipped-root var here (single-var ENVIRONMENT works + preserves the
 # skip-gate), and give RAF-10 its OWN app fixtures via a compiled path (CRD_RAF10_APP_ASSETS_DIR, env-overridable).
 crd_discover_tests(crd-scene-render-tests
-    PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")
+    PROPERTIES ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets" RESOURCE_LOCK crd_gpu_device)
 # RAF-10's app_assets are this test's OWN fixtures (fixed source location) — a compiled path is robust + config-invariant;
 # the env var still wins if ctest/a dev sets it.
 target_compile_definitions(crd-scene-render-tests PRIVATE

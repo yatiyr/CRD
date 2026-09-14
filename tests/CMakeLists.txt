@@ -52,6 +52,7 @@ endif()
 # come BEFORE any test target that links it.
 crd_tests(support/test_helpers test_helpers)
 crd_tests(support/fuzz fuzz)  # REPO.DEV.9: the bounded fuzz harness shared by the ingestion fuzz targets
+crd_tests(support/diag diag)  # DIAG.0: the bounded specimen harness (detector controls)
 
 crd_tests(foundation/core core)
 crd_tests(foundation/vm vm)
