@@ -250,7 +250,10 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
 #endif
 
     tl_set_pending_park(counter, w);
+    sanitizer_switch_begin(current_fiber->sanitizer, current_fiber->sanitizer.return_bottom,
+                           current_fiber->sanitizer.return_size, current_fiber->tsan_return);
     fiber_switch(&current_fiber->context, &scheduler_ctx);
+    sanitizer_switch_end(current_fiber->sanitizer); // resumed, possibly on another OS thread
 
     // --- Resumed (by counter_decrement having claimed Wakeup, or by the
     //     scheduler if the value had already reached target at publish time) --- //

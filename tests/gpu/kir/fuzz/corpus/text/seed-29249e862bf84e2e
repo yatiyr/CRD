@@ -1,0 +1,73 @@
+# .ckir - an authored CKIR program (node graph). A node editor reads this and turns it into CKIR.
+schema = 1
+
+[[entry]]
+stage = "Compute"
+inputs = 0
+position = -1
+frag_depth = -1
+discard_cond = -1
+early_fragment_tests = false
+depth_mode = "Any"
+shading_rate = -1
+storage_write_index = -1
+storage_write_value = -1
+interlock = false
+n_out = 0
+local_size = [32, 1, 1]
+kernel_body_begin = 0
+kernel_body_count = 1
+mesh_vertices = 0
+mesh_primitives = 0
+mesh_prim = -1
+task_emit = -1
+task_payload = [-1, -1, -1, -1]
+n_task_payload = 0
+tess_patch_size = 0
+tess_inner = -1
+tess_outer = -1
+mesh_payload_in = false
+storage_read_only = false
+
+[[node]]
+id = "n0"
+op = "BufferDecl"
+shape = [1]
+
+[[node]]
+id = "n1"
+op = "BufferDecl"
+shape = [1]
+iidx = 1
+axes = 1
+
+[[node]]
+id = "n2"
+op = "Builtin"
+dtype = "U32"
+shape = [1]
+iidx = 4
+
+[[node]]
+id = "n3"
+op = "Const"
+shape = [1]
+cval = "0x4000000000000000"
+
+[[node]]
+id = "n4"
+op = "BufferLoad"
+shape = [1]
+in = ["n0", "n2"]
+
+[[node]]
+id = "n5"
+op = "Mul"
+shape = [1]
+in = ["n4", "n3"]
+
+[[stmt]]
+kind = "BufferStore"
+target = "n1"
+index = "n2"
+value = "n5"

@@ -16,8 +16,10 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All 96 engine module CMake files are represented below. Existing overview links retain their dated evidence;
-where no dedicated overview exists, the public source and CMake manifest are the direct entry points.
+All 102 registered modules are represented: the 96 engine modules below and the six application and tool
+modules in the next table. Existing overview links retain their dated evidence; where no dedicated overview
+exists, the public source and CMake manifest are the direct entry points. The documentation validator holds
+this map and the `crd_module()` registry in the root CMakeLists to the same set of names.
 
 | Module | Overview / source | Build and dependency contract |
 |---|---|---|
@@ -117,6 +119,21 @@ where no dedicated overview exists, the public source and CMake manifest are the
 | `units` | [units](units.md) | [CMake](../../engine/foundation/units/CMakeLists.txt) |
 | `vertex-cook` | [Public source](../../engine/assets/vertex-cook/include/) | [CMake](../../engine/assets/vertex-cook/CMakeLists.txt) |
 | `vm` | [vm](vm.md) | [CMake](../../engine/foundation/vm/CMakeLists.txt) |
+
+## Registered applications and tools
+
+The registry owns these non-engine modules under the same contract (their names are the `NAME` arguments of
+their rows where the directory name is not a plain identifier). Their review route is the same: the owning
+ROADMAP row, then the single maintainer.
+
+| Module | Overview / source | Build and dependency contract |
+|---|---|---|
+| `asset_cooker` | [Source](../../tools/asset_cooker/) | [CMake](../../tools/asset_cooker/CMakeLists.txt) |
+| `ceridc` | [Source](../../tools/ceridc/) | [CMake](../../tools/ceridc/CMakeLists.txt) |
+| `kir_autotune` | [Source](../../tools/kir-autotune/) | [CMake](../../tools/kir-autotune/CMakeLists.txt) |
+| `shader_cook` | [Source](../../tools/shader-cook/) | [CMake](../../tools/shader-cook/CMakeLists.txt) |
+| `runtime` | [Source](../../runtime/) | [CMake](../../runtime/CMakeLists.txt) |
+| `sandbox` | [Source](../../sandbox/) | [CMake](../../sandbox/CMakeLists.txt) |
 
 ## Planned product modules
 

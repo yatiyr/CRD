@@ -28,6 +28,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/opt/constraints.hpp>
 #include <crd/hesap/opt/kkt.hpp>
+#include <crd/hesap/opt/levenberg_marquardt.hpp>
 #include <crd/hesap/opt/merit.hpp>
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/hesap/opt/opt_types.hpp>

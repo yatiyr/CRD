@@ -12,7 +12,8 @@ keeps every oracle intact; and a retirement trigger. Registered failures are nev
 The tests run, sanitizers stay strict, the reports stay in the lane log, and only the lane's final step consults this
 register: it compares the failing set with the registered set in both directions. An unexpected failure turns the lane
 red; so does a registered test that passes, is skipped or does not run, which is how an entry is forced out of the
-register when the provider is fixed. Lanes without entries require zero failures and propagate CTest's exit code.
+register when the provider is fixed. Every hosted lane, Windows and Linux, ends in the gate; lanes without entries
+require zero failures and propagate CTest's exit code.
 Each entry names the ROADMAP row that closed with this register as its evidence. An entry never widens by itself:
 adding a test name is a documented decision with a reproduction, like the entry it joins.
 

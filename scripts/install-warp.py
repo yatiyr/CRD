@@ -4,40 +4,35 @@ Run with Python 3.12+. Pass the installed DLL to CMake as -DCRD_WARP_DLL=<destin
 test executable then stages a copy in its own directory, which the D3D12 runtime loads ahead of the OS build.
 The OS WARP shipped with Windows 10.0.26100 over-reads DXR state-object inputs under AddressSanitizer
 (docs/recipes/2026-09-13-dx12-pinned-warp.md); the 1.0.20 package does not. Only the pinned package hash is trusted.
+The version, URL, package and member hashes come from cmake/pins.json (tools/warp).
 """
 from pathlib import Path
 import argparse
 import hashlib
 import shutil
-import urllib.request
+import sys
 import zipfile
 
-VERSION = '1.0.20'
-PACKAGE = f'microsoft.direct3d.warp.{VERSION}.nupkg'
-URL = f'https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/{VERSION}/{PACKAGE}'
-USER_AGENT = 'Cerid-SDK-Installer/1.0 (+https://github.com/yatiyr/CRD)'
-SHA256 = 'e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40'
-MEMBER = 'build/native/bin/x64/d3d10warp.dll'
-MEMBER_SHA256 = '2a08692cba4c130593329255627fb915d666c90cda53d284594bc8438fd4f49d'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pins  # noqa: E402
+
+PIN = pins.entry('tools', 'warp')
+VERSION = PIN['version']
+PACKAGE = PIN['file']
+URL = PIN['url']
+USER_AGENT = pins.USER_AGENT
+SHA256 = PIN['sha256']
+MEMBER = PIN['member']
+MEMBER_SHA256 = PIN['member_sha256']
 OUTPUT = 'd3d10warp.dll'
 
 
 def install(destination, archive):
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    if archive is None:
-        archive = destination / PACKAGE
-        if not archive.exists():
-            partial = archive.with_suffix('.partial')
-            # Identify the actual client; package identity still comes from the pinned SHA-256, never the response.
-            request = urllib.request.Request(URL, headers={'User-Agent': USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response, partial.open('wb') as output:
-                shutil.copyfileobj(response, output)
-            partial.replace(archive)
-    with archive.open('rb') as source:
-        actual = hashlib.file_digest(source, 'sha256').hexdigest()
-    if actual != SHA256:
-        raise ValueError(f'WARP package checksum mismatch: expected {SHA256}, got {actual}')
+    # Downloads go through a .partial file and are verified before the final name exists; an archive handed in is
+    # verified in place. Package identity comes from the pinned SHA-256, never from the response.
+    archive = pins.fetch(PIN, destination, archive, label='WARP package', sha=SHA256)
     output = destination / OUTPUT
     with zipfile.ZipFile(archive) as package:
         info = package.getinfo(MEMBER)

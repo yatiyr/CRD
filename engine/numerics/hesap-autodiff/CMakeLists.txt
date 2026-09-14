@@ -29,6 +29,7 @@ target_link_libraries(crd-hesap-autodiff
         crd-jobs       # v16-a: data-parallel batched gradient (deterministic fixed-order reduce — the {1..16} moat)
         crd-hesap      # v15-z: the CLI command registry (hesap.ad.* registration). crd-hesap depends only on
                        # core/math (NOT autodiff), so this edge is acyclic — autodiff stays below the solvers.
+        crd-hesap-tensor # einsum_reverse.hpp (public): EinsumPlan / einsum_execute; acyclic, tensor never links autodiff
     PRIVATE
         crd-warnings
 )

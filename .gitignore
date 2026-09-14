@@ -4,6 +4,7 @@
 /cmake-build-*/
 /_deps/
 /.cpm-cache/
+/.sccache/
 /external/
 CMakeFiles/
 CMakeCache.txt

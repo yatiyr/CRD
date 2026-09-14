@@ -17,7 +17,9 @@ Families: foundation, numerics (hesap), geometry, execution (CEIR/CHIR), gpu (co
 assets, world (scene/animation/timeline), physics, media and ui. Test-only support, tools and application families
 remain explicit. The existing shared benchmark suite stays under `tests/bench/`.
 Public `crd/...` includes and `crd-*` targets remain stable. Family membership describes navigation, not new
-dependency permissions. `docs/systems/README.md` remains the module API index.
+dependency permissions. `docs/systems/README.md` remains the module API index. Every module, tool and test
+directory is registered once with its declared direct dependencies in the [module registry](module-registry.md),
+which also owns `CRD_MODULES` selection and host-tool import.
 
 CMake sets target folders from source ownership; engine and test hierarchies match the physical tree.
 Source groups preserve paths beneath each module. External dependency and CMake utility targets have separate
@@ -82,7 +84,9 @@ Check all migrated references, CMake configure/generation, generated source cons
 representative scoped CTest consumers. A source-only move must preserve file contents except reviewed path updates.
 CI owns the full build/configuration sweep; local scope follows [BUILDING](../BUILDING.md). CI must fail on tidy
 warnings using the selected pinned LLVM executable, fail on empty test selections, and retain failure output.
-Repository/documentation guards run on Windows and Linux. No remote green claim applies to unpublished changes.
+Repository/documentation guards run on Windows and Linux; [CI tiers](ci-tiers.md) own which presets a run executes
+and the evidence each lane leaves; [pinned inputs](pinned-inputs.md) own every external source, tool, action and
+runner the build and the workflow acquire. No remote green claim applies to unpublished changes.
 Linux CI installs the SHA-256-pinned Khronos validation layer matching its Vulkan headers; runtime layer selection
 is explicit. A passing CTest summary cannot conceal initialization diagnostics emitted before a capture object exists.
 

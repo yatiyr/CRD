@@ -1,0 +1,6 @@
+module {
+  ^bb0(%0 : !i32):
+    %1 = test.add(%0, %0) {big = 1e+20, ", sym = @target, ty = !struct<Point,x:!i32,y:!f32>, ty2 = !fn<(!param<T,!trait<Ord>>)->(!ty2ion<!i32>ÿ>, tyregiimage) {
+      ^bb0(%4 : !i32A):
+   call(%0) {calÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿlme"= @callee_fn} : !i32
+}

@@ -3,41 +3,33 @@
 
 Run with Python 3.12+. Set VK_LAYER_PATH to <destination>/share/vulkan/explicit_layer.d
 and prepend <destination>/lib to LD_LIBRARY_PATH before scoped GPU tests.
+The version, URL, SHA-256 and member list come from cmake/pins.json (tools/vulkan-sdk-linux).
 """
 from pathlib import Path
 import argparse
-import hashlib
 import json
 import shutil
+import sys
 import tarfile
-import urllib.request
 
-VERSION = '1.4.341.1'
-ARCHIVE = f'vulkansdk-linux-x86_64-{VERSION}.tar.xz'
-URL = f'https://sdk.lunarg.com/sdk/download/{VERSION}/linux/{ARCHIVE}'
-USER_AGENT = 'Cerid-SDK-Installer/1.0 (+https://github.com/yatiyr/CRD)'
-SHA256 = '3bf0f762afb6c79bc6a9d9fb5998745ccff928800a29619b501ed9de7fd9789b'
-MEMBERS = ('lib/libVkLayer_khronos_validation.so',
-           'share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pins  # noqa: E402
+
+PIN = pins.entry('tools', 'vulkan-sdk-linux')
+VERSION = PIN['version']
+ARCHIVE = PIN['file']
+URL = PIN['url']
+USER_AGENT = pins.USER_AGENT
+SHA256 = PIN['sha256']
+MEMBERS = tuple(PIN['members'])
 
 
 def install(destination, archive):
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    if archive is None:
-        archive = destination / ARCHIVE
-        if not archive.exists():
-            partial = archive.with_suffix('.partial')
-            # The public SDK endpoint rejects Python's default user agent. Identify the actual client;
-            # archive identity still comes from the pinned SHA-256, never the HTTP response alone.
-            request = urllib.request.Request(URL, headers={'User-Agent': USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response, partial.open('wb') as output:
-                shutil.copyfileobj(response, output)
-            partial.replace(archive)
-    with archive.open('rb') as source:
-        actual = hashlib.file_digest(source, 'sha256').hexdigest()
-    if actual != SHA256:
-        raise ValueError(f'SDK checksum mismatch: expected {SHA256}, got {actual}')
+    # Downloads go through a .partial file and are verified before the final name exists; an archive handed in is
+    # verified in place. Identity comes from the pinned SHA-256, never from the HTTP response alone.
+    archive = pins.fetch(PIN, destination, archive, label='SDK', sha=SHA256)
     wanted = {f'{VERSION}/x86_64/{name}': name for name in MEMBERS}
     found = set()
     with tarfile.open(archive, 'r|xz') as sdk:
@@ -58,7 +50,7 @@ def install(destination, archive):
     if found != set(MEMBERS):
         raise ValueError(f'Missing validation SDK members: {set(MEMBERS) - found}')
     manifest = json.loads((destination / MEMBERS[1]).read_text(encoding='utf-8'))
-    if manifest['layer']['api_version'] != '1.4.341':
+    if manifest['layer']['api_version'] != PIN['api_version']:
         raise ValueError('Unexpected validation layer API version')
     print(f'Installed Khronos validation {VERSION}; archive SHA-256 verified.')
     print(f'VK_LAYER_PATH={destination / "share/vulkan/explicit_layer.d"}')

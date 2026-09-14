@@ -3702,6 +3702,81 @@
       "path": "docs/lessons/memory/build-and-verification.md",
       "anchor": "memory-feedback_check_git_budget_on_9p_checkout",
       "description": "dev.py plan/check run every Git command under --git-timeout (default 60 s, recorded in evidence). A checkout on a 9p mount (WSL reading a Windows drive) needs more: the first `git diff HEAD` took 98 s cold and a few seconds afterwards; the doc-validator CTest guard runs 57 to 64 s there, which exceeded its former 60 s CTest budget; the three repository guards now carry a 300 s ceiling. Exhausting a budget is an instrument failure, never a pass."
+    },
+    "feedback_module_registry_declares_direct_edges_and_verifies_them_at_configure": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_module_registry_declares_direct_edges_and_verifies_them_at_configure",
+      "description": "Register every build directory once with crd_module()/crd_tests() and declare its DIRECT crd-* and package links from its target_link_libraries blocks, never from the CMake File API (a reduced build-order set); build-time tool edges such as sandbox's $<TARGET_FILE:asset_cooker> are declared by hand. crd_verify_modules() fails any configure whose real link graph the declarations do not cover, so the registry cannot drift; the default full configuration is proven unchanged by comparing the File API graph, compile_commands.json and the Ninja build statements before and after."
+    },
+    "feedback_ninja_cmake_rerun_needs_the_toolchain_environment": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_ninja_cmake_rerun_needs_the_toolchain_environment",
+      "description": "After editing a CMake file run the next build through scripts/build-target.bat or configure-preset.bat: a bare ninja from Git Bash/PowerShell re-runs CMake without the MSVC environment and stops at GLFW's C-compiler identification with 'Configuring incomplete'. A dry run (ninja -n) always lists 'Re-running CMake' under CONFIGURE_DEPENDS and proves nothing; the no-op proof is the real helper run printing 'ninja: no work to do.'"
+    },
+    "feedback_ci_tier_resolution_is_data_driven_and_conservative": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_ci_tier_resolution_is_data_driven_and_conservative",
+      "description": "The CI tier of a run comes from .github/ci-tiers.json through scripts/ci-tier.py resolve, never from hand-edited job conditions: every visible preset has exactly one owner (check-ci-tiers.py is a CTest, a preflight step and a tooling test), docs-only pushes end after preflight, source changes run the change lanes, and any change to .github/, root CMakeLists.txt, CMakePresets.json, cmake/, scripts/, tests/CMakeLists.txt, .clang-tidy or the third-party register, an unavailable base or an empty diff resolves to the complete tier; so the push introducing the tiered workflow necessarily ran the full matrix and a preset without an owner fails the guard instead of silently never running. Never narrow a class without hosted durations."
+    },
+    "feedback_dynamic_matrices_need_a_non_matrix_preflight_empty_list_guards_and_an_explicit_required_job": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_dynamic_matrices_need_a_non_matrix_preflight_empty_list_guards_and_an_explicit_required_job",
+      "description": "A GitHub Actions matrix fed from another job's output needs a non-matrix producer (matrix outputs are the last leg's), an `if: list != '[]'` guard on every consumer (an empty matrix fails evaluation), and one required aggregate with needs on every job, if: always() and an explicit expected-job list from the producer, because plain needs treats skipped jobs as satisfied. Limit cancel-in-progress to pull_request groups and key push/scheduled/manual runs by run id so the push run on main (the revision's qualification evidence) and the nightly complete run are never cancelled or serialized. Validate with the pinned actionlint (WSL, SHA-256 checked) before pushing."
+    },
+    "feedback_every_external_input_is_pinned_in_cmake_pins_json_and_verified_before_use": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_every_external_input_is_pinned_in_cmake_pins_json_and_verified_before_use",
+      "description": "Every external input of the build and the workflow (CPM packages, CPM bootstrap, Vulkan SDK and headers, SPIRV-Reflect, WARP, actionlint, actions, runner images) is pinned once in cmake/pins.json with version, commit-addressed source, SHA-256 and license, and consumed from there: crd_add_pinned_package() passes the archive and URL_HASH so CMake verifies before extraction, scripts/pins.py fetch() downloads to .partial and verifies before the final name exists, and check-pins.py fails floating action refs, -latest runners, persisted checkout credentials, direct SDK fetches, packages acquired outside the registry or literal digests elsewhere. Git-SHA pins were rejected because CPM disables shallow clones for commit hashes."
+    },
+    "feedback_third_party_patches_go_to_a_build_owned_copy_never_the_shared_download": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_third_party_patches_go_to_a_build_owned_copy_never_the_shared_download",
+      "description": "Patch a downloaded third-party file with crd_patched_copy(): a versioned cmake/patches/<spec>.cmake of crd_patch_replace() steps applied to a build-owned copy under ${CMAKE_BINARY_DIR}/patched/ that the target compiles instead of the original; never file(WRITE) into the package source directory (CI shares the CPM cache across presets) and never rely on CPM PATCHES (needs a patch executable absent on hosted Windows). Anchor drift is a configure error naming the patch; four consumers on one CPM_SOURCE_CACHE leave the tree hash identical after the third and the fourth."
+    },
+    "feedback_msvc_pch_consumers_are_uncacheable_cache_with_pch_off_and_embedded_debug_info": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_msvc_pch_consumers_are_uncacheable_cache_with_pch_off_and_embedded_debug_info",
+      "description": "sccache 0.17.0 refuses MSVC precompiled-header consumers (/Yu /Fp) and /Zi without a per-object PDB, so the cached Windows configuration is -DCRD_COMPILER_LAUNCHER=<sccache> -DCRD_ENABLE_PCH=OFF with CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded (/Z7) for Debug/RelWithDebInfo; GCC's -include cmake_pch.hxx stays cacheable so Linux keeps PCH on. Shipping (explicit /Zi + LTCG) and Visual Studio generators stay uncached and say so; never flip CRD_ENABLE_PCH silently. Decided by two-compile probes, measured by docs/bench/2026-09-14-repo-dev7-build-board.md, contract docs/design/build-performance.md."
+    },
+    "feedback_a_fresh_cold_build_board_is_the_toolset_upgrade_check_an_incremental_tree_hides": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_a_fresh_cold_build_board_is_the_toolset_upgrade_check_an_incremental_tree_hides",
+      "description": "Build one preset cold in a fresh scratch directory (scripts/build-bench.py run) after a toolset upgrade: Ninja rebuilds on timestamps, not compiler identity, so an incremental tree keeps objects the old toolset accepted. MSVC 14.51 rejected HashMap<u32>::find(int) (C4389 inside std::equal_to<>) and REQUIRE((a ^ b) == true) on bools (C4805 in Catch's decomposer) under /WX while the incremental win-debug tree and the hosted windows-2025 toolset still passed; typed key literals and REQUIRE(a != b) fixed the tests."
+    },
+    "feedback_a_public_header_is_checked_through_the_consumer_view_and_fixed_at_the_header_or_the_declaration": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_a_public_header_is_checked_through_the_consumer_view_and_fixed_at_the_header_or_the_declaration",
+      "description": "A public header proves itself by compiling alone through its module's consumer view (CRD_PUBLIC_CHECKS: one shim per include/** header in an OBJECT library linking only the module's library targets; cmake/CrdPublicChecks.cmake); a failure is a missing include or a boundary defect fixed at the header or the declaration (PUBLIC edge, DEPENDS, or an include-only PUBLIC edge where an ADR forbids the link), never a wider check; crd_public_header_exclude() is for documented fragments and fails when stale. The first run (1,118 headers on MSVC in 43.6 s at 16 jobs) found 21 such headers, none needing an exclusion; GCC (1,110 headers) ran after the first fifteen fixes and reported the six hesap-tensor surfaces, then none. Local: scripts/check-headers.py --changed; hosted: win-public-checks / linux-gcc-public-checks. Contract docs/design/public-consumption.md."
+    },
+    "feedback_one_installed_prefix_is_one_profile_and_the_consumer_test_proves_relocation_on_the_lane_toolchain": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_one_installed_prefix_is_one_profile_and_the_consumer_test_proves_relocation_on_the_lane_toolchain",
+      "description": "The relocatable Cerid::core package (cmake/CrdPackage.cmake) is proved by scripts/test-package-consumer.py: core-only build, install, layout check, move the prefix, grep installed .cmake files for source/build/pre-move paths, build and run a find_package(Cerid CONFIG) consumer without inherited warning flags, compare the printed build_config.hpp profile with the packaging switches, and prove the refusals (CeridConfig.cmake rejects another build type; BUILD_SHARED_LIBS=ON fails). One installed prefix is one profile; export needs $<BUILD_INTERFACE:> around build-tree paths and crd-warnings. Passed on MSVC 19.51 and GCC 13.3; registered as crd-package-consumer under the public-check presets."
+    },
+    "feedback_an_instrument_that_cannot_fail_the_run_is_not_an_instrument_ubsan_no_recover_and_configure_errors": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_an_instrument_that_cannot_fail_the_run_is_not_an_instrument_ubsan_no_recover_and_configure_errors",
+      "description": "A sanitizer report must fail the run (UBSan builds with -fno-sanitize-recover=undefined) and an instrument the toolchain cannot provide fails the configure (CRD_ENABLE_UBSAN on MSVC, CRD_ENABLE_TSAN on MSVC or with ASan, CRD_ENABLE_FUZZER without clang++), never a warning that ignores the request; audit the hosted lane log (zero runtime error lines in run 34780682504's linux-gcc-asan job) before making an instrument stricter. Contract docs/design/test-instruments.md."
+    },
+    "feedback_fiber_switches_are_annotated_for_asan_and_tsan_and_the_tsan_model_found_the_free_list_races": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_fiber_switches_are_annotated_for_asan_and_tsan_and_the_tsan_model_found_the_free_list_races",
+      "description": "The jobs scheduler's three fiber switch sites carry ASan (__sanitizer_start/finish_switch_fiber) and TSan (__tsan_create/switch_to/destroy_fiber, flags 0) annotations in sanitizer_fibers.hpp; the deque's seq_cst fence is a seq_cst RMW under TSan only (GCC -Wtsan). Probes on MSVC 19.51 and GCC 13.3 showed no difference annotated vs unannotated; TSan's only reports are the fiber and counter free-lists reading next_free outside the CAS (fiber_pool.cpp:296/239, counter.cpp:66/75), owned by CORE-USE.2, so no TSan preset yet; WSL2 needs setarch x86_64 -R for TSan."
+    },
+    "feedback_bounded_fuzz_targets_replay_their_corpus_on_every_lane_and_the_first_rounds_found_the_loader_debt": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_bounded_fuzz_targets_replay_their_corpus_on_every_lane_and_the_first_rounds_found_the_loader_debt",
+      "description": "Ingestion loaders get bounded fuzz targets (cmake/CrdFuzz.cmake, tests/support/fuzz, scripts/fuzz.py, linux-clang-fuzz diagnostic preset): a replay executable whose committed raw-byte corpus is a CTest on every lane plus a libFuzzer build with time/length/RSS/allocation limits and the unit tests' round-trip as oracle. Four bounded rounds found 29 artifacts in seconds (exponent and integer overflows, over-long op names asserting, an empty attribute name, a quoted-first-name lookahead, region nesting caps, CKIR n_out vs [[out]], a blob input count past the node array, missing blob bounds validation); 21 adopted (12 root-caused to nine defects fixed as rejections, nine replay clean on both hosts with no established cause), eight pending under fuzz/pending/ owned by REPO.DEV.11; clang++ on Linux stays unqualified (139 units fail under the GCC warning set) so the preset shows warnings without -Werror."
+    },
+    "feedback_every_committed_generated_file_is_named_with_its_generator_status_and_bytes_and_regeneration_is_a_reference_host_act": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_every_committed_generated_file_is_named_with_its_generator_status_and_bytes_and_regeneration_is_a_reference_host_act",
+      "description": "Every committed generated file is an entry in scripts/generated-sources.json (generator, status, LF-normalized SHA-256); check-generated.py fails a lane on changed bytes, an unlisted generation marker or a missing generator, and hosted lanes check hashes only (no numpy there). Regeneration is a reference-host act (Linux glibc, Python 3.12): float constants from the host cmath differ by one ulp on Windows (FFT twiddles), so those entries are host-dependent; a scan of 160 files found 39 whose scratch generators were never committed and four whose generators no longer reproduce them (hand maintenance, formatting, unseeded or version-bound oracles); a marker rule must be line-leading because 16 hand-written files merely mention generation."
+    },
+    "feedback_a_fuzz_finding_that_does_not_replay_alone_is_adopted_with_its_repetition_evidence_and_generated_source_statuses_are_declared_properties": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_a_fuzz_finding_that_does_not_replay_alone_is_adopted_with_its_repetition_evidence_and_generated_source_statuses_are_declared_properties",
+      "description": "A libFuzzer-process finding that does not replay in isolation on a fresh sanitizer build, nor over thousands of in-process repetitions, is adopted as a corpus input with that evidence, while a deterministic oracle failure is a defect fixed in the loader with a regression (REPO.DEV.11: two CKIR text writer/reader gaps fixed, six artifacts adopted). Generated-source statuses other than drifted are declared properties with no owner; drifted names the row that decides; formatted means generator output through the repository clang-format."
     }
   },
   "aliases": {

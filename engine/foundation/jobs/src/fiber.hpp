@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/jobs/detail/fiber_context.hpp>
+#include "sanitizer_fibers.hpp"
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
@@ -46,6 +47,12 @@ struct Fiber
     crd::u32   next_free     = kFiberNullIndex; // Treiber stack link; kFiberNullIndex = end-of-list
     FiberTier  tier          = FiberTier::Small;
     Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
+
+    // Sanitizer switch state (sanitizer_fibers.hpp): the fake stack this fiber left behind and the scheduler stack
+    // it returns to, its TSan context, and the TSan context of the thread that dispatched or resumed it last.
+    SanitizerSwitch sanitizer{};
+    void*           tsan_fiber  = nullptr;
+    void*           tsan_return = nullptr;
 
     // SBO callable storage — valid when the running job was created by make_job<F>.
     // Copied from JobDecl (data + _pad[9..41]) by run_job_in_fiber on initial dispatch.

@@ -457,6 +457,9 @@ public:
     Context& operator=(Context&&)      = delete;
 
     // Intern an op-kind identity: the FNV-1a hash of "dialect.op". The name is retained for diagnostics only.
+    // "dialect.op" is interned through a fixed buffer of this many bytes (the NUL included); a loader rejects a longer
+    // name before interning (REPO.DEV.9 fuzz finding), so intern_op only asserts on a builder mistake.
+    static constexpr usize kMaxOpNameBytes = 256U;
     [[nodiscard]] OpId intern_op(containers::StringView dialect, containers::StringView name);
     // Reverse lookup for diagnostics — the "dialect.op" string, or "" if the id was never interned here.
     [[nodiscard]] containers::StringView op_name(OpId id) const noexcept;

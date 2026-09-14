@@ -15,6 +15,7 @@
 // the error-tier QuadResult (the |higher−lower| Tier-1 estimate, never a bound).
 
 #include <crd/hesap/quadrature/gauss.hpp>
+#include <crd/hesap/quadrature/gauss_kronrod.hpp>
 #include <crd/hesap/quadrature/integrate.hpp>
 
 #include <crd/containers/array.hpp>

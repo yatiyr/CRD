@@ -1,0 +1,22 @@
+# .ckiet = 2
+
+[[node]]
+id = "n2"
+op = "Sampler"
+tkind = "Sampler"
+trows = 0
+tcols = 0
+shape = [1]
+iidx = 1
+dset = 2
+
+[[node]]
+id = "n3"
+op = "TexSample"
+tkind = "Vec"
+trows = 4
+shape = [1]
+in = ["n1", "n2666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666", ,", ":n2", ,n0"]
+ "n4"
+pe = [1]
+in = plH

@@ -14,7 +14,7 @@ ROOT_FILES = {
 }
 ROOT_DIRS = {
     '.git', '.github', '.vs', '.vscode', '.idea', '.claude', '.codex', '.agents',
-    '.cpm-cache', '.venv', 'assets', 'bench', 'build', 'cmake', 'docs', 'engine',
+    '.cpm-cache', '.sccache', '.venv', 'assets', 'bench', 'build', 'cmake', 'docs', 'engine',
     'external', 'out', 'runtime', 'sandbox', 'scripts', 'tests', 'tools',
 }
 SOURCE_FAMILIES = {
@@ -71,10 +71,10 @@ def check(root=ROOT):
             errors.append(f'Unclassified engine directory: {family.relative_to(root)}')
     for module in modules:
         relative = module.parent.relative_to(root).as_posix()
-        if relative not in excluded_modules and not re.search(r'add_subdirectory\(' + re.escape(relative) + r'(?:\s|\))', cmake):
+        if relative not in excluded_modules and not re.search(r'(?:add_subdirectory|crd_module)\(' + re.escape(relative) + r'(?:\s|\))', cmake):
             errors.append(f'Module absent from build registration: {relative}')
     test_cmake = (root / 'tests/CMakeLists.txt').read_text(encoding='utf-8-sig')
-    for source in re.findall(r'add_subdirectory\(([^\s)]+)', test_cmake):
+    for source in re.findall(r'(?:add_subdirectory|crd_tests)\(([^\s)]+)', test_cmake):
         if not (root / 'tests' / source / 'CMakeLists.txt').is_file():
             errors.append(f'Test registration points to missing directory: {source}')
     if root == ROOT:

@@ -22,6 +22,7 @@ This applies to every human and agent, regardless of tool/model. No host-specifi
 | Whole-system vision, classified gaps, AI/collaboration/science | [System review](research/2026-09-12-cerid-whole-system-review.md) |
 | Cross-domain qualification and task closure | [Quality contract](design/system-quality-contract.md) |
 | Source owner, dependencies, public API | [Systems/source map](systems/README.md) |
+| Contribute a module, fix, asset/program or build change; publication handoff | [Contribution routes](CONTRIBUTING.md) |
 | Specific implementation plan or decision | Row's link; reverse lookup in [design](design/README.md) or [ADRs](decisions/README.md) |
 | Prior lesson or matching failure | [MEMORY](../MEMORY.md); query one record |
 | What actually ran or was measured | Linked [session](sessions/), [benchmark](bench/README.md) or [recipe](recipes/README.md) |

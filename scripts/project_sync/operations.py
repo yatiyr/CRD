@@ -158,41 +158,91 @@ def cmake_commands(text: str):
         yield start, close, value.lower(), arguments
 
 
-def register_module(tx: Transaction, directory: str):
+REGISTRATIONS = {'add_subdirectory', 'crd_module', 'crd_tests'}
+REGISTRY_ANCHORS = {'crd_resolve_modules', 'crd_stage_warp_dll', 'crd_apply_project_structure', 'crd_organize_targets'}
+
+
+def registration_file(directory: str):
     prefix = 'tests/' if directory.startswith('tests/') else ''
-    registration = 'tests/CMakeLists.txt' if prefix else 'CMakeLists.txt'
+    return prefix, ('tests/CMakeLists.txt' if prefix else 'CMakeLists.txt')
+
+
+def declare_tests(text: str, module_source: str, test_source: str) -> str:
+    """Add a TESTS entry to the crd_module() registration of the owning engine module, when one exists."""
+    for start, end, command, args in cmake_commands(text):
+        if command == 'crd_module' and args and args[0] == module_source:
+            if test_source in args:
+                return text
+            close = text.rindex(')', start, end + 1)
+            keyword = '' if 'TESTS' in args else 'TESTS '
+            insert = f' {keyword}{test_source}'
+            if 'TESTS' in args:
+                # append after the last TESTS value: the keyword group runs until the next keyword
+                keywords = {'HOST', 'EXECUTABLES', 'DEPENDS', 'PACKAGES', 'TESTS', 'TEST_DEPENDS', 'TEST_PACKAGES'}
+                spans = [(left, right, token) for left, right, token in cmake_tokens(text[start:close])]
+                index = next(i for i, span in enumerate(spans) if span[2] == 'TESTS')
+                last = index
+                for i in range(index + 1, len(spans)):
+                    if spans[i][2] in keywords:
+                        break
+                    last = i
+                position = start + spans[last][1]
+                return text[:position] + insert + text[position:]
+            return text[:close] + insert + text[close:]
+    return text
+
+
+def register_module(tx: Transaction, directory: str, depends=()):
+    prefix, registration = registration_file(directory)
     raw = tx.read(registration)
     if raw is None:
         raise Conflict(f'Missing module registration file: {registration}')
     source = directory[len(prefix):]
     text = raw.decode('utf-8')
-    if any(command == 'add_subdirectory' and args and args[0] == source
-           for _, _, command, args in cmake_commands(text)):
+    commands = list(cmake_commands(text))
+    if any(command in REGISTRATIONS and args and args[0] == source for _, _, command, args in commands):
         return
     binary = ('engine/' if directory.startswith('engine/') else '') + directory.rsplit('/', 1)[-1]
-    line = f'add_subdirectory({source} {binary})\n'
-    anchors = [start for start, _, command, _ in cmake_commands(text)
-               if command in {'crd_apply_project_structure', 'crd_organize_targets'}]
+    registry = any(command in {'crd_resolve_modules', 'crd_add_modules', 'crd_tests'} for _, _, command, _ in commands)
+    if registry and prefix:
+        line = f'crd_tests({source} {binary})\n'
+    elif registry:
+        line = f'crd_module({source} {binary}' + (' DEPENDS ' + ' '.join(depends) if depends else '') + ')\n'
+    else:
+        line = f'add_subdirectory({source} {binary})\n'
+    anchors = [start for start, _, command, _ in commands if command in REGISTRY_ANCHORS]
     anchor = min(anchors) if anchors else -1
     if anchor >= 0:
         text = text[:anchor] + line + text[anchor:]
     else:
         text = text.rstrip() + '\n' + line
     tx.write(registration, text.encode('utf-8'))
+    if registry and prefix:
+        root_raw = tx.read('CMakeLists.txt')
+        if root_raw is not None:
+            root_text = declare_tests(root_raw.decode('utf-8'), 'engine/' + source, source)
+            if root_text != root_raw.decode('utf-8'):
+                tx.write('CMakeLists.txt', root_text.encode('utf-8'))
 
 
 def unregister_module(tx: Transaction, directory: str):
-    prefix = 'tests/' if directory.startswith('tests/') else ''
-    registration = 'tests/CMakeLists.txt' if prefix else 'CMakeLists.txt'
+    prefix, registration = registration_file(directory)
     raw = tx.read(registration)
     if raw is None:
         raise Conflict(f'Missing module registration file: {registration}')
     text = raw.decode('utf-8')
     matches = [(start, end) for start, end, command, args in cmake_commands(text)
-               if command == 'add_subdirectory' and args and args[0] == directory[len(prefix):]]
+               if command in REGISTRATIONS and args and args[0] == directory[len(prefix):]]
     if len(matches) != 1:
-        raise Conflict(f'{directory} is not registered by one literal add_subdirectory; edit its CMake definition explicitly')
+        raise Conflict(f'{directory} is not registered by one literal add_subdirectory/crd_module/crd_tests; '
+                       'edit its CMake definition explicitly')
     start, end = matches[0]
+    line_start = text.rfind('\n', 0, start) + 1
+    if text[line_start:start].strip() == '':
+        start = line_start
+    line_end = text.find('\n', end)
+    if line_end >= 0 and text[end:line_end].strip() == '':
+        end = line_end + 1
     tx.write(registration, (text[:start] + text[end:]).encode('utf-8'))
 
 
@@ -303,7 +353,9 @@ class Plan:
             text += f'target_link_libraries({target} PRIVATE ' + ' '.join(dependencies) + ')\n'
         text += f'if(TARGET crd-warnings)\n    target_link_libraries({target} PRIVATE crd-warnings)\nendif()\n'
         self.tx.write(directory + '/CMakeLists.txt', text.encode('utf-8'))
-        register_module(self.tx, directory)
+        modules = sorted({self.model['targets'][d]['source_dir'].rsplit('/', 1)[-1] for d in dependencies
+                          if self.model['targets'][d]['source_dir'].startswith('engine/')})
+        register_module(self.tx, directory, modules)
         self.manifest['directories'].append('/'.join(parts[:2]))
 
     def remove_module(self, directory: str):

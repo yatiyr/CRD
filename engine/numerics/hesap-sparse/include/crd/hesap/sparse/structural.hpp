@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>

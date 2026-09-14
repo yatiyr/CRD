@@ -1,0 +1,28 @@
+@PACKAGE_INIT@
+
+# Cerid @PROJECT_VERSION@ package, installed from one profile (cmake/CrdPackage.cmake; docs/design/public-consumption.md).
+# The installed <crd/core/build_config.hpp> carries these values, so a consumer must configure the same profile.
+set(Cerid_BUILD_TYPE "@CMAKE_BUILD_TYPE@")
+set(Cerid_ENABLE_ASSERTS @CRD_PACKAGE_ASSERTS@)
+set(Cerid_ENABLE_PROFILING @CRD_PACKAGE_PROFILING@)
+set(Cerid_SHIPPING @CRD_PACKAGE_SHIPPING@)
+set(Cerid_LOG_MIN_LEVEL_NUM "@CRD_LOG_MIN_LEVEL_NUM@")
+set(Cerid_SIMD_LEVEL "@CRD_SIMD_LEVEL@")
+set(Cerid_COMPILER "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@")
+set(Cerid_PROFILE "@CRD_PACKAGE_PROFILE@")
+set(Cerid_LIBRARIES "@CRD_PACKAGE_LIBRARY_LIST@")
+
+if(Cerid_BUILD_TYPE STREQUAL "")
+    message(WARNING "Cerid ${Cerid_VERSION} was installed from a multi-configuration build; its build_config.hpp "
+                    "belongs to the configuration that ran the install, which this package cannot verify")
+elseif(CMAKE_CONFIGURATION_TYPES)
+    message(WARNING "Cerid ${Cerid_VERSION} was installed from the ${Cerid_BUILD_TYPE} profile; only that "
+                    "configuration of this multi-configuration project matches its build_config.hpp")
+elseif(NOT CMAKE_BUILD_TYPE STREQUAL Cerid_BUILD_TYPE AND NOT Cerid_ALLOW_PROFILE_MISMATCH)
+    message(FATAL_ERROR "Cerid ${Cerid_VERSION} was installed from the ${Cerid_BUILD_TYPE} profile (${Cerid_PROFILE}); "
+                        "this project configures CMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}'. Install the matching profile, "
+                        "or set Cerid_ALLOW_PROFILE_MISMATCH=ON to accept the installed build_config.hpp anyway")
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/CeridTargets.cmake")
+check_required_components(Cerid)

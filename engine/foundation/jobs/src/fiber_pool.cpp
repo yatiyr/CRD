@@ -137,6 +137,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
         auto* usable_base = static_cast<crd::u8*>(f.stack_alloc) + guard_bytes;
         fiber_init_stack(f.context, usable_base, usable_bytes, trampoline);
         f.usable_base = usable_base;
+        f.tsan_fiber  = sanitizer_create_fiber();
         f.usable_size = usable_bytes;
         f.trampoline  = trampoline;
     }
@@ -156,6 +157,7 @@ void FiberPool::shutdown_tier(Tier& tier) noexcept
     {
         if (tier.fibers[i].stack_alloc)
         {
+            sanitizer_destroy_fiber(tier.fibers[i].tsan_fiber);
             platform_stack_free(tier.fibers[i].stack_alloc, tier.fibers[i].alloc_size);
             tier.fibers[i].stack_alloc = nullptr;
         }

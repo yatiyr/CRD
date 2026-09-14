@@ -1,0 +1,271 @@
+{
+  "schema": "cerid-pins/1",
+  "note": "Every external input of the build and the hosted workflow: version, source, SHA-256 and license. Read by cmake/CrdPins.cmake, scripts/pins.py and scripts/check-pins.py; contract in docs/design/pinned-inputs.md. Refresh an entry by editing it here only.",
+  "packages": {
+    "Catch2": {
+      "version": "3.7.1",
+      "repository": "catchorg/Catch2",
+      "ref": "v3.7.1",
+      "commit": "fa43b77429ba76c462b1898d6cd2f2d7a9416b14",
+      "url": "https://github.com/catchorg/Catch2/archive/fa43b77429ba76c462b1898d6cd2f2d7a9416b14.tar.gz",
+      "file": "Catch2-fa43b774.tar.gz",
+      "sha256": "e7bbe2a99e111dfc9eb931f5e95b11b02f18f64c4f5b3aff6fdbd118fe440107",
+      "license": "BSL-1.0"
+    },
+    "glfw": {
+      "version": "3.4",
+      "repository": "glfw/glfw",
+      "ref": "3.4",
+      "commit": "7b6aead9fb88b3623e3b3725ebb42670cbe4c579",
+      "url": "https://github.com/glfw/glfw/archive/7b6aead9fb88b3623e3b3725ebb42670cbe4c579.tar.gz",
+      "file": "glfw-7b6aead9.tar.gz",
+      "sha256": "169d49096e339caabbc12e1762273c5cb9130a535a282ba46cf5c14ab6e55694",
+      "license": "Zlib"
+    },
+    "tomlplusplus": {
+      "version": "3.4.0",
+      "repository": "marzer/tomlplusplus",
+      "ref": "v3.4.0",
+      "commit": "30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
+      "url": "https://github.com/marzer/tomlplusplus/archive/30172438cee64926dc41fdd9c11fb3ba5b2ba9de.tar.gz",
+      "file": "tomlplusplus-30172438.tar.gz",
+      "sha256": "291254ffe7f2433f90deef878d0d9335534a350a958ea23ecf511b7b2277bf7f",
+      "license": "MIT"
+    },
+    "zstd": {
+      "version": "1.5.5",
+      "repository": "facebook/zstd",
+      "ref": "v1.5.5",
+      "commit": "63779c798237346c2b245c546c40b72a5a5913fe",
+      "url": "https://github.com/facebook/zstd/archive/63779c798237346c2b245c546c40b72a5a5913fe.tar.gz",
+      "file": "zstd-63779c79.tar.gz",
+      "sha256": "52f5e9fe50c75feda969686b29d28791ac430bc33e85c35bc9fb02d1a1b891e3",
+      "license": "BSD-3-Clause OR GPL-2.0-only"
+    },
+    "stb": {
+      "version": "2c980bb",
+      "repository": "nothings/stb",
+      "ref": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+      "commit": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+      "url": "https://github.com/nothings/stb/archive/2c980bb59875b0d32144a71867fbdebb2f77cd20.tar.gz",
+      "file": "stb-2c980bb5.tar.gz",
+      "sha256": "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515",
+      "license": "MIT OR Unlicense"
+    },
+    "cgltf": {
+      "version": "1.14",
+      "repository": "jkuhlmann/cgltf",
+      "ref": "v1.14",
+      "commit": "52c23814dbb60c2fbb54750ddf41d342d432a498",
+      "url": "https://github.com/jkuhlmann/cgltf/archive/52c23814dbb60c2fbb54750ddf41d342d432a498.tar.gz",
+      "file": "cgltf-52c23814.tar.gz",
+      "sha256": "b0d9edddaf691d903449c8a8e2c72ad564abe314531fbb49fb589b6289563eec",
+      "license": "MIT"
+    },
+    "MikkTSpace": {
+      "version": "3e895b4",
+      "repository": "mmikk/MikkTSpace",
+      "ref": "3e895b49d05ea07e4c2133156cfa94369e19e409",
+      "commit": "3e895b49d05ea07e4c2133156cfa94369e19e409",
+      "url": "https://github.com/mmikk/MikkTSpace/archive/3e895b49d05ea07e4c2133156cfa94369e19e409.tar.gz",
+      "file": "MikkTSpace-3e895b49.tar.gz",
+      "sha256": "aeba65ddee85a679133d510d71d00b108f603752f90b15b9ecf7777033f6e351",
+      "license": "Zlib"
+    },
+    "imgui": {
+      "version": "1.92.0-docking",
+      "repository": "ocornut/imgui",
+      "ref": "v1.92.0-docking",
+      "commit": "adfa5364cd84db127f8f5d093be90c2e3608be0f",
+      "url": "https://github.com/ocornut/imgui/archive/adfa5364cd84db127f8f5d093be90c2e3608be0f.tar.gz",
+      "file": "imgui-adfa5364.tar.gz",
+      "sha256": "f60b8b5f452d38891d78946efe14a447477e64c9cfe6924f522eae15478a58c4",
+      "license": "MIT",
+      "patches": [
+        "imgui-vulkan-whole-size"
+      ]
+    },
+    "eigen": {
+      "version": "3.4.0",
+      "repository": "gitlab.com/libeigen/eigen",
+      "ref": "3.4.0",
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "file": "eigen-3.4.0.tar.gz",
+      "sha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "license": "MPL-2.0",
+      "gated": "CRD_BUILD_HESAP_VS_REFERENCE"
+    },
+    "OpenBLAS": {
+      "version": "0.3.27",
+      "repository": "OpenMathLib/OpenBLAS",
+      "ref": "v0.3.27",
+      "commit": "ce3f668c992cb3cc80849d5c30ed637f5adbd5b2",
+      "url": "https://github.com/OpenMathLib/OpenBLAS/archive/ce3f668c992cb3cc80849d5c30ed637f5adbd5b2.tar.gz",
+      "file": "OpenBLAS-ce3f668c.tar.gz",
+      "sha256": "fab73d732f1063b93d1aa96f024d7e8258c22a7eff86ca2a5a771614d54c6224",
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_HESAP_VS_REFERENCE"
+    }
+  },
+  "tools": {
+    "cpm": {
+      "version": "0.40.2",
+      "url": "https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.40.2/CPM.cmake",
+      "file": "CPM_0.40.2.cmake",
+      "sha256": "c8cdc32c03816538ce22781ed72964dc864b2a34a310d3b7104812a5ca2d835d",
+      "license": "MIT"
+    },
+    "vulkan-sdk-windows": {
+      "version": "1.4.341.1",
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe",
+      "file": "vulkansdk-windows-X64-1.4.341.1.exe",
+      "sha256": "bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe",
+      "size": 307449952,
+      "install_root": "C:\\VulkanSDK\\1.4.341.1",
+      "provenance": "https://vulkan.lunarg.com/sdk/files.json?version=1.4.341.1",
+      "license": "LunarG Vulkan SDK License Agreement"
+    },
+    "vulkan-sdk-linux": {
+      "version": "1.4.341.1",
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.341.1/linux/vulkansdk-linux-x86_64-1.4.341.1.tar.xz",
+      "file": "vulkansdk-linux-x86_64-1.4.341.1.tar.xz",
+      "sha256": "3bf0f762afb6c79bc6a9d9fb5998745ccff928800a29619b501ed9de7fd9789b",
+      "size": 288040252,
+      "api_version": "1.4.341",
+      "members": [
+        "lib/libVkLayer_khronos_validation.so",
+        "share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json"
+      ],
+      "provenance": "https://vulkan.lunarg.com/sdk/files.json?version=1.4.341.1",
+      "license": "LunarG Vulkan SDK License Agreement"
+    },
+    "vulkan-headers": {
+      "version": "vulkan-sdk-1.4.341.0",
+      "repository": "KhronosGroup/Vulkan-Headers",
+      "commit": "b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2.tar.gz",
+      "file": "Vulkan-Headers-b5c8f996.tar.gz",
+      "sha256": "7937d8ec21785736436d9ff52564db7d55992070b5ac98324472cce6e425a7ba",
+      "license": "Apache-2.0 OR MIT"
+    },
+    "spirv-reflect": {
+      "version": "vulkan-sdk-1.4.341.0",
+      "repository": "KhronosGroup/SPIRV-Reflect",
+      "commit": "62ca825c692334ed758027b908c5aafbbc76243f",
+      "files": {
+        "spirv_reflect.h": {
+          "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/62ca825c692334ed758027b908c5aafbbc76243f/spirv_reflect.h",
+          "sha256": "3b15f03e650c0a134fbfa6c65a7694f59ff936cb175426e2d9e7160f9b388eb4"
+        },
+        "spirv_reflect.c": {
+          "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/62ca825c692334ed758027b908c5aafbbc76243f/spirv_reflect.c",
+          "sha256": "1e6c732a61859175c280131b3a9aa9e322123f2bfb3e1d9f268c758532b68f25"
+        }
+      },
+      "license": "Apache-2.0"
+    },
+    "spirv-headers": {
+      "version": "vulkan-sdk-1.4.341.0",
+      "repository": "KhronosGroup/SPIRV-Headers",
+      "commit": "04f10f650d514df88b76d25e83db360142c7b174",
+      "files": {
+        "include/spirv/unified1/spirv.h": {
+          "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/04f10f650d514df88b76d25e83db360142c7b174/include/spirv/unified1/spirv.h",
+          "sha256": "a3e041124815be3e6411dc9cfe04153a499b37ff83e630af8f7f98766db183a7"
+        }
+      },
+      "license": "MIT"
+    },
+    "warp": {
+      "version": "1.0.20",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.20/microsoft.direct3d.warp.1.0.20.nupkg",
+      "file": "microsoft.direct3d.warp.1.0.20.nupkg",
+      "sha256": "e5fe5de661ce98b58ef9cfb736e73c0a7a2623d3bbf5f14839b2d55566d87e40",
+      "member": "build/native/bin/x64/d3d10warp.dll",
+      "member_sha256": "2a08692cba4c130593329255627fb915d666c90cda53d284594bc8438fd4f49d",
+      "license": "Microsoft Software License Terms (Microsoft.Direct3D.WARP)"
+    },
+    "actionlint": {
+      "version": "1.7.12",
+      "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+      "file": "actionlint_1.7.12_linux_amd64.tar.gz",
+      "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+      "license": "MIT"
+    },
+    "sccache-windows": {
+      "version": "0.17.0",
+      "url": "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc.zip",
+      "file": "sccache-v0.17.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "e94cfc5b58cbe439302f586c1d1bd7980c2cd371d47bdf385ade657411e6f3ac",
+      "member": "sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe",
+      "member_sha256": "7a2b4220389c959bd78a12187f0d2339f4b3d794d3e9ff75cf1e5426f7c16a29",
+      "license": "Apache-2.0"
+    },
+    "sccache-linux": {
+      "version": "0.17.0",
+      "url": "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz",
+      "file": "sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006",
+      "member": "sccache-v0.17.0-x86_64-unknown-linux-musl/sccache",
+      "member_sha256": "066c5a84c85044c8f48b3ab571ac114293ea717c3d36985db022af8206e21e63",
+      "license": "Apache-2.0"
+    },
+    "llvm": {
+      "version": "20.1.8",
+      "acquired_by": "KyleMayes/install-llvm-action",
+      "license": "Apache-2.0 WITH LLVM-exception"
+    }
+  },
+  "actions": {
+    "actions/checkout": {
+      "ref": "v4",
+      "sha": "11d5960a326750d5838078e36cf38b85af677262"
+    },
+    "actions/setup-python": {
+      "ref": "v5",
+      "sha": "a26af69be951a213d495a4c3e4e4022e16d87065"
+    },
+    "actions/cache": {
+      "ref": "v4",
+      "sha": "0057852bfaa89a56745cba8c7296529d2fc39830"
+    },
+    "actions/upload-artifact": {
+      "ref": "v4",
+      "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+    },
+    "seanmiddleditch/gha-setup-ninja": {
+      "ref": "v5",
+      "sha": "96bed6edff20d1dd61ecff9b75cc519d516e6401"
+    },
+    "ilammy/msvc-dev-cmd": {
+      "ref": "v1",
+      "sha": "0b201ec74fa43914dc39ae48a89fd1d8cb592756"
+    },
+    "KyleMayes/install-llvm-action": {
+      "ref": "v2.0.9",
+      "sha": "ebc0426251bc40c7cd31162802432c68818ab8f0"
+    }
+  },
+  "runners": {
+    "windows": "windows-2025",
+    "linux": "ubuntu-24.04",
+    "windows-native": "windows-2025-vs2026"
+  },
+  "unpinned": {
+    "apt": [
+      "libvulkan-dev",
+      "glslang-tools",
+      "libshaderc-dev",
+      "libwayland-dev",
+      "wayland-protocols",
+      "libxkbcommon-dev",
+      "libx11-dev",
+      "libxrandr-dev",
+      "libxinerama-dev",
+      "libxcursor-dev",
+      "libxi-dev",
+      "mesa-common-dev"
+    ],
+    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census. The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
+  }
+}

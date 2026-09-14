@@ -1,0 +1,4 @@
+module {
+  ^bb1(%0 : !i32):
+  test.add(%0, %0) {big = 1e+20, fbuffer999999 = @target, ty = !struct<Point,x:!i32,y:!f32>, ty2 = !fn<(!param<T,!trait<Ord>>)->(!option<!i32>)>, t = !qty<!vec<3x!f32>,L1999999999999999999s = "h_fni32
+}

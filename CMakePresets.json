@@ -239,6 +239,14 @@
             }
         },
         {
+            "name": "win-public-checks",
+            "displayName": "Windows Debug + public header checks and the package consumer test",
+            "inherits": "win-debug",
+            "cacheVariables": {
+                "CRD_PUBLIC_CHECKS": "ON"
+            }
+        },
+        {
             "name": "linux-gcc-debug",
             "displayName": "Linux GCC Debug",
             "inherits": "linux-base",
@@ -310,6 +318,38 @@
             "inherits": "linux-gcc-debug",
             "cacheVariables": {
                 "CRD_SIMD_LEVEL": "sse2"
+            }
+        },
+        {
+            "name": "linux-gcc-public-checks",
+            "displayName": "Linux GCC Debug + public header checks and the package consumer test",
+            "inherits": "linux-gcc-debug",
+            "cacheVariables": {
+                "CRD_PUBLIC_CHECKS": "ON"
+            }
+        },
+        {
+            "name": "linux-clang-fuzz",
+            "displayName": "Linux clang Debug + ASan + UBSan + libFuzzer targets (diagnostic: warnings shown, not errors; scripts/fuzz.py)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_ENABLE_ASAN": "ON",
+                "CRD_ENABLE_UBSAN": "ON",
+                "CRD_ENABLE_FUZZER": "ON",
+                "CRD_WARNINGS_AS_ERRORS": "OFF"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-clang-x64"
+                }
             }
         }
     ],
@@ -435,6 +475,10 @@
             "configurePreset": "win-debug-sse2"
         },
         {
+            "name": "win-public-checks",
+            "configurePreset": "win-public-checks"
+        },
+        {
             "name": "linux-gcc-debug",
             "configurePreset": "linux-gcc-debug"
         },
@@ -461,6 +505,14 @@
         {
             "name": "linux-gcc-debug-sse2",
             "configurePreset": "linux-gcc-debug-sse2"
+        },
+        {
+            "name": "linux-gcc-public-checks",
+            "configurePreset": "linux-gcc-public-checks"
+        },
+        {
+            "name": "linux-clang-fuzz",
+            "configurePreset": "linux-clang-fuzz"
         }
     ],
     "testPresets": [
@@ -625,6 +677,13 @@
             }
         },
         {
+            "name": "win-public-checks",
+            "configurePreset": "win-public-checks",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
             "name": "linux-gcc-debug-scalar",
             "configurePreset": "linux-gcc-debug-scalar",
             "output": {
@@ -634,6 +693,20 @@
         {
             "name": "linux-gcc-debug-sse2",
             "configurePreset": "linux-gcc-debug-sse2",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-gcc-public-checks",
+            "configurePreset": "linux-gcc-public-checks",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-clang-fuzz",
+            "configurePreset": "linux-clang-fuzz",
             "output": {
                 "outputOnFailure": true
             }

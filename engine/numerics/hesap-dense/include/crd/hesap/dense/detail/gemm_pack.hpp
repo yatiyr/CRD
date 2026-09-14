@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/detail/gemm_microkernel.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>

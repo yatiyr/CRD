@@ -170,6 +170,57 @@ inline Shape read_shape(Cursor& c)
     return s;
 }
 
+// Bounds of a decoded graph against its final sizes (mirrors the .ckir text reader's block): every node ref is -1 or
+// < n, every ext window and stmt body range lies inside its pool, struct ids index the registry, field offsets stay
+// inside the field pool, the entry's refs and outputs are in range, the input count is a prefix of the node array.
+inline bool refs_valid(const crd::containers::Array<KNode>& nodes, const crd::containers::Array<crd::i32>& ext,
+                       const crd::containers::Array<KType>& sfields, const crd::containers::Array<crd::u32>& sbegin,
+                       const crd::containers::Array<KStmt>& stmts, const KEntry& e, crd::u32 nin) noexcept
+{
+    const crd::i64 n_nodes   = static_cast<crd::i64>(nodes.size());
+    const crd::i64 n_stmts   = static_cast<crd::i64>(stmts.size());
+    const crd::i64 n_extpool = static_cast<crd::i64>(ext.size());
+    const crd::i64 n_sflds   = static_cast<crd::i64>(sfields.size());
+    const crd::i64 n_structs = static_cast<crd::i64>(sbegin.size());
+    const auto     nref_ok   = [&](crd::i64 r) noexcept { return r >= -1 && r < n_nodes; };
+    const auto     sid_ok    = [&](crd::i64 r) noexcept { return r >= -1 && r < n_structs; };
+    const auto     extwin_ok = [&](crd::i32 off, crd::u32 cnt) noexcept {
+        return off == -1 ? true : (off >= 0 && static_cast<crd::i64>(off) + static_cast<crd::i64>(cnt) <= n_extpool);
+    };
+    const auto bodywin_ok = [&](crd::i32 begin, crd::i32 cnt) noexcept {
+        return begin == -1 ? true : (begin >= 0 && cnt >= 0 && static_cast<crd::i64>(begin) + static_cast<crd::i64>(cnt) <= n_stmts);
+    };
+    if (static_cast<crd::i64>(nin) > n_nodes) { return false; }
+    for (crd::usize i = 0; i < nodes.size(); ++i)
+    {
+        const KNode& n = nodes[i];
+        if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d)) { return false; }
+        if (!extwin_ok(n.ext, n.n_ext)) { return false; }
+        if (!sid_ok(n.type.struct_id)) { return false; }
+    }
+    for (crd::usize i = 0; i < ext.size(); ++i) { if (!nref_ok(ext[i])) { return false; } }
+    for (crd::usize i = 0; i < sfields.size(); ++i) { if (!sid_ok(sfields[i].struct_id)) { return false; } }
+    for (crd::usize i = 0; i < sbegin.size(); ++i) { if (static_cast<crd::i64>(sbegin[i]) > n_sflds) { return false; } }
+    for (crd::usize i = 0; i < stmts.size(); ++i)
+    {
+        const KStmt& st = stmts[i];
+        if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result)) { return false; }
+        if (!bodywin_ok(st.body_begin, st.body_count)) { return false; }
+        if (!extwin_ok(st.ext, st.n_ext)) { return false; }
+    }
+    if (!nref_ok(e.position) || !nref_ok(e.frag_depth) || !nref_ok(e.discard_cond) || !nref_ok(e.shading_rate)
+        || !nref_ok(e.storage_write_index) || !nref_ok(e.storage_write_value) || !nref_ok(e.mesh_prim)
+        || !nref_ok(e.task_emit) || !nref_ok(e.tess_inner) || !nref_ok(e.tess_outer))
+    {
+        return false;
+    }
+    for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (!nref_ok(e.task_payload[k])) { return false; } }
+    if (!bodywin_ok(e.kernel_body_begin, e.kernel_body_count)) { return false; }
+    if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return false; }
+    for (int k = 0; k < e.n_out; ++k) { if (e.out[k].node < 0 || !nref_ok(e.out[k].node)) { return false; } } // an output names a node (REPO.DEV.11)
+    return true;
+}
+
 inline void write_node(ByteArray& b, const KNode& n)
 {
     put_u8(b, static_cast<crd::u8>(n.op));
@@ -401,6 +452,10 @@ inline KEntry read_entry(Cursor& c)
     if (!c.ok) { return false; }
     e = decoded;
 
+    // REPO.DEV.9 fuzz findings: a blob is validated against its FINAL sizes before anything iterates it, the same
+    // bounds the .ckir text reader applies (node refs >= -1 and < n, ext windows, struct ids, field offsets, stmt
+    // body ranges, the entry refs and its stage outputs, the input count as a prefix of the node array).
+    if (!sd::refs_valid(nodes, ext, sfields, sbegin, stmts, e, nin)) { return false; }
     g.serial_restore(nodes.data(), nodes.size(), ext.data(), ext.size(), sfields.data(), sfields.size(), sbegin.data(), sbegin.size(),
                      stmts.data(), stmts.size(), static_cast<int>(nin));
     return true;

@@ -192,7 +192,7 @@ private:
         if (sv_eq(head, "f64")) { return m_ctx.type_float(FloatKind::F64); }
         if (sv_eq(head, "f8e4m3")) { return m_ctx.type_float(FloatKind::F8E4M3); }
         if (sv_eq(head, "f8e5m2")) { return m_ctx.type_float(FloatKind::F8E5M2); }
-        if ((head[0] == 'i' || head[0] == 'u') && head.size() > 1U && sv_all_digits(head, 1U))
+        if (head.size() > 1U && (head[0] == 'i' || head[0] == 'u') && sv_all_digits(head, 1U))
         {
             return m_ctx.type_int(sv_to_uint(head, 1U), head[0] == 'i');
         }
@@ -646,7 +646,13 @@ private:
         i32 v = 0;
         while (m_cur < m_end && is_digit(*m_cur))
         {
-            v = (v * 10) + static_cast<i32>(*m_cur - '0');
+            const i32 digit = static_cast<i32>(*m_cur - '0');
+            if (v > (2147483647 - digit) / 10) // REPO.DEV.9 fuzz finding: reject, never overflow (UBSan)
+            {
+                fail("integer exponent out of range");
+                return 0;
+            }
+            v = (v * 10) + digit;
             ++m_cur;
         }
         return neg ? -v : v;
@@ -738,11 +744,19 @@ private:
     }
 
     // ── region / block / op ──
+    u32 m_region_depth = 0U; // REPO.DEV.9 fuzz finding: nested regions recurse through block/op; cap it like types
     void parse_region_body(Region* r) noexcept
     {
+        if (m_region_depth >= kMaxTypeDepth)
+        {
+            fail("region nesting too deep");
+            return;
+        }
+        ++m_region_depth;
         expect('{', "expected '{' opening a region");
         while (m_ok && la() == '^') { parse_block(r); }
         expect('}', "expected '}' closing a region");
+        --m_region_depth;
     }
 
     void parse_block(Region* r) noexcept
@@ -815,6 +829,11 @@ private:
         if (!split_op_name(name, dialect, opname))
         {
             fail("operation name must be 'dialect.op'");
+            return;
+        }
+        if (dialect.size() + 1U + opname.size() >= Context::kMaxOpNameBytes) // REPO.DEV.9 fuzz finding: reject, never assert
+        {
+            fail("operation name too long");
             return;
         }
         const OpId kind = m_ctx.intern_op(dialect, opname);
@@ -1084,8 +1103,10 @@ private:
         return m_ctx.attr_float(v);
     }
 
-    // Decide whether a '{' at the cursor opens an attribute dict (next significant char is an identifier: `name =`)
-    // or a region (next is '^' for a block, or '}' for an empty region). Non-consuming.
+    // Decide whether a '{' at the cursor opens an attribute dict (next significant char is an identifier `name =` or
+    // a quoted name `"p:key" =`, which the printer emits first when it sorts) or a region (next is '^' for a block,
+    // or '}' for an empty region). Non-consuming. REPO.DEV.9 fuzz finding: a dict whose first name was quoted
+    // printed fine and re-parsed as a region.
     [[nodiscard]] bool brace_opens_attrs() noexcept
     {
         const char* const save = m_cur;
@@ -1093,7 +1114,7 @@ private:
         skip_ws();
         const char c = m_cur < m_end ? *m_cur : '\0';
         m_cur        = save;
-        return is_ident_start(c);
+        return is_ident_start(c) || c == '"';
     }
 
     // Count the trailing region groups without consuming them: each is a balanced `{ ... }`. Restores the cursor so

@@ -241,6 +241,38 @@ class Operations(Fixture):
         self.assertLess(text.index('add_subdirectory(engine/numerics/extra engine/extra)'), text.index('crd_organize_targets'))
         self.assertIn('add_library(crd-extra STATIC', (self.root / 'engine/numerics/extra/CMakeLists.txt').read_text())
 
+    def test_registry_root_registers_crd_module_before_resolution(self):
+        self.write('CMakeLists.txt', 'project(Fixture)\ncrd_module(engine/numerics/dense engine/dense)\ncrd_resolve_modules()\n'
+                   'crd_add_modules()\ncrd_organize_targets("${CMAKE_CURRENT_SOURCE_DIR}")\n')
+        plan = Plan(self.ws, self.model, 'new module')
+        plan.module('crd-extra', 'engine/numerics/extra', 'STATIC', {'src/value.cpp': b'int value() { return 1; }\n'}, ['dense'])
+        self.run_plan(plan)
+        text = (self.root / 'CMakeLists.txt').read_text()
+        self.assertIn('crd_module(engine/numerics/extra engine/extra DEPENDS dense)\n', text)
+        self.assertLess(text.index('crd_module(engine/numerics/extra'), text.index('crd_resolve_modules'))
+        self.assertNotIn('add_subdirectory(', text)
+
+    def test_registry_test_directory_registers_crd_tests_and_declares_the_owner(self):
+        self.write('CMakeLists.txt', 'crd_module(engine/numerics/dense engine/dense DEPENDS core)\ncrd_resolve_modules()\n'
+                   'crd_add_modules()\n')
+        self.write('tests/CMakeLists.txt', 'crd_tests(foundation/core core)\ncrd_stage_warp_dll("${CMAKE_CURRENT_SOURCE_DIR}")\n')
+        plan = Plan(self.ws, self.model, 'new tests')
+        plan.module('crd-dense-tests', 'tests/numerics/dense', 'EXECUTABLE', {'test.cpp': b'int main() { return 0; }\n'})
+        self.run_plan(plan)
+        tests = (self.root / 'tests/CMakeLists.txt').read_text()
+        self.assertIn('crd_tests(numerics/dense dense)\n', tests)
+        self.assertLess(tests.index('crd_tests(numerics/dense'), tests.index('crd_stage_warp_dll'))
+        self.assertIn('crd_module(engine/numerics/dense engine/dense DEPENDS core TESTS numerics/dense)',
+                      (self.root / 'CMakeLists.txt').read_text())
+
+    def test_registry_unregister_removes_the_whole_crd_module_call(self):
+        self.write('CMakeLists.txt', 'crd_module(engine/numerics/dense engine/dense DEPENDS core\n    TESTS numerics/dense)\n'
+                   'crd_resolve_modules()\n')
+        plan = Plan(self.ws, self.model, 'remove module')
+        plan.remove_module(self.name)
+        self.run_plan(plan)
+        self.assertEqual((self.root / 'CMakeLists.txt').read_text(), 'crd_resolve_modules()\n')
+
     def test_cmake_projection_handles_explicit_and_discovered_sources(self):
         name = self.name + '/src/new.cpp'
         self.write(name, 'int new_answer() { return 9; }\n')

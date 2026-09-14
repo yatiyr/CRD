@@ -6,6 +6,10 @@ find_package(Vulkan REQUIRED)
 # set_source_files_properties appends flags AFTER /W4, which always triggers
 # D9025; the object library approach means /W4 is never on the command line
 # for these files in the first place.
+# The Vulkan backend compiles from a build-owned patched copy (cmake/patches/imgui-vulkan-whole-size.cmake):
+# the texture-upload map/flush uses VK_WHOLE_SIZE so VUID-VkMappedMemoryRange-size-01390 is satisfied. The
+# downloaded imgui tree is never modified; a patch anchor that stops matching upstream fails the configure.
+crd_patched_copy(_crd_imgui_impl_vulkan imgui backends/imgui_impl_vulkan.cpp imgui-vulkan-whole-size)
 add_library(crd-imgui-vendor OBJECT
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -13,7 +17,7 @@ add_library(crd-imgui-vendor OBJECT
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${_crd_imgui_impl_vulkan}
 )
 # REN-39-D2: the D3D12 render backend joins on Windows — ImGui on the second backend (the sandbox's panel).
 if(WIN32)
@@ -78,7 +82,8 @@ add_library(crd-imgui STATIC
 # CI-1 (2026-07-23): SYSTEM must be the FIRST argument of its own call — mid-list it parses as a literal
 # include dir named "SYSTEM" and the imgui dirs silently lose -isystem (GCC then -Werror's imgui's own headers).
 target_include_directories(crd-imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_include_directories(crd-imgui SYSTEM PRIVATE
+# PUBLIC: unit_preferences_inspector.hpp, a public header, draws with the ImGui API, so a consumer sees imgui.h.
+target_include_directories(crd-imgui SYSTEM PUBLIC
     "${imgui_SOURCE_DIR}"
     "${imgui_SOURCE_DIR}/backends"
 )

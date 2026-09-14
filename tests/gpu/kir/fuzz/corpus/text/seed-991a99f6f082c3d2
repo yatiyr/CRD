@@ -1,0 +1,6 @@
+schema = 1
+[[entry]]
+stage = "Compute"
+[[node]]
+op = "Const"
+in = ["n7"]

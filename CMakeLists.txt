@@ -17,6 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/CrdIdeFolders.cmake)
 include(cmake/CrdProjectSync.cmake)
+include(cmake/CrdModules.cmake)
 
 option(CRD_BUILD_TESTS      "Build test executables"           ON)
 option(CRD_BUILD_BENCHMARKS "Build benchmark executable"       ON)
@@ -40,10 +41,20 @@ option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
+option(CRD_ENABLE_TSAN      "Enable Thread Sanitizer (GCC/clang; exclusive with ASan)" OFF)
+option(CRD_ENABLE_FUZZER    "Build the libFuzzer fuzz targets (clang; coverage instrumentation tree-wide)" OFF)
 option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for crash diagnostics" OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS "Treat clang-tidy warnings as build errors (OFF only for diagnostic preview)" ON)
 option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
+# Diagnostic builds of a compiler the tree is not qualified for (linux-clang-fuzz) show warnings instead of failing on
+# them; every qualified configuration keeps warnings as errors (docs/design/test-instruments.md).
+option(CRD_WARNINGS_AS_ERRORS "Treat compiler warnings as errors (OFF only for diagnostic presets)" ON)
+# Cerid is static-only: the modules are STATIC libraries, the installed package exports them as such, and a shared
+# variant has no export contract yet (docs/design/public-consumption.md).
+if(BUILD_SHARED_LIBS)
+    message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is unsupported: Cerid builds and packages static libraries only")
+endif()
 
 # SIMD level + ADR-0063 deterministic-FP contract live in their own module.
 # Any target that links crd-math (everything, transitively) inherits the
@@ -51,6 +62,12 @@ option(CRD_ENABLE_PCH       "Enable default precompiled headers" ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CrdBuildProfiles)
 include(CrdSimd)
+# Opt-in compiler launcher and Ninja job pools; the default graph is unchanged. See cmake/CrdBuildPerformance.cmake.
+include(CrdBuildPerformance)
+# Opt-in public-header checks and the package consumer test; the default graph is unchanged. See cmake/CrdPublicChecks.cmake.
+include(CrdPublicChecks)
+# Relocatable package export (install rules only; no build statement). See cmake/CrdPackage.cmake.
+include(CrdPackage)
 
 # ---- Log compile-time minimum level ---------------------------------------
 # Anything strictly below this level is compiled out to ((void)0).
@@ -120,14 +137,35 @@ if(CRD_ENABLE_ASAN OR CRD_NATIVE_PROFILES)
     message(STATUS "[crd] Address Sanitizer condition: ${_crd_asan}")
 endif()
 
+# Instrument policy (REPO.DEV.9, docs/design/test-instruments.md): an instrument the toolchain cannot provide fails
+# the configure, and a UBSan report fails the run (no recovery), so a lane can never print a report and stay green.
 if(CRD_ENABLE_UBSAN)
     if(MSVC)
-        message(WARNING "[crd] UBSan not supported on MSVC, ignoring")
+        message(FATAL_ERROR "[crd] CRD_ENABLE_UBSAN is not supported by MSVC; configure a GCC or clang preset")
     else()
-        add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
-        add_link_options(-fsanitize=undefined)
-        message(STATUS "[crd] UB Sanitizer ENABLED")
+        add_compile_options(-fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=undefined -fno-sanitize-recover=undefined)
+        message(STATUS "[crd] UB Sanitizer ENABLED (no recovery: a report fails the run)")
     endif()
+endif()
+if(CRD_ENABLE_TSAN)
+    if(MSVC)
+        message(FATAL_ERROR "[crd] CRD_ENABLE_TSAN is not supported by MSVC; configure a GCC or clang preset")
+    elseif(CRD_ENABLE_ASAN)
+        message(FATAL_ERROR "[crd] CRD_ENABLE_TSAN and CRD_ENABLE_ASAN are exclusive instruments")
+    else()
+        add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=thread)
+        message(STATUS "[crd] Thread Sanitizer ENABLED (fiber switches annotated; docs/design/test-instruments.md)")
+    endif()
+endif()
+if(CRD_ENABLE_FUZZER)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR MSVC)
+        message(FATAL_ERROR "[crd] CRD_ENABLE_FUZZER needs clang++ (libFuzzer through the clang driver); "
+                            "the compiler is ${CMAKE_CXX_COMPILER_ID}${CMAKE_CXX_SIMULATE_ID}")
+    endif()
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=fuzzer-no-link>)
+    message(STATUS "[crd] libFuzzer targets ENABLED (coverage instrumentation tree-wide; cmake/CrdFuzz.cmake)")
 endif()
 
 # ----- Shipping optimizations + debug symbols --------------------------------
@@ -207,7 +245,7 @@ if(MSVC)
     # Gate flags on CXX/C only — MASM (ASM_MASM) does not accept these options.
     target_compile_options(crd-warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX,C>:/W4>
-        $<$<COMPILE_LANGUAGE:CXX,C>:/WX>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:/WX>
         $<$<COMPILE_LANGUAGE:CXX,C>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
@@ -245,7 +283,7 @@ else()
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wpedantic>
-        $<$<COMPILE_LANGUAGE:CXX,C>:-Werror>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:-Werror>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wconversion>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wshadow>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wdouble-promotion>
@@ -256,100 +294,390 @@ else()
     )
 endif()
 
+# ----- Module registry (REPO.DEV.4) ----------------------------------------------
+# Every build directory is registered once with its declared direct dependencies; crd_add_modules() below adds
+# the selected closure in this order and crd_verify_modules() checks the declarations against the real link
+# graph at the end of configure. CRD_MODULES empty keeps the full configuration. See cmake/CrdModules.cmake.
+
+crd_module(engine/foundation/core engine/core TESTS foundation/core)
+# ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
+crd_module(engine/foundation/vm engine/vm DEPENDS core log TESTS foundation/vm)
+crd_module(engine/foundation/units engine/units DEPENDS containers core memory TESTS foundation/units
+    TEST_DEPENDS math)
+# D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
+crd_module(engine/execution/ceir engine/ceir DEPENDS containers core log memory units TESTS execution/ceir support/fuzz)
+# D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
+crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir containers core jobs memory perf time
+    TESTS execution/ceir-host)
+# D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
+crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core memory render-asset-core resources
+    TESTS execution/ceir-cook)
+# D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
+crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers core gpu-context kir memory
+    TESTS execution/ceir-gpu TEST_DEPENDS hesap-autodiff)
+# D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
+crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir)
+crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
+crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf)
+crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory TEST_DEPENDS jobs)
+crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
+crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math
+    TESTS geometry/geometry-primitives)
+crd_module(engine/geometry/geometry-bvh engine/geometry-bvh DEPENDS containers core geometry-primitives jobs math
+    TESTS geometry/geometry-bvh)
+crd_module(engine/geometry/geometry-convex engine/geometry-convex
+    DEPENDS containers core geometry-primitives math memory TESTS geometry/geometry-convex)
+crd_module(engine/geometry/geometry-mesh engine/geometry-mesh
+    DEPENDS containers core geometry-bvh geometry-primitives math memory units TESTS geometry/geometry-mesh)
+crd_module(engine/geometry/geometry-spatial engine/geometry-spatial
+    DEPENDS containers core geometry-primitives math memory units TESTS geometry/geometry-spatial TEST_DEPENDS jobs)
+crd_module(engine/geometry/geometry-polygon engine/geometry-polygon
+    DEPENDS containers core geometry-primitives math memory units TESTS geometry/geometry-polygon)
+crd_module(engine/geometry/geometry-mesh-processing engine/geometry-mesh-processing
+    DEPENDS containers core geometry-bvh geometry-mesh geometry-polygon geometry-primitives math memory units
+    TESTS geometry/geometry-mesh-processing)
+crd_module(engine/geometry/geometry-delaunay engine/geometry-delaunay
+    DEPENDS containers core geometry-polygon geometry-primitives math memory units TESTS geometry/geometry-delaunay)
+crd_module(engine/geometry/geometry-decomposition engine/geometry-decomposition
+    DEPENDS containers core geometry-convex geometry-mesh geometry-primitives jobs math memory units
+    TESTS support/test_helpers geometry/geometry-decomposition TEST_DEPENDS perf time)
+crd_module(engine/geometry/geometry-bvh-gpu engine/geometry-bvh-gpu
+    DEPENDS containers core geometry-bvh geometry-primitives gpu-context jobs math memory units
+    TESTS support/test_helpers geometry/geometry-bvh-gpu TEST_DEPENDS gpu-context-vulkan perf platform time)
+crd_module(engine/geometry/geometry-shader-helpers engine/geometry-shader-helpers
+    DEPENDS containers core geometry-primitives math memory platform
+    TESTS support/test_helpers geometry/geometry-shader-helpers TEST_DEPENDS gpu-context gpu-context-vulkan perf)
+crd_module(engine/geometry/geometry-curves engine/geometry-curves
+    DEPENDS containers core geometry-primitives math memory units TESTS support/test_helpers geometry/geometry-curves
+    TEST_DEPENDS perf time)
+# GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
+crd_module(engine/assets/asset-io engine/asset-io
+    DEPENDS containers core geometry-bvh geometry-mesh geometry-primitives math memory time units
+    TESTS assets/asset-io TEST_DEPENDS resources TEST_PACKAGES mikktspace)
+crd_module(engine/numerics/hesap engine/hesap DEPENDS containers core math memory TESTS numerics/hesap)
+# v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
+crd_module(engine/numerics/hesap-special engine/hesap-special DEPENDS containers core hesap jobs math memory
+    TESTS numerics/hesap-special)
+crd_module(engine/numerics/hesap-dense engine/hesap-dense DEPENDS containers core hesap jobs math memory
+    TESTS numerics/hesap-dense)
+# v12-c; Gauss quadrature via Golub-Welsch (REUSES hesap-dense eig_sym + hesap-special recurrences); ADR-0094
+crd_module(engine/numerics/hesap-quadrature engine/hesap-quadrature
+    DEPENDS containers core hesap hesap-dense hesap-special memory TESTS numerics/hesap-quadrature)
+# v1a; links crd-jobs (declared below — CMake resolves target names at generation)
+crd_module(engine/numerics/hesap-sparse engine/hesap-sparse DEPENDS containers core hesap jobs math memory
+    TESTS numerics/hesap-sparse)
+# v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
+crd_module(engine/numerics/hesap-ordering engine/hesap-ordering DEPENDS containers core hesap hesap-sparse memory
+    TESTS numerics/hesap-ordering)
+# v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
+crd_module(engine/numerics/hesap-resources engine/hesap-resources
+    DEPENDS containers core hesap hesap-sparse hesap-tensor math memory resources TESTS numerics/hesap-resources)
+# v4a; Krylov solvers (CG/PCG) over LinearOp
+crd_module(engine/numerics/hesap-iterative engine/hesap-iterative
+    DEPENDS containers core hesap hesap-dense hesap-sparse math memory TESTS numerics/hesap-iterative
+    TEST_DEPENDS hesap-preconditioners)
+# v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
+crd_module(engine/numerics/hesap-preconditioners engine/hesap-preconditioners
+    DEPENDS containers core hesap hesap-dense hesap-iterative hesap-ordering hesap-sparse math memory)
+# v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
+crd_module(engine/numerics/hesap-amg engine/hesap-amg
+    DEPENDS containers core hesap hesap-dense hesap-preconditioners hesap-sparse math memory TESTS numerics/hesap-amg)
+crd_module(engine/foundation/containers engine/containers DEPENDS core memory TESTS foundation/containers)
+# RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
+crd_module(engine/rendering/render-asset-core engine/render-asset-core DEPENDS containers core memory
+    TESTS rendering/render-asset-core)
+# RAF-4 (D-007 "RAF band"): the shader + program contract (deps: render-asset-core)
+crd_module(engine/rendering/render-program engine/render-program DEPENDS containers core memory render-asset-core
+    TESTS rendering/render-program)
+# RAF-5 (D-007 "RAF band"): the material + technique contract (deps: render-asset-core, render-program)
+crd_module(engine/rendering/render-material engine/render-material
+    DEPENDS containers core memory render-asset-core render-program TESTS rendering/render-material)
+# RAF-6 (D-007 "RAF band"): the pass-executor registry (deps: render-asset-core)
+crd_module(engine/rendering/render-pass engine/render-pass DEPENDS containers core memory render-asset-core
+    TESTS rendering/render-pass)
+# RAF-7 (D-007 "RAF band"): the unified frame-graph runtime (deps: render-asset-core, render-pass, gpu-context)
+crd_module(engine/rendering/render-graph engine/render-graph
+    DEPENDS ceir-gpu containers core gpu-context memory render-asset-core render-pass TESTS rendering/render-graph
+    TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan)
+crd_module(engine/foundation/log engine/log DEPENDS containers core TESTS foundation/log)
+crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time PACKAGES glfw
+    TESTS foundation/platform)
+crd_module(engine/foundation/app engine/app DEPENDS containers core jobs platform TESTS foundation/app)
+crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform PACKAGES tomlplusplus
+    TESTS foundation/config)
+crd_module(engine/ui/imgui engine/imgui
+    DEPENDS config gpu-context gpu-context-dx12 gpu-context-vulkan log platform units PACKAGES glfw imgui
+    TESTS ui/imgui)
+# D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
+crd_module(engine/ui/perf-ui engine/perf-ui DEPENDS core imgui memory perf PACKAGES imgui TESTS ui/perf-ui)
+# REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
+crd_module(engine/geometry/lod engine/lod DEPENDS containers core geometry-mesh-processing math memory resources
+    PACKAGES tomlplusplus TESTS geometry/lod TEST_DEPENDS scene-render)
+crd_module(engine/geometry/meshgen engine/meshgen DEPENDS core math memory resources TESTS geometry/meshgen)
+# ADR-0099 v17-i-a: backend-agnostic GPU context foundation
+crd_module(engine/gpu/gpu-context engine/gpu-context DEPENDS containers core render-asset-core TESTS gpu/gpu-context
+    TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan kir)
+# ADR-0099 v17-i-a: headless Vulkan compute context
+crd_module(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan
+    DEPENDS containers core gpu-context kir memory platform TESTS gpu/gpu-context-vulkan
+    TEST_DEPENDS asset_cooker ceir ceir-gpu draw frame-cook imgui scene-render shader-cook vertex-cook
+    TEST_PACKAGES imgui)
+# ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
+crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS containers core gpu-context kir memory
+    TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook shader-cook vertex-cook)
+# ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
+crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context memory
+    TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu kir)
+crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs)
+# depends on crd-jobs above + crd-hesap (declared earlier)
+crd_module(engine/numerics/hesap-sched engine/hesap-sched DEPENDS containers core hesap jobs memory
+    TESTS numerics/hesap-sched)
+# v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
+crd_module(engine/numerics/hesap-direct engine/hesap-direct
+    DEPENDS containers core hesap hesap-dense hesap-iterative hesap-ordering hesap-sched hesap-sparse jobs math memory
+    TESTS numerics/hesap-direct)
+# v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
+crd_module(engine/numerics/hesap-eigen engine/hesap-eigen
+    DEPENDS containers core hesap hesap-dense hesap-direct hesap-iterative hesap-sparse jobs math memory
+    TESTS numerics/hesap-eigen TEST_DEPENDS hesap-amg hesap-preconditioners)
+# v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
+crd_module(engine/numerics/hesap-autodiff engine/hesap-autodiff DEPENDS containers core hesap hesap-tensor jobs math memory
+    TESTS numerics/hesap-autodiff)
+# v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
+crd_module(engine/gpu/kir engine/kir DEPENDS containers core math memory TESTS gpu/kir support/fuzz)
+# v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
+crd_module(engine/gpu/kir-vulkan engine/kir-vulkan DEPENDS containers core gpu-context gpu-context-vulkan kir memory
+    TESTS gpu/kir-vulkan execution/ceir-gpu-vulkan TEST_DEPENDS ceir ceir-cook ceir-gpu hesap-autodiff)
+# v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
+crd_module(engine/gpu/kir-cuda engine/kir-cuda DEPENDS containers core kir memory TESTS gpu/kir-cuda)
+# v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
+crd_module(engine/gpu/kir-dx12 engine/kir-dx12 DEPENDS containers core kir memory
+    TESTS gpu/kir-dx12 execution/ceir-gpu-dx12 TEST_DEPENDS ceir ceir-gpu gpu-context-dx12 hesap-autodiff)
+# v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
+crd_module(engine/gpu/kir-webgpu engine/kir-webgpu DEPENDS containers core kir memory TESTS gpu/kir-webgpu)
+# v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
+crd_module(engine/gpu/kir-hip engine/kir-hip DEPENDS containers core kir memory TESTS gpu/kir-hip)
+# v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
+crd_module(engine/gpu/kir-metal engine/kir-metal DEPENDS containers core kir memory TESTS gpu/kir-metal)
+# REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
+crd_module(engine/assets/frame-cook engine/frame-cook
+    DEPENDS ceir ceir-gpu containers core gpu-context log memory render-asset-core render-graph render-pass
+    PACKAGES tomlplusplus TESTS assets/frame-cook TEST_DEPENDS platform)
+# REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
+crd_module(engine/assets/technique-cook engine/technique-cook DEPENDS containers core frame-cook kir memory
+    PACKAGES tomlplusplus TESTS assets/technique-cook)
+# REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
+crd_module(engine/assets/material-cook engine/material-cook DEPENDS containers core kir memory
+    PACKAGES tomlplusplus TESTS assets/material-cook)
+# REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
+crd_module(engine/assets/vertex-cook engine/vertex-cook DEPENDS containers core kir material-cook memory
+    PACKAGES tomlplusplus TESTS assets/vertex-cook)
+# REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
+crd_module(engine/assets/light-cook engine/light-cook DEPENDS containers core kir memory PACKAGES tomlplusplus
+    TESTS assets/light-cook)
+# D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
+crd_module(engine/assets/shader-cook engine/shader-cook
+    DEPENDS containers core gpu-context gpu-context-dx12 gpu-context-vulkan jobs kir memory platform resources)
+# v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
+crd_module(engine/numerics/hesap-opt engine/hesap-opt
+    DEPENDS containers core hesap hesap-autodiff hesap-dense hesap-direct hesap-sparse hesap-stats jobs math memory
+    TESTS numerics/hesap-opt TEST_DEPENDS hesap-ordering)
+# v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
+crd_module(engine/numerics/hesap-stats engine/hesap-stats
+    DEPENDS containers core hesap-dense hesap-quadrature hesap-special jobs memory TESTS numerics/hesap-stats)
+# v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
+crd_module(engine/numerics/hesap-ode engine/hesap-ode
+    DEPENDS containers core hesap hesap-dense hesap-direct hesap-iterative hesap-sparse memory
+    TESTS numerics/hesap-ode)
+# v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
+crd_module(engine/numerics/hesap-fft engine/hesap-fft DEPENDS containers core hesap math memory
+    TESTS numerics/hesap-fft)
+# v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
+crd_module(engine/numerics/hesap-dsp engine/hesap-dsp
+    DEPENDS containers core hesap hesap-eigen hesap-fft hesap-special jobs math memory units TESTS numerics/hesap-dsp)
+# v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
+crd_module(engine/numerics/hesap-wavelet engine/hesap-wavelet DEPENDS containers core hesap hesap-fft jobs math memory
+    TESTS numerics/hesap-wavelet)
+# v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
+crd_module(engine/numerics/hesap-comms engine/hesap-comms
+    DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms)
+# v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
+crd_module(engine/numerics/hesap-interp engine/hesap-interp
+    DEPENDS containers core geometry-delaunay hesap hesap-dense hesap-fft math memory TESTS numerics/hesap-interp)
+# v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
+crd_module(engine/numerics/hesap-diff engine/hesap-diff
+    DEPENDS containers core hesap hesap-dense hesap-fft math memory TESTS numerics/hesap-diff)
+# v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
+crd_module(engine/numerics/hesap-motion engine/hesap-motion
+    DEPENDS containers core hesap hesap-dense hesap-special math memory TESTS numerics/hesap-motion)
+# v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
+crd_module(engine/numerics/hesap-tensor engine/hesap-tensor DEPENDS containers core jobs math memory platform
+    TESTS numerics/hesap-tensor TEST_DEPENDS hesap hesap-autodiff hesap-dense hesap-resources)
+crd_module(engine/assets/resources engine/resources DEPENDS containers core jobs log memory platform PACKAGES zstd
+    TESTS assets/resources TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan)
+crd_module(engine/world/scene engine/scene
+    DEPENDS containers core geometry-primitives geometry-spatial math memory resources
+    TESTS foundation/stress world/scene TEST_DEPENDS preset profile)
+crd_module(engine/assets/preset engine/preset DEPENDS containers core memory resources TESTS assets/preset)
+crd_module(engine/foundation/profile engine/profile DEPENDS containers core memory resources TESTS foundation/profile)
+crd_module(engine/physics/eylem engine/eylem DEPENDS containers core math memory TESTS physics/eylem)
+crd_module(engine/physics/eylem-rigid3d engine/eylem-rigid3d DEPENDS containers core eylem log math memory scene
+    TESTS physics/eylem-rigid3d)
+# GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
+crd_module(engine/world/anim engine/anim DEPENDS containers core hesap-interp math memory resources TESTS world/anim
+    TEST_DEPENDS asset-io asset_cooker)
+# GEO-9 (D-007 row 74): the TIMELINE resource — OTIO-shaped, RATIONAL time, deterministic eval, EXR-sequence render
+crd_module(engine/world/timeline engine/timeline DEPENDS containers core hesap-interp memory resources time
+    TESTS world/timeline)
+# GEO-10 (D-007 row 75): the DAW substrate — own WAV/AIFF/FLAC, audio-graph resource, MIDI 2.0, realtime
+crd_module(engine/media/audio engine/audio
+    DEPENDS ceir containers core hesap-dsp hesap-interp jobs memory resources time TESTS media/audio)
+crd_module(engine/rendering/draw engine/draw
+    DEPENDS containers core gpu-context gpu-context-vulkan kir log material-cook math memory scene vertex-cook
+    TESTS rendering/draw)
+# GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
+crd_module(engine/rendering/scene-render engine/scene-render
+    DEPENDS anim containers core frame-cook geometry-primitives gpu-context kir light-cook lod log material-cook math
+        memory render-asset-core resources scene vertex-cook TESTS rendering/scene-render
+    TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan meshgen)
+crd_module(engine/rendering/draw-imgui engine/draw-imgui DEPENDS core draw imgui PACKAGES imgui)
+crd_module(engine/physics/eylem-viz engine/eylem-viz DEPENDS core draw eylem eylem-rigid3d math scene
+    TESTS physics/eylem-viz)
+# The sandbox showcase tests link geometry-viz, draw and imgui, not the sandbox executable, so they stay owned here
+# and build whether or not CRD_BUILD_SANDBOX is on.
+crd_module(engine/geometry/geometry-viz engine/geometry-viz
+    DEPENDS containers core draw geometry-bvh geometry-curves geometry-primitives math
+    TESTS geometry/geometry-viz applications/sandbox TEST_DEPENDS imgui TEST_PACKAGES imgui)
+# add_subdirectory(engine/graphics)
+# add_subdirectory(engine/scripting)
+
+# Host tools: cookers and generators run on the build host; CRD_HOST_TOOLS_DIR imports prebuilt executables
+# instead (a target build consuming a host build), so host/target separation is declared here, not implied.
+crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
+    DEPENDS anim asset-io audio containers core frame-cook gpu-context gpu-context-vulkan light-cook log material-cook
+        math memory platform preset profile resources scene technique-cook timeline vertex-cook PACKAGES tomlplusplus
+    TESTS assets/scene_cooker assets/cooker)
+# GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
+crd_module(tools/ceridc HOST EXECUTABLES ceridc
+    DEPENDS asset-io asset_cooker audio containers core memory platform resources scene time timeline
+    TESTS tools/ceridc)
+# D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
+crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
+    DEPENDS containers core kir memory platform resources shader-cook)
+# ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
+crd_module(tools/kir-autotune NAME kir_autotune HOST EXECUTABLES kir_autotune
+    DEPENDS containers core kir kir-cuda memory)
+
+crd_module(runtime
+    DEPENDS app config containers core geometry-primitives hesap hesap-amg hesap-dense hesap-direct hesap-eigen
+        hesap-iterative hesap-ode hesap-opt hesap-ordering hesap-preconditioners hesap-resources hesap-sched
+        hesap-sparse hesap-special hesap-stats hesap-tensor jobs log math memory meshgen platform resources vm
+    TESTS bench TEST_DEPENDS geometry-bvh geometry-convex)
+
+if(CRD_BUILD_SANDBOX)
+    # asset_cooker is a build-time dependency: the demo pack is cooked by $<TARGET_FILE:asset_cooker>.
+    crd_module(sandbox
+        DEPENDS anim app asset_cooker draw geometry-spatial gpu-context gpu-context-dx12 gpu-context-vulkan imgui jobs kir
+            log memory perf perf-ui resources scene scene-render timeline
+        PACKAGES glfw imgui)
+endif()
+
+crd_resolve_modules()
+
 # ----- Dependencies (via CPM) ----------------------------------------------
+# Each package is acquired only when a selected module declares it (CRD_SELECTED_PACKAGES); the full
+# configuration selects every package, so the default acquisition is unchanged.
 
 include(cmake/CPM.cmake)
 
 if (CRD_BUILD_TESTS)
-    CPMAddPackage("gh:catchorg/Catch2@3.7.1")
+    crd_add_pinned_package(Catch2)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 endif()
 
-# GLFW: window + input backend for crd-platform.
-# We pin the 3.4 tag and disable everything we don't ship.
-# GLFW 3.4 on Linux: disable the X11 backend so its GLX context code (which needs
-# GL/gl.h) is never compiled. Wayland packages are installed in CI and suffice for
-# headless test runs. X11 users can opt back in by overriding GLFW_BUILD_X11.
-set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-if(UNIX AND NOT APPLE)
-    set(GLFW_BUILD_X11     OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
-endif()
-CPMAddPackage("gh:glfw/glfw#3.4")
-
-CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
-
-# zstd 1.5.5 has cmake_minimum_required(VERSION 2.8.12.2) which modern CMake rejects.
-# Setting CMAKE_POLICY_VERSION_MINIMUM tells CMake to treat it as 3.5.
-set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
-CPMAddPackage(
-    NAME zstd
-    GITHUB_REPOSITORY facebook/zstd
-    GIT_TAG v1.5.5
-    SOURCE_SUBDIR build/cmake
-    OPTIONS
-        "ZSTD_BUILD_PROGRAMS OFF"
-        "ZSTD_BUILD_TESTS OFF"
-        "ZSTD_BUILD_SHARED OFF"
-        "ZSTD_BUILD_STATIC ON"
-)
-unset(CMAKE_POLICY_VERSION_MINIMUM)
-
-# Phase 3.1.7.6 v0-close (2026-05-17) — disable IPO/LTCG on the
-# vendored zstd_static target. MSVC's LTCG link step recurrently
-# emits a C1001 internal compiler error at `zstd_decompress_block.c`
-# call-sites when LTCG-linked into `crd-sandbox.exe`
-# (`link!DllGetObjHandler()+0xc2654`) in the win-shipping-profile
-# preset. We can't `CRD_NOINLINE` third-party code, and the upstream
-# MSVC bug has no known fix. Disabling IPO on zstd's objects means
-# they're not `/GL`-tagged; the final link still uses `/LTCG` for
-# Cerid's own code but skips the un-tagged zstd objects — no link-
-# time codegen happens for zstd, breaking the ICE chain. Cerid's own
-# LTCG benefits (cross-TU inlining in the engine) are unaffected.
-if(TARGET zstd_static)
-    set_target_properties(zstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
+    # GLFW: window + input backend for crd-platform.
+    # We pin the 3.4 tag and disable everything we don't ship.
+    # GLFW 3.4 on Linux: disable the X11 backend so its GLX context code (which needs
+    # GL/gl.h) is never compiled. Wayland packages are installed in CI and suffice for
+    # headless test runs. X11 users can opt back in by overriding GLFW_BUILD_X11.
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    if(UNIX AND NOT APPLE)
+        set(GLFW_BUILD_X11     OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
+    endif()
+    crd_add_pinned_package(glfw)
 endif()
 
-# stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
-# Pin the previously checked-out revision: configure must not follow a moving branch.
-CPMAddPackage(
-    NAME stb
-    GITHUB_REPOSITORY nothings/stb
-    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
-    DOWNLOAD_ONLY YES
-)
-add_library(stb INTERFACE)
-target_include_directories(stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+if("tomlplusplus" IN_LIST CRD_SELECTED_PACKAGES)
+    crd_add_pinned_package(tomlplusplus)
+endif()
 
-# cgltf: single-header glTF 2.0 parser (DOWNLOAD_ONLY — no cmake build).
-# Phase 2.7: used by the glTF mesh cook handler.
-CPMAddPackage(
-    NAME cgltf
-    GITHUB_REPOSITORY jkuhlmann/cgltf
-    GIT_TAG v1.14
-    DOWNLOAD_ONLY YES
-)
-add_library(cgltf INTERFACE)
-target_include_directories(cgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
+if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
+    # zstd 1.5.5 has cmake_minimum_required(VERSION 2.8.12.2) which modern CMake rejects.
+    # Setting CMAKE_POLICY_VERSION_MINIMUM tells CMake to treat it as 3.5.
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
+    crd_add_pinned_package(zstd
+        SOURCE_SUBDIR build/cmake
+        OPTIONS
+            "ZSTD_BUILD_PROGRAMS OFF"
+            "ZSTD_BUILD_TESTS OFF"
+            "ZSTD_BUILD_SHARED OFF"
+            "ZSTD_BUILD_STATIC ON"
+    )
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
 
-# MikkTSpace: tangent-space generation (two C files, MIT license).
-# Phase 2.7: used by the glTF mesh cook handler to generate tangents when glTF
-# meshes omit TANGENT data. Compiled as a STATIC C99 library.
-CPMAddPackage(
-    NAME MikkTSpace
-    GITHUB_REPOSITORY mmikk/MikkTSpace
-    GIT_TAG 3e895b49d05ea07e4c2133156cfa94369e19e409
-    DOWNLOAD_ONLY YES
-)
-add_library(mikktspace INTERFACE)
-target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}")
-# mikktspace.c is included directly inside mesh.cpp (within an extern "C" block)
-# so it compiles as C++ without triggering C-compiler detection in CMake.
+    # Phase 3.1.7.6 v0-close (2026-05-17) — disable IPO/LTCG on the
+    # vendored zstd_static target. MSVC's LTCG link step recurrently
+    # emits a C1001 internal compiler error at `zstd_decompress_block.c`
+    # call-sites when LTCG-linked into `crd-sandbox.exe`
+    # (`link!DllGetObjHandler()+0xc2654`) in the win-shipping-profile
+    # preset. We can't `CRD_NOINLINE` third-party code, and the upstream
+    # MSVC bug has no known fix. Disabling IPO on zstd's objects means
+    # they're not `/GL`-tagged; the final link still uses `/LTCG` for
+    # Cerid's own code but skips the un-tagged zstd objects — no link-
+    # time codegen happens for zstd, breaking the ICE chain. Cerid's own
+    # LTCG benefits (cross-TU inlining in the engine) are unaffected.
+    if(TARGET zstd_static)
+        set_target_properties(zstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    endif()
+endif()
 
-CPMAddPackage("gh:ocornut/imgui#v1.92.0-docking")
+if("stb" IN_LIST CRD_SELECTED_PACKAGES)
+    # stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
+    # Pin the previously checked-out revision: configure must not follow a moving branch.
+    crd_add_pinned_package(stb DOWNLOAD_ONLY YES)
+    add_library(stb INTERFACE)
+    target_include_directories(stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+endif()
+
+if("cgltf" IN_LIST CRD_SELECTED_PACKAGES)
+    # cgltf: single-header glTF 2.0 parser (DOWNLOAD_ONLY — no cmake build).
+    # Phase 2.7: used by the glTF mesh cook handler.
+    crd_add_pinned_package(cgltf DOWNLOAD_ONLY YES)
+    add_library(cgltf INTERFACE)
+    target_include_directories(cgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
+endif()
+
+if("mikktspace" IN_LIST CRD_SELECTED_PACKAGES)
+    # MikkTSpace: tangent-space generation (two C files, MIT license).
+    # Phase 2.7: used by the glTF mesh cook handler to generate tangents when glTF
+    # meshes omit TANGENT data. Compiled as a STATIC C99 library.
+    crd_add_pinned_package(MikkTSpace DOWNLOAD_ONLY YES)
+    add_library(mikktspace INTERFACE)
+    target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}")
+    # mikktspace.c is included directly inside mesh.cpp (within an extern "C" block)
+    # so it compiles as C++ without triggering C-compiler detection in CMake.
+endif()
+
+if("imgui" IN_LIST CRD_SELECTED_PACKAGES)
+    # The Vulkan backend's texture-upload flush is patched into a build-owned copy by engine/ui/imgui
+    # (cmake/patches/imgui-vulkan-whole-size.cmake); the downloaded tree stays pristine.
+    crd_add_pinned_package(imgui)
+endif()
 
 # ----- Reference-class shootout deps (Phase 3.1.6 v0d-parallelism-scaling) -----
 # Gated behind CRD_BUILD_HESAP_VS_REFERENCE — fetched on demand into build/_deps,
@@ -359,12 +687,7 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
 
     # Eigen 3.4 — header-only template library. DOWNLOAD_ONLY since we only need
     # headers; we wrap them in a SYSTEM-include interface target.
-    CPMAddPackage(
-        NAME eigen
-        GITLAB_REPOSITORY libeigen/eigen
-        GIT_TAG 3.4.0
-        DOWNLOAD_ONLY YES
-    )
+    crd_add_pinned_package(eigen DOWNLOAD_ONLY YES)
     add_library(eigen_headers INTERFACE)
     target_include_directories(eigen_headers SYSTEM INTERFACE "${eigen_SOURCE_DIR}")
     # Eigen's parallel path: -DEIGEN_DONT_PARALLELIZE turns it OFF. We want it ON,
@@ -412,59 +735,9 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     set(NUM_THREADS            32  CACHE STRING "" FORCE)
     set(_crd_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
     set(BUILD_SHARED_LIBS      OFF CACHE BOOL   "" FORCE)
-    CPMAddPackage(
-        NAME OpenBLAS
-        GITHUB_REPOSITORY OpenMathLib/OpenBLAS
-        GIT_TAG v0.3.27
-    )
+    crd_add_pinned_package(OpenBLAS)
     set(BUILD_SHARED_LIBS ${_crd_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
-endif()
-
-# Phase 3.1.7 v1-close debt payment: patch ImGui's Vulkan backend so
-# `vkFlushMappedMemoryRanges` in the texture-upload path doesn't trip the
-# Vulkan validation layer's VUID-VkMappedMemoryRange-size-01390 (size must
-# either be a multiple of `nonCoherentAtomSize` or `VK_WHOLE_SIZE`).
-# Upstream uses `range[0].size = upload_size;` which is the raw unaligned
-# upload size — we switch to `VK_WHOLE_SIZE` since the upload buffer is
-# allocated single-use for that texture and a whole-flush is always safe.
-# Idempotent: if the patch is already applied (re-configure with a populated
-# build dir) the string-find misses and the write is a no-op. See
-# docs/debt.md for the original diagnostic.
-if(imgui_SOURCE_DIR)
-    set(_crd_imgui_vk_file "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
-    if(EXISTS "${_crd_imgui_vk_file}")
-        file(READ "${_crd_imgui_vk_file}" _crd_imgui_vk_text)
-        # Patch 1 — flush size: VK_WHOLE_SIZE means "from offset to end-of-
-        # mapping". Combined with patch 2 below (the map call uses
-        # VK_WHOLE_SIZE), end-of-mapping equals the memory size which IS
-        # aligned (req.size is buffer-alignment-padded). Satisfies VUID
-        # 01389/01390 both.
-        string(FIND "${_crd_imgui_vk_text}" "range[0].size = upload_size;" _crd_imgui_vk_idx1)
-        if(NOT _crd_imgui_vk_idx1 EQUAL -1)
-            string(REPLACE
-                "range[0].size = upload_size;"
-                "range[0].size = VK_WHOLE_SIZE; // crd-patch v1-close: nonCoherentAtomSize alignment"
-                _crd_imgui_vk_text "${_crd_imgui_vk_text}"
-            )
-        endif()
-        # Patch 2 — map call: map the whole allocation so end-of-mapping
-        # coincides with end-of-memory (which IS atom-aligned via
-        # req.size). The map'd extra bytes past `upload_size` are never
-        # written, which is fine.
-        string(FIND "${_crd_imgui_vk_text}" "vkMapMemory(v->Device, upload_buffer_memory, 0, upload_size, 0, (void**)(&map))" _crd_imgui_vk_idx2)
-        if(NOT _crd_imgui_vk_idx2 EQUAL -1)
-            string(REPLACE
-                "vkMapMemory(v->Device, upload_buffer_memory, 0, upload_size, 0, (void**)(&map))"
-                "vkMapMemory(v->Device, upload_buffer_memory, 0, VK_WHOLE_SIZE, 0, (void**)(&map)) /* crd-patch v1-close */"
-                _crd_imgui_vk_text "${_crd_imgui_vk_text}"
-            )
-        endif()
-        if(NOT _crd_imgui_vk_idx1 EQUAL -1 OR NOT _crd_imgui_vk_idx2 EQUAL -1)
-            file(WRITE "${_crd_imgui_vk_file}" "${_crd_imgui_vk_text}")
-            message(STATUS "[crd] Patched imgui_impl_vulkan.cpp texture-upload map/flush -> VK_WHOLE_SIZE (VUID 01389/01390)")
-        endif()
-    endif()
 endif()
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
@@ -554,123 +827,11 @@ if(CRD_ENABLE_CLANG_TIDY)
 endif()
 
 
-# ----- Engine Modules ------------------------------------------------------
+# ----- Engine modules, host tools, runtime and sandbox ----------------------
 
-add_subdirectory(engine/foundation/core engine/core)
-add_subdirectory(engine/foundation/vm engine/vm)  # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
-add_subdirectory(engine/foundation/units engine/units)
-add_subdirectory(engine/execution/ceir engine/ceir)  # D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
-add_subdirectory(engine/execution/ceir-host engine/ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
-add_subdirectory(engine/execution/ceir-cook engine/ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
-add_subdirectory(engine/execution/ceir-gpu engine/ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
-add_subdirectory(engine/execution/chir engine/chir)  # D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
-add_subdirectory(engine/foundation/time engine/time)
-add_subdirectory(engine/foundation/perf engine/perf)
-add_subdirectory(engine/foundation/memory engine/memory)
-# crd-perf-ui depends on crd-imgui (which depends on crd-rhi-vulkan/crd-app/crd-config);
-# declared further below after those modules are added.
-add_subdirectory(engine/foundation/math engine/math)
-add_subdirectory(engine/geometry/geometry-primitives engine/geometry-primitives)
-add_subdirectory(engine/geometry/geometry-bvh engine/geometry-bvh)
-add_subdirectory(engine/geometry/geometry-convex engine/geometry-convex)
-add_subdirectory(engine/geometry/geometry-mesh engine/geometry-mesh)
-add_subdirectory(engine/geometry/geometry-spatial engine/geometry-spatial)
-add_subdirectory(engine/geometry/geometry-polygon engine/geometry-polygon)
-add_subdirectory(engine/geometry/geometry-mesh-processing engine/geometry-mesh-processing)
-add_subdirectory(engine/geometry/geometry-delaunay engine/geometry-delaunay)
-add_subdirectory(engine/geometry/geometry-decomposition engine/geometry-decomposition)
-add_subdirectory(engine/geometry/geometry-bvh-gpu engine/geometry-bvh-gpu)
-add_subdirectory(engine/geometry/geometry-shader-helpers engine/geometry-shader-helpers)
-add_subdirectory(engine/geometry/geometry-curves engine/geometry-curves)
-add_subdirectory(engine/assets/asset-io engine/asset-io)  # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
-add_subdirectory(engine/numerics/hesap engine/hesap)
-add_subdirectory(engine/numerics/hesap-special engine/hesap-special)  # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
-add_subdirectory(engine/numerics/hesap-dense engine/hesap-dense)
-add_subdirectory(engine/numerics/hesap-quadrature engine/hesap-quadrature)  # v12-c; Gauss quadrature via Golub-Welsch (REUSES hesap-dense eig_sym + hesap-special recurrences); ADR-0094
-add_subdirectory(engine/numerics/hesap-sparse engine/hesap-sparse)  # v1a; links crd-jobs (declared below — CMake resolves target names at generation)
-add_subdirectory(engine/numerics/hesap-ordering engine/hesap-ordering)  # v2; fill-reducing reorderings + symbolic factorisation (depends on hesap-sparse)
-add_subdirectory(engine/numerics/hesap-resources engine/hesap-resources)  # v4-corpus; matrices as cooked resources (depends on hesap-sparse + resources)
-add_subdirectory(engine/numerics/hesap-iterative engine/hesap-iterative)  # v4a; Krylov solvers (CG/PCG) over LinearOp
-add_subdirectory(engine/numerics/hesap-preconditioners engine/hesap-preconditioners)  # v4a; Jacobi/SSOR preconditioners (one-way dep on hesap-iterative)
-add_subdirectory(engine/numerics/hesap-amg engine/hesap-amg)  # v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
-# crd-hesap-sched depends on crd-jobs (declared below); declared after jobs.
-# crd-geometry-viz must come AFTER crd-draw (its declaration is below) — moved
-# down to engine/physics/eylem-viz neighbourhood. See the second add_subdirectory below.
-add_subdirectory(engine/foundation/containers engine/containers)
-add_subdirectory(engine/rendering/render-asset-core engine/render-asset-core)  # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
-add_subdirectory(engine/rendering/render-program engine/render-program)     # RAF-4 (D-007 "RAF band"): the shader + program contract (deps: render-asset-core)
-add_subdirectory(engine/rendering/render-material engine/render-material)    # RAF-5 (D-007 "RAF band"): the material + technique contract (deps: render-asset-core, render-program)
-add_subdirectory(engine/rendering/render-pass engine/render-pass)        # RAF-6 (D-007 "RAF band"): the pass-executor registry (deps: render-asset-core)
-add_subdirectory(engine/rendering/render-graph engine/render-graph)       # RAF-7 (D-007 "RAF band"): the unified frame-graph runtime (deps: render-asset-core, render-pass, gpu-context)
-add_subdirectory(engine/foundation/log engine/log)
-add_subdirectory(engine/foundation/platform engine/platform)
-add_subdirectory(engine/foundation/app engine/app)
-add_subdirectory(engine/foundation/config engine/config)
-add_subdirectory(engine/ui/imgui engine/imgui)
-add_subdirectory(engine/ui/perf-ui engine/perf-ui)  # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
-# RET-8 (ADR-0105, 2026-07-23): crd-rhi · crd-rhi-vulkan · crd-renderer · crd-shader · crd-shader-vulkan are
-# DELETED — gpu-context IS the graphics layer. Their capabilities were absorbed across RET-2..7 (present ·
-# resources · allocator/capture · ImGui · draw · consumers); the parity audit lives in D-007 rows 89-96.
-add_subdirectory(engine/geometry/lod engine/lod) # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
-add_subdirectory(engine/geometry/meshgen engine/meshgen)
-add_subdirectory(engine/gpu/gpu-context engine/gpu-context)          # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
-add_subdirectory(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan)   # ADR-0099 v17-i-a: headless Vulkan compute context
-add_subdirectory(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12)     # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
-add_subdirectory(engine/gpu/gpu-context-cuda engine/gpu-context-cuda)     # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
-add_subdirectory(engine/foundation/jobs engine/jobs)
-add_subdirectory(engine/numerics/hesap-sched engine/hesap-sched)  # depends on crd-jobs above + crd-hesap (declared earlier)
-add_subdirectory(engine/numerics/hesap-direct engine/hesap-direct)  # v5; sparse DIRECT factorization (depends on hesap-dense/ordering/sparse/sched)
-add_subdirectory(engine/numerics/hesap-eigen engine/hesap-eigen)  # v6; sparse EIGENVALUE, matrix-free (Rayleigh-Ritz via hesap-dense; shift-invert via hesap-direct)
-add_subdirectory(engine/numerics/hesap-autodiff engine/hesap-autodiff)  # v15/16; AUTODIFF — forward Dual/Jet + reverse tape; Dual migrated from opt (v15-a); ADR-0097
-add_subdirectory(engine/gpu/kir engine/kir)  # v17; CERID KERNEL IR (CKIR) — the GPU compute compiler substrate (IR -> tile -> 6 backends); ADR-0098
-add_subdirectory(engine/gpu/kir-vulkan engine/kir-vulkan)  # v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
-add_subdirectory(engine/gpu/kir-cuda engine/kir-cuda)  # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
-add_subdirectory(engine/gpu/kir-dx12 engine/kir-dx12)  # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
-add_subdirectory(engine/gpu/kir-webgpu engine/kir-webgpu)  # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
-add_subdirectory(engine/gpu/kir-hip engine/kir-hip)  # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098
-add_subdirectory(engine/gpu/kir-metal engine/kir-metal)  # v17-d; CKIR Metal backend (KirBackend over Apple Metal, Objective-C++); APPLE-only; validated at Part C; ADR-0098
-add_subdirectory(engine/assets/frame-cook engine/frame-cook)   # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
-                                      # pipelines and whole rendering architectures as cooked, API-agnostic assets
-add_subdirectory(engine/assets/technique-cook engine/technique-cook) # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
-add_subdirectory(engine/assets/material-cook engine/material-cook)  # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
-add_subdirectory(engine/assets/vertex-cook engine/vertex-cook)    # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
-add_subdirectory(engine/assets/light-cook engine/light-cook)     # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
-                                      # asset + the BINDING CONTRACT verified against a frame-graph pass
-add_subdirectory(engine/assets/shader-cook engine/shader-cook)  # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
-add_subdirectory(engine/numerics/hesap-opt engine/hesap-opt)  # v7; OPTIMISATION (unconstrained + constrained) over Objective<T>; ADR-0090 (now consumes hesap-autodiff)
-add_subdirectory(engine/numerics/hesap-stats engine/hesap-stats)  # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
-add_subdirectory(engine/numerics/hesap-ode engine/hesap-ode)  # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
-add_subdirectory(engine/numerics/hesap-fft engine/hesap-fft)  # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
-add_subdirectory(engine/numerics/hesap-dsp engine/hesap-dsp)  # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
-add_subdirectory(engine/numerics/hesap-wavelet engine/hesap-wavelet)  # v11w; WAVELETS — DWT/IDWT/SWT/WPT/CWT (depends on hesap-fft); ADR-0093
-add_subdirectory(engine/numerics/hesap-comms engine/hesap-comms)  # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
-add_subdirectory(engine/numerics/hesap-interp engine/hesap-interp)  # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
-add_subdirectory(engine/numerics/hesap-diff engine/hesap-diff)  # v13-l/m; NUMERICAL DIFFERENTIATION — Fornberg/Ridders/complex-step/SavGol/spectral; ADR-0095
-add_subdirectory(engine/numerics/hesap-motion engine/hesap-motion)  # v13-n/o/p/q; TRAJECTORY GENERATION — SQUAD/clothoid/NURBS/min-snap/S-curve/TCB; ADR-0095
-add_subdirectory(engine/numerics/hesap-tensor engine/hesap-tensor)  # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
-add_subdirectory(engine/assets/resources engine/resources)
-add_subdirectory(engine/world/scene engine/scene)
-add_subdirectory(engine/assets/preset engine/preset)
-add_subdirectory(engine/foundation/profile engine/profile)
-add_subdirectory(engine/physics/eylem engine/eylem)
-add_subdirectory(engine/physics/eylem-rigid3d engine/eylem-rigid3d)
-add_subdirectory(engine/world/anim engine/anim)          # GEO-8 (D-007 row 73): SKEL/ANIM resources + glTF-exact clip sampling on the hesap-interp curve engine
-add_subdirectory(engine/world/timeline engine/timeline)      # GEO-9 (D-007 row 74): the TIMELINE resource — OTIO-shaped, RATIONAL time, deterministic eval, EXR-sequence render
-add_subdirectory(engine/media/audio engine/audio)         # GEO-10 (D-007 row 75): the DAW substrate — own WAV/AIFF/FLAC, audio-graph resource, MIDI 2.0, realtime
-add_subdirectory(engine/rendering/draw engine/draw)
-add_subdirectory(engine/rendering/scene-render engine/scene-render)  # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
-add_subdirectory(engine/rendering/draw-imgui engine/draw-imgui)
-add_subdirectory(engine/physics/eylem-viz engine/eylem-viz)
-add_subdirectory(engine/geometry/geometry-viz engine/geometry-viz)
-# add_subdirectory(engine/graphics)
-# add_subdirectory(engine/scripting)
-
-# ----- Tools ----------------------------------------------------------------
-
-add_subdirectory(tools/asset_cooker)
-add_subdirectory(tools/ceridc)         # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
-add_subdirectory(tools/shader-cook)  # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
-add_subdirectory(tools/kir-autotune) # ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
+crd_add_modules()
+crd_add_public_header_checks()
+crd_package_config()
 
 # Optional 'cook' target: cmake --build --preset win-debug --target cook
 # Requires CRD_COOK_ROOT and CRD_COOK_OUT to be set (e.g. via -D flags).
@@ -682,23 +843,15 @@ if(CRD_COOK_ROOT AND CRD_COOK_OUT)
     )
 endif()
 
-# ----- Runtime executable ---------------------------------------------------
-
-add_subdirectory(runtime)
-
-# ----- Sandbox --------------------------------------------------------------
-
-if(CRD_BUILD_SANDBOX)
-    add_subdirectory(sandbox)
-endif()
-
 # ----- Tests ----------------------------------------------------------------
 
 if(CRD_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+crd_add_package_consumer_test()
 
+crd_verify_modules()
 crd_apply_project_structure()
 if(CRD_PROJECT_SYNC AND CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_custom_target(crd-project-sync-check

@@ -12,17 +12,25 @@ endif()
 
 add_library(crd-core STATIC ${SOURCES} ${HEADERS})
 
+# Build-tree paths only in the build tree; the installed package (cmake/CrdPackage.cmake) adds its own include/.
 target_include_directories(crd-core
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${_crd_config_include}"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${_crd_config_include}>"
 )
 
 target_compile_features(crd-core PUBLIC cxx_std_20)
 
-target_link_libraries(crd-core PUBLIC crd-warnings)
+# crd-warnings (/W4 /WX or -Wall -Werror) reaches every engine target through this edge and stays inside the
+# build tree: a package consumer keeps its own warning policy.
+target_link_libraries(crd-core PUBLIC $<BUILD_INTERFACE:crd-warnings>)
 if(WIN32)
     target_link_libraries(crd-core PRIVATE dbghelp)
 endif()
 
 crd_enable_default_pch(crd-core)
+
+# Cerid::core of the relocatable package: the public headers, the generated profile header and the archive.
+crd_package_library(crd-core NAME core
+    INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    GENERATED "${_crd_config_include}/crd/core/build_config.hpp" DESTINATION crd/core)

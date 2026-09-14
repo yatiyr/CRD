@@ -90,3 +90,6 @@ target_include_directories(crd-kir-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/ge
 crd_enable_default_pch(crd-kir-tests)
 
 crd_discover_tests(crd-kir-tests)
+
+# REPO.DEV.9: the bounded ingestion fuzz targets and their corpus replay tests.
+add_subdirectory(fuzz)

@@ -826,7 +826,15 @@ private:
         return m_attrs[idx];
     }
 
+    u32 m_region_depth = 0U; // REPO.DEV.9 fuzz finding: the same nesting cap as the text parser
     void decode_region(Region* r)
+    {
+        if (m_region_depth >= 64U) { fail(m_body_off + m_bc.pos, "region nesting too deep"); return; }
+        ++m_region_depth;
+        decode_region_body(r);
+        --m_region_depth;
+    }
+    void decode_region_body(Region* r)
     {
         const u8 kind = m_bc.u8v();
         if (kind > static_cast<u8>(RegionKind::SsaCfg)) { fail(m_body_off + m_bc.pos, "invalid region kind"); return; }
@@ -906,6 +914,11 @@ private:
             if (m_ok) { fail(m_body_off + m_bc.pos, "operation name is not 'dialect.op'"); }
             return;
         }
+        if (dialect.size() + 1U + opname.size() >= Context::kMaxOpNameBytes) // REPO.DEV.9 fuzz finding: reject, never assert
+        {
+            fail(m_body_off + m_bc.pos, "operation name too long");
+            return;
+        }
         const OpId kind = m_ctx.intern_op(dialect, opname);
 
         Operation* const op = m_ctx.create_operation(
@@ -924,6 +937,7 @@ private:
             const containers::StringView an = str(attr_name_idx[i]);
             const AttrId                 av = attr_at(attr_val_idx[i]);
             if (!m_ok) { return; }
+            if (an.size() == 0U) { fail(m_body_off + m_bc.pos, "empty attribute name"); return; } // REPO.DEV.9 fuzz finding
             m_ctx.set_attr(op, an, av);
         }
         u32 file_id = 0U;

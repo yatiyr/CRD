@@ -393,6 +393,31 @@ TEST_CASE("CEIR-18q: malformed .ckir input is REPORTED (ok=false), never thrown"
     }
 }
 
+TEST_CASE("REPO.DEV.11: the .ckir text form keeps a -0.0 constant and rejects an output that names no node",
+          "[kir][asset][fuzz][repodev11]")
+{
+    crd::memory::TlsfAllocator a(8U << 20U);
+    {
+        // The writer elided `cval` with `!= 0.0`, which is also false for -0.0: the sign bit died in the text form while
+        // the blob kept it (pending fuzz artifact 0add989c, now in the corpus). Byte-identical through write/read/serialize.
+        kir::KGraph       g(&a);
+        const kir::KEntry e = build_scale(g, -0.0);
+        CHECK(ckir_roundtrip_diff(g, e, &a) == -1);
+    }
+    {
+        // `[[out]]` without `node =` left out[0].node at -1; the reader accepted it, the writer emitted "n-1" and the reader
+        // rejected its own output (pending artifact dd98295f, now in the corpus). Rejected at the first read instead.
+        kir::KGraph               g(&a);
+        kir::KEntry               e;
+        const kir::CkirReadResult r = kir::ckir_read(
+            crd::containers::StringView("schema = 1\n[[entry]]\nstage = \"Fragment\"\nn_out = 1\n[[out]]\nlocation = 0\n"
+                                        "[[node]]\nid = \"n0\"\nop = \"Const\"\n"),
+            g, e);
+        CHECK_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "stage output names no node") == 0);
+    }
+}
+
 // ── CEIR-35b: systematic MUTATION-robustness fuzz for ckir_read (the .ckir text loader). ──────────────────────────────
 // Extends the hand-picked malformed corpus above into exhaustive coverage: mutate a valid .ckir seed thousands of ways
 // and prove ckir_read NEVER crashes/throws (ASan-clean under the asan configs) and ALWAYS returns a WELL-FORMED result.

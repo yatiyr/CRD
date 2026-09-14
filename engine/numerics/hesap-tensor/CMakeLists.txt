@@ -19,17 +19,20 @@ target_include_directories(crd-hesap-tensor
         # hesap-stats -> hesap-special stack into every tensor consumer (the
         # units->math precedent). philox.hpp includes only leaf headers.
         "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
+        # Include-ONLY hesap-dense edge (ADR-0096 section 1): batched / einsum_exec / tt / decomp / nn / sparse_cp
+        # are public header-only surfaces over the v0d GEMM, so the consumer view must see the headers; the
+        # link stays with the consumer (the smoke_hesap_tensor isolation gate keeps the built lib dense-free).
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-dense/include"
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap/include" # blas3.hpp includes crd/hesap/complex.hpp
     PRIVATE
         # Include-ONLY edges for the v14-z CLI registration TU (cli_register_tensor.cpp):
         # it consumes the CLI substrate (crd-hesap) plus the header-only einsum-exec /
-        # batched / decomp / tt / nn / io surfaces (hesap-dense, platform fs). These are
+        # batched / decomp / tt / nn / io surfaces (hesap-dense above, platform fs). These are
         # NOT link edges — the TU's object enters a consumer link ONLY when
         # register_tensor_cli_anchor() is referenced (the static-lib anchor pattern), and
         # such consumers link crd-hesap + crd-hesap-dense + crd-platform themselves (the
         # einsum/decomp/tt/io/nn test executables' edge set). The smoke_hesap_tensor
         # link-isolation gate (ADR-0096 §1) never references the anchor and stays intact.
-        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap/include"
-        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-dense/include"
         "${CMAKE_SOURCE_DIR}/engine/foundation/platform/include"
 )
 

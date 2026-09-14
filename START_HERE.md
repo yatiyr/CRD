@@ -17,6 +17,7 @@ replaceable assets. A working demo that bypasses those assets does not meet the 
    selects a future slice. [Ordered execution](docs/ROADMAP.md#strict-sequential-execution) preserves Needs CI gates
    while available work continues. Other hardware/review gates remain binding; no missing evidence becomes Done.
 3. Find source ownership in [systems](docs/systems/README.md); inspect the public API, implementation, callers and tests.
+   Routes for a module, fix, asset/program or build change, and the handoff: [CONTRIBUTING](docs/CONTRIBUTING.md).
    Before code read [BUILDING](docs/BUILDING.md), [CODING](docs/CODING.md) and the relevant
    [quality contract](docs/design/system-quality-contract.md). Load performance mandates for hot-kernel work.
 4. State: **purpose; slice ID; complete deliverable; dependencies; evidence required; unresolved decisions**.

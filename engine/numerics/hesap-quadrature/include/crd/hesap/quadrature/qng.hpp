@@ -8,6 +8,7 @@
 // x·√x form (one hardware sqrt, not the heavy double-double pow).
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/quadrature/gauss_kronrod.hpp>
 #include <crd/hesap/quadrature/integrate.hpp>
 #include <crd/math/cmath.hpp>
 

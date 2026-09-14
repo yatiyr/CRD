@@ -1,0 +1,49 @@
+{
+  "schema": "cerid-ci-tiers/1",
+  "tiers": ["preflight", "change", "complete"],
+  "jobs": {
+    "windows": {"runner": "windows-2025"},
+    "clang-tidy": {"runner": "windows-2025"},
+    "clang-cl": {"runner": "windows-2025"},
+    "linux-gcc": {"runner": "ubuntu-24.04"},
+    "windows-shipping": {"runner": "windows-2025"},
+    "windows-clang-cl-shipping": {"runner": "windows-2025"},
+    "linux-gcc-shipping": {"runner": "ubuntu-24.04"},
+    "windows-native": {"runner": "windows-2025-vs2026"}
+  },
+  "presets": {
+    "win-debug": {"tier": "change", "job": "windows"},
+    "win-release": {"tier": "change", "job": "windows"},
+    "win-asan": {"tier": "change", "job": "windows"},
+    "win-debug-sse2": {"tier": "change", "job": "windows"},
+    "win-relwithdebinfo": {"tier": "complete", "job": "windows"},
+    "win-debug-scalar": {"tier": "complete", "job": "windows"},
+    "win-public-checks": {"tier": "complete", "job": "windows"},
+    "win-tidy": {"tier": "change", "job": "clang-tidy"},
+    "win-tidy-local": {"tier": "diagnostic"},
+    "linux-clang-fuzz": {"tier": "diagnostic"},
+    "win-clang-cl": {"tier": "change", "job": "clang-cl"},
+    "win-shipping": {"tier": "change", "job": "windows-shipping"},
+    "win-shipping-profile": {"tier": "complete", "job": "windows-shipping"},
+    "win-clang-cl-shipping": {"tier": "change", "job": "windows-clang-cl-shipping"},
+    "win-vs": {"tier": "complete", "job": "windows-native", "test": "win-vs-debug"},
+    "linux-gcc-debug": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-release": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-relwithdebinfo": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-asan": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-debug-sse2": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-debug-scalar": {"tier": "complete", "job": "linux-gcc"},
+    "linux-gcc-public-checks": {"tier": "complete", "job": "linux-gcc"},
+    "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"}
+  },
+  "classes": [
+    {"name": "register", "tier": "complete", "patterns": ["docs/third-party-defects.md"]},
+    {"name": "documentation", "tier": "preflight",
+     "patterns": ["docs/**", "**/*.md", ".vscode/**", ".natvis", ".clang-format", ".gitattributes", ".gitignore",
+                  "opencode.json"]},
+    {"name": "build-system", "tier": "complete",
+     "patterns": [".github/**", "CMakeLists.txt", "CMakePresets.json", "cmake/**", "scripts/**", "tests/CMakeLists.txt",
+                  ".clang-tidy"]},
+    {"name": "source", "tier": "change", "patterns": ["**"]}
+  ]
+}

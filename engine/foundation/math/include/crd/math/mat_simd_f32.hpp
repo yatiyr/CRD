@@ -26,9 +26,11 @@
 
 #pragma once
 
+#include <crd/math/mat.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/vec4f.hpp>
+#include <crd/math/vec.hpp>
 
 namespace crd::math
 {

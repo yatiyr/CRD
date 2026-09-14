@@ -69,6 +69,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace crd::geometry::convex
 {

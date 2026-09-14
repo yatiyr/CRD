@@ -792,8 +792,10 @@ TEST_CASE("HashMap: default empty", "[containers][hash_map]")
     REQUIRE(m.size() == 0);
     REQUIRE(m.empty());
     REQUIRE(m.capacity() == 0);
-    REQUIRE(m.find(7) == nullptr);
-    REQUIRE_FALSE(m.contains(7));
+    // The key literal must match the key type: MSVC 14.51 diagnoses the signed/unsigned comparison inside
+    // std::equal_to<> for a heterogeneous lookup (C4389 under /WX); older toolsets accepted it silently.
+    REQUIRE(m.find(7u) == nullptr);
+    REQUIRE_FALSE(m.contains(7u));
 }
 
 TEST_CASE("HashMap: insert + find round-trip", "[containers][hash_map]")
@@ -804,16 +806,16 @@ TEST_CASE("HashMap: insert + find round-trip", "[containers][hash_map]")
     REQUIRE(m.insert(3, 300));
     REQUIRE(m.size() == 3);
 
-    auto* p1 = m.find(1);
+    auto* p1 = m.find(1u);
     REQUIRE(p1);
     REQUIRE(*p1 == 100);
-    auto* p2 = m.find(2);
+    auto* p2 = m.find(2u);
     REQUIRE(p2);
     REQUIRE(*p2 == 200);
-    auto* p3 = m.find(3);
+    auto* p3 = m.find(3u);
     REQUIRE(p3);
     REQUIRE(*p3 == 300);
-    REQUIRE(m.find(99) == nullptr);
+    REQUIRE(m.find(99u) == nullptr);
 }
 
 TEST_CASE("HashMap: insert duplicate key is a no-op", "[containers][hash_map]")
@@ -822,7 +824,7 @@ TEST_CASE("HashMap: insert duplicate key is a no-op", "[containers][hash_map]")
     REQUIRE(m.insert(1, 100));
     REQUIRE_FALSE(m.insert(1, 999));
     REQUIRE(m.size() == 1);
-    REQUIRE(*m.find(1) == 100);
+    REQUIRE(*m.find(1u) == 100);
 }
 
 TEST_CASE("HashMap: erase round-trip", "[containers][hash_map]")
@@ -832,14 +834,14 @@ TEST_CASE("HashMap: erase round-trip", "[containers][hash_map]")
     m.insert(2, 20);
     m.insert(3, 30);
 
-    REQUIRE(m.erase(2));
+    REQUIRE(m.erase(2u));
     REQUIRE(m.size() == 2);
-    REQUIRE(m.find(2) == nullptr);
-    REQUIRE(*m.find(1) == 10);
-    REQUIRE(*m.find(3) == 30);
+    REQUIRE(m.find(2u) == nullptr);
+    REQUIRE(*m.find(1u) == 10);
+    REQUIRE(*m.find(3u) == 30);
 
-    REQUIRE_FALSE(m.erase(2));
-    REQUIRE_FALSE(m.erase(99));
+    REQUIRE_FALSE(m.erase(2u));
+    REQUIRE_FALSE(m.erase(99u));
 }
 
 TEST_CASE("HashMap: operator[] inserts default and returns reference", "[containers][hash_map]")
@@ -847,7 +849,7 @@ TEST_CASE("HashMap: operator[] inserts default and returns reference", "[contain
     HashMap<u32, u32> m;
     m[42] = 7;
     REQUIRE(m.size() == 1);
-    REQUIRE(*m.find(42) == 7);
+    REQUIRE(*m.find(42u) == 7);
     REQUIRE(m[42] == 7);
     m[42] = 8;
     REQUIRE(m[42] == 8);
@@ -915,10 +917,10 @@ TEST_CASE("HashMap: clear keeps capacity", "[containers][hash_map]")
     m.clear();
     REQUIRE(m.empty());
     REQUIRE(m.capacity() == cap);
-    REQUIRE(m.find(0) == nullptr);
+    REQUIRE(m.find(0u) == nullptr);
     // Can keep using
     m.insert(99, 99);
-    REQUIRE(*m.find(99) == 99);
+    REQUIRE(*m.find(99u) == 99);
 }
 
 TEST_CASE("HashMap: reserve avoids rehash mid-fill", "[containers][hash_map]")
@@ -944,13 +946,13 @@ TEST_CASE("HashMap: copy ctor and copy assign", "[containers][hash_map]")
 
     HashMap<u32, u32> b(a);
     REQUIRE(b.size() == 2);
-    REQUIRE(*b.find(1) == 10);
-    REQUIRE(*b.find(2) == 20);
+    REQUIRE(*b.find(1u) == 10);
+    REQUIRE(*b.find(2u) == 20);
 
     HashMap<u32, u32> c;
     c = a;
     REQUIRE(c.size() == 2);
-    REQUIRE(*c.find(2) == 20);
+    REQUIRE(*c.find(2u) == 20);
 }
 
 TEST_CASE("HashMap: move ctor leaves source empty", "[containers][hash_map]")
@@ -965,7 +967,7 @@ TEST_CASE("HashMap: move ctor leaves source empty", "[containers][hash_map]")
     REQUIRE(b.size() == 20);
     REQUIRE(a.size() == 0);
     REQUIRE(a.capacity() == 0);
-    REQUIRE(*b.find(5) == 10);
+    REQUIRE(*b.find(5u) == 10);
 }
 
 TEST_CASE("HashMap: iterator visits every live entry exactly once", "[containers][hash_map]")
@@ -1098,11 +1100,11 @@ TEST_CASE("HashSet: insert + contains + erase", "[containers][hash_set]")
     REQUIRE(s.insert(8));
     REQUIRE_FALSE(s.insert(7)); // duplicate
     REQUIRE(s.size() == 2);
-    REQUIRE(s.contains(7));
-    REQUIRE_FALSE(s.contains(99));
-    REQUIRE(s.erase(7));
-    REQUIRE_FALSE(s.contains(7));
-    REQUIRE_FALSE(s.erase(7));
+    REQUIRE(s.contains(7u));
+    REQUIRE_FALSE(s.contains(99u));
+    REQUIRE(s.erase(7u));
+    REQUIRE_FALSE(s.contains(7u));
+    REQUIRE_FALSE(s.erase(7u));
 }
 
 TEST_CASE("HashSet: iteration yields keys", "[containers][hash_set]")

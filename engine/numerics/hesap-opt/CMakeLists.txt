@@ -33,6 +33,7 @@ target_link_libraries(crd-hesap-opt
         crd-hesap-autodiff # Dual<T> forward-AD (migrated here in v15-a; opt re-exports via opt/dual.hpp) — ADR-0097
         crd-hesap          # LinearOp<T> + the cli substrate
         crd-hesap-dense    # dense Vector + blas1 (the optimizer arithmetic)
+        crd-hesap-direct   # newton_sparse.hpp / levenberg_marquardt_sparse.hpp (public): supernodal Cholesky
         crd-hesap-sparse   # SparseLinearOp / ParallelSpmvLeastSquaresOp (parallel-bit-exact objective eval)
         crd-hesap-stats    # Philox counter-RNG (v7-i reproducible minibatch sampling; the v12-pull)
         crd-jobs           # parallel objective eval (the only parallel step; the moat keeps it bit-exact)

@@ -3,6 +3,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
+#include "sanitizer_fibers.hpp" // CRD_JOBS_TSAN: the fence model under ThreadSanitizer
 
 #include <atomic>
 #include <memory>
@@ -186,7 +187,14 @@ template<typename T>
 std::optional<T> WorkStealingDeque<T>::steal() noexcept
 {
     crd::i64 t = m_top.load(std::memory_order_acquire);
+#if CRD_JOBS_TSAN
+    // GCC's ThreadSanitizer does not model a standalone fence (-Wtsan, an error under -Werror). Under the
+    // instrument only, the fence becomes a seq_cst read-modify-write on the same location, which TSan does model
+    // and which orders this load before the bottom load at least as strongly (sanitizer_fibers.hpp).
+    (void)m_top.fetch_add(0, std::memory_order_seq_cst);
+#else
     std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
     const crd::i64 b = m_bottom.load(std::memory_order_acquire);
 
     if (t < b)

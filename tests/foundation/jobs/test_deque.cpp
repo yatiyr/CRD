@@ -269,8 +269,9 @@ TEST_CASE("work_stealing_deque: last element race", "[jobs][deque]")
         const bool thief_got = steal_result.load() == 1;
         const bool owner_got = pop_v.has_value();
 
-        // Exactly one of {pop, steal} must retrieve the item.
-        REQUIRE((owner_got ^ thief_got) == true);
+        // Exactly one of {pop, steal} must retrieve the item. (bool ^ bool promotes to int; MSVC 14.51 rejects the
+        // int-vs-bool comparison inside Catch's decomposer as C4805 under /WX, so compare the bools directly.)
+        REQUIRE(owner_got != thief_got);
     }
 }
 

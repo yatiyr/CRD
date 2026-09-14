@@ -22,6 +22,7 @@ target_link_libraries(crd-hesap-resources
         crd-math          # Complex<T> value variants (c32/c64)
         crd-hesap         # CLI substrate (arg_value/command_registry) for hesap.matrix.*
         crd-hesap-sparse  # SparseMatrix / read_matrix_market
+        crd-hesap-tensor  # tensor_artifact.hpp (public): Tensor<T> + the tensor io surface
         crd-resources     # CRDR / ILoader / ResourceManager
     PRIVATE
         crd-warnings

@@ -47,6 +47,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/geometry/curves/arclength.hpp>
 #include <crd/geometry/curves/evaluator.hpp>
 #include <crd/geometry/curves/sample.hpp>
 #include <crd/geometry/primitives/constants.hpp>

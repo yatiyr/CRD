@@ -99,6 +99,9 @@ crd_enable_default_pch(crd-ceir-tests)
 
 crd_discover_tests(crd-ceir-tests)
 
+# REPO.DEV.9: the bounded ingestion fuzz targets and their corpus replay tests.
+add_subdirectory(fuzz)
+
 # CEIR-2: gate the op-definition generator (tools/ceir_opgen). The DRIFT test reruns `ceir_opgen.py --check` (the
 # committed generated C++ must be a byte-identical regen of the *.ceirop.toml); the VALIDATOR test runs the schema
 # validator's unit suite. Both are Python (stdlib only). ⛔ if Python3 is absent the gate FAILS LOUDLY, never skips

@@ -34,9 +34,9 @@ Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
 OpId Context::intern_op(containers::StringView dialect, containers::StringView name)
 {
     // Build "dialect.op" on the stack for hashing; op names are short.
-    char        buf[256];
+    char        buf[kMaxOpNameBytes];
     const usize n = dialect.size() + 1U + name.size();
-    CRD_ASSERT_MSG(n < sizeof(buf), "ceir op name too long");
+    CRD_ASSERT_MSG(n < sizeof(buf), "ceir op name too long (the loaders reject such a name before interning)");
     usize k = 0;
     for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
     buf[k++] = '.';

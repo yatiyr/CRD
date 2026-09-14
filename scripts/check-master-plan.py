@@ -245,6 +245,31 @@ def query(args, rows):
     return None
 
 
+def registered_modules(build_text):
+    """Module names the root CMakeLists registers: the NAME argument, else the last path component (CrdModules)."""
+    names = set()
+    for body in re.findall(r'crd_module\(([^()]*(?:\([^()]*\)[^()]*)*)\)', build_text):
+        tokens = body.split()
+        if not tokens:
+            continue
+        override = re.search(r'\bNAME\s+([A-Za-z][A-Za-z0-9_-]*)', body)
+        names.add(override[1] if override else tokens[0].rsplit('/', 1)[-1])
+    return names
+
+
+def registry_map_errors(build_text=None, systems_text=None):
+    """The systems map and the module registry name the same set: every crd_module() row has an ownership route
+    and the map never keeps a retired module alive (REPO.DEV.10)."""
+    names = registered_modules(build_text if build_text is not None else read(ROOT / 'CMakeLists.txt'))
+    if systems_text is None:
+        systems_text = read(ROOT / 'docs/systems/README.md')
+    mapped = re.findall(r'^\| `([A-Za-z][A-Za-z0-9_-]*)`', systems_text, flags=re.M)
+    errors = [f'systems map lacks a route for the registered module: {name}' for name in sorted(names - set(mapped))]
+    errors += [f'systems map names an unregistered module: {name}' for name in sorted(set(mapped) - names)]
+    errors += [f'systems map lists a module twice: {name}' for name in sorted({n for n in mapped if mapped.count(n) > 1})]
+    return errors
+
+
 def main():
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -376,6 +401,7 @@ def main():
     for alias, name in memory_index.get('aliases', {}).items():
         if name not in memory_index['records']:
             errors.append('Memory alias has no target: ' + alias)
+    errors.extend(registry_map_errors())
     count, broken = link_errors(files)
     errors.extend(broken)
     print(f'Checked {len(rows)} rows, {len(files)} documents, {count} local links, '

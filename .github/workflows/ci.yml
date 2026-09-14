@@ -1,10 +1,34 @@
 name: CI
 
+# Three tiers, one coverage contract (docs/design/ci-tiers.md; mapping in .github/ci-tiers.json):
+#   preflight  - workflow syntax, tier mapping and the repository/documentation/tooling guards; always runs.
+#   change     - the push/PR lanes; selected when engine, test, asset or tool sources change.
+#   complete   - every supported non-diagnostic preset; nightly, manual, and whenever the build system, the
+#                workflow, the scripts or the third-party register change (a changed build system qualifies itself
+#                with conservative scope). Docs-only pushes end after preflight with a meaningful required result.
+# The `required` job is the one stable status: it passes only when preflight succeeded and every job the resolved
+# tier expected actually ran and passed; a skipped expected job or a failed unexpected job fails it.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'change: the push lanes; complete: every supported preset'
+        type: choice
+        options: [change, complete]
+        default: complete
+
+# Cancellation is safe only for superseded pull-request feedback. A push run on main is the qualification evidence
+# for that revision and scheduled or manual complete runs must not be starved by frequent pushes, so every other
+# run owns its own group (keyed by run id) and is never cancelled or serialized.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Perf budgets (CRD_PERF_BUDGET_LE) are calibrated on dev hardware and are NOT a
 # reliable correctness gate on shared/heterogeneous CI runners. Soft mode logs an
@@ -18,10 +42,68 @@ permissions:
 env:
   CRD_PERF_BUDGET_SOFT: '1'
   PYTHONUTF8: '1'
+  # Lanes that build through the pinned sccache (docs/design/build-performance.md): the boards qualified
+  # win-debug without precompiled headers and linux-gcc-debug with them; every other lane stays uncached.
+  CRD_CACHED_PRESETS: ' win-debug linux-gcc-debug '
+  SCCACHE_CACHE_SIZE: '2G'
 
 jobs:
+  preflight:
+    name: Preflight (tier resolution)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+      reason: ${{ steps.tier.outputs.reason }}
+      expected: ${{ steps.tier.outputs.expected }}
+      presets_windows: ${{ steps.tier.outputs.presets_windows }}
+      presets_clang_tidy: ${{ steps.tier.outputs.presets_clang_tidy }}
+      presets_clang_cl: ${{ steps.tier.outputs.presets_clang_cl }}
+      presets_linux_gcc: ${{ steps.tier.outputs.presets_linux_gcc }}
+      presets_windows_shipping: ${{ steps.tier.outputs.presets_windows_shipping }}
+      presets_windows_clang_cl_shipping: ${{ steps.tier.outputs.presets_windows_clang_cl_shipping }}
+      presets_linux_gcc_shipping: ${{ steps.tier.outputs.presets_linux_gcc_shipping }}
+      presets_windows_native: ${{ steps.tier.outputs.presets_windows_native }}
+    env:
+      # push: the previous tip (all zeros on a new branch or a force push); pull_request: the base branch tip.
+      # An unavailable base resolves to the complete tier.
+      CRD_CI_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Validate workflows (actionlint 1.7.12)
+        shell: bash
+        run: |
+          python scripts/pins.py fetch tools actionlint --destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+      - name: Pinned inputs agree with the registry
+        run: python scripts/check-pins.py
+      - name: Tier mapping owns every preset
+        run: python scripts/check-ci-tiers.py
+      - name: Fetch the comparison base
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          if [[ -z "$CRD_CI_BASE" || "$CRD_CI_BASE" =~ ^0+$ ]]; then
+            echo "no base revision; the resolver takes the complete tier"
+          elif ! git fetch --no-tags --depth=1 origin "$CRD_CI_BASE"; then
+            echo "base $CRD_CI_BASE is unreachable; the resolver takes the complete tier"
+          fi
+      - name: Resolve the tier
+        id: tier
+        shell: bash
+        run: |
+          python scripts/ci-tier.py resolve --event "$GITHUB_EVENT_NAME" --base "$CRD_CI_BASE" --head HEAD \
+            --tier "${{ inputs.tier }}" --output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
   repository:
     name: Repository checks (${{ matrix.os }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -29,28 +111,31 @@ jobs:
       matrix:
         os: [windows-2025-vs2026, ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
-      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - name: Validate workflows (actionlint 1.7.12)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          archive="$RUNNER_TEMP/actionlint.tar.gz"
-          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$archive"
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum --check --status
-          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
       - name: Repository hygiene and layout
         run: python scripts/check-repository.py
       - name: Documentation and roadmap
         run: python scripts/check-master-plan.py
+      - name: CI tier mapping
+        run: python scripts/check-ci-tiers.py
+      - name: Pinned inputs
+        run: python scripts/check-pins.py
+      - name: Generated sources carry their provenance and bytes
+        run: python scripts/check-generated.py
+      - name: License manifest follows the registry
+        run: python scripts/gen_license_manifest.py --check
       - name: Build tooling regression checks
         run: python scripts/test-repository-tools.py
+      - name: Module registry contracts
+        run: python scripts/test-module-selection.py
       - name: Affected workflow selection contracts
         run: python scripts/test-dev-workflow.py
       - name: Project structure synchronization
@@ -72,58 +157,61 @@ jobs:
         run: python tools/ceir_capability_matrix/gen_matrix.py --check
 
   windows:
-    runs-on: windows-latest
+    needs: preflight
+    if: needs.preflight.outputs.presets_windows != '[]'
+    runs-on: windows-2025
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
       CRD_PLATFORM_HEADLESS: '1'
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
 
     strategy:
       fail-fast: false
       matrix:
-        preset: [win-debug, win-release, win-asan, win-debug-sse2]
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_windows) }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Record graphics driver identity
         shell: pwsh
-        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
           restore-keys: |
             cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\VulkanSDK
           key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
-          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
-            -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
-            -Wait -NoNewWindow
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
 
       - name: Set Vulkan environment
         shell: pwsh
@@ -131,11 +219,42 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python scripts/install-sccache.py --destination "${{ runner.temp }}/sccache"
+
+      - name: Restore compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ matrix.preset }}-
+
       - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
+
+      # MSVC precompiled headers are non-cacheable (/Fp), so the cached lane compiles every unit standalone; the
+      # module embeds debug information (/Z7) for the launcher. Measured: docs/bench (build performance board).
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats --stats-format json | Out-File -FilePath "$env:RUNNER_TEMP/sccache.json" -Encoding utf8
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --stop-server
+
+      - name: Test inventory
+        run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
 
       - name: Test
         shell: pwsh
@@ -152,36 +271,60 @@ jobs:
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
           exit $LASTEXITCODE
 
-      - name: Preserve CTest diagnostics
+      - name: Evidence bundle and summary
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --sccache-stats "$env:RUNNER_TEMP/sccache.json" `
+            --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
+          name: evidence-${{ matrix.preset }}
           path: |
+            build/*/evidence/**
             build/**/Testing/Temporary/*.log
             build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
   clang-tidy:
-    runs-on: windows-latest
+    needs: preflight
+    if: needs.preflight.outputs.presets_clang_tidy != '[]'
+    runs-on: windows-2025
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
 
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_clang_tidy) }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Record graphics driver identity
         shell: pwsh
-        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
 
       # Pin clang-tidy to LLVM 20.1.8, the version VS2026 ships locally, so hosted
       # and local analysis agree on every check. Constant naming follows
@@ -197,7 +340,7 @@ jobs:
       # to its newest known version which was LLVM 19.1.7. Explicit `@v2.0.9 +
       # version: '20.1.8'` resolves to LLVM 20.1.8 deterministically.
       - name: Install LLVM 20.1.8 (pinned)
-        uses: KyleMayes/install-llvm-action@v2.0.9
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: '20.1.8'
           directory: ${{ runner.temp }}/llvm-20.1.8
@@ -214,31 +357,24 @@ jobs:
           "CRD_CI_TIDY=$tidyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-win-tidy-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
           restore-keys: |
-            cpm-${{ runner.os }}-win-tidy-
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\VulkanSDK
           key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
-          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
-            -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
-            -Wait -NoNewWindow
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
 
       - name: Set Vulkan environment
         shell: pwsh
@@ -248,39 +384,69 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake --preset win-tidy -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=ON "-DCLANG_TIDY_EXE=$env:CRD_CI_TIDY"
+        run: cmake --preset ${{ matrix.preset }} -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=ON "-DCLANG_TIDY_EXE=$env:CRD_CI_TIDY"
 
       - name: Build
-        run: cmake --build --preset win-tidy
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Evidence bundle and summary
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.preset }}
+          path: build/*/evidence/**
+          if-no-files-found: warn
 
   clang-cl:
-    runs-on: windows-latest
+    needs: preflight
+    if: needs.preflight.outputs.presets_clang_cl != '[]'
+    runs-on: windows-2025
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
 
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_clang_cl) }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Record graphics driver identity
         shell: pwsh
-        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-win-clang-cl-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
           restore-keys: |
-            cpm-${{ runner.os }}-win-clang-cl-
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
       - name: Add LLVM to PATH
@@ -308,21 +474,14 @@ jobs:
 
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\VulkanSDK
           key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
-          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
-            -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
-            -Wait -NoNewWindow
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
 
       - name: Set Vulkan environment
         shell: pwsh
@@ -331,50 +490,76 @@ jobs:
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
-        run: cmake --preset win-clang-cl
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
-        run: cmake --build --preset win-clang-cl
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test inventory
+        run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
 
       - name: Test
         env:
           CRD_PLATFORM_HEADLESS: '1'
         shell: pwsh
         run: |
-          ctest --preset win-clang-cl -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
-          ctest --preset win-clang-cl --output-on-failure --no-tests=error
+          $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
-          exit $testExit
+          python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
+          exit $LASTEXITCODE
 
-      - name: Preserve CTest diagnostics
+      - name: Evidence bundle and summary
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
   linux-gcc:
-    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.presets_linux_gcc != '[]'
+    runs-on: ubuntu-24.04
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
       CRD_PLATFORM_HEADLESS: '1'
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
     strategy:
       fail-fast: false
       matrix:
-        preset: [linux-gcc-debug, linux-gcc-release, linux-gcc-relwithdebinfo, linux-gcc-asan, linux-gcc-debug-sse2]
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_linux_gcc) }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
 
       - name: Install system dependencies
         run: |
@@ -393,29 +578,18 @@ jobs:
             libxi-dev \
             mesa-common-dev
 
-      - name: Fetch SPIRV-Reflect source
-        run: |
-          mkdir -p /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.h \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.h
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.c \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.c
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.4.341.0/include/spirv/unified1/spirv.h \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1/spirv.h
-          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> $GITHUB_ENV
+      - name: Record system package versions
+        run: dpkg-query -W -f='${Package} ${Version}\n' libvulkan-dev glslang-tools libshaderc-dev libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev mesa-common-dev | tee "$RUNNER_TEMP/packages.txt"
 
       # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
       # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
-      # Compile against current Khronos Vulkan-Headers (pinned to the same SDK tag as Windows); the runtime
-      # loader (libvulkan.so) still comes from apt — headers-newer-than-loader is the supported direction.
-      - name: Fetch current Vulkan headers
+      # Compile against the pinned Khronos Vulkan-Headers (the same SDK tag as Windows, every file verified by
+      # SHA-256 from cmake/pins.json); the runtime loader (libvulkan.so) still comes from apt —
+      # headers-newer-than-loader is the supported direction.
+      - name: Install pinned Vulkan headers and SPIRV-Reflect
         run: |
-          git clone --depth 1 --branch vulkan-sdk-1.4.341.0 \
-            https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
-          cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
+          python3 scripts/install-vulkan-headers.py --destination /tmp/vulkan-sdk --download-dir "$RUNNER_TEMP/vulkan-headers"
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> "$GITHUB_ENV"
 
       - name: Install matching Vulkan validation layer
         run: |
@@ -425,10 +599,381 @@ jobs:
           echo "LD_LIBRARY_PATH=$validation_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
+            cpm-${{ runner.os }}-
+
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python3 scripts/install-sccache.py --destination "$RUNNER_TEMP/sccache"
+
+      - name: Restore compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ matrix.preset }}-
+
+      - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
+        run: cmake --preset ${{ matrix.preset }}
+
+      # GCC's precompiled header is consumed through -include and stays cacheable, so only the launcher changes.
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache"
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: |
+          "$RUNNER_TEMP/sccache/sccache" --show-stats --stats-format json > "$RUNNER_TEMP/sccache.json"
+          "$RUNNER_TEMP/sccache/sccache" --show-stats
+          "$RUNNER_TEMP/sccache/sccache" --stop-server
+
+      - name: Test inventory
+        run: python3 scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
+
+      - name: Test
+        shell: bash
+        run: |
+          junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
+          set +e
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          test_exit=$?
+          set -e
+          python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
+
+      - name: Evidence bundle and summary
+        if: always()
+        shell: bash
+        run: |
+          python3 scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} \
+            --outcome "${{ job.status }}" --output build/${{ matrix.preset }}/evidence \
+            --packages "$RUNNER_TEMP/packages.txt" --sccache-stats "$RUNNER_TEMP/sccache.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
+          if-no-files-found: warn
+
+  windows-shipping:
+    needs: preflight
+    if: needs.preflight.outputs.presets_windows_shipping != '[]'
+    runs-on: windows-2025
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_windows_shipping) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
+            cpm-${{ runner.os }}-
+
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-1.4.341.1-windows
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
+
+      - name: Set Vulkan environment
+        shell: pwsh
+        run: |
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test inventory
+        run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
+
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
+          exit $LASTEXITCODE
+
+      - name: Evidence bundle and summary
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
+          if-no-files-found: warn
+
+  windows-clang-cl-shipping:
+    # clang-cl shipping verification config. thin-LTO is currently DISABLED
+    # for this preset (see docs/debt.md) pending investigation of a clang-cl
+    # LTO miscompile in the async resource manager path. Still validates
+    # max-/O2 + dead-strip + clang-cl frontend differences vs MSVC and GCC.
+    needs: preflight
+    if: needs.preflight.outputs.presets_windows_clang_cl_shipping != '[]'
+    runs-on: windows-2025
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_windows_clang_cl_shipping) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Record graphics driver identity
+        shell: pwsh
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
+            cpm-${{ runner.os }}-
+
+      - name: Add LLVM to PATH
+        shell: pwsh
+        run: |
+          # Locate clang-cl robustly across runner-image changes: the GitHub windows-latest image has trimmed the
+          # VS-bundled LLVM component (and shifts VS year/edition), which broke the old hard-coded
+          # `2022\{Enterprise,Community}\VC\Tools\Llvm\x64\bin` lookup. Prefer the VS-bundled LLVM for ANY VS
+          # year/edition, then fall back to the standalone C:\Program Files\LLVM (reliably present on the runner),
+          # then to whatever clang-cl is already on PATH (msvc-dev-cmd). Only fail if truly none is found.
+          $candidates = @()
+          $candidates += Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" `
+                          -ErrorAction SilentlyContinue | ForEach-Object { $_.DirectoryName }
+          $candidates += "C:\Program Files\LLVM\bin"
+          $llvm = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clang-cl.exe")) } | Select-Object -First 1
+          if (-not $llvm) {
+            $cmd = Get-Command clang-cl -ErrorAction SilentlyContinue
+            if ($cmd) { $llvm = Split-Path $cmd.Source }
+          }
+          if (-not $llvm) {
+            throw "clang-cl not found (checked VS-bundled LLVM for all editions, C:\Program Files\LLVM, and PATH)"
+          }
+          Write-Host "Using clang-cl at: $llvm"
+          Add-Content -Path $env:GITHUB_PATH -Value $llvm
+
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-1.4.341.1-windows
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
+
+      - name: Set Vulkan environment
+        shell: pwsh
+        run: |
+          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test inventory
+        run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
+
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
+          $probeExit = $LASTEXITCODE
+          $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          $testExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
+          exit $LASTEXITCODE
+
+      - name: Evidence bundle and summary
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
+          if-no-files-found: warn
+
+  linux-gcc-shipping:
+    needs: preflight
+    if: needs.preflight.outputs.presets_linux_gcc_shipping != '[]'
+    runs-on: ubuntu-24.04
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_linux_gcc_shipping) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libvulkan-dev \
+            glslang-tools \
+            libshaderc-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            mesa-common-dev
+
+      - name: Record system package versions
+        run: dpkg-query -W -f='${Package} ${Version}\n' libvulkan-dev glslang-tools libshaderc-dev libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev mesa-common-dev | tee "$RUNNER_TEMP/packages.txt"
+
+      # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
+      # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
+      # Compile against the pinned Khronos Vulkan-Headers (the same SDK tag as Windows, every file verified by
+      # SHA-256 from cmake/pins.json); the runtime loader (libvulkan.so) still comes from apt —
+      # headers-newer-than-loader is the supported direction.
+      - name: Install pinned Vulkan headers and SPIRV-Reflect
+        run: |
+          python3 scripts/install-vulkan-headers.py --destination /tmp/vulkan-sdk --download-dir "$RUNNER_TEMP/vulkan-headers"
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> "$GITHUB_ENV"
+
+      - name: Install matching Vulkan validation layer
+        run: |
+          validation_dir="$RUNNER_TEMP/cerid-vulkan-validation"
+          python3 scripts/install-vulkan-validation.py --destination "$validation_dir"
+          echo "VK_LAYER_PATH=$validation_dir/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$validation_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
           restore-keys: |
             cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
@@ -439,65 +984,95 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
-      - name: Test
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+      - name: Test inventory
+        run: python3 scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
 
-      - name: Preserve CTest diagnostics
+      - name: Test
+        shell: bash
+        run: |
+          junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
+          set +e
+          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          test_exit=$?
+          set -e
+          python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
+
+      - name: Evidence bundle and summary
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: bash
+        run: |
+          python3 scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} \
+            --outcome "${{ job.status }}" --output build/${{ matrix.preset }}/evidence \
+            --packages "$RUNNER_TEMP/packages.txt" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
-  windows-shipping:
-    runs-on: windows-latest
+  windows-native:
+    # Complete tier: the native Visual Studio generator (`win-vs`) configures the solution on the VS 2026 image,
+    # builds the Debug sandbox profile exactly as the IDE build preset does and runs the repository guards under the
+    # multi-config CTest, including the two native-only fixtures (`crd-project-structure-native`,
+    # `crd-native-build-profiles`) that no Ninja lane can register. Engine suites stay with the Ninja lanes.
+    needs: preflight
+    if: needs.preflight.outputs.presets_windows_native != '[]'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 300
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
       CRD_PLATFORM_HEADLESS: '1'
 
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.preflight.outputs.presets_windows_native) }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
         with:
           destination: ${{ runner.temp }}/ninja
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
 
       - name: Record graphics driver identity
         shell: pwsh
-        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
+        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
 
       - name: Cache CPM downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-win-shipping-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
           restore-keys: |
-            cpm-${{ runner.os }}-win-shipping-
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: C:\VulkanSDK
           key: vulkan-sdk-1.4.341.1-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
-          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
-            -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
-            -Wait -NoNewWindow
+        run: python scripts/install-vulkan-sdk.py --download-dir "${{ runner.temp }}"
 
       - name: Set Vulkan environment
         shell: pwsh
@@ -506,220 +1081,57 @@ jobs:
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure
-        run: cmake --preset win-shipping
+        run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build
-        run: cmake --build --preset win-shipping
+      - name: Build the Debug sandbox profile
+        run: cmake --build --preset win-vs-debug
+
+      - name: Test inventory
+        run: python scripts/ci-evidence.py inventory --build-dir build/win-vs-debug --config Debug
 
       - name: Test
         shell: pwsh
         run: |
-          ctest --preset win-shipping -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
-          $probeExit = $LASTEXITCODE
-          ctest --preset win-shipping --output-on-failure --no-tests=error
+          $junit = "$env:GITHUB_WORKSPACE\build\win-vs-debug\Testing\Temporary\ctest-junit.xml"
+          ctest --preset win-vs-debug -R '^crd-(repository-hygiene|master-plan|ci-tiers|repository-tools|developer-workflow|project-structure-sync|build-profiles|module-selection|project-structure-native|native-build-profiles)$' --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
-          if ($probeExit -ne 0) { exit $probeExit }
-          exit $testExit
+          python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
+          exit $LASTEXITCODE
 
-      - name: Preserve CTest diagnostics
+      - name: Evidence bundle and summary
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: pwsh
+        run: |
+          python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/win-vs-debug `
+            --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --output build/win-vs-debug/evidence --summary "$env:GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
-  windows-clang-cl-shipping:
-    # clang-cl shipping verification config. thin-LTO is currently DISABLED
-    # for this preset (see docs/debt.md) pending investigation of a clang-cl
-    # LTO miscompile in the async resource manager path. Still validates
-    # max-/O2 + dead-strip + clang-cl frontend differences vs MSVC and GCC.
-    runs-on: windows-latest
-    env:
-      CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
-      CRD_PLATFORM_HEADLESS: '1'
-
+  required:
+    name: Required result
+    needs: [preflight, repository, windows, clang-tidy, clang-cl, linux-gcc, windows-shipping, windows-clang-cl-shipping, linux-gcc-shipping, windows-native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          destination: ${{ runner.temp }}/ninja
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Record graphics driver identity
-        shell: pwsh
-        run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
-
-      - name: Cache CPM downloads
-        uses: actions/cache@v4
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-win-clang-cl-shipping-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
-          restore-keys: |
-            cpm-${{ runner.os }}-win-clang-cl-shipping-
-            cpm-${{ runner.os }}-
-
-      - name: Add LLVM to PATH
-        shell: pwsh
-        run: |
-          # Locate clang-cl robustly across runner-image changes: the GitHub windows-latest image has trimmed the
-          # VS-bundled LLVM component (and shifts VS year/edition), which broke the old hard-coded
-          # `2022\{Enterprise,Community}\VC\Tools\Llvm\x64\bin` lookup. Prefer the VS-bundled LLVM for ANY VS
-          # year/edition, then fall back to the standalone C:\Program Files\LLVM (reliably present on the runner),
-          # then to whatever clang-cl is already on PATH (msvc-dev-cmd). Only fail if truly none is found.
-          $candidates = @()
-          $candidates += Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" `
-                          -ErrorAction SilentlyContinue | ForEach-Object { $_.DirectoryName }
-          $candidates += "C:\Program Files\LLVM\bin"
-          $llvm = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clang-cl.exe")) } | Select-Object -First 1
-          if (-not $llvm) {
-            $cmd = Get-Command clang-cl -ErrorAction SilentlyContinue
-            if ($cmd) { $llvm = Split-Path $cmd.Source }
-          }
-          if (-not $llvm) {
-            throw "clang-cl not found (checked VS-bundled LLVM for all editions, C:\Program Files\LLVM, and PATH)"
-          }
-          Write-Host "Using clang-cl at: $llvm"
-          Add-Content -Path $env:GITHUB_PATH -Value $llvm
-
-      - name: Cache Vulkan SDK
-        id: vulkan-cache
-        uses: actions/cache@v4
-        with:
-          path: C:\VulkanSDK
-          key: vulkan-sdk-1.4.341.1-windows
-
-      - name: Install Vulkan SDK
-        if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe" `
-            -OutFile "$env:RUNNER_TEMP/VulkanSDK.exe"
-          Start-Process -FilePath "$env:RUNNER_TEMP/VulkanSDK.exe" `
-            -ArgumentList "--accept-licenses --default-answer --confirm-command install" `
-            -Wait -NoNewWindow
-
-      - name: Set Vulkan environment
-        shell: pwsh
-        run: |
-          "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Configure
-        run: cmake --preset win-clang-cl-shipping
-
-      - name: Build
-        run: cmake --build --preset win-clang-cl-shipping
-
-      - name: Test
-        shell: pwsh
-        run: |
-          ctest --preset win-clang-cl-shipping -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
-          $probeExit = $LASTEXITCODE
-          ctest --preset win-clang-cl-shipping --output-on-failure --no-tests=error
-          $testExit = $LASTEXITCODE
-          if ($probeExit -ne 0) { exit $probeExit }
-          exit $testExit
-
-      - name: Preserve CTest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
-          if-no-files-found: warn
-
-  linux-gcc-shipping:
-    runs-on: ubuntu-latest
-    env:
-      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-      CRD_PLATFORM_HEADLESS: '1'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
-        with:
-          destination: ${{ runner.temp }}/ninja
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
-            libvulkan-dev \
-            glslang-tools \
-            libshaderc-dev \
-            libwayland-dev \
-            wayland-protocols \
-            libxkbcommon-dev \
-            libx11-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxcursor-dev \
-            libxi-dev \
-            mesa-common-dev
-
-      - name: Fetch SPIRV-Reflect source
-        run: |
-          mkdir -p /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.h \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.h
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Reflect/vulkan-sdk-1.4.341.0/spirv_reflect.c \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/spirv_reflect.c
-          curl -fsSL \
-            https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/vulkan-sdk-1.4.341.0/include/spirv/unified1/spirv.h \
-            -o /tmp/vulkan-sdk/Source/SPIRV-Reflect/include/spirv/unified1/spirv.h
-          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> $GITHUB_ENV
-
-      # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
-      # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
-      # Compile against current Khronos Vulkan-Headers (pinned to the same SDK tag as Windows); the runtime
-      # loader (libvulkan.so) still comes from apt — headers-newer-than-loader is the supported direction.
-      - name: Fetch current Vulkan headers
-        run: |
-          git clone --depth 1 --branch vulkan-sdk-1.4.341.0 \
-            https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
-          cp -r /tmp/vulkan-headers/include /tmp/vulkan-sdk/
-
-      - name: Install matching Vulkan validation layer
-        run: |
-          validation_dir="$RUNNER_TEMP/cerid-vulkan-validation"
-          python3 scripts/install-vulkan-validation.py --destination "$validation_dir"
-          echo "VK_LAYER_PATH=$validation_dir/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$validation_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-
-      - name: Cache CPM downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CPM_SOURCE_CACHE }}
-          key: cpm-${{ runner.os }}-linux-gcc-shipping-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake') }}
-          restore-keys: |
-            cpm-${{ runner.os }}-linux-gcc-shipping-
-            cpm-${{ runner.os }}-
-
-      - name: Configure
-        run: cmake --preset linux-gcc-shipping
-
-      - name: Build
-        run: cmake --build --preset linux-gcc-shipping
-
-      - name: Test
-        run: ctest --preset linux-gcc-shipping --output-on-failure --no-tests=error
-
-      - name: Preserve CTest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-${{ github.job }}-${{ strategy.job-index }}
-          path: build/**/Testing/Temporary/*.log
-          if-no-files-found: warn
+          python-version: '3.12'
+      - name: Every expected job ran and passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EXPECTED: ${{ needs.preflight.outputs.expected }}
+        run: python scripts/ci-tier.py conclude --needs-env NEEDS --expected-env EXPECTED --summary "$GITHUB_STEP_SUMMARY"

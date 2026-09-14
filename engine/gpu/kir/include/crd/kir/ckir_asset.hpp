@@ -224,7 +224,12 @@ struct Tok
         if (pos < in.size() && (in[pos] == '-' || in[pos] == '+')) { neg = in[pos] == '-'; ++pos; }
         crd::u64   v = 0;
         crd::usize d = pos;
-        for (; pos < in.size() && in[pos] >= '0' && in[pos] <= '9'; ++pos) { v = v * 10U + static_cast<crd::u64>(in[pos] - '0'); }
+        for (; pos < in.size() && in[pos] >= '0' && in[pos] <= '9'; ++pos)
+        {
+            const crd::u64 digit = static_cast<crd::u64>(in[pos] - '0');
+            if (v > (0x7FFFFFFFFFFFFFFFULL - digit) / 10U) { fail("integer out of range"); return 0; } // REPO.DEV.9 fuzz finding
+            v = v * 10U + digit;
+        }
         if (pos == d) { pos = b; fail("expected integer"); return 0; }
         return neg ? -static_cast<crd::i64>(v) : static_cast<crd::i64>(v);
     }
@@ -258,6 +263,7 @@ struct Tok
         for (crd::usize i = b + 1; i < e; ++i)
         {
             if (in[i] < '0' || in[i] > '9') { pos = b; fail("bad node ref"); return -1; }
+            if (v > 214748364) { pos = b; fail("node ref out of range"); return -1; } // REPO.DEV.9 fuzz finding: no i64 overflow, no i32 wrap
             v = v * 10 + (in[i] - '0');
         }
         return static_cast<crd::i32>(v);
@@ -385,7 +391,11 @@ struct Tok
             }
             s.append("]\n");
         }
-        if (n.cval != 0.0) { td::w_kv_hex(s, "cval", n.cval); }
+        // Elide only the exact +0.0 bit pattern: `cval != 0.0` is false for -0.0 too, which dropped the sign bit on the
+        // way through the text form (REPO.DEV.11 fuzz finding: the blob kept 0x8000000000000000, the text did not).
+        crd::u64 cbits = 0U;
+        std::memcpy(&cbits, &n.cval, sizeof(cbits));
+        if (cbits != 0U) { td::w_kv_hex(s, "cval", n.cval); }
         if (n.iidx != 0) { td::w_kv_i(s, "iidx", n.iidx); }
         if (n.axes != 0U) { td::w_kv_u(s, "axes", n.axes); }
         bool any_perm = false;
@@ -737,7 +747,11 @@ struct CkirReadResult
         for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (!nref_ok(en.task_payload[k])) { return CkirReadResult{false, 0, "entry task_payload ref out of range"}; } }
         if (!bodywin_ok(en.kernel_body_begin, en.kernel_body_count)) { return CkirReadResult{false, 0, "entry kernel body range out of range"}; }
         if (en.n_out < 0 || en.n_out > kMaxStageOutputs) { return CkirReadResult{false, 0, "entry n_out out of range"}; }
-        for (int k = 0; k < n_out_seen; ++k) { if (!nref_ok(en.out[k].node)) { return CkirReadResult{false, 0, "stage output node ref out of range"}; } }
+        if (n_out_seen != en.n_out) { return CkirReadResult{false, 0, "entry n_out does not match the [[out]] blocks"}; } // REPO.DEV.9 fuzz finding
+        // A stage output must NAME a node: -1 is a gap for operands, not for an output (`[[out]]` without `node =` left
+        // it -1, the writer emitted "n-1" and rejected its own output; REPO.DEV.11 fuzz finding). Same rule as verify's
+        // "output names no node" and the blob reader.
+        for (int k = 0; k < n_out_seen; ++k) { if (en.out[k].node < 0 || !nref_ok(en.out[k].node)) { return CkirReadResult{false, 0, "stage output names no node"}; } }
     }
 
     e = en;

@@ -1,0 +1,10 @@
+module {
+  ^bb0(%0 : !i32):
+    %1 = test.add(%0, %0) {big = 1e+20, flag = true, frac = 4.5, i = -42, s = "he said \"hi\"\\n", sym = @target, ty = !struct<Point,x:!i31,y:!f32>, ty2 = !fn<(!param<T,!trait<Ord>>)->(!option<!i32>)>, ty3 = !view<!image<d2,!vec<4x!f32>>,mip,layer>, ty4 = !tensor<!f32,!shape<!dim<4>,!dim<N>,!dim<dyn>>>, ty5 = !qty<!vec<3x!f32>,L1>, booly4 = !qual<borrow,!buffer<plain,!f32>>, whole = 4.0} : !vec<4x!f32>
+    %2, %3 = test.split(%1)
+{sym_name = "callee_fn"} {
+      ^bb0(%8 : !i32):
+        func.return(%8)
+    }
+    %9 = func.call(%0) {callee = @callee_fi} : !i32
+}

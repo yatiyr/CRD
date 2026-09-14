@@ -147,6 +147,8 @@ static void resume_fiber_fn(void* /*data*/) noexcept
 
 static void job_fiber_trampoline() noexcept
 {
+    // A fresh stack: the sanitizers learn which stack dispatched us (sanitizer_fibers.hpp).
+    sanitizer_fiber_entered(tl_current_fiber_ref()->sanitizer);
     while (true)
     {
         tl_job_fn(tl_job_data);
@@ -188,7 +190,11 @@ static void job_fiber_trampoline() noexcept
             }
         }
 
+        sanitizer_switch_begin(done->sanitizer, done->sanitizer.return_bottom, done->sanitizer.return_size,
+                               done->tsan_return);
         fiber_switch(&done->context, &tl_scheduler_context());
+        // Dispatched again with the next job on this fiber stack, possibly on another OS thread.
+        sanitizer_switch_end(done->sanitizer);
     }
 }
 
@@ -285,8 +291,12 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         }
     }
 
-    tl_fiber = target;
+    tl_fiber            = target;
+    target->tsan_return = sanitizer_current_fiber();
+    SanitizerSwitch dispatch_switch{};
+    sanitizer_switch_begin(dispatch_switch, target->usable_base, target->usable_size, target->tsan_fiber);
     fiber_switch(&tl_sched_ctx, &target->context);
+    sanitizer_switch_end(dispatch_switch);
 
     // Back on the OS (scheduler) stack. By now `target`'s context is fully saved.
     //

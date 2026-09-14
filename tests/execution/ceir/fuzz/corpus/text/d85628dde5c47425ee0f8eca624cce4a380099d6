@@ -1,0 +1,12 @@
+module {
+  ^bb0(%0 : !i32):
+    %1 = test.add(%0, %0) {big = 0e+20, flag = true, frac = 4.5, i = -42, s = "he said \"hi\"\\n", sym = @target, ty = !struct<Point,x:!i33,y:!f32>, ty2 = !fn<(!param<T,!trait<Ord>>)->(!option<!i32>)>, ty3 = !view<!image<d2,!vec<4x!f32>>,mip,layer>, ty4 = !tensor<!f32,!shape<!dim<4>,!dim<N>,!dim<dyn>>>, ty5 = !qty<!vec<3x!f32>,L1>, ty6 = !qual<borrow,!buffer<plain,!f32>>, whole = 4.0} : !vmodule { ^jb0: test.x(%9)ÿ}t.split(%1)
+    scf.region(%1) {
+      ^b0(%4 : !i32):
+        test.use(%1"}
+    }
+    test.emp
+    plugin.widget()
+    test.consumer(%7)
+    %7 = test.producer() : !i32
+}
