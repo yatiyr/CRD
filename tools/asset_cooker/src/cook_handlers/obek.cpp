@@ -31,7 +31,7 @@
 #include <crd/scene/transform_propagation.hpp>
 #include <crd/scene/world.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstring>
 #include <memory>
@@ -67,7 +67,7 @@ inline void emit_error(crd::containers::Array<CookError>& errors,
     errors.push_back(std::move(err));
 }
 
-inline crd::u32 line_of(const toml::node& n) noexcept
+inline crd::u32 line_of(const crd::toml::node& n) noexcept
 {
     return static_cast<crd::u32>(n.source().begin.line);
 }
@@ -279,7 +279,7 @@ struct RecCtx
 constexpr crd::usize kMaxObekRecursionDepth = 64U;
 
 // Forward declarations — the apply / chain-walk pair recurses.
-void apply_table_to_world(const toml::table& root, RecCtx& rc);
+void apply_table_to_world(const crd::toml::node& root, RecCtx& rc);
 [[nodiscard]] bool walk_and_apply_chain(crd::containers::StringView source_path,
                                          crd::containers::StringView source_text,
                                          RecCtx& rc);
@@ -333,7 +333,7 @@ crd::containers::Array<crd::u8> ObekCooker::cook_inline(
     // Cook-time validated; the builder records each as a PendingOverride and
     // emits a single OOVR chunk in build().
     {
-        toml::parse_result top_pr = toml::parse(std::string_view{toml_text.data(), toml_text.size()});
+        crd::toml::parse_result top_pr = crd::toml::parse(std::string_view{toml_text.data(), toml_text.size()});
         if (!top_pr)
         {
             const auto& err = top_pr.error();
@@ -342,10 +342,10 @@ crd::containers::Array<crd::u8> ObekCooker::cook_inline(
                        static_cast<crd::u32>(err.source().begin.column));
             return crd::containers::Array<crd::u8>{ctx.allocator};
         }
-        const toml::table& root_tbl = top_pr.table();
+        const crd::toml::node& root_tbl = top_pr.table();
         if (const auto* ovr_node = root_tbl.get("overrides"); ovr_node != nullptr)
         {
-            const toml::array* ovr_arr = ovr_node->as_array();
+            const crd::toml::node* ovr_arr = ovr_node->as_array();
             if (ovr_arr == nullptr)
             {
                 emit_error(errors,
@@ -356,7 +356,7 @@ crd::containers::Array<crd::u8> ObekCooker::cook_inline(
             {
                 for (const auto& elt : *ovr_arr)
                 {
-                    const toml::table* entry = elt.as_table();
+                    const crd::toml::node* entry = elt.as_table();
                     if (entry == nullptr)
                     {
                         emit_error(errors,
@@ -364,9 +364,9 @@ crd::containers::Array<crd::u8> ObekCooker::cook_inline(
                                    line_of(elt));
                         continue;
                     }
-                    const toml::node* entity_node = entry->get("entity");
-                    const toml::node* comp_node   = entry->get("component");
-                    const toml::node* value_node  = entry->get("value");
+                    const crd::toml::node* entity_node = entry->get("entity");
+                    const crd::toml::node* comp_node   = entry->get("component");
+                    const crd::toml::node* value_node  = entry->get("value");
                     if (entity_node == nullptr || comp_node == nullptr || value_node == nullptr)
                     {
                         emit_error(errors,
@@ -506,7 +506,7 @@ namespace
                        crd::containers::StringView{"extends chain exceeds max depth (64) — possible cycle"});
             return false;
         }
-        toml::parse_result pr = toml::parse(iter_text);
+        crd::toml::parse_result pr = crd::toml::parse(iter_text);
         if (!pr)
         {
             const auto& err = pr.error();
@@ -515,8 +515,8 @@ namespace
                        static_cast<crd::u32>(err.source().begin.column));
             return false;
         }
-        const toml::table& tbl = pr.table();
-        const toml::node*  ext = tbl.get("extends");
+        const crd::toml::node& tbl = pr.table();
+        const crd::toml::node*  ext = tbl.get("extends");
         if (ext == nullptr)
         {
             break;
@@ -564,7 +564,7 @@ namespace
 
     auto apply_one = [&](std::string_view text_sv) -> bool
     {
-        toml::parse_result pr = toml::parse(text_sv);
+        crd::toml::parse_result pr = crd::toml::parse(text_sv);
         if (!pr)
         {
             const auto& err = pr.error();
@@ -606,7 +606,7 @@ namespace
     return true;
 }
 
-void apply_table_to_world(const toml::table& root, RecCtx& rc)
+void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
 {
     // Reject `overrides` (top-level) — reserved for v1m3d.
     // Top-level `overrides = [...]` is handled in ObekCooker::cook_inline
@@ -614,12 +614,12 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
     // chain steps don't double-emit; the cook only honours overrides
     // declared in the current öbek (not those baked into ancestors).
 
-    const toml::node* entity_root_node = root.get("entity");
+    const crd::toml::node* entity_root_node = root.get("entity");
     if (entity_root_node == nullptr)
     {
         return; // a chain step with no entities is fine
     }
-    const toml::table* entity_root = entity_root_node->as_table();
+    const crd::toml::node* entity_root = entity_root_node->as_table();
     if (entity_root == nullptr)
     {
         emit_error(rc.errors, crd::containers::StringView{"toml: 'entity' must be a table"},
@@ -630,10 +630,10 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
     // Pass 1: collect / dedupe entity names. Existing names reuse their
     // EntityId — that's how variant-chain "deepest wins" works without
     // table merging.
-    crd::containers::Array<const toml::table*>      step_entity_tables{rc.ctx.allocator};
+    crd::containers::Array<const crd::toml::node*>      step_entity_tables{rc.ctx.allocator};
     crd::containers::Array<crd::scene::EntityId>    step_entity_ids{rc.ctx.allocator};
 
-    for (const auto& [key, value] : *entity_root)
+    for (const auto& [key, value] : entity_root->items())
     {
         const auto* entity_table = value.as_table();
         if (entity_table == nullptr)
@@ -642,7 +642,7 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
                        line_of(value));
             continue;
         }
-        const std::string_view name_sv{key.str()};
+        const std::string_view name_sv{key};
         if (name_sv.find('.') != std::string_view::npos)
         {
             emit_error(rc.errors,
@@ -677,7 +677,7 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
         const crd::scene::EntityId entity = step_entity_ids[ei];
 
         // ---- Per-entity `obek = "..."` nested reference (v1m3c) ----
-        if (const toml::node* obek_node = entity_table->get("obek"); obek_node != nullptr)
+        if (const crd::toml::node* obek_node = entity_table->get("obek"); obek_node != nullptr)
         {
             auto obek_path_sv = obek_node->value<std::string_view>();
             if (!obek_path_sv.has_value())
@@ -787,9 +787,9 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
         }
 
         crd::containers::Array<std::string_view> field_keys{rc.ctx.allocator};
-        for (const auto& [key, _] : *entity_table)
+        for (const auto& [key, _] : entity_table->items())
         {
-            field_keys.push_back(std::string_view{key.str()});
+            field_keys.push_back(std::string_view{key});
         }
         for (crd::usize i = 1; i < field_keys.size(); ++i)
         {
@@ -828,7 +828,7 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
             {
                 continue; // pass 3 below
             }
-            const toml::node* field_node = entity_table->get(fk);
+            const crd::toml::node* field_node = entity_table->get(fk);
             const crd::scene::ComponentId cid = find_component_by_fourcc(rc.world, reader->serialize.fourcc);
             if (cid.is_null())
             {
@@ -857,9 +857,9 @@ void apply_table_to_world(const toml::table& root, RecCtx& rc)
         const auto* entity_table = step_entity_tables[ei];
         const crd::scene::EntityId src = step_entity_ids[ei];
 
-        for (const auto& [key, value] : *entity_table)
+        for (const auto& [key, value] : entity_table->items())
         {
-            const std::string_view fk{key.str()};
+            const std::string_view fk{key};
             if (fk == "obek" || fk == "overrides")
             {
                 continue;

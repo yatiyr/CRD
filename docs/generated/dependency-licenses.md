@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **10** · tools: **11** · workflow actions: **7** · runner images: **3** · unpinned apt packages: **12**
+- packages: **9** · tools: **11** · workflow actions: **7** · runner images: **3** · unpinned apt packages: **12**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -17,7 +17,6 @@
 |---|---|---|---|---|
 | Catch2 | 3.7.1 | BSL-1.0 | catchorg/Catch2 @ `v3.7.1` (fa43b77429ba) | `Catch2-fa43b774.tar.gz` |
 | glfw | 3.4 | Zlib | glfw/glfw @ `3.4` (7b6aead9fb88) | `glfw-7b6aead9.tar.gz` |
-| tomlplusplus | 3.4.0 | MIT | marzer/tomlplusplus @ `v3.4.0` (30172438cee6) | `tomlplusplus-30172438.tar.gz` |
 | zstd | 1.5.5 | BSD-3-Clause OR GPL-2.0-only | facebook/zstd @ `v1.5.5` (63779c798237) | `zstd-63779c79.tar.gz` |
 | stb | 2c980bb | MIT OR Unlicense | nothings/stb @ `2c980bb59875b0d32144a71867fbdebb2f77cd20` (2c980bb59875) | `stb-2c980bb5.tar.gz` |
 | cgltf | 1.14 | MIT | jkuhlmann/cgltf @ `v1.14` (52c23814dbb6) | `cgltf-52c23814.tar.gz` |

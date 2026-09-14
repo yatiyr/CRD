@@ -7,12 +7,6 @@
 # A technique's types are IR types, so the edge lives here instead.
 # One-way: technique-cook -> {kir, frame-cook, containers, memory}; nothing depends back on it.
 
-if(TARGET tomlplusplus::tomlplusplus)
-    set(_crd_toml_target tomlplusplus::tomlplusplus)
-else()
-    set(_crd_toml_target tomlplusplus)
-endif()
-
 add_library(crd-technique-cook
     src/technique_asset.cpp
 )
@@ -27,12 +21,10 @@ target_link_libraries(crd-technique-cook
         crd-kir          # the technique CONTRACT vocabulary (BindType/BindFrequency) + the splice ABI
         crd-frame-cook   # REN-37.3: the binding contract is checked against a FramePassDesc
     PRIVATE
-        ${_crd_toml_target}
+        crd-toml
         crd-warnings
 )
 
-# toml++ in EXCEPTIONS-FREE mode — the repo-wide setting. Without it `toml::parse` throws instead of returning a
 # checkable parse_result and `ParseFailed` becomes unreachable-by-return.
-target_compile_definitions(crd-technique-cook PRIVATE TOML_EXCEPTIONS=0)
 target_compile_features(crd-technique-cook PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-technique-cook)

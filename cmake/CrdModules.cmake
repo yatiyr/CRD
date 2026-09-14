@@ -21,7 +21,7 @@ set(CRD_MODULES "" CACHE STRING
     "Opt-in module selection (module names, families, tools, runtime, sandbox, all); empty = full configuration")
 set(CRD_HOST_TOOLS_DIR "" CACHE PATH
     "Directory holding prebuilt host tools; when set, HOST modules are imported from it instead of built")
-set(CRD_KNOWN_PACKAGES glfw zstd tomlplusplus stb cgltf mikktspace imgui)
+set(CRD_KNOWN_PACKAGES glfw zstd stb cgltf mikktspace imgui)
 
 set_property(GLOBAL PROPERTY CRD_MODULE_NAMES "")
 set_property(GLOBAL PROPERTY CRD_MODULES_RESOLVED FALSE)
@@ -360,8 +360,6 @@ function(_crd_package_of item out_var)
         set(package glfw)
     elseif(item MATCHES "^(lib)?zstd_static$")
         set(package zstd)
-    elseif(item MATCHES "^tomlplusplus(::tomlplusplus)?$")
-        set(package tomlplusplus)
     elseif(item MATCHES "^(stb|cgltf|mikktspace)$")
         set(package "${item}")
     endif()

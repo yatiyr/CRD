@@ -9,7 +9,7 @@
 #include <crd/kir/ckir_shape.hpp> // REN-38 audit: the cook refuses a shape-invalid entry by name
 #include <crd/matcook/material_asset.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -139,7 +139,7 @@ struct AttrVals
 // ── PARSE ─────────────────────────────────────────────────────────────────────────────────────────────────
 namespace
 {
-void read_value(const toml::node& n, double* v, crd::u32& comps)
+void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
 {
     if (const auto* arr = n.as_array())
     {
@@ -286,12 +286,12 @@ void parse_source_term(std::string_view s, VaryingSource& out)
     set_str(out.name, s);
 }
 
-VertexCookError parse_attr_array(const toml::array& arr, crd::containers::Array<VertexAttrDesc>& out,
+VertexCookError parse_attr_array(const crd::toml::node& arr, crd::containers::Array<VertexAttrDesc>& out,
                                  crd::memory::IAllocator* alloc, crd::containers::String* where)
 {
     for (const auto& e : arr)
     {
-        const toml::table* t = e.as_table();
+        const crd::toml::node* t = e.as_table();
         if (t == nullptr) { continue; }
         VertexAttrDesc a(alloc);
         const auto     nm = (*t)["name"].value<std::string_view>();
@@ -321,9 +321,9 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     // while a live GPU device (validation layer hooked into SEH dispatch) CRASHED the process — an
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
-    toml::parse_result pr = toml::parse(std::string_view(toml_text.data(), toml_text.size()));
+    crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
     if (!pr) { return VertexCookError::ParseFailed; }
-    toml::table root = std::move(pr).table();
+    crd::toml::node root = std::move(pr).table();
     auto* alloc = out.attrs.allocator();
 
     // ⛔ RESET THE OUTPUT FIRST. Parsing into a descriptor that already held a program APPENDED to it: the second
@@ -559,7 +559,7 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     {
         for (const auto& e : *nt)
         {
-            const toml::table* t = e.as_table();
+            const crd::toml::node* t = e.as_table();
             if (t == nullptr) { continue; }
             VertNodeDesc n(alloc);
             const auto   nn = (*t)["name"].value<std::string_view>();
@@ -645,7 +645,7 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     {
         for (const auto& e : *va)
         {
-            const toml::table* t = e.as_table();
+            const crd::toml::node* t = e.as_table();
             if (t == nullptr) { continue; }
             VaryingDesc v(alloc);
             const auto  vn = (*t)["name"].value<std::string_view>();

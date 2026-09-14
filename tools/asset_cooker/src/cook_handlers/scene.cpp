@@ -35,7 +35,7 @@
 #include <crd/scene/transform_propagation.hpp>
 #include <crd/scene/world.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstring>
 #include <memory>
@@ -71,13 +71,13 @@ inline void emit_error(crd::containers::Array<CookError>& errors,
     errors.push_back(std::move(err));
 }
 
-// Convert a toml::node source-position to a u32 line.
-inline crd::u32 line_of(const toml::node& n) noexcept
+// Convert a crd::toml::node source-position to a u32 line.
+inline crd::u32 line_of(const crd::toml::node& n) noexcept
 {
     return static_cast<crd::u32>(n.source().begin.line);
 }
 
-[[nodiscard]] bool read_f32_field(const toml::node* node, crd::f32 fallback, crd::f32& out)
+[[nodiscard]] bool read_f32_field(const crd::toml::node* node, crd::f32 fallback, crd::f32& out)
 {
     if (node == nullptr)
     {
@@ -99,14 +99,14 @@ inline crd::u32 line_of(const toml::node& n) noexcept
 
 // Read a Vec3 from a TOML array of three floats. Returns false on type
 // mismatch; out unchanged.
-[[nodiscard]] bool read_vec3(const toml::node* node, crd::math::Vec3f fallback, crd::math::Vec3f& out)
+[[nodiscard]] bool read_vec3(const crd::toml::node* node, crd::math::Vec3f fallback, crd::math::Vec3f& out)
 {
     if (node == nullptr)
     {
         out = fallback;
         return true;
     }
-    const toml::array* arr = node->as_array();
+    const crd::toml::node* arr = node->as_array();
     if (arr == nullptr || arr->size() < 3)
     {
         return false;
@@ -123,14 +123,14 @@ inline crd::u32 line_of(const toml::node& n) noexcept
     return true;
 }
 
-[[nodiscard]] bool read_quat(const toml::node* node, crd::math::Quatf fallback, crd::math::Quatf& out)
+[[nodiscard]] bool read_quat(const crd::toml::node* node, crd::math::Quatf fallback, crd::math::Quatf& out)
 {
     if (node == nullptr)
     {
         out = fallback;
         return true;
     }
-    const toml::array* arr = node->as_array();
+    const crd::toml::node* arr = node->as_array();
     if (arr == nullptr || arr->size() < 4)
     {
         return false;
@@ -162,7 +162,7 @@ bool read_transform_from_toml(const void* node_opaque, void* dst, crd::usize siz
         }
         return false;
     }
-    auto* node = static_cast<const toml::node*>(node_opaque);
+    auto* node = static_cast<const crd::toml::node*>(node_opaque);
     auto* table = node->as_table();
     if (table == nullptr)
     {
@@ -389,7 +389,7 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
     // Parse TOML. toml++ is exception-free in compile mode CRD_TOML_NO_EXCEPTIONS;
     // its `parse` returns a result type with .err() / .table().
     const std::string_view text_sv{toml_text.data(), toml_text.size()};
-    toml::parse_result parse_result = toml::parse(text_sv);
+    crd::toml::parse_result parse_result = crd::toml::parse(text_sv);
     if (!parse_result)
     {
         const auto& err = parse_result.error();
@@ -398,7 +398,7 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
                    static_cast<crd::u32>(err.source().begin.column));
         return crd::containers::Array<crd::u8>{ctx.allocator};
     }
-    const toml::table& root = parse_result.table();
+    const crd::toml::node& root = parse_result.table();
 
     // Build the temp World. Each user-registered reader must have a
     // matching `register_component<T>(...serialize_trait...)` registration
@@ -408,15 +408,15 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
     setup_temp_world(world);
 
     // The [entity.NAME] tables. Iterate in document order via the
-    // top-level table's order — toml::table preserves insertion order.
-    const toml::node* entity_root_node = root.get("entity");
+    // top-level table's order — crd::toml::table preserves insertion order.
+    const crd::toml::node* entity_root_node = root.get("entity");
     if (entity_root_node == nullptr)
     {
         // Empty scene — emit a valid SCEN with zero entities.
         crd::scene::SceneArtifactBuilder builder{ctx.allocator, ctx.id};
         return builder.build(world);
     }
-    const toml::table* entity_root = entity_root_node->as_table();
+    const crd::toml::node* entity_root = entity_root_node->as_table();
     if (entity_root == nullptr)
     {
         emit_error(errors, crd::containers::StringView{"toml: 'entity' must be a table"},
@@ -427,9 +427,9 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
     // Pass 1: collect entity names + spawn EntityIds. Reject duplicates.
     crd::containers::HashMap<crd::u64, crd::scene::EntityId> name_to_entity{ctx.allocator};
     crd::containers::Array<crd::containers::String>          entity_names{ctx.allocator};
-    crd::containers::Array<const toml::table*>               entity_tables{ctx.allocator};
+    crd::containers::Array<const crd::toml::node*>               entity_tables{ctx.allocator};
 
-    for (const auto& [key, value] : *entity_root)
+    for (const auto& [key, value] : entity_root->items())
     {
         const auto* entity_table = value.as_table();
         if (entity_table == nullptr)
@@ -438,7 +438,7 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
                        line_of(value));
             continue;
         }
-        const std::string_view name_sv{key.str()};
+        const std::string_view name_sv{key};
         // Reject hierarchical name references (advisor pin #2).
         if (name_sv.find('.') != std::string_view::npos)
         {
@@ -483,9 +483,9 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
         // insertion order; we need deterministic ordering for SCEN
         // determinism).
         crd::containers::Array<std::string_view> field_keys{ctx.allocator};
-        for (const auto& [key, _] : *entity_table)
+        for (const auto& [key, _] : entity_table->items())
         {
-            field_keys.push_back(std::string_view{key.str()});
+            field_keys.push_back(std::string_view{key});
         }
         // Simple insertion sort; alphabetic by underlying char order.
         for (crd::usize i = 1; i < field_keys.size(); ++i)
@@ -518,7 +518,7 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
                 continue;
             }
             // Component path — invoke the reader.
-            const toml::node* field_node = entity_table->get(fk);
+            const crd::toml::node* field_node = entity_table->get(fk);
             const crd::scene::ComponentId cid = find_component_by_fourcc(world, reader->serialize.fourcc);
             if (cid.is_null())
             {
@@ -554,9 +554,9 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
         }
         const crd::scene::EntityId src = *slot;
 
-        for (const auto& [key, value] : *entity_table)
+        for (const auto& [key, value] : entity_table->items())
         {
-            const std::string_view fk{key.str()};
+            const std::string_view fk{key};
             const crd::containers::StringView fk_view{fk.data(), fk.size()};
             const ReaderEntry* reader = m_impl->find_reader(fk_view);
             if (reader == nullptr || !reader->is_relation)

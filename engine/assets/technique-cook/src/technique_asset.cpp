@@ -4,7 +4,7 @@
 
 #include <crd/techniquecook/technique_asset.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstring>
 #include <string_view>
@@ -153,9 +153,9 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
 {
     auto*                  alloc = out.bindings.allocator();
     const std::string_view text(toml_text.data(), toml_text.size());
-    const toml::parse_result res = toml::parse(text);
+    const crd::toml::parse_result res = crd::toml::parse(text);
     if (!res) { return TechniqueCookError::ParseFailed; }
-    const toml::table& root = res.table();
+    const crd::toml::node& root = res.table();
 
     // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
     // parsing into a descriptor that already held a technique APPENDED to it, so a second asset's bindings and
@@ -201,7 +201,7 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return TechniqueCookError::ParseFailed; }
             TechniqueBindingDesc b(alloc);
             const auto bn = (*t)["name"].value<std::string_view>();
@@ -229,7 +229,7 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return TechniqueCookError::ParseFailed; }
             TechniqueOptionDesc o(alloc);
             const auto on = (*t)["name"].value<std::string_view>();

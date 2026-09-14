@@ -2,7 +2,7 @@
 
 #include <crd/cooker/cook_db.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -90,10 +90,10 @@ void CookDb::load(const fs::Path& root)
     crd::containers::String text(m_alloc);
     if (fs::read_file_text(db_path(root), text))
     {
-        const auto parsed = toml::parse(std::string_view{text.data(), text.size()});
+        const auto parsed = crd::toml::parse(std::string_view{text.data(), text.size()});
         if (parsed) // a malformed database is DISCARDED wholesale — everything recooks (safe, never stale)
         {
-            const toml::table& tbl  = parsed.table();
+            const crd::toml::node& tbl  = parsed.table();
             const auto*        jobs = tbl["job"].as_array();
             if (jobs != nullptr)
             {

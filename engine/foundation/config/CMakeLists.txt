@@ -8,12 +8,6 @@ target_include_directories(crd-config
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
-if(TARGET tomlplusplus::tomlplusplus)
-    set(_crd_toml_target tomlplusplus::tomlplusplus)
-else()
-    set(_crd_toml_target tomlplusplus)
-endif()
-
 target_link_libraries(crd-config
     PUBLIC
         crd-core
@@ -21,9 +15,8 @@ target_link_libraries(crd-config
         crd-log
         crd-math
         crd-platform
-        ${_crd_toml_target}
+        crd-toml
 )
 
-target_compile_definitions(crd-config PRIVATE TOML_EXCEPTIONS=0)
 target_compile_features(crd-config PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-config)

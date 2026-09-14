@@ -383,6 +383,7 @@ crd_module(engine/numerics/hesap-preconditioners engine/hesap-preconditioners
 crd_module(engine/numerics/hesap-amg engine/hesap-amg
     DEPENDS containers core hesap hesap-dense hesap-preconditioners hesap-sparse math memory TESTS numerics/hesap-amg)
 crd_module(engine/foundation/containers engine/containers DEPENDS core memory TESTS foundation/containers)
+crd_module(engine/foundation/toml engine/toml DEPENDS containers core TESTS foundation/toml)
 # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
 crd_module(engine/rendering/render-asset-core engine/render-asset-core DEPENDS containers core memory
     TESTS rendering/render-asset-core)
@@ -403,7 +404,7 @@ crd_module(engine/foundation/log engine/log DEPENDS containers core TESTS founda
 crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time PACKAGES glfw
     TESTS foundation/platform)
 crd_module(engine/foundation/app engine/app DEPENDS containers core jobs platform TESTS foundation/app)
-crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform PACKAGES tomlplusplus
+crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform toml
     TESTS foundation/config)
 crd_module(engine/ui/imgui engine/imgui
     DEPENDS config gpu-context gpu-context-dx12 gpu-context-vulkan log platform units PACKAGES glfw imgui
@@ -411,8 +412,8 @@ crd_module(engine/ui/imgui engine/imgui
 # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
 crd_module(engine/ui/perf-ui engine/perf-ui DEPENDS core imgui memory perf PACKAGES imgui TESTS ui/perf-ui)
 # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
-crd_module(engine/geometry/lod engine/lod DEPENDS containers core geometry-mesh-processing math memory resources
-    PACKAGES tomlplusplus TESTS geometry/lod TEST_DEPENDS scene-render)
+crd_module(engine/geometry/lod engine/lod DEPENDS containers core geometry-mesh-processing math memory resources toml
+    TESTS geometry/lod TEST_DEPENDS scene-render)
 crd_module(engine/geometry/meshgen engine/meshgen DEPENDS core math memory resources TESTS geometry/meshgen)
 # ADR-0099 v17-i-a: backend-agnostic GPU context foundation
 crd_module(engine/gpu/gpu-context engine/gpu-context DEPENDS containers core render-asset-core TESTS gpu/gpu-context
@@ -461,19 +462,19 @@ crd_module(engine/gpu/kir-hip engine/kir-hip DEPENDS containers core kir memory 
 crd_module(engine/gpu/kir-metal engine/kir-metal DEPENDS containers core kir memory TESTS gpu/kir-metal)
 # REN-36 (D-007 row 139): the AUTHORABLE FRAME GRAPH — render passes,
 crd_module(engine/assets/frame-cook engine/frame-cook
-    DEPENDS ceir ceir-gpu containers core gpu-context log memory render-asset-core render-graph render-pass
-    PACKAGES tomlplusplus TESTS assets/frame-cook TEST_DEPENDS platform)
+    DEPENDS ceir ceir-gpu containers core gpu-context log memory render-asset-core render-graph render-pass toml
+    TESTS assets/frame-cook TEST_DEPENDS platform)
 # REN-37 (D-007 row 140): the LIGHTING TECHNIQUE as an authored `.crdt`
-crd_module(engine/assets/technique-cook engine/technique-cook DEPENDS containers core frame-cook kir memory
-    PACKAGES tomlplusplus TESTS assets/technique-cook)
+crd_module(engine/assets/technique-cook engine/technique-cook DEPENDS containers core frame-cook kir memory toml
+    TESTS assets/technique-cook)
 # REN-38-C (D-007 row 141): the MATERIAL as an authored `.crdm`
-crd_module(engine/assets/material-cook engine/material-cook DEPENDS containers core kir memory
-    PACKAGES tomlplusplus TESTS assets/material-cook)
+crd_module(engine/assets/material-cook engine/material-cook DEPENDS containers core kir memory toml
+    TESTS assets/material-cook)
 # REN-38-D (D-007 row 141): the VERTEX PROGRAM as an authored `.crdv`
-crd_module(engine/assets/vertex-cook engine/vertex-cook DEPENDS containers core kir material-cook memory
-    PACKAGES tomlplusplus TESTS assets/vertex-cook)
+crd_module(engine/assets/vertex-cook engine/vertex-cook DEPENDS containers core kir material-cook memory toml
+    TESTS assets/vertex-cook)
 # REN-38-E (D-007 row 141): the LIGHTING VOCABULARY as an authored asset
-crd_module(engine/assets/light-cook engine/light-cook DEPENDS containers core kir memory PACKAGES tomlplusplus
+crd_module(engine/assets/light-cook engine/light-cook DEPENDS containers core kir memory toml
     TESTS assets/light-cook)
 # D-007 D2; OFFLINE shader cook — CKIR graph -> .crdr bundle (IR + reflection + per-backend blobs); ADR-0104
 crd_module(engine/assets/shader-cook engine/shader-cook
@@ -555,7 +556,7 @@ crd_module(engine/geometry/geometry-viz engine/geometry-viz
 # instead (a target build consuming a host build), so host/target separation is declared here, not implied.
 crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
     DEPENDS anim asset-io audio containers core frame-cook gpu-context gpu-context-vulkan light-cook log material-cook
-        math memory platform preset profile resources scene technique-cook timeline vertex-cook PACKAGES tomlplusplus
+        math memory platform preset profile resources scene technique-cook timeline vertex-cook toml
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
@@ -613,10 +614,6 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
         set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
     endif()
     crd_add_pinned_package(glfw SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
-endif()
-
-if("tomlplusplus" IN_LIST CRD_SELECTED_PACKAGES)
-    crd_add_pinned_package(tomlplusplus SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
 endif()
 
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)

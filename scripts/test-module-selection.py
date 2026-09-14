@@ -150,7 +150,7 @@ class Fixture(unittest.TestCase):
         self.assert_configured(result, ['core', 'math', 'fft', 'bench', 'vulkan', 'render', 'cook', 'sandbox',
                                         'tests/core', 'tests/math', 'tests/fft', 'tests/render'])
         self.assertIn('8 of 8 configured (full configuration)', result.stdout)
-        self.assertEqual(self.packages(), {'glfw', 'zstd', 'tomlplusplus', 'stb', 'cgltf', 'mikktspace', 'imgui'})
+        self.assertEqual(self.packages(), {'glfw', 'zstd', 'stb', 'cgltf', 'mikktspace', 'imgui'})
 
     def test_selection_closes_over_dependencies_tests_and_packages(self):
         result = self.configure('-DCRD_MODULES=fft')

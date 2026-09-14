@@ -3,7 +3,7 @@
 
 #include <crd/framecook/frame_asset.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <algorithm> // RAF-12.3: std::ranges::any_of (is_builtin_executor)
 #include <cstring>
@@ -450,9 +450,9 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
 {
     auto* alloc = out.resources.allocator();
     const std::string_view text(toml_text.data(), toml_text.size());
-    const toml::parse_result res = toml::parse(text);
+    const crd::toml::parse_result res = crd::toml::parse(text);
     if (!res) { return FrameCookError::ParseFailed; }
-    const toml::table& root = res.table();
+    const crd::toml::node& root = res.table();
 
     // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
     // parsing into a descriptor that already held a graph APPENDED to it (a silently merged frame), and the
@@ -501,7 +501,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FrameIncludeDesc inc(alloc);
             const auto gname = (*t)["graph"].value<std::string_view>();
@@ -514,14 +514,14 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             {
                 if (str_eq(out.includes[i].as, *as)) { set_where(where, *as); return FrameCookError::DuplicateInclude; }
             }
-            if (const toml::table* bt = (*t)["bind"].as_table())
+            if (const crd::toml::node* bt = (*t)["bind"].as_table())
             {
-                for (const auto& [k, v] : *bt)
+                for (const auto& [k, v] : bt->items())
                 {
                     const auto sv = v.value<std::string_view>();
                     if (!sv) { return FrameCookError::ParseFailed; }
                     FrameBinding b(alloc);
-                    set_str(b.from, std::string_view(k.str()));
+                    set_str(b.from, std::string_view(k));
                     set_str(b.to, *sv);
                     inc.bind.push_back(static_cast<FrameBinding&&>(b));
                 }
@@ -533,7 +533,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FrameAnchorDesc a(alloc);
             const auto an = (*t)["name"].value<std::string_view>();
@@ -561,7 +561,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FrameInjectDesc inj(alloc);
             const auto at = (*t)["at"].value<std::string_view>();
@@ -578,7 +578,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FrameResourceDesc r(alloc);
             const auto rn = (*t)["name"].value<std::string_view>();
@@ -653,7 +653,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FrameDrawListDesc d(alloc);
             const auto dn = (*t)["name"].value<std::string_view>();
@@ -697,7 +697,7 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     {
         for (const auto& node : *arr)
         {
-            const toml::table* t = node.as_table();
+            const crd::toml::node* t = node.as_table();
             if (t == nullptr) { return FrameCookError::ParseFailed; }
             FramePassDesc p(alloc);
             // ⭐ RAF-12.3 §7 fold: parse the executor-specific config into LOCALS (preserving the intricate
@@ -947,12 +947,12 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 l_has_clear_depth = true;
                 l_clear_depth     = static_cast<float>(*cd);
             }
-            if (const toml::table* pp = (*t)["params"].as_table())
+            if (const crd::toml::node* pp = (*t)["params"].as_table())
             {
-                for (const auto& [k, v] : *pp)
+                for (const auto& [k, v] : pp->items())
                 {
                     FrameParam prm(alloc);
-                    set_str(prm.name, std::string_view(k.str().data(), k.str().size()));
+                    set_str(prm.name, std::string_view(k.data(), k.size()));
                     if (const auto* av = v.as_array())
                     {
                         prm.type = FrameParamType::Vec4;

@@ -22,16 +22,6 @@
       "sha256": "169d49096e339caabbc12e1762273c5cb9130a535a282ba46cf5c14ab6e55694",
       "license": "Zlib"
     },
-    "tomlplusplus": {
-      "version": "3.4.0",
-      "repository": "marzer/tomlplusplus",
-      "ref": "v3.4.0",
-      "commit": "30172438cee64926dc41fdd9c11fb3ba5b2ba9de",
-      "url": "https://github.com/marzer/tomlplusplus/archive/30172438cee64926dc41fdd9c11fb3ba5b2ba9de.tar.gz",
-      "file": "tomlplusplus-30172438.tar.gz",
-      "sha256": "291254ffe7f2433f90deef878d0d9335534a350a958ea23ecf511b7b2277bf7f",
-      "license": "MIT"
-    },
     "zstd": {
       "version": "1.5.5",
       "repository": "facebook/zstd",

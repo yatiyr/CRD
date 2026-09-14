@@ -9,7 +9,7 @@
 #include <crd/kir/ckir_nodes.hpp>
 #include <crd/kir/ckir_shape.hpp> // REN-38 audit: the cook refuses a shape-invalid graph by name
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -186,9 +186,9 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
     // while a live GPU device (validation layer hooked into SEH dispatch) CRASHED the process — an
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
-    toml::parse_result pr = toml::parse(std::string_view(toml_text.data(), toml_text.size()));
+    crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
     if (!pr) { return LightingCookError::ParseFailed; }
-    toml::table root = std::move(pr).table();
+    crd::toml::node root = std::move(pr).table();
     // ⛔ RESET FIRST — the scar the vertex/material cookers both carried: parsing into a reused descriptor
     // APPENDED to it, so a tool with a load button silently merged two declarations.
     out.name.clear();

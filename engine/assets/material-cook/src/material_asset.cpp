@@ -11,7 +11,7 @@
 #include <crd/kir/ckir_post.hpp> // 38-G1: the post/tonemap family (post-context ops)
 #include <crd/kir/ckir_shape.hpp> // REN-38 audit: the cook refuses a shape-invalid graph by name
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -344,7 +344,7 @@ void set_where(crd::containers::String* w, std::string_view v)
 // ── PARSE ─────────────────────────────────────────────────────────────────────────────────────────────────
 namespace
 {
-void read_value(const toml::node& n, double* v, crd::u32& comps)
+void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
 {
     if (const auto* arr = n.as_array())
     {
@@ -368,9 +368,9 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     // while a live GPU device (validation layer hooked into SEH dispatch) CRASHED the process — an
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
-    toml::parse_result pr = toml::parse(std::string_view(toml_text.data(), toml_text.size()));
+    crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
     if (!pr) { return MaterialCookError::ParseFailed; }
-    toml::table root = std::move(pr).table();
+    crd::toml::node root = std::move(pr).table();
     auto* alloc = out.nodes.allocator();
 
     // ⛔ RESET THE OUTPUT FIRST. Parsing into a descriptor that already held a material APPENDED to it: the second
@@ -393,7 +393,7 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     {
         for (const auto& e : *pt)
         {
-            const toml::table* t = e.as_table();
+            const crd::toml::node* t = e.as_table();
             if (t == nullptr) { continue; }
             MatParamDesc p(alloc);
             const auto   pn = (*t)["name"].value<std::string_view>();
@@ -403,7 +403,7 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
             {
                 if (str_eq(out.params[i].name, *pn)) { set_where(where, *pn); return MaterialCookError::DuplicateName; }
             }
-            if (const toml::node* v = (*t)["value"].node()) { read_value(*v, static_cast<double*>(p.value), p.comps); }
+            if (const crd::toml::node* v = (*t)["value"].node_ptr()) { read_value(*v, static_cast<double*>(p.value), p.comps); }
             out.params.push_back(static_cast<MatParamDesc&&>(p));
         }
     }
@@ -412,7 +412,7 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     {
         for (const auto& e : *nt)
         {
-            const toml::table* t = e.as_table();
+            const crd::toml::node* t = e.as_table();
             if (t == nullptr) { continue; }
             MatNodeDesc n(alloc);
             const auto  nn = (*t)["name"].value<std::string_view>();
@@ -462,7 +462,7 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     {
         for (const auto& e : *it)
         {
-            const toml::table* t = e.as_table();
+            const crd::toml::node* t = e.as_table();
             if (t == nullptr) { continue; }
             MatInstanceDesc inst(alloc);
             const auto      iname = (*t)["name"].value<std::string_view>();
@@ -474,10 +474,10 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
             }
             if (const auto* ov = (*t)["set"].as_table())
             {
-                for (const auto& [k, v] : *ov)
+                for (const auto& [k, v] : ov->items())
                 {
                     MatParamDesc p(alloc);
-                    set_str(p.name, std::string_view(k.str().data(), k.str().size()));
+                    set_str(p.name, std::string_view(k.data(), k.size()));
                     read_value(v, static_cast<double*>(p.value), p.comps);
                     inst.overrides.push_back(static_cast<MatParamDesc&&>(p));
                 }

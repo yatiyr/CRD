@@ -2,7 +2,7 @@
 
 #include <crd/lod/lod_asset.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -69,9 +69,9 @@ const char* lod_cook_error_text(LodCookError err) noexcept
 LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, crd::containers::String* where)
 {
     out = LodPolicy{};
-    toml::parse_result pr = toml::parse(std::string_view(text.data(), text.size()));
+    crd::toml::parse_result pr = crd::toml::parse(std::string_view(text.data(), text.size()));
     if (!pr) { return LodCookError::ParseFailed; }
-    toml::table root = std::move(pr).table();
+    crd::toml::node root = std::move(pr).table();
 
     if (root["schema"].value_or<int64_t>(0) != 1) { return LodCookError::BadSchema; }
     out.boundary_weight = static_cast<crd::f32>(root["boundary_weight"].value_or<double>(1000.0));

@@ -7,12 +7,6 @@
 # know which asset understood which node.
 # One-way: vertex-cook -> {material-cook, kir, containers, memory, core}; nothing depends back on it.
 
-if(TARGET tomlplusplus::tomlplusplus)
-    set(_crd_toml_target tomlplusplus::tomlplusplus)
-else()
-    set(_crd_toml_target tomlplusplus)
-endif()
-
 add_library(crd-vertex-cook
     src/vertex_asset.cpp
 )
@@ -27,12 +21,10 @@ target_link_libraries(crd-vertex-cook
         crd-kir
         crd-material-cook   # the shared node registry (38-D3 displacement)
     PRIVATE
-        ${_crd_toml_target}
+        crd-toml
 )
 
 target_compile_features(crd-vertex-cook PUBLIC cxx_std_20)
-# TOML_EXCEPTIONS=0: the no-exception toml++ API (parse() returns a checked result). A thrown
 # parse_error unwinding while a live GPU device had hooked SEH dispatch crashed the process (F15).
-target_compile_definitions(crd-vertex-cook PRIVATE TOML_EXCEPTIONS=0)
 
 crd_enable_default_pch(crd-vertex-cook)

@@ -37,7 +37,7 @@
 #include <crd/profile/profile_resource.hpp>
 #include <crd/resources/resource_id.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -111,7 +111,7 @@ CookResult profile_handler(const CookContext& ctx)
     crd::containers::String text(ctx.allocator);
     text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
-    const auto parsed = toml::parse(std::string_view{text.data(), text.size()});
+    const auto parsed = crd::toml::parse(std::string_view{text.data(), text.size()});
     if (!parsed)
     {
         std::fprintf(stderr, "profile cook: TOML parse error in %.*s\n",
@@ -121,19 +121,19 @@ CookResult profile_handler(const CookContext& ctx)
 
     crd::profile::ProfileArtifactBuilder b{ctx.allocator, /*schema_version=*/1U, ctx.id};
 
-    const toml::table& root = parsed.table();
-    const toml::node*  profile_array_node = root.get("profile");
+    const crd::toml::node& root = parsed.table();
+    const crd::toml::node*  profile_array_node = root.get("profile");
     if (profile_array_node == nullptr || !profile_array_node->is_array_of_tables())
     {
         std::fprintf(stderr, "profile cook: %.*s missing required `[[profile]]` array of tables\n",
                      static_cast<int>(ctx.source_path.size()), ctx.source_path.data());
         return result;
     }
-    const toml::array& profile_array = *profile_array_node->as_array();
+    const crd::toml::node& profile_array = *profile_array_node->as_array();
 
     for (const auto& node : profile_array)
     {
-        const toml::table* profile = node.as_table();
+        const crd::toml::node* profile = node.as_table();
         if (profile == nullptr)
         {
             std::fprintf(stderr, "profile cook: [[profile]] entry must be a table\n");
@@ -142,7 +142,7 @@ CookResult profile_handler(const CookContext& ctx)
 
         // priority — defaults to 0 (lowest).
         crd::u32 priority = 0U;
-        if (const toml::node* p = profile->get("priority"); p != nullptr)
+        if (const crd::toml::node* p = profile->get("priority"); p != nullptr)
         {
             if (auto v = p->value<int64_t>(); v.has_value() && *v >= 0)
                 priority = static_cast<crd::u32>(*v);
@@ -151,12 +151,12 @@ CookResult profile_handler(const CookContext& ctx)
         // predicates — array of inline tables; v1o3 ships the parser even
         // though the default profile uses no predicates.
         crd::containers::Array<crd::profile::PredicateRecord> predicates(ctx.allocator);
-        if (const toml::node* preds = profile->get("predicate");
+        if (const crd::toml::node* preds = profile->get("predicate");
             preds != nullptr && preds->is_array_of_tables())
         {
             for (const auto& pn : *preds->as_array())
             {
-                const toml::table* pt = pn.as_table();
+                const crd::toml::node* pt = pn.as_table();
                 if (pt == nullptr) continue;
                 crd::profile::PredicateRecord rec{};
                 if (auto fnode = pt->get("field"); fnode != nullptr)
@@ -196,7 +196,7 @@ CookResult profile_handler(const CookContext& ctx)
 
         // bundle — array of preset path strings (relative to source dir).
         crd::containers::Array<crd::resources::ResourceId> bundle(ctx.allocator);
-        if (const toml::node* bn = profile->get("bundle"); bn != nullptr && bn->is_array())
+        if (const crd::toml::node* bn = profile->get("bundle"); bn != nullptr && bn->is_array())
         {
             for (const auto& en : *bn->as_array())
             {

@@ -116,6 +116,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `technique-cook` | [Public source](../../engine/assets/technique-cook/include/) | [CMake](../../engine/assets/technique-cook/CMakeLists.txt) |
 | `time` | [Public source](../../engine/foundation/time/include/) | [CMake](../../engine/foundation/time/CMakeLists.txt) |
 | `timeline` | [Public source](../../engine/world/timeline/include/) | [CMake](../../engine/world/timeline/CMakeLists.txt) |
+| `toml` | [Public source](../../engine/foundation/toml/include/) | [CMake](../../engine/foundation/toml/CMakeLists.txt) |
 | `units` | [units](units.md) | [CMake](../../engine/foundation/units/CMakeLists.txt) |
 | `vertex-cook` | [Public source](../../engine/assets/vertex-cook/include/) | [CMake](../../engine/assets/vertex-cook/CMakeLists.txt) |
 | `vm` | [vm](vm.md) | [CMake](../../engine/foundation/vm/CMakeLists.txt) |

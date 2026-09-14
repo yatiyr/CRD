@@ -31,7 +31,7 @@
 #include <crd/preset/preset_artifact_builder.hpp>
 #include <crd/preset/quality_preset.hpp>
 
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -48,10 +48,10 @@ namespace
 constexpr crd::u32 kPresetHandlerVersion = 1U;
 
 // Helper: read an optional u32 from TOML root by key; clamp to [0, max].
-[[nodiscard]] crd::u32 read_u32_or(const toml::table& root, std::string_view key,
+[[nodiscard]] crd::u32 read_u32_or(const crd::toml::node& root, std::string_view key,
                                    crd::u32 fallback, crd::u32 max_inclusive = 0xFFFF'FFFFU)
 {
-    const toml::node* n = root.get(key);
+    const crd::toml::node* n = root.get(key);
     if (n == nullptr)
         return fallback;
     if (auto v = n->value<int64_t>(); v.has_value())
@@ -65,14 +65,14 @@ constexpr crd::u32 kPresetHandlerVersion = 1U;
     return fallback;
 }
 
-[[nodiscard]] crd::u8 read_u8_or(const toml::table& root, std::string_view key, crd::u8 fallback)
+[[nodiscard]] crd::u8 read_u8_or(const crd::toml::node& root, std::string_view key, crd::u8 fallback)
 {
     return static_cast<crd::u8>(read_u32_or(root, key, fallback, 0xFFU));
 }
 
-[[nodiscard]] float read_f32_or(const toml::table& root, std::string_view key, float fallback)
+[[nodiscard]] float read_f32_or(const crd::toml::node& root, std::string_view key, float fallback)
 {
-    const toml::node* n = root.get(key);
+    const crd::toml::node* n = root.get(key);
     if (n == nullptr)
         return fallback;
     if (auto v = n->value<double>(); v.has_value())
@@ -84,7 +84,7 @@ constexpr crd::u32 kPresetHandlerVersion = 1U;
 
 // Quality writer — fills a QualityPreset, emits its bytes.
 [[nodiscard]] crd::containers::Array<crd::u8>
-emit_quality(const toml::table& root, const CookContext& ctx)
+emit_quality(const crd::toml::node& root, const CookContext& ctx)
 {
     crd::preset::QualityPreset q{};
     q.shadow_resolution    = read_u32_or(root, "shadow_resolution",    q.shadow_resolution);
@@ -106,7 +106,7 @@ emit_quality(const toml::table& root, const CookContext& ctx)
 
 // Camera writer — fills a CameraPreset, emits its bytes.
 [[nodiscard]] crd::containers::Array<crd::u8>
-emit_camera(const toml::table& root, const CookContext& ctx)
+emit_camera(const crd::toml::node& root, const CookContext& ctx)
 {
     crd::preset::CameraPreset c{};
     c.fov_y_radians     = read_f32_or(root, "fov_y_radians",     c.fov_y_radians);
@@ -119,7 +119,7 @@ emit_camera(const toml::table& root, const CookContext& ctx)
     c.ev100_min         = read_f32_or(root, "ev100_min",         c.ev100_min);
     c.ev100_max         = read_f32_or(root, "ev100_max",         c.ev100_max);
 
-    if (const toml::node* n = root.get("lens_model"); n != nullptr)
+    if (const crd::toml::node* n = root.get("lens_model"); n != nullptr)
     {
         if (auto s = n->value<std::string_view>(); s.has_value())
         {
@@ -128,7 +128,7 @@ emit_camera(const toml::table& root, const CookContext& ctx)
             else if (v == "Orthographic") c.lens_model = crd::preset::LensModel::Orthographic;
         }
     }
-    if (const toml::node* n = root.get("exposure_mode"); n != nullptr)
+    if (const crd::toml::node* n = root.get("exposure_mode"); n != nullptr)
     {
         if (auto s = n->value<std::string_view>(); s.has_value())
         {
@@ -158,7 +158,7 @@ CookResult preset_handler(const CookContext& ctx)
     crd::containers::String text(ctx.allocator);
     text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
-    const auto parsed = toml::parse(std::string_view{text.data(), text.size()});
+    const auto parsed = crd::toml::parse(std::string_view{text.data(), text.size()});
     if (!parsed)
     {
         std::fprintf(stderr, "preset cook: TOML parse error in %.*s\n",
@@ -166,9 +166,9 @@ CookResult preset_handler(const CookContext& ctx)
         return result;
     }
 
-    const toml::table& root = parsed.table();
+    const crd::toml::node& root = parsed.table();
 
-    const toml::node* type_node = root.get("type");
+    const crd::toml::node* type_node = root.get("type");
     if (type_node == nullptr)
     {
         std::fprintf(stderr, "preset cook: %.*s missing required `type` (string) key\n",

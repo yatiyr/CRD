@@ -68,6 +68,7 @@ crd_tests(rendering/render-material render-material)    # RAF-5 (D-007 "RAF band
 crd_tests(rendering/render-pass render-pass)        # RAF-6 (D-007 "RAF band"): pass-executor registry Gate 6
 crd_tests(rendering/render-graph render-graph)       # RAF-7 (D-007 "RAF band"): unified frame-graph runtime Gate 7
 crd_tests(foundation/time time)
+crd_tests(foundation/toml toml)
 crd_tests(foundation/perf perf)
 crd_tests(ui/perf-ui perf-ui)
 crd_tests(foundation/log log)

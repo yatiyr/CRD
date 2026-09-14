@@ -2,13 +2,13 @@
 #include <crd/log/log.hpp>
 
 #include <memory>
-#include <toml++/toml.hpp>
+#include <crd/toml/toml.hpp>
 
 namespace crd::config
 {
 struct Config::Impl
 {
-    toml::table root{};
+    crd::toml::node root;
 };
 
 namespace
@@ -31,9 +31,9 @@ namespace
     return parts;
 }
 
-[[nodiscard]] const toml::node* find_node(const toml::table& root, crd::containers::StringView key) noexcept
+[[nodiscard]] const crd::toml::node* find_node(const crd::toml::node& root, crd::containers::StringView key) noexcept
 {
-    const toml::node* current = &root;
+    const crd::toml::node* current = &root;
     const auto parts = split_key(key);
     for (const auto& part : parts)
     {
@@ -51,20 +51,20 @@ namespace
     return current;
 }
 
-[[nodiscard]] toml::table* ensure_parent_table(toml::table& root, crd::containers::StringView key)
+[[nodiscard]] crd::toml::node* ensure_parent_table(crd::toml::node& root, crd::containers::StringView key)
 {
     const auto parts = split_key(key);
-    toml::table* current = &root;
+    crd::toml::node* current = &root;
     if (parts.empty())
     {
         return current;
     }
     for (crd::usize i = 0; i + 1 < parts.size(); ++i)
     {
-        toml::node* node = current->get(parts[i].c_str());
+        crd::toml::node* node = current->get(parts[i].c_str());
         if (node == nullptr || !node->is_table())
         {
-            current->insert_or_assign(parts[i].c_str(), toml::table{});
+            current->insert_or_assign(parts[i].c_str(), crd::toml::table{});
             node = current->get(parts[i].c_str());
         }
         current = node->as_table();
@@ -80,7 +80,7 @@ namespace
     return parts.back();
 }
 
-template <typename ValueType> [[nodiscard]] bool read_scalar(const toml::node& node, ValueType& out) noexcept
+template <typename ValueType> [[nodiscard]] bool read_scalar(const crd::toml::node& node, ValueType& out) noexcept
 {
     if constexpr (std::is_same_v<ValueType, crd::i64>)
     {
@@ -133,7 +133,7 @@ template <typename ValueType> [[nodiscard]] bool read_scalar(const toml::node& n
     return false;
 }
 
-template <typename ValueType> [[nodiscard]] bool read_array(const toml::node& node, ValueType& out) noexcept
+template <typename ValueType> [[nodiscard]] bool read_array(const crd::toml::node& node, ValueType& out) noexcept
 {
     using ElementType = typename ValueType::value_type;
     const auto* arr = node.as_array();
@@ -155,7 +155,7 @@ template <typename ValueType> [[nodiscard]] bool read_array(const toml::node& no
     return true;
 }
 
-[[nodiscard]] bool read_vec4f(const toml::node& node, crd::math::Vec4f& out) noexcept
+[[nodiscard]] bool read_vec4f(const crd::toml::node& node, crd::math::Vec4f& out) noexcept
 {
     const auto* arr = node.as_array();
     if (arr == nullptr || arr->size() != 4U)
@@ -178,7 +178,7 @@ template <typename ValueType> [[nodiscard]] bool read_array(const toml::node& no
     return true;
 }
 
-template <typename ValueType> void write_scalar(toml::table& table, const char* key, const ValueType& value)
+template <typename ValueType> void write_scalar(crd::toml::node& table, const char* key, const ValueType& value)
 {
     if constexpr (std::is_same_v<ValueType, crd::containers::String>)
     {
@@ -190,9 +190,9 @@ template <typename ValueType> void write_scalar(toml::table& table, const char* 
     }
 }
 
-template <typename ValueType> void write_array(toml::table& table, const char* key, const ValueType& value)
+template <typename ValueType> void write_array(crd::toml::node& table, const char* key, const ValueType& value)
 {
-    toml::array arr;
+    crd::toml::array arr;
     for (const auto& element : value)
     {
         if constexpr (std::is_same_v<typename ValueType::value_type, crd::containers::String>)
@@ -207,9 +207,9 @@ template <typename ValueType> void write_array(toml::table& table, const char* k
     table.insert_or_assign(key, std::move(arr));
 }
 
-void write_vec4f(toml::table& table, const char* key, const crd::math::Vec4f& value)
+void write_vec4f(crd::toml::node& table, const char* key, const crd::math::Vec4f& value)
 {
-    toml::array arr;
+    crd::toml::array arr;
     arr.push_back(value.x);
     arr.push_back(value.y);
     arr.push_back(value.z);
@@ -228,7 +228,7 @@ Config& Config::operator=(Config&&) noexcept = default;
 
 bool Config::load_from_string(crd::containers::StringView toml_text) noexcept
 {
-    const auto result = toml::parse(std::string_view(toml_text.data(), toml_text.size()), std::string_view{"config"});
+    const auto result = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()), std::string_view{"config"});
     if (!result)
     {
         const auto desc = result.error().description();
@@ -273,7 +273,7 @@ bool Config::contains(crd::containers::StringView key) const noexcept
 template <typename ValueType>
 ValueType Config::get_impl(crd::containers::StringView key, const ValueType& fallback) const noexcept
 {
-    const toml::node* node = find_node(m_impl->root, key);
+    const crd::toml::node* node = find_node(m_impl->root, key);
     if (node == nullptr)
     {
         CRD_LOG_WARN(g_log_config, "Missing config key '{}'; using fallback", key.data());
@@ -309,7 +309,7 @@ ValueType Config::get_impl(crd::containers::StringView key, const ValueType& fal
 
 template <typename ValueType> void Config::set_impl(crd::containers::StringView key, const ValueType& value)
 {
-    toml::table* parent = ensure_parent_table(m_impl->root, key);
+    crd::toml::node* parent = ensure_parent_table(m_impl->root, key);
     const auto leaf = leaf_key(key);
 
     if constexpr (std::is_same_v<ValueType, crd::i64> || std::is_same_v<ValueType, int> ||
