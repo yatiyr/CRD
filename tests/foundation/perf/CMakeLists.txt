@@ -20,6 +20,8 @@ add_executable(crd-perf-tests
     test_perf_budget_soft.cpp
     test_diag_harness.cpp
     test_doctor.cpp
+    test_diagnostics.cpp
+    test_diagnostic_recorder.cpp
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

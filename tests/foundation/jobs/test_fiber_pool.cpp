@@ -438,3 +438,121 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
 
     pool.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// 13. DG05 adversarial exhaustion/reclamation stress (DIAG.1a).
+//
+// The one-fiber-per-thread test above barely walks the free-list link chain.
+// Here each thread grabs a *batch* of fibers before releasing any, and the pool
+// is deliberately oversubscribed (threads*batch > pool), so the free list is
+// repeatedly drained toward empty and refilled under contention. That maximises
+// the window in which acquire()'s `next = next_free.load()` between the head load
+// and the CAS overlaps a concurrent release()'s `next_free.store()` on the same
+// fiber — the exact next_free race DG05 repairs. Uniqueness: no fiber index may
+// be held by two threads at once. Completion: the pool is fully restored.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("fiber_pool: DG05 exhaustion/reclamation stress preserves uniqueness and completion",
+          "[jobs][fiber_pool][stress][diag]")
+{
+    static constexpr crd::u32 kSmallCount  = 24U;
+    static constexpr crd::u32 kThreadCount = 6U;   // 6 * 6 = 36 > 24 → forced exhaustion
+    static constexpr crd::u32 kBatch       = 6U;
+    static constexpr crd::u32 kIterations  = 6'000U;
+
+    FiberPool pool;
+    REQUIRE(pool.init(make_test_config(kSmallCount, 1U, 1U)));
+
+#if CRD_ENABLE_ASSERTS
+    // Oversubscription drains the pool on purpose; suppress the "pool exhausted"
+    // assert UI so a drained acquire cleanly returns nullptr instead of blocking.
+    crd::set_assert_platform_handler([](const char*) -> int { return 0; });
+#endif
+
+    std::atomic<bool> in_use[kSmallCount]{};
+    for (auto& b : in_use)
+        b.store(false, std::memory_order_relaxed);
+
+    std::atomic<bool> corruption_detected{false};
+    std::atomic<crd::u64> total_acquired{0U};
+
+    crd::containers::Array<std::thread> threads;
+    threads.reserve(kThreadCount);
+
+    for (crd::u32 t = 0; t < kThreadCount; ++t)
+    {
+        threads.emplace_back([&, t]()
+        {
+            Fiber* held[kBatch] = {};
+            for (crd::u32 iter = 0; iter < kIterations; ++iter)
+            {
+                crd::u32 got = 0U;
+                for (crd::u32 b = 0; b < kBatch; ++b)
+                {
+                    Fiber* f = pool.acquire(FiberTier::Small);
+                    if (!f)
+                        break; // pool momentarily drained — expected under oversubscription
+                    const crd::u32 idx = f->pool_index;
+                    if (in_use[idx].exchange(true, std::memory_order_acq_rel))
+                        corruption_detected.store(true, std::memory_order_relaxed);
+                    held[got++] = f;
+                }
+                total_acquired.fetch_add(got, std::memory_order_relaxed);
+
+                if ((iter & 1U) == 0U)
+                    std::this_thread::yield();
+
+                // Release in reverse order on even threads, forward on odd, so the
+                // free-list ordering is churned rather than perfectly LIFO-restored.
+                if ((t & 1U) == 0U)
+                {
+                    for (crd::u32 b = got; b-- > 0;)
+                    {
+                        in_use[held[b]->pool_index].store(false, std::memory_order_release);
+                        pool.release(held[b]);
+                    }
+                }
+                else
+                {
+                    for (crd::u32 b = 0; b < got; ++b)
+                    {
+                        in_use[held[b]->pool_index].store(false, std::memory_order_release);
+                        pool.release(held[b]);
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto& th : threads)
+        th.join();
+
+    CHECK_FALSE(corruption_detected.load());
+    CHECK(total_acquired.load() > 0U);
+    // Completion: every fiber returned to the pool, no leaks, list intact.
+    CHECK(pool.available_count(FiberTier::Small) == kSmallCount);
+    for (auto& b : in_use)
+        CHECK_FALSE(b.load(std::memory_order_relaxed));
+
+    // The free list is still fully functional after the churn: drain it dry once.
+    crd::u32 drained = 0U;
+    Fiber*   all[kSmallCount] = {};
+    for (crd::u32 i = 0; i < kSmallCount; ++i)
+    {
+        all[i] = pool.acquire(FiberTier::Small);
+        if (all[i])
+            ++drained;
+    }
+    CHECK(drained == kSmallCount);
+    CHECK(pool.acquire(FiberTier::Small) == nullptr); // exhausted exactly
+    for (crd::u32 i = 0; i < kSmallCount; ++i)
+        if (all[i])
+            pool.release(all[i]);
+    CHECK(pool.available_count(FiberTier::Small) == kSmallCount);
+
+#if CRD_ENABLE_ASSERTS
+    crd::set_assert_platform_handler(nullptr);
+#endif
+
+    pool.shutdown();
+}

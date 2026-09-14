@@ -129,7 +129,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
         f.pool_index = i;
         f.tier       = kind;
         // Wire the singly-linked free list: 0 → 1 → 2 → … → (count-1) → nil.
-        f.next_free  = (i + 1U < count) ? (i + 1U) : kFiberNullIndex;
+        f.next_free.store((i + 1U < count) ? (i + 1U) : kFiberNullIndex, std::memory_order_relaxed);
 
         // The usable stack starts just after the guard page.
         // fiber_init_stack computes the initial stack top as (usable_base + usable_bytes),
@@ -218,10 +218,16 @@ void FiberPool::shutdown() noexcept
 //   - CAS success uses acq_rel: the acquire half synchronises with the pusher's release,
 //     making fiber->next_free visible; the release half is unused here but harmless.
 //   - CAS failure uses acquire so the refreshed `head` value is equally synchronised.
-//   - The read of tier.fibers[idx].next_free between the load and the CAS is safe:
-//     if the CAS succeeds, `idx` was continuously the head since our load, meaning
-//     no concurrent push could have changed next_free for that same fiber without first
-//     acquiring it (which would have changed the head and failed our CAS).
+//   - next_free is an atomic link read/written relaxed (DG05): making it atomic removes
+//     the TSan data race on the link itself. Relaxed suffices because the *ordering* that
+//     makes the read observe the correct successor is carried by free_head — a pusher's
+//     release CAS publishes both `idx` as head and its prior relaxed next_free store, and
+//     our acquire load/CAS synchronises with it. Linearization point: the successful CAS.
+//   - ABA: the value read from next_free is only committed if the CAS succeeds, i.e. `head`
+//     (index AND generation) is unchanged since our load. Every pop bumps the generation,
+//     so an interleaved pop+push that restores the same index cannot restore the same tag;
+//     a stale next_free can never be installed. Uniqueness: a fiber is on the free list or
+//     acquired, never both — a successful pop removes it before any acquirer can observe it.
 // ---------------------------------------------------------------------------
 
 Fiber* FiberPool::acquire_from(Tier& tier) noexcept
@@ -236,7 +242,7 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
             return nullptr;
         }
 
-        const crd::u32 next    = tier.fibers[idx].next_free;
+        const crd::u32 next    = tier.fibers[idx].next_free.load(std::memory_order_relaxed);
         const crd::u64 desired = pack_head(next, head_gen(head) + 1U); // bump gen on every pop
 
         if (tier.free_head.compare_exchange_weak(head, desired,
@@ -293,7 +299,7 @@ void FiberPool::release_to(Tier& tier, Fiber* fiber) noexcept
     crd::u64 desired;
     do
     {
-        fiber->next_free = head_idx(head);
+        fiber->next_free.store(head_idx(head), std::memory_order_relaxed);
         desired          = pack_head(idx, head_gen(head));
     } while (!tier.free_head.compare_exchange_weak(head, desired,
                   std::memory_order_release, std::memory_order_relaxed));

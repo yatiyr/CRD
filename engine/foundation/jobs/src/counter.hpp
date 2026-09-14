@@ -69,7 +69,10 @@ struct alignas(64) Counter
     crd::u32                 _pad0      = 0U;       // explicit pad → align waiters to 8
     std::atomic<Waiter*>     waiters    {nullptr};  // Treiber stack of pending waiters
     crd::u32                 pool_index  = kCounterNullIndex;
-    crd::u32                 next_free   = kCounterNullIndex;
+    // Treiber free-list link; kCounterNullIndex = end-of-list. Atomic (relaxed) so the
+    // pop-side read and push-side write of the link are not a data race under TSan
+    // (DG05); happens-before is carried by m_free_head and ABA by its generation tag.
+    std::atomic<crd::u32>    next_free   {kCounterNullIndex};
     crd::u8                  _pad1[40]  = {};
 };
 static_assert(sizeof(Counter)  == 64U, "Counter must be exactly one cache line");

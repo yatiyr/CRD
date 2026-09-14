@@ -358,6 +358,27 @@
                     "intelliSenseMode": "linux-clang-x64"
                 }
             }
+        },
+        {
+            "name": "linux-clang-tsan",
+            "displayName": "Linux clang Debug + ThreadSanitizer (DIAG.1b)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_ENABLE_TSAN": "ON"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-clang-x64"
+                }
+            }
         }
     ],
     "buildPresets": [
@@ -520,6 +541,10 @@
         {
             "name": "linux-clang-fuzz",
             "configurePreset": "linux-clang-fuzz"
+        },
+        {
+            "name": "linux-clang-tsan",
+            "configurePreset": "linux-clang-tsan"
         }
     ],
     "testPresets": [
@@ -667,6 +692,19 @@
             },
             "environment": {
                 "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
+        },
+        {
+            "name": "linux-clang-tsan",
+            "configurePreset": "linux-clang-tsan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "timeout": 3600
+            },
+            "environment": {
+                "TSAN_OPTIONS": "halt_on_error=1 second_deadlock_stack=1 history_size=4"
             }
         },
         {

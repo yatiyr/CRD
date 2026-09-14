@@ -5,6 +5,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <atomic>
+
 namespace crd::jobs::detail
 {
 
@@ -44,7 +46,11 @@ struct Fiber
     crd::usize usable_size   = 0;               // committed byte count (= alloc_size - guard)
     void     (*trampoline)() = nullptr;         // entry_fn passed to fiber_init_stack
     crd::u32   pool_index    = kFiberNullIndex; // stable index in the tier's fibers[] array
-    crd::u32   next_free     = kFiberNullIndex; // Treiber stack link; kFiberNullIndex = end-of-list
+    // Treiber stack link; kFiberNullIndex = end-of-list. Atomic (relaxed) so the
+    // pop-side read and push-side write of the link are not a data race under TSan
+    // (DG05); the real happens-before is carried by the tier's free_head, and ABA is
+    // handled by the generation tag packed into free_head — see fiber_pool.cpp.
+    std::atomic<crd::u32> next_free{kFiberNullIndex};
     FiberTier  tier          = FiberTier::Small;
     Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
 

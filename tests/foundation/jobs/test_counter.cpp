@@ -8,6 +8,7 @@
 #include <crd/core/types.hpp>
 
 #include <atomic>
+#include <new>
 #include <thread>
 #include <vector>
 
@@ -370,7 +371,10 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     // Reset mutable state (pool is default-constructed; atomics re-initialised individually).
     g_s10.pool.shutdown();
     g_s10.counter        = nullptr;
-    g_s10.job_fiber      = Fiber{};
+    // Fiber holds an atomic free-list link, so it is not assignable; reconstruct in
+    // place (its destructor is trivial) for the same effect as `= Fiber{}`.
+    g_s10.job_fiber.~Fiber();
+    new (&g_s10.job_fiber) Fiber{};
     g_s10.waiter.fiber   = nullptr;
     g_s10.waiter.target  = 0U;
     g_s10.waiter.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
@@ -482,7 +486,9 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
 {
     g_s12.pool.shutdown();
     g_s12.counter      = nullptr;
-    g_s12.job_fiber    = Fiber{};
+    // Fiber holds an atomic free-list link (not assignable); reconstruct in place.
+    g_s12.job_fiber.~Fiber();
+    new (&g_s12.job_fiber) Fiber{};
     g_s12.waiter.fiber = nullptr;
     g_s12.waiter.target = 0U;
     g_s12.waiter.claim.store(WaiterClaim::Pending, std::memory_order_relaxed);
@@ -628,5 +634,106 @@ TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][st
 
     CHECK(errors.load() == 0);
     CHECK(pool.available() == kPoolSize);
+    pool.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 15. DG05 adversarial exhaustion/reclamation stress (DIAG.1a).
+//
+// Batch-acquire under oversubscription (threads*batch > pool) so the counter
+// free list is repeatedly drained toward empty and refilled, maximising the
+// window where acquire()'s relaxed next_free.load() overlaps a concurrent
+// release()'s next_free.store() on the same counter — the DG05 race. Uniqueness:
+// a pool_index may not be live in two threads at once; completion: full restore.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("counter_pool: DG05 exhaustion/reclamation stress preserves uniqueness and completion",
+          "[jobs][counter][stress][diag]")
+{
+    static constexpr crd::u32 kPoolSize   = 24U;
+    static constexpr crd::u32 kThreads    = 6U;   // 6 * 6 = 36 > 24 → forced exhaustion
+    static constexpr crd::u32 kBatch      = 6U;
+    static constexpr int      kIterations = 6'000;
+
+    CounterPool pool;
+    REQUIRE(pool.init(kPoolSize));
+
+#if CRD_ENABLE_ASSERTS
+    crd::set_assert_platform_handler([](const char*) -> int { return 0; });
+#endif
+
+    std::atomic<bool> in_use[kPoolSize]{};
+    for (auto& b : in_use)
+        b.store(false, std::memory_order_relaxed);
+
+    std::atomic<bool> corruption{false};
+    std::atomic<int>  value_error{0};
+
+    crd::containers::Array<std::thread> threads;
+    threads.reserve(kThreads);
+
+    for (crd::u32 t = 0U; t < kThreads; ++t)
+    {
+        threads.emplace_back([&, t]()
+        {
+            Counter* held[kBatch] = {};
+            for (int iter = 0; iter < kIterations; ++iter)
+            {
+                const crd::u32 seed = static_cast<crd::u32>(iter) * 7U + t + 1U;
+                crd::u32 got = 0U;
+                for (crd::u32 b = 0; b < kBatch; ++b)
+                {
+                    Counter* c = pool.acquire(seed + b);
+                    if (c == nullptr)
+                        break; // drained — expected under oversubscription
+                    if (c->value.load(std::memory_order_relaxed) != seed + b)
+                        value_error.fetch_add(1, std::memory_order_relaxed);
+                    if (in_use[c->pool_index].exchange(true, std::memory_order_acq_rel))
+                        corruption.store(true, std::memory_order_relaxed);
+                    held[got++] = c;
+                }
+
+                if ((iter & 1) == 0)
+                    std::this_thread::yield();
+
+                for (crd::u32 b = 0; b < got; ++b)
+                {
+                    const crd::u32 rb = ((t & 1U) == 0U) ? (got - 1U - b) : b;
+                    in_use[held[rb]->pool_index].store(false, std::memory_order_release);
+                    pool.release(held[rb]);
+                }
+            }
+        });
+    }
+
+    for (auto& th : threads)
+        th.join();
+
+    CHECK_FALSE(corruption.load());
+    CHECK(value_error.load() == 0);
+    CHECK(pool.available() == kPoolSize);
+    for (auto& b : in_use)
+        CHECK_FALSE(b.load(std::memory_order_relaxed));
+
+    // Free list still fully functional: drain dry once and confirm exact exhaustion.
+    crd::u32 drained = 0U;
+    Counter* all[kPoolSize] = {};
+    for (crd::u32 i = 0; i < kPoolSize; ++i)
+    {
+        all[i] = pool.acquire(1U);
+        if (all[i])
+            ++drained;
+    }
+    CHECK(drained == kPoolSize);
+    CHECK(pool.acquire(1U) == nullptr);
+    for (crd::u32 i = 0; i < kPoolSize; ++i)
+        if (all[i])
+            pool.release(all[i]);
+    CHECK(pool.available() == kPoolSize);
+
+#if CRD_ENABLE_ASSERTS
+    crd::set_assert_platform_handler(nullptr);
+#endif
+
     pool.shutdown();
 }

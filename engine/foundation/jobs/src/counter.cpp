@@ -22,7 +22,8 @@ bool CounterPool::init(crd::u32 capacity) noexcept
     for (crd::u32 i = 0U; i < capacity; ++i)
     {
         m_counters[i].pool_index = i;
-        m_counters[i].next_free  = (i + 1U < capacity) ? (i + 1U) : kCounterNullIndex;
+        m_counters[i].next_free.store((i + 1U < capacity) ? (i + 1U) : kCounterNullIndex,
+                                      std::memory_order_relaxed);
     }
 
     m_free_head.store(pack_head(0U, 0U), std::memory_order_release);
@@ -45,8 +46,13 @@ void CounterPool::shutdown() noexcept
 // ---------------------------------------------------------------------------
 // CounterPool — acquire (Treiber pop)
 //
-// Memory ordering: mirrors FiberPool::acquire_from — acquire on load, acq_rel
-// on successful CAS so the next_free link read between them is safe.
+// Memory ordering: mirrors FiberPool::acquire_from — acquire on load, acq_rel on
+// successful CAS. next_free is an atomic link accessed relaxed (DG05): atomic removes the
+// TSan data race; ordering is carried by m_free_head (a releaser's CAS publishes the index
+// and its relaxed next_free store, our acquire synchronises with it). ABA: the read
+// successor is committed only if the CAS sees an unchanged (index,generation) head, and
+// every pop bumps the generation, so a stale link can never be reinstalled. Linearization
+// point is the successful CAS; a counter is on the free list or acquired, never both.
 // ---------------------------------------------------------------------------
 
 Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
@@ -63,7 +69,7 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
             return nullptr;
         }
 
-        const crd::u32 next    = m_counters[idx].next_free; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        const crd::u32 next    = m_counters[idx].next_free.load(std::memory_order_relaxed); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         const crd::u64 desired = pack_head(next, head_gen(head) + 1U);
 
         if (m_free_head.compare_exchange_weak(head, desired,
@@ -72,7 +78,7 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
             Counter* c    = &m_counters[idx]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
             c->value.store(initial_value,  std::memory_order_relaxed);
             c->waiters.store(nullptr,       std::memory_order_relaxed);
-            c->next_free = kCounterNullIndex;
+            c->next_free.store(kCounterNullIndex, std::memory_order_relaxed);
             m_acquired.fetch_add(1U, std::memory_order_relaxed);
             return c;
         }
@@ -108,7 +114,7 @@ void CounterPool::release(Counter* counter) noexcept
     crd::u64 desired;
     do
     {
-        counter->next_free = head_idx(head);
+        counter->next_free.store(head_idx(head), std::memory_order_relaxed);
         desired            = pack_head(idx, head_gen(head));
     } while (!m_free_head.compare_exchange_weak(head, desired,
                   std::memory_order_release, std::memory_order_relaxed));
