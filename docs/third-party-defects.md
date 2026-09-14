@@ -30,6 +30,9 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
       {"test": "REN-38-F13 GATE (DX12): authored INTERSECTION + CALLABLE stages trace a procedural sphere through the SBT", "defect": "TP-1"},
       {"test": "CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-traced shadow (DX12)", "defect": "TP-1"},
       {"test": "REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scene TLAS through the live host", "defect": "TP-1"}
+    ],
+    "linux-gcc-asan": [
+      {"test": "assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "defect": "TP-5"}
     ]
   }
 }
@@ -88,6 +91,21 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Engine handling | The wrapper variants record the export failure and keep the textual apps and device snapshots as the restoration proof; every run still reports `restoration: verified` |
 | Retirement | When the export verb works again the variants can require the XML export as before |
 | Row | none; recorded in the [route and provider session](sessions/2026-09-13-inner-coverage-route-and-pinned-warp.md) |
+
+<a id="tp-5"></a>
+## TP-5: MikkTSpace's edge-sort pivot PRNG shifts a 32-bit value by 32
+
+| Field | Value |
+|---|---|
+| Component | MikkTSpace (pinned commit `633eb1ff`, MIT), the tangent-generation reference oracle, `mikktspace.c` |
+| Symptom | UBSan: `mikktspace.c:1667:21: runtime error: shift exponent 32 is too large for 32-bit type 'unsigned int'`. The pivot PRNG in `QuickSortEdges` computes `t = uSeed & 31` then `uSeed >> (32 - t)`; when `t == 0` the shift is by 32, undefined for a 32-bit type. Non-recovering UBSan aborts the process |
+| Trigger | Any `genTangSpaceDefault` call whose edge sort takes the pivot branch with `t == 0`; the assetio oracle hits it deterministically on its fixtures |
+| Reproduction outside Cerid | Faulting stack is entirely MikkTSpace, no engine frame: `QuickSortEdges` (`:1667`) ← `BuildNeighborsFast` (`:1517`) ← `InitTriInfo` (`:1056`) ← `genTangSpace` (`:307`) ← `genTangSpaceDefault` (`:226`). The UB is on MikkTSpace's own local `uSeed`; the engine only supplies mesh data |
+| Affected | `linux-gcc-asan` only (the one lane with UBSan), the one registered test. The same test passes with correct tangents on every non-sanitized lane and on `win-asan` (ASan without UBSan). The oracle is the unmodified upstream file, `#include`d as the reference; patching it would defeat the bit-exact comparison it exists for, so the engine keeps it pristine and registers the sanitizer-only finding |
+| Hosted evidence | [Run 34821419392](https://github.com/yatiyr/CRD/actions/runs/34821419392) at `2b6dcdb0`: the first complete-tier run, `linux-gcc-asan` reports the shift at `mikktspace.c:1667` on this test; local reproduction on the `linux-gcc-asan` preset (WSL2, GCC 13.3) matches |
+| Engine handling | None: the UB is in the reference oracle's own PRNG, our tangent implementation is separate and validated against it on every non-UBSan lane |
+| Retirement | When a later MikkTSpace pin masks the shift (`>> ((32 - t) & 31)` or equivalent) or the oracle is dropped; the gate then fails on the unexpected pass and this entry is removed |
+| Row | [REPO.3d](ROADMAP.md#slice-repo.3d); evidence [first complete-tier run repairs](sessions/2026-09-14-first-complete-tier-run-repairs.md) |
 
 ## The registered-failure gate
 

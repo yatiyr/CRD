@@ -591,7 +591,10 @@ crd_resolve_modules()
 include(cmake/CPM.cmake)
 
 if (CRD_BUILD_TESTS)
-    crd_add_pinned_package(Catch2)
+    # SYSTEM and EXCLUDE_FROM_ALL are what CPM's single-argument shorthand implied before the pins registry; the long
+    # form implies neither, and the first complete-tier run (34821419392) failed clang-cl on a warning inside a Catch2
+    # header once its includes stopped being system includes. Third-party headers never fail the warning gate.
+    crd_add_pinned_package(Catch2 SYSTEM YES EXCLUDE_FROM_ALL YES)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 endif()
 
@@ -609,11 +612,11 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
         set(GLFW_BUILD_X11     OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
     endif()
-    crd_add_pinned_package(glfw)
+    crd_add_pinned_package(glfw SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
 endif()
 
 if("tomlplusplus" IN_LIST CRD_SELECTED_PACKAGES)
-    crd_add_pinned_package(tomlplusplus)
+    crd_add_pinned_package(tomlplusplus SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
 endif()
 
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
@@ -676,7 +679,7 @@ endif()
 if("imgui" IN_LIST CRD_SELECTED_PACKAGES)
     # The Vulkan backend's texture-upload flush is patched into a build-owned copy by engine/ui/imgui
     # (cmake/patches/imgui-vulkan-whole-size.cmake); the downloaded tree stays pristine.
-    crd_add_pinned_package(imgui)
+    crd_add_pinned_package(imgui SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
 endif()
 
 # ----- Reference-class shootout deps (Phase 3.1.6 v0d-parallelism-scaling) -----

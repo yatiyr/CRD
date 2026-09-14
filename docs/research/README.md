@@ -12,6 +12,7 @@ and verification evidence in the linked note; its live status belongs only to th
 
 | Reference | Purpose |
 |---|---|
+| [Diagnostics and instrumentation](2026-09-14-diagnostics-and-instrumentation.md) | DG01–DG18 source findings, primary research, tool limits and DIAG ownership |
 | [Large C++ development and CI](2026-09-12-large-cpp-development-and-ci.md) | Current CI evidence, seven-project research, fast local workflow and proposed finite repository loop; REPO.DEV and REPO.3c own state |
 | [Whole-system architecture review](2026-09-12-cerid-whole-system-review.md) | G01–G30 source-backed gaps, primary research and domain qualification; owner state only in ROADMAP |
 | [2026-07-06-v15-forward-ad-crush](2026-07-06-v15-forward-ad-crush.md) | Research — 2026-07-06 — v15 forward-mode AD: the frontier crush levers + reconstruct-verify tables |

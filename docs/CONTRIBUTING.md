@@ -58,6 +58,10 @@ paths resolves to the complete tier, so every owned preset runs hosted.
 
 ## Generated sources and provenance
 
+Runtime changes also follow [DIAG](design/runtime-diagnostics.md): retained ownership/provenance, actionable failure
+records and deliberately faulty detector controls. Use the existing services; new modules must not create a private
+profiler or silently bypass custom-allocator diagnostics. Planned DIAG modes are not existing commands until qualified.
+
 Every committed generated file is named once in [scripts/generated-sources.json](../scripts/generated-sources.json)
 with its generator, its status and the SHA-256 of its bytes; [check-generated.py](../scripts/check-generated.py)
 fails a lane when a listed file changed without a refresh, when a file carrying a generation marker is unlisted, or

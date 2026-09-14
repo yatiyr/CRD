@@ -71,8 +71,8 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   incremental tidy. Add configurations/platforms only for a discriminating risk or reproduced failure; use BUILDING's
   decision table. CI owns broader Windows/Linux/backend and full-matrix qualification. Preserve validation/oracles,
   nonzero execution counts, real exit codes and timeouts. Never run full repository/configuration sweeps locally.
-- Use testable invariants, adversarial boundaries and measured budgets. Do not claim a platform from its emitter
-  or a completed feature from a schema. Parent completion requires every child and its evidence.
+- Use [diagnostic controls](docs/design/runtime-diagnostics.md#shared-acceptance-rules), adversarial cases and measured budgets.
+  A schema/emitter is not runtime proof. Parent completion requires every child and its evidence.
 - Every task, including fixes and investigations, ends with a session record and accurate affected documents.
   Follow the [quality/close-out contract](docs/design/system-quality-contract.md): update the owning ROADMAP row,
   context and changed contracts/API examples/indexes; inspect orientation docs for affected facts. Preserve historical

@@ -147,7 +147,9 @@ private:
         return reinterpret_cast<const Header*>(reinterpret_cast<std::uintptr_t>(p) - sizeof(Header));
     }
 
-    memory::MallocAllocator m_inner;
+    // Every block goes to the system allocator on purpose: ASan and libFuzzer's malloc limit see each allocation
+    // one by one, which a TLSF arena would hide (the first complete-tier run's crd-no-malloc-allocator guard).
+    memory::MallocAllocator m_inner; // crd-lint-allow-malloc-allocator: sanitizer visibility per block
     usize                   m_budget;
     usize                   m_live = 0U;
     usize                   m_peak = 0U;

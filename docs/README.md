@@ -4,9 +4,8 @@
 > Navigation; no independent live queue. Current work: [ROADMAP](ROADMAP.md); current rules: [AGENTS](../AGENTS.md).
 
 **[ROADMAP](ROADMAP.md) is the only live roadmap, slice table and bug/finding queue.**
-Start at [START_HERE](../START_HERE.md), then [AGENTS](../AGENTS.md). [Context](../context.md) names the current row;
-[MEMORY](../MEMORY.md) routes lessons.
-This applies to every human and agent, regardless of tool/model. No host-specific memory is required.
+Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context.md) names the row;
+[MEMORY](../MEMORY.md) routes shared lessons.
 
 ## Find what you need
 
@@ -16,6 +15,7 @@ This applies to every human and agent, regardless of tool/model. No host-specifi
 | Current slice | [context](../context.md), then its one [master row](ROADMAP.md) |
 | Architecture and ownership | [PRINCIPLES](PRINCIPLES.md), then the row's ADR |
 | Bug diagnosis and evidence standard | [SANITY](SANITY.md) |
+| Runtime diagnostics, allocator/race/crash/capture implementation | [DIAG contract](design/runtime-diagnostics.md) |
 | Third-party defects and the registered-failure gate | [Register](third-party-defects.md) |
 | Build/test/tidy commands | [BUILDING](BUILDING.md); style in [CODING](CODING.md) |
 | Full renderer/UI/editor scope | [Execution contract](design/renderer-ui-execution-contract.md), [catalogue](design/rendering-ui-contracts.md) |
@@ -74,10 +74,9 @@ correct changed facts, preserve historical evidence and leave already-correct te
 
 ## Keep documents small without losing knowledge
 
-Each file has a role: current rule/navigation/contract, decision record, generated view, or dated reference/evidence.
-Only ROADMAP owns live slice/finding state. Historical statuses, Next lists, grades, tool versions and grants are
-not current instructions. Source-backed facts still require verification when code changes. Preserve original evidence
-when superseding a claim; never rewrite history as though tests ran again.
+Each file declares its role. Only ROADMAP owns live state. Historical statuses, Next lists, grades, tool versions
+and grants are not current instructions. Recheck source facts after code changes. Preserve original evidence when
+superseding claims; never rewrite history as though tests ran again.
 
 Entry budgets in bytes: AGENTS 8,000; PRINCIPLES 6,500; SANITY 4,500; BUILDING 7,000; MEMORY 3,000;
 context 2,500; this map 6,000; START_HERE 4,500. These are ceilings, not targets. Move examples/scars to linked references before

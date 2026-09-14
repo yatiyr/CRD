@@ -662,7 +662,9 @@ class PinnedInputs(unittest.TestCase):
         self.assertTrue(any('persist-credentials' in p for p in problems), problems)
         problems = check_pins.validate_workflow(self.pins, self.workflow + '\n      - run: curl https://sdk.lunarg.com/x\n')
         self.assertTrue(any('sdk.lunarg.com' in p for p in problems), problems)
-        problems = check_pins.validate_cmake(self.pins, self.cmake.replace('crd_add_pinned_package(glfw)', 'CPMAddPackage("gh:glfw/glfw#3.4")'))
+        unpinned, replaced = re.subn(r'crd_add_pinned_package\(glfw[^)]*\)', 'CPMAddPackage("gh:glfw/glfw#3.4")', self.cmake, count=1)
+        self.assertEqual(replaced, 1)  # the call carries SYSTEM/EXCLUDE_FROM_ALL since the first complete-tier run
+        problems = check_pins.validate_cmake(self.pins, unpinned)
         self.assertTrue(any('outside the registry' in p for p in problems) and any('glfw is never added' in p for p in problems), problems)
         broken = json.loads(json.dumps(self.pins))
         broken['packages']['imgui']['sha256'] = 'abc'

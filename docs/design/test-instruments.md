@@ -7,10 +7,16 @@
 > [CrdFuzz.cmake](../../cmake/CrdFuzz.cmake) and [fuzz.py](../../scripts/fuzz.py); the sanitizer model is
 > [sanitizer_fibers.hpp](../../engine/foundation/jobs/src/sanitizer_fibers.hpp).
 
+**2026-09-14 extension:** [DIAG](runtime-diagnostics.md) owns the next instrument programme after REPO.DEV.
+The measurements below are dated evidence. TSan switch flags and the instrument-only fence substitution require
+negative-control/model qualification in DIAG.1b; a clean probe does not prove annotations cannot conceal races.
+DG05's immediate free-list repair transfers from CORE-USE.2 to DIAG.1a. DIAG.3f owns MSVC UAR and initialization/leak
+coverage; DIAG.10a/DIAG.11b own expanded fuzzing/CI. Existing REPO.DEV evidence is preserved.
+
 Purpose: the two existing ingestion surfaces (CEIR text and binary modules, CKIR text and binary graphs) have
 reusable, bounded fuzz targets whose corpus is a permanent regression set on every lane; every sanitizer the tree
-offers is qualified rather than assumed, so a lane cannot print a report and stay green and a fiber stack is never
-invisible to the instrument; and the concurrency instrument has a written, verified model before any lane claims
+offers requires qualification rather than assumption, so a lane cannot print a report and stay green; fiber stack
+coverage and concurrency annotations require explicit controls before any lane claims
 concurrency coverage. The row qualifies instruments and the current consumers; a defect it finds in an allocator or
 the scheduler gets an owner row, not a repair here.
 
@@ -156,19 +162,18 @@ which GCC's TSan cannot model (`-Wtsan`), becomes a seq_cst read-modify-write on
 instrument only. On this WSL2 kernel TSan aborts with "unexpected memory mapping" unless address-space
 randomization is off for the process (`setarch x86_64 -R`, no root needed; the sysctl is unreadable there).
 
-The verified model: the switch path itself produced no report in 22 tests and a 2,048-wait probe, so the fiber
-contexts and the sync flag are consistent with the scheduler's happens-before. What TSan then reports is real and
+The recorded probe: the switch path itself produced no report in 22 tests and a 2,048-wait probe. This does not prove
+the model preserves all required race visibility; DIAG.1b supplies that qualification. The recorded reports are
 outside the switch path: two lock-free free-lists read the `next_free` link of the head element outside the
 compare-exchange that validates it (`fiber_pool.cpp` `release_to`:296 against `acquire_from`:239; `counter.cpp`
 `CounterPool::acquire`:66 and :75 against its release), a plain read racing a plain write, benign in practice by the
 code's own argument and a data race by the language. Five of the 22 jobs tests fail on those reports (16 in the
-suite, 68 in the probe, no other site). The findings belong to [CORE-USE.2](../ROADMAP.md#slice-core-use.2); until
-its links are relaxed atomics there is no TSan preset, and a TSan-clean jobs suite, when it comes, proves the
-absence of unsynchronized shared access on the paths the suite drives under the fiber model above, not the absence
-of ordering bugs that only a specific interleaving reaches.
+suite, 68 in the probe, no other site). The immediate repair now belongs to [DIAG.1a](../ROADMAP.md#slice-diag.1a);
+atomic links are a candidate requiring a memory-order/reclamation proof. No TSan preset is qualified yet. A clean
+suite reports no detected race on its instrumented executions; it cannot prove absence of races or ordering bugs.
 
 ## Not in scope
 
-Fixing the free-list links, clang++ on Linux as a qualified compiler, MSVC use-after-return coverage, a hosted fuzz
-lane and fuzz targets for consumers that do not exist yet are separate rows; the templates, routes and
-reproducibility work is REPO.DEV.10.
+REPO.DEV.9 remains the bounded ingestion baseline. DIAG now owns the immediate diagnostic extensions above;
+clang++ as a full Linux compiler and not-yet-existing product consumers retain their respective qualification rows.
+The original templates/routes contribution work remains REPO.DEV.10.

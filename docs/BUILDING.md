@@ -10,9 +10,8 @@ Overrides: ignored `CMakeUserPresets.json`.
 ## Fast local workflow — one primary configuration
 
 **Build affected targets/consumers, run selected CTests/guards and tidy changed C++ on one primary configuration.**
-Add local lanes only for a discriminating risk/failure; CI owns broader qualification. This approved
-[policy](sessions/2026-09-12-large-cpp-research-and-loop-plan.md) replaces local multi-platform rituals.
-Preserve CI obligations until a replacement qualifies.
+Add local lanes only for a discriminating risk/failure; CI owns broader qualification under the approved
+[policy](sessions/2026-09-12-large-cpp-research-and-loop-plan.md). Retain CI gates until replacements qualify.
 
 Check scope belongs to the [first unfinished slice](ROADMAP.md#strict-sequential-execution). Helpers initialize the
 toolchain; `build-target.bat` takes one target. Rebuild affected executables.
@@ -29,7 +28,7 @@ python scripts/tidy-files.py <changed.cpp> <changed.hpp>
 if ($LASTEXITCODE -ne 0) { throw 'Tidy failed' }
 ```
 
-`dev.py doctor` diagnoses tools; `plan` explains scope; `check` qualifies; `--dry-run` runs nothing.
+`dev.py doctor`: tools; `plan`: scope; `check`: verification; `--dry-run`: no execution.
 [Contract](design/developer-workflow.md).
 Require timeouts, nonzero CTest matches, guards.
 `-DCRD_MODULES=<module|family>` configures one dependency-closed [selection](design/module-registry.md);
@@ -37,7 +36,7 @@ Require timeouts, nonzero CTest matches, guards.
 `-DCRD_COMPILER_LAUNCHER=<sccache>` (Ninja; PCH off on MSVC), `CRD_COMPILE_JOBS`/`CRD_LINK_JOBS`:
 [build board](design/build-performance.md); `-DCRD_PUBLIC_CHECKS=ON` checks every public header and the package consumer:
 [public consumption](design/public-consumption.md); fuzz corpora replay everywhere, `fuzz.py` fuzzes:
-[test instruments](design/test-instruments.md).
+[instruments](design/test-instruments.md); planned coverage: [DIAG](design/runtime-diagnostics.md).
 
 | Change | Local check beyond the primary build/tests | CI obligation |
 |---|---|---|
@@ -45,7 +44,7 @@ Require timeouts, nonzero CTest matches, guards.
 | Python/CMake/IDE | Changed-tool fixtures and a representative generated target | Windows/Linux tooling; native fixtures when affected |
 | Private C++ | Incremental LLVM-20 tidy; affected linked consumers | Affected primary Windows/Linux targets |
 | Public/template headers, generated API, ABI | `check-headers.py --changed`; reverse consumers | Compiler diversity; public-check presets; ISA/profile lanes |
-| Memory/lifetime/concurrency | Focused adversarial tests; applicable sanitizer instrument | Sanitizer/stress lanes; the fiber model is TSan-verified |
+| Memory/lifetime/concurrency | Scoped adversarial tests and detector controls | Sanitizer/stress; TSan qualification: DIAG.1b |
 | GPU/CEIR/CKIR/layout | Available affected provider, validation and declared CPU/image oracle | Affected backend/OS/device lanes; hardware truth retained |
 | Intrinsics/OS API/build flags/LTCG | Actual failing/risky configuration when locally available | Explicit matching compiler/ISA/optimized/platform checks |
 

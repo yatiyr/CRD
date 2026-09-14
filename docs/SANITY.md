@@ -13,8 +13,9 @@ All unresolved work has an owner in [ROADMAP](ROADMAP.md); never maintain a seco
    dependencies. Use scoped CTest plus guards; cached output and a stale sibling executable are not new evidence.
 3. **Test boundaries deliberately.** Empty/single/last-element, capacity edges, poisoned storage, invalid handles,
    partial failure and lifecycle transitions matter more than assertion count. Random volume can miss the last block.
-4. **Know the instrument's blind spots.** ASan cannot establish intra-pool integrity or absence of uninitialized reads;
-   use structural walks/poisoning where appropriate. A non-LTCG build cannot qualify an LTCG-only code path.
+4. **Prove the instrument.** Seed an invalid access/race/fault and require its attributed report. ASan needs pool
+   annotations; initialized-memory and ordering checks are separate. Follow [DIAG](design/runtime-diagnostics.md).
+   A non-LTCG build cannot qualify an LTCG-only code path; a retry-pass cannot erase lost failure evidence.
 5. **Try to refute the performance hypothesis first.** Capture a baseline, profile the limiter, change one mechanism,
    and save the full matched-peer board. Follow the kernel mandate before invoking a hardware limit.
 6. **Report the complete board.** Match hardware, accuracy, threads, features and timing boundaries. Keep losses and

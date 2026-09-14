@@ -31,6 +31,10 @@ historical records remain available as references; they are not competing tracke
 
 ## Consequences
 
+**2026-09-14 amendment:** the user adds the runtime diagnostic foundation **DIAG** immediately after REPO.DEV,
+before retained repository closure and renderer implementation. [ADR-0133](0133-runtime-diagnostics-and-instrumentation.md)
+defines this prerequisite; renderer → UI/editor → notebook product order and all review gates remain intact.
+
 Renderer runtime features and text-asset editing/reload qualify before UI. Their visual CR-D007 authoring acceptance
 necessarily follows I2D-9; parent rows remain open until both stages pass. This is a dependency distinction, not a
 removal of the editor requirement.

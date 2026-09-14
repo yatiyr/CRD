@@ -36,10 +36,12 @@ TEST_CASE("Stopwatch: elapsed grows over time", "[d-006][stopwatch]")
 TEST_CASE("Stopwatch: stop() freezes elapsed", "[d-006][stopwatch]")
 {
     Stopwatch sw;
-    volatile int sink = 0;
+    // A burn sink, never read: unsigned so the 100000-iteration accumulation wraps by definition instead of
+    // overflowing signed int, which UBSan (no recover) aborts on (first complete-tier run, linux-gcc-asan).
+    volatile unsigned sink = 0;
     for (int i = 0; i < 1000; ++i)
     {
-        sink += i;
+        sink += static_cast<unsigned>(i);
     }
     (void)sink;
     sw.stop();
@@ -48,7 +50,7 @@ TEST_CASE("Stopwatch: stop() freezes elapsed", "[d-006][stopwatch]")
     Duration first = sw.elapsed();
     for (int i = 0; i < 100000; ++i)
     {
-        sink += i;
+        sink += static_cast<unsigned>(i);
     }
     (void)sink;
     Duration second = sw.elapsed();

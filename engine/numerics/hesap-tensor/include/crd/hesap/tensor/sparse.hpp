@@ -200,9 +200,11 @@ inline void lsd_sort(crd::u32* perm_a, crd::u32* perm_b, crd::u32* counts, crd::
     }
     // levels passes: if odd, the result sits in what the caller passed as
     // perm_b — copy back so the contract is "result in perm_a".
-    if ((levels & 1U) != 0U)
+    if ((levels & 1U) != 0U && n != 0U)
     {
-        // after an odd number of swaps perm_a (local) is the caller's perm_b
+        // after an odd number of swaps perm_a (local) is the caller's perm_b. Guard n != 0: an empty sparse tensor
+        // passes null perm arrays, and memcpy(null, null, 0) is undefined, which UBSan (no recover) aborts on
+        // (first complete-tier run, linux-gcc-asan).
         std::memcpy(perm_b, perm_a, static_cast<crd::usize>(n) * sizeof(crd::u32));
     }
 }

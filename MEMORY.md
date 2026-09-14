@@ -34,4 +34,4 @@ For source details use [systems](docs/systems/README.md); measured boards live i
 Write new durable lessons with the rule, why and how to apply it in the appropriate reference/recipe. Keep this
 index small. Link evidence from the owning ROADMAP row and session. Do not copy a Next list here. Retire stale
 directions explicitly; historical dates or authorizations cannot override current rules or restart the CEIR loop.
-No hidden host-only memory is required for normal repository work. Tool-specific memory entry points redirect here.
+Diagnostic gaps and detector controls: [DIAG](docs/design/runtime-diagnostics.md). Tool memories redirect here.

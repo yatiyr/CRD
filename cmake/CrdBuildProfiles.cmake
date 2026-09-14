@@ -3,9 +3,14 @@ include_guard(GLOBAL)
 option(CRD_NATIVE_PROFILES "Expose canonical MSVC profiles in a native Visual Studio solution" OFF)
 
 if(CRD_NATIVE_PROFILES)
+    # The effective platform is CMAKE_VS_PLATFORM_NAME. CMAKE_GENERATOR_PLATFORM is only what -A passed, and a preset
+    # whose `architecture` is a plain string inherits its parent's strategy (`external` in win-base), so a fresh
+    # configure from the preset left it empty; the first complete-tier run (34821419392) failed here while the
+    # local proof had run over a cache that already carried the platform.
     if(NOT CMAKE_GENERATOR MATCHES "^Visual Studio" OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"
-       OR NOT CMAKE_GENERATOR_PLATFORM STREQUAL "x64")
-        message(FATAL_ERROR "CRD_NATIVE_PROFILES requires a native MSVC x64 Visual Studio generator")
+       OR NOT CMAKE_VS_PLATFORM_NAME STREQUAL "x64")
+        message(FATAL_ERROR "CRD_NATIVE_PROFILES requires a native MSVC x64 Visual Studio generator "
+                            "(generator '${CMAKE_GENERATOR}', platform '${CMAKE_VS_PLATFORM_NAME}')")
     endif()
     if(CRD_ENABLE_CLANG_TIDY)
         message(FATAL_ERROR "Visual Studio generators do not run CMAKE_CXX_CLANG_TIDY; use the win-tidy preset")

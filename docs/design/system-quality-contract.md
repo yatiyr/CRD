@@ -8,6 +8,11 @@ The [whole-system review](../research/2026-09-12-cerid-whole-system-review.md) s
 It does not certify existing code. Apply the relevant sections to every slice; record why a section is inapplicable.
 New architecture choices follow [ADR-0130](../decisions/0130-system-qualification-and-agent-driven-products.md).
 
+[DIAG](runtime-diagnostics.md), ordered immediately after REPO.DEV by
+[ADR-0133](../decisions/0133-runtime-diagnostics-and-instrumentation.md), defines the runtime diagnostic foundation.
+Every future module/host must integrate its lifetime, source identity, failure/replay and bounded telemetry contracts.
+Qualify detectors with intentionally faulty controls; a dashboard, clean retry or missing report is not safety evidence.
+
 ## Contract before implementation
 
 Apply [ordered execution](../ROADMAP.md#strict-sequential-execution): start with the earliest unfinished work unless

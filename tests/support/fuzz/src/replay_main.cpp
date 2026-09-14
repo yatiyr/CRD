@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -89,9 +90,9 @@ private:
     fs::path    m_directory;
     std::size_t m_written = 0U;
 };
-} // namespace
-
-int main(int argc, char** argv)
+// The body may throw (filesystem, streams, vectors); main() below turns that into exit code 2 with the reason, so
+// no exception escapes main (clang-tidy bugprone-exception-escape; caught by the first complete-tier run).
+int run(int argc, char** argv)
 {
     bool                  verbose = false;
     std::vector<fs::path> inputs;
@@ -157,4 +158,23 @@ int main(int argc, char** argv)
     std::printf("fuzz replay: %zu inputs, %zu bytes, %zu rejected by the target, slowest %.2f ms (%s)\n",
                 outcome.inputs, outcome.bytes, outcome.rejected, outcome.slowest_ms, outcome.slowest_name.c_str());
     return 0;
+}
+} // namespace
+
+int main(int argc, char** argv)
+{
+    try
+    {
+        return run(argc, argv);
+    }
+    catch (const std::exception& error)
+    {
+        std::fprintf(stderr, "fuzz replay: %s\n", error.what());
+        return 2;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "fuzz replay: unknown exception\n");
+        return 2;
+    }
 }

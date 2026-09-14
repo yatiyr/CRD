@@ -46,7 +46,10 @@ or the workflow carries a literal digest.
 the digest matched, and verifies an already present copy on every configure. `crd_add_pinned_package(<name> ...)`
 calls `CPMAddPackage` with the commit-addressed archive and `URL_HASH`, so CMake verifies the archive before
 extraction and a moved tag or altered archive fails the configure; the CPM source cache keys the extracted tree by
-URL and hash, so no two pins share a directory. `CRD_INPUT_ARCHIVES=<dir>` substitutes a local file named like the
+URL and hash, so no two pins share a directory. CPM's single-argument shorthand implied `SYSTEM YES` and
+`EXCLUDE_FROM_ALL YES`; the long form implies neither, so the packages that used the shorthand (Catch2, glfw,
+tomlplusplus, imgui) pass both explicitly: third-party headers stay system includes and never fail the warning
+gate (the first complete-tier run, 34821419392, failed clang-cl inside a Catch2 header when they did not). `CRD_INPUT_ARCHIVES=<dir>` substitutes a local file named like the
 entry's `file` for its URL (the same hash applies), which is the offline setup path.
 
 The Python helpers share [scripts/pins.py](../../scripts/pins.py): `fetch()` downloads through a `.partial` file,

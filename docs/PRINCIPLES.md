@@ -79,3 +79,5 @@ share reflected effects and capabilities. Project collaboration and multiplayer 
 Memory/task/device lifetimes, clocks/frames and trust boundaries remain explicit. Apply the
 [quality contract](design/system-quality-contract.md); measured evidence defines support, not module names.
 The [expanded review](research/2026-09-12-cerid-whole-system-review.md) routes future domain requirements to ROADMAP.
+
+[Diagnostics](design/runtime-diagnostics.md) require bounded evidence and measured detection, not blanket safety claims.

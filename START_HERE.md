@@ -30,6 +30,9 @@ AI, collaboration, simulation and manufacturing contracts. It is a reference, no
 
 ## Work and close the loop
 
+Runtime diagnosis: [DIAG contract](docs/design/runtime-diagnostics.md). It follows REPO.DEV in ROADMAP; seeded faults,
+actual instrument activation and useful captured evidence are required before claiming detection coverage.
+
 Use existing modules and canonical execution. Implement the complete consumer behaviour, adverse paths, asset
 replacement and lifecycle. A source suspicion needs investigation before being called a bug. A verified failure
 blocks its owning gate. Track findings and new children in ROADMAP, with exact evidence and ownership.
