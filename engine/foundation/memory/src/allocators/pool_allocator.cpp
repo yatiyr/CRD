@@ -1,6 +1,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
 namespace crd::memory
@@ -14,9 +15,15 @@ PoolAllocator::PoolAllocator(usize slot_size, usize slot_count, usize slot_align
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
 
     m_name = name;
-    m_slot_size = align_up(slot_size, slot_alignment);
-
-    const usize total = m_slot_size * m_slot_count;
+    // DIAG.3a: checked stride/size arithmetic. slot_size padded to alignment, then
+    // stride*count -- both overflow-checked so a hostile/buggy size can never wrap to a
+    // too-small buffer. CRD_FATAL (not a debug assert) so the guard survives release.
+    usize total = 0U;
+    if (!checked_align_up(slot_size, slot_alignment, &m_slot_size) ||
+        !checked_mul(m_slot_size, m_slot_count, &total))
+    {
+        CRD_FATAL("PoolAllocator: slot_size padded * slot_count overflows usize");
+    }
     m_buffer = static_cast<u8*>(m_parent->allocate(total, slot_alignment));
     build_free_list();
 }
@@ -113,5 +120,42 @@ bool PoolAllocator::owns(const void* p) const noexcept
 usize PoolAllocator::allocation_size(const void* p) const noexcept
 {
     return owns(p) ? m_slot_size : 0;
+}
+
+bool PoolAllocator::is_slot_aligned(const void* p) const noexcept
+{
+    const u8* bytes = static_cast<const u8*>(p);
+    if (bytes < m_buffer || bytes >= (m_buffer + m_slot_size * m_slot_count))
+    {
+        return false;
+    }
+    return (static_cast<usize>(bytes - m_buffer) % m_slot_size) == 0;
+}
+
+bool PoolAllocator::validate_structure() const noexcept
+{
+    const u8* const base = m_buffer;
+    const u8* const end  = m_buffer + m_slot_size * m_slot_count;
+
+    usize seen = 0;
+    for (const FreeNode* n = m_free_head; n != nullptr; n = n->next)
+    {
+        const u8* const b = reinterpret_cast<const u8*>(n);
+        if (b < base || b >= end) // link points outside the buffer
+        {
+            return false;
+        }
+        if ((static_cast<usize>(b - base) % m_slot_size) != 0) // link not on a slot boundary
+        {
+            return false;
+        }
+        if (++seen > m_slot_count) // cycle or over-length -- the shape a double-free produces
+        {
+            return false;
+        }
+    }
+    // A consistent free list has exactly slots_free() entries; a mismatch means a leaked or
+    // double-freed slot.
+    return seen == (m_slot_count - m_in_use);
 }
 } // namespace crd::memory

@@ -10,7 +10,7 @@ int main()
 {
     crd_diag_harden();
     crd_diag_announce();
-#if CRD_DIAG_HAS_SANITIZER
+#if CRD_DIAG_HAS_ASAN
     volatile char* buf = static_cast<char*>(std::malloc(8));
     if (buf == nullptr)
     {

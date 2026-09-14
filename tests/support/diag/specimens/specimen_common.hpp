@@ -12,21 +12,45 @@
 #define CRD_DIAG_SPECIMEN_ID "unknown"
 #endif
 
+// AddressSanitizer detection (heap/overflow specimens key on this specifically).
 #if defined(__SANITIZE_ADDRESS__)
-#define CRD_DIAG_HAS_SANITIZER 1
+#define CRD_DIAG_HAS_ASAN 1
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define CRD_DIAG_HAS_SANITIZER 1
+#define CRD_DIAG_HAS_ASAN 1
 #endif
 #endif
-#ifndef CRD_DIAG_HAS_SANITIZER
-#define CRD_DIAG_HAS_SANITIZER 0
+#ifndef CRD_DIAG_HAS_ASAN
+#define CRD_DIAG_HAS_ASAN 0
 #endif
 
-#if CRD_DIAG_HAS_SANITIZER
+// ThreadSanitizer detection (the DIAG.1b data-race specimen keys on this specifically).
+#if defined(__SANITIZE_THREAD__)
+#define CRD_DIAG_HAS_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define CRD_DIAG_HAS_TSAN 1
+#endif
+#endif
+#ifndef CRD_DIAG_HAS_TSAN
+#define CRD_DIAG_HAS_TSAN 0
+#endif
+
+// Back-compat alias: any sanitizer runtime present.
+#define CRD_DIAG_HAS_SANITIZER (CRD_DIAG_HAS_ASAN || CRD_DIAG_HAS_TSAN)
+
+// A specimen may pre-define CRD_DIAG_SPECIMEN_SANITIZER before including this header to declare that
+// its specific error ROUTE is unavailable on this toolchain even though a sanitizer is linked (e.g.
+// stack-use-after-return is not reliably reported by MSVC ASan). The harness then treats it as
+// InstrumentAbsent rather than expecting a catch -- an explicit unqualified route, never a skip-pass.
+#ifndef CRD_DIAG_SPECIMEN_SANITIZER
+#if CRD_DIAG_HAS_ASAN
 #define CRD_DIAG_SPECIMEN_SANITIZER "asan"
+#elif CRD_DIAG_HAS_TSAN
+#define CRD_DIAG_SPECIMEN_SANITIZER "tsan"
 #else
 #define CRD_DIAG_SPECIMEN_SANITIZER "none"
+#endif
 #endif
 
 #if defined(_WIN32)

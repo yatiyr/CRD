@@ -26,6 +26,18 @@ cont::String heap_overflow_specimen()
 {
     return cont::String{CRD_DIAG_HEAP_OVERFLOW_SPECIMEN};
 }
+cont::String use_after_free_specimen()
+{
+    return cont::String{CRD_DIAG_USE_AFTER_FREE_SPECIMEN};
+}
+cont::String use_after_return_specimen()
+{
+    return cont::String{CRD_DIAG_USE_AFTER_RETURN_SPECIMEN};
+}
+cont::String leak_specimen()
+{
+    return cont::String{CRD_DIAG_LEAK_SPECIMEN};
+}
 
 bool built_with_asan()
 {
@@ -74,6 +86,67 @@ TEST_CASE("diag harness: the sanitizer specimen is caught, or reported absent", 
     const cd::Outcome o = cd::run_specimen(heap_overflow_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
     if (built_with_asan())
+    {
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent);
+    }
+}
+
+TEST_CASE("diag 3f: heap-use-after-free is caught by ASan, or reported absent", "[diag][harness][diag3f]")
+{
+    // A temporal-safety class core AddressSanitizer catches on every ASan lane (win-asan + linux).
+    // Same falsifier as the heap-overflow case: CAUGHT with the runtime present, INSTRUMENT-ABSENT
+    // without -- never a silent pass. Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::SanitizerCatch;
+    const cd::Outcome o = cd::run_specimen(use_after_free_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
+    if (built_with_asan())
+    {
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent);
+    }
+}
+
+TEST_CASE("diag 3f: stack-use-after-return is qualified on the gcc/clang ASan lanes", "[diag][harness][diag3f]")
+{
+    // The design's named "MSVC use-after-return" class. The specimen self-reports its route: on gcc/clang
+    // ASan it tags "asan" and commits a real stack-use-after-return the runtime catches (SanitizerCaught);
+    // on MSVC ASan -- where the fake-stack route is not reliably reported -- it pre-tags "none", so the
+    // route is InstrumentAbsent (explicitly unqualified, a partial-instrumentation dependency, never a
+    // skip-pass). The harness judges purely on the specimen's echoed tag, so no lane #ifdef is needed.
+    // Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::SanitizerCatch;
+    const cd::Outcome o = cd::run_specimen(use_after_return_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
+    if (cont::StringView{o.sanitizer} == cont::StringView{"asan"})
+    {
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught); // gcc/clang ASan lane: the route is qualified
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent); // no ASan, or the MSVC-unqualified route
+    }
+}
+
+TEST_CASE("diag 3f: a memory leak is caught by LeakSanitizer, or reported absent", "[diag][harness][diag3f]")
+{
+    // The "leak routes" class. On a LeakSanitizer build the specimen tags "asan" and aborts on a
+    // recoverable leak check (SanitizerCaught); where no LSan route exists it tags "none" and exits
+    // clean (InstrumentAbsent). Judged purely on the specimen's echoed tag -- no lane #ifdef, no
+    // skip-pass. Qualified on linux-gcc-asan. Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::SanitizerCatch;
+    const cd::Outcome o = cd::run_specimen(leak_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
+    if (cont::StringView{o.sanitizer} == cont::StringView{"asan"})
     {
         CHECK(o.verdict == cd::Verdict::SanitizerCaught);
     }

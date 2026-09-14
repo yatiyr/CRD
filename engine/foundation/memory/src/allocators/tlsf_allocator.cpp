@@ -15,6 +15,7 @@ constexpr usize kAlignSize = usize{1} << kAlignSizeLog2; // 16
 
 constexpr usize kSlIndexLog2 = 5;
 constexpr usize kSlIndexCount = usize{1} << kSlIndexLog2; // 32
+constexpr usize kFlIndexCount = 24;                       // first-level classes; sizes m_sl_bitmap / m_free_lists
 
 constexpr usize kFlIndexShift = kSlIndexLog2 + kAlignSizeLog2; // 9
 constexpr usize kSmallBlockSize = usize{1} << kFlIndexShift;   // 512
@@ -729,6 +730,134 @@ usize TlsfAllocator::allocation_size(const void* p) const noexcept
     }
     const BlockHeader* block = reinterpret_cast<const BlockHeader*>(static_cast<const u8*>(p) - kBlockHeaderOverhead);
     return block_size(block);
+}
+
+bool TlsfAllocator::validate_structure() const noexcept
+{
+    if (m_pool == nullptr)
+    {
+        return false;
+    }
+
+    // The region spans the start sentinel (kBlockHeaderOverhead before m_pool) through the end sentinel.
+    const u8* const region_lo = static_cast<const u8*>(m_pool) - kBlockHeaderOverhead;
+    const u8* const region_hi = region_lo + m_pool_capacity;
+
+    // Loose upper bound on the number of blocks: the tightest possible stride is one header (the sentinels).
+    // Any walk exceeding it means a corrupted size field created a cycle or a stalled/backward step.
+    const usize max_blocks = m_pool_capacity / kBlockHeaderOverhead + 1U;
+
+    // ---- Pass 1: physical block chain -------------------------------------
+    const BlockHeader* const start_sentinel = reinterpret_cast<const BlockHeader*>(region_lo);
+    if (start_sentinel->prev_phys_block != nullptr || block_size(start_sentinel) != 0 || block_is_free(start_sentinel))
+    {
+        return false; // start sentinel must be a zero-size, in-use anchor
+    }
+
+    usize              physical_free_blocks = 0;
+    const BlockHeader* prev = start_sentinel;
+    const BlockHeader* b = reinterpret_cast<const BlockHeader*>(region_lo + kBlockHeaderOverhead);
+    for (usize steps = 0;; ++steps)
+    {
+        if (steps > max_blocks)
+        {
+            return false; // cycle / runaway: corrupted size field
+        }
+        const u8* const bp = reinterpret_cast<const u8*>(b);
+        if (bp <= region_lo || bp >= region_hi) // every non-start block lies strictly inside the region
+        {
+            return false;
+        }
+        if (b->prev_phys_block != prev) // physical back-link must match the block we walked from
+        {
+            return false;
+        }
+        if (block_prev_is_free(b) != block_is_free(prev)) // prev-free flag must reflect the real predecessor
+        {
+            return false;
+        }
+        if (block_is_free(b) && block_is_free(prev)) // coalescing invariant: never two adjacent free blocks
+        {
+            return false;
+        }
+
+        const usize sz = block_size(b);
+        if (sz == 0) // end sentinel: zero-size, in-use, closes the region exactly
+        {
+            if (block_is_free(b) || (bp + kBlockHeaderOverhead) != region_hi)
+            {
+                return false;
+            }
+            break;
+        }
+
+        if ((bp + kBlockHeaderOverhead + sz) > (region_hi - kBlockHeaderOverhead)) // must leave room for end sentinel
+        {
+            return false;
+        }
+        if (block_is_free(b))
+        {
+            // A free block's payload overlays next_free/prev_free, so its minimum is kBlockMinUserSize (16),
+            // not kBlockMinSize (32): an alignment leading-remainder (trim_free_leading) can be exactly that small.
+            if (sz < kBlockMinUserSize)
+            {
+                return false;
+            }
+            ++physical_free_blocks;
+        }
+
+        prev = b;
+        b = reinterpret_cast<const BlockHeader*>(bp + kBlockHeaderOverhead + sz);
+    }
+
+    // ---- Pass 2: free lists + bitmaps -------------------------------------
+    usize listed_free_blocks = 0;
+    for (u32 fl = 0; fl < kFlIndexCount; ++fl)
+    {
+        const bool fl_bit = (m_fl_bitmap & (u32{1} << fl)) != 0;
+        bool       any_sl = false;
+        for (u32 sl = 0; sl < kSlIndexCount; ++sl)
+        {
+            const bool         sl_bit = (m_sl_bitmap[fl] & (u32{1} << sl)) != 0;
+            const BlockHeader* head = static_cast<const BlockHeader*>(m_free_lists[fl][sl]);
+            if ((head != nullptr) != sl_bit) // bitmap bit must agree with the list head
+            {
+                return false;
+            }
+            any_sl = any_sl || sl_bit;
+
+            const BlockHeader* back = nullptr;
+            usize              chain = 0;
+            for (const BlockHeader* node = head; node != nullptr; node = node->next_free)
+            {
+                if (++chain > max_blocks) // cycle in the free list
+                {
+                    return false;
+                }
+                const u8* const np = reinterpret_cast<const u8*>(node);
+                if (np <= region_lo || np >= region_hi || !block_is_free(node) || node->prev_free != back)
+                {
+                    return false;
+                }
+                u32 mfl = 0;
+                u32 msl = 0;
+                mapping_insert(block_size(node), mfl, msl);
+                if (mfl != fl || msl != sl) // block filed in the wrong (fl, sl) bucket
+                {
+                    return false;
+                }
+                back = node;
+                ++listed_free_blocks;
+            }
+        }
+        if (fl_bit != any_sl) // first-level bit set iff any sub-list under it is non-empty
+        {
+            return false;
+        }
+    }
+
+    // Every physically-free block is listed exactly once, and nothing stale is listed.
+    return listed_free_blocks == physical_free_blocks;
 }
 
 } // namespace crd::memory

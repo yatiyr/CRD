@@ -68,3 +68,23 @@ The instrumented-path proof (TSan reports on the original code disappearing with
 suppression**) is qualified on the hosted TSan lane by the next slice, [DIAG.1b](../ROADMAP.md#slice-diag.1b),
 which owns the TSan preset/CI and the happens-before model with ordered and deliberately
 racy negative controls.
+
+## DIAG.1b — TSan preset + fiber happens-before positive controls
+
+Landed alongside 1a: the `linux-clang-tsan` configure/build/test presets (the `CRD_ENABLE_TSAN`
+`-fsanitize=thread` machinery and the `__tsan_*_fiber` model in `sanitizer_fibers.hpp` already
+existed) and, in CI, `linux-clang-tsan` registered as a **diagnostic-tier** preset in
+`.github/ci-tiers.json` (fixing the preflight "no tier owner" regression the preset first
+introduced). Positive controls (`tests/foundation/jobs/test_tsan_fiber_model.cpp`,
+`[jobs][tsan][diag]`) pass on win-debug: ordered write→wait→read across fibers, raw-thread/fiber
+equivalence, and a migrating hand-off chain — all happens-before clean by construction, so under
+the TSan lane they certify the model stays silent on correct orderings.
+
+The negative control has since landed as well: `tests/support/diag/specimens/data_race_specimen.cpp`
+(two threads racing a plain, unsynchronised int) built through the DIAG.0 specimen harness and driven by
+`tests/foundation/jobs/test_tsan_race_specimen.cpp` (`[jobs][tsan][diag][harness]`). It asserts the
+harness verdict is **SanitizerCaught** when built with `-fsanitize=thread` and **InstrumentAbsent**
+otherwise — never a silent pass, mirroring the DIAG.0 ASan heap-overflow specimen. `specimen_common.hpp`
+gained ThreadSanitizer detection (`CRD_DIAG_HAS_TSAN`, distinct from the ASan path). On win-debug the
+verdict is InstrumentAbsent (green, 4 `[tsan]` cases). The only remaining piece is the hosted
+linux-clang-tsan lane actually building the specimen with TSan and observing the catch.

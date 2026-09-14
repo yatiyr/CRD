@@ -429,7 +429,7 @@ crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS container
 # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
 crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context memory
     TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu kir)
-crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs)
+crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs support/diag)
 # depends on crd-jobs above + crd-hesap (declared earlier)
 crd_module(engine/numerics/hesap-sched engine/hesap-sched DEPENDS containers core hesap jobs memory
     TESTS numerics/hesap-sched)

@@ -97,6 +97,16 @@ public:
     [[nodiscard]] usize pool_capacity() const noexcept { return m_pool_capacity; }
     [[nodiscard]] const void* pool_base() const noexcept { return m_pool; }
 
+    // DIAG.3d structural walker. Read-only integrity check of the whole heap: the physical block chain
+    // (bounds, prev_phys back-links, the prev-free flag vs. the real predecessor, the coalescing invariant
+    // that no two adjacent blocks are both free, exact region closure by the end sentinel), the segregated
+    // free lists (each free block filed in the bucket its size maps to, doubly-linked consistency, no cycles)
+    // and the FL/SL bitmaps (a bit set iff its list is non-empty), reconciling that every physically-free
+    // block is listed exactly once. Returns false on the shapes a double/interior/wrong-owner free, a leaked
+    // block or seeded metadata corruption produce — a named failure, never a hang or silent success. O(blocks);
+    // debug/diagnostic use, not on the allocation fast path.
+    [[nodiscard]] bool validate_structure() const noexcept;
+
     // The smallest pool size the allocator can be constructed with. A pool
     // smaller than this would have no usable free block.
     [[nodiscard]] static usize min_pool_size() noexcept;

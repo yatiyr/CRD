@@ -1,6 +1,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
 namespace crd::memory
@@ -11,6 +13,7 @@ StackAllocator::StackAllocator(usize capacity, IAllocator* parent, const char* n
     CRD_ASSERT(capacity > 0);
     m_name = name;
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kDefaultAlignment));
+    asan_poison(m_buffer, m_capacity); // DIAG.3b
 }
 
 StackAllocator::StackAllocator(void* buffer, usize capacity, const char* name) noexcept
@@ -19,10 +22,15 @@ StackAllocator::StackAllocator(void* buffer, usize capacity, const char* name) n
     CRD_ASSERT(buffer != nullptr);
     CRD_ASSERT(capacity > 0);
     m_name = name;
+    asan_poison(m_buffer, m_capacity);
 }
 
 StackAllocator::~StackAllocator()
 {
+    if (m_buffer)
+    {
+        asan_unpoison(m_buffer, m_capacity); // return memory clean (external buffers, parent reuse)
+    }
     if (m_parent && m_buffer)
     {
         m_parent->deallocate(m_buffer);
@@ -37,10 +45,19 @@ void* StackAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size > 0);
     CRD_ASSERT(is_pow2(alignment));
 
+    // DIAG.3a: checked so a near-SIZE_MAX size cannot wrap past the capacity test; on overflow
+    // this fails like exhaustion, preserving the prior allocation.
     const usize current = reinterpret_cast<usize>(m_buffer) + m_offset;
-    const usize aligned = align_up(current, alignment);
+    usize       aligned = 0U;
+    usize       new_offset = 0U;
+    if (!checked_align_up(current, alignment, &aligned) ||
+        !checked_add(m_offset, (aligned - current), &new_offset) ||
+        !checked_add(new_offset, size, &new_offset))
+    {
+        CRD_LOG_ERROR(g_log_memory, "{} size arithmetic overflow (requested {})", m_name, size);
+        return nullptr;
+    }
     const usize padding = aligned - current;
-    const usize new_offset = m_offset + padding + size;
 
     if (new_offset > m_capacity)
     {
@@ -51,7 +68,9 @@ void* StackAllocator::allocate(usize size, usize alignment)
 
     m_offset = new_offset;
     m_stats.on_allocate(size);
-    return m_buffer + (new_offset - size);
+    u8* const result = m_buffer + (new_offset - size);
+    asan_unpoison(result, size); // DIAG.3b: this logical allocation is now live
+    return result;
 }
 
 void StackAllocator::deallocate(void* /*p*/) noexcept
@@ -86,6 +105,7 @@ void StackAllocator::reset_to(Marker m) noexcept
         m_stats.on_deallocate(m_offset - m.offset);
     }
     m_offset = m.offset;
+    asan_poison(m_buffer + m.offset, m_capacity - m.offset); // DIAG.3b: popped frames go stale
 }
 
 void StackAllocator::reset() noexcept
@@ -95,5 +115,6 @@ void StackAllocator::reset() noexcept
         m_stats.on_deallocate(m_offset);
     }
     m_offset = 0;
+    asan_poison(m_buffer, m_capacity); // DIAG.3b
 }
 } // namespace crd::memory

@@ -9,6 +9,7 @@
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_manager.hpp>
+#include <crd/containers/slot_map.hpp> // DIAG.3e: same generation-checked lifetime as the real consumer
 
 #include <cstring>
 #include <string_view>
@@ -377,5 +378,63 @@ TEST_CASE("Hot-reload: unsubscribe prevents callback", "[resources][hot_reload]"
     CHECK(handle.generation() == 1U); // reload still happened, just no callback
 
     (void)rm.poll_hot_reload(0U); // drain deferred frees
+    (void)crd::platform::fs::remove_file(path);
+}
+
+TEST_CASE("DIAG.3e: the real resource consumer follows the SlotMap generation-checked lifetime",
+          "[resources][hot_reload][diag]")
+{
+    // DG04: prove the real reload consumer (the ResourceManager control block) enforces the SAME
+    // generation-checked lifetime that SlotMap<T> formalizes -- a generation snapshot taken before a
+    // reload no longer matches the live one, so a consumer keying on it detects the swap instead of
+    // reading through a stale identity. Contract: docs/design/runtime-diagnostics.md#diag-3e; ADR-0133.
+
+    const ResourceId artifact_id = ResourceId::mint_random();
+    const auto       tmp_id      = artifact_id.to_string(&s_hr_alloc);
+    crd::containers::String tmp_name("hr_diag3e_", &s_hr_alloc);
+    tmp_name.append(tmp_id);
+    tmp_name.append(".crdr");
+    const crd::platform::fs::Path path(tmp_name);
+
+    const crd::u8 v1[] = {0x01, 0x02};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v1, 2));
+
+    ResourceManager rm(&s_hr_alloc);
+    rm.register_loader(std::make_unique<HRBlobLoader>());
+    const MountId mid = rm.mount_manifest(path.generic());
+    REQUIRE(mid.is_valid());
+
+    auto handle = rm.load_sync<HRBlobResource>(artifact_id);
+    REQUIRE(handle.state() == LoadState::Ready);
+
+    // A generation snapshot the way a suspended job / borrow would capture it before yielding.
+    const crd::u32 gen_before = handle.generation();
+    CHECK(gen_before == 0U);
+
+    // Reload while a live handle is still held -- the "reload with pending work" acceptance case.
+    const crd::u8 v2[] = {0xEE, 0xFF};
+    write_blob_pack(path, artifact_id, crd::containers::ConstSpan<crd::u8>(v2, 2));
+    REQUIRE(rm.reload_mount_now(mid) == 1U);
+
+    // The real consumer bumped the generation: the pre-reload snapshot is now stale, exactly as a
+    // SlotMap handle goes stale across erase() + slot reuse.
+    const crd::u32 gen_after = handle.generation();
+    CHECK(gen_after != gen_before);
+    CHECK(gen_after == 1U);
+
+    // The identical contract in the formal container: a captured handle is rejected after erase, and
+    // a reused slot never resurrects it (same index, new generation).
+    crd::containers::SlotMap<int> sm(&s_hr_alloc);
+    const auto                    h0 = sm.insert(7);
+    CHECK(sm.contains(h0));
+    const crd::u32 sm_gen_before = h0.generation;
+    REQUIRE(sm.erase(h0));
+    CHECK_FALSE(sm.contains(h0)); // stale handle rejected (mirrors gen_after != gen_before)
+    const auto h1 = sm.insert(9); // reuses the freed slot
+    CHECK(h1.index == h0.index);
+    CHECK(h1.generation != sm_gen_before); // different generation -> the old handle stays dead
+    CHECK_FALSE(sm.contains(h0));
+
+    (void)rm.poll_hot_reload(0U); // drain deferred frees before the handle drops
     (void)crd::platform::fs::remove_file(path);
 }

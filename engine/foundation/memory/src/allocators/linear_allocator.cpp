@@ -1,6 +1,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
 namespace crd::memory
@@ -11,6 +13,7 @@ LinearAllocator::LinearAllocator(usize capacity, IAllocator* parent, const char*
     CRD_ASSERT(capacity > 0);
     m_name = name;
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kDefaultAlignment));
+    asan_poison(m_buffer, m_capacity); // DIAG.3b: nothing handed out yet
 }
 
 LinearAllocator::LinearAllocator(void* buffer, usize capacity, const char* name) noexcept
@@ -19,10 +22,17 @@ LinearAllocator::LinearAllocator(void* buffer, usize capacity, const char* name)
     CRD_ASSERT(buffer != nullptr);
     CRD_ASSERT(capacity > 0);
     m_name = name;
+    asan_poison(m_buffer, m_capacity);
 }
 
 LinearAllocator::~LinearAllocator()
 {
+    // Return the memory unpoisoned: an external buffer belongs to the caller, and a parent
+    // free of a poisoned region would confuse a subsequent reuse.
+    if (m_buffer)
+    {
+        asan_unpoison(m_buffer, m_capacity);
+    }
     if (m_parent && m_buffer)
     {
         m_parent->deallocate(m_buffer);
@@ -37,11 +47,20 @@ void* LinearAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size > 0);
     CRD_ASSERT(is_pow2(alignment));
 
-    // Compute aligned start within our buffer.
+    // Compute aligned start within our buffer. DIAG.3a: checked so a near-SIZE_MAX size
+    // cannot wrap new_offset small and slip past the capacity test below. On overflow this
+    // fails like exhaustion -- non-fatal, and m_offset (the previous allocation) is preserved.
     const usize current = reinterpret_cast<usize>(m_buffer) + m_offset;
-    const usize aligned = align_up(current, alignment);
+    usize       aligned = 0U;
+    usize       new_offset = 0U;
+    if (!checked_align_up(current, alignment, &aligned) ||
+        !checked_add(m_offset, (aligned - current), &new_offset) ||
+        !checked_add(new_offset, size, &new_offset))
+    {
+        CRD_LOG_ERROR(g_log_memory, "{} size arithmetic overflow (requested {})", m_name, size);
+        return nullptr;
+    }
     const usize padding = aligned - current;
-    const usize new_offset = m_offset + padding + size;
 
     if (new_offset > m_capacity)
     {
@@ -52,7 +71,9 @@ void* LinearAllocator::allocate(usize size, usize alignment)
 
     m_offset = new_offset;
     m_stats.on_allocate(size);
-    return m_buffer + (new_offset - size);
+    u8* const result = m_buffer + (new_offset - size);
+    asan_unpoison(result, size); // DIAG.3b: this logical allocation is now live (padding stays poisoned)
+    return result;
 }
 
 void LinearAllocator::deallocate(void* /*p*/) noexcept
@@ -75,6 +96,7 @@ void LinearAllocator::reset() noexcept
         m_stats.on_deallocate(m_offset);
     }
     m_offset = 0;
+    asan_poison(m_buffer, m_capacity); // DIAG.3b: use-after-reset of any prior pointer now faults
 }
 
 void LinearAllocator::reset_to(usize saved_offset) noexcept
@@ -85,6 +107,8 @@ void LinearAllocator::reset_to(usize saved_offset) noexcept
         m_stats.on_deallocate(m_offset - saved_offset);
     }
     m_offset = saved_offset;
+    // DIAG.3b: poison the rewound tail so nested-arena reuse cannot read a scope's freed slices.
+    asan_poison(m_buffer + saved_offset, m_capacity - saved_offset);
 }
 
 LinearScope::~LinearScope() noexcept

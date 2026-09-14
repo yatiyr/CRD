@@ -40,10 +40,16 @@ crd_enable_default_pch(crd-perf-tests)
 add_dependencies(crd-perf-tests
     crd-diag-clean-specimen
     crd-diag-crash-specimen
-    crd-diag-heap-overflow-specimen)
+    crd-diag-heap-overflow-specimen
+    crd-diag-use-after-free-specimen    # DIAG.3f
+    crd-diag-use-after-return-specimen  # DIAG.3f
+    crd-diag-leak-specimen)             # DIAG.3f
 target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_CLEAN_SPECIMEN="$<TARGET_FILE:crd-diag-clean-specimen>"
     CRD_DIAG_CRASH_SPECIMEN="$<TARGET_FILE:crd-diag-crash-specimen>"
-    CRD_DIAG_HEAP_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-heap-overflow-specimen>")
+    CRD_DIAG_HEAP_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-heap-overflow-specimen>"
+    CRD_DIAG_USE_AFTER_FREE_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-free-specimen>"
+    CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
+    CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>")
 
 crd_discover_tests(crd-perf-tests)

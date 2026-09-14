@@ -22,6 +22,7 @@
     "win-tidy": {"tier": "change", "job": "clang-tidy"},
     "win-tidy-local": {"tier": "diagnostic"},
     "linux-clang-fuzz": {"tier": "diagnostic"},
+    "linux-clang-tsan": {"tier": "diagnostic"},
     "win-clang-cl": {"tier": "change", "job": "clang-cl"},
     "win-shipping": {"tier": "change", "job": "windows-shipping"},
     "win-shipping-profile": {"tier": "complete", "job": "windows-shipping"},
