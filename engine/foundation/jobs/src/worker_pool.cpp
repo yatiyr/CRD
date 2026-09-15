@@ -19,6 +19,18 @@
 namespace crd::jobs::detail
 {
 
+namespace
+{
+// Unpack the job's Counter* (packed into JobDecl::_pad by submit_jobs) and return its task id, or 0 if none.
+// Same unpack run_job_in_fiber uses; lets a worker record WHICH task it is dispatching for the snapshot.
+[[nodiscard]] crd::u64 task_id_of(const crd::jobs::JobDecl& job) noexcept
+{
+    Counter* cp = nullptr;
+    std::memcpy(&cp, &job._pad[0], sizeof(cp));
+    return (cp != nullptr) ? cp->task_id : 0U;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // CRD_JOBS_TLS_OPAQUE — load-bearing optimization barrier for the fiber runtime.
 //
@@ -174,6 +186,11 @@ static void job_fiber_trampoline() noexcept
                             static_cast<crd::u8>(tl_thread_index()));
         }
 
+        // Hang-watchdog progress: this worker just finished a job (counted before the counter release so a
+        // waiter woken by the decrement below already sees the progress). tl_worker_pool() is set on every
+        // thread that runs jobs (workers and the enrolled main thread via pump()).
+        tl_worker_pool()->note_job_completed(tl_thread_index());
+
         // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
         cur_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
         Counter* const c = done->job_counter;
@@ -239,10 +256,11 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
 {
     Fiber* target = nullptr;
 
-    // Cache the observer pointer once for the entire dispatch. set_observer
-    // may race with this read (well-defined, atomic-acquire load); we use
-    // the snapshot consistently for the begin/end/yield/resume pair so we
-    // don't fire a mismatched event sequence under concurrent replacement.
+    // Snapshot the observer once for this dispatch. The observer may only change while the job system
+    // is quiescent (see set_observer / is_quiescent), so no begin/end pair can straddle a replacement:
+    // the on_job_end read in job_fiber_trampoline sees the same observer that saw on_job_begin here.
+    // The snapshot keeps this dispatch's begin/yield/resume calls consistent even though the store is
+    // atomic.
     const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
     const crd::u8 thread_idx = static_cast<crd::u8>(tl_thread_index());
 
@@ -264,7 +282,15 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     {
         target = m_fiber_pool.acquire(stack_size_to_tier(job.stack));
         if (!target)
-            return; // pool exhausted: CRD_ASSERT already fired inside acquire()
+        {
+            // Fiber-pool exhaustion: acquire() tallied the event and (in assert builds) asserted, then returned
+            // null. Silently returning here would DROP this job -- its counter never decrements, so the work
+            // vanishes and leaves permanent outstanding state. Fail fast with an always-on fatal (CRD_ASSERT_MSG
+            // is a no-op in Release) so exhaustion is a distinct, visible error in every build, not a lost job.
+            CRD_FATAL("run_job_in_fiber: fiber pool exhausted — a job could not be dispatched; raise fiber counts "
+                      "in jobs::Config");
+            return; // unreachable in practice (CRD_FATAL terminates); never dispatch on a null fiber
+        }
         tl_job_fn = job.fn;
         Counter* cp = nullptr;
         std::memcpy(&cp, &job._pad[0], sizeof(cp));
@@ -370,10 +396,24 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
 
     while (!self->m_stopping.load(std::memory_order_acquire))
     {
+        // Cooperative-snapshot safe point: acknowledge the current request generation. A worker stuck inside a
+        // single long/spinning job never returns here, so its ack falls behind -- that is the honest
+        // "unresponsive" signal worker_snapshot() reports. One relaxed store per loop turn (same class as the
+        // executing store below); idle workers block in wait_for_work and only reach here when woken.
+        self->m_progress[thread_index].ack_gen.store(self->m_snapshot_gen.load(std::memory_order_acquire),
+                                                     std::memory_order_release);
+
         std::optional<crd::jobs::JobDecl> job = self->m_scheduler.try_pop(thread_index);
         if (job)
         {
+            // Hang-watchdog: mark this worker busy across the dispatch (run_job_in_fiber returns on a job's
+            // completion OR its park, so a parked fiber correctly leaves this worker not-executing). Record the
+            // task being dispatched so a snapshot names WHAT is stuck even when the worker cannot ack.
+            self->m_progress[thread_index].current_task_id.store(task_id_of(*job), std::memory_order_relaxed);
+            self->m_progress[thread_index].executing.store(1U, std::memory_order_relaxed);
             self->run_job_in_fiber(*job);
+            self->m_progress[thread_index].executing.store(0U, std::memory_order_relaxed);
+            self->m_progress[thread_index].current_task_id.store(0U, std::memory_order_relaxed);
         }
         else
         {
@@ -495,6 +535,7 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     // by a reallocation (unlike std::vector).
     m_frame_arenas       = std::make_unique<FrameArena[]>(m_num_threads);
     m_frame_arena_count  = m_num_threads;
+    m_progress           = std::make_unique<WorkerProgress[]>(m_num_threads); // per-worker hang-watchdog slots
     for (crd::u32 i = 0U; i < m_num_threads; ++i)
     {
         [[maybe_unused]] const bool ok = m_frame_arenas[i].init(cfg.frame_arena_bytes);
@@ -543,6 +584,7 @@ void WorkerPool::shutdown() noexcept
     // Destroy all frame arenas (each ~FrameArena() calls free()).
     m_frame_arenas.reset();
     m_frame_arena_count = 0U;
+    m_progress.reset(); // per-worker hang-watchdog slots
 
     // Reset the worker count so num_workers() reflects reality after shutdown.
     // A stale positive count here is a landmine: gemm_parallel_auto (and any
@@ -563,6 +605,20 @@ void WorkerPool::reset_all_frame_arenas() noexcept
 {
     for (crd::u32 i = 0U; i < m_frame_arena_count; ++i)
         m_frame_arenas[i].reset();
+}
+
+void WorkerPool::progress_counts(crd::u64& completions_out, crd::u32& executing_out) const noexcept
+{
+    crd::u64 completions = 0U;
+    crd::u32 executing   = 0U;
+    for (crd::u32 i = 0U; i < m_num_threads; ++i)
+    {
+        completions += m_progress[i].completions.load(std::memory_order_relaxed);
+        if (m_progress[i].executing.load(std::memory_order_relaxed) != 0U)
+            ++executing;
+    }
+    completions_out = completions;
+    executing_out   = executing;
 }
 
 void WorkerPool::push(const crd::jobs::JobDecl& job)
@@ -590,8 +646,20 @@ bool WorkerPool::pump()
     std::optional<crd::jobs::JobDecl> job = m_scheduler.try_pop(tl_idx);
     if (!job)
         return false;
+    m_progress[tl_idx].current_task_id.store(task_id_of(*job), std::memory_order_relaxed);
+    m_progress[tl_idx].executing.store(1U, std::memory_order_relaxed); // hang-watchdog: main thread busy
     run_job_in_fiber(*job);
+    m_progress[tl_idx].executing.store(0U, std::memory_order_relaxed);
+    m_progress[tl_idx].current_task_id.store(0U, std::memory_order_relaxed);
     return true;
+}
+
+void WorkerPool::request_snapshot() noexcept
+{
+    // Bump the generation, then wake every sleeper so idle workers revisit their loop-top safe point and ack.
+    // A worker executing a job will not ack until it returns to the loop -- which is the point.
+    m_snapshot_gen.fetch_add(1U, std::memory_order_acq_rel);
+    m_scheduler.wake_all(m_num_threads);
 }
 
 } // namespace crd::jobs::detail

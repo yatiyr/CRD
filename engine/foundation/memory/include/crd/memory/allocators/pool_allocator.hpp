@@ -56,13 +56,13 @@ public:
     usize slots_in_use() const noexcept { return m_in_use; }
     usize slots_free() const noexcept { return m_slot_count - m_in_use; }
 
-    // DIAG.3d: structural walker. Walks the intrusive free list and returns false if it is
+    // Structural walker. Walks the intrusive free list and returns false if it is
     // corrupt -- a link outside the buffer, a link not on a slot boundary, a cycle or a length
     // that disagrees with slots_free() (the shape a double-free produces). O(free slots),
     // allocation-free; for diagnostics/tests, not the hot path.
     [[nodiscard]] bool validate_structure() const noexcept;
 
-    // DIAG.3d: true iff `p` is exactly the start of a slot. owns() is range-based and returns
+    // True iff `p` is exactly the start of a slot. owns() is range-based and returns
     // true for an interior pointer; this distinguishes a genuine slot pointer from an interior
     // one, so a caller/test can detect an interior free.
     [[nodiscard]] bool is_slot_aligned(const void* p) const noexcept;

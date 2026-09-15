@@ -218,7 +218,7 @@ void FiberPool::shutdown() noexcept
 //   - CAS success uses acq_rel: the acquire half synchronises with the pusher's release,
 //     making fiber->next_free visible; the release half is unused here but harmless.
 //   - CAS failure uses acquire so the refreshed `head` value is equally synchronised.
-//   - next_free is an atomic link read/written relaxed (DG05): making it atomic removes
+//   - next_free is an atomic link read/written relaxed; making it atomic removes
 //     the TSan data race on the link itself. Relaxed suffices because the *ordering* that
 //     makes the read observe the correct successor is carried by free_head — a pusher's
 //     release CAS publishes both `idx` as head and its prior relaxed next_free store, and
@@ -238,6 +238,11 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
         const crd::u32 idx = head_idx(head);
         if (idx == kFiberNullIndex)
         {
+            // Tally the exhaustion event (readable back via progress_snapshot), then keep the documented
+            // contract: assert with Ignore semantics and return nullptr. run_job_in_fiber turns that nullptr into
+            // an always-on fatal (worker_pool.cpp) so a Release build fails fast instead of dropping the job;
+            // the direct-pool stress tests rely on the graceful nullptr here.
+            m_exhaustions.fetch_add(1U, std::memory_order_relaxed);
             CRD_ASSERT_MSG(false, "fiber pool exhausted — raise pool counts in jobs::Config");
             return nullptr;
         }
@@ -293,6 +298,10 @@ void FiberPool::release_to(Tier& tier, Fiber* fiber) noexcept
 #endif
 
     tier.acquired_count.fetch_sub(1U, std::memory_order_relaxed);
+
+    // Clear the opt-in livelock progress epoch so a recycled or free-list fiber reads as unmonitored (0) until
+    // its next task opts in via jobs::note_progress(). Relaxed: the free_head CAS below carries publication.
+    fiber->progress_epoch.store(0U, std::memory_order_relaxed);
 
     const crd::u32 idx = fiber->pool_index;
     crd::u64 head = tier.free_head.load(std::memory_order_relaxed);

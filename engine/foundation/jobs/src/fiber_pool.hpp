@@ -76,6 +76,27 @@ public:
 
     [[nodiscard]] bool is_initialized() const noexcept { return m_initialized; }
 
+    // Count of acquire() calls (across all tiers) that found the pool exhausted. Bumped just before the fatal on
+    // the fail path so a handler intercepting the fatal can read a non-zero count. Relaxed: an event tally.
+    [[nodiscard]] crd::u32 exhaustions() const noexcept { return m_exhaustions.load(std::memory_order_relaxed); }
+
+    // Diagnostics walk: invoke fn(const Fiber&, FiberTier) for every fiber slot in every tier. Read-only and
+    // lock-free; it may run concurrently with acquire()/release(), so callers must treat the fiber fields as a
+    // racy point-in-time snapshot, never as an oracle (see jobs::wait_graph_snapshot). Bodies of inline member
+    // templates see the whole class, so the private Tier type declared below is in scope here.
+    template<typename Fn>
+    void for_each_fiber(Fn&& fn) const
+    {
+        const auto walk = [&fn](const Tier& t, FiberTier kind)
+        {
+            for (crd::u32 i = 0U; i < t.count; ++i)
+                fn(t.fibers[i], kind); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        };
+        walk(m_small, FiberTier::Small);
+        walk(m_medium, FiberTier::Medium);
+        walk(m_large, FiberTier::Large);
+    }
+
 private:
     // One free-list tier. alignas(64) places each tier on its own cache line so concurrent
     // acquire()/release() on different tiers never invalidate each other's lines.
@@ -112,6 +133,7 @@ private:
     Tier m_small;
     Tier m_medium;
     Tier m_large;
+    std::atomic<crd::u32> m_exhaustions{0U}; // acquire()-found-empty events across all tiers (diagnostic tally)
     bool m_initialized = false;
 };
 

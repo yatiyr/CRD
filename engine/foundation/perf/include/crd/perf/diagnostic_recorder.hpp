@@ -1,6 +1,6 @@
 #pragma once
 
-// crd-perf -- lifecycle-safe diagnostic recording + bounded emergency record (DIAG.2b).
+// crd-perf -- lifecycle-safe diagnostic recording + bounded emergency record.
 //
 // A preallocated bounded ring of DiagnosticEvents (no allocation on the record path once
 // initialised), reader registration that hands back a lifetime token and retires slots safely on
@@ -8,13 +8,13 @@
 // INDEPENDENT minimal emergency record captured without the ring's mutex, so a crash taken while
 // the ordinary log/ring lock is held still yields a record. Reentrancy and early-init /
 // late-shutdown are defined: every entry point is a no-op (not a fault) before init and after
-// shutdown. DG08's unsynchronised registry reads are addressed by taking the same lock for reads
+// shutdown. Unsynchronised registry reads are addressed by taking the same lock for reads
 // and writes here rather than assuming a writer mutex protects readers.
 //
-// Async-signal-safe capture from a real signal handler is DIAG.5b's job; this slice makes the
+// Async-signal-safe capture from a real signal handler is out of scope here; this makes the
 // record independent of the ordinary lock and bounded, and proves it under concurrency.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-2b; ADR-0133; DG08/DG10.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/perf/diagnostics.hpp>
 

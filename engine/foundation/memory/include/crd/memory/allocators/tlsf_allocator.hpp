@@ -97,7 +97,7 @@ public:
     [[nodiscard]] usize pool_capacity() const noexcept { return m_pool_capacity; }
     [[nodiscard]] const void* pool_base() const noexcept { return m_pool; }
 
-    // DIAG.3d structural walker. Read-only integrity check of the whole heap: the physical block chain
+    // Structural walker. Read-only integrity check of the whole heap: the physical block chain
     // (bounds, prev_phys back-links, the prev-free flag vs. the real predecessor, the coalescing invariant
     // that no two adjacent blocks are both free, exact region closure by the end sentinel), the segregated
     // free lists (each free block filed in the bucket its size maps to, doubly-linked consistency, no cycles)

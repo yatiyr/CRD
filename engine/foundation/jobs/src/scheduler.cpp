@@ -368,6 +368,17 @@ crd::u32 Scheduler::num_threads() const noexcept
     return m_config.num_threads;
 }
 
+void Scheduler::injection_diagnostics(crd::u32 backlog[3], crd::u64 pops[3]) const noexcept
+{
+    const JobInjectionQueue* const lanes[3] = {m_high_injection.get(), m_normal_injection.get(),
+                                               m_low_injection.get()};
+    for (crd::u32 i = 0U; i < 3U; ++i)
+    {
+        backlog[i] = (lanes[i] != nullptr) ? static_cast<crd::u32>(lanes[i]->size()) : 0U;
+        pops[i]    = (lanes[i] != nullptr) ? lanes[i]->dequeued() : 0U;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // run_job
 //

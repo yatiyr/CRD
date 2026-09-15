@@ -1,18 +1,18 @@
 #pragma once
 
-// crd-memory -- AddressSanitizer poisoning of logical (sub-)allocations (DIAG.3b).
+// crd-memory -- AddressSanitizer poisoning of logical (sub-)allocations.
 //
 // A bump/arena allocator hands out slices of one big parent allocation, so the parent's ASan
 // redzones sit only at the ends of the whole buffer -- ASan cannot see a use of a freed arena
 // slice or an over-read into the next slice. Manually poisoning freed/unhanded ranges and
 // unpoisoning live ones restores per-logical-allocation boundaries. Every helper compiles to
 // nothing unless the build defines AddressSanitizer, so production layout/performance is
-// unchanged (DIAG.3a/3b: diagnostic metadata as side storage, not fatter allocations).
+// unchanged (diagnostic metadata as side storage, not fatter allocations).
 //
 // Do NOT use these on an offset/GPU allocator whose "address" is an unmapped device range --
-// that is a logical-range check, not CPU memory (see DIAG.3a). These are CPU-memory only.
+// that is a logical-range check, not CPU memory. These are CPU-memory only.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-3b; ADR-0133; DG02.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/core/types.hpp>
 

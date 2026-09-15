@@ -1,6 +1,6 @@
 #pragma once
 
-// crd-perf -- typed diagnostic events, identities and authorable policy (DIAG.2a).
+// crd-perf -- typed diagnostic events, identities and authorable policy.
 //
 // The shared schema every diagnostic producer emits: a versioned, severity-tagged event with
 // a source/symbol identity, a monotonic timestamp and a stable generation key, plus an
@@ -8,7 +8,7 @@
 // bridge) CEIR consumers emit the SAME structured context to CLI/JSON and to logging, without
 // foundation depending upward on CEIR.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-2a; ADR-0133; DG13/DG18.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
@@ -79,7 +79,7 @@ struct DiagnosticEvent
 [[nodiscard]] crd::u64 diagnostic_now_ns() noexcept;
 
 // ---------------------------------------------------------------------------
-// Authorable bounded policy (DG18)
+// Authorable bounded policy
 // ---------------------------------------------------------------------------
 
 // Hard bounds a policy may never exceed; a candidate outside them is rejected.
@@ -107,7 +107,7 @@ enum class PolicyLoadStatus : crd::u8
 
 // Holds the active policy behind a validating, last-known-good reload. A rejected candidate
 // leaves both the active policy AND the generation untouched -- malformed input can never move
-// the active generation. Not internally synchronised; DIAG.2b owns lifecycle/concurrency.
+// the active generation. Not internally synchronised; the recorder owns lifecycle/concurrency.
 class DiagnosticPolicyStore
 {
 public:

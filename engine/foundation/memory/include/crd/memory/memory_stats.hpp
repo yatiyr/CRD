@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/build_config.hpp>
+#include <crd/core/rt_sentinel.hpp>
 #include <crd/core/types.hpp>
 
 #include <atomic>
@@ -62,6 +63,13 @@ struct MemoryStats
 
     void on_allocate(u64 bytes) noexcept
     {
+#if CRD_ENABLE_ASSERTS
+        // Real-time sentinel: an allocation inside a declared RtScope is a forbidden operation -- report it
+        // (then proceed; a sentinel never changes behaviour). Independent of stats tracking; zero-cost in
+        // shipping builds. This is the shared allocation seam -- every concrete allocator calls on_allocate.
+        if (crd::in_rt_scope())
+            crd::report_rt_violation(crd::RtViolationKind::Allocation, static_cast<crd::usize>(bytes));
+#endif
 #if CRD_MEMORY_STATS_TRACKING
         alloc_count.fetch_add(1, std::memory_order_relaxed);
         total_bytes.fetch_add(bytes, std::memory_order_relaxed);

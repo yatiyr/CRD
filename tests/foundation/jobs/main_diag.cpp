@@ -2,6 +2,9 @@
 #include <catch2/catch_session.hpp>
 #include <crd/core/crash.hpp>
 
+#include <filesystem>
+#include <string>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -28,7 +31,10 @@ LONG CALLBACK fiber_diag_veh(EXCEPTION_POINTERS* ep) noexcept
 int main(int argc, char* argv[])
 {
     // Minidump + stderr exception info for all crash types.
-    crd::crash::install("./crashes");
+    // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
+    // crashes/ would trip the repository structure check.
+    const std::string crash_dir = (std::filesystem::temp_directory_path() / "crd-test-crashes").string();
+    (void)crd::crash::install(crash_dir.c_str());
 
 #if defined(_WIN32)
     // VEH fires before the unhandled-exception filter — catches CET violations

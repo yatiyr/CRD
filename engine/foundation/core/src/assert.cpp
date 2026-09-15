@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/core/types.hpp> // crd::usize (used by the per-site ignore table below; do not rely on the PCH)
 
 #include <atomic>
 #include <cstdio>

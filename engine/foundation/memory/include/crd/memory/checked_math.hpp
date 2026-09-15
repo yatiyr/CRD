@@ -1,18 +1,18 @@
 #pragma once
 
-// crd-memory -- overflow-checked size/stride/alignment/page arithmetic (DIAG.3a).
+// crd-memory -- overflow-checked size/stride/alignment/page arithmetic.
 //
 // Allocation sizing computes count*stride, size+header, align-up-to-boundary and pages-for-bytes;
 // each can overflow near the address-width boundary and silently return a too-small size, the
 // classic allocator integer-overflow bug. These helpers do the arithmetic and report overflow
 // instead of wrapping. All are constexpr and branch-cheap; they add no per-allocation heap cost,
-// so production layout/performance is preserved (DIAG.3a: diagnostic metadata as side storage,
+// so production layout/performance is preserved (diagnostic metadata as side storage,
 // not fatter allocations).
 //
 // Convention: every function returns true on success and writes *out; on overflow it returns
 // false and leaves *out unspecified. Callers must check the bool before using the size.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-3a; ADR-0133; DG02/DG03.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>

@@ -13,7 +13,7 @@ LinearAllocator::LinearAllocator(usize capacity, IAllocator* parent, const char*
     CRD_ASSERT(capacity > 0);
     m_name = name;
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kDefaultAlignment));
-    asan_poison(m_buffer, m_capacity); // DIAG.3b: nothing handed out yet
+    asan_poison(m_buffer, m_capacity); // nothing handed out yet
 }
 
 LinearAllocator::LinearAllocator(void* buffer, usize capacity, const char* name) noexcept
@@ -47,7 +47,7 @@ void* LinearAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size > 0);
     CRD_ASSERT(is_pow2(alignment));
 
-    // Compute aligned start within our buffer. DIAG.3a: checked so a near-SIZE_MAX size
+    // Compute aligned start within our buffer. Checked so a near-SIZE_MAX size
     // cannot wrap new_offset small and slip past the capacity test below. On overflow this
     // fails like exhaustion -- non-fatal, and m_offset (the previous allocation) is preserved.
     const usize current = reinterpret_cast<usize>(m_buffer) + m_offset;
@@ -72,7 +72,7 @@ void* LinearAllocator::allocate(usize size, usize alignment)
     m_offset = new_offset;
     m_stats.on_allocate(size);
     u8* const result = m_buffer + (new_offset - size);
-    asan_unpoison(result, size); // DIAG.3b: this logical allocation is now live (padding stays poisoned)
+    asan_unpoison(result, size); // this logical allocation is now live (padding stays poisoned)
     return result;
 }
 
@@ -96,7 +96,7 @@ void LinearAllocator::reset() noexcept
         m_stats.on_deallocate(m_offset);
     }
     m_offset = 0;
-    asan_poison(m_buffer, m_capacity); // DIAG.3b: use-after-reset of any prior pointer now faults
+    asan_poison(m_buffer, m_capacity); // use-after-reset of any prior pointer now faults
 }
 
 void LinearAllocator::reset_to(usize saved_offset) noexcept
@@ -107,7 +107,7 @@ void LinearAllocator::reset_to(usize saved_offset) noexcept
         m_stats.on_deallocate(m_offset - saved_offset);
     }
     m_offset = saved_offset;
-    // DIAG.3b: poison the rewound tail so nested-arena reuse cannot read a scope's freed slices.
+    // Poison the rewound tail so nested-arena reuse cannot read a scope's freed slices.
     asan_poison(m_buffer + saved_offset, m_capacity - saved_offset);
 }
 

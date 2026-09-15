@@ -188,6 +188,10 @@ public:
         return m_enqueue_pos.load(std::memory_order_acquire) == m_dequeue_pos.load(std::memory_order_acquire);
     }
 
+    /// Monotonic count of successful dequeues since construction. Races with concurrent pop — diagnostics only
+    /// (e.g. per-lane pop-progress for starvation detection). Never wraps in practice (64-bit).
+    [[nodiscard]] u64 dequeued() const noexcept { return m_dequeue_pos.load(std::memory_order_acquire); }
+
     [[nodiscard]] memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
 private:

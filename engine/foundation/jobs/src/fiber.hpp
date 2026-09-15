@@ -48,11 +48,24 @@ struct Fiber
     crd::u32   pool_index    = kFiberNullIndex; // stable index in the tier's fibers[] array
     // Treiber stack link; kFiberNullIndex = end-of-list. Atomic (relaxed) so the
     // pop-side read and push-side write of the link are not a data race under TSan
-    // (DG05); the real happens-before is carried by the tier's free_head, and ABA is
+    // The real happens-before is carried by the tier's free_head, and ABA is
     // handled by the generation tag packed into free_head — see fiber_pool.cpp.
     std::atomic<crd::u32> next_free{kFiberNullIndex};
     FiberTier  tier          = FiberTier::Small;
     Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
+    // The counter this fiber is currently BLOCKED on (distinct from job_counter, which is its own job's
+    // completion counter): set on the park path in counter_wait before the switch, cleared to nullptr on
+    // resume. It is the wait-graph edge — a diagnostics snapshot walks the fiber pool and reports every fiber
+    // with a non-null value. Atomic/relaxed so a concurrent snapshot reader is race-free; it is written only
+    // by the owning fiber on the (cold) park/resume path, so relaxed is enough for that writer.
+    std::atomic<Counter*> waiting_on{nullptr};
+
+    // Opt-in task progress epoch for livelock detection. 0 = unmonitored (the default, and what a recycled
+    // fiber is reset to in FiberPool::release_to). The running task bumps it via jobs::note_progress(); the
+    // watchdog reports a monitored task whose epoch stays flat across several windows while it keeps a worker
+    // executing (a livelock -- indistinguishable from a legitimate long job by aggregates alone, hence opt-in).
+    // Atomic/relaxed: written only by the owning fiber, read racily by the diagnostics snapshot.
+    std::atomic<crd::u32> progress_epoch{0U};
 
     // Sanitizer switch state (sanitizer_fibers.hpp): the fake stack this fiber left behind and the scheduler stack
     // it returns to, its TSan context, and the TSan context of the thread that dispatched or resumed it last.

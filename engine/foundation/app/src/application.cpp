@@ -3,13 +3,21 @@
 #include <crd/app/events/input_events.hpp>
 #include <crd/app/events/window_events.hpp>
 
+#include <cstdio>
+
 namespace crd::app
 {
 Application::Application(const ApplicationDesc& desc)
     : m_desc(desc), m_context(crd::platform::PlatformContext::create())
 {
     if (m_desc.install_crash_handler)
-        crd::crash::install(m_desc.crash_dir);
+    {
+        const crd::crash::InstallResult ir = crd::crash::install(m_desc.crash_dir);
+        if (ir != crd::crash::InstallResult::Ok && ir != crd::crash::InstallResult::OkReinstalled &&
+            ir != crd::crash::InstallResult::OkReplacedForeignFilter)
+            std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
+                         static_cast<unsigned>(ir)); // a fuller host diagnostics lifecycle comes later
+    }
 
     if (!m_context.is_valid())
     {

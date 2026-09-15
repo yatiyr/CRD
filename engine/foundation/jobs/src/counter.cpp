@@ -1,6 +1,17 @@
 #include "counter.hpp"
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include "sched_check.hpp"   // test-only controlled-interleaving yield points (gate off -> no-ops)
+#include <crd/jobs/jobs.hpp> // crd::jobs::current_task_id() — stamp the causal parent edge on acquire
+
+// Controlled-interleaving yield points (test-only; gate off they compile to nothing). A driver installs
+// a SchedOracle (sched_check.hpp) that can block a thread at each, serializing the publication/
+// reclamation race in any order. The five points and what they bracket:
+//   fp.published  — counter_finish_park: after the Treiber publish CAS, before the ABA value load
+//   fp.finalizing — counter_finish_park: after the claim CAS, before the park_finalized store
+//   dec.zero      — counter_decrement: after the decrement hits zero, before stealing the waiter list
+//   dec.claim     — counter_decrement: in the drain loop, before racing for a Waiter's claim CAS
+//   wait.resumed  — counter_wait: after the fiber resumes, before the park_finalized handshake spin
 
 namespace crd::jobs::detail
 {
@@ -47,7 +58,7 @@ void CounterPool::shutdown() noexcept
 // CounterPool — acquire (Treiber pop)
 //
 // Memory ordering: mirrors FiberPool::acquire_from — acquire on load, acq_rel on
-// successful CAS. next_free is an atomic link accessed relaxed (DG05): atomic removes the
+//  successful CAS. next_free is an atomic link accessed relaxed; atomic removes the
 // TSan data race; ordering is carried by m_free_head (a releaser's CAS publishes the index
 // and its relaxed next_free store, our acquire synchronises with it). ABA: the read
 // successor is committed only if the CAS sees an unchanged (index,generation) head, and
@@ -65,6 +76,11 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
         const crd::u32 idx = head_idx(head);
         if (idx == kCounterNullIndex)
         {
+            // Tally the exhaustion event (a diagnostic signal a handler can read back via progress_snapshot),
+            // then keep the documented contract: assert with Ignore semantics and return nullptr. The caller
+            // decides recovery -- the public run() path fatals on it (jobs.cpp); the direct-pool stress tests
+            // handle the nullptr. Making acquire() itself fatal would break that contract.
+            m_exhaustions.fetch_add(1U, std::memory_order_relaxed);
             CRD_ASSERT_MSG(false, "CounterPool exhausted — raise max_counters in jobs::Config");
             return nullptr;
         }
@@ -77,8 +93,14 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
         {
             Counter* c    = &m_counters[idx]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
             c->value.store(initial_value,  std::memory_order_relaxed);
+            c->drained.store(0U,            std::memory_order_relaxed);
             c->waiters.store(nullptr,       std::memory_order_relaxed);
             c->next_free.store(kCounterNullIndex, std::memory_order_relaxed);
+            // Stamp a unique task-instance id, distinct from this recycled slot's address.
+            c->task_id = m_next_task_id.fetch_add(1U, std::memory_order_relaxed);
+            // Retain the causal parent edge: the submitting task is whatever job runs on the calling
+            // fiber right now (0 when submitted from the main thread / outside any job).
+            c->parent_task_id = crd::jobs::current_task_id();
             m_acquired.fetch_add(1U, std::memory_order_relaxed);
             return c;
         }
@@ -97,17 +119,18 @@ void CounterPool::release(Counter* counter) noexcept
     CRD_ASSERT_MSG(m_initialized, "CounterPool::release called before init");
     CRD_ASSERT_MSG(counter != nullptr, "CounterPool::release: null pointer");
 
-    // No leftover-waiter assert walk here, deliberately. By the time this counter
-    // is released, jobs::wait() has returned, which means the value reached 0,
-    // which means the zero-decrement (counter_decrement) ran — and that drains
-    // counter->waiters and claims/skips every entry, so no Pending waiter can
-    // survive to here. The only nodes that may still hang off counter->waiters
-    // are Canceled ones published by counter_finish_park's ABA win *after* the
-    // zero-decrement's drain — and those Waiters live in already-unwound
-    // counter_wait() frames, so walking the list to inspect them would be a
-    // use-after-read of reclaimed stack. Harmless to leave dangling: nothing
-    // dereferences counter->waiters between here and acquire(), which overwrites
-    // it with nullptr.
+    // Precondition: the zero-decrement has finished draining counter->waiters. jobs::wait() enforces this by
+    // spinning on counter->drained (set right after that decrement's waiters.exchange) before calling us, so
+    // the slot is never recycled while the exchange is still pending. value == 0 alone does NOT establish it —
+    // the fetch_sub that hits zero is sequenced before the exchange, and a fast-path / ABA-cancelled waiter
+    // could otherwise reach release in that gap.
+    //
+    // Given the precondition, no leftover-waiter assert walk here, deliberately: the zero-decrement drained
+    // counter->waiters and claimed/skipped every entry, so no Pending waiter can survive to here. The only
+    // nodes that may still hang off counter->waiters are Canceled ones published by counter_finish_park's ABA
+    // win *after* that drain — and those Waiters live in already-unwound counter_wait() frames, so walking the
+    // list to inspect them would be a use-after-read of reclaimed stack. Harmless to leave dangling: nothing
+    // dereferences counter->waiters between here and acquire(), which overwrites it with nullptr.
 
     const crd::u32 idx = counter->pool_index;
     crd::u64 head      = m_free_head.load(std::memory_order_relaxed);
@@ -171,8 +194,18 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
     if (new_val != 0U)
         return nullptr;
 
+    CRD_JOBS_SCHED_POINT("dec.zero"); // hit zero, before stealing the waiter list
+
     // We are the decrement that satisfies every waiter. Drain the list.
     Waiter* list = counter->waiters.exchange(nullptr, std::memory_order_acq_rel);
+
+    // The exchange above is this decrement's LAST access to `counter` — the drain below only touches the
+    // stolen Waiter nodes. Signal that the counter is safe to recycle. jobs::wait() spins on this before
+    // release(): value==0 only means the fetch_sub landed, but a fast-path / ABA-cancelled waiter could
+    // otherwise release the slot before this exchange runs, letting a concurrent acquire recycle it and this
+    // exchange then steal the NEW generation's waiters (a premature wake → early release cascade that ends in
+    // a decrement past zero). release-store pairs with the acquire-load in jobs::wait().
+    counter->drained.store(1U, std::memory_order_release);
 
     Waiter* woken = nullptr;  // fibers this call owes a resume
     while (list != nullptr)
@@ -187,6 +220,8 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
             continue;
         }
         // Otherwise it is Pending (Wakeup is only set here, on a node we remove).
+
+        CRD_JOBS_SCHED_POINT("dec.claim"); // before racing counter_finish_park for this Waiter's claim
 
         WaiterClaim expected = WaiterClaim::Pending;
         if (list->claim.compare_exchange_strong(expected, WaiterClaim::Wakeup,
@@ -249,6 +284,11 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
     w->next.store(nullptr,               std::memory_order_relaxed);
     w->park_finalized.store(false,       std::memory_order_relaxed);
 
+    // Wait-graph edge: record which counter this fiber is about to block on, so a diagnostics snapshot can
+    // report it (see jobs::wait_graph_snapshot). Distinct from job_counter (the fiber's own completion
+    // counter). Cleared on resume below. Relaxed: written only here by the owning fiber on the cold park path.
+    current_fiber->waiting_on.store(counter, std::memory_order_relaxed);
+
 #if CRD_ENABLE_ASSERTS
     CRD_ASSERT_MSG(current_fiber->state == FiberState::Active,
                    "counter_wait: fiber must be Active before parking");
@@ -264,13 +304,23 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
     // --- Resumed (by counter_decrement having claimed Wakeup, or by the
     //     scheduler if the value had already reached target at publish time) --- //
 
+    CRD_JOBS_SCHED_POINT("wait.resumed"); // resumed, before the park_finalized handshake spin
+
     // Don't unwind this frame (which would free `w` and let jobs::wait() release
     // the counter) until counter_finish_park has finished touching both. The
     // resume chain (decrement → enqueue → scheduler pop → fiber_switch) is far
     // longer than counter_finish_park's tail, so this almost never actually
     // spins; it's strictly defensive against the tight interleaving.
-    while (!w->park_finalized.load(std::memory_order_acquire))
-    { /* counter_finish_park is a handful of instructions away */ }
+#if CRD_JOBS_SCHED_CHECK
+    if (!detail::sched_check_handshake_broken()) // test-only: the broken variant drops this handshake
+#endif
+    {
+        while (!w->park_finalized.load(std::memory_order_acquire))
+        { /* counter_finish_park is a handful of instructions away */ }
+    }
+
+    // Resumed: no longer blocked on any counter. Clear the wait-graph edge.
+    current_fiber->waiting_on.store(nullptr, std::memory_order_relaxed);
 
 #if CRD_ENABLE_ASSERTS
     CRD_ASSERT_MSG(current_fiber->state == FiberState::Ready,
@@ -295,6 +345,15 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     CRD_ASSERT_MSG(w       != nullptr, "counter_finish_park: null Waiter");
     CRD_ASSERT_MSG(w->target == 0U,    "counter_finish_park: only target == 0 is supported");
 
+#if CRD_JOBS_SCHED_CHECK
+    // Snapshot this park's owning task-instance id. The park_finalized handshake (counter_wait spins on
+    // it before unwinding) guarantees the slot cannot be released — hence cannot be re-acquired with a
+    // fresh task_id — while we are still touching it. If it changes before we finish, the slot was
+    // recycled out from under a half-finished park: report it (a use-after-read here does not fault in a
+    // debug build). The repaired algorithm never trips this; a variant that drops the handshake does.
+    const crd::u64 park_task_id = counter->task_id;
+#endif
+
     // Publish w onto counter->waiters (Treiber push).
     Waiter* head = counter->waiters.load(std::memory_order_relaxed);
     do
@@ -303,6 +362,8 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     } while (!counter->waiters.compare_exchange_weak(
                  head, w,
                  std::memory_order_release, std::memory_order_relaxed));
+
+    CRD_JOBS_SCHED_POINT("fp.published"); // published on waiters, before the ABA re-check load
 
     // ABA re-check: did the counter reach target while the fiber was switching
     // out / we were publishing? If yes, race counter_decrement for this Waiter:
@@ -316,9 +377,24 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
                                    std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
+    CRD_JOBS_SCHED_POINT("fp.finalizing"); // after the claim CAS, before releasing the fiber
+
+#if CRD_JOBS_SCHED_CHECK
+    // Owner-release invariant: the slot we parked must still be ours. A changed task_id means it was
+    // released and re-acquired while this park was in flight — the reclamation race the handshake exists
+    // to prevent (see park_task_id above).
+    if (counter->task_id != park_task_id)
+        detail::sched_check_note_violation("fp.recycled-under-park");
+#endif
+
     // Done touching `counter` and `w`. Release the fiber to complete jobs::wait()
     // — counter_wait spins on this before returning.
-    w->park_finalized.store(true, std::memory_order_release);
+#if CRD_JOBS_SCHED_CHECK
+    if (!detail::sched_check_handshake_broken()) // test-only: the broken variant omits the store too
+#endif
+    {
+        w->park_finalized.store(true, std::memory_order_release);
+    }
     return resumed_by_scheduler;
 }
 

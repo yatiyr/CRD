@@ -1,18 +1,18 @@
 #pragma once
 
-// crd-containers -- generation-checked handle map (DIAG.3e).
+// crd-containers -- generation-checked handle map.
 //
 // A dense store of T addressed by a small `Handle{index, generation}`. Every access validates the
 // handle's generation against the slot's; erasing a slot bumps its generation, so every handle to
 // that slot -- and any borrow derived from one -- goes stale at once and get()/contains() reject
 // it instead of returning a reused element (the classic dangling-handle / use-after-free-of-a-slot
-// bug, DG04). Handles are trivially copyable values, safe to store in containers and pass to
+// bug). Handles are trivially copyable values, safe to store in containers and pass to
 // callbacks: the check happens at dereference, not at copy.
 //
 // T must be move-constructible and move-assignable (erase moves the element out to run its
 // destructor; reuse move-assigns the new element in). No T default-construction is required.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-3e; ADR-0133; DG04.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>

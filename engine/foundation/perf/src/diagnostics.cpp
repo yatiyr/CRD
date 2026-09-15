@@ -1,4 +1,4 @@
-// crd-perf -- typed diagnostic events, identities and policy (DIAG.2a). See diagnostics.hpp.
+// crd-perf -- typed diagnostic events, identities and policy. See diagnostics.hpp.
 
 #include <crd/perf/diagnostics.hpp>
 

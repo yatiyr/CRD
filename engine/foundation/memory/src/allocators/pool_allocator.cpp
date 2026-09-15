@@ -15,7 +15,7 @@ PoolAllocator::PoolAllocator(usize slot_size, usize slot_count, usize slot_align
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
 
     m_name = name;
-    // DIAG.3a: checked stride/size arithmetic. slot_size padded to alignment, then
+    // Checked stride/size arithmetic. slot_size padded to alignment, then
     // stride*count -- both overflow-checked so a hostile/buggy size can never wrap to a
     // too-small buffer. CRD_FATAL (not a debug assert) so the guard survives release.
     usize total = 0U;

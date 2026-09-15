@@ -12,9 +12,15 @@
 
 #include <catch2/catch_session.hpp>
 
+#include <filesystem>
+#include <string>
+
 int main(int argc, char* argv[])
 {
-    crd::crash::install("./crashes");
+    // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
+    // crashes/ would trip the repository structure check.
+    const std::string crash_dir = (std::filesystem::temp_directory_path() / "crd-test-crashes").string();
+    (void)crd::crash::install(crash_dir.c_str());
 
     crd::jobs::Config jobs_cfg;
     jobs_cfg.frame_alloc_bytes = 8U << 20; // 8 MB/thread — stress tests do many parallel_for/parallel_reduce calls

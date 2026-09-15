@@ -13,7 +13,7 @@ StackAllocator::StackAllocator(usize capacity, IAllocator* parent, const char* n
     CRD_ASSERT(capacity > 0);
     m_name = name;
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kDefaultAlignment));
-    asan_poison(m_buffer, m_capacity); // DIAG.3b
+    asan_poison(m_buffer, m_capacity);
 }
 
 StackAllocator::StackAllocator(void* buffer, usize capacity, const char* name) noexcept
@@ -45,7 +45,7 @@ void* StackAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size > 0);
     CRD_ASSERT(is_pow2(alignment));
 
-    // DIAG.3a: checked so a near-SIZE_MAX size cannot wrap past the capacity test; on overflow
+    // Checked so a near-SIZE_MAX size cannot wrap past the capacity test; on overflow
     // this fails like exhaustion, preserving the prior allocation.
     const usize current = reinterpret_cast<usize>(m_buffer) + m_offset;
     usize       aligned = 0U;
@@ -69,7 +69,7 @@ void* StackAllocator::allocate(usize size, usize alignment)
     m_offset = new_offset;
     m_stats.on_allocate(size);
     u8* const result = m_buffer + (new_offset - size);
-    asan_unpoison(result, size); // DIAG.3b: this logical allocation is now live
+    asan_unpoison(result, size); // this logical allocation is now live
     return result;
 }
 
@@ -105,7 +105,7 @@ void StackAllocator::reset_to(Marker m) noexcept
         m_stats.on_deallocate(m_offset - m.offset);
     }
     m_offset = m.offset;
-    asan_poison(m_buffer + m.offset, m_capacity - m.offset); // DIAG.3b: popped frames go stale
+    asan_poison(m_buffer + m.offset, m_capacity - m.offset); // popped frames go stale
 }
 
 void StackAllocator::reset() noexcept
@@ -115,6 +115,6 @@ void StackAllocator::reset() noexcept
         m_stats.on_deallocate(m_offset);
     }
     m_offset = 0;
-    asan_poison(m_buffer, m_capacity); // DIAG.3b
+    asan_poison(m_buffer, m_capacity);
 }
 } // namespace crd::memory

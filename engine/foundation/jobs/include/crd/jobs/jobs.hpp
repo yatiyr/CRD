@@ -33,6 +33,10 @@ struct Config
     crd::u32 max_counters = 512U;
     crd::u32 injection_queue_capacity = 4096U;
     crd::u32 frame_alloc_bytes = 1U << 20U; // 1 MB per thread
+    // Opt-in progress-sensitive hang watchdog (see set_hang_handler). 0 = disabled (no thread spawned); >0 is
+    // the sampling window in milliseconds. A thread OUTSIDE the pool samples progress each window and reports a
+    // suspected hang after several stale windows. Off by default; only meaningful with a handler installed.
+    crd::u32 hang_watchdog_period_ms = 0U;
 
     // ADR-0094 — opt-in P-core routing. Default false ⇒ the historical shared-semaphore wake path runs verbatim
     // (no behavior/perf change for any existing system). When true, the pool uses per-worker targeted wake +
@@ -52,8 +56,10 @@ void shutdown();
 // Inside a fiber: suspends the fiber cooperatively; the thread remains available for other work.
 // Outside a fiber on the main thread (thread 0): spins, calling pump() on each iteration so
 // thread-0-pinned jobs can make progress. Safe even with a single-thread pool.
-// Outside a fiber on any other unenrolled thread: spins with yield(); requires at least one
-// background worker thread (num_threads >= 2) to decrement the counter, otherwise deadlocks.
+// Outside a fiber on any other unenrolled thread: spins with yield(); REQUIRES num_threads >= 2 --
+// a single-thread pool has nothing that can decrement the counter, so wait() fatals rather than hang.
+// (An unenrolled wait on a counter whose jobs are all thread-0-pinned also deadlocks; that is the
+// caller's guarantee -- it cannot be detected here without the job's affinity.)
 void wait(Counter* counter, crd::u32 target = 0U);
 
 // Convenience: submit + wait; counter released before returning.
@@ -130,6 +136,240 @@ private:
 [[nodiscard]] bool is_worker_fiber() noexcept;  // true when called from inside a job fiber
 [[nodiscard]] crd::u32 worker_index() noexcept; // thread index of the calling thread
 [[nodiscard]] crd::u32 num_workers() noexcept;  // total thread count (incl. thread 0)
+// The unique task-instance id of the job currently executing on the calling fiber, or 0 when
+// no job is running on this thread (off-fiber caller, or main thread outside a job). Derived from the
+// running fiber's Counter, so it travels with the fiber across suspend/resume/thread-migration and a
+// nested job's parent id is automatically restored when the parent resumes. Distinct from the recycled
+// fiber/counter address — two runs that reuse the same pool slot get different ids.
+[[nodiscard]] crd::u64 current_task_id() noexcept;
+// The task_id of the job that submitted the job now running on the calling fiber (its immediate
+// parent), or 0 when that job was submitted from outside any job (e.g. the main thread). Reads the
+// running fiber's Counter, so it is migration-safe like current_task_id().
+[[nodiscard]] crd::u64 parent_task_id() noexcept;
+
+// Opt-in livelock instrumentation: a long-running task calls note_progress() whenever it makes forward
+// progress (an iteration completed, an item processed). The FIRST call opts the task in; from then on the
+// livelock watchdog expects the task to tick again within a few watchdog windows. A monitored task that keeps
+// a worker executing but stops ticking for several consecutive windows is reported as a livelock -- a shape no
+// aggregate can see (a spin loop reads as a legitimate long job). Tasks that never call this are never flagged;
+// the tick is a single relaxed atomic increment on the running fiber. A no-op when called off any job fiber.
+void note_progress() noexcept;
+
+// True when no job is in flight: the counter pool is uninitialised, or every counter is free.
+// set_observer() requires it — the observer may change only while quiescent, so each job begins and
+// ends under the same observer. A detector, not a lock: a concurrent run() makes the result stale at
+// once; the caller guarantees quiescence.
+[[nodiscard]] bool is_quiescent() noexcept;
+
+// ---------------------------------------------------------------------------
+// Wait-graph snapshot: parked-fiber evidence for hang diagnosis.
+//
+// One node per fiber currently BLOCKED inside wait()/counter_wait, identifying the counter it is waiting on by
+// its stable task ids (not the recycled slot address). This is the "who is parked on what" half of a hang
+// report; the running-fiber/worker-stack half is captured separately.
+//
+// It is a best-effort DUMP, not an oracle: it walks live fiber state with relaxed reads while other threads may
+// park/resume/recycle, so a node may be momentarily stale (e.g. a fiber resumed the instant after it was read).
+// For a deterministic assertion, snapshot while the pool is known-parked (a fiber blocked on a counter the
+// caller is holding at a non-zero value). No allocation: the caller supplies storage.
+// ---------------------------------------------------------------------------
+struct WaitGraphNode
+{
+    crd::u32 fiber_index;               // stable index within its tier's fiber array
+    crd::u8  tier;                       // FiberTier: 0=Small 1=Medium 2=Large
+    crd::u64 waiting_on_task_id;         // task id of the counter this fiber is blocked on (the edge TARGET)
+    crd::u64 waiting_on_parent_task_id; // that counter's causal parent task id
+    crd::u32 waiting_on_remaining;      // remaining count on that counter (jobs still outstanding)
+    crd::u64 own_task_id;               // task id of THIS fiber's own job counter (the edge SOURCE); 0 if none.
+                                        // A closed loop of own->waiting_on edges is a deadlock (see classify_hang).
+};
+
+// Fill `out` with one node per parked fiber and return the TOTAL number of parked fibers observed. If the
+// return value exceeds out.size(), the result was truncated (only out.size() nodes were written) — size `out`
+// with a cap (e.g. the pool's total fiber count). A return of 0 means no fiber is parked.
+[[nodiscard]] crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept;
+
+// ---------------------------------------------------------------------------
+// Monitored-task snapshot: one node per RUNNING task that has opted into livelock instrumentation (called
+// note_progress() at least once, so progress_epoch > 0) and is not currently parked (a parked monitored task
+// is the hang detector's domain, not livelock). progress_epoch is the task's own forward-progress counter; the
+// livelock check flags a task whose epoch stays flat across several windows while it keeps a worker executing.
+// Racy point-in-time reads (relaxed) -- a diagnostics dump, not an oracle -- and truncation-honest like
+// wait_graph_snapshot: the return value is the TOTAL monitored count, which may exceed out.size().
+// ---------------------------------------------------------------------------
+struct ProgressNode
+{
+    crd::u32 fiber_index;      // stable index within its tier's fiber array
+    crd::u8  tier;             // FiberTier: 0=Small 1=Medium 2=Large
+    crd::u64 task_id;          // the running task's own id
+    crd::u64 parent_task_id;   // its causal parent task id
+    crd::u32 progress_epoch;   // forward-progress ticks so far (compared across windows)
+};
+
+[[nodiscard]] crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept;
+
+// ---------------------------------------------------------------------------
+// Cooperative worker snapshot: the safe stop/snapshot protocol for the RUNNING half of the pool (the parked
+// half is wait_graph_snapshot). worker_snapshot() bumps a request generation, wakes every worker, and polls
+// (bounded by timeout_ms on a steady clock) for each background worker to acknowledge at its loop-top safe
+// point. A worker executing a single long/spinning job never reaches that safe point, so it does not ack: the
+// snapshot returns an HONEST INCOMPLETE result rather than blocking forever or walking a live, changing stack.
+// Actual worker-stack capture of a running thread requires an external suspend+walk and belongs to the
+// OS-specific, qualified crash-capture layer, not here; this protocol delivers responsiveness + the task each
+// worker is running.
+//
+// Thread 0 (the pump thread) does not run the worker loop, so it is reported from the racy dump and counted as
+// responsive; only background workers 1..N-1 are polled for an ack (minus the caller, if a worker calls this).
+// Racy point-in-time reads; a diagnostic dump, not an oracle. Truncation-honest: `total` may exceed out.size().
+// ---------------------------------------------------------------------------
+struct WorkerNode
+{
+    crd::u32 thread_index;    // index into the pool's worker array (0 = the pump/main thread)
+    crd::u64 current_task_id; // task this worker was dispatching at the snapshot (0 = idle / none)
+    bool     executing;       // whether it was inside a job dispatch
+    bool     responsive;      // reached its loop-top safe point (acked) within the timeout
+};
+
+struct WorkerSnapshotResult
+{
+    crd::usize total;     // worker slots observed (nodes written is min(total, out.size()))
+    crd::usize expected;  // background workers polled for an acknowledgement
+    crd::usize responded; // how many of them acknowledged within the timeout
+    bool       complete;  // responded == expected: every polled worker reached a safe point
+};
+
+[[nodiscard]] WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// Progress sample: the liveness signal a hang watchdog compares across time windows.
+//
+//   completions -- total jobs finished across all workers since init (monotonic).
+//   executing   -- how many workers are currently inside a job dispatch (a long-running job keeps this > 0
+//                  even while completions is flat, which is what tells "still working" apart from "deadlocked").
+//   outstanding -- counters with value > 0, i.e. jobs still to run/finish. This is the true "work in flight"
+//                  signal: a counter that reached 0 but has not been wait()-released yet is NOT outstanding
+//                  (the work is done), whereas quiescent would still report it as busy.
+//   quiescent   -- no counters HELD (all free). Retained for reporting; note it stays false for a completed-
+//                  but-unwaited counter, which is why the hang classifier keys off `outstanding`, not this.
+//
+// A racy point-in-time read (relaxed): a diagnostic sample, not an oracle. The classification of two samples
+// into a hang verdict lives in the internal hang watchdog (see src/hang_watchdog.hpp), kept pure and testable.
+// ---------------------------------------------------------------------------
+struct ProgressSample
+{
+    crd::u64 completions;
+    crd::u32 executing;
+    crd::u32 outstanding;
+    bool     quiescent;
+    crd::u32 exhaustions; // total counter-pool + fiber-pool exhaustion events since init (monotonic)
+};
+
+[[nodiscard]] ProgressSample progress_snapshot() noexcept;
+
+// ---------------------------------------------------------------------------
+// Per-lane scheduler sample: the signal a priority-starvation check compares across windows. Indexed by
+// Priority (0 = High, 1 = Normal, 2 = Low):
+//   backlog[i] -- jobs waiting in that priority's injection queue (a racy snapshot depth).
+//   pops[i]    -- monotonic count of successful dequeues from that lane's injection queue since init.
+//
+// A lane with backlog but flat pops, while another lane's pops (or completions) advance, is being starved by
+// the strict High -> Normal -> Low drain order (see starvation_verdict in src/hang_watchdog.hpp). Local
+// per-thread deques and stolen work are not counted: public run() jobs land in the injection queues, which is
+// exactly where a starved job waits. Racy point-in-time reads -- a diagnostic sample, not an oracle.
+// ---------------------------------------------------------------------------
+struct LaneSample
+{
+    crd::u32 backlog[3];
+    crd::u64 pops[3];
+};
+
+[[nodiscard]] LaneSample lane_snapshot() noexcept;
+
+// ---------------------------------------------------------------------------
+// Hang watchdog handler (opt-in via Config::hang_watchdog_period_ms).
+//
+// A thread outside the pool samples progress every window and, after several consecutive windows that show
+// work outstanding but no completion and no worker executing, calls the installed handler ONCE per stall
+// episode. There is deliberately NO default action -- with no handler installed, nothing fires; a detector
+// that kills a production process would be its own bug. The handler decides what to do (log, dump, abort).
+//
+// How a detected hang is classified from the report's own evidence (see classify_hang in src/hang_watchdog.hpp).
+// These are the shapes distinguishable from parked-fiber state alone; the acceptance cases that need extra
+// engine signals (livelock -> per-job declared progress; priority starvation -> per-lane wait age; pool
+// exhaustion -> an acquire-failure event) are deliberately NOT guessed at here and are separate work.
+enum class HangKind : crd::u8
+{
+    ExecutorStarved, // no fiber parked, yet work is outstanding -- queued jobs with no worker draining them
+    ParkedStalled,   // fibers parked on counters, but no cycle -- blocked on work that was never dispatched
+    WaitCycle,       // parked fibers form a cycle of own->waiting_on edges -- a genuine deadlock
+};
+
+// The handler runs ON the watchdog thread, so it must be thread-safe and quick. `parked` (the wait-graph at
+// detection) is valid ONLY for the duration of the call -- copy out what you need; do not retain the span.
+struct HangReport
+{
+    crd::u32                        stale_windows; // consecutive stale windows that triggered this report
+    crd::u64                        completions;   // total jobs finished (flat across the stall)
+    crd::u32                        executing;     // workers executing at detection (0 for the deadlock shape)
+    crd::u32                        outstanding;   // counters with value > 0 -- the work that is not progressing
+    bool                            quiescent;     // whether any counter is HELD (informational)
+    std::span<const WaitGraphNode>  parked;        // parked-fiber evidence; valid only during this call
+    crd::usize                      parked_total;  // true parked count (parked.size() may be capped)
+    HangKind                        kind;          // the classified shape of this hang (from the evidence above)
+    crd::u32                        exhaustions;   // pool-exhaustion events to date (informational; those fatal)
+};
+
+using HangHandler = void (*)(const HangReport& report, void* user);
+
+// Install (or clear, with nullptr) the hang-watchdog handler. Stored atomically; safe to call at any time.
+void set_hang_handler(HangHandler handler, void* user) noexcept;
+
+// ---------------------------------------------------------------------------
+// Priority-starvation report (opt-in: fires only with a handler installed, on a watchdog with a non-zero
+// period). Each window the watchdog also asks whether any priority lane has work waiting that is making no
+// dispatch progress while the rest of the system does; after several consecutive such windows for a lane it
+// calls the handler ONCE per starvation episode for that lane. This is DISTINCT from a hang: a starved system
+// is still completing other work, so hang_verdict reads Progressing -- starvation is its own check and report.
+//
+// The handler runs ON the watchdog thread, so it must be thread-safe and quick.
+struct StarvationReport
+{
+    crd::u8  lane;          // Priority of the starved lane (0 = High, 1 = Normal, 2 = Low)
+    crd::u32 backlog;       // jobs waiting in that lane at detection
+    crd::u32 stale_windows; // consecutive windows the lane made no dispatch progress
+    crd::u64 completions;   // total jobs finished (advancing -- the system is not hung, just unfair)
+};
+
+using StarvationHandler = void (*)(const StarvationReport& report, void* user);
+
+// Install (or clear, with nullptr) the starvation handler. Stored atomically; safe to call at any time.
+void set_starvation_handler(StarvationHandler handler, void* user) noexcept;
+
+// ---------------------------------------------------------------------------
+// Livelock report (opt-in: fires only with a handler installed AND a task that opted in via note_progress()).
+// Each window the watchdog checks every monitored, executing task; a task whose progress_epoch stays flat for
+// several consecutive windows while it keeps a worker busy is spinning without making progress -- a livelock.
+// This is DISTINCT from a hang (the workers are executing, so hang_verdict reads Progressing) and from a
+// legitimate long job (which either ticks note_progress() or never opts in). One report per task per episode.
+//
+// The handler runs ON the watchdog thread, so it must be thread-safe and quick.
+struct LivelockReport
+{
+    crd::u32 fiber_index;     // stable index within its tier's fiber array
+    crd::u8  tier;            // FiberTier: 0=Small 1=Medium 2=Large
+    crd::u64 task_id;         // the spinning task's own id
+    crd::u64 parent_task_id;  // its causal parent task id
+    crd::u32 progress_epoch;  // the epoch value that stayed flat
+    crd::u32 stale_windows;   // consecutive windows with no progress that triggered this report
+    crd::u64 completions;     // total jobs finished (the pool is not hung -- other work still completes)
+    crd::u32 executing;       // workers executing at detection (> 0 -- the spinner holds one)
+    crd::usize monitored_total; // total monitored tasks observed (may exceed what a snapshot buffer holds)
+};
+
+using LivelockHandler = void (*)(const LivelockReport& report, void* user);
+
+// Install (or clear, with nullptr) the livelock handler. Stored atomically; safe to call at any time.
+void set_livelock_handler(LivelockHandler handler, void* user) noexcept;
 
 // ---------------------------------------------------------------------------
 // Worker-dispatch policy for parallel batches (ADR-0094).

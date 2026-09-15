@@ -1,4 +1,4 @@
-// crd-perf -- lifecycle-safe diagnostic recording + emergency record (DIAG.2b).
+// crd-perf -- lifecycle-safe diagnostic recording + emergency record.
 // See diagnostic_recorder.hpp.
 
 #include <crd/perf/diagnostic_recorder.hpp>

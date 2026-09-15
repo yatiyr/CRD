@@ -299,7 +299,7 @@ endif()
 # the selected closure in this order and crd_verify_modules() checks the declarations against the real link
 # graph at the end of configure. CRD_MODULES empty keeps the full configuration. See cmake/CrdModules.cmake.
 
-crd_module(engine/foundation/core engine/core TESTS foundation/core)
+crd_module(engine/foundation/core engine/core TESTS foundation/core support/diag)
 # ADR-0085: OS virtual-memory leaf (page source for crd-memory's VirtualMemoryAllocator)
 crd_module(engine/foundation/vm engine/vm DEPENDS core log TESTS foundation/vm)
 crd_module(engine/foundation/units engine/units DEPENDS containers core memory TESTS foundation/units

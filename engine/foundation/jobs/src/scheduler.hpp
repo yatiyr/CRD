@@ -152,6 +152,14 @@ public:
     [[nodiscard]] crd::u32 num_threads()    const noexcept;
     [[nodiscard]] bool     is_initialized() const noexcept { return m_initialized; }
 
+    // Per-lane injection-queue diagnostics for starvation detection, indexed by Priority (0=High,1=Normal,2=Low):
+    //   backlog[i] = jobs waiting in that lane's injection queue (a racy snapshot depth);
+    //   pops[i]    = monotonic successful dequeues from that lane's injection queue since init.
+    // Reads only the queues' own diagnostic accessors (size()/dequeued()); a best-effort dump, never an oracle.
+    // Local Chase-Lev deques and stolen work are not counted -- public run() jobs land in the injection queues,
+    // which is exactly the lane a starved job waits in. Both arrays are caller-provided (no allocation).
+    void injection_diagnostics(crd::u32 backlog[3], crd::u64 pops[3]) const noexcept;
+
 private:
     static void run_job(const crd::jobs::JobDecl& job);
 

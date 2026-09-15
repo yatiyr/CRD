@@ -1,4 +1,4 @@
-// crd-perf -- the diagnostics doctor (DIAG.0). See crd/perf/doctor.hpp.
+// crd-perf -- the diagnostics doctor. See crd/perf/doctor.hpp.
 
 #include <crd/perf/doctor.hpp>
 

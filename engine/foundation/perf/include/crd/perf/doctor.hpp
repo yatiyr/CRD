@@ -1,16 +1,16 @@
 #pragma once
 
-// crd-perf -- the diagnostics doctor (DIAG.0).
+// crd-perf -- the diagnostics doctor.
 //
 // Reports each diagnostic mode as compiled / enabled / usable with its
 // dependencies, so a host (or a test) can ask "what diagnostics does this build
-// actually have?" At DIAG.0 most modes are honestly unqualified or unsupported per
+// actually have?" Most modes are honestly unqualified or unsupported per
 // the capability census; the doctor states that rather than pretending a route is a
 // command. Three dependencies are live-probed (sanitizer runtime, symbolizer,
 // output path); the mode table is census-sourced. No registration hook, bundle or
 // recorder yet -- those are later DIAG leaves.
 //
-// Contract: docs/design/runtime-diagnostics.md; ADR-0133; owner ROADMAP DIAG.0.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>

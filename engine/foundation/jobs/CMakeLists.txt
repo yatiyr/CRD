@@ -34,6 +34,13 @@ endif()
 
 target_compile_features(crd-jobs PUBLIC cxx_std_20)
 
+# DIAG.4b: test-only controlled-interleaving yield-point hooks (src/sched_check.*). OFF by default and
+# in every shipping profile -> the CRD_JOBS_SCHED_POINT macro compiles to nothing (zero production cost).
+# Controlled-interleaving tests configure with -DCRD_JOBS_SCHED_CHECK=ON. PUBLIC so those tests see the
+# same definition as the library.
+option(CRD_JOBS_SCHED_CHECK "Enable test-only scheduler yield-point hooks (DIAG.4b controlled interleavings)" OFF)
+target_compile_definitions(crd-jobs PUBLIC CRD_JOBS_SCHED_CHECK=$<BOOL:${CRD_JOBS_SCHED_CHECK}>)
+
 # Hand-rolled asm context switch is incompatible with MSVC LTO (/GL+/LTCG):
 # the linker can rewrite call sequences across TU boundaries in ways that break
 # the fiber trampoline's assumptions about register state on entry.
@@ -62,3 +69,28 @@ if(MSVC)
 endif()
 
 crd_enable_default_pch(crd-jobs)
+
+# ---------------------------------------------------------------------------
+# crd-jobs-schedcheck — DIAG.4b test-only twin of crd-jobs, built with the controlled-interleaving
+# yield points ACTIVE (CRD_JOBS_SCHED_CHECK=1). Same sources; the only difference is the gate. Never in
+# a shipping build (EXCLUDE_FROM_ALL); only the 4b controlled-interleaving tests link it. It must mirror
+# every crd-jobs build property that is load-bearing for correctness (the LTO-off pin and the MSVC
+# /Od /Y- per-source flags on the context-switch-adjacent TUs), or it SEGFAULTs like crd-jobs would.
+# ---------------------------------------------------------------------------
+add_library(crd-jobs-schedcheck STATIC EXCLUDE_FROM_ALL ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
+target_include_directories(crd-jobs-schedcheck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(crd-jobs-schedcheck PUBLIC crd-core PRIVATE crd-containers)
+if(WIN32)
+    target_link_libraries(crd-jobs-schedcheck PRIVATE synchronization)
+endif()
+target_compile_features(crd-jobs-schedcheck PUBLIC cxx_std_20)
+target_compile_definitions(crd-jobs-schedcheck PUBLIC CRD_JOBS_SCHED_CHECK=1)
+set_target_properties(crd-jobs-schedcheck PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+if(MSVC)
+    set_source_files_properties(
+        src/worker_pool.cpp
+        src/fiber_init.cpp
+        PROPERTIES COMPILE_FLAGS "/Od /Y-"
+        TARGET_DIRECTORY crd-jobs-schedcheck
+    )
+endif()

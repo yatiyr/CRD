@@ -1,6 +1,6 @@
 #pragma once
 
-// DIAG.3c -- allocation/free provenance, redzones, bounded quarantine, guarded sampling and
+// crd-memory -- allocation/free provenance, redzones, bounded quarantine, guarded sampling and
 // leak/retention summaries, as a decorator over any IAllocator.
 //
 // DiagnosticAllocator wraps a backing IAllocator and, per configuration, adds:
@@ -22,7 +22,7 @@
 // never silently disables a mandatory mode: the allocation still succeeds, a MetadataSaturation
 // violation is raised, and a saturation counter advances.
 //
-// Contract: docs/design/runtime-diagnostics.md#diag-3c; ADR-0133.
+// Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
