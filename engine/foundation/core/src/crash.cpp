@@ -253,7 +253,9 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
     {
         us.Type             = crd::crash::kEvidenceStreamType;
         us.BufferSize       = note->evidence_bytes;
-        us.Buffer           = const_cast<void*>(note->evidence);
+        // MINIDUMP_USER_STREAM::Buffer is PVOID (non-const); MiniDumpWriteDump only reads it (the bytes are copied
+        // into the dump during the call), so dropping const at this Win32 boundary is safe.
+        us.Buffer           = const_cast<void*>(note->evidence); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         usi.UserStreamCount = 1U;
         usi.UserStreamArray = &us;
         usi_ptr             = &usi;
@@ -261,7 +263,11 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
 
     BOOL  ok       = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
                                       static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithHandleData |
-                                                                 MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo),
+                                                                 MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo |
+                                                                 // DIAG.5d(d): carry ntdll's unloaded-module trace so a
+                                                                 // module unloaded before the fault still yields its
+                                                                 // identity (the UnloadedModuleListStream readback).
+                                                                 MiniDumpWithUnloadedModules),
                                       mei, usi_ptr, nullptr);
     DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw
 #if CRD_ENABLE_ASSERTS
@@ -723,18 +729,127 @@ void test_inject_write_failure(WriteResult step) noexcept
 
 #include <cerrno>
 #include <csignal>
-#include <cstdio>
-#include <cstring>
-#include <execinfo.h>
+#include <cstdint>
+#include <cstring> // memcpy/memcmp for the build-id note walk (DIAG.5d(c2))
+#include <ctime>
 #include <fcntl.h>
+#include <link.h> // dl_iterate_phdr, ElfW, struct dl_phdr_info, PT_NOTE/NT_GNU_BUILD_ID (via <elf.h>) -- DIAG.5d(c2)
 #include <sys/stat.h>
+#include <sys/syscall.h> // SYS_gettid
+#include <ucontext.h>    // ucontext_t / gregs (g++/clang++ predefine _GNU_SOURCE on Linux)
 #include <unistd.h>
 
 namespace
 {
 
-char s_output_dir[512] = "";
-bool s_have_prev       = false;
+// -- Install-time state: populated before any fault; only READ (never written) in the signal handler. --
+char        s_output_dir[4096] = ""; // cached at install(); the dir is mkdir'd there, never in the handler
+char        s_exe_path[4096]   = ""; // readlink("/proc/self/exe") cached at install() -- the "identified binary"
+std::size_t s_exe_path_len     = 0;
+bool        s_have_prev        = false;
+
+// -- DIAG.5d(c2): per-module ELF build-id, captured at install() (dl_iterate_phdr takes the loader lock and may
+// allocate -- forbidden in the async-signal handler), then only READ when the record is written. The build-id is the
+// Linux analogue of the Windows RSDS GUID: it lets an offline symbolizer find the matching debug file and REJECT a
+// wrong one. This slice ends at "the record carries it"; turning the record into a SymbolIndex section is a later
+// composer's job. --
+constexpr std::size_t kMaxModuleNotes = 64;   // bounded; a busier process marks s_modules_overflow
+constexpr std::size_t kBuildIdBytes   = 20;   // GNU build-id is SHA-1 (20 B) by default; longer ids are truncated
+constexpr std::size_t kModulePathCap  = 128;  // basename only
+
+struct ModuleNote
+{
+    std::uintptr_t base;
+    unsigned char  id[kBuildIdBytes];
+    unsigned char  id_len;
+    char           path[kModulePathCap]; // basename; "" for the main executable
+};
+
+ModuleNote    s_modules[kMaxModuleNotes];
+std::size_t   s_module_count     = 0;
+bool          s_modules_overflow = false;
+unsigned char s_exe_build_id[kBuildIdBytes] = {};
+unsigned char s_exe_build_id_len            = 0;
+
+// Walk the PT_NOTE segments of one loaded object for NT_GNU_BUILD_ID. Bounds-checked against p_memsz so a malformed
+// or truncated note can never overrun. Returns the number of build-id bytes copied into out (0 if none).
+std::size_t extract_build_id(const ElfW(Phdr)* phdr, int phnum, ElfW(Addr) load_base, unsigned char* out,
+                             std::size_t out_cap) noexcept
+{
+    for (int i = 0; i < phnum; ++i)
+    {
+        if (phdr[i].p_type != PT_NOTE)
+            continue;
+        const unsigned char* p   = reinterpret_cast<const unsigned char*>(load_base + phdr[i].p_vaddr);
+        std::size_t          rem = static_cast<std::size_t>(phdr[i].p_memsz);
+        while (rem >= sizeof(ElfW(Nhdr)))
+        {
+            ElfW(Nhdr) nh{};
+            std::memcpy(&nh, p, sizeof(nh));
+            const std::size_t name_pad = (static_cast<std::size_t>(nh.n_namesz) + 3U) & ~static_cast<std::size_t>(3);
+            const std::size_t desc_pad = (static_cast<std::size_t>(nh.n_descsz) + 3U) & ~static_cast<std::size_t>(3);
+            const std::size_t total    = sizeof(ElfW(Nhdr)) + name_pad + desc_pad;
+            if (total > rem || total < sizeof(ElfW(Nhdr))) // second test guards a wrapped add
+                break;
+            if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U &&
+                std::memcmp(p + sizeof(ElfW(Nhdr)), "GNU", 4) == 0)
+            {
+                std::size_t take = nh.n_descsz;
+                if (take > out_cap)
+                    take = out_cap;
+                std::memcpy(out, p + sizeof(ElfW(Nhdr)) + name_pad, take);
+                return take;
+            }
+            p += total;
+            rem -= total;
+        }
+    }
+    return 0;
+}
+
+// dl_iterate_phdr callback: record one module's base + build-id + basename. Runs at install() only.
+int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
+{
+    if (s_module_count >= kMaxModuleNotes)
+    {
+        s_modules_overflow = true;
+        return 0;
+    }
+    unsigned char     id[kBuildIdBytes];
+    const std::size_t idlen = extract_build_id(info->dlpi_phdr, info->dlpi_phnum, info->dlpi_addr, id, sizeof(id));
+
+    ModuleNote& m = s_modules[s_module_count];
+    m.base        = static_cast<std::uintptr_t>(info->dlpi_addr);
+    m.id_len      = static_cast<unsigned char>(idlen);
+    std::memcpy(m.id, id, idlen);
+
+    const char* name = (info->dlpi_name != nullptr) ? info->dlpi_name : "";
+    const char* bn   = name;
+    for (const char* q = name; *q != '\0'; ++q)
+        if (*q == '/')
+            bn = q + 1;
+    std::size_t j = 0;
+    for (; bn[j] != '\0' && j + 1U < kModulePathCap; ++j)
+        m.path[j] = bn[j];
+    m.path[j] = '\0';
+
+    if (name[0] == '\0' && idlen != 0U) // dlpi_name == "" is the main executable
+    {
+        std::memcpy(s_exe_build_id, id, idlen);
+        s_exe_build_id_len = static_cast<unsigned char>(idlen);
+    }
+    ++s_module_count;
+    return 0;
+}
+
+// Populate the module-note table. Called from install() (never the handler).
+void capture_module_notes() noexcept
+{
+    s_module_count     = 0;
+    s_modules_overflow = false;
+    s_exe_build_id_len = 0;
+    (void)dl_iterate_phdr(&phdr_cb, nullptr);
+}
 
 struct sigaction s_prev_sigsegv{};
 struct sigaction s_prev_sigabrt{};
@@ -743,55 +858,363 @@ struct sigaction s_prev_sigill{};
 
 std::atomic<crd::crash::CrashReportHandler> s_handler{nullptr};
 std::atomic<void*>                          s_handler_user{nullptr};
+std::atomic<unsigned>                       s_record_serial{0};
+static_assert(std::atomic<unsigned>::is_always_lock_free, "the crash serial must be lock-free for the handler");
 
-// Only async-signal-safe functions used after the write() calls. (SA_ONSTACK / alternate-stack and
-// install-failure hardening belong to the Linux crash-capture slice; this branch is left behaviourally
-// as-is beyond returning results.)
-void crash_signal_handler(int sig, siginfo_t* info, void* /*ctx*/) noexcept
+// Single-shot concurrent-fault gate: the first faulting thread (any of the four signals) wins and writes the one
+// record; a simultaneous second fault on another thread is honestly Suppressed but still waits for the winner's
+// record to land before it chains, so the process is not torn down mid-write. Both must be lock-free to be usable
+// from a signal handler.
+std::atomic<int>  s_gate{0};      // 0 = free; a CAS to 1 claims the single record slot
+std::atomic<bool> s_done{false};  // set by the winner once its record is fsync'd -- the loser waits on this
+static_assert(std::atomic<int>::is_always_lock_free && std::atomic<bool>::is_always_lock_free,
+              "the crash gate must be lock-free for the handler");
+
+// Per-thread alternate signal stack. A stack-EXHAUSTED fault has no room on its own stack to run the handler, so
+// SA_ONSTACK diverts the handler onto this buffer. thread_local => zero-initialised .tbss (no malloc, nothing to
+// free); each thread that may fault registers it via guard_current_thread_stack(). Fixed 64 KiB deliberately:
+// SIGSTKSZ is not a constant expression on glibc >= 2.34, so a static-sized buffer cannot use it.
+constexpr std::size_t                  kAltStackBytes = 64U * 1024U;
+alignas(64) thread_local unsigned char t_alt_stack[kAltStackBytes];
+thread_local bool                      t_alt_installed = false;
+
+// -- Async-signal-safe primitives: format into a fixed buffer (no libc formatting) then write(2). --
+
+// Append the C-string s into buf[.. cap), advancing n; clamped to leave room for a terminator. Pure memory.
+std::size_t ap_str(char* buf, std::size_t cap, std::size_t n, const char* s) noexcept
 {
-    (void)mkdir(s_output_dir, 0755);
+    while (*s != '\0' && n + 1U < cap)
+        buf[n++] = *s++;
+    return n;
+}
 
-    char path[576];
-    (void)snprintf(path, sizeof(path), "%s/crash_pid%d_sig%d.log", s_output_dir, static_cast<int>(getpid()), sig);
-
-    char      header[128];
-    const int header_len = snprintf(header, sizeof(header), "signal %d at %p\n", sig, info->si_addr);
-
-    [[maybe_unused]] ssize_t r = write(STDERR_FILENO, header, static_cast<size_t>(header_len));
-
-    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0)
+// Append v as decimal.
+std::size_t ap_dec(char* buf, std::size_t cap, std::size_t n, std::uint64_t v) noexcept
+{
+    char        tmp[20];
+    std::size_t t = 0;
+    if (v == 0U)
+        tmp[t++] = '0';
+    while (v != 0U)
     {
-        r = write(fd, header, static_cast<size_t>(header_len));
+        tmp[t++] = static_cast<char>('0' + static_cast<int>(v % 10U));
+        v /= 10U;
+    }
+    while (t != 0U && n + 1U < cap)
+        buf[n++] = tmp[--t];
+    return n;
+}
 
-        void*     frames[64];
-        const int count = backtrace(frames, 64);
-        backtrace_symbols_fd(frames, count, fd);
-        (void)close(fd);
+// Append v as 0x-prefixed hex (no leading-zero padding).
+std::size_t ap_hex(char* buf, std::size_t cap, std::size_t n, std::uint64_t v) noexcept
+{
+    n = ap_str(buf, cap, n, "0x");
+    char        tmp[16];
+    std::size_t t = 0;
+    if (v == 0U)
+        tmp[t++] = '0';
+    while (v != 0U)
+    {
+        const int d = static_cast<int>(v & 0xFU);
+        tmp[t++]    = static_cast<char>(d < 10 ? ('0' + d) : ('a' + d - 10));
+        v >>= 4U;
+    }
+    while (t != 0U && n + 1U < cap)
+        buf[n++] = tmp[--t];
+    return n;
+}
 
-        char      msg[576 + 32];
-        const int msg_len = snprintf(msg, sizeof(msg), "[crd] crash log: %s\n", path);
-        r                 = write(STDERR_FILENO, msg, static_cast<size_t>(msg_len));
+// Append `len` bytes as fixed 2-hex-digit-per-byte, no 0x prefix (the build-id encoding). Pure memory.
+std::size_t ap_hex_bytes(char* buf, std::size_t cap, std::size_t n, const unsigned char* p, std::size_t len) noexcept
+{
+    for (std::size_t i = 0; i < len; ++i)
+    {
+        const int hi = (p[i] >> 4) & 0xF;
+        const int lo = p[i] & 0xF;
+        if (n + 1U < cap)
+            buf[n++] = static_cast<char>(hi < 10 ? ('0' + hi) : ('a' + hi - 10));
+        if (n + 1U < cap)
+            buf[n++] = static_cast<char>(lo < 10 ? ('0' + lo) : ('a' + lo - 10));
+    }
+    return n;
+}
+
+// write() the whole buffer, retrying short writes and EINTR. false on any hard error.
+bool write_all(int fd, const char* p, std::size_t n) noexcept
+{
+    std::size_t off = 0;
+    while (off < n)
+    {
+        const ssize_t w = write(fd, p + off, n - off);
+        if (w < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        if (w == 0)
+            return false;
+        off += static_cast<std::size_t>(w);
+    }
+    return true;
+}
+
+std::uint64_t mono_ns() noexcept // a monotonic stamp for the record filename -- async-signal-safe
+{
+    struct timespec ts{};
+    (void)clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<std::uint64_t>(ts.tv_nsec);
+}
+
+long current_tid() noexcept
+{
+    return static_cast<long>(syscall(SYS_gettid)); // gettid: async-signal-safe, no glibc-version dependency
+}
+
+// Write ONE crash record file: the signal, si_code/si_addr, the ORIGINAL registers and the process/thread identity,
+// into a collision-safe O_EXCL file. Async-signal-safe (hand-formatted, no libc formatting). Returns the WriteResult;
+// fills out_path with the (attempted) path and *out_err with the failing errno. It does NOT walk or symbolize the
+// stack -- backtrace (via dl_iterate_phdr) takes the loader lock and can allocate, which the design forbids in
+// compromised execution ("Symbolization/backtraces occur outside compromised execution"); the call stack is recovered
+// offline from the OS core, symbolized in a later slice.
+crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::uint64_t addr, int si_code,
+                                           char* out_path, std::size_t out_cap, int* out_err) noexcept
+{
+    int                 fd    = -1;
+    int                 err   = 0;
+    const std::uint64_t stamp = mono_ns();
+    for (int attempt = 0; attempt < 4096 && fd < 0; ++attempt) // <dir>/crash_<pid>_<tid>_<ns-hex>_<serial>.log, O_EXCL
+    {
+        std::size_t n = 0;
+        n             = ap_str(out_path, out_cap, n, s_output_dir);
+        n             = ap_str(out_path, out_cap, n, "/crash_");
+        n             = ap_dec(out_path, out_cap, n, static_cast<std::uint64_t>(getpid()));
+        n             = ap_str(out_path, out_cap, n, "_");
+        n             = ap_dec(out_path, out_cap, n, static_cast<std::uint64_t>(tid));
+        n             = ap_str(out_path, out_cap, n, "_");
+        n             = ap_hex(out_path, out_cap, n, stamp);
+        n             = ap_str(out_path, out_cap, n, "_");
+        n             = ap_dec(out_path, out_cap, n, s_record_serial.fetch_add(1U, std::memory_order_relaxed));
+        n             = ap_str(out_path, out_cap, n, ".log");
+        out_path[n]   = '\0';
+
+        fd = open(out_path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd < 0 && errno != EEXIST)
+        {
+            err = errno;
+            break;
+        }
+    }
+    if (fd < 0)
+    {
+        *out_err = err;
+        return crd::crash::WriteResult::OpenFailed;
     }
 
-    if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+    // Assemble the whole record on the alt stack, then one durable write + fsync.
+    char        rec[8192];
+    std::size_t n = 0;
+    n             = ap_str(rec, sizeof(rec), n, "crd crash record\npid ");
+    n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(getpid()));
+    n             = ap_str(rec, sizeof(rec), n, " tid ");
+    n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(tid));
+    n             = ap_str(rec, sizeof(rec), n, "\nsignal ");
+    n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(sig));
+    n             = ap_str(rec, sizeof(rec), n, " code ");
+    n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(static_cast<unsigned>(si_code)));
+    n             = ap_str(rec, sizeof(rec), n, " addr ");
+    n             = ap_hex(rec, sizeof(rec), n, addr);
+    n             = ap_str(rec, sizeof(rec), n, "\nexe ");
+    if (s_exe_path_len != 0U)
+        n = ap_str(rec, sizeof(rec), n, s_exe_path);
+    n = ap_str(rec, sizeof(rec), n, "\nregs ");
+
+    auto* uc = static_cast<ucontext_t*>(ctx);
+#if defined(__x86_64__)
+    n = ap_str(rec, sizeof(rec), n, "x86_64\n");
+    if (uc != nullptr)
     {
-        crd::crash::CrashReport report{};
-        report.code         = static_cast<std::uint32_t>(sig);
-        report.address      = info->si_addr;
-        report.faulting_tid = 0U;
-        report.write        = crd::crash::WriteResult::Unsupported; // the .log is not a minidump
-        report.dump_path    = nullptr;
-        report.last_error   = 0U;
-        h(report, s_handler_user.load(std::memory_order_relaxed));
+        static const char* const kNames[NGREG] = {
+            "r8",  "r9",  "r10", "r11",    "r12", "r13",    "r14",    "r15",     "rdi", "rsi",    "rbp", "rbx",
+            "rdx", "rax", "rcx", "rsp",    "rip", "efl",    "csgsfs", "err",     "trapno", "oldmask", "cr2"};
+        for (int i = 0; i < NGREG; ++i)
+        {
+            n = ap_str(rec, sizeof(rec), n, kNames[i]);
+            n = ap_str(rec, sizeof(rec), n, " ");
+            n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(uc->uc_mcontext.gregs[i]));
+            n = ap_str(rec, sizeof(rec), n, ((i % 4) == 3) ? "\n" : " ");
+        }
+        n = ap_str(rec, sizeof(rec), n, "\n");
+    }
+#elif defined(__aarch64__)
+    n = ap_str(rec, sizeof(rec), n, "aarch64\n");
+    if (uc != nullptr)
+    {
+        for (int i = 0; i < 31; ++i)
+        {
+            n = ap_str(rec, sizeof(rec), n, "x");
+            n = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(i));
+            n = ap_str(rec, sizeof(rec), n, " ");
+            n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(uc->uc_mcontext.regs[i]));
+            n = ap_str(rec, sizeof(rec), n, ((i % 4) == 3) ? "\n" : " ");
+        }
+        n = ap_str(rec, sizeof(rec), n, "\nsp ");
+        n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(uc->uc_mcontext.sp));
+        n = ap_str(rec, sizeof(rec), n, " pc ");
+        n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(uc->uc_mcontext.pc));
+        n = ap_str(rec, sizeof(rec), n, "\n");
+    }
+#else
+    n = ap_str(rec, sizeof(rec), n, "unsupported-arch\n");
+    (void)uc;
+#endif
+
+    // DIAG.5d(c2): binary identities, captured at install() (static reads only -- async-signal-safe). Appended AFTER
+    // the 5b fields so the existing record parsers are unaffected. The exe build_id is the load-bearing line; the
+    // module list is bounded-best-effort (honest truncation markers), and basenames keep each line small.
+    if (s_exe_build_id_len != 0U)
+    {
+        n = ap_str(rec, sizeof(rec), n, "build_id ");
+        n = ap_hex_bytes(rec, sizeof(rec), n, s_exe_build_id, s_exe_build_id_len);
+        n = ap_str(rec, sizeof(rec), n, "\n");
+    }
+    n = ap_str(rec, sizeof(rec), n, "modules ");
+    n = ap_dec(rec, sizeof(rec), n, s_module_count);
+    if (s_modules_overflow)
+        n = ap_str(rec, sizeof(rec), n, " truncated 1");
+    n = ap_str(rec, sizeof(rec), n, "\n");
+    for (std::size_t i = 0; i < s_module_count; ++i)
+    {
+        if (n + 300U >= sizeof(rec)) // leave headroom; mark that the record buffer, not the table, cut the list
+        {
+            n = ap_str(rec, sizeof(rec), n, "modules_record_truncated 1\n");
+            break;
+        }
+        n = ap_str(rec, sizeof(rec), n, "module ");
+        n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(s_modules[i].base));
+        n = ap_str(rec, sizeof(rec), n, " ");
+        if (s_modules[i].id_len != 0U)
+            n = ap_hex_bytes(rec, sizeof(rec), n, s_modules[i].id, s_modules[i].id_len);
+        else
+            n = ap_str(rec, sizeof(rec), n, "-"); // no build-id for this module (refuse, don't guess)
+        n = ap_str(rec, sizeof(rec), n, " ");
+        n = ap_str(rec, sizeof(rec), n, (s_modules[i].path[0] != '\0') ? s_modules[i].path : "(exe)");
+        n = ap_str(rec, sizeof(rec), n, "\n");
     }
 
-    // Re-raise with the default handler so the OS writes a core dump.
-    struct sigaction dfl{};
-    dfl.sa_handler = SIG_DFL;
-    sigemptyset(&dfl.sa_mask);
-    (void)sigaction(sig, &dfl, nullptr);
-    raise(sig);
+    const bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);
+    if (!ok)
+        err = errno; // capture the write/fsync errno before close() can change it
+    (void)close(fd);
+    if (!ok)
+    {
+        (void)unlink(out_path); // no plausible partial record left behind
+        *out_err = err;
+        return crd::crash::WriteResult::DumpFailed;
+    }
+    *out_err = 0;
+    return crd::crash::WriteResult::Ok;
+}
+
+// The signal handler: async-signal-safe ONLY. A single-shot gate makes exactly one thread write the record under
+// concurrent faults; the loser is honestly Suppressed but waits for the record to land before chaining. Both branches
+// chain to the previously-installed handler and re-raise, so the process terminates with the original fault reason
+// (the harness reads it from WTERMSIG). dump_path stays nullptr (a Windows wide minidump path); the record path is
+// reported to stderr instead.
+void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
+{
+    const long          tid = current_tid();
+    const std::uint64_t addr =
+        (info != nullptr) ? static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(info->si_addr)) : 0U;
+    const int si_code = (info != nullptr) ? info->si_code : 0;
+
+    int expected = 0;
+    if (s_gate.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) // winner: write the one record
+    {
+        char                          path[4200];
+        int                           err = 0;
+        const crd::crash::WriteResult wr  = write_crash_record(sig, ctx, tid, addr, si_code, path, sizeof(path), &err);
+
+        // A minimal emergency line to stderr -- "record:" (with the path) ONLY on a complete record; "FAILED"
+        // otherwise. A failed write can never print success (mirrors the Windows fatal path).
+        if (wr == crd::crash::WriteResult::Ok)
+        {
+            char        msg[4300];
+            std::size_t m = 0;
+            m             = ap_str(msg, sizeof(msg), m, "[crd] crash record: ");
+            m             = ap_str(msg, sizeof(msg), m, path);
+            m             = ap_str(msg, sizeof(msg), m, "\n");
+            (void)write_all(STDERR_FILENO, msg, m);
+        }
+        else
+        {
+            char        msg[64];
+            std::size_t m = 0;
+            m             = ap_str(msg, sizeof(msg), m, "[crd] crash record FAILED (errno ");
+            m             = ap_dec(msg, sizeof(msg), m, static_cast<std::uint64_t>(static_cast<unsigned>(err)));
+            m             = ap_str(msg, sizeof(msg), m, ")\n");
+            (void)write_all(STDERR_FILENO, msg, m);
+        }
+
+        if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+        {
+            crd::crash::CrashReport report{};
+            report.code         = static_cast<std::uint32_t>(sig);
+            report.address      = (info != nullptr) ? info->si_addr : nullptr;
+            report.faulting_tid = static_cast<std::uint32_t>(tid);
+            report.write        = wr;
+            report.dump_path    = nullptr; // the Linux record path is reported to stderr, not via a wide dump_path
+            report.last_error   = static_cast<std::uint32_t>(static_cast<unsigned>(err));
+            h(report, s_handler_user.load(std::memory_order_relaxed));
+        }
+        s_done.store(true, std::memory_order_release); // record + hook complete -> release any waiting loser
+    }
+    else // loser: a concurrent second fault. Do not race on the output; wait (bounded) then report Suppressed.
+    {
+        // Returning/chaining before the winner finishes could let the OS tear the process down mid-write; wait ~5 s so
+        // a stuck winner/hook still yields bounded termination.
+        for (int i = 0; i < 5000 && !s_done.load(std::memory_order_acquire); ++i)
+        {
+            struct timespec ts{};
+            ts.tv_sec  = 0;
+            ts.tv_nsec = 1000000L; // 1 ms
+            (void)nanosleep(&ts, nullptr);
+        }
+        if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+        {
+            crd::crash::CrashReport report{};
+            report.code         = static_cast<std::uint32_t>(sig);
+            report.address      = (info != nullptr) ? info->si_addr : nullptr;
+            report.faulting_tid = static_cast<std::uint32_t>(tid);
+            report.write        = crd::crash::WriteResult::Suppressed;
+            report.dump_path    = nullptr;
+            report.last_error   = 0U;
+            h(report, s_handler_user.load(std::memory_order_relaxed));
+        }
+        char        msg[64];
+        std::size_t m = 0;
+        m             = ap_str(msg, sizeof(msg), m, "[crd] crash record suppressed (concurrent fault)\n");
+        (void)write_all(STDERR_FILENO, msg, m);
+    }
+
+    // Chain to the previously-installed handler, then re-raise: a default previous disposition terminates with the
+    // original signal (retained fault reason, read from WTERMSIG); a sanitizer's previous handler also gets to report.
+    // The handler is NOT SA_RESETHAND -- that resets the disposition process-wide on entry, so a concurrent same-signal
+    // fault on another thread would take SIG_DFL and kill the process mid-record. Instead the four fault signals are
+    // blocked in sa_mask during the handler, so a RECURSIVE fault on this thread is forced to SIG_DFL (bounded, no
+    // re-entry); restoring prev here replaces our handler so the re-raise reaches the correct next link.
+    struct sigaction* prev = nullptr;
+    switch (sig)
+    {
+    case SIGSEGV: prev = &s_prev_sigsegv; break;
+    case SIGABRT: prev = &s_prev_sigabrt; break;
+    case SIGFPE: prev = &s_prev_sigfpe; break;
+    case SIGILL: prev = &s_prev_sigill; break;
+    default: break;
+    }
+    if (prev != nullptr)
+        (void)sigaction(sig, prev, nullptr);
+    (void)raise(sig);
 }
 
 } // namespace
@@ -810,10 +1233,12 @@ InstallResult install(const char* output_dir) noexcept
     if (output_dir == nullptr)
         return InstallResult::OutputDirUnusable;
 
-    strncpy(s_output_dir, output_dir, sizeof(s_output_dir) - 1);
-    s_output_dir[sizeof(s_output_dir) - 1] = '\0';
+    std::size_t di = 0; // bounded manual copy (avoids strncpy truncation diagnostics under -Werror)
+    for (; output_dir[di] != '\0' && di + 1U < sizeof(s_output_dir); ++di)
+        s_output_dir[di] = output_dir[di];
+    s_output_dir[di] = '\0';
 
-    if (mkdir(s_output_dir, 0755) != 0 && errno != EEXIST)
+    if (mkdir(s_output_dir, 0755) != 0 && errno != EEXIST) // created ONCE here, never in the async-signal handler
     {
         s_output_dir[0] = '\0';
         return InstallResult::OutputDirUnusable;
@@ -825,10 +1250,42 @@ InstallResult install(const char* output_dir) noexcept
         return InstallResult::OutputDirUnusable;
     }
 
+    // Cache the executable path once (readlink is not async-signal-safe, so it must not run in the handler): the
+    // "correctly identified binary" the record names. Symbol resolution against it is done offline in a later slice.
+    const ssize_t ep = readlink("/proc/self/exe", s_exe_path, sizeof(s_exe_path) - 1);
+    if (ep > 0)
+    {
+        s_exe_path[ep] = '\0';
+        s_exe_path_len = static_cast<std::size_t>(ep);
+    }
+    else
+    {
+        s_exe_path[0]  = '\0';
+        s_exe_path_len = 0;
+    }
+
+    // Cache each loaded module's ELF build-id ONCE here (dl_iterate_phdr takes the loader lock / may allocate, both
+    // forbidden in the handler); the record reads this table. Re-install re-captures (cheap; module set may have grown).
+    capture_module_notes();
+
+    guard_current_thread_stack(0U); // the installing thread gets its alternate signal stack (SA_ONSTACK target)
+
+    s_gate.store(0, std::memory_order_relaxed); // fresh generation: no fault has claimed the record slot yet
+    s_done.store(false, std::memory_order_relaxed);
+
     struct sigaction sa{};
     sa.sa_sigaction = crash_signal_handler;
-    sa.sa_flags     = SA_SIGINFO | SA_RESETHAND;
+    // ONSTACK: run the handler on the alt stack so an exhausted stack is still captured. NOT RESETHAND: it resets the
+    // disposition process-wide on entry, so a concurrent same-signal fault on another thread would take SIG_DFL and
+    // kill the process mid-record. Instead block all four fault signals during the handler (below): a recursive fault
+    // on the handling thread is then forced to SIG_DFL (bounded, no re-entry), while other threads' faults still reach
+    // the handler and hit the gate (the mask is per-thread).
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
+    (void)sigaddset(&sa.sa_mask, SIGSEGV);
+    (void)sigaddset(&sa.sa_mask, SIGABRT);
+    (void)sigaddset(&sa.sa_mask, SIGFPE);
+    (void)sigaddset(&sa.sa_mask, SIGILL);
 
     const bool first = !s_have_prev;
     if (first)
@@ -859,7 +1316,22 @@ void uninstall() noexcept
         (void)sigaction(SIGILL, &s_prev_sigill, nullptr);
         s_have_prev = false;
     }
-    s_output_dir[0] = '\0';
+    s_output_dir[0]    = '\0';
+    s_exe_path[0]      = '\0';
+    s_exe_path_len     = 0;
+    s_module_count     = 0;
+    s_modules_overflow = false;
+    s_exe_build_id_len = 0;
+    s_gate.store(0, std::memory_order_relaxed);
+    s_done.store(false, std::memory_order_relaxed);
+
+    if (t_alt_installed) // disable this thread's alt stack (per-thread; other threads' .tbss frees at thread exit)
+    {
+        stack_t ss{};
+        ss.ss_flags = SS_DISABLE;
+        (void)sigaltstack(&ss, nullptr);
+        t_alt_installed = false;
+    }
 }
 
 WriteResult capture_dump(const DumpNote& /*note*/, const wchar_t** /*out_path*/) noexcept
@@ -880,7 +1352,19 @@ std::size_t read_dump_stream(const wchar_t* /*dump_path*/, std::uint32_t /*strea
 
 void guard_current_thread_stack(std::uint32_t /*reserve_bytes*/) noexcept
 {
-    // The alternate-signal-stack equivalent is handled by the Linux crash-capture slice; nothing to reserve here.
+    // Register this thread's alternate signal stack so SA_ONSTACK can run the crash handler even when this thread's
+    // own stack is exhausted. reserve_bytes is ignored (the Windows analog is a SetThreadStackGuarantee byte count;
+    // here the alt stack is a fixed kAltStackBytes thread_local buffer). Idempotent per thread. Every thread that may
+    // fault -- workers/fibers included (wired in a later sub-unit) -- must call this, or a stack-exhausted fault on it
+    // cannot be recorded (there is no separate handler thread as on Windows).
+    if (t_alt_installed)
+        return;
+    stack_t ss{};
+    ss.ss_sp    = t_alt_stack;
+    ss.ss_size  = kAltStackBytes;
+    ss.ss_flags = 0;
+    if (sigaltstack(&ss, nullptr) == 0)
+        t_alt_installed = true;
 }
 
 #if CRD_ENABLE_ASSERTS

@@ -8,8 +8,25 @@
 
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
+// DIAG.6b(k): the real end-to-end -- a real VulkanFrameGraph driven through the real crd-perf GPU bridge.
+// config.hpp is cheap (build_config + types) and defines CRD_PERF_ENABLED; the heavy perf headers below
+// are only needed by the CRD_PERF_ENABLED e2e block (~line 1583) and must NOT enter the TU when profiling
+// is off -- pulling their inline/template code into this large Catch2 TU tips clang-cl thin-LTO codegen into
+// an lld-link ICE in the shipping lane (perf off). Guarding the includes keeps the shipping TU lean.
+#include <crd/perf/config.hpp>
+#if CRD_PERF_ENABLED
+#  include <crd/perf/capture.hpp>
+#  include <crd/perf/capture_view.hpp>
+#  include <crd/perf/gpu/frame_graph_gpu_backend.hpp>
+#  include <crd/perf/gpu_scope.hpp>
+#  include <crd/perf/perf.hpp>
+#  include <crd/perf/profiler.hpp>
+#  include <crd/perf/sample.hpp>
+#  include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#endif // CRD_PERF_ENABLED
 #include <crd/renderasset/diagnostic.hpp>  // CEIR-17z: DiagnosticList for build_frame_plans at a direct rec.record site
 #include <crd/gpu/frame_graph.hpp>
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): live_count(Resource) for the multi-draw arg-ring identity test
 #include <crd/gpu/command_model.hpp> // RAF-12.4: DispatchDesc for enc_dispatch
 #include <verb_packet_helpers.hpp>   // RAF-12.4: gputest::enc_draw{,_textured,_shadow,_bindless}/enc_dispatch (shared)
 #include <crd/gpu/raster_context.hpp>
@@ -1545,7 +1562,80 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
     CHECK(fgraph->pass_gpu_ms(99U) == 0.0);
     CHECK(fgraph->pass_name(99U) == nullptr);
 
+    // DIAG.6b(i2): the raw per-pass ticks reconstruct pass_gpu_ms via a DIFFERENT code path, and the placement
+    // metadata is exposed. (Env-gated: this whole case SKIPs without a timestamp-capable device; on a GPU lane it is
+    // the acceptance evidence that (i)'s default-unavailable verdict flips to "placed". Both passes are graphics, so
+    // pass_gpu_ticks is available for each -- an async pass would report false, its stamps being on the graphics
+    // timeline.)
+    const double period = fgraph->gpu_timestamp_period_ns();
+    CHECK(period > 0.0);
+    CHECK(fgraph->gpu_timestamp_valid_bits() > 0U);  // the real queue-family timestampValidBits (device-dependent)
+    CHECK(fgraph->gpu_timestamp_valid_bits() <= 64U);
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        crd::u64 tb = 0U;
+        crd::u64 te = 0U;
+        REQUIRE(fgraph->pass_gpu_ticks(i, tb, te));
+        const double ms_from_ticks = (static_cast<double>(te - tb) * period) / 1.0e6;
+        const double diff          = ms_from_ticks - fgraph->pass_gpu_ms(i);
+        CHECK((diff < 0.0 ? -diff : diff) < 1.0e-6); // same underlying ticks -> same duration
+        CHECK(fgraph->pass_kind(i) == crd::gpu::FgPassKind::Raster);
+        CHECK(fgraph->pass_queue(i) == crd::gpu::FgQueue::Graphics);
+    }
+    crd::u64 ob = 0U;
+    crd::u64 oe = 0U;
+    CHECK_FALSE(fgraph->pass_gpu_ticks(99U, ob, oe)); // out of range -> unavailable, never zeros reported as real
+
     std::printf("[ren8] shadow_depth %.4f ms | shade %.4f ms | span %.4f ms\n", p0, p1, tot);
+
+#if CRD_PERF_ENABLED
+    // ── DIAG.6b(k): the REAL end-to-end. Drive this real, already-executed frame graph through the real
+    // FrameGraphGpuBackend and assert crd-perf placed both graphics passes on the graphics track with linked
+    // pass identities -- the acceptance's "linked CPU/task/pass/resource identities on Vulkan" clause, on hardware.
+    crd::perf::init({});
+    crd::perf::gpu::FrameGraphGpuBackend bridge{*fgraph, 0U};
+    struct PerfGuard // clears the backend BEFORE the bridge dies, then shuts the profiler down (many device tests follow)
+    {
+        ~PerfGuard()
+        {
+            crd::perf::set_gpu_backend(nullptr);
+            crd::perf::shutdown();
+        }
+    } perf_guard;
+    crd::perf::set_gpu_backend(&bridge);
+    crd::perf::frame_mark(); // end_frame -> resolve -> the bridge places the already-executed passes
+
+    crd::memory::GrowableTlsfAllocator ecap{64ULL << 20, nullptr, "vk-e2e"};
+    const auto                         ebuf = crd::perf::save_capture_to_buffer(&ecap);
+    const crd::perf::CaptureView       eview{crd::containers::ConstSpan<crd::u8>{ebuf.data(), ebuf.size()}};
+    REQUIRE(eview.is_valid());
+    crd::u32 q0 = 0xFFFF'FFFFU;
+    for (crd::u32 t = 0U; t < eview.thread_count(); ++t)
+    {
+        const char* const nm = eview.thread_name(t);
+        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0) { q0 = t; }
+    }
+    REQUIRE(q0 != 0xFFFF'FFFFU);
+    const auto esamps = eview.thread_samples(q0);
+    REQUIRE(esamps.size() == 2U); // both graphics passes placed (async passes, if any, would be unavailable)
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        CHECK(esamps[i].category == static_cast<crd::u8>(crd::perf::Category::Gpu));
+        CHECK(esamps[i].end_ns >= esamps[i].begin_ns);
+        const auto* rec = eview.correlation_for(q0, i);
+        REQUIRE(rec != nullptr);
+        CHECK(rec->device_id == 0U);
+        CHECK(rec->queue_id == crd::perf::kGpuQueueGraphics);
+        CHECK((rec->flags & crd::perf::kCorrelationCalibrated) == 0U);                  // real path is uncalibrated
+        CHECK(rec->clock_uncertainty_ns == crd::perf::kUnknownClockUncertainty);        // sentinel, never a fake bound
+    }
+    CHECK(eview.correlation_for(q0, 0U)->pass_id == crd::perf::intern_name("shadow_depth").value);
+    CHECK(eview.correlation_for(q0, 1U)->pass_id == crd::perf::intern_name("shade").value);
+    CHECK(crd::perf::uncalibrated_span_count() == 2U);
+    CHECK(bridge.total_match_count() == 1U);         // placed total agrees with the graph's own gpu_ms_total (j oracle)
+    CHECK(bridge.total_incomparable_count() == 0U);
+    CHECK(crd::perf::gpu_timestamps_unavailable_count() == 0U); // both passes were placeable
+#endif // CRD_PERF_ENABLED
 }
 
 // ── REN-1 GATE: DEPENDENCY ORDER, not declaration order. ─────────────────────────────────────────────────────
@@ -8151,4 +8241,368 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
     // every surviving instance landed in EXACTLY ONE slot — the property that makes a per-view sum meaningful
     CHECK(total == n_boxes);
     CHECK(capture.error_count() == 0U);
+}
+
+// DIAG.7a(d2b-vk): the CONTEXT-FIELD buffers group (bucket 3b) -- the MULTI-DRAW ARG RINGS (m_multi_args +
+// m_multi_idx_args). Both are LAZY (created on the first non-indexed / indexed multi-draw during frame recording via
+// ensure_multi_args / ensure_multi_idx_args), FIXED-size (create-once, NO grow -> no re-stamp), retired in the context
+// dtor. So each mints ONE Resource identity the first time its verb runs and NOTHING on later calls. The delta is
+// measured immediately around each frame-graph execute() (so intervening target creation never pollutes it), and
+// multi_batch_count()/multi_indexed_batch_count() are the "the multi-draw path actually ran" probes. WARN-skips.
+namespace
+{
+struct ArgRingNI // non-indexed multi-draw pass state
+{
+    g::FgImage         img{};
+    g::IRasterProgram* prog   = nullptr;
+    g::IStorageBuffer* sb     = nullptr;
+    const crd::u32*    counts = nullptr;
+};
+struct ArgRingIDX // indexed multi-draw pass state
+{
+    g::FgImage         img{};
+    g::IRasterProgram* prog  = nullptr;
+    g::IStorageBuffer* sb    = nullptr;
+    const g::IRasterContext::IndexedDraw* draws = nullptr;
+};
+} // namespace
+
+TEST_CASE("D2b-vk: the multi-draw arg rings each mint one Resource identity (context-field 3b, create-once)",
+          "[gpu-context][vulkan][buffer][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Resource); // BEFORE any context exists
+    {
+        Rig rig = make_rig();
+        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        auto& raster = *rig.raster;
+        // Init mints NO Resource (only a default sampler, not an ObjectKind::Resource).
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == before);
+
+        memory::TlsfAllocator alloc(8U << 20U);
+        kir::KGraph           vg(&alloc);
+        kir::KEntry           ve;
+        gputest::build_vertex_pull_vs(vg, ve); // SSBO read + index fetch in one draw -- serves both verbs
+        kir::KGraph fg2(&alloc);
+        kir::KEntry fe;
+        gputest::build_triangle_fs(fg2, fe);
+        auto vs = rig.vk->create_program(vg, ve);
+        auto fs = rig.vk->create_program(fg2, fe);
+        REQUIRE(vs != nullptr);
+        REQUIRE(fs != nullptr);
+        auto prog = raster.create_raster_program(*vs, *fs);
+        REQUIRE(prog != nullptr);
+
+        // 12 records (576 bytes) + a 6-index section {4,5,6, 8,9,10} at byte 576 (as in the REN-39 indexed gate).
+        auto sb = raster.create_storage_buffer(600U);
+        REQUIRE(sb != nullptr);
+        float rec[144];
+        for (crd::u32 i = 0; i < 144U; ++i) { rec[i] = 0.0F; }
+        for (crd::u32 r = 0; r < 12U; ++r) { rec[r * 12U + 0U] = 2.0F; rec[r * 12U + 1U] = 2.0F; }
+        rec[4U * 12U + 1U] = -0.8F; rec[5U * 12U + 0U] = 0.8F; rec[5U * 12U + 1U] = 0.8F; rec[6U * 12U + 0U] = -0.8F;
+        rec[6U * 12U + 1U] = 0.8F;
+        REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
+        const crd::u32 idx[6] = {4U, 5U, 6U, 8U, 9U, 10U};
+        REQUIRE(raster.upload_storage(*sb, 576U, static_cast<const void*>(idx), sizeof(idx)));
+
+        const crd::u32 counts[2] = {3U, 3U};
+        const g::IRasterContext::IndexedDraw draws[2] = {{3U, 1U, 0U}, {3U, 1U, 3U}};
+
+        auto run_ni = [&](g::IRasterTarget& tgt) {
+            auto fgraph = raster.create_frame_graph();
+            REQUIRE(fgraph != nullptr);
+            ArgRingNI st;
+            st.img = fgraph->import_target(tgt); st.prog = prog.get(); st.sb = sb.get(); st.counts = counts;
+            fgraph->add_pass("ni").writes(st.img).execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<ArgRingNI*>(user);
+                    crd::gputest::enc_draw_storage_multi_depth(ctx.raster(), *ctx.image(u->img), *u->prog,
+                        g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, *u->sb, u->counts, 2U, 0U,
+                        false);
+                }, &st);
+            REQUIRE(fgraph->build());
+            fgraph->execute();
+        };
+        auto run_idx = [&](g::IRasterTarget& tgt) {
+            auto fgraph = raster.create_frame_graph();
+            REQUIRE(fgraph != nullptr);
+            ArgRingIDX st;
+            st.img = fgraph->import_target(tgt); st.prog = prog.get(); st.sb = sb.get();
+            st.draws = static_cast<const g::IRasterContext::IndexedDraw*>(draws);
+            fgraph->add_pass("idx").writes(st.img).execute(
+                [](g::IFrameContext& ctx, void* user) {
+                    auto* u = static_cast<ArgRingIDX*>(user);
+                    crd::gputest::enc_draw_storage_multi_indexed_depth(ctx.raster(), *ctx.image(u->img), *u->prog,
+                        g::ClearColor{0.05F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, *u->sb, 576U, u->draws, 2U,
+                        0U, false);
+                }, &st);
+            REQUIRE(fgraph->build());
+            fgraph->execute();
+        };
+
+        // --- non-indexed multi-draw: FIRST run mints the args ring (+1); the path-ran probe is multi_batch_count. ---
+        const crd::u64 n0 = raster.multi_batch_count();
+        auto t1 = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(t1 != nullptr);
+        const crd::usize c0 = g::identity_registry().live_count(g::ObjectKind::Resource);
+        run_ni(*t1);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == c0 + 1U); // args ring minted
+        CHECK(raster.multi_batch_count() == n0 + 1U);                                 // the batched path actually ran
+
+        // --- non-indexed AGAIN: create-once, NO new mint. ---
+        auto t2 = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(t2 != nullptr);
+        const crd::usize c1 = g::identity_registry().live_count(g::ObjectKind::Resource);
+        run_ni(*t2);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == c1); // no remint (create-once)
+        CHECK(raster.multi_batch_count() == n0 + 2U);
+
+        // --- indexed multi-draw: FIRST run mints the SEPARATE indexed ring (+1); probe multi_indexed_batch_count. ---
+        const crd::u64 ni0 = raster.multi_indexed_batch_count();
+        auto t3 = raster.create_color_depth_target(64U, 64U);
+        REQUIRE(t3 != nullptr);
+        const crd::usize c2 = g::identity_registry().live_count(g::ObjectKind::Resource);
+        run_idx(*t3);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == c2 + 1U); // indexed ring minted
+        CHECK(raster.multi_indexed_batch_count() == ni0 + 1U);
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == before); // both rings + all setup retired
+}
+
+// DIAG.7a(d2b-vk): the RASTER PROGRAMS group (P2 + P3, ObjectKind::Program). create_program compiles ONE shader stage
+// into a VulkanGpuProgramImpl (P2, owns a VkShaderModule); create_raster_program LINKS two P2 into a VulkanRasterProgram
+// (P3, owns its OWN VkShaderEXT pair + a pipeline layout -- it READS the P2 inputs' SPIR-V, it does NOT own them). So a
+// full raster program is THREE logical programs, and the ordered resets below prove each layer retires independently.
+// live_count(Program) is a separate kind from the buffer/texture Resource count. Device-gated: WARN/SKIP.
+TEST_CASE("D2b-vk: raster programs mint one Program identity per compiled stage and per linked program",
+          "[gpu-context][vulkan][program][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // BEFORE any context exists
+    {
+        Rig rig = make_rig();
+        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        auto& raster = *rig.raster;
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before); // init compiles nothing (k0=0)
+
+        memory::TlsfAllocator alloc(8U << 20U);
+        kir::KGraph           vg(&alloc);
+        kir::KEntry           ve;
+        gputest::build_triangle_vs(vg, ve);
+        kir::KGraph fgk(&alloc);
+        kir::KEntry fe;
+        gputest::build_triangle_fs(fgk, fe);
+
+        auto vs = rig.vk->create_program(vg, ve); // P2: a compiled VS stage
+        REQUIRE(vs != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before + 1U);
+        auto fs = rig.vk->create_program(fgk, fe); // P2: a compiled FS stage
+        REQUIRE(fs != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before + 2U);
+        auto prog = raster.create_raster_program(*vs, *fs); // P3: the linked shader-object program (its OWN VkShaderEXTs)
+        REQUIRE(prog != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before + 3U);
+
+        // Ordered resets: destroying the linked program does NOT retire the stages it linked (P3 does not own P2).
+        prog.reset();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before + 2U);
+        fs.reset();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before + 1U);
+        vs.reset();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before);
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before); // baseline
+}
+
+// DIAG.7a(d2b-vk): the RT-PIPELINE group (ObjectKind::Program) -- the LAST d2b-vk native-attach unit. An RT trace lazily
+// creates a cached RT pipeline (raster-TU m_rtp[], keyed by the trio's SPIR-V content hashes): the creation mints ONE
+// Program identity on the VkPipeline and NAMES the SBT VkBuffer sibling (the pipeline LAYOUT is shared context-wide, not
+// a per-pipeline sibling); the identity is retired in the context dtor. Cached create-once per key -> a second trace with
+// the SAME trio adds nothing. Reuses the proven REN-38-A16 framecook trace path. Feature-gated: SKIPs without rt_pipeline.
+TEST_CASE("D2b-vk: an RT trace mints one Program identity per cached RT pipeline",
+          "[gpu-context][vulkan][rt][program][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // before any context exists
+    {
+        Rig rig = make_rig();
+        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        auto& raster = *rig.raster;
+        if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+
+        g::VulkanRayTracingContext rt(*rig.vk);
+        REQUIRE(rt.valid());
+        memory::TlsfAllocator alloc(16U << 20U);
+
+        const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
+        auto        scene  = rt.build_scene(tri, 1U);
+        REQUIRE(scene != nullptr);
+
+        kir::KGraph rgg(&alloc); kir::KEntry rge;
+        kir::KGraph msg(&alloc); kir::KEntry mse;
+        kir::KGraph chg(&alloc); kir::KEntry che;
+        gputest::build_rt_pipeline_trio(rgg, rge, msg, mse, chg, che);
+        auto rgp = rig.vk->create_program(rgg, rge);
+        auto msp = rig.vk->create_program(msg, mse);
+        auto chp = rig.vk->create_program(chg, che);
+        if (rgp == nullptr || msp == nullptr || chp == nullptr) { SKIP("RT-stage compile unavailable"); }
+
+        constexpr u32 ray_count = 4U;
+        auto          hits = raster.create_storage_buffer(ray_count * 4U);
+        REQUIRE(hits != nullptr);
+        const float sentinel[ray_count] = {-7.0F, -7.0F, -7.0F, -7.0F};
+        REQUIRE(raster.upload_storage(*hits, 0U, static_cast<const void*>(sentinel), sizeof(sentinel)));
+        auto dst = raster.create_color_target(64U, 64U);
+        REQUIRE(dst != nullptr);
+
+        framecook::FrameGraphDesc desc(&alloc);
+        containers::String        where(&alloc);
+        REQUIRE(framecook::parse_frame_toml(containers::StringView(kRtPipeGraph), desc, &where)
+                == framecook::FrameCookError::Ok);
+        StateHost host(*dst);
+        host.add_kernel("crd://rt/raygen", rgp.get());
+        host.add_kernel("crd://rt/miss", msp.get());
+        host.add_kernel("crd://rt/chit", chp.get());
+        host.set_buffer(hits.get());
+        host.set_accel(scene.get());
+
+        const auto trace_once = [&]() {
+            auto fgraph = raster.create_frame_graph();
+            REQUIRE(fgraph != nullptr);
+            framecook::FrameRecorder rec(&alloc);
+            rec.begin_frame();
+            framecook::FrameExecError err = framecook::FrameExecError::Ok;
+            REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
+            REQUIRE(fgraph->build());
+            fgraph->execute();
+        };
+
+        // The trio's 3 stages already minted (P2) at create_program; measure AFTER that so the delta isolates the pipeline.
+        const crd::usize after_setup = g::identity_registry().live_count(g::ObjectKind::Program);
+        trace_once();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == after_setup + 1U); // RT pipeline created + cached
+        trace_once();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == after_setup + 1U); // same trio -> cache hit, no remint
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before); // context teardown retired everything
+}
+// DIAG.7a(d2b-vk P4): the KERNEL-PIPELINE caches (ObjectKind::Program) -- the LAST d2b-vk native-attach sub-unit. A compute
+// dispatch inside the frame graph lazily creates a cached compute pipeline (raster-TU m_kernel_pso[], keyed by the user
+// program's VkShaderModule) via kernel_pipeline(): the creation mints ONE Program identity on the VkPipeline. NO siblings --
+// the module already carries the P2 identity (re-naming it would double-identity a native object) and the pipeline LAYOUT is
+// shared context-wide. Cached create-once per module -> a second dispatch of the SAME kernel adds nothing; a DIFFERENT kernel
+// adds one. Retired in the context dtor (no mid-life flush). rt_kernel_pipeline / sampled_kernel_pipeline are byte-identical
+// in shape and wired the same way; they are reached only through dispatch_kernel_rt / dispatch_kernel_sampled (RT ray-query /
+// HZB-readback lowering) and share this coverage by construction. Reuses the proven REN-38-A2 compute-pass path. Device-gated.
+TEST_CASE("D2b-vk: a compute dispatch mints one Program identity per cached kernel pipeline",
+          "[gpu-context][vulkan][compute][program][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // before any context exists
+    {
+        Rig rig = make_rig();
+        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        auto& raster = *rig.raster;
+
+        memory::TlsfAllocator alloc(8U << 20U);
+        // Two DISTINCT kernels (out[i] = i * mul). Each create_program mints its OWN VkShaderModule, so the two are distinct
+        // cache keys even beyond the differing constant.
+        const auto build_kernel = [](kir::KGraph& kg, kir::KEntry& ke, unsigned mul) {
+            const auto sh  = kir::make_shape({1});
+            const int  buf = kg.buffer_decl(kir::DType::U32, 0, 0, /*writable=*/true);
+            const int  gid = kg.builtin(kir::KBuiltin::LocalInvocationIndex);
+            const int  km  = kg.constant(static_cast<double>(mul), sh, kir::DType::U32);
+            const int  val = kg.binary(kir::KOp::Mul, gid, km);
+            const int  mk  = kg.kernel_stmt_mark();
+            kg.stmt_buffer_store(buf, gid, val);
+            ke.stage             = kir::KStage::Compute;
+            ke.local_size[0]     = 64U;
+            ke.kernel_body_begin = mk;
+            ke.kernel_body_count = kg.stmt_count() - mk;
+        };
+        kir::KGraph kg1(&alloc); kir::KEntry ke1; build_kernel(kg1, ke1, 7U);
+        kir::KGraph kg2(&alloc); kir::KEntry ke2; build_kernel(kg2, ke2, 3U);
+        auto kern1 = rig.vk->create_program(kg1, ke1);
+        auto kern2 = rig.vk->create_program(kg2, ke2);
+        if (kern1 == nullptr || kern2 == nullptr) { SKIP("compute shader compile unavailable"); }
+
+        // Baseline AFTER create_program: the two P2 stage identities are already counted, so every delta below is the
+        // kernel-pipeline cache ALONE (a pure Compute frame-graph pass mints no raster program).
+        const crd::usize base = g::identity_registry().live_count(g::ObjectKind::Program);
+
+        constexpr u32 elem = 64U;
+        auto          out  = raster.create_storage_buffer(elem * 4U);
+        REQUIRE(out != nullptr);
+
+        struct Kern
+        {
+            g::IGpuProgram* prog = nullptr;
+            g::FgBuffer     buf{};
+        };
+        const auto rec = [](g::IFrameContext& ctx, void* user) {
+            auto*              s  = static_cast<Kern*>(user);
+            g::IStorageBuffer* sb = ctx.buffer(s->buf);
+            if (sb == nullptr) { return; }
+            g::IStorageBuffer* bufs[1] = {sb};
+            gputest::enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
+        };
+        const auto dispatch = [&](g::IGpuProgram* prog) {
+            auto fgraph = raster.create_frame_graph();
+            REQUIRE(fgraph != nullptr);
+            const g::FgBuffer fb = fgraph->import_storage(*out);
+            Kern              k{prog, fb};
+            fgraph->add_pass("k", g::FgPassKind::Compute).writes(fb).execute(+rec, &k);
+            REQUIRE(fgraph->build());
+            fgraph->execute();
+        };
+
+        dispatch(kern1.get());
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == base + 1U); // kernel1 pipeline created + cached
+        dispatch(kern1.get());
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == base + 1U); // same module -> cache hit, no remint
+        dispatch(kern2.get());
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == base + 2U); // kernel2 -> a second cached pipeline
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before); // context dtor retired the cached pipelines
+}
+// DIAG.7a(d2c-vk): FRAME-GRAPH PASS identity (ObjectKind::Pass) -- the backend-agnostic unit after d2b. A pass has NO
+// native VkObject to SetName (its native "name" is a command-buffer LABEL, a later sub-unit), so add_pass mints a PURE
+// registry identity (SlotMap generation -> stable, no alias) and it is retired where the pass RECORD is destroyed: at
+// reset() (framecook rebuilds the graph EVERY frame -> m_passes.clear()) AND at the graph dtor. live_count(Pass) is a
+// SEPARATE index space from Resource/Program. build()/execute() neither mint nor retire (labels are transient). Gated.
+TEST_CASE("D2c-vk: a frame-graph pass mints one Pass identity, retired on reset and at teardown",
+          "[gpu-context][vulkan][frame-graph][pass][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Pass); // before any graph exists
+    {
+        Rig rig = make_rig();
+        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        auto& raster = *rig.raster;
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before);
+        g::ValidationCapture capture(*rig.vk); // DIAG.7a(d2c-vk label): the pass labels' partial oracle -- End-without-Begin is a VUID
+
+        auto out = raster.create_storage_buffer(64U);
+        REQUIRE(out != nullptr);
+        const auto noop = [](g::IFrameContext&, void*) {}; // a pass whose IDENTITY is all this test measures
+
+        auto fgraph = raster.create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // an empty graph mints nothing
+
+        const g::FgBuffer fb = fgraph->import_storage(*out);
+        fgraph->add_pass("p0", g::FgPassKind::Compute).writes(fb).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 1U); // one pass -> one identity
+        fgraph->add_pass("p1", g::FgPassKind::Compute).read_writes(fb).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U);
+
+        REQUIRE(fgraph->build());
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U); // build() mints nothing
+        fgraph->execute();
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U); // execute() mints nothing (labels transient)
+        CHECK(capture.error_count() == 0U); // DIAG.7a(d2c-vk label): pass labels emit BALANCED (no End-without-Begin)
+
+        fgraph->reset(); // the mid-life flush -- framecook rebuilds the graph every frame
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // reset() retired BOTH pass identities
+
+        const g::FgBuffer fb2 = fgraph->import_storage(*out);
+        fgraph->add_pass("p2", g::FgPassKind::Compute).writes(fb2).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 1U); // a fresh mint after reset (slot recycled)
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // graph dtor retired the pass added since reset
 }

@@ -35,7 +35,8 @@ public:
 // adapter identity + the "live device foundation" contract) and dxc. Returns nullptr if D3D12 or dxc is unavailable
 // (non-Windows, no adapter, dxcompiler.dll missing). The returned object is a Dx12GpuContext behind the IGpuContext handle.
 [[nodiscard]] std::unique_ptr<IGpuContext>
-create_dx12_gpu_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+create_dx12_gpu_context(crd::memory::IAllocator* alloc  = crd::memory::default_allocator(),
+                        const GpuContextConfig& config = {}); // DIAG.7a(f-3): per-mode validation (append-only)
 
 enum class InnerCoverageRoute : u8; // B1-f: defined in raster_context.hpp
 

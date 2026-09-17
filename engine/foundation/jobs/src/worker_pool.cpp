@@ -3,6 +3,7 @@
 #include <crd/jobs/jobs.hpp> // performance_core_cpu_ids (ADR-0094 affinity)
 #include <crd/jobs/observer.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/crash.hpp> // guard_current_thread_stack: give each worker an alternate signal stack
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
@@ -393,6 +394,14 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
     tl_idx         = thread_index;
     tl_pool_ptr    = self;
     tl_frame_arena = &self->m_frame_arenas[thread_index];
+
+    // Give this worker OS thread an alternate signal stack (Linux SA_ONSTACK target / Windows last-chance guard).
+    // A job runs on a fiber stack switched-to from this bare OS thread; an alternate stack registered here — per OS
+    // thread, so once covers every fiber this worker ever runs — lets the crash handler still run when the running
+    // fiber stack is exhausted (a fiber-stack overflow). Without it such a fault on a worker is lost: the installing
+    // (main) thread is guarded by install(), but worker threads created afterwards must register their own. No-op on
+    // platforms where the crash API is unsupported.
+    crd::crash::guard_current_thread_stack();
 
     while (!self->m_stopping.load(std::memory_order_acquire))
     {

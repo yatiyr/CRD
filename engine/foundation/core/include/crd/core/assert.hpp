@@ -2,6 +2,7 @@
 
 #include <crd/core/build_config.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/core/types.hpp>
 
 namespace crd
 {
@@ -23,6 +24,32 @@ AssertHandler get_assert_handler() noexcept;
 void set_assert_platform_handler(AssertPlatformHandler h) noexcept;
 /// Return the currently installed platform UI hook, or nullptr if none.
 AssertPlatformHandler get_assert_platform_handler() noexcept;
+
+/// Declare that this process is headless/non-interactive (a server, a CI job, a spawned test child).
+///
+/// When set, the DEFAULT assert path (no platform handler installed) must never show a modal dialog and must never
+/// silently ignore: it writes the failure evidence and terminates promptly via std::abort(). abort() raises SIGABRT,
+/// which crd's crash handler captures on Linux (routing the failure to the emergency channel); on Windows it
+/// terminates promptly with the evidence already emitted. A platform handler, if installed, still takes precedence
+/// over this. Off by default (interactive: the Windows MessageBox / the debugger break is preserved). An installed
+/// platform handler is unaffected. This is a declared mode, not auto-detected — headless contexts opt in (the test
+/// harness's crd_diag_harden() sets it; a shipping headless app sets it at startup).
+void set_assert_headless(bool headless) noexcept;
+/// Return whether headless mode is set (default false).
+bool get_assert_headless() noexcept;
+
+/// Record (file, line) as an ignored assert site: a later report_assert_failure() at the same site returns 0
+/// (ignore) without reaching the handler. This is the programmatic form of the interactive "Ignore" button. The
+/// table is bounded to 256 sites as a FIFO ring — recording a 257th distinct site evicts the oldest (which will
+/// then fire again), rather than silently refusing to record. `file` must have static lifetime (a __FILE__ literal;
+/// compared by pointer). Returns true (the site is now recorded). Thread-safe. NOTE: a headless build never reaches
+/// the ignore table (it terminates before the dialog); this is interactive/opt-in behaviour. See DIAG.5c(f).
+bool ignore_assert_site(const char* file, int line) noexcept;
+
+/// Number of times the ignore table was full (256 sites) and evicted its oldest entry. Non-zero means ignore churn
+/// exceeded the table and evicted sites will fire again — the defined, bounded behaviour under many distinct
+/// ignored sites (replacing the previous silent drop). See DIAG.5c(f).
+u64 assert_ignore_eviction_count() noexcept;
 } // namespace crd
 
 namespace crd::detail

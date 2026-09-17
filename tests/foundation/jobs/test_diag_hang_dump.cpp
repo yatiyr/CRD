@@ -21,6 +21,12 @@
 #include <string>
 #include <thread>
 
+// Windows-only: the live minidump path (capture_dump / read_dump_stream) is a Windows artifact; on Linux capture_dump
+// is Unsupported (the crash record there is signal-handler-driven -- DIAG.5b), so this end-to-end minidump test is
+// platform-scoped, not weakened -- the same scoping as test_diag_crash_capture.cpp. The hang watchdog itself is
+// cross-platform and covered by test_diag_hang_watchdog.cpp.
+#if defined(_WIN32)
+
 namespace fs = std::filesystem;
 
 using crd::crash::WriteResult;
@@ -127,3 +133,5 @@ TEST_CASE("hang dump: a watchdog-fired hang writes one non-fatal dump with evide
     std::error_code ec;
     fs::remove(dump, ec); // delete the one dump this test created (ambient dir is otherwise left as found)
 }
+
+#endif // defined(_WIN32)

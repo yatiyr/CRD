@@ -25,6 +25,8 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/object_identity.hpp> // DIAG.7a(d1): the Cerid identity parsed from a named object / message text
+#include <crd/gpu/validation.hpp> // DIAG.7a(b): the common ValidationSeverity + ValidationReport this maps onto
 
 #include <memory>
 
@@ -33,18 +35,16 @@ namespace crd::gpu
 
 class VulkanGpuContext;
 
-enum class ValidationSeverity : crd::u8
-{
-    Info,
-    Warning,
-    Error,
-};
+// ValidationSeverity now lives in <crd/gpu/validation.hpp> (the common, backend-agnostic vocabulary) -- DIAG.7a(b).
 
 struct ValidationMessage
 {
     ValidationSeverity      severity          = ValidationSeverity::Info;
     crd::i32                message_id_number = 0; // Vulkan VUID number when present
     crd::containers::String message_text{};
+    // DIAG.7a(d1): the stable Cerid identity, resolved from the named objects the message references (each object's
+    // debug-utils name), falling back to the message prose. Default-invalid == "no crd token found".
+    ObjectIdentity          identity{};
 };
 
 class ValidationCapture
@@ -65,6 +65,15 @@ public:
 
     // Convenience: total errors + warnings (info usually noise).
     [[nodiscard]] crd::u32 error_or_warning_count() const noexcept { return error_count() + warning_count(); }
+
+    // Messages the capture could not store (record buffer past its 256 cap). DIAG.7a(b): exposed so a gate can honour
+    // "dropped validation messages are not a clean run" -- before this the count was tracked but unreachable.
+    [[nodiscard]] crd::u32 dropped_count() const noexcept;
+
+    // This capture projected onto the common backend-agnostic ValidationReport (severity counts + dropped). A gate
+    // can then call report().clean() identically for either backend. (truncated/instrumentation_failures are 0 here:
+    // Vulkan records store full text and the layer-absent case is surfaced via validation_layer_spec_version().)
+    [[nodiscard]] ValidationReport report() const noexcept;
 
     // Captured message records (capped at 256 to bound memory; overflow drops with a count-only signal).
     [[nodiscard]] crd::containers::ConstSpan<ValidationMessage> messages() const noexcept;

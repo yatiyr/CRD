@@ -50,6 +50,15 @@ static_assert(kMaxThreads <= 255U, "Sample::begin_thread is u8; cap is 255");
 // thousand is plenty.
 inline constexpr crd::u32 kMaxRegionNames = 4096U;
 
+// DIAG.6a(d): the profiler OWNS its name bytes (region/thread/counter/allocator names are copied into a bounded arena
+// at registration, never borrowed), so a dynamic name from an unloaded module can no longer dangle. kMaxNameBytes caps
+// a single name (incl NUL): a longer name is dropped and counted, NOT truncated (truncation + content dedup could
+// collide two distinct names onto one id). kNameArenaBytesPerEntry is the average per-name budget used to size the
+// shared arena as (region + thread + counter + allocator capacities) * this; exhausting it is explicit (drop counter),
+// never a silent fallback to borrowing.
+inline constexpr crd::u32 kMaxNameBytes           = 256U;
+inline constexpr crd::u32 kNameArenaBytesPerEntry = 48U;
+
 // Per-frame max GPU spans (multi-frame in-flight). 256 GPU regions per
 // frame at 4 frames-in-flight = 1024 query slots default.
 inline constexpr crd::u32 kMaxGpuSpansPerFrame = 256U;

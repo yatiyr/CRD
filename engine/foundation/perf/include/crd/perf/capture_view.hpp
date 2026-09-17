@@ -71,8 +71,25 @@ public:
     // Frame history.
     [[nodiscard]] crd::containers::ConstSpan<FrameRecord> frame_records() const noexcept;
 
+    // DIAG.6a(d2): the allocator name recorded for slot `allocator_idx` at frame `frame_index` (dense capture-side
+    // frame index, 0 = oldest). Prefers the per-record stamped name identity -- correct even after the slot was
+    // unregistered and reused by a different allocator -- and falls back to the live-at-save AllocatorMeta name for
+    // pre-(d2) records (`_pad == 0`). Returns "" if either index is out of range.
+    [[nodiscard]] const char* frame_allocator_name(crd::u32 frame_index, crd::u32 allocator_idx) const noexcept;
+
     // Resolve an interned NameId via the in-blob string table.
     [[nodiscard]] const char* resolve_name(NameId id) const noexcept;
+
+    // DIAG.6b(b): the optional correlation side table (queue/device/clock-domain/uncertainty/pass/resource per sample).
+    // 0 when the capture carries no correlation (old files, or a save with none enabled). The records are sorted by
+    // (thread_index, sample_ordinal). `correlation_at` returns the i-th record (nullptr if out of range);
+    // `correlation_for` looks up a specific sample's record by (thread_index, ordinal) via binary search (nullptr if
+    // that sample has no correlation). `thread_index` is the capture's `ThreadHeader.thread_index`, which the writer
+    // keeps equal to the dense thread position -- so it matches the index passed to `thread_samples`/`thread_name`.
+    [[nodiscard]] crd::u32 correlation_count() const noexcept;
+    [[nodiscard]] const CorrelationRecord* correlation_at(crd::u32 i) const noexcept;
+    [[nodiscard]] const CorrelationRecord* correlation_for(crd::u32 thread_index,
+                                                           crd::u32 sample_ordinal) const noexcept;
 
 private:
     [[nodiscard]] const CprofHeader*    header() const noexcept;
@@ -98,6 +115,10 @@ private:
     // then packed strings.
     [[maybe_unused]] crd::u32 m_name_count       = 0U;
     [[maybe_unused]] crd::u64 m_name_blob_bytes  = 0ULL;
+
+    // DIAG.6b(b): correlation section (0 offset/count when absent). Set in the ctor after strict validation.
+    [[maybe_unused]] crd::usize m_off_correlation   = 0U;
+    [[maybe_unused]] crd::u32   m_correlation_count = 0U;
 };
 
 } // namespace crd::perf

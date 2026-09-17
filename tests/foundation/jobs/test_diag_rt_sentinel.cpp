@@ -15,6 +15,12 @@
 #include <chrono>
 #include <thread>
 
+// The RT sentinels (RtScope and the allocator/wait hooks) are CRD_ENABLE_ASSERTS-only: in a shipping build
+// (win-shipping/win-release, asserts off) RtScope is a zero-cost no-op with a defaulted ctor/dtor, so an RtScope
+// local both raises MSVC C4101 (unreferenced) and would make these behavioural CHECKs fail at runtime. Gate the
+// whole suite to the config where the sentinels are live, matching test_counter.cpp's convention.
+#if CRD_ENABLE_ASSERTS
+
 namespace
 {
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
@@ -207,3 +213,5 @@ TEST_CASE("rt sentinel: a violation is distinct -- hang/starvation/livelock stay
     crd::jobs::set_starvation_handler(nullptr, nullptr);
     crd::jobs::set_livelock_handler(nullptr, nullptr);
 }
+
+#endif // CRD_ENABLE_ASSERTS

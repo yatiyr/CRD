@@ -29,6 +29,11 @@ struct LoggerConfig
     // If true, a Critical record bypasses the async queue and is delivered + flushed
     // synchronously, so a crashing program still gets its last words to disk.
     bool flush_on_critical = true;
+
+    // Upper bound (milliseconds) on the flush the assert bridge performs before terminating: a headless build
+    // must not hang forever draining a stuck sink on the way to the platform assert UI. flush_for() below uses
+    // it; the ordinary flush() at shutdown is still unbounded. See DIAG.5c.
+    u32 assert_flush_timeout_ms = 2000;
 };
 
 // ----- Lifecycle (called from main / engine init) ----------------------
@@ -44,8 +49,30 @@ void clear_sinks() noexcept;
 // Block until all queued records are written and sinks are flushed.
 void flush() noexcept;
 
+// Bounded flush for the assert / headless path: drain and flush, but never block longer than roughly
+// `timeout_ms`. Returns true if the queue drained and every sink was flushed; false if it gave up because the
+// queue was still backed up or a stuck sink held the sink lock (or it was called from the log worker itself). On
+// a give-up it bumps flush_timeout_count() and writes one diagnostic line to stderr, so a stuck flush leaves
+// evidence and terminates promptly instead of hanging. flush() is unchanged. See DIAG.5c.
+bool flush_for(u32 timeout_ms) noexcept;
+
 // Number of records dropped because the async queue was full.
 u64 dropped_count() noexcept;
+
+// Number of times flush_for() gave up before fully draining (stuck sink, queue pressure, or a reentrant call from
+// inside a sink). A non-zero value is evidence a headless flush was bounded rather than allowed to hang.
+u64 flush_timeout_count() noexcept;
+
+// Number of asserts that fired from inside a sink and were suppressed (routing them back through the logger would
+// re-lock the sink mutex on the owning thread and self-deadlock). Non-zero is evidence of sink-side assert
+// reentrancy; the process still terminates via crd-core's own evidence + platform/default handler. See DIAG.5c(d).
+u64 sink_reentrant_assert_count() noexcept;
+
+// Number of times a sink's write()/flush() threw, violating the ISink "must not throw" contract. The throw is
+// contained per-sink (counted, one stderr line, delivery continues to the other sinks) rather than terminating the
+// noexcept worker. The logger does NOT auto-disable a failing sink -- removal stays the caller's decision via
+// clear_sinks()/shutdown(). See DIAG.5c(e).
+u64 sink_failure_count() noexcept;
 
 // ----- Internal: used by macros only -----------------------------------
 namespace detail

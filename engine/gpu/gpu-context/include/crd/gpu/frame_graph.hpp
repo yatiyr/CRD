@@ -429,6 +429,33 @@ public:
     // Did the last `build()` fail because of that budget (rather than for any other reason)? ⛔ Reported
     // separately because "too big" and "malformed" need different fixes, and a single false cannot say which.
     [[nodiscard]] virtual bool last_build_exceeded_budget() const noexcept { return false; }
+
+    // ── ⭐ DIAG.6b(i): RAW PER-PASS TIMESTAMP TICKS. Appended at the END of the vtable (D135). ──
+    // The device ticks bracketing pass `i`. A profiler needs the raw ticks to PLACE a pass on a GPU timeline:
+    // `pass_gpu_ms(i)` is a DURATION with no begin, and a span that cannot be placed must be COUNTED as
+    // unavailable, never invented from a fabricated begin. Returns false when the backend does not retain its
+    // per-pass ticks; the consumer (crd-perf-gpu-bridge) then counts the pass unavailable rather than guessing.
+    //
+    // ⛔ NO backend overrides these yet. Both raster contexts convert ticks→ms from STACK LOCALS in
+    // `resolve_timestamps()` and retain only `m_pass_ms[i]`; exposing the ticks means retaining the raw pairs in a
+    // member and overriding the four getters below. That blind, env-gated backend work is DIAG.6b(i2). Until it
+    // lands every backend reports "not available" and the bridge honestly emits ZERO positioned GPU samples.
+    [[nodiscard]] virtual bool pass_gpu_ticks(crd::u32 /*i*/, crd::u64& /*begin_ticks*/,
+                                              crd::u64& /*end_ticks*/) const noexcept
+    {
+        return false;
+    }
+    // ns per GPU timestamp tick (the device timestamp period). 0 = unknown; the bridge cannot scale ticks then.
+    [[nodiscard]] virtual double gpu_timestamp_period_ns() const noexcept { return 0.0; }
+    // Valid low-bit width of a device timestamp (the query's timestampValidBits). 64 = the full counter; a narrower
+    // width lets the bridge repair a single mid-frame wrap instead of dropping the span.
+    [[nodiscard]] virtual crd::u32 gpu_timestamp_valid_bits() const noexcept { return 64U; }
+    // The KIND of pass `i` (raster / compute / present / transfer). The bridge maps it to a GPU sample category
+    // (transfer → I/O, the rest → GPU execution). Default Raster keeps every non-overriding backend on one kind.
+    [[nodiscard]] virtual FgPassKind pass_kind(crd::u32 /*i*/) const noexcept { return FgPassKind::Raster; }
+    // The QUEUE pass `i` actually ran on (graphics / async). The bridge maps it to a perf GPU queue id so async
+    // work lands on its own track. Default Graphics matches the single-queue backends.
+    [[nodiscard]] virtual FgQueue pass_queue(crd::u32 /*i*/) const noexcept { return FgQueue::Graphics; }
 };
 
 } // namespace crd::gpu

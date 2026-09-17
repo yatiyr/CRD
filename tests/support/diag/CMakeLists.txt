@@ -14,6 +14,9 @@ target_compile_features(crd-diag-harness PUBLIC cxx_std_20)
 crd_diag_specimen(crd-diag-clean-specimen SOURCES specimens/clean_specimen.cpp)
 crd_diag_specimen(crd-diag-crash-specimen SOURCES specimens/crash_specimen.cpp)
 crd_diag_specimen(crd-diag-heap-overflow-specimen SOURCES specimens/heap_overflow_specimen.cpp)
+# DIAG.6c(f): the unscoped-CPU-hotspot specimen the WPR/perf sampling runbook (scripts/sample-cpu-wpr.py) records.
+# Standalone; NOT a crd-perf-tests dependency -- the runbook launches it directly.
+crd_diag_specimen(crd-diag-cpu-hotspot-specimen SOURCES specimens/cpu_hotspot_specimen.cpp)
 
 # The DIAG.1b data-race specimen spawns two threads, so it links the platform thread library
 # (a no-op on MSVC; -pthread on clang/gcc). Caught by ThreadSanitizer on the linux-clang-tsan lane.

@@ -6,6 +6,7 @@
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): live_count(Resource) for the AS-scene identity test
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
 #include <crd/kir/ckir.hpp>
@@ -3500,4 +3501,37 @@ TEST_CASE("CEIR-20b: the AUTHORED wavefront_work.frame.toml DRIVES the device wa
     CHECK(decisions[3] == 1U); // (-6,0,0)  clear -> LIT
     CHECK(next_count ==
           0U); // single-bounce: the authored compact#2 produces an EMPTY continuation queue (termination PINNED)
+}
+
+// DIAG.7a(d2b-vk): the AS group. A built RtScene is ONE logical Resource -- its TLAS (the bound handle) + BLAS. The scene
+// builder mints ONE identity on the TLAS and NAMES the BLAS with the same id; ~RtSceneImpl retires it. The native AS +
+// backing buffers live in the CONTEXT's arena (freed at context teardown), so the identity tracks the scene HANDLE's
+// lifetime -- one id per scene regardless of the two AS objects + backing buffers it references. Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: build_scene mints one Resource identity per acceleration-structure scene",
+          "[gpu-context][vulkan][rt][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    gpu::VulkanRayTracingContext rt(*vk);
+    if (!rt.valid()) { WARN("no valid Vulkan RT context; skipping"); return; }
+
+    static const float verts[9] = {0.0F, 0.5F, 0.0F, -0.5F, -0.5F, 0.0F, 0.5F, -0.5F, 0.0F};
+    const crd::usize   before   = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto s1 = rt.build_scene(verts, 1U);
+        REQUIRE(s1 != nullptr);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // TLAS+BLAS -> one id
+        {
+            auto s2 = rt.build_scene(verts, 1U);
+            REQUIRE(s2 != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U); // a second scene -> +1
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // s2 handle retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // baseline
 }

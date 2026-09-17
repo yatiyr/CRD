@@ -5,6 +5,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 
+#include "json_writer.hpp" // DIAG.6c(c): shared locale-safe JSON-append helpers (also used by capture_export.cpp)
+
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
@@ -35,53 +37,10 @@ cont::Array<CodeRange>&   code_registry()
 
 FatalInvariantHandler g_fatal_handler = nullptr;
 
-// Append a JSON-escaped string body (no surrounding quotes) to `out`.
-void append_json_escaped(cont::String& out, cont::StringView s)
-{
-    for (const char c : s)
-    {
-        switch (c)
-        {
-        case '"':  out.append("\\\""); break;
-        case '\\': out.append("\\\\"); break;
-        case '\n': out.append("\\n");  break;
-        case '\r': out.append("\\r");  break;
-        case '\t': out.append("\\t");  break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20U)
-            {
-                // Control character -> \u00XX.
-                static constexpr char kHex[] = "0123456789abcdef";
-                out.append("\\u00");
-                out.push_back(kHex[(static_cast<unsigned char>(c) >> 4) & 0xFU]);
-                out.push_back(kHex[static_cast<unsigned char>(c) & 0xFU]);
-            }
-            else
-            {
-                out.push_back(c);
-            }
-            break;
-        }
-    }
-}
-
-void append_u64(cont::String& out, crd::u64 v)
-{
-    char        buf[20];
-    int         n = 0;
-    if (v == 0U)
-    {
-        out.push_back('0');
-        return;
-    }
-    while (v > 0U && n < 20)
-    {
-        buf[n++] = static_cast<char>('0' + (v % 10U));
-        v /= 10U;
-    }
-    while (n-- > 0)
-        out.push_back(buf[n]);
-}
+// append_json_escaped / append_u64 now live in json_writer.hpp (shared with the Perfetto exporter). Pull them into
+// this anonymous namespace so the call sites below are unchanged.
+using detail::append_json_escaped;
+using detail::append_u64;
 
 void append_key_str(cont::String& out, const char* key, cont::StringView val, bool leading_comma)
 {

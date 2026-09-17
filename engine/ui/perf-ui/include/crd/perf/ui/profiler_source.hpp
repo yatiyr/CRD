@@ -36,6 +36,10 @@ public:
     // Threads ---------------------------------------------------------
     [[nodiscard]] virtual crd::u32 thread_count() const noexcept = 0;
     [[nodiscard]] virtual const char* thread_name(crd::u32 idx) const noexcept = 0;
+    // SPAN LIFETIME: the returned span is valid only until the NEXT thread_samples() call on the SAME source. The live
+    // source (DIAG.6a(c3-ui)) reuses one internal buffer to make the read wrap-correct and single-consumer-safe, so a
+    // caller must fully consume (or copy out of) one thread's span before requesting another. CaptureViewSource returns
+    // a stable view into the loaded buffer, but the panel is polymorphic, so the weaker promise is the contract.
     [[nodiscard]] virtual crd::containers::ConstSpan<Sample>
     thread_samples(crd::u32 idx) const noexcept = 0;
     [[nodiscard]] virtual crd::u32 thread_dropped(crd::u32 idx) const noexcept = 0;
@@ -66,6 +70,15 @@ public:
 class LiveProfilerSource final : public IProfilerSource
 {
 public:
+    LiveProfilerSource() noexcept = default;
+    ~LiveProfilerSource() override; // frees the reusable copy buffer (defined in live_source.cpp)
+
+    // Owns one reusable sample buffer and is UI-thread-only (single buffer, no internal locking): not copyable/movable.
+    LiveProfilerSource(const LiveProfilerSource&)            = delete;
+    LiveProfilerSource& operator=(const LiveProfilerSource&) = delete;
+    LiveProfilerSource(LiveProfilerSource&&)                 = delete;
+    LiveProfilerSource& operator=(LiveProfilerSource&&)      = delete;
+
     [[nodiscard]] const char* source_label() const noexcept override { return "live"; }
     [[nodiscard]] bool        is_live() const noexcept override     { return true; }
 
@@ -86,6 +99,14 @@ public:
     [[nodiscard]] const FrameRecord* frame_record(crd::u32 frames_back) const noexcept override;
 
     [[nodiscard]] const char* resolve_name(NameId id) const noexcept override;
+
+private:
+    // Reusable, wrap-correct copy destination for thread_samples(). `mutable` because the accessor is const by the
+    // IProfilerSource contract yet must refresh the buffer each call. Sized lazily to per_thread_ring_capacity() and
+    // reallocated only if that changes across a re-init. One buffer -> a returned span is valid only until the next
+    // thread_samples() call (see the interface contract); UI-thread-only.
+    mutable Sample*  m_sample_buf = nullptr;
+    mutable crd::u32 m_sample_cap = 0U;
 };
 
 } // namespace crd::perf::ui

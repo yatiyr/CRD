@@ -109,3 +109,44 @@ DIAG.4c row 072 → **Needs CI**, with this Session link and the latest publishe
 preset, off-limits to this loop, and turns Done on the next green). The next Open row is
 [DIAG.5a](../ROADMAP.md#slice-diag.5a) — reliable Windows external/OS crash and hang capture (DG09), which is also
 the home of the running-thread stack capture and lock-owner diagnostics deferred above.
+
+## CI hardening (2026-09-15): linux-gcc-debug `-Werror` debt from the `exhaustions` field
+
+Discovered while building the DIAG slices under WSL (Ubuntu 24.04, g++ 13.3, glibc 2.39) for DIAG.5b: the
+`linux-gcc-debug` lane is red for reasons **beyond** the maintainer-owned repo-hardening preset noted above. The DIAG
+loop had been building only `win-debug` (MSVC), which does **not** warn on several things GCC `-Werror` rejects, so
+committed DIAG code accumulated Linux-only violations. Concretely, DIAG.4c added `ProgressSample::exhaustions` (a 5th
+field) but left aggregate-init sites at four initializers → `-Werror=missing-field-initializers` under `-Wextra`.
+
+Fixed this tick (Windows-verified: `crd-jobs-tests` 172 cases / 29686 assertions green; `jobs.cpp` also
+`-fsyntax-only`-clean under the full CI flag set on g++ 13.3):
+- `engine/foundation/jobs/src/jobs.cpp:571` — `ProgressSample s{0U, 0U, 0U, true}` → `{…, true, 0U}` (the early-return
+  path needs `quiescent = true`, so a plain `{}` value-init would be wrong; the explicit 5th initializer preserves it).
+- `tests/foundation/jobs/test_diag_hang_watchdog.cpp` — 10 `ProgressSample{…}` comparison fixtures gained the neutral
+  `exhaustions = 0U`.
+- `tests/foundation/jobs/test_diag_hang_dump.cpp` — gated to `#if defined(_WIN32)`: it asserts `capture_dump({Hang,…})
+  == Ok`, which is `Unsupported` on Linux (the Linux crash record is signal-handler-driven — DIAG.5b), so it was a
+  runtime failure waiting on the Linux lane. Platform scoping, not weakening (the cross-platform hang watchdog stays
+  covered by `test_diag_hang_watchdog.cpp`).
+
+**Fixed the next tick (2026-09-15) — the Linux lane now compiles the whole DIAG tree:**
+`engine/foundation/memory/src/allocators/diagnostic_allocator.cpp:115` — `std::memset(m_records, …)` over the
+non-trivial `Record` (its `AllocationTag` has default member initializers) → `-Werror=class-memaccess`. Replaced with a
+placement-new value-init loop (`::new (&m_records[i]) Record{}`); verified byte-equivalent to the old zero-fill
+(`AllocationTag` = three `u32`s defaulting to 0, `StackId` = `u32` default 0, `state = kStateEmpty = 0`, `user =
+nullptr`). `StackEntry`/`QuarantineEntry` memsets left as-is (trivially-copyable, not flagged). Windows regression:
+`crd-memory-tests` win-debug + **win-asan 820203 assertions / 140 cases** (the allocator is the ASan lane's subject),
+core 26/133, jobs 172/29686.
+
+One further same-class site surfaced once crd-memory unblocked: `tests/foundation/core/test_diag_crash_contract.cpp`
+`count_dumps()` was `-Werror=unused-function` on non-Windows (used only in the `_WIN32` cases) → marked
+`[[maybe_unused]]`. With that, **all three DIAG test targets (`crd-core-tests`, `crd-jobs-tests`,
+`crd-diag-crash-capture-specimen`) build clean on `linux-gcc-debug` under the full `-Werror` set** — the first time the
+DIAG tree has compiled on Linux. First-ever Linux runs under WSL: `crd-core-tests [crash]` 3/3 (the non-Windows
+`capture_dump == Unsupported` contract holds with the new handler); `crd-jobs-tests` 170/171 — the one failure is
+`test_diag_worker_snapshot` (`responded < expected`), most likely a **timing effect** (the cooperative-snapshot poll
+timeout is tight for DrvFs-slow WSL scheduling; the failing count varies run to run) in a test this loop did not touch —
+reported, not "fixed" by loosening an oracle. It did **not** reproduce on Windows (172/172); whether it also flakes on
+the CI runner is what run `34939903567`'s `linux-gcc-debug` job will show. If it does, that is a tolerance question for
+this row (DIAG.4c), to be flagged and handled there — not patched inside a 5b tick. Row 072 stays Needs CI (its flip
+waits on a green published run).

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <new> // placement-new value-init of the non-trivial Record array (see init below)
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -112,9 +113,13 @@ DiagnosticAllocator::DiagnosticAllocator(IAllocator* backing, const DiagnosticCo
 
     if (m_records != nullptr && m_stacks != nullptr && m_quarantine != nullptr)
     {
-        std::memset(m_records, 0, rec_bytes); // state = kStateEmpty, user = nullptr
-        std::memset(m_stacks, 0, stk_bytes);
-        std::memset(m_quarantine, 0, q_bytes);
+        // Record is non-trivial (its AllocationTag member has default member initializers), so memset would be UB and
+        // GCC -Werror=class-memaccess rejects it. Value-init each record instead; Record{} is byte-identical to the
+        // old zero-fill here (state = kStateEmpty = 0, user = nullptr, every other field's default is 0).
+        for (usize i = 0; i < m_cfg.max_live_records; ++i)
+            ::new (static_cast<void*>(&m_records[i])) Record{};
+        std::memset(m_stacks, 0, stk_bytes);         // StackEntry is trivially-copyable
+        std::memset(m_quarantine, 0, q_bytes);       // QuarantineEntry is trivially-copyable
         m_ok = true;
     }
 }

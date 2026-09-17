@@ -103,6 +103,28 @@ TEST_CASE("CaptureViewSource gpu_thread_index returns 0xFF when no 'gpu' thread 
     CHECK(src.gpu_thread_index() == 0xFFU);
 }
 
+TEST_CASE("CaptureViewSource gpu_thread_index finds the default (device 0, queue 0) track (DIAG.6b(c))",
+          "[perf-ui][source][capture-view][gpu]")
+{
+    PerfFixture fx;
+    crd::memory::GrowableTlsfAllocator alloc{256ULL << 20, nullptr, "capture-with-gpu"};
+    // Emit one GPU sample on the default execution track so the capture carries a "gpu d0 q0" thread. Before DIAG.6b(c)
+    // the track was named "gpu"; the rename would silently break this legacy single-track UI accessor without a guard.
+    crd::perf::Sample s{};
+    s.begin_ns = 1000;
+    s.end_ns   = 1100;
+    s.name_id  = crd::perf::intern_name("gpu_pass").value;
+    crd::perf::emit_gpu_sample(s);
+
+    auto                 buf = crd::perf::save_capture_to_buffer(&alloc);
+    crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};
+    REQUIRE(view.is_valid());
+    crd::perf::ui::CaptureViewSource src{view};
+    const crd::u8                    idx = src.gpu_thread_index();
+    REQUIRE(idx != 0xFFU);
+    CHECK(std::strcmp(view.thread_name(idx), "gpu d0 q0") == 0);
+}
+
 TEST_CASE("ProfilerPanel default source is the live profiler",
           "[perf-ui][panel]")
 {
@@ -111,6 +133,36 @@ TEST_CASE("ProfilerPanel default source is the live profiler",
     CHECK(panel.current_source().is_live());
     panel.set_source(nullptr); // reset = live
     CHECK(panel.current_source().is_live());
+}
+
+TEST_CASE("LiveProfilerSource live view is wrap-correct after a clear (DIAG.6a(c3-ui))",
+          "[perf-ui][source][live][diag]")
+{
+    PerfFixture fx;
+    const auto  idx = crd::perf::current_thread_index();
+
+    for (int i = 0; i < 5; ++i)
+    {
+        CRD_PERF_SCOPE("ui.a");
+    }
+    crd::perf::clear_samples(); // wrap: tail -> head, so the old base-indexed live view would read stale "ui.a"
+    for (int i = 0; i < 5; ++i)
+    {
+        CRD_PERF_SCOPE("ui.b");
+    }
+
+    // The migrated source reads through copy_thread_samples, so the live view is now wrap-correct: it must show the
+    // post-clear batch B, not the stale batch A the zero-copy base index would have returned.
+    crd::perf::ui::LiveProfilerSource src;
+    const auto                        samples = src.thread_samples(idx);
+    REQUIRE(samples.size() == 5U);
+    bool checked = false;
+    for (const auto& s : samples)
+    {
+        CHECK(std::strcmp(src.resolve_name(crd::perf::NameId{s.name_id}), "ui.b") == 0);
+        checked = true;
+    }
+    CHECK(checked); // the span was actually inspected (guards a vacuous pass)
 }
 
 #endif // CRD_PERF_ENABLED

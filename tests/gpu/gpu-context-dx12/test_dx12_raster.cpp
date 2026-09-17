@@ -10,6 +10,7 @@
 #include <crd/gpu/dx12_context.hpp>         // C4-b: create_dx12_gpu_context, compile_hlsl_to_dxil, Dx12GpuProgram
 #include <crd/gpu/dx12_raster_context.hpp>
 #include <crd/gpu/frame_graph.hpp> // REN-39-A1: the frame-mode indexed-draw arm records through a graph
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-dx12-b) batch 3: identity_registry().live_count(Program) the program-identity test asserts on
 #include <crd/gpu/raster_context.hpp>
 #include <crd/kir/ckir.hpp>           // C4-b: KGraph/KEntry/KStage — the create_program(KGraph) seam
 #include <crd/kir/ckir_hlsl.hpp>      // B4: emit_compute_kernel_hlsl (the cull kernel)
@@ -3770,4 +3771,63 @@ TEST_CASE("REN-39-B1 GATE (DX12): InstanceIndex sequences instances 0..N-1 throu
     CHECK((two->read_pixel(24U, 32U) & 0xFFU) >= 250U);
     CHECK((two->read_pixel(40U, 32U) & 0x00FFFFFFU) == 0U);
     CHECK((two->read_pixel(56U, 32U) & 0x00FFFFFFU) == 0U);
+}
+
+// DIAG.7a(d2b-dx12-b) batch 3: a Dx12RasterProgram mints exactly ONE ObjectKind::Program identity -- on its root
+// signature, the always-present primary -- and NO Resource identity, no matter how many PSO variants it caches lazily
+// (those are named with dx12_name_object, never minted). Reuses this TU's dxc/DXIL raster-program fixture.
+TEST_CASE("DX12 raster program mints one Program identity, not a Resource one",
+          "[dx12][raster][program][identity][naming]")
+{
+    auto gctx = g::create_dx12_gpu_context();
+    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    auto raster = g::create_dx12_raster_context();
+    REQUIRE(raster != nullptr);
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+
+    static constexpr const char* kVs = "float4 main(uint vid : SV_VertexID) : SV_Position {\n"
+                                       "  float2 p[3] = { float2(0.0,-0.8), float2(0.8,0.8), float2(-0.8,0.8) };\n"
+                                       "  return float4(p[vid], 0.0, 1.0);\n}\n";
+    static constexpr const char* kFs = "float4 main() : SV_Target { return float4(1.0,0.0,0.0,1.0); }\n";
+    const auto vs_dxil =
+        g::compile_hlsl_to_dxil(g::ShaderStage::Vertex, crd::containers::StringView(kVs), "prog_id_vs", &alloc);
+    if (!vs_dxil.ok) { WARN("dxc/DXIL unavailable; skipping program-identity"); return; }
+    const auto fs_dxil =
+        g::compile_hlsl_to_dxil(g::ShaderStage::Fragment, crd::containers::StringView(kFs), "prog_id_fs", &alloc);
+    REQUIRE(fs_dxil.ok);
+    auto vs = gctx->create_program(g::ShaderStage::Vertex,
+                                   crd::containers::ConstSpan<crd::u8>(vs_dxil.dxil.data(), vs_dxil.dxil.size()));
+    auto fs = gctx->create_program(g::ShaderStage::Fragment,
+                                   crd::containers::ConstSpan<crd::u8>(fs_dxil.dxil.data(), fs_dxil.dxil.size()));
+    REQUIRE(vs != nullptr);
+    REQUIRE(fs != nullptr);
+
+    const crd::usize prog_before = g::identity_registry().live_count(g::ObjectKind::Program);
+    const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
+    {
+        auto program = raster->create_raster_program(*vs, *fs);
+        REQUIRE(program != nullptr);
+        REQUIRE(program->valid());
+        // Minted once, as a Program -- the Resource index space is untouched (proves ObjectKind::Program, not Resource).
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before);
+
+        // A draw forces pso_for to build the default PSO (create_raster_program passes a null m_pso1, so it is lazy).
+        // If a PSO build minted (the bug this batch avoids), Program would rise; dx12_name_object stamps the program's
+        // id onto the PSO WITHOUT minting, so it stays +1. The Resource +1 (the target) proves the draw path ran.
+        auto t = raster->create_color_target(16U, 16U);
+        REQUIRE(t != nullptr);
+        crd::gputest::enc_draw(*raster, *t, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U); // default PSO build: no mint
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 1U); // the target -> the draw ran
+
+        // Force a SECOND, CACHED PSO variant (samples != 1 => the keyed m_cache path, not m_pso1) -> still ONE Program id.
+        auto ms = raster->create_color_target_ms(16U, 16U, 4U);
+        if (ms != nullptr) // 4x MSAA is near-universal on a real GPU; skip cleanly if this adapter lacks it
+        {
+            crd::gputest::enc_draw(*raster, *ms, *program, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 3U);
+            CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U); // cache variant: no mint
+        }
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before); // destroyed -> retired
 }

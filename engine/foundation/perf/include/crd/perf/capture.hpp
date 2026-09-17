@@ -16,6 +16,13 @@
 //   [NameBlob]                           -- packed interned-name strings
 //   [FrameRecord] x frame_count          -- per-frame snapshot (counters + allocators)
 //   [Sample]      x sum(thread sample counts)
+//   [Correlation section]                -- DIAG.6b(b): OPTIONAL, 8-aligned, present iff
+//                                           (flags & kCprofFlagCorrelation); located by
+//                                           CprofHeader.correlation_section_offset. Layout:
+//                                             u32 count; u32 record_size (== sizeof(CorrelationRecord));
+//                                             CorrelationRecord x count   -- sparse, sorted by (thread_index, ordinal)
+//                                           Old readers ignore the trailing section (validation tolerates a tail);
+//                                           old files have flags bit clear / offset 0 -- new readers skip it.
 //
 // All structs are pinned POD; `FrameRecord` and `Sample` come from the
 // existing layout (`frame_record.hpp` / `sample.hpp`) and are memcpy'd
@@ -56,8 +63,25 @@ namespace crd::perf
 // FourCC + version. Bump CprofVersion on any layout change to
 // CprofHeader / ThreadHeader / CounterMeta / AllocatorMeta / NameBlob,
 // or any change that breaks the meaning of FrameRecord / Sample.
+//
+// DIAG.6c(b) -- versioning procedure (the "version CPROF without silently changing pinned layouts" contract):
+//   * The on-disk layout is pinned field-by-field: sizeof() pins here + offsetof() pins in
+//     tests/foundation/perf/test_diag_cprof_version.cpp. A same-size field reorder fails that build, so a layout
+//     change CANNOT reach disk silently -- it is a deliberate act that also bumps N below.
+//   * The flag-bit trick (an OPTIONAL appended section, version unchanged so old readers still accept new files)
+//     works ONLY for a *purely additive* section that needs no room in the fixed structs. It is NOT free forever:
+//     the correlation section (6b(b)) already consumed CprofHeader's last spare slot (`correlation_section_offset`,
+//     the former `_pad_a`). A SECOND optional section has nowhere to store its offset -> it forces a v2 bump (or a
+//     redesign to a section table). So do not assume another additive section is free.
+//   * On a bump: raise kCprofVersion to N; `validate_capture_buffer`/`CaptureView` gain a version switch and KEEP a
+//     tested reader for N-1 (ADR-0133 ID-1). An offline export always writes the version it produced.
 inline constexpr crd::u32 kCprofMagic   = 0x4F525043U; // 'CPRO' little-endian
 inline constexpr crd::u32 kCprofVersion = 1U;
+
+// DIAG.6b(b): CprofHeader.flags bits. A bit signals an OPTIONAL appended section; the version stays 1 so old readers
+// still accept new files and new readers still accept old files (compatibility with existing captures). Bit0 =
+// a correlation side table is present at CprofHeader.correlation_section_offset (see the layout note below).
+inline constexpr crd::u64 kCprofFlagCorrelation = 0x1ULL;
 
 // ---- On-disk POD layouts ------------------------------------------------
 //
@@ -78,7 +102,8 @@ struct CprofHeader
     crd::u64 frame_record_size;    // 8 -- sizeof(FrameRecord) sanity check
     crd::u64 name_blob_byte_size;  // 8 -- intern-name table footprint
     crd::u32 name_blob_count;      // 4 -- number of distinct names
-    crd::u32 _pad_a;               // 4
+    crd::u32 correlation_section_offset; // 4 -- DIAG.6b(b): byte offset of the correlation section, or 0 if none
+                                         //      (was _pad_a, always 0 in v1; same bytes, gated by kCprofFlagCorrelation)
 };
 
 static_assert(sizeof(CprofHeader) == 72, "CprofHeader is 72 B; on-disk pin");
@@ -141,6 +166,17 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept;
 // Path is opened with stdio; fopen failure returns false.
 [[nodiscard]] bool save_capture_to_file(const char* path,
                                         crd::memory::IAllocator* alloc) noexcept;
+
+// DIAG.6c(e): load a CPROF file into a freshly-allocated caller-owned buffer (the inverse of save_capture_to_file;
+// `alloc` backs it). Returns an EMPTY buffer on a null path, a file/read error, or (profiling compiled out) the stub.
+// The bytes are NOT validated here -- pass the buffer to validate_capture_buffer / CaptureView.
+[[nodiscard]] crd::containers::Array<crd::u8>
+load_capture_from_file(const char* path, crd::memory::IAllocator* alloc) noexcept;
+
+// (c3) Number of per-thread sample copies a save had to abandon because another consumer (a live UI copy or a
+// clear_samples) held the ring across every bounded retry. Such a thread is written with 0 samples -- never stale or
+// torn ones -- and this counter makes that rare loss visible rather than silent. Monotonic across saves in a process.
+[[nodiscard]] crd::u64 capture_contended_thread_count() noexcept;
 
 // ---- Validate API ------------------------------------------------------
 

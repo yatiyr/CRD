@@ -27,6 +27,8 @@ target_link_libraries(crd-gpu-context-dx12-tests PRIVATE
     crd-kir
     crd-gpu-context
     crd-gpu-context-dx12
+    crd-perf              # DIAG.6b(k): the profiler substrate for the real end-to-end bridge test
+    crd-perf-gpu-bridge   # DIAG.6b(k): FrameGraphGpuBackend over a real Dx12FrameGraph (pulls crd-time transitively)
     crd-vertex-cook # REN-38-F13: the authored RT stages the F13 gate cooks
     crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) — the DXIL run-the-cooked-bytecode gate
     crd-ceir                 # CEIR-19c: build the ceir.rt program (blas/tlas/ray_query) the bridge lowers

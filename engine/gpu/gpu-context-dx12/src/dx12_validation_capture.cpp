@@ -51,6 +51,7 @@ struct CaptureRegistry
     u32 next_device = 1;
     u64 next_context = 1;
     bool enabled = false;
+    bool gpu_based_validation = false; // DIAG.7a(f-3): process-global GBV state (no leak across contexts)
     bool registration_failed_to_retire = false;
 };
 
@@ -103,11 +104,15 @@ void receive_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3
         message.id = static_cast<u32>(id);
         message.device = device->id;
         usize length = 0;
+        message.identity = ObjectIdentity{}; // records storage is raw (try_allocate) -- set every field explicitly
         if (description != nullptr)
         {
             while (length + 1U < sizeof(message.text) && description[length] != '\0') { ++length; }
             std::memcpy(message.text, description, length);
             message.truncated = description[length] != '\0';
+            // DIAG.7a(d1): parse the Cerid token from the FULL description (before the text[] truncation), so a token
+            // past the cut still resolves. parse() is pure + noexcept + non-allocating -- safe in this callback.
+            (void)parse(std::string_view{description}, message.identity);
         }
         message.text[length] = '\0';
         if (message.truncated) { ++report.truncated; }
@@ -273,6 +278,35 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     if (m_created || output != nullptr) { return E_UNEXPECTED; }
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);
+    // DIAG.7a(f-3): apply the requested validation modes to the PROCESS-GLOBAL debug state before creating this device.
+    // Debug layer + GPU-based validation are process-wide; setting them under devices_mutex (the lock the capture ctor
+    // uses) keeps the once-guard and this creation coherent. Existing callers request nothing -> zero extra calls.
+    m_activation = ValidationActivation{};
+    m_activation.requested[0] = m_req_core;
+    m_activation.requested[1] = m_req_sync;
+    m_activation.requested[2] = m_req_gbv;
+    bool debug_ok  = false;
+    bool debug1_ok = false;
+    {
+        const bool any_req = m_req_core || m_req_sync || m_req_gbv;
+        Microsoft::WRL::ComPtr<ID3D12Debug> debug;
+        debug_ok = any_req && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
+        if (debug_ok)
+        {
+            if ((m_req_core || m_req_gbv) && !state.enabled) { debug->EnableDebugLayer(); state.enabled = true; }
+            Microsoft::WRL::ComPtr<ID3D12Debug1> debug1;
+            if (SUCCEEDED(debug.As(&debug1)))
+            {
+                debug1_ok = true;
+                // Explicit set (not TRUE-only-if-requested) so GBV never leaks into a later context's device.
+                if (state.gpu_based_validation != m_req_gbv)
+                {
+                    debug1->SetEnableGPUBasedValidation(m_req_gbv ? TRUE : FALSE);
+                    state.gpu_based_validation = m_req_gbv;
+                }
+            }
+        }
+    }
     const HRESULT result = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&output));
     {
         const std::lock_guard record_lock(state.records_mutex);
@@ -284,6 +318,26 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     }
     if (FAILED(result)) { return result; }
     m_created = true;
+    // DIAG.7a(f-3): device created -> resolve per-mode activation. Core active is OBSERVABLE (ID3D12InfoQueue QI on this
+    // device succeeds iff the debug layer is on for it -- the post-hoc oracle Vulkan lacks). GPU-assisted active == the
+    // Debug1 enable ran pre-device (enabled, not proven instrumenting; (g) proves that). Sync has no D3D12 equivalent.
+    {
+        ValidationActivation& va = m_activation;
+        Microsoft::WRL::ComPtr<ID3D12InfoQueue> iq;
+        const bool core_active = m_req_core && SUCCEEDED(output.As(&iq));
+        va.active[0] = core_active;
+        va.reason[0] = !m_req_core ? ValidationUnsupportedReason::NotRequested
+                       : (core_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::LayerAbsent);
+        va.active[1] = false;
+        va.reason[1] = !m_req_sync ? ValidationUnsupportedReason::NotRequested
+                                   : ValidationUnsupportedReason::BackendHasNoEquivalent;
+        const bool gbv_active = m_req_gbv && debug_ok && debug1_ok && state.gpu_based_validation;
+        va.active[2] = gbv_active;
+        va.reason[2] = !m_req_gbv ? ValidationUnsupportedReason::NotRequested
+                       : (!debug_ok ? ValidationUnsupportedReason::LayerAbsent
+                       : (!debug1_ok ? ValidationUnsupportedReason::ExtensionAbsent
+                       : (gbv_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::FeatureAbsent)));
+    }
     m_ordinal = state.next_context++;
     ++state.live_contexts;
     if (!state.enabled) { return result; }

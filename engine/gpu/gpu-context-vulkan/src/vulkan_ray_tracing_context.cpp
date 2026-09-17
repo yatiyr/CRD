@@ -3,6 +3,8 @@
 
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
 
+#include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per acceleration-structure scene
+
 #include <crd/containers/array.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -190,9 +192,27 @@ struct VulkanRayTracingContext::Impl
 class RtSceneImpl final : public RtScene
 {
 public:
+    // DIAG.7a(d2b-vk): retire the ONE logical Resource identity for this scene's acceleration structure. The native
+    // AS + backing buffers live in the context's `owned`/`owned_as` arenas (freed at context teardown); this handle owns
+    // no native object, so the dtor only retires the identity (no-op on an invalid id).
+    ~RtSceneImpl() override { detail::vk_detach_identity(m_identity); }
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
     VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
+    ObjectIdentity             m_identity{}; // one stable Cerid Resource identity for this scene (minted on the TLAS)
 };
+
+// DIAG.7a(d2b-vk): mint ONE Resource identity on a built scene's TLAS and NAME its BLAS with the same id (the DX12
+// tick-3 shape: identity on the bound TLAS, BLAS as a sibling). Clusters carry no BLAS handle (address-referenced) -> the
+// name is skipped there (vk_name_object also rejects a null handle). Backing/scratch buffers are context-arena/transient,
+// not per-scene siblings.
+inline void stamp_scene_identity(VkDevice device, RtSceneImpl& scene) noexcept
+{
+    scene.m_identity = detail::vk_attach_identity(device, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                  reinterpret_cast<crd::u64>(scene.tlas), ObjectKind::Resource,
+                                                  "vk-rt-tlas");
+    detail::vk_name_object(device, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, reinterpret_cast<crd::u64>(scene.blas),
+                           scene.m_identity, "vk-rt-blas");
+}
 
 VulkanRayTracingContext::VulkanRayTracingContext(VulkanGpuContext& ctx)
     : m_impl(std::make_unique<Impl>(crd::memory::default_allocator()))
@@ -383,6 +403,7 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
     if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, ninst, scene->tlas)) { return nullptr; }
+    stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
 
@@ -491,6 +512,7 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* v
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
     if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas)) { return nullptr; }
+    stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
 
@@ -577,6 +599,7 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_curves(const float
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
     if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas)) { return nullptr; }
+    stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
 
@@ -740,6 +763,7 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     VkAccelerationStructureBuildRangeInfoKHR rng{}; rng.primitiveCount = 1;
     const VkAccelerationStructureBuildRangeInfoKHR* prng = &rng;
     impl.submit_oneshot([&](VkCommandBuffer cmd) { impl.cmd_build_as(cmd, 1, &bgi, &prng); });
+    stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
 

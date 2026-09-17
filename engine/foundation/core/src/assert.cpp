@@ -24,17 +24,24 @@ namespace
 std::atomic<AssertHandler> g_assert_handler{nullptr};
 std::atomic<AssertPlatformHandler> g_assert_platform_handler{nullptr};
 
+// Headless/non-interactive mode: when set, the default (no-handler) assert path terminates promptly instead of
+// showing a modal dialog. Off by default so interactive behaviour is unchanged. See set_assert_headless().
+std::atomic<bool> g_assert_headless{false};
+
 // Per-site ignore table: tracks (file, line) pairs the user has chosen to ignore.
 // __FILE__ string literals have static lifetime so pointer comparison is stable
 // within a single process image.
 std::mutex g_ignore_mutex;
 constexpr crd::usize kMaxIgnoredSites = 256U;
 std::pair<const char*, int> g_ignored_sites[kMaxIgnoredSites];
-crd::usize g_ignored_count = 0U;
+crd::usize g_ignored_filled = 0U; // number of valid entries (caps at kMaxIgnoredSites)
+crd::usize g_ignore_next    = 0U; // FIFO write cursor (wraps at kMaxIgnoredSites)
+std::atomic<crd::u64> g_ignored_evictions{0};
 
+// Caller holds g_ignore_mutex. Once the ring has wrapped, all kMaxIgnoredSites slots are valid.
 bool ignored_contains(const char* file, int line) noexcept
 {
-    for (crd::usize i = 0U; i < g_ignored_count; ++i)
+    for (crd::usize i = 0U; i < g_ignored_filled; ++i)
     {
         if (g_ignored_sites[i].first == file && g_ignored_sites[i].second == line) { return true; }
     }
@@ -60,6 +67,53 @@ void set_assert_platform_handler(AssertPlatformHandler h) noexcept
 AssertPlatformHandler get_assert_platform_handler() noexcept
 {
     return g_assert_platform_handler.load(std::memory_order_acquire);
+}
+
+void set_assert_headless(bool headless) noexcept
+{
+    g_assert_headless.store(headless, std::memory_order_release);
+}
+
+bool get_assert_headless() noexcept
+{
+    return g_assert_headless.load(std::memory_order_acquire);
+}
+
+bool ignore_assert_site(const char* file, int line) noexcept
+{
+    if (file == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_ignore_mutex);
+    if (ignored_contains(file, line))
+    {
+        return true; // already recorded -- no duplicate, no eviction
+    }
+    if (g_ignored_filled == kMaxIgnoredSites)
+    {
+        // Table full: overwrite the oldest entry (FIFO), which will fire again next time. Previously this branch
+        // silently refused to record -- the "ignored-site churn" defect. Emit ONE stderr line, on the first
+        // eviction only (per-eviction lines would spam under real churn); the counter carries the rest.
+        if (g_ignored_evictions.fetch_add(1U, std::memory_order_relaxed) == 0U)
+        {
+            std::fputs("[crd-assert] ignore table full (256 sites); wrapping -- the oldest ignored sites will fire "
+                       "again\n",
+                       stderr);
+        }
+    }
+    g_ignored_sites[g_ignore_next] = {file, line};
+    g_ignore_next                  = (g_ignore_next + 1U) % kMaxIgnoredSites;
+    if (g_ignored_filled < kMaxIgnoredSites)
+    {
+        ++g_ignored_filled;
+    }
+    return true;
+}
+
+u64 assert_ignore_eviction_count() noexcept
+{
+    return g_ignored_evictions.load(std::memory_order_relaxed);
 }
 
 namespace detail
@@ -126,11 +180,25 @@ int report_assert_failure(const char* expression, const char* file, int line, co
         return platform_handler(buffer);
     }
 
-    // Default path: no platform handler — print to stderr + debugger + OS dialog.
+    // Default path: no platform handler — print evidence to stderr (+ the debugger on Windows), then either terminate
+    // (headless) or show the OS dialog (interactive).
     std::fputs(buffer, stderr);
 
 #if CRD_OS_WINDOWS
     OutputDebugStringA(buffer);
+#endif
+
+    // Headless/CI (declared via set_assert_headless): a modal dialog would hang and a silent ignore would hide a
+    // required check, so do neither. The evidence is already emitted; terminate promptly. abort() raises SIGABRT,
+    // which crd's crash handler records on Linux (routing the failure to the emergency channel); on Windows it
+    // terminates promptly with the evidence above. A platform handler, checked earlier, still takes precedence.
+    if (g_assert_headless.load(std::memory_order_acquire))
+    {
+        std::fflush(stderr);
+        std::abort();
+    }
+
+#if CRD_OS_WINDOWS
     const int result = MessageBoxA(nullptr, buffer, "CRD Assert", MB_ABORTRETRYIGNORE | MB_ICONERROR);
     if (result == IDABORT)
     {
@@ -138,11 +206,7 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     }
     if (result == IDIGNORE)
     {
-        std::lock_guard<std::mutex> lock(g_ignore_mutex);
-        if (g_ignored_count < kMaxIgnoredSites)
-        {
-            g_ignored_sites[g_ignored_count++] = {file, line};
-        }
+        (void)crd::ignore_assert_site(file, line); // FIFO-bounded record with eviction evidence; see DIAG.5c(f)
         return 0;
     }
     return (result == IDRETRY) ? 2 : 0;

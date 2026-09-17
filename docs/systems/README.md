@@ -100,6 +100,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `memory` | [memory](memory.md) | [CMake](../../engine/foundation/memory/CMakeLists.txt) |
 | `meshgen` | [meshgen](meshgen.md) | [CMake](../../engine/geometry/meshgen/CMakeLists.txt) |
 | `perf` | [perf](perf.md) | [CMake](../../engine/foundation/perf/CMakeLists.txt) |
+| `perf-gpu-bridge` | [Public source](../../engine/gpu/perf-gpu-bridge/include/) | [CMake](../../engine/gpu/perf-gpu-bridge/CMakeLists.txt) |
 | `perf-ui` | [Public source](../../engine/ui/perf-ui/include/) | [CMake](../../engine/ui/perf-ui/CMakeLists.txt) |
 | `platform` | [platform](platform.md) | [CMake](../../engine/foundation/platform/CMakeLists.txt) |
 | `preset` | [Public source](../../engine/assets/preset/include/) | [CMake](../../engine/assets/preset/CMakeLists.txt) |
@@ -133,6 +134,7 @@ ROADMAP row, then the single maintainer.
 | `ceridc` | [Source](../../tools/ceridc/) | [CMake](../../tools/ceridc/CMakeLists.txt) |
 | `kir_autotune` | [Source](../../tools/kir-autotune/) | [CMake](../../tools/kir-autotune/CMakeLists.txt) |
 | `shader_cook` | [Source](../../tools/shader-cook/) | [CMake](../../tools/shader-cook/CMakeLists.txt) |
+| `cprof_export` | [Source](../../tools/cprof-export/) | [CMake](../../tools/cprof-export/CMakeLists.txt) |
 | `runtime` | [Source](../../runtime/) | [CMake](../../runtime/CMakeLists.txt) |
 | `sandbox` | [Source](../../sandbox/) | [CMake](../../sandbox/CMakeLists.txt) |
 

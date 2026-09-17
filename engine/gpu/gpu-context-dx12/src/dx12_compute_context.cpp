@@ -5,6 +5,7 @@
 
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
+#include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-b) batch 3b: mint/name a Cerid Program identity on a compute pipeline
 
 #include <crd/gpu/dx12_compute_context.hpp>
 
@@ -95,10 +96,16 @@ bool compile_dxil(IDxcCompiler3* dxc, const char* src, ComPtr<IDxcBlob>& obj)
 // ── buffer ────────────────────────────────────────────────────────────────────────────────────────────────────────
 struct BufferImpl final : ComputeBuffer
 {
+    // DIAG.7a(d2b-dx12-b) batch 4: retire this buffer's Resource identity when it is destroyed. create_buffer returns a
+    // unique_ptr<ComputeBuffer> (virtual dtor), so ~BufferImpl runs on delete -- the single retire site. No-op on the
+    // default-invalid identity (e.g. a create_buffer that returned nullptr never constructed a BufferImpl).
+    ~BufferImpl() override { detail::dx12_detach_identity(m_identity); }
+
     ComPtr<ID3D12Resource> res;
     crd::u64               bytes = 0;
     D3D12_RESOURCE_STATES  state = D3D12_RESOURCE_STATE_COMMON; // current (tracked; only DEFAULT buffers transition)
     bool                   fixed = false;                       // UPLOAD/READBACK stay in their creation state
+    ObjectIdentity         m_identity{};                        // one stable Cerid Resource identity for this buffer
 
     [[nodiscard]] void* map() noexcept override
     {
@@ -115,10 +122,15 @@ struct BufferImpl final : ComputeBuffer
 // ── pipeline ──────────────────────────────────────────────────────────────────────────────────────────────────────
 struct PipelineImpl final : ComputePipeline
 {
+    // DIAG.7a(d2b-dx12-b) batch 3b: retire the compute program's identity when the pipeline is destroyed (unique_ptr
+    // owns it, so this one dtor is the single retire site). detach is a no-op on the default-invalid identity.
+    ~PipelineImpl() override { detail::dx12_detach_identity(m_identity); }
+
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pso;
     int                         n_bindings = 0;
     UINT                        n_consts   = 0; // push_size / 4
+    ObjectIdentity              m_identity{};   // DIAG.7a(d2b-dx12-b): one stable Cerid Program identity for this kernel
 };
 
 // ── context + recorder (the Impl IS the recorder, like the Vulkan backend) ──────────────────────────────────────────
@@ -426,6 +438,9 @@ std::unique_ptr<ComputeBuffer> Dx12ComputeContext::create_buffer(crd::u64 bytes,
         break;
     }
     if (b->res == nullptr) { return nullptr; }
+    // DIAG.7a(d2b-dx12-b) batch 4: mint one ObjectKind::Resource identity on the buffer's single native resource (all
+    // three ComputeMemory heaps use the one `res`). Placed after the last early-return so only a live resource is minted.
+    b->m_identity = detail::dx12_attach_identity(b->res.Get(), ObjectKind::Resource, "dx12-compute-buffer");
     return b;
 }
 
@@ -488,6 +503,12 @@ static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device
         }
     }
     if (!made && FAILED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso)))) { return nullptr; }
+    // DIAG.7a(d2b-dx12-b) batch 3b: root sig + PSO are both live past the last early-return -> mint ONE Program identity
+    // on the root signature (the primary) and stamp it onto the PSO. The PSO's WKPDID debug name is a SEPARATE channel
+    // from the pipeline-library `pName` cache key above (an FNV hash of the DXIL, deliberately run-stable), so naming
+    // here never perturbs the warm-start cache. No mint happens on either early-return path, so a failed build leaks none.
+    pl->m_identity = detail::dx12_attach_identity(pl->root.Get(), ObjectKind::Program, "dx12-compute-rootsig");
+    detail::dx12_name_object(pl->pso.Get(), pl->m_identity, "dx12-compute-pso");
     pl->n_bindings = n_bindings;
     pl->n_consts   = push_size / 4U;
     return pl;

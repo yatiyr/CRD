@@ -7,6 +7,9 @@
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): identity_registry().live_count/alive the identity tests assert on
+#include "vulkan_identity_naming.hpp"    // DIAG.7a(d2b-vk): the vk_attach/name/detach adapter under test (src-private)
+
 #include <crd/draw/draw_assets.hpp>  // REN-38-F7: the AUTHORED draw suite (the overlay-draw seam gate)
 #include <crd/kir/ckir_cook.hpp>
 #include <crd/kir/ckir_material.hpp>
@@ -114,6 +117,69 @@ TEST_CASE("v17-i-a: headless Vulkan compute context via the GpuContextManager", 
                 vk->adapter_name(), vk->cooperative_matrix2() ? "YES" : "no", vk->compute_family());
     // coopmat2 is the tensor lever (present on the RTX 4070 Ti Super); a soft note so the test stays portable.
     if (!vk->cooperative_matrix2()) { WARN("adapter has no VK_NV_cooperative_matrix2 — tensor tier will be unavailable"); }
+}
+// DIAG.7a(f): per-mode validation ACTIVATION on Vulkan. Requesting core/sync/GPU-assisted yields a consistent report;
+// a valid context created WITH core means the layer loaded so Core is active; sync/GPU-assisted resolve against
+// VK_EXT_validation_features + device features and REPORT their actual state (this box ships VVL, so sync is active).
+TEST_CASE("DIAG.7a(f): Vulkan reports per-mode validation activation", "[gpu-context][vulkan][validation][gpu]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend                        = gpu::GpuBackend::Vulkan;
+    cfg.headless                       = true;
+    cfg.enable_validation              = true; // Core
+    cfg.enable_sync_validation         = true; // Synchronization
+    cfg.enable_gpu_assisted_validation = true; // GpuAssisted
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr || !ctx->valid()) { SKIP("no Vulkan device with the validation layer available"); }
+
+    const gpu::ValidationActivation va = ctx->validation_activation();
+    REQUIRE(va.consistent()); // the backend filled a well-formed report
+
+    CHECK(va.is_requested(gpu::ValidationMode::Core));
+    CHECK(va.is_requested(gpu::ValidationMode::Synchronization));
+    CHECK(va.is_requested(gpu::ValidationMode::GpuAssisted));
+
+    // A valid context created WITH core requested means the KHRONOS validation layer loaded -> Core is active.
+    CHECK(va.is_active(gpu::ValidationMode::Core));
+    CHECK(va.unsupported_reason(gpu::ValidationMode::Core) == gpu::ValidationUnsupportedReason::None);
+
+    // Sync / GPU-assisted: assert the report is COHERENT for whatever resolved, and record the actual state.
+    for (const gpu::ValidationMode m : {gpu::ValidationMode::Synchronization, gpu::ValidationMode::GpuAssisted})
+    {
+        const bool active = va.is_active(m);
+        const gpu::ValidationUnsupportedReason reason = va.unsupported_reason(m);
+        UNSCOPED_INFO("mode " << static_cast<int>(m) << " active=" << active << " reason=" << gpu::to_string(reason));
+        if (active) { CHECK(reason == gpu::ValidationUnsupportedReason::None); }
+        else
+        {
+            CHECK((reason == gpu::ValidationUnsupportedReason::ExtensionAbsent
+                   || reason == gpu::ValidationUnsupportedReason::FeatureAbsent
+                   || reason == gpu::ValidationUnsupportedReason::LayerAbsent));
+        }
+    }
+    // This box ships the Khronos validation layer, which provides synchronization validation -> active here.
+    CHECK(va.is_active(gpu::ValidationMode::Synchronization));
+    // This box has a real GPU whose device advertises AND enables fragment/vertexPipelineStoresAndAtomics, so GPU-assisted
+    // validation is active. Hard-assert it (not just coherence) so a regression in the avail/enabled-feature gate is caught.
+    CHECK(va.is_active(gpu::ValidationMode::GpuAssisted));
+
+    // A context that requests NOTHING reports every mode NotRequested / inactive (mint/live_count unaffected -- the
+    // activation gate is orthogonal to identity, which is unconditional).
+    gpu::GpuContextConfig plain;
+    plain.backend  = gpu::GpuBackend::Vulkan;
+    plain.headless = true;
+    auto ctx2 = gpu::create_vulkan_gpu_context(plain);
+    if (ctx2 != nullptr && ctx2->valid())
+    {
+        const gpu::ValidationActivation va2 = ctx2->validation_activation();
+        REQUIRE(va2.consistent());
+        for (crd::usize i = 0; i < gpu::kValidationModeCount; ++i)
+        {
+            CHECK_FALSE(va2.requested[i]);
+            CHECK_FALSE(va2.active[i]);
+            CHECK(va2.reason[i] == gpu::ValidationUnsupportedReason::NotRequested);
+        }
+    }
 }
 
 // D-007 C6: cooperative-VECTOR device enable (VK_NV_cooperative_vector) — the PER-INVOCATION matrix×vector inference primitive
@@ -13731,4 +13797,335 @@ TEST_CASE("RET-6: crd-draw init + submit_overlay compose a RenderBuffer over the
     }
     CHECK(capture.error_count() == 0U);
     CHECK(capture.warning_count() == 0U);
+}
+
+// DIAG.7a(d2b-vk): the identity-naming ADAPTER contract, device-free. vk_attach_identity MINTS before the debug-utils
+// null guard, so the identity (and its retire-on-destroy lifetime) holds even when VK_EXT_debug_utils is absent and the
+// name silently no-ops (a null handle / VK_NULL_HANDLE device forces exactly that no-op path). vk_detach_identity
+// retires it. This is the Vulkan analogue of the DX12 raw-round-trip test, minus the read-back Vulkan cannot do.
+TEST_CASE("D2b-vk: vk_attach_identity mints before the debug-utils guard; detach retires",
+          "[gpu-context][vulkan][identity][naming]")
+{
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    // VK_NULL_HANDLE device + 0 handle: naming cannot happen, but the mint MUST (mint precedes the guard).
+    const gpu::ObjectIdentity id =
+        gpu::detail::vk_attach_identity(VK_NULL_HANDLE, VK_OBJECT_TYPE_BUFFER, 0U, gpu::ObjectKind::Resource, "vk-storage");
+    REQUIRE(id.valid());
+    CHECK(gpu::identity_registry().alive(id));
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+    // Naming a sibling with the SAME id does NOT mint (a no-op here since device is null, but never a second mint).
+    gpu::detail::vk_name_object(VK_NULL_HANDLE, VK_OBJECT_TYPE_BUFFER, 0U, id, "vk-storage-readback");
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+    gpu::detail::vk_detach_identity(id);
+    CHECK_FALSE(gpu::identity_registry().alive(id));
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // retired -> baseline
+}
+
+// DIAG.7a(d2b-vk): the wiring proof -- create_storage_buffer() mints ONE Resource identity on its device VkBuffer and
+// names the owned readback sibling with the same id (the line-431 rule: +1 per logical buffer despite two native
+// buffers), retired when the buffer is destroyed. Device-gated: WARN-skips without a Vulkan device.
+TEST_CASE("D2b-vk: create_storage_buffer mints one Resource identity, retired on destroy",
+          "[gpu-context][vulkan][storage][resource][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto sb = raster->create_storage_buffer(256U);
+        REQUIRE(sb != nullptr);
+        // +1, NOT +2: the device buffer is minted and the readback sibling is NAMED with the same identity.
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+        // S7 defrag relocates the device buffer to a NEW VkBuffer; swap_device_bundle RE-STAMPS the same identity (no
+        // mint), so the count is unchanged -- guards against a relocation that leaks or double-mints the identity.
+        (void)gpu::vulkan_raster_defragment(*raster);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // relocation kept one identity
+        {
+            auto sb2 = raster->create_storage_buffer(256U);
+            REQUIRE(sb2 != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U); // distinct buffer
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // sb2 retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // sb retired -> baseline
+}
+
+// DIAG.7a(d2b-vk): the IMAGE group. VulkanTexture is ONE logical resource over a VkImage + VkImageView -- the ctor
+// mints one ObjectKind::Resource identity on the image and NAMES the view with the same id (pooled memory is a shared
+// block, never named). +1 per texture despite two natives; distinct textures are +2. The mipped path is relocatable, so
+// an S7 defrag re-stamps the recreated image+view with the SAME identity (count unchanged). Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: create_texture mints one Resource identity, retired on destroy",
+          "[gpu-context][vulkan][texture][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+
+    constexpr crd::u32 tw = 16U;
+    crd::u8            px[tw * tw * 4U];
+    for (crd::usize i = 0; i < sizeof(px); ++i) { px[i] = static_cast<crd::u8>(i & 0xFFU); }
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto a = raster->create_texture(tw, tw, px);
+        REQUIRE(a != nullptr);
+        // +1, NOT +2: the VkImage is minted and the VkImageView is NAMED with the same identity.
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+        {
+            auto b = raster->create_texture(tw, tw, px);
+            REQUIRE(b != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U); // distinct texture
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // b retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // a retired -> baseline
+
+    // Relocation: a mipped texture is TRANSFER_SRC-capable ⇒ the S7 defrag relocates it; the re-stamp is name-only, so
+    // the count is unchanged (guards against a relocation that leaks or double-mints the identity).
+    {
+        auto m = raster->create_texture_mipped(tw, tw, px);
+        REQUIRE(m != nullptr);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+        const crd::u32 relocations = gpu::vulkan_raster_defragment(*raster);
+        CHECK(relocations >= 1U); // the mipped texture actually moved -> the re-stamp path ran (assertion not vacuous)
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // relocation kept one identity
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // baseline
+}
+
+// DIAG.7a(d2b-vk): the TARGETS group. VulkanRasterTarget is ONE logical resource over color(+resolve+depth+vrs) images
+// and a readback buffer -- the ctor mints ONE identity on the colour VkImage (depth image for a depth-only target) and
+// NAMES every owned sibling with the same id. So live_count(Resource) rises by ONE per target regardless of how many
+// native objects it owns. Targets are not in a defrag registry (no relocation re-stamp). Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: create_color_target* mints one Resource identity per target",
+          "[gpu-context][vulkan][target][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto a = raster->create_color_target(16U, 16U);
+        REQUIRE(a != nullptr);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // colour+view+readback -> 1 id
+        {
+            // A depth target owns colour + depth (image+view) + readback -- still ONE identity, so +2 total.
+            auto d = raster->create_color_depth_target(16U, 16U);
+            REQUIRE(d != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // d retired
+        // MSAA adds a resolve sibling -- still ONE identity. Skip the sub-check if 4x is unsupported on this device.
+        {
+            auto ms = raster->create_color_target_ms(16U, 16U, 4U);
+            if (ms != nullptr)
+            {
+                CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+            }
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // ms retired (if any)
+        // The R32_UINT VISIBILITY-BUFFER target takes a DISTINCT colour format through the SAME make_target -> ctor,
+        // so it still mints exactly ONE identity (proves the distinct-format factory isn't a separate mint path).
+        {
+            auto vis = raster->create_visbuffer_target(16U, 16U);
+            REQUIRE(vis != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // vis retired
+        // A VRS target mints via make_target FIRST, then set_vrs NAMES the VRS image+view onto the SAME id -> still +1.
+        // (Returns a plain colour target when VRS is unsupported, so the count holds either way.)
+        {
+            auto vrs = raster->create_color_vrs_target(16U, 16U, gpu::ShadingRate::Rate2x2);
+            REQUIRE(vrs != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // vrs retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // a retired -> baseline
+}
+
+// DIAG.7a(d2b-vk): the GBUFFER group. VulkanGBufferTarget owns N colour planes (each image+view) + N readback buffers --
+// ONE logical resource. The ctor mints ONE identity on plane 0's VkImage and NAMES every sibling (planes 1..N-1
+// image+view, all N views, all N readbacks) with that id. So live_count(Resource) rises by ONE per gbuffer regardless of
+// the attachment count -- that is the "per logical target, not per plane" invariant. Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: create_gbuffer_target mints one Resource identity per target (not per plane)",
+          "[gpu-context][vulkan][gbuffer][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        // n=2: two planes + two readbacks -> still ONE identity.
+        auto g2 = raster->create_gbuffer_target(16U, 16U, 2U);
+        REQUIRE(g2 != nullptr);
+        REQUIRE(g2->attachment_count() == 2U);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U);
+        {
+            // n=4: four planes + four readbacks -> ANOTHER single identity (proves +1 is per-target, not per-plane).
+            auto g4 = raster->create_gbuffer_target(16U, 16U, 4U);
+            REQUIRE(g4 != nullptr);
+            REQUIRE(g4->attachment_count() == 4U);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // g4 retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // g2 retired -> baseline
+}
+
+// DIAG.7a(d2b-vk): the COMPUTE-BUFFER group. VulkanComputeContext::create_buffer wraps ONE VkBuffer in a BufferImpl
+// (no readback sibling -- a single native object). The ctor mints ONE Resource identity on that VkBuffer; the dtor
+// retires it. So live_count(Resource) rises by ONE per compute buffer. Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: VulkanComputeContext::create_buffer mints one Resource identity per buffer",
+          "[gpu-context][vulkan][compute][buffer][identity][naming]")
+{
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    if (!compute.valid()) { WARN("no valid Vulkan compute device; skipping"); return; }
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto a = compute.create_buffer(256U, cg::compute_usage::storage, cg::ComputeMemory::GpuOnly);
+        REQUIRE(a != nullptr);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // one VkBuffer -> one id
+        {
+            // A second, host-visible buffer -> ANOTHER single identity (per logical buffer).
+            auto b = compute.create_buffer(512U, cg::compute_usage::storage | cg::compute_usage::transfer_dst,
+                                           cg::ComputeMemory::CpuToGpu);
+            REQUIRE(b != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // b retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // a retired -> baseline
+}
+
+// DIAG.7a(d2b-vk): the CONTEXT-FIELD buffers group (bucket 3a) -- the upload staging RING. Unlike the wrapper classes,
+// each ring is a context-owned BufferBundle in m_upload[kUploadBatches], lazily created in begin_upload_batch (one per
+// slot) and retired in the context dtor. So the oracle is measured ACROSS context creation/teardown, with `before` taken
+// BEFORE create_vulkan_raster_context. A GROW (an upload larger than the ring cap) re-stamps the SAME id onto the bigger
+// VkBuffer, so the count stays FLAT across a realloc (identity stable across recreation -- the DG12 contract). WARN-skips.
+TEST_CASE("D2b-vk: the upload staging ring mints one Resource identity per slot (context-field, grow re-stamps)",
+          "[gpu-context][vulkan][buffer][identity][naming]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+
+    // `before` BEFORE the raster context exists -- the rings are context-owned, retired only at teardown.
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
+    {
+        auto raster = gpu::create_vulkan_raster_context(*vk);
+        REQUIRE(raster != nullptr);
+        if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+        // Init mints NO Resource (its only owned native object is a default sampler, not an ObjectKind::Resource).
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before);
+
+        // Each begin/end cycle opens the NEXT slot and lazily creates that slot's ring -> +1 per distinct slot.
+        raster->begin_upload_batch();
+        raster->end_upload_batch();
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // slot 0 ring
+        raster->begin_upload_batch();
+        raster->end_upload_batch();
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U); // slot 1 ring
+        // A THIRD cycle reuses slot 0's existing ring -> NO new mint (mint is once-per-ring, idempotent).
+        raster->begin_upload_batch();
+        raster->end_upload_batch();
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+
+        // GROW: an upload larger than the 8 MiB ring cap reallocs the slot's ring bigger -> RE-STAMP (same id), so the
+        // count does NOT rise across the realloc. The storage buffer itself mints +1; the grow adds nothing.
+        {
+            const crd::u32 big = (9U << 20U); // > kUploadRingBytes (8 MiB) -> forces one grow
+            auto           storage = raster->create_storage_buffer(big);
+            REQUIRE(storage != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 3U); // +1 storage buffer
+            crd::containers::Array<crd::u8> src;
+            src.resize(big, crd::u8{0});
+            raster->begin_upload_batch();
+            REQUIRE(raster->upload_storage(*storage, 0U, src.data(), big)); // > cap -> grow -> re-stamp same id
+            raster->end_upload_batch();
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 3U); // grow did NOT remint
+        } // storage destroyed -> +2
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U);
+    } // raster destroyed -> both slot rings retired
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before); // baseline
+}
+
+// DIAG.7a(d2b-vk): the PROGRAMS group -- compute pipelines (ObjectKind::Program). VulkanComputeContext::create_pipeline*
+// wraps ONE VkPipeline + its pipeline layout + descriptor-set layout + shader module in a PipelineImpl. The ctor mints
+// ONE Program identity on the VkPipeline and NAMES the three siblings; the dtor retires it. So live_count(Program) rises
+// by ONE per logical pipeline regardless of the four native objects. A different ObjectKind from the buffer tests, so
+// their live_count(Resource) baselines are untouched. Device-gated: WARN-skips.
+TEST_CASE("D2b-vk: VulkanComputeContext::create_pipeline_from_spirv mints one Program identity per pipeline",
+          "[gpu-context][vulkan][compute][program][identity][naming]")
+{
+    namespace cg = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    if (!compute.valid()) { WARN("no valid Vulkan compute device; skipping"); return; }
+
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    static const char* const   kSrc = "#version 460\n"
+                                       "layout(local_size_x = 1) in;\n"
+                                       "layout(set=0, binding=0) buffer B { uint x[]; } b;\n"
+                                       "void main() { b.x[0] = 1u; }\n";
+    const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kSrc), "diag_prog", &alloc);
+    REQUIRE(spv.spirv.size() > 0U);
+
+    const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Program);
+    {
+        auto p1 = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 1, 0U);
+        REQUIRE(p1 != nullptr);
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before + 1U); // pipeline+layouts+module -> 1 id
+        {
+            // A fresh pipeline from the SAME SPIR-V -> ANOTHER identity (create_pipeline_from_spirv never wrapper-caches).
+            auto p2 = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 1, 0U);
+            REQUIRE(p2 != nullptr);
+            CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before + 2U);
+        }
+        CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before + 1U); // p2 retired
+    }
+    CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before); // baseline
 }

@@ -5,6 +5,7 @@
 
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
+#include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12) batch 4b: one Resource identity per acceleration structure
 
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
 
@@ -46,9 +47,14 @@ ComPtr<ID3D12Resource> make_buffer(ID3D12Device* dev, UINT64 size, D3D12_HEAP_TY
 // The built scene keeps its BLAS + TLAS result buffers (and the TLAS device address the root SRV binds).
 struct SceneImpl final : Dx12RtScene
 {
+    // DIAG.7a(d2b-dx12) batch 4b: a scene is ONE logical resource (an IAccelerationStructure). One identity is minted on
+    // the TLAS (the bound handle) and the BLAS is named with the same id; ~SceneImpl retires it (no-op on invalid).
+    ~SceneImpl() override { detail::dx12_detach_identity(m_identity); }
+
     ComPtr<ID3D12Resource>    blas;
     ComPtr<ID3D12Resource>    tlas;
     D3D12_GPU_VIRTUAL_ADDRESS tlas_va = 0;
+    ObjectIdentity            m_identity{}; // one stable Cerid Resource identity for this acceleration structure
 };
 
 
@@ -231,6 +237,11 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
     if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
+
+    // batch 4b: mint after the last early-return (the scene is now fully built). One identity per scene: mint on the
+    // TLAS, name the BLAS with the same id. The transient build feeds (vbuf/ibuf/scratch) are locals — never minted.
+    scene->m_identity = detail::dx12_attach_identity(scene->tlas.Get(), ObjectKind::Resource, "dx12-rt-tlas");
+    detail::dx12_name_object(scene->blas.Get(), scene->m_identity, "dx12-rt-blas");
     return scene;
 }
 
@@ -339,6 +350,11 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
     if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
+
+    // batch 4b: mint after the last early-return (the scene is now fully built). One identity per scene: mint on the
+    // TLAS, name the BLAS with the same id. The transient build feeds (vbuf/ibuf/scratch) are locals — never minted.
+    scene->m_identity = detail::dx12_attach_identity(scene->tlas.Get(), ObjectKind::Resource, "dx12-rt-tlas");
+    detail::dx12_name_object(scene->blas.Get(), scene->m_identity, "dx12-rt-blas");
     return scene;
 }
 

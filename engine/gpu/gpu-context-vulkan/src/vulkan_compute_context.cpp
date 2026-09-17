@@ -4,6 +4,8 @@
 
 #include <crd/gpu/vulkan_compute_context.hpp>
 
+#include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per compute buffer
+
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -50,9 +52,14 @@ public:
     BufferImpl(VkDevice d, VkBuffer b, VkDeviceMemory m, crd::u64 bytes, bool mappable) noexcept
         : m_device(d), m_buffer(b), m_memory(m), m_bytes(bytes), m_mappable(mappable)
     {
+        // DIAG.7a(d2b-vk): ONE logical Resource identity on the compute VkBuffer (no readback sibling -- a single native
+        // object). Mints + names in one step; no-op if the handle is null.
+        m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(m_buffer),
+                                                ObjectKind::Resource, "vk-compute-buffer");
     }
     ~BufferImpl() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical identity (no-op if invalid)
         if (m_buffer != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_buffer, nullptr); }
         if (m_memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_memory, nullptr); }
     }
@@ -76,6 +83,7 @@ private:
     VkDeviceMemory m_memory;
     crd::u64       m_bytes;
     bool           m_mappable;
+    ObjectIdentity m_identity{}; // DIAG.7a(d2b-vk): the one logical Resource identity for this compute buffer
 };
 
 class PipelineImpl final : public ComputePipeline
@@ -84,9 +92,21 @@ public:
     PipelineImpl(VkDevice d, VkShaderModule sh, VkDescriptorSetLayout sl, VkPipelineLayout pl, VkPipeline p, int nb) noexcept
         : m_device(d), m_shader(sh), m_set_layout(sl), m_pipe_layout(pl), m_pipeline(p), m_nb(nb)
     {
+        // DIAG.7a(d2b-vk): ONE logical Program identity for the compute pipeline -- mint on the VkPipeline, then NAME the
+        // owned siblings (pipeline layout, descriptor-set layout, shader module) with the same id. One create_pipeline*
+        // -> one PipelineImpl -> one identity, regardless of the four native objects it owns.
+        m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(m_pipeline),
+                                                ObjectKind::Program, "vk-compute-pipeline");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<crd::u64>(m_pipe_layout),
+                               m_identity, "vk-compute-pipe-layout");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<crd::u64>(m_set_layout),
+                               m_identity, "vk-compute-set-layout");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_SHADER_MODULE, reinterpret_cast<crd::u64>(m_shader), m_identity,
+                               "vk-compute-shader");
     }
     ~PipelineImpl() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical Program identity
         if (m_pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(m_device, m_pipeline, nullptr); }
         if (m_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_pipe_layout, nullptr); }
         if (m_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_set_layout, nullptr); }
@@ -104,6 +124,7 @@ private:
     VkPipelineLayout      m_pipe_layout;
     VkPipeline            m_pipeline;
     int                   m_nb;
+    ObjectIdentity        m_identity{}; // DIAG.7a(d2b-vk): the one logical Program identity for this compute pipeline
 };
 } // namespace
 

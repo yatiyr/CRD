@@ -128,10 +128,24 @@ struct CounterInfo
 // Frame-history accessors. `frames_back == 0` returns the most-recently-
 // captured FrameRecord; `frames_back == 1` is the previous frame; up to
 // kFrameHistorySlots - 1. nullptr if not enough frames have been captured.
+//
+// SAME-THREAD ONLY: this returns a raw pointer INTO the overwrite-oldest ring, which frame_mark() can lap. It is safe
+// only on the same thread that calls frame_mark() (e.g. the in-process perf-ui panel). Any OTHER thread -- a capture
+// save, a background reader -- MUST use copy_frame_record (DIAG.6a(c1)); dereferencing this pointer cross-thread reads
+// a torn record.
 [[nodiscard]] const FrameRecord* frame_record(crd::u32 frames_back) noexcept;
+
+// Cross-thread-safe frame read: copies the frame `frames_back` from head into `out` under a per-slot seqlock, so it
+// never returns a record half-overwritten by frame_mark(). Returns false if that frame is not retained or if the slot
+// was lapped faster than the copy could complete (bounded retry) -- the latter bumps frame_history_unavailable_count.
+[[nodiscard]] bool copy_frame_record(crd::u32 frames_back, FrameRecord& out) noexcept;
 
 // Number of FrameRecords currently retained. Saturates at kFrameHistorySlots.
 [[nodiscard]] crd::u32 frame_record_count() noexcept;
+
+// Count of copy_frame_record calls that lost the seqlock retry race (a slot lapped mid-copy) -- an explicit
+// "unavailable" tally, distinct from the ring's dropped-sample count.
+[[nodiscard]] crd::u64 frame_history_unavailable_count() noexcept;
 
 } // namespace crd::perf
 

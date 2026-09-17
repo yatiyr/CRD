@@ -5,6 +5,8 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp> // the relocated GLSL→SPIR-V compiler (C1-c graph on-ramp)
 
+#include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Program identity per compiled shader stage
+
 #include <crd/core/platform.hpp> // CRD_OS_* for the platform surface extension (C2-a)
 
 #include <crd/kir/ckir.hpp>      // KGraph / KEntry / KStage (ADR-0103 IR currency)
@@ -36,9 +38,15 @@ public:
     {
         m_spirv.resize(spirv.size());
         for (crd::usize i = 0; i < spirv.size(); ++i) { m_spirv[i] = spirv[i]; }
+        // DIAG.7a(d2b-vk): ONE logical Program identity per compiled shader stage -- mint on the VkShaderModule (the only
+        // native object this wrapper owns). A separate identity from the raster program (P3) that later links it.
+        m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_SHADER_MODULE,
+                                                reinterpret_cast<crd::u64>(m_module), ObjectKind::Program,
+                                                "vk-shader-module");
     }
     ~VulkanGpuProgramImpl() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the shader-stage Program identity
         if (m_module != VK_NULL_HANDLE) { vkDestroyShaderModule(m_device, m_module, nullptr); }
     }
     VulkanGpuProgramImpl(const VulkanGpuProgramImpl&)            = delete;
@@ -59,6 +67,7 @@ private:
     VkShaderModule                  m_module = VK_NULL_HANDLE;
     ShaderStage                     m_stage  = ShaderStage::Compute;
     crd::containers::Array<crd::u8> m_spirv;
+    ObjectIdentity                  m_identity{}; // DIAG.7a(d2b-vk): the one logical Program identity for this shader stage
 };
 
 class VulkanGpuContextImpl final : public VulkanGpuContext
@@ -74,6 +83,7 @@ public:
     [[nodiscard]] bool             valid() const noexcept override { return m_valid; }
     [[nodiscard]] GpuBackend       backend() const noexcept override { return GpuBackend::Vulkan; }
     [[nodiscard]] const char*      adapter_name() const noexcept override { return m_name; }
+    [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f)
     [[nodiscard]] VkInstance       vk_instance() const noexcept override { return m_instance; }
     [[nodiscard]] VkPhysicalDevice vk_physical_device() const noexcept override { return m_physical; }
     [[nodiscard]] VkDevice         vk_device() const noexcept override { return m_device; }
@@ -254,7 +264,10 @@ private:
         ici.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &app;
         const char* layers[] = {"VK_LAYER_KHRONOS_validation"};
-        if (config.enable_validation) { ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = layers; }
+        // DIAG.7a(f): ANY requested validation mode (core/sync/GPU-assisted) needs the validation layer loaded.
+        const bool any_validation =
+            config.enable_validation || config.enable_sync_validation || config.enable_gpu_assisted_validation;
+        if (any_validation) { ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = layers; }
 
         // C2-a: a WINDOWED context enables the surface instance extensions so the ONE device can present (ADR-0099).
         // Guarded + additive — headless (compute) leaves the instance byte-for-byte unchanged. Only enabled if available.
@@ -269,9 +282,10 @@ private:
         // surface + VK_EXT_headless_surface (a swapchain WITHOUT a window — the fully-testable present path) are all
         // enabled whenever the loader offers them. A headless context can therefore still drive the present machinery
         // through a headless surface; a windowed one presents to a real window. Purely additive.
-        const char*   inst_exts[4];
+        const char*   inst_exts[6]; // DIAG.7a(f): +VK_EXT_validation_features
         std::uint32_t n_inst_exts = 0;
         bool          surface_ok  = false;
+        bool          has_valfeat = false; // DIAG.7a(f): VK_EXT_validation_features present (needed outside the enum block)
         {
             std::uint32_t nie = 0;
             vkEnumerateInstanceExtensionProperties(nullptr, &nie, nullptr);
@@ -290,6 +304,7 @@ private:
                 }
                 if (std::strcmp(iavail[i].extensionName, "VK_EXT_headless_surface") == 0) { has_headless = true; }
                 if (std::strcmp(iavail[i].extensionName, "VK_EXT_debug_utils") == 0) { has_dbg = true; }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_validation_features") == 0) { has_valfeat = true; }
             }
             if (has_surf)
             {
@@ -308,15 +323,65 @@ private:
             }
             // RET-4: debug_utils enabled EXPLICITLY with validation (ValidationCapture's messenger rides it — the
             // layer resolving the entry points anyway is an accident, never a contract)
-            if (config.enable_validation && has_dbg) { inst_exts[n_inst_exts++] = "VK_EXT_debug_utils"; }
+            if (any_validation && has_dbg) { inst_exts[n_inst_exts++] = "VK_EXT_debug_utils"; }
+            // DIAG.7a(f): VK_EXT_validation_features is provided by the VALIDATION LAYER, not the loader, so it does
+            // NOT appear in the null-layer enumeration above -- enumerate the layer explicitly to detect it.
+            if (any_validation)
+            {
+                std::uint32_t nle = 0;
+                vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &nle, nullptr);
+                auto lavail = std::make_unique<VkExtensionProperties[]>(nle == 0 ? 1 : nle);
+                vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &nle, lavail.get());
+                for (std::uint32_t li = 0; li < nle; ++li)
+                {
+                    if (std::strcmp(lavail[li].extensionName, "VK_EXT_validation_features") == 0) { has_valfeat = true; }
+                }
+            }
+            // DIAG.7a(f): sync / GPU-assisted enables ride VkValidationFeaturesEXT, which needs this instance ext.
+            const bool want_valfeat = config.enable_sync_validation || config.enable_gpu_assisted_validation;
+            if (want_valfeat && has_valfeat) { inst_exts[n_inst_exts++] = "VK_EXT_validation_features"; }
         }
         if (n_inst_exts > 0U)
         {
             ici.enabledExtensionCount   = n_inst_exts;
             ici.ppEnabledExtensionNames = inst_exts;
         }
+        // DIAG.7a(f): chain the requested sync / GPU-assisted enables onto the instance. GPU-assisted active is
+        // confirmed later against device features -- the layer accepts the enable but only instruments if present.
+        VkValidationFeatureEnableEXT vf_enables[2];
+        crd::u32                     n_vf = 0U;
+        if (config.enable_sync_validation && has_valfeat) { vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT; }
+        if (config.enable_gpu_assisted_validation && has_valfeat) { vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT; }
+        VkValidationFeaturesEXT vfeat{};
+        vfeat.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        if (n_vf > 0U)
+        {
+            vfeat.enabledValidationFeatureCount = n_vf;
+            vfeat.pEnabledValidationFeatures    = vf_enables;
+            vfeat.pNext                         = ici.pNext;
+            ici.pNext                           = &vfeat;
+        }
         m_surface_ext = surface_ok;
         if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS) { return; }
+        // DIAG.7a(f): record activation. Core + Sync known now (layer loaded == vkCreateInstance succeeded);
+        // GPU-assisted is provisional (FeatureAbsent) until the device features are queried below.
+        {
+            ValidationActivation& va = m_validation_activation;
+            va.requested[0] = config.enable_validation;
+            va.active[0]    = config.enable_validation; // Core == the KHRONOS layer loaded, which any requested mode guarantees
+            va.reason[0]    = config.enable_validation ? ValidationUnsupportedReason::None
+                                                       : ValidationUnsupportedReason::NotRequested;
+            va.requested[1] = config.enable_sync_validation;
+            va.active[1]    = config.enable_sync_validation && has_valfeat;
+            va.reason[1]    = !config.enable_sync_validation ? ValidationUnsupportedReason::NotRequested
+                              : (va.active[1] ? ValidationUnsupportedReason::None
+                                             : ValidationUnsupportedReason::ExtensionAbsent);
+            va.requested[2] = config.enable_gpu_assisted_validation;
+            va.active[2]    = false;
+            va.reason[2]    = !config.enable_gpu_assisted_validation ? ValidationUnsupportedReason::NotRequested
+                              : (!has_valfeat ? ValidationUnsupportedReason::ExtensionAbsent
+                                             : ValidationUnsupportedReason::FeatureAbsent);
+        }
 
         std::uint32_t    npd = 16;
         VkPhysicalDevice pds[16];
@@ -487,8 +552,28 @@ private:
         VkPhysicalDeviceFeatures avail_feats{};
         vkGetPhysicalDeviceFeatures(m_physical, &avail_feats);
         m_int64 = avail_feats.shaderInt64 == VK_TRUE;
+        // DIAG.7a(f): GPU-assisted is ACTIVE only if the device advertises the stores/atomics features its shader
+        // instrumentation needs; otherwise the layer cannot instrument -> stays FeatureAbsent.
+        if (m_validation_activation.requested[2] && m_validation_activation.reason[2] == ValidationUnsupportedReason::FeatureAbsent)
+        {
+            if (avail_feats.fragmentStoresAndAtomics == VK_TRUE && avail_feats.vertexPipelineStoresAndAtomics == VK_TRUE)
+            {
+                m_validation_activation.active[2] = true;
+                m_validation_activation.reason[2] = ValidationUnsupportedReason::None;
+            }
+        }
         VkPhysicalDeviceFeatures enabled_feats{};
         enabled_feats.shaderInt64 = avail_feats.shaderInt64;
+        // DIAG.7a(f): when GPU-assisted validation is ACTIVE, enable the stores/atomics features its shader
+        // instrumentation needs on OUR VkDeviceCreateInfo. Otherwise VVL force-enables them at vkCreateDevice and warns
+        // ("Forcing vertexPipelineStoresAndAtomics to VK_TRUE"); enabling them here makes active[2] reflect a feature we
+        // turned on -- not one the layer patched behind us -- and silences that adjust-settings warning. active[2] already
+        // implies both are available (checked above), so a device without them is byte-identical.
+        if (m_validation_activation.active[2])
+        {
+            enabled_feats.fragmentStoresAndAtomics       = VK_TRUE;
+            enabled_feats.vertexPipelineStoresAndAtomics = VK_TRUE;
+        }
         // B1-c: a `sample`-qualified fragment interpolant lowers to SPIR-V that declares the SampleRateShading capability,
         // which REQUIRES this device feature — without it, creating the shader is a validation error (a lenient driver may
         // still run it, but a strict one rejects it). A raster-only feature ⇒ enabled only for a graphics-capable context,
@@ -886,6 +971,7 @@ private:
     }
 
     VkInstance       m_instance        = VK_NULL_HANDLE;
+    ValidationActivation m_validation_activation{}; // DIAG.7a(f): per-mode validation activation report
     VkPhysicalDevice m_physical        = VK_NULL_HANDLE;
     VkDevice         m_device          = VK_NULL_HANDLE;
     VkQueue          m_compute_queue   = VK_NULL_HANDLE;

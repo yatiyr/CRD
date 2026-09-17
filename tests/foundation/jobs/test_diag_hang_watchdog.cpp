@@ -110,15 +110,15 @@ void parking_root(void* /*data*/) noexcept
 
 TEST_CASE("hang_verdict: quiescent is never a hang", "[jobs][diag][hang]")
 {
-    const ProgressSample before{10U, 0U, 0U, false};
-    const ProgressSample after{10U, 0U, 0U, true}; // nothing outstanding
+    const ProgressSample before{10U, 0U, 0U, false, 0U};
+    const ProgressSample after{10U, 0U, 0U, true, 0U}; // nothing outstanding
     CHECK(hang_verdict(before, after, 500U, 505U) == HangVerdict::None);
 }
 
 TEST_CASE("hang_verdict: advancing completions is progress", "[jobs][diag][hang]")
 {
-    const ProgressSample before{10U, 0U, 1U, false};
-    const ProgressSample after{11U, 0U, 1U, false}; // work still outstanding, one job finished this window
+    const ProgressSample before{10U, 0U, 1U, false, 0U};
+    const ProgressSample after{11U, 0U, 1U, false, 0U}; // work still outstanding, one job finished this window
     CHECK(hang_verdict(before, after, 500U, 505U) == HangVerdict::Progressing);
 }
 
@@ -127,8 +127,8 @@ TEST_CASE("hang_verdict: a long job executing with flat completions is progress,
 {
     // The acceptance's "long progressing offline work does not trigger a false deadlock claim": completions
     // are flat (the one long job has not finished) but a worker is still executing it.
-    const ProgressSample before{10U, 1U, 1U, false};
-    const ProgressSample after{10U, 1U, 1U, false}; // outstanding, flat completions, but a worker is executing
+    const ProgressSample before{10U, 1U, 1U, false, 0U};
+    const ProgressSample after{10U, 1U, 1U, false, 0U}; // outstanding, flat completions, but a worker is executing
     CHECK(hang_verdict(before, after, 500U, 505U) == HangVerdict::Progressing);
 }
 
@@ -136,16 +136,16 @@ TEST_CASE("hang_verdict: a badly overrun window is Paused (debugger/suspend), no
 {
     // Frozen process: the watchdog's own sleep overran ~10x. Even with the deadlock shape (flat completions,
     // nothing executing) this must read Paused so the freeze is not miscounted as a stall.
-    const ProgressSample before{10U, 0U, 1U, false};
-    const ProgressSample after{10U, 0U, 1U, false}; // deadlock shape, but the overrun means the process froze
+    const ProgressSample before{10U, 0U, 1U, false, 0U};
+    const ProgressSample after{10U, 0U, 1U, false, 0U}; // deadlock shape, but the overrun means the process froze
     CHECK(hang_verdict(before, after, 500U, 5000U) == HangVerdict::Paused);
 }
 
 TEST_CASE("hang_verdict: outstanding work with no completion and no worker executing is a suspected hang",
           "[jobs][diag][hang]")
 {
-    const ProgressSample before{10U, 0U, 1U, false};
-    const ProgressSample after{10U, 0U, 1U, false}; // outstanding, nothing finished, nobody executing
+    const ProgressSample before{10U, 0U, 1U, false, 0U};
+    const ProgressSample after{10U, 0U, 1U, false, 0U}; // outstanding, nothing finished, nobody executing
     CHECK(hang_verdict(before, after, 500U, 505U) == HangVerdict::SuspectedHang);
 }
 

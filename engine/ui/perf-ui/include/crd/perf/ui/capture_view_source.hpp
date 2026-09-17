@@ -13,6 +13,8 @@
 #include <crd/perf/capture_view.hpp>
 #include <crd/perf/ui/profiler_source.hpp>
 
+#include <cstring>
+
 namespace crd::perf::ui
 {
 
@@ -46,13 +48,14 @@ public:
     }
     [[nodiscard]] crd::u8 gpu_thread_index() const noexcept override
     {
-        // The CPROF format doesn't currently mark a per-thread "is gpu"
-        // bit; the convention is that the gpu track is whichever thread
-        // is named "gpu". Find it by linear scan (small loop; up to 64).
+        // The CPROF format doesn't currently mark a per-thread "is gpu" bit. DIAG.6b(c): GPU work is now modelled on
+        // separate per-(device,queue) tracks named "gpu d<dev> q<queue>"; this legacy single-track accessor returns the
+        // DEFAULT execution track (device 0, queue 0), matching the live source's gpu_thread_index(). Find it by linear
+        // scan (small loop; up to 64). A multi-queue consumer should enumerate all "gpu d* q*" tracks instead.
         for (crd::u32 i = 0U; i < m_view->thread_count(); ++i)
         {
             const char* n = m_view->thread_name(i);
-            if (n != nullptr && n[0] == 'g' && n[1] == 'p' && n[2] == 'u' && n[3] == '\0')
+            if (n != nullptr && std::strcmp(n, "gpu d0 q0") == 0)
             {
                 return static_cast<crd::u8>(i);
             }

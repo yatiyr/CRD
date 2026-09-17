@@ -262,10 +262,14 @@ TEST_CASE("begin_frame / end_frame are forwarded on the backend",
 
     crd::perf::IProfilerGpuBackend* api = crd::perf::current_gpu_backend();
     REQUIRE(api != nullptr);
+    // DIAG.6b(e): set_gpu_backend opens the first frame on install, so assert the manual calls FORWARD (delta of 1),
+    // independent of that install-time begin_frame.
+    const crd::u32 b0 = be.begin_frame_calls.load();
+    const crd::u32 e0 = be.end_frame_calls.load();
     api->begin_frame(7U);
     api->end_frame();
-    CHECK(be.begin_frame_calls.load() == 1U);
-    CHECK(be.end_frame_calls.load() == 1U);
+    CHECK(be.begin_frame_calls.load() == b0 + 1U);
+    CHECK(be.end_frame_calls.load() == e0 + 1U);
 
     crd::perf::set_gpu_backend(nullptr);
 }

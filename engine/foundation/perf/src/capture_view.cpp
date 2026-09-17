@@ -51,6 +51,24 @@ CaptureView::CaptureView(crd::containers::ConstSpan<crd::u8> buf) noexcept
     }
     m_name_count = *reinterpret_cast<const crd::u32*>(buf.data() + m_off_name_blob);
 
+    // DIAG.6b(b): locate the optional correlation section. validate_capture_buffer (called above) has already
+    // strictly bounds-checked it when the flag is set; re-derive the record offset/count from the header here.
+    if ((hdr->flags & kCprofFlagCorrelation) != 0U)
+    {
+        const crd::u64 off = hdr->correlation_section_offset;
+        if ((off & 7U) == 0U && off + 8U <= buf.size())
+        {
+            const crd::u32 count    = *reinterpret_cast<const crd::u32*>(buf.data() + off);
+            const crd::u32 rec_size = *reinterpret_cast<const crd::u32*>(buf.data() + off + sizeof(crd::u32));
+            if (rec_size == sizeof(CorrelationRecord)
+                && off + 8U + static_cast<crd::u64>(count) * rec_size <= buf.size())
+            {
+                m_off_correlation   = static_cast<crd::usize>(off + 8U);
+                m_correlation_count = count;
+            }
+        }
+    }
+
     m_valid = true;
 }
 
@@ -181,6 +199,28 @@ CaptureView::frame_records() const noexcept
     return crd::containers::ConstSpan<FrameRecord>{base, header()->frame_count};
 }
 
+[[nodiscard]] const char*
+CaptureView::frame_allocator_name(crd::u32 frame_index, crd::u32 allocator_idx) const noexcept
+{
+    if (!m_valid || allocator_idx >= kMaxAllocators)
+    {
+        return "";
+    }
+    const auto frames = frame_records();
+    if (frame_index >= frames.size())
+    {
+        return "";
+    }
+    // DIAG.6a(d2): prefer the identity STAMPED into this record -- correct even after the slot was unregistered and
+    // reused -- and fall back to the live-at-save slot name for pre-(d2) records (_pad == 0).
+    const NameId nid = allocator_record_name_id(frames[frame_index].allocators[allocator_idx]);
+    if (nid.is_valid())
+    {
+        return resolve_name(nid);
+    }
+    return allocator_info(allocator_idx).name;
+}
+
 [[nodiscard]] const char* CaptureView::resolve_name(NameId id) const noexcept
 {
     if (!m_valid || !id.is_valid() || id.value >= m_name_count)
@@ -198,6 +238,52 @@ CaptureView::frame_records() const noexcept
     const auto* strings_base = reinterpret_cast<const char*>(
         blob + 8U + static_cast<crd::u64>(m_name_count) * sizeof(crd::u32));
     return strings_base + offset;
+}
+
+[[nodiscard]] crd::u32 CaptureView::correlation_count() const noexcept
+{
+    return m_valid ? m_correlation_count : 0U;
+}
+
+[[nodiscard]] const CorrelationRecord* CaptureView::correlation_at(crd::u32 i) const noexcept
+{
+    if (!m_valid || i >= m_correlation_count)
+    {
+        return nullptr;
+    }
+    return reinterpret_cast<const CorrelationRecord*>(m_buf.data() + m_off_correlation) + i;
+}
+
+[[nodiscard]] const CorrelationRecord*
+CaptureView::correlation_for(crd::u32 thread_index, crd::u32 sample_ordinal) const noexcept
+{
+    if (!m_valid || m_correlation_count == 0U)
+    {
+        return nullptr;
+    }
+    // Records are written sorted by (thread_index, sample_ordinal); binary-search the composite key.
+    const auto*    base = reinterpret_cast<const CorrelationRecord*>(m_buf.data() + m_off_correlation);
+    const crd::u64 key  = (static_cast<crd::u64>(thread_index) << 32) | sample_ordinal;
+    crd::u32       lo   = 0U;
+    crd::u32       hi   = m_correlation_count;
+    while (lo < hi)
+    {
+        const crd::u32 mid = lo + (hi - lo) / 2U;
+        const crd::u64 mk  = (static_cast<crd::u64>(base[mid].thread_index) << 32) | base[mid].sample_ordinal;
+        if (mk == key)
+        {
+            return base + mid;
+        }
+        if (mk < key)
+        {
+            lo = mid + 1U;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    return nullptr;
 }
 
 #else // CRD_PERF_ENABLED == 0
@@ -227,7 +313,14 @@ CaptureView::CaptureView(crd::containers::ConstSpan<crd::u8>) noexcept {}
 {
     return {};
 }
+[[nodiscard]] const char* CaptureView::frame_allocator_name(crd::u32, crd::u32) const noexcept { return ""; }
 [[nodiscard]] const char* CaptureView::resolve_name(NameId) const noexcept { return ""; }
+[[nodiscard]] crd::u32 CaptureView::correlation_count() const noexcept { return 0U; }
+[[nodiscard]] const CorrelationRecord* CaptureView::correlation_at(crd::u32) const noexcept { return nullptr; }
+[[nodiscard]] const CorrelationRecord* CaptureView::correlation_for(crd::u32, crd::u32) const noexcept
+{
+    return nullptr;
+}
 
 #endif
 

@@ -45,6 +45,12 @@ struct StoredLogRecord
 // to render. The snapshot still returns std::vector for caller
 // convenience (Array of an owning record type with an external API
 // doesn't gain anything at the API boundary).
+// NOT crash-safe / NOT async-signal-safe. write() copies three crd::String members (channel_name, message, file),
+// each a heap allocation, and snapshot() allocates an Array plus more Strings. It must never be called from a crash
+// handler, a signal handler, or any post-fault context where the heap may be locked or corrupt -- the DIAG.5a/5b
+// emergency crash recorder (async-signal-safe write(2), no allocation) is that channel. This sink is for normal,
+// live logging only. (DIAG.5c(f): the crash path structurally cannot reach it -- the crash-capture specimens link
+// no crd-log, crd-core does not depend upward on crd-log, and no crd crash/signal handler calls a logging macro.)
 class RingBufferSink : public ISink
 {
 public:

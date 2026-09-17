@@ -30,9 +30,11 @@
 #include <crd/perf/profiler.hpp>
 #include <crd/time/clocks.hpp>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <thread>
 
 namespace crd::perf
 {
@@ -43,6 +45,18 @@ namespace
 {
 
 constexpr crd::u32 kEmptyNameOffset = 0xFFFF'FFFFU;
+
+// (c3) Time budget a save spends retrying one thread's copy against a competing consumer before it gives up and writes
+// that thread with 0 samples. It must be bounded by TIME, not iteration count: a single copy window is a full-ring
+// copy (~tens of microseconds, more under ASan), and a fixed handful of spins can be exhausted entirely INSIDE one
+// window -- so a live-UI copy holding the flag would make saves silently drop whole threads. This budget is >> one
+// window yet far below anything a user notices, so the retry outlasts sustained contention while the save still
+// terminates. The give-up path is truthful, not silent (see g_capture_contended_threads).
+constexpr crd::u64 kCaptureCopyBudgetNs = 50ULL * 1000ULL * 1000ULL; // 50 ms
+
+// Monotonic count of threads a save abandoned to reader contention. File-scope so it survives across saves; surfaced
+// via capture_contended_thread_count().
+std::atomic<crd::u64> g_capture_contended_threads{0U};
 
 // Align an offset upward to an 8-byte boundary.
 [[nodiscard]] constexpr crd::usize align_up_8(crd::usize n) noexcept
@@ -114,7 +128,12 @@ struct ThreadSnap
 save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
 {
     crd::containers::Array<crd::u8> out{alloc};
-    if (!is_active() || alloc == nullptr)
+    // DIAG.6a(e): pin the profiler state for the WHOLE capture. Each inner call (thread_count, copy_thread_samples,
+    // copy_frame_record, ...) also takes a per-call guard, but only this outer pin keeps a concurrent shutdown() from
+    // freeing state BETWEEN those calls -- which per-call guards alone would leave crash-free but torn across the
+    // shutdown. shutdown() blocks until this guard releases. A false guard means the profiler is inactive.
+    detail::StateReadGuard state_ref;
+    if (!state_ref || alloc == nullptr)
     {
         return out;
     }
@@ -161,7 +180,27 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
                                   + alloc_meta_bytes + name_blob.total_bytes
                                   + frame_bytes + total_sample_bytes;
 
-    out.resize(static_cast<crd::usize>(total_bytes));
+    // DIAG.6b(b): reserve an UPPER BOUND for the optional correlation section -- at most one record per sample on a
+    // correlation-enabled thread, plus the 8 B section header and up to 7 B of alignment padding. When no thread has
+    // correlation the reserve is 0 and the output is byte-for-byte what the pre-6b writer produced.
+    crd::u64 max_corr_records = 0U;
+    crd::u32 max_sample_count = 0U;
+    for (const auto& t : threads)
+    {
+        if (t.sample_count > max_sample_count)
+        {
+            max_sample_count = t.sample_count;
+        }
+        if (thread_has_correlation(static_cast<crd::u8>(t.thread_index)))
+        {
+            max_corr_records += t.sample_count;
+        }
+    }
+    const bool     want_correlation = max_corr_records != 0U;
+    const crd::u64 corr_reserve_bytes =
+        want_correlation ? (7U + 8U + max_corr_records * sizeof(CorrelationRecord)) : 0U;
+
+    out.resize(static_cast<crd::usize>(total_bytes + corr_reserve_bytes));
     std::memset(out.data(), 0, out.size());
 
     // ----- Pass 2: write the header (placeholder; fill sample offsets after) -----
@@ -181,7 +220,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     hdr->frame_record_size   = sizeof(FrameRecord);
     hdr->name_blob_byte_size = name_blob.total_bytes;
     hdr->name_blob_count     = name_blob.capacity;
-    hdr->_pad_a              = 0U;
+    hdr->correlation_section_offset = 0U; // DIAG.6b(b): patched below iff a correlation section is written
     cursor += hdr_bytes;
 
     // ----- Write thread headers (sample_byte_offset patched below) -----
@@ -257,27 +296,34 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     auto* frame_dst = reinterpret_cast<FrameRecord*>(out.data() + cursor);
     for (crd::u32 i = 0U; i < frame_n; ++i)
     {
-        const FrameRecord* rec = frame_record(frame_n - 1U - i); // oldest first
-        if (rec == nullptr)
+        // DIAG.6a(c1): the save path is cross-thread ("save while producers wrap buffers") -- copy each frame under the
+        // seqlock so a lapping frame_mark() cannot hand us a torn record. A lapped-out frame lands as a zeroed record.
+        if (!copy_frame_record(frame_n - 1U - i, frame_dst[i])) // oldest first
         {
             frame_dst[i] = FrameRecord{};
-        }
-        else
-        {
-            std::memcpy(&frame_dst[i], rec, sizeof(FrameRecord));
         }
     }
     cursor += frame_bytes;
 
     // ----- Write per-thread sample arrays + patch ThreadHeader offsets -----
+    // DIAG.6b(b): when any thread has correlation, copy samples via copy_thread_samples_with_correlation into a reusable
+    // scratch and accumulate the VALID records (stamped with their save-time (thread_index, ordinal)); the sparse list
+    // is written as the correlation section after the sample arrays. corr_records stays sorted by (thread, ordinal) --
+    // outer loop by thread, inner by ascending ordinal.
+    crd::containers::Array<CorrelationRecord> corr_scratch{alloc};
+    crd::containers::Array<CorrelationRecord> corr_records{alloc};
+    if (want_correlation)
+    {
+        corr_scratch.resize(max_sample_count);
+    }
+
     auto* thread_hdrs = reinterpret_cast<ThreadHeader*>(out.data() + thread_hdr_start);
     for (crd::u32 i = 0U; i < thread_n; ++i)
     {
         const auto&   t           = threads[i];
         ThreadHeader& th          = thread_hdrs[i];
         th.thread_index           = t.thread_index;
-        th.sample_count           = t.sample_count;
-        th.sample_byte_offset     = cursor;
+        th.sample_byte_offset     = cursor; // th.sample_count is set below, to the count actually copied (truthful)
         th.dropped_count          = t.dropped_count;
         th._pad_a                 = 0U;
         copy_to_fixed(th.name, sizeof(th.name), t.name);
@@ -286,22 +332,63 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
         // is the saved size at snapshot time -- may differ slightly from
         // the pre-pass; cap to the smaller value to keep the buffer
         // within bounds.
-        const auto view = thread_samples(static_cast<crd::u8>(t.thread_index));
-        const crd::u32 to_copy = view.size < t.sample_count ? view.size : t.sample_count;
-
-        // Ring sample addresses are not contiguous in the source ring
-        // (head/tail wrap), but `view.data` returns the raw underlying
-        // buffer + size = head-tail. For v0f we copy whatever
-        // thread_samples returned -- this means the oldest-first order
-        // matches the live profiler's ordering. Future versions may
-        // reorder for capture stability.
-        const crd::u64 copy_bytes = static_cast<crd::u64>(to_copy) * sizeof(Sample);
-        if (copy_bytes > 0U)
+        //
+        // DIAG.6a(c2/c3): copy via copy_thread_samples -- OLDEST-FIRST regardless of ring wrap (c2), and refusing to
+        // race a concurrent consumer (c3). The old path copied thread_samples().data (the ring base) + size, which
+        // reads the wrong slots once the ring has wrapped (e.g. after a perf-ui clear_samples). A save is itself a
+        // cross-thread consumer ("save while producers wrap buffers"), so a live UI copy or a clear_samples may hold
+        // the ring; we retry a bounded number of times and then -- rather than write stale/torn samples -- record 0 for
+        // this thread and bump the visible contended counter (never a silent empty).
+        auto* const    sample_dst  = reinterpret_cast<Sample*>(out.data() + cursor);
+        crd::u32       to_copy     = 0U;
+        bool           contended   = false;
+        const crd::u64 deadline_ns =
+            static_cast<crd::u64>(crd::time::MonotonicClock::now().ns_since_epoch()) + kCaptureCopyBudgetNs;
+        for (;;)
         {
-            std::memcpy(out.data() + cursor, view.data, copy_bytes);
+            // DIAG.6b(b): with correlation, copy samples AND their slot-parallel records in ONE hold so they can't
+            // desync; without it, the original path (byte-identical output).
+            to_copy = want_correlation
+                          ? copy_thread_samples_with_correlation(static_cast<crd::u8>(t.thread_index), sample_dst,
+                                                                 corr_scratch.data(), t.sample_count, &contended)
+                          : copy_thread_samples(static_cast<crd::u8>(t.thread_index), sample_dst, t.sample_count,
+                                                &contended);
+            if (!contended)
+            {
+                break; // copied cleanly (possibly 0 if the ring was genuinely empty)
+            }
+            if (static_cast<crd::u64>(crd::time::MonotonicClock::now().ns_since_epoch()) >= deadline_ns)
+            {
+                break; // budget exhausted while still contended: give up truthfully below
+            }
+            // Be the polite consumer: the save holds the long (50 ms) budget, so yield between attempts to let a
+            // waiting clear_samples (or another copier) win the flag instead of starving it for the whole budget.
+            std::this_thread::yield();
         }
-        // If the live ring was shorter at copy time, zero the remainder
-        // so the file size matches the pre-pass total.
+        if (contended)
+        {
+            to_copy = 0U; // give up truthfully; the reserved slots are zeroed below
+            g_capture_contended_threads.fetch_add(1U, std::memory_order_relaxed);
+        }
+        th.sample_count           = to_copy; // truthful: the reader reads exactly what was copied, not zero-padding
+        // DIAG.6b(b): harvest this thread's VALID correlation records, stamping each with its save-time identity
+        // (thread_index + the ordinal within THIS saved array). Appended in (thread, ordinal) order.
+        if (want_correlation)
+        {
+            for (crd::u32 j = 0U; j < to_copy; ++j)
+            {
+                if ((corr_scratch[j].flags & kCorrelationValid) != 0U)
+                {
+                    CorrelationRecord rec = corr_scratch[j];
+                    rec.thread_index      = t.thread_index;
+                    rec.sample_ordinal    = j;
+                    corr_records.push_back(rec);
+                }
+            }
+        }
+        const crd::u64 copy_bytes = static_cast<crd::u64>(to_copy) * sizeof(Sample);
+        // The pre-pass reserved t.sample_count slots; if fewer were live/copyable, zero the reserved remainder so the
+        // file size still matches the precomputed total (cursor advances by the reserved amount, not to_copy).
         const crd::u64 leftover_bytes =
             static_cast<crd::u64>(t.sample_count - to_copy) * sizeof(Sample);
         if (leftover_bytes > 0U)
@@ -313,7 +400,35 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     }
 
     CRD_ASSERT_MSG(cursor == total_bytes,
-                   "save_capture: cursor diverged from precomputed total");
+                   "save_capture: cursor diverged from precomputed total (base sections)");
+
+    // ----- DIAG.6b(b): optional correlation section (sparse, appended, 8-aligned) -----
+    if (want_correlation && !corr_records.empty())
+    {
+        while ((cursor & 7U) != 0U) // align: reinterpret_cast to CorrelationRecord* must be 8-aligned
+        {
+            out[cursor++] = 0;
+        }
+        const crd::u64 corr_offset = static_cast<crd::u64>(cursor);
+        // Guard: if the offset does not fit the u32 header field, omit the section (flag stays clear) rather than write
+        // a wrong offset -- the capture is still valid, just without correlation.
+        if (corr_offset <= 0xFFFF'FFFFULL)
+        {
+            const crd::u32 count = static_cast<crd::u32>(corr_records.size());
+            *reinterpret_cast<crd::u32*>(out.data() + cursor) = count;
+            cursor += sizeof(crd::u32);
+            *reinterpret_cast<crd::u32*>(out.data() + cursor) = static_cast<crd::u32>(sizeof(CorrelationRecord));
+            cursor += sizeof(crd::u32);
+            std::memcpy(out.data() + cursor, corr_records.data(),
+                        static_cast<crd::usize>(count) * sizeof(CorrelationRecord));
+            cursor += static_cast<crd::usize>(count) * sizeof(CorrelationRecord);
+            hdr->flags |= kCprofFlagCorrelation;
+            hdr->correlation_section_offset = static_cast<crd::u32>(corr_offset);
+        }
+    }
+
+    CRD_ASSERT_MSG(cursor <= out.size(), "save_capture: correlation section overran the reserved buffer");
+    out.resize(cursor); // truncate the reserved-but-unused tail (no-op when no correlation was written)
     return out;
 }
 
@@ -345,6 +460,48 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     const auto written = std::fwrite(buf.data(), 1U, buf.size(), fp);
     std::fclose(fp);
     return written == buf.size();
+}
+
+[[nodiscard]] crd::containers::Array<crd::u8>
+load_capture_from_file(const char* path, crd::memory::IAllocator* alloc) noexcept
+{
+    crd::containers::Array<crd::u8> buf{alloc};
+    if (path == nullptr || alloc == nullptr)
+    {
+        return buf;
+    }
+    std::FILE* fp = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&fp, path, "rb") != 0)
+    {
+        return buf;
+    }
+#else
+    fp = std::fopen(path, "rb");
+#endif
+    if (fp == nullptr)
+    {
+        return buf;
+    }
+    if (std::fseek(fp, 0, SEEK_END) != 0)
+    {
+        std::fclose(fp);
+        return buf;
+    }
+    const long sz = std::ftell(fp);
+    if (sz <= 0 || std::fseek(fp, 0, SEEK_SET) != 0)
+    {
+        std::fclose(fp);
+        return buf;
+    }
+    buf.resize(static_cast<crd::usize>(sz));
+    const auto read = std::fread(buf.data(), 1U, static_cast<crd::usize>(sz), fp);
+    std::fclose(fp);
+    if (read != static_cast<crd::usize>(sz))
+    {
+        buf.resize(0U); // partial read -> report empty, never a truncated capture
+    }
+    return buf;
 }
 
 [[nodiscard]] bool validate_capture_buffer(
@@ -383,7 +540,35 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     {
         return false;
     }
+    // DIAG.6b(b): a buffer LARGER than min_bytes is fine (an appended section / a tolerated tail). But if a correlation
+    // section is ADVERTISED, validate it strictly here so CaptureView can trust the offset/count without OOB-reading a
+    // corrupt file: 8-aligned, past the base sections, its 8 B header in-bounds, record_size an exact match (the
+    // section's own version guard), and the record array within the buffer.
+    if ((hdr->flags & kCprofFlagCorrelation) != 0U)
+    {
+        const crd::u64 off = hdr->correlation_section_offset;
+        if ((off & 7U) != 0U || off < min_bytes || off + 8U > buf.size())
+        {
+            return false;
+        }
+        const crd::u8* p        = buf.data() + off;
+        const crd::u32 count    = *reinterpret_cast<const crd::u32*>(p);
+        const crd::u32 rec_size = *reinterpret_cast<const crd::u32*>(p + sizeof(crd::u32));
+        if (rec_size != sizeof(CorrelationRecord))
+        {
+            return false;
+        }
+        if (off + 8U + static_cast<crd::u64>(count) * rec_size > buf.size())
+        {
+            return false;
+        }
+    }
     return true;
+}
+
+[[nodiscard]] crd::u64 capture_contended_thread_count() noexcept
+{
+    return g_capture_contended_threads.load(std::memory_order_relaxed);
 }
 
 #else // CRD_PERF_ENABLED == 0
@@ -399,10 +584,21 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     return false;
 }
 
+[[nodiscard]] crd::containers::Array<crd::u8>
+load_capture_from_file(const char*, crd::memory::IAllocator* alloc) noexcept
+{
+    return crd::containers::Array<crd::u8>{alloc};
+}
+
 [[nodiscard]] bool validate_capture_buffer(
     crd::containers::ConstSpan<crd::u8>) noexcept
 {
     return false;
+}
+
+[[nodiscard]] crd::u64 capture_contended_thread_count() noexcept
+{
+    return 0U;
 }
 
 #endif

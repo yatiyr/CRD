@@ -87,6 +87,51 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
             rec.message_id_number = msg_id;
             rec.message_text =
                 crd::containers::String(callback_data->pMessage != nullptr ? callback_data->pMessage : "(null)");
+            // DIAG.7a(d1): resolve the Cerid identity from the named objects this message references (each carries its
+            // debug-utils name); first valid token wins. If no named object yields one, fall back to the message prose.
+            // Multi-object correlation (which of several named objects is "the" subject) is (e)/(g), not (d1).
+            for (crd::u32 i = 0; i < callback_data->objectCount; ++i)
+            {
+                const VkDebugUtilsObjectNameInfoEXT* objects = callback_data->pObjects;
+                if (objects != nullptr && objects[i].pObjectName != nullptr &&
+                    parse(std::string_view{objects[i].pObjectName}, rec.identity))
+                {
+                    break;
+                }
+            }
+            // DIAG.7a(g-4): a hazard recorded INSIDE a PassLabelScope carries no named object, but the active
+            // command-buffer debug label is format_debug_name(pass_id). Objects win (above); among labels the INNERMOST
+            // (index 0 on this VVL) wins; prose is still the final fallback. Guarded on null so the (d1) no-label
+            // path is a no-op (an empty array must not resolve).
+            if (!rec.identity.valid() && callback_data->pCmdBufLabels != nullptr)
+            {
+                // VVL delivers the label stack most-recent-FIRST (index 0 = innermost), confirmed by the (g-4) nested
+                // specimen -- so a forward walk makes the innermost active pass win over its enclosure.
+                for (crd::u32 i = 0; i < callback_data->cmdBufLabelCount; ++i)
+                {
+                    if (callback_data->pCmdBufLabels[i].pLabelName != nullptr &&
+                        parse(std::string_view{callback_data->pCmdBufLabels[i].pLabelName}, rec.identity))
+                    {
+                        break;
+                    }
+                }
+            }
+            // Queue labels carry a submit-time / GPU-AV message's active pass; same innermost-first order, after cmd labels.
+            if (!rec.identity.valid() && callback_data->pQueueLabels != nullptr)
+            {
+                for (crd::u32 i = 0; i < callback_data->queueLabelCount; ++i)
+                {
+                    if (callback_data->pQueueLabels[i].pLabelName != nullptr &&
+                        parse(std::string_view{callback_data->pQueueLabels[i].pLabelName}, rec.identity))
+                    {
+                        break;
+                    }
+                }
+            }
+            if (!rec.identity.valid() && callback_data->pMessage != nullptr)
+            {
+                (void)parse(std::string_view{callback_data->pMessage}, rec.identity);
+            }
             impl->records.push_back(std::move(rec));
         }
         else { ++impl->records_dropped; }
@@ -142,6 +187,27 @@ crd::u32 ValidationCapture::warning_count() const noexcept
 crd::u32 ValidationCapture::info_count() const noexcept
 {
     return m_impl ? m_impl->infos.load(std::memory_order_relaxed) : 0U;
+}
+
+crd::u32 ValidationCapture::dropped_count() const noexcept
+{
+    if (m_impl == nullptr) { return 0U; }
+    std::lock_guard<std::mutex> lk(m_impl->records_mu); // records_dropped is written under this lock in the callback
+    return m_impl->records_dropped;
+}
+
+ValidationReport ValidationCapture::report() const noexcept
+{
+    ValidationReport r;
+    if (m_impl == nullptr) { return r; }
+    r.info    = m_impl->infos.load(std::memory_order_relaxed);
+    r.warning = m_impl->warnings.load(std::memory_order_relaxed);
+    r.error   = m_impl->errors.load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lk(m_impl->records_mu);
+        r.dropped = m_impl->records_dropped;
+    }
+    return r; // truncated / instrumentation_failures stay 0 for Vulkan (full-text records; layer-absent via spec_version)
 }
 
 crd::containers::ConstSpan<ValidationMessage> ValidationCapture::messages() const noexcept

@@ -64,6 +64,7 @@ crd_tests(execution/ceir-cook ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook b
 crd_tests(execution/ceir-gpu ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge
 crd_tests(rendering/render-asset-core render-asset-core)  # RAF-1 (D-007 "RAF band"): identity/namespaces/diagnostics/deps Gate 1
 crd_tests(gpu/gpu-context gpu-context)        # RAF-2a (D-007 "RAF band"): canonical GPU command model (device-free structural gate)
+crd_tests(gpu/perf-gpu-bridge perf-gpu-bridge) # DIAG.6b(i): IFrameGraph timings -> crd-perf GPU spans (fake-verified)
 crd_tests(rendering/render-program render-program)     # RAF-4 (D-007 "RAF band"): shader + program contract Gate 4
 crd_tests(rendering/render-material render-material)    # RAF-5 (D-007 "RAF band"): material + technique contract Gate 5
 crd_tests(rendering/render-pass render-pass)        # RAF-6 (D-007 "RAF band"): pass-executor registry Gate 6

@@ -7,6 +7,8 @@
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
 #include "dx12_frame_descriptors.hpp"
+#include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-a): mint + SetName a Cerid identity on a native ID3D12Object
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-dx12): mint(ObjectKind::Pass) for frame-graph pass identities
 
 #include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
 #include <crd/log/log_macros.hpp>
@@ -396,18 +398,35 @@ constexpr D3D12_RESOURCE_STATES kIndexedDrawStates = D3D12_RESOURCE_STATE_INDEX_
 class Dx12RasterTarget final : public IRasterTarget
 {
 public:
+    // DIAG.7a(d2b-dx12-b): whether the ctor mints + names one identity for this target. `Mint` for the standalone
+    // factory targets (create_color_target and siblings); `None` for frame-graph transient / RTT nodes (REN-1/3/39/40)
+    // that alias or borrow heap images -- those keep the defaulted-invalid identity (dtor detach is a no-op) and are the
+    // frame-graph batch's to wire, matching batch 1's deferral of the transient Dx12Texture.
+    enum class IdentityMode { Mint, None };
+
     Dx12RasterTarget(ComPtr<ID3D12Resource> tex, ComPtr<ID3D12Resource> resolve, ComPtr<ID3D12Resource> depth,
                      ComPtr<ID3D12Resource> readback, ComPtr<ID3D12DescriptorHeap> rtv_heap,
                      ComPtr<ID3D12DescriptorHeap> dsv_heap, void* mapped, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp,
-                     crd::u32 samples, crd::u32 w, crd::u32 h, bool has_stencil = false) noexcept
+                     crd::u32 samples, crd::u32 w, crd::u32 h, bool has_stencil = false,
+                     IdentityMode identity_mode = IdentityMode::Mint) noexcept
         : m_tex(std::move(tex)), m_resolve(std::move(resolve)), m_depth(std::move(depth)),
           m_readback(std::move(readback)), m_rtv_heap(std::move(rtv_heap)), m_dsv_heap(std::move(dsv_heap)),
           m_mapped(mapped), m_fp(fp), m_samples(samples), m_w(w), m_h(h), m_has_stencil(has_stencil)
     {
+        if (identity_mode == IdentityMode::None) { return; } // frame-graph node: no mint, identity stays invalid
+        // DIAG.7a(d2b-dx12-b): ONE identity for the whole logical target, minted on the colour primary and stamped
+        // onto every native sibling it owns -- a validation message about any of them resolves to this one identity.
+        m_identity = detail::dx12_attach_identity(m_tex.Get(), ObjectKind::Resource, "dx12-target-color");
+        detail::dx12_name_object(m_resolve.Get(), m_identity, "dx12-target-resolve");
+        detail::dx12_name_object(m_depth.Get(), m_identity, "dx12-target-depth");
+        detail::dx12_name_object(m_readback.Get(), m_identity, "dx12-target-readback");
+        detail::dx12_name_object(m_rtv_heap.Get(), m_identity, "dx12-target-rtv-heap");
+        detail::dx12_name_object(m_dsv_heap.Get(), m_identity, "dx12-target-dsv-heap");
     }
     ~Dx12RasterTarget() override
     {
         if (m_mapped != nullptr && m_readback != nullptr) { m_readback->Unmap(0, nullptr); }
+        detail::dx12_detach_identity(m_identity); // DIAG.7a(d2b-dx12-b): retire the logical target's identity
     }
     Dx12RasterTarget(const Dx12RasterTarget&)            = delete;
     Dx12RasterTarget& operator=(const Dx12RasterTarget&) = delete;
@@ -462,7 +481,11 @@ public:
     }
     [[nodiscard]] bool            has_vrs() const noexcept { return m_vrs != nullptr; } // B1-e attachment VRS image
     [[nodiscard]] ID3D12Resource* vrs_tex() const noexcept { return m_vrs.Get(); }
-    void set_vrs(ComPtr<ID3D12Resource> vrs) noexcept { m_vrs = std::move(vrs); }
+    void set_vrs(ComPtr<ID3D12Resource> vrs) noexcept
+    {
+        m_vrs = std::move(vrs);
+        detail::dx12_name_object(m_vrs.Get(), m_identity, "dx12-target-vrs"); // same logical identity, no new mint
+    }
 
 private:
     ComPtr<ID3D12Resource>              m_tex;
@@ -478,6 +501,7 @@ private:
     crd::u32                            m_w = 0;
     crd::u32                            m_h = 0;
     bool                                m_has_stencil = false; // REN-38-F11: the depth resource is D24S8 (appended at END)
+    ObjectIdentity                      m_identity{}; // DIAG.7a(d2b-dx12-b): one stable Cerid identity for the whole target
 };
 
 // ── RET-2 (ADR-0105): the DX12 present surface — the DXGI mirror of the Vulkan sink design ────────────────────────────
@@ -712,8 +736,13 @@ public:
           m_as_size(as_size), m_hs(std::move(hs)), m_hs_size(hs_size), m_ds(std::move(ds)), m_ds_size(ds_size),
           m_pso1(std::move(pso1))
     {
+        // DIAG.7a(d2b-dx12-b) batch 3: ONE identity per logical program (ObjectKind::Program, NOT Resource), minted on
+        // the always-present root signature and stamped onto each owned PSO -- the eager pso1 here, lazy variants in
+        // pso_for. All four create_raster_program factories funnel through this ctor, so it is one mint per program.
+        m_identity = detail::dx12_attach_identity(m_root.Get(), ObjectKind::Program, "dx12-program-rootsig");
+        detail::dx12_name_object(m_pso1.Get(), m_identity, "dx12-program-pso");
     }
-    ~Dx12RasterProgram() override                           = default;
+    ~Dx12RasterProgram() override { detail::dx12_detach_identity(m_identity); } // DIAG.7a(d2b-dx12-b): retire the program id
     Dx12RasterProgram(const Dx12RasterProgram&)             = delete;
     Dx12RasterProgram& operator=(const Dx12RasterProgram&)  = delete;
     Dx12RasterProgram(Dx12RasterProgram&&)                  = delete;
@@ -776,6 +805,7 @@ public:
                     D3D12_SHADER_BYTECODE{m_fs.get(), m_fs_size}, samples, dsv, depth_func, conservative, num_rts,
                     D3D12_SHADER_BYTECODE{m_hs.get(), m_hs_size}, D3D12_SHADER_BYTECODE{m_ds.get(), m_ds_size},
                     rt_fmt, blend, &st, fmts);
+                detail::dx12_name_object(m_pso1.Get(), m_identity, "dx12-program-pso"); // DIAG.7a(d2b-dx12-b): lazy PSO, no mint
             }
             return m_pso1.Get();
         }
@@ -809,6 +839,7 @@ public:
                                            D3D12_SHADER_BYTECODE{m_hs.get(), m_hs_size},   // B4-tess: hull (empty ⇒ non-tess)
                                            D3D12_SHADER_BYTECODE{m_ds.get(), m_ds_size},   // B4-tess: domain
                                            rt_fmt, blend, &st, fmts);                      // A15 blend · REN-38 state · c3 per-attachment fmts
+        detail::dx12_name_object(m_cache[m_cache_n].pso.Get(), m_identity, "dx12-program-pso"); // DIAG.7a(d2b-dx12-b): variant PSO, no mint
         return m_cache[m_cache_n++].pso.Get();
     }
 
@@ -839,6 +870,7 @@ private:
     ComPtr<ID3D12PipelineState> m_pso1;                // plain 1×/no-depth PSO, materialized for its actual use
     PsoCacheEntry               m_cache[kPsoCacheCap]; // lazily-built PSOs for MSAA / depth configs
     int                         m_cache_n = 0;
+    ObjectIdentity              m_identity{}; // DIAG.7a(d2b-dx12-b): one stable Cerid identity for the whole program
 };
 
 // B1-f: a fragment-shader storage buffer — a DEFAULT-heap UAV buffer (RWStructuredBuffer<uint> / RasterizerOrdered… on
@@ -846,13 +878,17 @@ private:
 class Dx12StorageBuffer final : public IStorageBuffer
 {
 public:
-    Dx12StorageBuffer(ComPtr<ID3D12Resource> buf, ComPtr<ID3D12Resource> readback, void* mapped, crd::u32 size) noexcept
-        : m_buf(std::move(buf)), m_readback(std::move(readback)), m_mapped(mapped), m_size(size)
+    Dx12StorageBuffer(ComPtr<ID3D12Resource> buf, ComPtr<ID3D12Resource> readback, void* mapped, crd::u32 size,
+                      ObjectIdentity identity = {}) noexcept
+        : m_buf(std::move(buf)), m_readback(std::move(readback)), m_mapped(mapped), m_size(size), m_identity(identity)
     {
     }
     ~Dx12StorageBuffer() override
     {
         if (m_mapped != nullptr && m_readback != nullptr) { m_readback->Unmap(0, nullptr); }
+        // DIAG.7a(d2b-dx12-a): retire the identity so the freed native object's slot generation bumps -- a later
+        // message about it resolves to alive()==false (the retired-provenance primitive lifecycle coverage (e) uses).
+        detail::dx12_detach_identity(m_identity);
     }
     Dx12StorageBuffer(const Dx12StorageBuffer&)            = delete;
     Dx12StorageBuffer& operator=(const Dx12StorageBuffer&) = delete;
@@ -871,12 +907,14 @@ public:
     [[nodiscard]] ID3D12Resource* buf() const noexcept { return m_buf.Get(); }
     [[nodiscard]] ID3D12Resource* readback() const noexcept { return m_readback.Get(); }
     [[nodiscard]] crd::u32        num_elements() const noexcept { return m_size / 4U; }
+    [[nodiscard]] ObjectIdentity  identity() const noexcept { return m_identity; } // DIAG.7a(d2b): the minted Cerid id
 
 private:
     ComPtr<ID3D12Resource> m_buf;
     ComPtr<ID3D12Resource> m_readback;
     void*                  m_mapped = nullptr;
     crd::u32               m_size   = 0;
+    ObjectIdentity         m_identity{}; // DIAG.7a(d2b-dx12-a): stable Cerid identity, also this buffer's debug name
 };
 
 // B2: a sampled texture — a DEFAULT-heap RGBA8 resource parked in PIXEL_SHADER_RESOURCE state. It carries the fully-formed
@@ -888,11 +926,13 @@ public:
     // R32_TYPELESS resource (typed-D32 SRVs fail creation), so the format alone cannot tell a depth atlas from
     // an ordinary single-channel colour texture — and the atlas SAMPLER is chosen by this answer (REN-40-D).
     Dx12Texture(ComPtr<ID3D12Resource> tex, crd::u32 w, crd::u32 h, const D3D12_SHADER_RESOURCE_VIEW_DESC& srv,
-                bool depth = false) noexcept
-        : m_tex(std::move(tex)), m_srv(srv), m_w(w), m_h(h), m_depth(depth)
+                bool depth = false, ObjectIdentity identity = {}) noexcept
+        : m_tex(std::move(tex)), m_srv(srv), m_w(w), m_h(h), m_depth(depth), m_identity(identity)
     {
     }
-    ~Dx12Texture() override                    = default;
+    // DIAG.7a(d2b-dx12-b): retire the identity so the freed texture's slot generation bumps. Frame-graph transient
+    // Dx12Textures pass no identity (default-invalid), for which detach is a no-op -- they are wired in a later batch.
+    ~Dx12Texture() override { detail::dx12_detach_identity(m_identity); }
     Dx12Texture(const Dx12Texture&)            = delete;
     Dx12Texture& operator=(const Dx12Texture&) = delete;
     Dx12Texture(Dx12Texture&&)                 = delete;
@@ -910,6 +950,7 @@ private:
     crd::u32                        m_w = 0;
     crd::u32                        m_h = 0;
     bool                            m_depth = false;
+    ObjectIdentity                  m_identity{}; // DIAG.7a(d2b-dx12-b): stable Cerid identity + this texture's debug name
 };
 
 inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour attachments
@@ -925,10 +966,17 @@ public:
         : m_rtv_heap(std::move(rtv_heap)), m_rtv_inc(rtv_inc), m_n(n), m_w(w), m_h(h)
     {
         for (crd::u32 i = 0; i < n; ++i) { m_tex[i] = std::move(tex[i]); m_rb[i] = std::move(rb[i]); m_mapped[i] = mapped[i]; m_fp[i] = fp[i]; }
+        // DIAG.7a(d2b-dx12-b): ONE identity for the whole logical G-buffer (all N colour planes + readbacks + heap),
+        // minted on plane 0 and stamped onto every sibling -- so live_count rises by 1, not N, per G-buffer target.
+        m_identity = detail::dx12_attach_identity(m_tex[0].Get(), ObjectKind::Resource, "dx12-gbuffer-color");
+        for (crd::u32 i = 1; i < m_n; ++i) { detail::dx12_name_object(m_tex[i].Get(), m_identity, "dx12-gbuffer-color"); }
+        for (crd::u32 i = 0; i < m_n; ++i) { detail::dx12_name_object(m_rb[i].Get(), m_identity, "dx12-gbuffer-readback"); }
+        detail::dx12_name_object(m_rtv_heap.Get(), m_identity, "dx12-gbuffer-rtv-heap");
     }
     ~Dx12GBufferTarget() override
     {
         for (crd::u32 i = 0; i < m_n; ++i) { if (m_mapped[i] != nullptr && m_rb[i] != nullptr) { m_rb[i]->Unmap(0, nullptr); } }
+        detail::dx12_detach_identity(m_identity); // DIAG.7a(d2b-dx12-b): retire the logical G-buffer's identity
     }
     Dx12GBufferTarget(const Dx12GBufferTarget&)            = delete;
     Dx12GBufferTarget& operator=(const Dx12GBufferTarget&) = delete;
@@ -969,6 +1017,7 @@ private:
     crd::u32                           m_n = 0;
     crd::u32                           m_w = 0;
     crd::u32                           m_h = 0;
+    ObjectIdentity                     m_identity{}; // DIAG.7a(d2b-dx12-b): one stable Cerid identity for the whole G-buffer
 };
 
 // ── ⛔⛔ REN-38-A9/A10: THE ONE PLACE A BUFFER HANDLE IS RESOLVED — the DX12 mirror of `vk_buffer_of`. ──
@@ -1133,6 +1182,12 @@ public:
     ~Dx12RasterContext() override
     {
         drain_upload_batches(); // wait out any in-flight upload batch before its ring/list ComPtrs release
+        // DIAG.7a(d2b-dx12-b) batch 3c: retire the identities of every cached compute-kernel PSO. These caches are
+        // append-only (never evicted), so the context dtor is the single retire site; the count is the source of truth.
+        for (crd::u32 i = 0; i < m_kernel_n; ++i) { detail::dx12_detach_identity(m_kernel_id[i]); }
+        for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { detail::dx12_detach_identity(m_rt_pso_id[i]); }
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i) { detail::dx12_detach_identity(m_sampled_id[i]); }
+        for (crd::u32 i = 0; i < m_dxr_n; ++i) { detail::dx12_detach_identity(m_dxr[i].identity); } // DIAG.7a batch 3d
         if (m_event != nullptr) { CloseHandle(m_event); }
     }
     Dx12RasterContext(const Dx12RasterContext&)            = delete;
@@ -2561,6 +2616,10 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS      sbt_va       = 0;
         UINT64                         rec_stride   = 0;
         bool                           has_callable = false; // REN-38-F13: record 3 is the callable identifier
+        // DIAG.7a(d2b-dx12-b) batch 3d: one stable Cerid Program identity for this DXR pipeline. A trivially-copyable
+        // value, so DxrPipe stays copyable (`m_dxr[n] = out`); NO dtor here (the local `out` must not retire) --
+        // retire happens from m_dxr[0..m_dxr_n) in ~Dx12RasterContext.
+        ObjectIdentity                 identity{};
     };
 
     // ⛔ REN-38 audit: the A16 Vulkan scar in its DX12 form, found by the FIRST DX12 RT-pipeline device gate.
@@ -2799,6 +2858,14 @@ public:
         }
         out.sbt->Unmap(0, nullptr);
         out.sbt_va = out.sbt->GetGPUVirtualAddress();
+
+        // DIAG.7a(d2b-dx12-b) batch 3d: every early-return above has passed, so this is the cache-MISS build path -- mint
+        // ONE Program identity (primary = the DXR state object) and name the SBT resource with the same id, then let the
+        // copy below carry `out.identity` into the cache slot. A cache HIT (~2745) returns the stored entry untouched, so
+        // no mint on a hit. `out` has no dtor, so it does not retire on scope exit; the slot's identity is retired in
+        // ~Dx12RasterContext. (The SBT is NAMED, not minted, so it never adds to the Resource count.)
+        out.identity = detail::dx12_attach_identity(out.state.Get(), ObjectKind::Program, "dx12-rt-pipeline");
+        detail::dx12_name_object(out.sbt.Get(), out.identity, "dx12-rt-sbt");
 
         m_dxr[m_dxr_n] = out;
         ++m_dxr_n;
@@ -3252,7 +3319,13 @@ public:
 
         void* mapped = nullptr;
         if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
-        return std::make_unique<Dx12StorageBuffer>(std::move(buf), std::move(readback), mapped, size_bytes);
+        // DIAG.7a(d2b-dx12-a): mint a stable Cerid identity and SetName it onto the native UAV buffer so a validation
+        // message about it resolves back to this resource. batch 4d: the host-visible readback is an OWNED sibling of
+        // this one logical resource, so name it with the SAME identity (not a second mint) — parity with
+        // Dx12RasterTarget/Dx12GBufferTarget, so a message about the readback also resolves here.
+        const ObjectIdentity identity = detail::dx12_attach_identity(buf.Get(), ObjectKind::Resource, "dx12-storage");
+        detail::dx12_name_object(readback.Get(), identity, "dx12-storage-readback");
+        return std::make_unique<Dx12StorageBuffer>(std::move(buf), std::move(readback), mapped, size_bytes, identity);
     }
 
     // GEO-1: staged CPU→UAV upload (vertex pulling — the cooked vertex stream the VS fetches by SV_VertexID). Mirrors the
@@ -4750,7 +4823,9 @@ public:
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels     = 1;
-        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
+        // DIAG.7a(d2b-dx12-b): mint + SetName the Cerid identity BEFORE moving tex (arg eval order is unspecified).
+        const ObjectIdentity id = detail::dx12_attach_identity(tex.Get(), ObjectKind::Resource, "dx12-texture");
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/false, id);
     }
 
     // RET-2 (ADR-0105): the DXGI present seam. `native_window` must be a real HWND (DXGI has no headless surface).
@@ -4846,7 +4921,9 @@ public:
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels     = mip_count;
-        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
+        // DIAG.7a(d2b-dx12-b): mint + SetName the Cerid identity BEFORE moving tex (arg eval order is unspecified).
+        const ObjectIdentity id = detail::dx12_attach_identity(tex.Get(), ObjectKind::Resource, "dx12-texture");
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/false, id);
     }
 
     [[nodiscard]] std::unique_ptr<ITexture> create_texture_dim(TextureKind kind, crd::u32 width, crd::u32 height,
@@ -4947,7 +5024,9 @@ public:
         case D3D12_SRV_DIMENSION_TEXTURECUBEARRAY: srv.TextureCubeArray.MipLevels = 1; srv.TextureCubeArray.NumCubes = layers / 6U; break;
         default:                                   srv.Texture2D.MipLevels = 1; break;
         }
-        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv);
+        // DIAG.7a(d2b-dx12-b): mint + SetName the Cerid identity BEFORE moving tex (arg eval order is unspecified).
+        const ObjectIdentity id = detail::dx12_attach_identity(tex.Get(), ObjectKind::Resource, "dx12-texture");
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/false, id);
     }
 
     void draw_textured(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& texture,
@@ -5029,7 +5108,9 @@ public:
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels     = 1;
-        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/true);
+        // DIAG.7a(d2b-dx12-b): mint + SetName the Cerid identity BEFORE moving tex (arg eval order is unspecified).
+        const ObjectIdentity id = detail::dx12_attach_identity(tex.Get(), ObjectKind::Resource, "dx12-depth-texture");
+        return std::make_unique<Dx12Texture>(std::move(tex), width, height, srv, /*depth=*/true, id);
     }
 
     void draw_shadow(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& depth,
@@ -5164,6 +5245,10 @@ public:
         if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
         m_kernel_key[m_kernel_n] = dxil;
         m_kernel_pso[m_kernel_n] = pso;
+        // DIAG.7a(d2b-dx12-b) batch 3c: mint ONE Program identity per cached kernel PSO, on the cache-MISS path only
+        // (a hit returns above with no mint). Kept adjacent to the PSO store so the parallel arrays never desync; the
+        // shared m_kernel_root is NOT named (naming one program's id onto a shared root sig is the aliasing bug).
+        m_kernel_id[m_kernel_n] = detail::dx12_attach_identity(pso.Get(), ObjectKind::Program, "dx12-kernel-pso");
         ++m_kernel_n;
         return m_kernel_pso[m_kernel_n - 1U].Get();
     }
@@ -5219,6 +5304,7 @@ public:
         if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
         m_rt_pso_key[m_rt_pso_n] = dxil;
         m_rt_pso[m_rt_pso_n]     = pso;
+        m_rt_pso_id[m_rt_pso_n]  = detail::dx12_attach_identity(pso.Get(), ObjectKind::Program, "dx12-rt-kernel-pso"); // DIAG.7a batch 3c: mint on miss; m_rt_root is shared, not named
         ++m_rt_pso_n;
         return m_rt_pso[m_rt_pso_n - 1U].Get();
     }
@@ -5282,6 +5368,7 @@ public:
         if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
         m_sampled_pso_key[m_sampled_pso_n] = dxil;
         m_sampled_pso[m_sampled_pso_n]     = pso;
+        m_sampled_id[m_sampled_pso_n]      = detail::dx12_attach_identity(pso.Get(), ObjectKind::Program, "dx12-sampled-kernel-pso"); // DIAG.7a batch 3c: mint on miss; m_sampled_kernel_root is shared, not named
         ++m_sampled_pso_n;
         return m_sampled_pso[m_sampled_pso_n - 1U].Get();
     }
@@ -6886,16 +6973,19 @@ private:
     ComPtr<ID3D12RootSignature>        m_kernel_root;
     const void*                        m_kernel_key[kKernelPsoCap]{};
     ComPtr<ID3D12PipelineState>        m_kernel_pso[kKernelPsoCap];
+    ObjectIdentity                     m_kernel_id[kKernelPsoCap]{}; // DIAG.7a(d2b-dx12-b) batch 3c: one Program id per cached kernel PSO
     crd::u32                           m_kernel_n = 0U;
     BlitKit                            m_blit;                  // REN-38-A6: the internal fullscreen blit (D3D12 has no copy-engine blit)
     ComPtr<ID3D12RootSignature>        m_rt_root;               // REN-38-A9: TLAS root SRV (t0) + UAV table (u1..uN)
     const void*                        m_rt_pso_key[kKernelPsoCap]{};
     ComPtr<ID3D12PipelineState>        m_rt_pso[kKernelPsoCap];
+    ObjectIdentity                     m_rt_pso_id[kKernelPsoCap]{}; // DIAG.7a(d2b-dx12-b) batch 3c: one Program id per cached RT-query kernel PSO
     crd::u32                           m_rt_pso_n = 0U;
     // REN-40-G3: sampled-compute root signature (UAV table u0..u7 + SRV t8 + static sampler s9) and PSO cache.
     ComPtr<ID3D12RootSignature>        m_sampled_kernel_root;
     const void*                        m_sampled_pso_key[kKernelPsoCap]{};
     ComPtr<ID3D12PipelineState>        m_sampled_pso[kKernelPsoCap];
+    ObjectIdentity                     m_sampled_id[kKernelPsoCap]{}; // DIAG.7a(d2b-dx12-b) batch 3c: one Program id per cached sampled-kernel PSO
     crd::u32                           m_sampled_pso_n = 0U;
     ComPtr<ID3D12CommandSignature>     m_dispatch_sig;          // REN-38-A10: ExecuteIndirect(DISPATCH)
     ComPtr<ID3D12DescriptorHeap>       m_clear_heap;            // REN-38-B3: the NON-shader-visible UAV ClearUint needs
@@ -7002,6 +7092,7 @@ public:
     ~Dx12FrameGraph() override
     {
         wait_pending_submit();
+        retire_pass_identities(); // DIAG.7a(d2c-dx12): retire any pass ids added since the last reset()
         free_transients();
         // REN-37.5: the persistent registry is the one thing `reset()` never touches, so the DESTRUCTOR is the
         // only place it is released.
@@ -7052,7 +7143,8 @@ public:
         const D3D12_PLACED_SUBRESOURCE_FOOTPRINT tfp{};
         auto* t = new (std::nothrow) Dx12RasterTarget(cn.resource, nullptr, dn.resource, nullptr, cn.rtv_heap,
                                                       dn.dsv_heap ? dn.dsv_heap : dn.depth_dsv_heap, nullptr, tfp, 1U,
-                                                      cn.desc.width, cn.desc.height);
+                                                      cn.desc.width, cn.desc.height, /*has_stencil=*/false,
+                                                      Dx12RasterTarget::IdentityMode::None); // REN-40 fg node: deferred
         if (t == nullptr) { return nullptr; } // OOM: the caller's needs_target guard skips the pass
         cn.shared_depth_target = t;
         return t;
@@ -7290,9 +7382,17 @@ public:
         Pass p{};
         p.name = name;
         p.kind = kind;
+        p.identity = identity_registry().mint(ObjectKind::Pass); // DIAG.7a(d2c-dx12): mint one Pass identity per add_pass
         m_passes.push_back(p);
         m_builder.bind(this, m_passes.size() - 1U);
         return m_builder;
+    }
+
+    // DIAG.7a(d2c-dx12): a pass record dies at reset() (m_passes.clear) and at the dtor -- retire its Pass identity at
+    // BOTH (identity goes where the destroy is). No-op-safe for a default identity.
+    void retire_pass_identities() noexcept
+    {
+        for (Pass& pp : m_passes) { detail::dx12_detach_identity(pp.identity); }
     }
 
     [[nodiscard]] bool build() override;
@@ -7303,6 +7403,7 @@ public:
         free_transients();
         m_images.clear();
         m_buffers.clear();
+        retire_pass_identities(); // DIAG.7a(d2c-dx12): retire pass ids BEFORE clearing the records they live on
         m_passes.clear();
         m_barrier_count = 0U;
     }
@@ -7330,6 +7431,27 @@ public:
     }
     [[nodiscard]] double gpu_ms_total() const noexcept override { return m_gpu_ms_total; }
     [[nodiscard]] bool   gpu_timing_available() const noexcept override { return m_ts_heap != nullptr; }
+
+    // ── DIAG.6b(i2): raw per-pass ticks so a profiler can PLACE each pass (see IFrameGraph). ──
+    [[nodiscard]] bool pass_gpu_ticks(crd::u32 i, crd::u64& begin_ticks, crd::u64& end_ticks) const noexcept override
+    {
+        if (i >= m_timed_passes) { return false; } // stale/unresolved -> unavailable, never zeros reported as real
+        begin_ticks = m_pass_ticks[i * 2U];
+        end_ticks   = m_pass_ticks[i * 2U + 1U];
+        return true;
+    }
+    [[nodiscard]] double gpu_timestamp_period_ns() const noexcept override
+    {
+        return m_ts_freq > 0.0 ? 1.0e9 / m_ts_freq : 0.0; // m_ts_freq is ticks/sec -> ns per tick
+    }
+    // The D3D12 timestamp counter is a full 64-bit value (no per-queue valid-bits concept); it cannot wrap mid-frame.
+    [[nodiscard]] crd::u32 gpu_timestamp_valid_bits() const noexcept override { return 64U; }
+    [[nodiscard]] FgPassKind pass_kind(crd::u32 i) const noexcept override
+    {
+        return i < m_timed_passes ? m_pass_kinds[i] : FgPassKind::Raster;
+    }
+    // This backend submits every pass on the single DIRECT queue (no async-compute queue declared): always graphics.
+    [[nodiscard]] FgQueue pass_queue(crd::u32 /*i*/) const noexcept override { return FgQueue::Graphics; }
 
     void wait_pending_submit() noexcept; // defined next to execute()
     void resolve_timestamps() noexcept;
@@ -7441,6 +7563,7 @@ private:
         FgExecuteFn      fn      = nullptr;
         void*            user    = nullptr;
         IPresentSurface* present = nullptr;
+        ObjectIdentity   identity{};             // DIAG.7a(d2c-dx12): one Pass identity per logical pass
     };
 
     // a fluent builder that rebinds to the current pass (one instance reused — add_pass returns it)
@@ -7621,6 +7744,11 @@ private:
     double                              m_ts_freq = 0.0; // ticks per second
     crd::containers::Array<const char*> m_pass_names{crd::memory::default_allocator()};
     double                              m_pass_ms[kMaxTimedPasses]{};
+    // DIAG.6b(i2): the RAW begin/end ticks behind m_pass_ms[i] (set in resolve_timestamps, gated by m_timed_passes),
+    // and the per-timed-pass kind (recorded at execute, indexed like m_pass_names). A profiler needs the ticks to
+    // PLACE a pass on a GPU timeline; m_pass_ms is a duration with no begin.
+    crd::u64                            m_pass_ticks[kMaxTimedPasses * 2U]{};
+    FgPassKind                          m_pass_kinds[kMaxTimedPasses]{};
     crd::u32                            m_timed_passes = 0U;
     double                              m_gpu_ms_total = 0.0;
     crd::u32 m_physical_bytes = 0U;
@@ -7959,10 +8087,12 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                 // ⭐ REN-39-D2: a COLOUR transient hands its companion depth + DSV heap to the depth slots, so
                 // `has_depth()` is true and every scene verb depth-tests into it (the Vulkan `make_target` twin).
                 return n.is_depth ? new Dx12RasterTarget(nullptr, nullptr, n.resource, nullptr, nullptr, heap, nullptr,
-                                                         tfp, 1U, n.desc.width, n.desc.height)
+                                                         tfp, 1U, n.desc.width, n.desc.height, /*has_stencil=*/false,
+                                                         Dx12RasterTarget::IdentityMode::None) // REN-3 fg node: deferred
                                   : new Dx12RasterTarget(n.resource, nullptr, n.depth_resource, nullptr, heap,
                                                          n.depth_dsv_heap, nullptr, tfp, 1U, n.desc.width,
-                                                         n.desc.height);
+                                                         n.desc.height, /*has_stencil=*/false,
+                                                         Dx12RasterTarget::IdentityMode::None); // REN-39 fg node: deferred
             };
 
             if (is_array)
@@ -8151,6 +8281,7 @@ void Dx12FrameGraph::execute()
         {
             ts_list->EndQuery(m_ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, pass_index * 2U + 1U);
             m_pass_names.push_back(p.name);
+            m_pass_kinds[pass_index] = p.kind; // DIAG.6b(i2): record kind parallel to the name/tick index
         }
         ++pass_index;
     }
@@ -8257,6 +8388,8 @@ void Dx12FrameGraph::resolve_timestamps() noexcept
         const UINT64 a = ticks[i * 2U];
         const UINT64 b = ticks[i * 2U + 1U];
         m_pass_ms[i]   = b > a ? (static_cast<double>(b - a) / m_ts_freq) * 1000.0 : 0.0;
+        m_pass_ticks[i * 2U]      = static_cast<crd::u64>(a); // DIAG.6b(i2): retain the raw pair behind m_pass_ms[i]
+        m_pass_ticks[i * 2U + 1U] = static_cast<crd::u64>(b);
     }
     m_gpu_ms_total = ticks[n * 2U - 1U] > ticks[0]
                          ? (static_cast<double>(ticks[n * 2U - 1U] - ticks[0]) / m_ts_freq) * 1000.0

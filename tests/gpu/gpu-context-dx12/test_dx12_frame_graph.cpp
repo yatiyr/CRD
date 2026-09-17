@@ -15,10 +15,27 @@
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
 #include <crd/vertexcook/vertex_asset.hpp> // REN-38-F13: the authored RT stages // REN-38-A9: the host builds the scene the asset names
 #include <crd/gpu/frame_graph.hpp>
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-dx12): live_count(ObjectKind::Pass) oracle
 #include <crd/gpu/raster_context.hpp>
 
 #include <crd/framecook/frame_asset.hpp>   // REN-36.2: the cooked frame-graph asset
 #include <crd/framecook/frame_runtime.hpp> // REN-36.2: executing it through IFrameGraph
+// DIAG.6b(k): the real end-to-end -- a real Dx12FrameGraph driven through the real crd-perf GPU bridge.
+// config.hpp is cheap (build_config + types) and defines CRD_PERF_ENABLED; the heavy perf headers below
+// are only needed by the CRD_PERF_ENABLED e2e block (~line 1249) and must NOT enter the TU when profiling
+// is off -- pulling their inline/template code into this large Catch2 TU tips clang-cl thin-LTO codegen into
+// an lld-link ICE in the shipping lane (perf off). Guarding the includes keeps the shipping TU lean.
+#include <crd/perf/config.hpp>
+#if CRD_PERF_ENABLED
+#  include <crd/perf/capture.hpp>
+#  include <crd/perf/capture_view.hpp>
+#  include <crd/perf/gpu/frame_graph_gpu_backend.hpp>
+#  include <crd/perf/gpu_scope.hpp>
+#  include <crd/perf/perf.hpp>
+#  include <crd/perf/profiler.hpp>
+#  include <crd/perf/sample.hpp>
+#  include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#endif // CRD_PERF_ENABLED
 #include <crd/renderasset/diagnostic.hpp>  // CEIR-18c: DiagnosticList for build_frame_plans at the direct rec.record site
 #include <crd/kir/ckir.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -1213,7 +1230,78 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
     CHECK(fgraph->pass_gpu_ms(99U) == 0.0);
     CHECK(fgraph->pass_name(99U) == nullptr);
 
+    // DIAG.6b(i2): the raw per-pass ticks reconstruct pass_gpu_ms via a DIFFERENT code path, and the placement
+    // metadata is exposed. (Env-gated: this whole case SKIPs without a timestamp-capable device; on a GPU lane it is
+    // the acceptance evidence that (i)'s default-unavailable verdict flips to "placed".)
+    const double period = fgraph->gpu_timestamp_period_ns();
+    CHECK(period > 0.0);
+    CHECK(fgraph->gpu_timestamp_valid_bits() == 64U); // the D3D12 timestamp counter is a full 64-bit value
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        crd::u64 tb = 0U;
+        crd::u64 te = 0U;
+        REQUIRE(fgraph->pass_gpu_ticks(i, tb, te));
+        CHECK(te >= tb);
+        const double ms_from_ticks = (static_cast<double>(te - tb) * period) / 1.0e6;
+        const double diff          = ms_from_ticks - fgraph->pass_gpu_ms(i);
+        CHECK((diff < 0.0 ? -diff : diff) < 1.0e-6); // same underlying ticks -> same duration
+        CHECK(fgraph->pass_kind(i) == crd::gpu::FgPassKind::Raster);
+        CHECK(fgraph->pass_queue(i) == crd::gpu::FgQueue::Graphics); // DX12: single direct queue
+    }
+    crd::u64 ob = 0U;
+    crd::u64 oe = 0U;
+    CHECK_FALSE(fgraph->pass_gpu_ticks(99U, ob, oe)); // out of range -> unavailable, never zeros reported as real
+
     std::printf("[ren8][dx12] shadow_depth %.4f ms | shade %.4f ms | span %.4f ms\n", p0, p1, tot);
+
+#if CRD_PERF_ENABLED
+    // ── DIAG.6b(k): the REAL end-to-end. Drive this real, already-executed frame graph through the real
+    // FrameGraphGpuBackend and assert crd-perf placed both graphics passes on the graphics track with linked
+    // pass identities -- the acceptance's "linked CPU/task/pass/resource identities on DX12" clause, on hardware.
+    crd::perf::init({});
+    crd::perf::gpu::FrameGraphGpuBackend bridge{*fgraph, 0U};
+    struct PerfGuard // clears the backend BEFORE the bridge dies, then shuts the profiler down (176 device tests follow)
+    {
+        ~PerfGuard()
+        {
+            crd::perf::set_gpu_backend(nullptr);
+            crd::perf::shutdown();
+        }
+    } perf_guard;
+    crd::perf::set_gpu_backend(&bridge);
+    crd::perf::frame_mark(); // end_frame -> resolve -> the bridge places the already-executed passes
+
+    crd::memory::GrowableTlsfAllocator ecap{64ULL << 20, nullptr, "dx12-e2e"};
+    const auto                         ebuf = crd::perf::save_capture_to_buffer(&ecap);
+    const crd::perf::CaptureView       eview{crd::containers::ConstSpan<crd::u8>{ebuf.data(), ebuf.size()}};
+    REQUIRE(eview.is_valid());
+    crd::u32 q0 = 0xFFFF'FFFFU;
+    for (crd::u32 t = 0U; t < eview.thread_count(); ++t)
+    {
+        const char* const nm = eview.thread_name(t);
+        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0) { q0 = t; }
+    }
+    REQUIRE(q0 != 0xFFFF'FFFFU);
+    const auto esamps = eview.thread_samples(q0);
+    REQUIRE(esamps.size() == 2U); // both graphics passes placed
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        CHECK(esamps[i].category == static_cast<crd::u8>(crd::perf::Category::Gpu));
+        CHECK(esamps[i].end_ns >= esamps[i].begin_ns);
+        const auto* rec = eview.correlation_for(q0, i);
+        REQUIRE(rec != nullptr);
+        CHECK(rec->device_id == 0U);
+        CHECK(rec->queue_id == crd::perf::kGpuQueueGraphics);
+        CHECK((rec->flags & crd::perf::kCorrelationCalibrated) == 0U);                  // real path is uncalibrated
+        CHECK(rec->clock_uncertainty_ns == crd::perf::kUnknownClockUncertainty);        // sentinel, never a fake bound
+    }
+    CHECK(eview.correlation_for(q0, 0U)->pass_id == crd::perf::intern_name("shadow_depth").value);
+    CHECK(eview.correlation_for(q0, 1U)->pass_id == crd::perf::intern_name("shade").value);
+    CHECK(crd::perf::uncalibrated_span_count() == 2U);
+    CHECK(bridge.total_match_count() == 1U);         // placed total agrees with the graph's own gpu_ms_total (j oracle)
+    CHECK(bridge.total_incomparable_count() == 0U);
+    CHECK(crd::perf::gpu_timestamps_unavailable_count() == 0U); // both passes were placeable
+#endif // CRD_PERF_ENABLED
 }
 
 // ── REN-1 GATE (DX12): DEPENDENCY ORDER, the parity half. ────────────────────────────────────────────────────
@@ -4351,4 +4439,48 @@ TEST_CASE("REN-40-A GATE (DX12): indirect draw takes its args AND its count from
     // outside both commands, at both counts - the dim clear only
     CHECK(r1 <= 20U);
     CHECK(r2 <= 20U);
+}
+
+
+// DIAG.7a(d2c-dx12): FRAME-GRAPH PASS identity (ObjectKind::Pass) -- the DX12 mirror of d2c-vk. Dx12FrameGraph::add_pass
+// mints one Pass identity on the Pass record (a pure registry mint -- a pass has no ID3D12Object to SetName; its native
+// "name" would be a PIX BeginEvent label, a deferred sub-unit -- PIX is not vendored on this box). The record dies at
+// reset() (m_passes.clear) AND the graph dtor, so retire_pass_identities() runs at both. live_count(Pass) is a separate
+// index space from Resource/Program. Device-gated: SKIP without a D3D12 device.
+TEST_CASE("D2c-dx12: a frame-graph pass mints one Pass identity, retired on reset and at teardown",
+          "[gpu-context][dx12][frame-graph][pass][identity][naming]")
+{
+    const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Pass); // before any graph exists
+    {
+        auto gctx = g::create_dx12_gpu_context();
+        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+        auto raster = g::create_dx12_raster_context();
+        REQUIRE(raster != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before);
+
+        auto out = raster->create_storage_buffer(64U);
+        REQUIRE(out != nullptr);
+        const auto noop = [](g::IFrameContext&, void*) {}; // a pass whose IDENTITY is all this test measures
+
+        auto fgraph = raster->create_frame_graph();
+        REQUIRE(fgraph != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // an empty graph mints nothing
+
+        const g::FgBuffer fb = fgraph->import_storage(*out);
+        fgraph->add_pass("p0", g::FgPassKind::Compute).writes(fb).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 1U); // one pass -> one identity
+        fgraph->add_pass("p1", g::FgPassKind::Compute).read_writes(fb).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U);
+
+        REQUIRE(fgraph->build()); // build() is CPU-side ordering (no target/window needed)
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U); // build() mints nothing
+
+        fgraph->reset(); // the mid-life flush -- m_passes.clear()
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // reset() retired BOTH pass identities
+
+        const g::FgBuffer fb2 = fgraph->import_storage(*out);
+        fgraph->add_pass("p2", g::FgPassKind::Compute).writes(fb2).execute(+noop, nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 1U); // a fresh mint after reset (slot recycled)
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // graph dtor retired the pass added since reset
 }

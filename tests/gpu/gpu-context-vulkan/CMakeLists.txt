@@ -4,6 +4,7 @@
 # GPU-API-free).
 add_executable(crd-gpu-context-vulkan-tests
     test_vulkan_context.cpp
+    test_diag_validation_identity.cpp # DIAG.7a(d1): Cerid identity resolved from a message's named objects / prose
     test_vulkan_frame_graph.cpp # REN-1 (D-007 row 98): the frame graph — one submission + transient aliasing
     test_ckir_glsl_compile.cpp
     test_vulkan_rt.cpp
@@ -21,6 +22,8 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-kir                  # the CKIR IR + GLSL emitter under test
     crd-gpu-context
     crd-gpu-context-vulkan
+    crd-perf                 # DIAG.6b(k): the profiler substrate for the real end-to-end bridge test
+    crd-perf-gpu-bridge      # DIAG.6b(k): FrameGraphGpuBackend over a real VulkanFrameGraph (pulls crd-time transitively)
     crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) under test
     crd-jobs                 # D-007 D10: the fiber scheduler for the parallel-cook test (jobs::init/shutdown)
     crd-cooker               # GEO-1: the wave1 (.stl/.obj/.ply) asset cook handler (the import→cook→draw gate)
@@ -38,6 +41,8 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
 
 # B3-e: the shared, backend-neutral CKIR raster triangle (the identical graph the DX12 suite draws).
 target_include_directories(crd-gpu-context-vulkan-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../gpu-shared")
+# DIAG.7a(d2b-vk): the src-private identity-naming adapter under test (mirrors the DX12 suite's src include).
+target_include_directories(crd-gpu-context-vulkan-tests PRIVATE "${PROJECT_SOURCE_DIR}/engine/gpu/gpu-context-vulkan/src")
 # (RET-6 pt 3 made crd-draw CLEAN — it links below now; the include-path-only guard died with its rhi links.)
 # RET-5: Dear ImGui headers for the overlay-present gate (same SYSTEM-private exposure crd-imgui's consumers use).
 target_include_directories(crd-gpu-context-vulkan-tests SYSTEM PRIVATE "${imgui_SOURCE_DIR}")

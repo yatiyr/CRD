@@ -171,9 +171,13 @@ private:
 class Dx12GpuContext final : public IGpuContext
 {
 public:
-    explicit Dx12GpuContext(crd::memory::IAllocator* alloc) : m_alloc(alloc)
+    Dx12GpuContext(crd::memory::IAllocator* alloc, const GpuContextConfig& config) : m_alloc(alloc)
     {
+        // DIAG.7a(f-3): request per-mode validation BEFORE device creation; the scope applies + reports it.
+        m_validation.request_validation(config.enable_validation, config.enable_sync_validation,
+                                        config.enable_gpu_assisted_validation);
         if (FAILED(m_validation.create(m_device))) { return; }
+        m_validation_activation = m_validation.activation();
         capture_adapter_name();
         m_ok = true;
     }
@@ -186,6 +190,7 @@ public:
     [[nodiscard]] bool        valid() const noexcept override { return m_ok; }
     [[nodiscard]] GpuBackend  backend() const noexcept override { return GpuBackend::Dx12; }
     [[nodiscard]] const char* adapter_name() const noexcept override { return m_adapter; }
+    [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f-3)
 
     [[nodiscard]] std::unique_ptr<IGpuProgram>
     create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked) override
@@ -305,6 +310,7 @@ private:
     crd::memory::IAllocator* m_alloc = nullptr;
     ComPtr<ID3D12Device>     m_device;
     char                     m_adapter[192] = {};
+    ValidationActivation     m_validation_activation{}; // DIAG.7a(f-3)
     bool                     m_ok           = false;
 };
 
@@ -534,9 +540,9 @@ std::unique_ptr<IGpuProgram> make_dx12_program(ShaderStage stage, crd::container
     return std::make_unique<Dx12GpuProgramImpl>(stage, cooked_dxil, alloc);
 }
 
-std::unique_ptr<IGpuContext> create_dx12_gpu_context(crd::memory::IAllocator* alloc)
+std::unique_ptr<IGpuContext> create_dx12_gpu_context(crd::memory::IAllocator* alloc, const GpuContextConfig& config)
 {
-    auto ctx = std::make_unique<Dx12GpuContext>(alloc);
+    auto ctx = std::make_unique<Dx12GpuContext>(alloc, config);
     if (!ctx->valid()) { return nullptr; }
     return ctx;
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/gpu/object_identity.hpp> // DIAG.7a(d1): the Cerid identity parsed from a named object / message text
+#include <crd/gpu/validation.hpp> // DIAG.7a(b): the common ValidationSeverity + ValidationReport this maps onto
 #include <crd/memory/allocator.hpp>
 
 namespace crd::gpu
@@ -30,6 +32,10 @@ struct Dx12ValidationMessage
     u32 device = 0; // Registration identity, not an adapter/hardware qualification.
     bool truncated = false;
     char text[1024]{};
+    // DIAG.7a(d1): the stable Cerid identity parsed from the message (from an encoded object name embedded in the
+    // description). Default-invalid == "no crd token found in this message". Parsed from the FULL description before
+    // the text[] truncation above, so a token past the cut still resolves.
+    ObjectIdentity identity{};
 };
 
 struct Dx12ValidationReport
@@ -60,6 +66,35 @@ struct Dx12ValidationReport
             && execution_failures == 0U;
     }
 };
+
+// DIAG.7a(b): project the DX12-native severity/report onto the common backend-agnostic vocabulary
+// (<crd/gpu/validation.hpp>), so a gate judges cleanliness identically for either backend. Pure, no vendor types.
+[[nodiscard]] constexpr ValidationSeverity to_common(Dx12ValidationSeverity s) noexcept
+{
+    switch (s)
+    {
+    case Dx12ValidationSeverity::Error:   return ValidationSeverity::Error;
+    case Dx12ValidationSeverity::Warning: return ValidationSeverity::Warning;
+    case Dx12ValidationSeverity::Info:    return ValidationSeverity::Info;
+    }
+    return ValidationSeverity::Info;
+}
+
+[[nodiscard]] inline ValidationReport to_common(const Dx12ValidationReport& r) noexcept
+{
+    ValidationReport c;
+    c.info      = r.info;
+    c.warning   = r.warnings;
+    c.error     = r.errors;
+    c.dropped   = r.dropped;
+    c.truncated = r.truncated;
+    // "the instrument itself did not fail" is part of clean(): a capture that never reached Ready, or that saw
+    // device-creation / execution failures, has NOT validated cleanly -- it must not read as a clean common report
+    // just because its message counters are zero (the registered-default-empty-reads-as-provably-none scar).
+    c.instrumentation_failures = r.instrumentation_failures + r.device_creation_failures + r.execution_failures
+                                 + (r.readiness == Dx12ValidationReadiness::Ready ? 0U : 1U);
+    return c; // contexts_started/finished (lifecycle) stay DX12-native; sub-unit (e) folds them
+}
 
 // Construct BEFORE any participating context; destroy contexts/resources before checking the final report.
 // Process-local debug enablement persists (D3D12 cannot safely toggle it with live devices). No registry settings

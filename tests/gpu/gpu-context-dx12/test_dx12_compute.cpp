@@ -5,6 +5,7 @@
 
 #include <crd/gpu/dx12_compute_context.hpp>
 #include <crd/gpu/dx12_context.hpp> // dx12_default_adapter_is_software — relax the fp bar on WARP (no-GPU CI) only
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-dx12-b) batch 3b: identity_registry().live_count(Program) the compute-identity test asserts on
 
 #include <crd/kir/ckir.hpp>        // B-cmp: KGraph/KEntry for the shared-memory compute kernel
 #include <crd/kir/ckir_fft.hpp>    // B-cmp Phase 1: build_fft1d_radix2 (the CKIR FFT authoring layer)
@@ -2426,4 +2427,78 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
         REQUIRE(reset_pipe != nullptr);
         CHECK(run(ctx2, *reset_pipe) == 0);
     });
+}
+
+// DIAG.7a(d2b-dx12-b) batch 3b: a compute pipeline mints exactly ONE ObjectKind::Program identity -- on its root
+// signature, the primary -- and NO Resource identity. There is no logical-program dedup (each create_pipeline_from_*
+// builds its own PipelineImpl; the pipeline-library cache only warms PSO creation), so two identical kernels are +2 --
+// the discriminator that pins the "identity per created pipeline" contract. PSOs are eager (built in the factory), so
+// no dispatch is needed to force one. Reuses this TU's kVecAddHlsl fixture.
+TEST_CASE("D3D12 compute pipeline mints one Program identity, not a Resource one",
+          "[dx12][compute][program][identity][naming]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    const crd::usize prog_before = g::identity_registry().live_count(g::ObjectKind::Program);
+    const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
+    {
+        auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::StringView(kVecAddHlsl), 3, 4U);
+        REQUIRE(pipe != nullptr);
+        // Program +1 is the kind oracle: a Resource-kinded mint would leave Program at +0 and fail here.
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U);
+        // A compute buffer now mints ONE ObjectKind::Resource identity (batch 4). Assert it is kind-orthogonal to the
+        // program mint (Program unchanged across the allocation) and that it retires cleanly at scope exit.
+        {
+            auto scratch = ctx.create_buffer(64U, g::compute_usage::storage, g::ComputeMemory::GpuOnly);
+            REQUIRE(scratch != nullptr);
+            CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 1U);
+            CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U); // buffer mint left Program untouched
+        }
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before); // scratch retired
+        {
+            // No logical-program dedup: an identical kernel is a SECOND program (+2), not a shared identity.
+            auto pipe2 = ctx.create_pipeline_from_hlsl(crd::containers::StringView(kVecAddHlsl), 3, 4U);
+            REQUIRE(pipe2 != nullptr);
+            CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 2U);
+        }
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before + 1U); // pipe2 retired
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before); // pipe retired -> baseline
+}
+
+// DIAG.7a(d2b-dx12-b) batch 4: a compute BufferImpl mints exactly ONE ObjectKind::Resource identity -- on its single
+// native ID3D12Resource -- and retires it in its dtor. Distinct buffers are distinct objects: NO dedup (+2 for two),
+// the discriminator against a false "shared identity". All three ComputeMemory heaps (DEFAULT/UPLOAD/READBACK) take the
+// same single-`res` path, so each mints one. The Program count stays flat: a buffer is not a program (kind oracle).
+TEST_CASE("D3D12 compute buffer mints one Resource identity per buffer",
+          "[dx12][compute][resource][identity][naming]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    g::Dx12ComputeContext      ctx(&alloc);
+    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+
+    const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
+    const crd::usize prog_before = g::identity_registry().live_count(g::ObjectKind::Program);
+    {
+        auto a = ctx.create_buffer(256U, g::compute_usage::storage, g::ComputeMemory::GpuOnly);
+        REQUIRE(a != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 1U);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == prog_before); // a buffer is not a program
+        {
+            // A second, byte-identical buffer is a SECOND resource object -> distinct identity, +2 (no dedup).
+            auto b = ctx.create_buffer(256U, g::compute_usage::storage, g::ComputeMemory::GpuOnly);
+            REQUIRE(b != nullptr);
+            CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 2U);
+        }
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 1U); // b retired
+        // The UPLOAD and READBACK heaps take the same single-`res` path and mint one each.
+        auto up = ctx.create_buffer(256U, g::compute_usage::storage, g::ComputeMemory::CpuToGpu);
+        auto rb = ctx.create_buffer(256U, g::compute_usage::storage, g::ComputeMemory::GpuToCpu);
+        REQUIRE(up != nullptr);
+        REQUIRE(rb != nullptr);
+        CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before + 3U);
+    }
+    CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == res_before); // all retired -> baseline
 }

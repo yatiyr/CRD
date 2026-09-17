@@ -85,9 +85,15 @@ struct AllocatorSnapshot
 // indices are no-ops.
 void unregister_allocator(crd::u32 allocator_idx) noexcept;
 
-// Number of currently-registered allocators. May change between calls;
-// take a copy if you iterate.
+// High-water of allocator slots ever used -- never shrinks, so an index stays stable for the life of the profiler
+// (the UI relies on this). Use it as the iteration bound; skip slots whose allocator_info is empty.
 [[nodiscard]] crd::u32 registered_allocator_count() noexcept;
+
+// Number of allocators registered right now (rises on register, falls on unregister) -- distinct from the high-water
+// above (DIAG.6a). Concurrency contract: an allocator may be destroyed only AFTER unregister_allocator returns;
+// unregister waits for any in-flight profiler snapshot before returning, so a snapshot never dereferences a freed
+// allocator. Corollary: never call unregister_allocator from inside IAllocator::stats() -- it would deadlock.
+[[nodiscard]] crd::u32 live_allocator_count() noexcept;
 
 // Metadata for one slot. Returns `{nullptr, nullptr}` if slot is
 // out-of-range or unregistered.

@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -32,6 +33,21 @@ usize next_pow2_at_least(usize n) noexcept
     while (p < n) { p <<= 1U; }
     return p;
 }
+
+// DIAG.5c(d): non-zero on a thread that is currently inside a sinks_mutex critical section (delivering a record or
+// flushing sinks). It is the precise invariant "this thread holds sinks_mutex", so an assert that fires from inside
+// a sink -- on the async worker, on a sync caller, or inside add_sink/clear_sinks -- can be detected and NOT routed
+// back through the logger (which would re-lock sinks_mutex on the owning thread: a hard self-deadlock / UB). A
+// counter, not a bool, so nesting is safe. Set by SinkDeliveryScope at every sinks_mutex acquisition below.
+thread_local int tl_in_sink_delivery = 0;
+
+struct SinkDeliveryScope
+{
+    SinkDeliveryScope() noexcept { ++tl_in_sink_delivery; }
+    ~SinkDeliveryScope() noexcept { --tl_in_sink_delivery; }
+    SinkDeliveryScope(const SinkDeliveryScope&)            = delete;
+    SinkDeliveryScope& operator=(const SinkDeliveryScope&) = delete;
+};
 
 // ----------------------------------------------------------------
 // Async queue entry. Each entry owns its formatted message string
@@ -68,6 +84,15 @@ struct LoggerState
     std::atomic<bool> running{false};
     std::atomic<u64> dropped{0};
 
+    // Reentrancy / bounded-flush evidence (DIAG.5c). flush_timeouts: how many times flush_for() gave up.
+    // sink_reentrant_asserts: how many asserts fired from inside a sink and were suppressed instead of routed back
+    // through the logger (which would self-lock). Distinct counters -- different events, different evidence.
+    std::atomic<u64> flush_timeouts{0};
+    std::atomic<u64> sink_reentrant_asserts{0};
+    // How many times a sink's write()/flush() threw (violating the "must not throw" ISink contract). Counted and
+    // swallowed so one misbehaving sink neither takes down the noexcept worker nor loses the record for the others.
+    std::atomic<u64> sink_failures{0};
+
     std::atomic<bool> initialized{false};
 };
 
@@ -75,6 +100,26 @@ LoggerState& state() noexcept
 {
     static LoggerState s;
     return s;
+}
+
+// Flush one sink, swallowing a contract-violating throw. Caller holds sinks_mutex (so this runs inside a
+// SinkDeliveryScope) -- the catch must NEVER log (a CRD_LOG_* would re-lock sinks_mutex on this thread), only count
+// + write one stderr line.
+void safe_sink_flush(LoggerState& st, ISink* sink) noexcept
+{
+    if (!sink)
+    {
+        return;
+    }
+    try
+    {
+        sink->flush();
+    }
+    catch (...)
+    {
+        st.sink_failures.fetch_add(1, std::memory_order_relaxed);
+        std::fputs("[crd-log] sink flush() threw: skipped for that sink\n", stderr);
+    }
 }
 
 // Fan out a single record to all sinks. Caller holds sinks_mutex.
@@ -90,7 +135,19 @@ void deliver_to_sinks_locked(LoggerState& st, const LogRecord& rec) noexcept
         {
             continue;
         }
-        sink->write(rec);
+        // ISink::write "must not throw", but a third-party sink can. On the async path this runs on the noexcept
+        // worker, so an escaping throw is std::terminate; on the sync path dispatch()'s outer catch would drop the
+        // record for EVERY sink. Contain it per-sink: count, one stderr line, keep delivering to the rest. No log
+        // here -- we hold sinks_mutex (SinkDeliveryScope), so a CRD_LOG_* would self-lock.
+        try
+        {
+            sink->write(rec);
+        }
+        catch (...)
+        {
+            st.sink_failures.fetch_add(1, std::memory_order_relaxed);
+            std::fputs("[crd-log] sink write() threw: record dropped for that sink\n", stderr);
+        }
     }
 }
 
@@ -106,6 +163,7 @@ void deliver_queued(LoggerState& st, const QueuedRecord& q) noexcept
     rec.message = q.message;
 
     std::lock_guard<std::mutex> lock(st.sinks_mutex);
+    SinkDeliveryScope           in_delivery;
     deliver_to_sinks_locked(st, rec);
 }
 
@@ -161,10 +219,25 @@ namespace
 {
 void crd_log_default_assert_handler(const char* expression, const char* file, int line, const char* message) noexcept
 {
+    // If the assert fired from inside a sink on this thread (we already hold sinks_mutex), routing it back through
+    // the logger would re-lock sinks_mutex on the owning thread -- a hard self-deadlock (the exact "assert from
+    // logger sink" acceptance case). Suppress: leave one stderr line, count it, and let crd-core's own stderr
+    // evidence + platform/default handler carry the termination. (DIAG.5c(d).)
+    if (tl_in_sink_delivery > 0)
+    {
+        state().sink_reentrant_asserts.fetch_add(1, std::memory_order_relaxed);
+        std::fputs("[crd-log] assert fired inside a sink: record suppressed (would self-lock)\n", stderr);
+        return;
+    }
+
     // Best-effort: if message is null, std::format prints "" cleanly.
     CRD_LOG_CRITICAL(g_log_default, "ASSERT: {} | {}:{} | msg='{}'", expression ? expression : "?", file ? file : "?",
                      line, message ? message : "");
-    flush();
+    // Bounded (DIAG.5c): a headless assert must terminate promptly with evidence, never hang forever draining a
+    // stuck sink on the way to the platform assert UI. flush_for() writes a stderr line and bumps
+    // flush_timeout_count() if it gives up. (The synchronous Critical delivery above still uses the ordinary
+    // sink-locked path; bounding that reentrant case is DIAG.5c(d).)
+    (void)flush_for(state().config.assert_flush_timeout_ms);
 }
 } // namespace
 
@@ -250,6 +323,7 @@ void add_sink(std::unique_ptr<ISink> sink) noexcept
     {
         LoggerState&                st = state();
         std::lock_guard<std::mutex> lock(st.sinks_mutex);
+        SinkDeliveryScope           in_delivery;
         st.sinks.push_back(std::move(sink));
     }
     catch (...)
@@ -264,6 +338,7 @@ void clear_sinks() noexcept
 {
     LoggerState& st = state();
     std::lock_guard<std::mutex> lock(st.sinks_mutex);
+    SinkDeliveryScope           in_delivery;
     st.sinks.clear();
 }
 
@@ -279,18 +354,84 @@ void flush() noexcept
     }
 
     std::lock_guard<std::mutex> lock(st.sinks_mutex);
+    SinkDeliveryScope           in_delivery;
     for (auto& sink : st.sinks)
     {
-        if (sink)
+        safe_sink_flush(st, sink.get());
+    }
+}
+
+bool flush_for(u32 timeout_ms) noexcept
+{
+    LoggerState& st = state();
+    bool         ok = true;
+
+    // Reentrant call from inside a sink (an assert/flush that itself calls flush_for while this thread already
+    // holds sinks_mutex): waiting on the drain would wait on ourselves and try_lock'ing a std::mutex we own is
+    // undefined. Covers the async worker AND a sync caller. Bail immediately with evidence.
+    if (tl_in_sink_delivery > 0)
+    {
+        st.flush_timeouts.fetch_add(1, std::memory_order_relaxed);
+        std::fputs("[crd-log] assert: flush skipped -- reentrant call from inside a sink\n", stderr);
+        return false;
+    }
+
+    // Bounded drain of the async queue: wait_for, never the unbounded wait flush() uses.
+    if (st.config.async)
+    {
+        std::unique_lock<std::mutex> lock(st.queue_mutex);
+        if (!st.drain_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return st.queue.empty(); }))
         {
-            sink->flush();
+            ok = false;
         }
     }
+
+    // Bounded acquisition of sinks_mutex: a sink stuck on the worker holds it, so try once and skip the per-sink
+    // flush rather than block. (A sink whose own flush() blocks forever cannot be bounded here -- that is a sink
+    // contract violation, distinct from queue pressure; see the DIAG.5c session doc.)
+    if (st.sinks_mutex.try_lock())
+    {
+        std::lock_guard<std::mutex> owned(st.sinks_mutex, std::adopt_lock);
+        SinkDeliveryScope           in_delivery;
+        for (auto& sink : st.sinks)
+        {
+            safe_sink_flush(st, sink.get());
+        }
+    }
+    else
+    {
+        ok = false;
+    }
+
+    if (!ok)
+    {
+        st.flush_timeouts.fetch_add(1, std::memory_order_relaxed);
+        char line[80];
+        (void)std::snprintf(line, sizeof line, "[crd-log] assert: flush did not drain within %u ms\n",
+                            static_cast<unsigned>(timeout_ms));
+        std::fputs(line, stderr);
+    }
+    return ok;
 }
 
 u64 dropped_count() noexcept
 {
     return state().dropped.load(std::memory_order_relaxed);
+}
+
+u64 flush_timeout_count() noexcept
+{
+    return state().flush_timeouts.load(std::memory_order_relaxed);
+}
+
+u64 sink_reentrant_assert_count() noexcept
+{
+    return state().sink_reentrant_asserts.load(std::memory_order_relaxed);
+}
+
+u64 sink_failure_count() noexcept
+{
+    return state().sink_failures.load(std::memory_order_relaxed);
 }
 
 namespace detail
@@ -326,22 +467,28 @@ void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, 
         rec.message = message;
 
         std::lock_guard<std::mutex> lock(st.sinks_mutex);
+        SinkDeliveryScope           in_delivery;
         deliver_to_sinks_locked(st, rec);
 
         if (level == LogLevel::Critical)
         {
             for (auto& sink : st.sinks)
             {
-                if (sink)
-                {
-                    sink->flush();
-                }
+                safe_sink_flush(st, sink.get());
             }
         }
         return;
     }
 
-    // Async path.
+    // Async path. If the worker is not running (a log racing shutdown, after running=false but before
+    // initialized=false), pushing would enqueue a record no one will ever drain -- a later flush() would hang.
+    // Count it as a drop instead. (DIAG.5c(d) lifecycle.)
+    if (!st.running.load(std::memory_order_acquire))
+    {
+        st.dropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
     QueuedRecord q;
     q.level = level;
     q.channel = &ch;

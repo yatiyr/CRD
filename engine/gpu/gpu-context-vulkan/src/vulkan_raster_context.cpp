@@ -11,6 +11,9 @@
 #include <crd/gpu/frame_graph.hpp>          // REN-1: the frame-graph interface this TU implements
 #include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
 
+#include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per logical GPU object
+#include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-vk): mint(ObjectKind::Pass) for frame-graph pass identities
+
 #include <crd/containers/hash.hpp> // fnv1a_64: content-hash identity for the RT pipeline cache (see RtPipe::key SCAR)
 
 #include <vulkan/vulkan.h>
@@ -281,13 +284,35 @@ class VulkanRasterTarget final : public IRasterTarget
 public:
     VulkanRasterTarget(VkDevice device, const ImageBundle& color, const ImageBundle& resolve, const ImageBundle& depth,
                        const BufferBundle& readback, crd::u32 samples, crd::u32 w, crd::u32 h,
-                       bool has_stencil = false) noexcept
+                       bool has_stencil = false, bool with_identity = true) noexcept
         : m_device(device), m_color(color), m_resolve(resolve), m_depth(depth), m_readback(readback),
           m_samples(samples), m_w(w), m_h(h), m_has_stencil(has_stencil)
     {
+        // DIAG.7a(d2b-vk): ONE identity per logical target -- mint on the colour VkImage, or the depth image for a
+        // depth-only target (colour null). Then name every OWNED sibling (colour view, resolve image+view, depth
+        // image+view, readback buffer) with the same id; the factory owns all of them (no imported depth ⇒ no
+        // cross-object collision). Pooled memory is not named (shared block). FG borrowed targets pass
+        // with_identity=false: views over FG-owned bundles, no identity, and the dtor frees nothing (a mint leaks).
+        if (with_identity)
+        {
+            const VkImage primary = m_color.image != VK_NULL_HANDLE ? m_color.image : m_depth.image;
+            if (primary != VK_NULL_HANDLE)
+            {
+                m_identity = detail::vk_attach_identity(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(primary),
+                                                        ObjectKind::Resource,
+                                                        m_color.image != VK_NULL_HANDLE ? "vk-target-color" : "vk-target-depth");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_color.view), m_identity, "vk-target-color-view");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(m_resolve.image), m_identity, "vk-target-resolve");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_resolve.view), m_identity, "vk-target-resolve-view");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(m_depth.image), m_identity, "vk-target-depth");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_depth.view), m_identity, "vk-target-depth-view");
+                detail::vk_name_object(device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(m_readback.buffer), m_identity, "vk-target-readback");
+            }
+        }
     }
     ~VulkanRasterTarget() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire BEFORE the borrowed early-return (no-op if invalid)
         if (m_borrowed) { return; } // REN-2: a frame-graph RTT transient — the ImageNode/slot owns the bundles
         destroy_image_bundle(m_device, m_color);
         destroy_image_bundle(m_device, m_resolve);
@@ -340,7 +365,14 @@ public:
     [[nodiscard]] bool        has_vrs() const noexcept { return m_vrs.image != VK_NULL_HANDLE; } // B1-e attachment VRS
     [[nodiscard]] VkImage     vrs_image() const noexcept { return m_vrs.image; }
     [[nodiscard]] VkImageView vrs_view() const noexcept { return m_vrs.view; }
-    void                      set_vrs(const ImageBundle& b) noexcept { m_vrs = b; } // owned after this; freed in the dtor
+    void                      set_vrs(const ImageBundle& b) noexcept
+    {
+        m_vrs = b; // owned after this; freed in the dtor
+        // DIAG.7a(d2b-vk): the VRS rate image is a sibling of this logical target -- name it with the target identity
+        // (no-op if the target is borrowed / carries no identity).
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(m_vrs.image), m_identity, "vk-target-vrs");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_vrs.view), m_identity, "vk-target-vrs-view");
+    }
     // REN-2: mark this a BORROWED view over frame-graph-owned bundles (a transient RTT target) — the dtor frees nothing.
     void                      set_borrowed() noexcept { m_borrowed = true; }
 
@@ -356,6 +388,7 @@ private:
     crd::u32     m_h       = 0;
     bool         m_borrowed = false; // REN-2: true ⇒ a frame-graph RTT transient view; the dtor frees nothing
     bool         m_has_stencil = false; // REN-38-F11: the depth bundle is D24S8 (attachments/barriers carry both aspects)
+    ObjectIdentity m_identity{}; // DIAG.7a(d2b-vk): one stable Cerid Resource identity (invalid if borrowed)
 };
 
 // ── RET-2 (ADR-0105): the present surface — the swapchain seam of the ONE graphics layer ──────────────────────────────
@@ -805,9 +838,20 @@ public:
         : m_device(device), m_api(api), m_layout(layout), m_vs(vs), m_fs(fs), m_is_mesh(is_mesh), m_task(task), m_tcs(tcs),
           m_tes(tes)
     {
+        // DIAG.7a(d2b-vk): ONE logical Program identity for the linked shader-object program -- mint on m_vs (the VS, or
+        // the MESH shader object when is_mesh) and NAME every owned sibling with the same id: fs + task/tcs/tes (any that
+        // are present -- vk_name_object rejects null handles) + the pipeline layout. Separate from the P2 stages it links.
+        m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_SHADER_EXT, reinterpret_cast<crd::u64>(m_vs),
+                                                ObjectKind::Program, "vk-raster-program");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_SHADER_EXT, reinterpret_cast<crd::u64>(m_fs), m_identity, "vk-raster-fs");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_SHADER_EXT, reinterpret_cast<crd::u64>(m_task), m_identity, "vk-raster-task");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_SHADER_EXT, reinterpret_cast<crd::u64>(m_tcs), m_identity, "vk-raster-tcs");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_SHADER_EXT, reinterpret_cast<crd::u64>(m_tes), m_identity, "vk-raster-tes");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<crd::u64>(m_layout), m_identity, "vk-raster-layout");
     }
     ~VulkanRasterProgram() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical raster-program identity
         if (m_task != VK_NULL_HANDLE) { m_api->destroy(m_device, m_task, nullptr); } // B4: the amplification (task) shader
         if (m_tcs != VK_NULL_HANDLE) { m_api->destroy(m_device, m_tcs, nullptr); }   // B4-tess: hull
         if (m_tes != VK_NULL_HANDLE) { m_api->destroy(m_device, m_tes, nullptr); }   // B4-tess: domain
@@ -841,6 +885,7 @@ private:
     VkShaderEXT            m_task    = VK_NULL_HANDLE; // B4: amplification shader (task→mesh); NULL for a plain mesh program
     VkShaderEXT            m_tcs     = VK_NULL_HANDLE; // B4-tess: tess-control (hull); NULL unless a tessellation program
     VkShaderEXT            m_tes     = VK_NULL_HANDLE; // B4-tess: tess-eval (domain)
+    ObjectIdentity         m_identity{}; // DIAG.7a(d2b-vk): the one logical Program identity for this linked raster program
 };
 
 // B1-f: a fragment-shader STORAGE buffer — a device-local SSBO the FS reads/writes, plus a host-visible readback the CPU
@@ -848,9 +893,9 @@ private:
 class VulkanStorageBuffer final : public IStorageBuffer
 {
 public:
-    VulkanStorageBuffer(VkDevice device, const BufferBundle& buf, const BufferBundle& readback,
-                        crd::u32 size_bytes) noexcept
-        : m_device(device), m_buf(buf), m_readback(readback), m_size(size_bytes)
+    VulkanStorageBuffer(VkDevice device, const BufferBundle& buf, const BufferBundle& readback, crd::u32 size_bytes,
+                        const ObjectIdentity& identity) noexcept
+        : m_device(device), m_buf(buf), m_readback(readback), m_size(size_bytes), m_identity(identity)
     {
     }
     ~VulkanStorageBuffer() override
@@ -875,6 +920,7 @@ public:
         }
         destroy_buffer_bundle(m_device, m_buf);
         destroy_buffer_bundle(m_device, m_readback);
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical identity (no-op if invalid)
     }
     VulkanStorageBuffer(const VulkanStorageBuffer&)            = delete;
     VulkanStorageBuffer& operator=(const VulkanStorageBuffer&) = delete;
@@ -899,6 +945,10 @@ public:
     {
         destroy_buffer_bundle(m_device, m_buf);
         m_buf = moved;
+        // DIAG.7a(d2b-vk): S7 defrag relocated the device buffer to a NEW VkBuffer -- re-stamp the same identity onto
+        // it (no mint) so a message about the relocated native buffer still resolves to this logical resource.
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(m_buf.buffer), m_identity,
+                               "vk-storage");
     }
     void set_registry(crd::containers::Array<VulkanStorageBuffer*>* registry) noexcept { m_registry = registry; }
     void set_drain_hook(void (*fn)(void*), void* ctx) noexcept
@@ -912,6 +962,7 @@ private:
     BufferBundle                                m_buf{};
     BufferBundle                                m_readback{};
     crd::u32                                    m_size     = 0;
+    ObjectIdentity                              m_identity{}; // DIAG.7a(d2b-vk): one stable Cerid Resource identity
     crd::containers::Array<VulkanStorageBuffer*>* m_registry = nullptr; // the context's live-storage list (S7 defrag)
     void (*m_drain_fn)(void*) = nullptr; // 38-G1: drains the context's upload batches before this buffer dies
     void* m_drain_ctx         = nullptr;
@@ -921,12 +972,27 @@ private:
 class VulkanTexture final : public ITexture
 {
 public:
-    VulkanTexture(VkDevice device, const ImageBundle& img, crd::u32 w, crd::u32 h) noexcept
+    VulkanTexture(VkDevice device, const ImageBundle& img, crd::u32 w, crd::u32 h, bool with_identity = true) noexcept
         : m_device(device), m_img(img), m_w(w), m_h(h)
     {
+        // DIAG.7a(d2b-vk): one identity per logical texture -- mint on the VkImage (primary), name the VkImageView with
+        // the same id (the pooled allocation/memory is NOT named: a suballocated block is shared by many images). This
+        // ctor is the single structural site every create_texture* factory funnels through. Frame-graph borrowed
+        // sampled views pass with_identity=false: they view an FG-owned image (no identity -- the batch-2 FG rule) and
+        // their dtor frees nothing, so a mint here would leak.
+        if (with_identity && img.image != VK_NULL_HANDLE)
+        {
+            char site[48];
+            (void)std::snprintf(static_cast<char*>(site), sizeof(site), "vk-texture %ux%ux%u", w, h, 1U);
+            m_identity = detail::vk_attach_identity(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(img.image),
+                                                    ObjectKind::Resource, site);
+            detail::vk_name_object(device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(img.view), m_identity,
+                                   "vk-texture-view");
+        }
     }
     ~VulkanTexture() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire BEFORE the borrowed early-return (no-op if invalid)
         if (m_borrowed) { return; } // REN-2: a frame-graph sampled transient — the ImageNode/slot owns the bundle
         if (m_registry != nullptr) // RET-4 pt 5: leave the live-texture registry (defrag never sees a dead texture)
         {
@@ -966,6 +1032,12 @@ public:
     {
         destroy_image_bundle(m_device, m_img);
         m_img = moved;
+        // DIAG.7a(d2b-vk): S7 defrag recreated the image + view -- re-stamp the SAME identity (no mint) onto both so a
+        // message about the relocated natives still resolves to this logical texture.
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(m_img.image), m_identity,
+                               "vk-texture");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_img.view), m_identity,
+                               "vk-texture-view");
     }
     void set_registry(crd::containers::Array<VulkanTexture*>* registry) noexcept { m_registry = registry; }
 
@@ -976,6 +1048,7 @@ private:
     crd::u32                               m_h = 0;
     crd::containers::Array<VulkanTexture*>* m_registry = nullptr; // the context's live-texture list (S7 defrag)
     bool                                   m_borrowed = false; // REN-2: view over a frame-graph transient; dtor frees nothing
+    ObjectIdentity                         m_identity{}; // DIAG.7a(d2b-vk): one stable Cerid Resource identity (invalid if borrowed)
 };
 
 inline constexpr crd::u32 kMaxGBuffer = 8U; // B5: max deferred G-buffer colour attachments
@@ -994,9 +1067,31 @@ public:
             m_img[i] = imgs[i];
             m_rb[i]  = readbacks[i];
         }
+        // DIAG.7a(d2b-vk): ONE logical Resource identity for the whole G-buffer target -- mint on plane 0's VkImage,
+        // then NAME every owned sibling (each plane's image [1..n-1] + view, and every readback buffer) with that id.
+        // The target owns all n colour planes + readbacks itself (no imported/borrowed depth), so no cross-object clash.
+        if (n != 0U)
+        {
+            m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_IMAGE,
+                                                    reinterpret_cast<crd::u64>(m_img[0].image), ObjectKind::Resource,
+                                                    "vk-gbuffer");
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                if (i != 0U)
+                {
+                    detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<crd::u64>(m_img[i].image),
+                                           m_identity, "vk-gbuffer-plane");
+                }
+                detail::vk_name_object(m_device, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<crd::u64>(m_img[i].view),
+                                       m_identity, "vk-gbuffer-view");
+                detail::vk_name_object(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(m_rb[i].buffer),
+                                       m_identity, "vk-gbuffer-readback");
+            }
+        }
     }
     ~VulkanGBufferTarget() override
     {
+        detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical identity (no-op if invalid)
         for (crd::u32 i = 0; i < m_n; ++i)
         {
             destroy_buffer_bundle(m_device, m_rb[i]);
@@ -1031,6 +1126,7 @@ private:
     BufferBundle m_rb[kMaxGBuffer]{}; // pooled host-visible readbacks (RET-4 pt 4)
     crd::u32     m_w = 0;
     crd::u32     m_h = 0;
+    ObjectIdentity m_identity{}; // DIAG.7a(d2b-vk): the one logical Resource identity across all planes + readbacks
 };
 
 class VulkanRasterContext final : public IRasterContext
@@ -1204,10 +1300,13 @@ public:
                 vkFreeCommandBuffers(m_device, m_pool, 1U, &b.cmd);
             }
             if (b.fence != VK_NULL_HANDLE) { vkDestroyFence(m_device, b.fence, nullptr); }
+            detail::vk_detach_identity(b.identity); // DIAG.7a(d2b-vk): retire the ring's identity (no-op if never opened)
             destroy_buffer_bundle(m_device, b.ring);
         }
+        detail::vk_detach_identity(m_multi_args_id); // DIAG.7a(d2b-vk): retire the args-ring identity (no-op if never created)
         if (m_multi_args != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_multi_args, nullptr); } // REN-38 multi-draw ring
         if (m_multi_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_multi_mem, nullptr); }
+        detail::vk_detach_identity(m_multi_idx_args_id); // DIAG.7a(d2b-vk): retire the indexed-args-ring identity
         if (m_multi_idx_args != VK_NULL_HANDLE)
         {
             vkDestroyBuffer(m_device, m_multi_idx_args, nullptr);
@@ -1223,15 +1322,16 @@ public:
         if (m_atlas_sampler != VK_NULL_HANDLE) { vkDestroySampler(m_device, m_atlas_sampler, nullptr); }
         if (m_desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(m_device, m_desc_pool, nullptr); }
         if (m_storage_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_storage_set_layout, nullptr); }
-        for (crd::u32 i = 0; i < m_kernel_n; ++i) { vkDestroyPipeline(m_device, m_kernel_pso[i], nullptr); }
-        for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { vkDestroyPipeline(m_device, m_rt_pso[i], nullptr); }
-        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i) { vkDestroyPipeline(m_device, m_sampled_pso[i], nullptr); }
+        for (crd::u32 i = 0; i < m_kernel_n; ++i) { detail::vk_detach_identity(m_kernel_id[i]); vkDestroyPipeline(m_device, m_kernel_pso[i], nullptr); }
+        for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { detail::vk_detach_identity(m_rt_pso_id[i]); vkDestroyPipeline(m_device, m_rt_pso[i], nullptr); }
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i) { detail::vk_detach_identity(m_sampled_id[i]); vkDestroyPipeline(m_device, m_sampled_pso[i], nullptr); }
         if (m_compute_sampled_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_compute_sampled_pipe_layout, nullptr); }
         if (m_compute_sampled_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_compute_sampled_set_layout, nullptr); }
         // REN-38-A16: the ray-tracing PIPELINES and their shader binding tables. Each SBT owns a buffer AND its
         // device memory (it is addressed by device address, not bound as a descriptor), so both must go.
         for (crd::u32 i = 0; i < m_rtp_n; ++i)
         {
+            detail::vk_detach_identity(m_rtp[i].id); // DIAG.7a(d2b-vk): retire the RT-pipeline Program identity
             if (m_rtp[i].pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(m_device, m_rtp[i].pipeline, nullptr); }
             if (m_rtp[i].sbt != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_rtp[i].sbt, nullptr); }
             if (m_rtp[i].sbt_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_rtp[i].sbt_mem, nullptr); }
@@ -1354,7 +1454,13 @@ public:
             vkCmdFillBuffer(cmd, buf.buffer, 0, size_bytes, 0U);
             end_and_wait(cmd);
         }
-        auto sb = std::make_unique<VulkanStorageBuffer>(m_device, buf, rb, size_bytes);
+        // DIAG.7a(d2b-vk): one identity per logical storage buffer -- mint on the device VkBuffer (primary) after the
+        // last early-return, name the host-visible readback sibling with the SAME id (not a second mint).
+        const ObjectIdentity id = detail::vk_attach_identity(
+            m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(buf.buffer), ObjectKind::Resource, "vk-storage");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(rb.buffer), id,
+                               "vk-storage-readback");
+        auto sb = std::make_unique<VulkanStorageBuffer>(m_device, buf, rb, size_bytes, id);
         sb->set_registry(&m_live_storage); // RET-4 pt 5: the S7 defrag pass walks the live set
         sb->set_drain_hook(&VulkanRasterContext::drain_upload_batches_thunk, this); // 38-G1: see ~VulkanStorageBuffer
         m_live_storage.push_back(sb.get());
@@ -2698,6 +2804,7 @@ private:
         VkStridedDeviceAddressRegionKHR miss_region{};
         VkStridedDeviceAddressRegionKHR hit_region{};
         VkStridedDeviceAddressRegionKHR call_region{};
+        ObjectIdentity                  id{}; // DIAG.7a(d2b-vk): one Program identity per cached RT pipeline (pipeline+SBT)
     };
 
     [[nodiscard]] bool ensure_rt_api()
@@ -2913,6 +3020,14 @@ private:
         out.call_region = cl != VK_NULL_HANDLE
                               ? VkStridedDeviceAddressRegionKHR{base + static_cast<VkDeviceSize>(rec) * 3U, rec, rec}
                               : VkStridedDeviceAddressRegionKHR{};
+
+        // DIAG.7a(d2b-vk): ONE logical Program identity per cached RT pipeline -- mint on the VkPipeline and NAME the
+        // SBT VkBuffer (the SBT is program-owned) with the same id. The pipeline LAYOUT is shared context-wide
+        // (m_rtp_pipe_layout, destroyed once), NOT per-pipeline, so it is not named here. The identity travels with `out`
+        // into m_rtp[]; retired in the context dtor loop. Cached create-once per SPIR-V-hash key -> no re-stamp.
+        out.id = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(out.pipeline),
+                                            ObjectKind::Program, "vk-rt-pipeline");
+        detail::vk_name_object(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(out.sbt), out.id, "vk-rt-sbt");
 
         m_rtp[m_rtp_n] = out;
         ++m_rtp_n;
@@ -5585,7 +5700,8 @@ public:
         ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vkCreateImage(m_device, &ici, nullptr, &img.image) != VK_SUCCESS) { return nullptr; }
-        name_image(m_device, img.image, "vk-texture", width, height, layers);
+        // DIAG.7a(d2b-vk): the VulkanTexture ctor now names image + view via the Cerid identity (image-only name_image
+        // here was redundant and would be overwritten by the identity name anyway).
         VkMemoryRequirements ir{};
         vkGetImageMemoryRequirements(m_device, img.image, &ir);
         VkMemoryAllocateInfo iai{};
@@ -6225,6 +6341,8 @@ public:
         }
         m_rt_pso_key[m_rt_pso_n] = module;
         m_rt_pso[m_rt_pso_n]     = pipe;
+        m_rt_pso_id[m_rt_pso_n]  = detail::vk_attach_identity(
+            m_device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(pipe), ObjectKind::Program, "vk-rt-kernel-pipeline");
         ++m_rt_pso_n;
         return pipe;
     }
@@ -6295,6 +6413,8 @@ public:
         }
         m_sampled_pso_key[m_sampled_pso_n] = module;
         m_sampled_pso[m_sampled_pso_n]     = pipe;
+        m_sampled_id[m_sampled_pso_n]      = detail::vk_attach_identity(
+            m_device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(pipe), ObjectKind::Program, "vk-sampled-kernel-pipeline");
         ++m_sampled_pso_n;
         return pipe;
     }
@@ -6903,6 +7023,7 @@ private:
         VkCommandBuffer cmd       = VK_NULL_HANDLE;
         VkFence         fence     = VK_NULL_HANDLE;
         bool            submitted = false;
+        ObjectIdentity  identity{}; // DIAG.7a(d2b-vk): the one logical Resource identity for this slot's staging ring
     };
     static constexpr crd::u32 kUploadBatches   = 2U;
     static constexpr crd::u32 kUploadRingBytes = 8U << 20U; // initial; grows by doubling on demand
@@ -6959,6 +7080,11 @@ private:
                 return; // no ring -> batch never opens; uploads stay on the synchronous path (correct, slower)
             }
             b.cap = kUploadRingBytes;
+            // DIAG.7a(d2b-vk): ONE logical Resource identity per staging ring (context-field buffer, lazily created here,
+            // retired in the context dtor). Minted only on a FRESH ring (this branch runs iff the slot had none).
+            b.identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_BUFFER,
+                                                    reinterpret_cast<crd::u64>(b.ring.buffer), ObjectKind::Resource,
+                                                    "vk-upload-ring");
         }
         b.cmd = alloc_cmd();
         if (b.cmd == VK_NULL_HANDLE) { return; }
@@ -7031,9 +7157,17 @@ private:
                 destroy_buffer_bundle(m_device, old.ring);
                 old.ring = {};
                 old.cap  = 0U;
+                // DIAG.7a(d2b-vk): the logical ring is gone (uploads fall back to sync) -> retire so a later
+                // begin_upload_batch mints a fresh identity instead of leaking this one.
+                detail::vk_detach_identity(old.identity);
+                old.identity = {};
                 return false; // caller falls back to the synchronous path
             }
             old.cap = want;
+            // DIAG.7a(d2b-vk): a GROW is the SAME logical ring on a bigger native buffer -> RE-STAMP the existing id
+            // onto the new VkBuffer (do NOT retire+remint); the identity is stable across the realloc, count unchanged.
+            detail::vk_name_object(m_device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(old.ring.buffer),
+                                   old.identity, "vk-upload-ring");
             // reopen a batch (the NEXT slot) for the remaining uploads of this frame
             begin_upload_batch();
             if (!m_batch_open) { return false; }
@@ -7233,6 +7367,7 @@ private:
     VkPipelineLayout                     m_compute_pipe_layout = VK_NULL_HANDLE;
     VkShaderModule                       m_kernel_key[kKernelPsoCap]{};
     VkPipeline                           m_kernel_pso[kKernelPsoCap]{};
+    ObjectIdentity                       m_kernel_id[kKernelPsoCap]{}; // DIAG.7a(d2b-vk P4): one Program id per cached kernel PSO
     crd::u32                             m_kernel_n = 0U;
     // REN-38-A9: the RAY-QUERY layout (binding 0 = TLAS) and its own pipeline cache — see `rt_kernel_pipeline`
     // for why the caches must not be shared.
@@ -7240,12 +7375,14 @@ private:
     VkPipelineLayout                     m_rt_pipe_layout = VK_NULL_HANDLE;
     VkShaderModule                       m_rt_pso_key[kKernelPsoCap]{};
     VkPipeline                           m_rt_pso[kKernelPsoCap]{};
+    ObjectIdentity                       m_rt_pso_id[kKernelPsoCap]{}; // DIAG.7a(d2b-vk P4): one Program id per cached RT-kernel PSO
     crd::u32                             m_rt_pso_n = 0U;
     // REN-40-G3: the SAMPLED-COMPUTE layout (binding 8 = SAMPLED_IMAGE, binding 9 = SAMPLER) and its pipeline cache.
     VkDescriptorSetLayout                m_compute_sampled_set_layout  = VK_NULL_HANDLE;
     VkPipelineLayout                     m_compute_sampled_pipe_layout = VK_NULL_HANDLE;
     VkShaderModule                       m_sampled_pso_key[kKernelPsoCap]{};
     VkPipeline                           m_sampled_pso[kKernelPsoCap]{};
+    ObjectIdentity                       m_sampled_id[kKernelPsoCap]{}; // DIAG.7a(d2b-vk P4): one Program id per cached sampled-kernel PSO
     crd::u32                             m_sampled_pso_n = 0U;
     // REN-38-B8: the authored-sampler cache.
     static constexpr crd::u32 kSamplerCacheCap = 16U;
@@ -7276,6 +7413,8 @@ private:
         }
         m_kernel_key[m_kernel_n] = mod;
         m_kernel_pso[m_kernel_n] = pipe;
+        m_kernel_id[m_kernel_n]  = detail::vk_attach_identity(
+            m_device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(pipe), ObjectKind::Program, "vk-kernel-pipeline");
         ++m_kernel_n;
         return pipe;
     }
@@ -7311,6 +7450,7 @@ private:
     VkDeviceMemory m_multi_mem    = VK_NULL_HANDLE;
     void*          m_multi_map    = nullptr;
     crd::u32       m_multi_cursor = 0U;
+    ObjectIdentity m_multi_args_id{}; // DIAG.7a(d2b-vk): the one logical Resource identity for the multi-draw args ring
     crd::u64       m_multi_batches = 0U;
     crd::u64       m_multi_indexed_batches = 0U; // REN-39-C1: the index-buffer subset of m_multi_batches
     crd::u64       m_compute_dispatches = 0U;
@@ -7349,6 +7489,10 @@ private:
             if (m_multi_mem != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_multi_mem, nullptr); m_multi_mem = VK_NULL_HANDLE; }
             return false;
         }
+        // DIAG.7a(d2b-vk): ONE logical Resource identity for the (lazily created, create-once) multi-draw args ring.
+        m_multi_args_id = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_BUFFER,
+                                                     reinterpret_cast<crd::u64>(m_multi_args), ObjectKind::Resource,
+                                                     "vk-multi-args");
         return true;
     }
 
@@ -7359,6 +7503,7 @@ private:
     VkDeviceMemory m_multi_idx_mem = VK_NULL_HANDLE;
     void* m_multi_idx_map = nullptr;
     crd::u32 m_multi_idx_cursor = 0U;
+    ObjectIdentity m_multi_idx_args_id{}; // DIAG.7a(d2b-vk): the one logical Resource identity for the indexed args ring
 
     [[nodiscard]] bool ensure_multi_idx_args()
     {
@@ -7399,6 +7544,10 @@ private:
             }
             return false;
         }
+        // DIAG.7a(d2b-vk): ONE logical Resource identity for the (lazily created, create-once) indexed args ring.
+        m_multi_idx_args_id = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_BUFFER,
+                                                         reinterpret_cast<crd::u64>(m_multi_idx_args),
+                                                         ObjectKind::Resource, "vk-multi-idx-args");
         return true;
     }
 
@@ -7599,6 +7748,9 @@ public:
     explicit VulkanFrameGraph(VulkanRasterContext& rc) : m_rc(&rc), m_device(rc.frame_vk_device()), m_queue(rc.frame_vk_queue())
     {
         vkGetPhysicalDeviceMemoryProperties(rc.frame_ctx().vk_physical_device(), &m_mem_props);
+        // DIAG.7a(d2c-vk): load the per-pass debug-label PFNs ONCE (they are used in the hot loop -> never per-pass-per-frame).
+        m_begin_label_fn = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(vkGetDeviceProcAddr(m_device, "vkCmdBeginDebugUtilsLabelEXT"));
+        m_end_label_fn   = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetDeviceProcAddr(m_device, "vkCmdEndDebugUtilsLabelEXT"));
 
         VkCommandPoolCreateInfo pci{};
         pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -7651,6 +7803,22 @@ public:
         m_ts_period = static_cast<double>(props.limits.timestampPeriod);
         if (m_ts_period > 0.0)
         {
+            // DIAG.6b(i2): cache the graphics queue family's timestampValidBits (never assume 64 -- some families
+            // report fewer valid low bits, and the downstream wrap-repair (f) needs the real width to be correct).
+            crd::u32 fam_count = 0U;
+            vkGetPhysicalDeviceQueueFamilyProperties(rc.frame_ctx().vk_physical_device(), &fam_count, nullptr);
+            VkQueueFamilyProperties fam_props[16]{};
+            if (fam_count > 16U) { fam_count = 16U; }
+            vkGetPhysicalDeviceQueueFamilyProperties(rc.frame_ctx().vk_physical_device(), &fam_count, fam_props);
+            const crd::u32 gfam = rc.frame_ctx().graphics_family();
+            // timestampValidBits == 0 means this family cannot timestamp at all; REN-8 already assumes the graphics
+            // family can (pool creation is gated on the device period, not on the family), so that path is unreachable
+            // here -- we keep the 64-bit interface default rather than record a meaningless width.
+            if (gfam < fam_count && fam_props[gfam].timestampValidBits != 0U)
+            {
+                m_ts_valid_bits =
+                    fam_props[gfam].timestampValidBits >= 64U ? 64U : fam_props[gfam].timestampValidBits;
+            }
             VkQueryPoolCreateInfo qpci{};
             qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
@@ -7669,6 +7837,7 @@ public:
     {
         // ⛔ never tear down a pool/fence, or free a transient, with work still in flight — drain EVERY slot
         wait_all_slots();
+        retire_pass_identities(); // DIAG.7a(d2c-vk): retire any pass ids added since the last reset()
         // REN-38-A14: the ASYNC submission has its own fence and is NOT covered by `wait_all_slots()` (which only
         // drains the graphics slots) — tearing its pool down while the compute queue still reads it is a
         // use-after-free that would look like a driver crash.
@@ -7742,7 +7911,8 @@ public:
         db.image  = dn.image;
         db.view   = dn.view;
         auto* t = new (std::nothrow) VulkanRasterTarget(m_device, cb, ImageBundle{}, db, BufferBundle{}, 1U,
-                                                        cn.desc.width, cn.desc.height);
+                                                        cn.desc.width, cn.desc.height, /*has_stencil=*/false,
+                                                        /*with_identity=*/false); // FG borrowed: no Cerid identity
         if (t == nullptr) { return nullptr; } // OOM: the caller's needs_target guard skips the pass
         t->set_borrowed();
         cn.shared_depth_target = t;
@@ -8013,9 +8183,17 @@ public:
         Pass p{};
         p.name = name;
         p.kind = kind;
+        p.identity = identity_registry().mint(ObjectKind::Pass); // DIAG.7a(d2c-vk): mint one Pass identity per add_pass
         m_passes.push_back(p);
         m_builder.bind(this, m_passes.size() - 1U);
         return m_builder;
+    }
+
+    // DIAG.7a(d2c-vk): a pass record is destroyed either on reset() (rebuild) or at dtor — retire its Pass identity at
+    // BOTH (identity goes where the destroy is). No-op-safe for a default identity, so a never-minted pass is fine.
+    void retire_pass_identities() noexcept
+    {
+        for (Pass& pp : m_passes) { detail::vk_detach_identity(pp.identity); }
     }
 
     [[nodiscard]] bool build() override;
@@ -8032,6 +8210,7 @@ public:
         else { free_transients(); } // nothing in flight — free immediately (keeps the peak footprint down)
         m_images.clear();
         m_buffers.clear();
+        retire_pass_identities(); // DIAG.7a(d2c-vk): retire pass ids BEFORE clearing the records they live on
         m_passes.clear();
         m_barrier_count = 0U;
     }
@@ -8094,6 +8273,31 @@ public:
     }
     [[nodiscard]] double gpu_ms_total() const noexcept override { return m_gpu_ms_total; }
     [[nodiscard]] bool   gpu_timing_available() const noexcept override { return m_ts_pool != VK_NULL_HANDLE; }
+
+    // ── DIAG.6b(i2): raw per-pass ticks so a profiler can PLACE each pass (see IFrameGraph). ──
+    [[nodiscard]] bool pass_gpu_ticks(crd::u32 i, crd::u64& begin_ticks, crd::u64& end_ticks) const noexcept override
+    {
+        // An async-compute pass's fn runs on the COMPUTE command buffer, but REN-8 writes both its timestamps on the
+        // GRAPHICS command buffer (m_cmd) with the fn skipped between them -- the pair does NOT bracket the async work.
+        // Report async passes as unavailable-for-placement rather than emit a graphics-timeline span for compute work
+        // (the consumer then counts them unavailable); a true per-queue timing needs a compute-queue query pool
+        // (future work). Graphics-queue passes are real.
+        if (i >= m_timed_passes || m_pass_async[i]) { return false; }
+        begin_ticks = m_pass_ticks[i * 2U];
+        end_ticks   = m_pass_ticks[i * 2U + 1U];
+        return true;
+    }
+    [[nodiscard]] double   gpu_timestamp_period_ns() const noexcept override { return m_ts_period; } // already ns/tick
+    [[nodiscard]] crd::u32 gpu_timestamp_valid_bits() const noexcept override { return m_ts_valid_bits; }
+    [[nodiscard]] FgPassKind pass_kind(crd::u32 i) const noexcept override
+    {
+        return i < m_timed_passes ? m_pass_kinds[i] : FgPassKind::Raster;
+    }
+    // The ACTUAL queue pass i ran on (on_async is the graph's verdict, not the request).
+    [[nodiscard]] FgQueue pass_queue(crd::u32 i) const noexcept override
+    {
+        return (i < m_timed_passes && m_pass_async[i]) ? FgQueue::Async : FgQueue::Graphics;
+    }
     void                 set_readback_enabled(bool on) noexcept override { m_readback = on; }
 
     // REN-8: the frames-in-flight machinery. The two that name FrameSlot are declared with it, below.
@@ -8212,6 +8416,7 @@ private:
         IPresentSurface* present = nullptr;
         FgQueue          want_queue = FgQueue::Graphics; // REN-38-A14: the REQUEST (see `on_async` for the answer)
         bool             on_async   = false;             // … and whether the graph granted it
+        ObjectIdentity   identity{};                      // DIAG.7a(d2c-vk): one Pass identity per logical pass
     };
 
     // a fluent builder that rebinds to the current pass (one instance reused — add_pass returns it)
@@ -8385,6 +8590,8 @@ private:
 
     VulkanRasterContext* m_rc     = nullptr;
     VkDevice             m_device = VK_NULL_HANDLE;
+    PFN_vkCmdBeginDebugUtilsLabelEXT m_begin_label_fn = nullptr; // DIAG.7a(d2c-vk): per-pass label PFNs, loaded once (no-op if null)
+    PFN_vkCmdEndDebugUtilsLabelEXT   m_end_label_fn   = nullptr;
     VkQueue              m_queue  = VK_NULL_HANDLE;
     VkCommandPool        m_pool   = VK_NULL_HANDLE;
     // ── REN-8: FRAMES IN FLIGHT. ────────────────────────────────────────────────────────────────────────────
@@ -8476,6 +8683,13 @@ private:
     double                                  m_ts_period = 1.0; // ns per tick
     crd::containers::Array<const char*>      m_pass_names{crd::memory::default_allocator()};
     double                                  m_pass_ms[kMaxTimedPasses]{};
+    // DIAG.6b(i2): the RAW begin/end ticks behind m_pass_ms[i] (set in resolve_timestamps), plus per-timed-pass kind
+    // and the ACTUAL async-queue verdict (recorded at execute, indexed like m_pass_names). timestampValidBits is
+    // cached from the graphics queue family so a narrow counter's mid-frame wrap is repaired, not dropped.
+    crd::u64                                m_pass_ticks[kMaxTimedPasses * 2U]{};
+    FgPassKind                              m_pass_kinds[kMaxTimedPasses]{};
+    bool                                    m_pass_async[kMaxTimedPasses]{};
+    crd::u32                                m_ts_valid_bits = 64U;
     crd::u32                                m_timed_passes = 0U;
     double                                  m_gpu_ms_total = 0.0;
     bool                                    m_readback     = true; // REN-8: opt-out; gates keep read_pixel
@@ -8828,10 +9042,12 @@ bool VulkanFrameGraph::materialize_image(ImageNode& n)
                 db.view  = n.depth_view;
             }
             auto* t = is_depth ? new VulkanRasterTarget(m_device, ImageBundle{}, ImageBundle{}, cb,
-                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height)
+                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height,
+                                                        /*has_stencil=*/false, /*with_identity=*/false)
                                : new VulkanRasterTarget(m_device, cb, ImageBundle{}, db,
-                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height);
-            t->set_borrowed();
+                                                        BufferBundle{}, 1U, n.desc.width, n.desc.height,
+                                                        /*has_stencil=*/false, /*with_identity=*/false);
+            t->set_borrowed(); // FG borrowed: views over FG-owned bundles, no Cerid identity
             return t;
         };
         // create it BEFORE any target is made (both branches below read `n.depth_view`)
@@ -8928,8 +9144,8 @@ bool VulkanFrameGraph::materialize_image(ImageNode& n)
             // returns the RAW STORED DEPTH as "visibility", so the whole frame renders at roughly half
             // brightness with a shallow shadow — plausible pixels, wrong physics, found by a scanline dump.
             sb.format = vci.format;
-            auto* tex = new VulkanTexture(m_device, sb, n.desc.width, n.desc.height);
-            tex->set_borrowed();
+            auto* tex = new VulkanTexture(m_device, sb, n.desc.width, n.desc.height, /*with_identity=*/false);
+            tex->set_borrowed(); // FG sampled transient: views an FG-owned image, no Cerid identity (batch-2 rule)
             n.texture = tex;
         }
     }
@@ -9067,7 +9283,10 @@ void VulkanFrameGraph::execute()
             Pass& p = m_passes[pass_idx];
             if (!p.on_async || p.fn == nullptr) { continue; }
             m_rc->frame_rec_new_pass();
-            p.fn(*this, p.user);
+            {
+                const detail::PassLabelScope lbl(m_begin_label_fn, m_end_label_fn, m_async_cmd, p.identity, p.name);
+                p.fn(*this, p.user); // DIAG.7a(d2c-vk): async pass records into m_async_cmd -> label that CB
+            }
             ++m_async_pass_count;
         }
         m_rc->frame_rec_end();
@@ -9306,11 +9525,17 @@ void VulkanFrameGraph::execute()
         if (stamp) { vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ts_pool, pass_index * 2U); }
         // REN-38-A14: an async pass was already recorded into the compute command buffer above. Its BARRIERS still
         // run here, on the graphics side, because that is where its consumers are.
-        if (p.fn != nullptr && !p.on_async) { p.fn(*this, p.user); }
+        if (p.fn != nullptr && !p.on_async)
+        {
+            const detail::PassLabelScope lbl(m_begin_label_fn, m_end_label_fn, m_cmd, p.identity, p.name); // DIAG.7a(d2c-vk)
+            p.fn(*this, p.user);
+        }
         if (stamp)
         {
             vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ts_pool, pass_index * 2U + 1U);
             m_pass_names.push_back(p.name);
+            m_pass_kinds[pass_index] = p.kind;     // DIAG.6b(i2): record kind + actual queue parallel to the name/tick
+            m_pass_async[pass_index] = p.on_async; //             index (on_async is the graph's verdict, not request)
         }
         ++pass_index;
     }
@@ -9524,6 +9749,8 @@ void VulkanFrameGraph::resolve_timestamps() noexcept
                 const crd::u64 a = raw[i * 2U];
                 const crd::u64 b = raw[i * 2U + 1U];
                 m_pass_ms[i]     = b > a ? (static_cast<double>(b - a) * ns_per_tick) / 1.0e6 : 0.0;
+                m_pass_ticks[i * 2U]      = a; // DIAG.6b(i2): retain the raw pair behind m_pass_ms[i]
+                m_pass_ticks[i * 2U + 1U] = b;
             }
             m_gpu_ms_total = raw[n * 2U - 1U] > raw[0]
                                  ? (static_cast<double>(raw[n * 2U - 1U] - raw[0]) * ns_per_tick) / 1.0e6

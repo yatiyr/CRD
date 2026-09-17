@@ -24,6 +24,7 @@
 
 #include <crd/core/types.hpp>
 #include <crd/perf/config.hpp>
+#include <crd/perf/sample.hpp> // NameId, kInvalidNameId (DIAG.6a(d2) allocator-record name identity)
 
 namespace crd::perf
 {
@@ -46,10 +47,22 @@ struct alignas(8) AllocatorRecord
     crd::u64 bytes_in_use  = 0; // 8
     crd::u64 peak_bytes    = 0; // 8
     crd::u64 total_bytes   = 0; // 8
-    crd::u64 _pad          = 0; // 8 -- pad to 48 B / multiple of 8 alignment + room for v0f flags
+    crd::u64 _pad          = 0; // 8 -- DIAG.6a(d2): carries the allocator's interned name identity AT THIS FRAME as
+                                //      name_id + 1 (0 = unset -> resolve via the live AllocatorMeta name). Decoded by
+                                //      allocator_record_name_id(); pins the label across allocator slot reuse. Was
+                                //      "room for v0f flags"; 0 in every pre-(d2) capture, so old files read unchanged.
 };
 
 static_assert(sizeof(AllocatorRecord) == 48, "AllocatorRecord is 48 B");
+
+// DIAG.6a(d2): decode AllocatorRecord::_pad -> the NameId stamped at capture time (kInvalidNameId when unset). Both the
+// file reader (CaptureView) and any live consumer decode the +1 sentinel through this one helper so it is never
+// re-derived. A valid id resolves through the capture's name blob / the live intern table; an invalid id means the
+// record predates (d2) (or interning was saturated) -- fall back to the slot's live name.
+[[nodiscard]] inline NameId allocator_record_name_id(const AllocatorRecord& ar) noexcept
+{
+    return ar._pad != 0U ? NameId{static_cast<crd::u32>(ar._pad - 1U)} : kInvalidNameId;
+}
 
 struct FrameRecord
 {

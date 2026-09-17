@@ -568,7 +568,7 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
 
 ProgressSample progress_snapshot() noexcept
 {
-    ProgressSample s{0U, 0U, 0U, true};
+    ProgressSample s{0U, 0U, 0U, true, 0U};
     if (!g_pool.is_initialized())
         return s;
     g_pool.progress_counts(s.completions, s.executing);

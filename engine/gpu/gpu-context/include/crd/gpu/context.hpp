@@ -11,6 +11,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/validation.hpp> // DIAG.7a(f): ValidationActivation + ValidationMode (vendor-free)
 
 #include <memory>
 
@@ -40,7 +41,11 @@ struct GpuContextConfig
 {
     GpuBackend backend           = GpuBackend::Vulkan;
     bool       headless          = true;  // pure compute — no surface/swapchain
-    bool       enable_validation = false; // debug layers (off by default; the compute hot path never wants them)
+    bool       enable_validation = false; // Core validation (debug layers) -- off by default; the compute hot path never wants it
+    // DIAG.7a(f): opt-in per-mode validation. Kept SEPARATE from enable_validation (which means "Core") so an existing
+    // caller that sets only enable_validation is unchanged; sync/GPU-assisted carry real perf cost, so they default off.
+    bool       enable_sync_validation         = false; // Synchronization (hazard) validation
+    bool       enable_gpu_assisted_validation = false; // GPU-assisted (shader-instrumented) validation
 };
 
 // A live GPU device foundation — backend-agnostic. Consumers that need backend handles downcast to the concrete
@@ -71,6 +76,11 @@ public:
     // emitter, D-007 B3-c). Appended at the vtable end (append-only interface stability).
     [[nodiscard]] virtual std::unique_ptr<IGpuProgram>
     create_program(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry) = 0;
+
+    // DIAG.7a(f): the per-mode validation activation report (core/sync/GPU-assisted -- requested/active/unsupported
+    // reason). Append-only with a default so a backend that has not wired (f) yet reports "nothing requested" rather
+    // than forcing every impl to change. The Vulkan context overrides it; DX12 reporting arrives with (f-3).
+    [[nodiscard]] virtual ValidationActivation validation_activation() const noexcept { return ValidationActivation{}; }
 };
 
 // Owns the configured set of live contexts. Per-backend factories construct them; the manager holds + serves them, so

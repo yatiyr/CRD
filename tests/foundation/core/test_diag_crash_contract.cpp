@@ -22,6 +22,9 @@
 #include <windows.h> // GetCurrentThreadId
 #else
 #include <unistd.h> // getpid
+#if defined(__linux__)
+#include <signal.h> // sigaction/sigaltstack/SIG_* -- uninstall-restoration contract
+#endif
 #endif
 
 #include "minidump_probe.hpp" // Windows-only dump content probe (no-op off Windows)
@@ -53,8 +56,9 @@ fs::path fresh_temp_dir()
     return p;
 }
 
-// Count the .dmp files an install produced in dir.
-std::size_t count_dumps(const fs::path& dir)
+// Count the .dmp files an install produced in dir. [[maybe_unused]]: only the Windows fatal-path cases call it; on
+// non-Windows (capture_dump is Unsupported) it is unused and would trip -Werror=unused-function.
+[[maybe_unused]] std::size_t count_dumps(const fs::path& dir)
 {
     std::size_t     n = 0;
     std::error_code ec;
@@ -419,5 +423,46 @@ TEST_CASE("crash contract: capture_dump is Unsupported off Windows", "[core][dia
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+
+#if defined(__linux__)
+TEST_CASE("crash contract: uninstall restores the previous handler and disables the alt stack", "[core][diag][crash]")
+{
+    // The acceptance's "normal uninstall": after uninstall() the process is returned to the disposition it had before
+    // install() -- observable from outside the crash API via the raw POSIX queries. Install a sentinel handler first so
+    // we can see it come back, and confirm the alternate signal stack is disabled.
+    crd::crash::uninstall(); // reset any prior static state in this process
+
+    struct sigaction sentinel{};
+    sentinel.sa_handler = SIG_IGN; // a distinctive prior disposition
+    sigemptyset(&sentinel.sa_mask);
+    sentinel.sa_flags = 0;
+    REQUIRE(sigaction(SIGSEGV, &sentinel, nullptr) == 0);
+
+    const fs::path dir = fresh_temp_dir();
+    REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
+
+    struct sigaction cur{};
+    REQUIRE(sigaction(SIGSEGV, nullptr, &cur) == 0);
+    CHECK((cur.sa_flags & SA_ONSTACK) != 0); // crd runs its handler on the alternate stack
+    CHECK(cur.sa_handler != SIG_IGN);        // crd's handler displaced the sentinel
+
+    crd::crash::uninstall();
+
+    REQUIRE(sigaction(SIGSEGV, nullptr, &cur) == 0);
+    CHECK(cur.sa_handler == SIG_IGN); // the sentinel prior handler is restored
+    stack_t ss{};
+    REQUIRE(sigaltstack(nullptr, &ss) == 0);
+    CHECK((ss.ss_flags & SS_DISABLE) != 0); // the alternate signal stack is disabled
+
+    struct sigaction dfl{}; // leave SIGSEGV at the default so a later crashing test is not silently ignored
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    dfl.sa_flags = 0;
+    (void)sigaction(SIGSEGV, &dfl, nullptr);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+#endif // defined(__linux__)
 
 #endif

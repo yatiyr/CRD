@@ -318,7 +318,7 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 # D-007 CEIR-32: CHIR — the Cerid high-level language layer (ADR-0128), host-only, lowers one-way into crd-ceir
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
-crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf support/diag)
+crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf support/diag support/fuzz)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math
@@ -421,14 +421,18 @@ crd_module(engine/gpu/gpu-context engine/gpu-context DEPENDS containers core ren
 # ADR-0099 v17-i-a: headless Vulkan compute context
 crd_module(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan
     DEPENDS containers core gpu-context kir memory platform TESTS gpu/gpu-context-vulkan
-    TEST_DEPENDS asset_cooker ceir ceir-gpu draw frame-cook imgui scene-render shader-cook vertex-cook
+    TEST_DEPENDS asset_cooker ceir ceir-gpu draw frame-cook imgui perf perf-gpu-bridge scene-render shader-cook vertex-cook
     TEST_PACKAGES imgui)
 # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
 crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS containers core gpu-context kir memory
-    TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook shader-cook vertex-cook)
+    TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook perf perf-gpu-bridge shader-cook vertex-cook)
 # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
 crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context memory
     TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu kir)
+# DIAG.6b(i): the frame-graph -> crd-perf GPU-timing bridge. The one module that names BOTH perf and gpu-context,
+# keeping their mutual independence intact (a leaf; nothing depends back on it).
+crd_module(engine/gpu/perf-gpu-bridge engine/perf-gpu-bridge DEPENDS core gpu-context perf time
+    TESTS gpu/perf-gpu-bridge)
 crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs support/diag)
 # depends on crd-jobs above + crd-hesap (declared earlier)
 crd_module(engine/numerics/hesap-sched engine/hesap-sched DEPENDS containers core hesap jobs memory
@@ -568,6 +572,9 @@ crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
 # ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
 crd_module(tools/kir-autotune NAME kir_autotune HOST EXECUTABLES kir_autotune
     DEPENDS containers core kir kir-cuda memory)
+# DIAG.6c(e): the offline CPROF -> Perfetto trace-events JSON export CLI (ADR-0133 DG14)
+crd_module(tools/cprof-export NAME cprof_export HOST EXECUTABLES cprof_export
+    DEPENDS containers core memory perf)
 
 crd_module(runtime
     DEPENDS app config containers core geometry-primitives hesap hesap-amg hesap-dense hesap-direct hesap-eigen

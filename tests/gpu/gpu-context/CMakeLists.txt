@@ -1,5 +1,8 @@
 add_executable(crd-gpu-context-tests
     test_command_model.cpp  # RAF-2a: canonical command model (device-free structural gate)
+    test_diag_validation_vocab.cpp  # DIAG.7a(b): common backend-agnostic validation vocabulary (device-free)
+    test_diag_object_identity.cpp  # DIAG.7a(c): stable Cerid object identity + name encoding (device-free)
+    test_diag_identity_registry.cpp  # DIAG.7a(d2a): identity minting registry + debug-name builder (device-free)
 )
 
 target_link_libraries(crd-gpu-context-tests PRIVATE
