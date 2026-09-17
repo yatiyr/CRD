@@ -122,12 +122,15 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
 
 // Non-tail recursion with a volatile local so the compiler cannot fold it away or turn it into a loop; each frame
 // touches a page of stack (__chkstk) so the guard page is reached quickly -> STATUS_STACK_OVERFLOW (0xC00000FD).
-#if defined(_MSC_VER)
+#if defined(__clang__) // clang-cl defines _MSC_VER but not __GNUC__, so clang must be handled before both
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winfinite-recursion" // deliberate: this is the overflow specimen
+#elif defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4717) // recursive on all control paths -- deliberate: this is the overflow specimen
 #elif defined(__GNUC__)
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winfinite-recursion" // deliberate unbounded recursion (clang honors this pragma too)
+#pragma GCC diagnostic ignored "-Winfinite-recursion" // deliberate unbounded recursion
 #endif
 int recurse(int depth) noexcept
 {
@@ -136,7 +139,9 @@ int recurse(int depth) noexcept
     pad[sizeof(pad) - 1] = static_cast<char>(depth & 0x7F);
     return pad[0] + recurse(depth + 1) + pad[sizeof(pad) - 1];
 }
-#if defined(_MSC_VER)
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(_MSC_VER)
 #pragma warning(pop)
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
