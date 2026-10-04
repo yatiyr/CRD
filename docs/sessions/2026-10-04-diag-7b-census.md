@@ -95,3 +95,61 @@ SDK check first: the workstation and the hosted Windows image both use Windows S
 Verification on the workstation (`win-debug`, hardware adapter): `[dred]` 1 case, 22 assertions, the `Set` path (not
 the `SettingsAbsent` fallback); the whole `[validation]` set 29 cases, 4,162 assertions, passed after the change;
 strict gate clean on the three files. Hosted lanes qualify the rest.
+
+## (c) landed: the removal-time DRED read
+
+`dx12_dred.hpp`/`.cpp` add `detail::dx12_read_dred(ID3D12Device*)`, a no-allocation, never-throwing reader into a
+fixed-capacity `Dx12DredReport`: the removal HRESULT, the `Data2` device state (Unknown/Hung/Fault/PageFault, or
+NotQueried when the interface is absent), the auto-breadcrumb outcome with up to 8 nodes (command list and queue debug
+names, op count, last completed op), and the page-fault outcome with the faulting VA and up to 8 existing or recently
+freed allocations (debug name, allocation type). Each query keeps its own outcome and raw HRESULT: `Ok`,
+`NotAvailable` (`DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`, `DXGI_ERROR_UNSUPPORTED`, `E_NOINTERFACE`) or `Failed`, so one
+failed query never erases the others and "unavailable" is never reported as "empty". D3D12 types stay in the module.
+
+Measured on the workstation hardware adapter with a simulated removal (`ID3D12Device5::RemoveDevice` after one named,
+completed submission; no GPU hang):
+
+| Device | Removal reason | Breadcrumbs | Page fault |
+|---|---|---|---|
+| DRED requested, removed | `DXGI_ERROR_DEVICE_REMOVED` | Ok, 0 nodes (nothing in flight) | Ok, VA 0, no allocations |
+| DRED not requested, removed | `DXGI_ERROR_DEVICE_REMOVED` | NotAvailable (`DXGI_ERROR_UNSUPPORTED`) | NotAvailable |
+| DRED requested, live | S_OK | NotAvailable (`NOT_CURRENTLY_AVAILABLE`) | NotAvailable |
+
+The first two rows differ only in the (b) request, which proves the pre-creation settings reach the runtime. The
+`[dred]` test asserts exactly this classification, never breadcrumb content, plus the null-device contract; it passed
+three consecutive runs, and the `[validation]` set passed (30 cases, 4,179 assertions). Strict gate clean. Software
+evidence (WARP) and a real fault reproduction remain separate, labelled steps ((d), (h)).
+
+## (d) landed: removals recorded on the production completion path
+
+`stop_failed_device` (the failure response of `dx12_submit`, `dx12_signal` and `dx12_wait`) now records every stopped
+device through `dx12_record_removal`, with its origin: `Observed` when the runtime or driver had already removed the
+device (the classification an actual device loss takes) and `EngineForced` when the engine itself called
+`RemoveDevice` after a failed completion (the simulated error path). The `Dx12RemovalRecord` (origin, 1-based
+sequence, the full `Dx12DredReport`) lives in a process-lifetime store outside every context, so the last-known removal
+survives provider shutdown; the DRED read happens outside its lock.
+
+`[dx12][validation][dred]` (d): a DRED-enabled device, a fence nobody signals, `dx12_wait` with a 50 ms bound. The
+timeout yields an `EngineForced` record with `DXGI_ERROR_DEVICE_REMOVED` and both DRED queries `Ok`; a second wait on the
+removed device yields an `Observed` record; a live `Dx12ValidationCapture` counted both execution failures; the record
+outlives the device and its scope. `[dred]` 3 cases, 55 assertions, three consecutive passes; `[validation]` 31 cases,
+4,195 assertions. Strict gate clean on the four files. Remaining: (e) identity mapping, (f) bundle, (g) GBV
+qualification, (h) the hardware-gated real fault.
+
+## (e) landed: DRED lists map to Cerid identities
+
+Measured first: on the workstation hardware adapter a forced `RemoveDevice` leaves DRED's breadcrumb list **empty**,
+even with a Cerid-named list holding a recorded operation (a UAV barrier) in flight behind a queue-side wait on a fence
+nobody signals (the queue idles; no GPU hang). Real breadcrumb and page-fault content therefore needs a genuine device
+fault, which is the hardware-gated (h). That end-to-end attempt was replaced, not kept as a test that cannot fail.
+
+The mapping is proven deterministically instead. The read is split: `dx12_dred_fill_breadcrumbs` and
+`dx12_dred_fill_page_fault` turn DRED's output lists into the report, and `dx12_read_dred` calls them. Each breadcrumb
+node carries `list_identity` and `queue_identity`, and each allocation an `identity`, parsed with the public
+`crd::gpu::parse` from the native debug names DIAG.7a stamps. The `[dred]` (e) case feeds constructed lists: ten nodes
+(the first a Cerid-named Pass list on an unnamed queue, one over-long name, one without a last-completed value) and a
+page fault with one live and one retired Cerid-named resource. It checks that all ten are counted and eight stored,
+that the named list maps to its Pass identity and the unnamed queue to none, that the long name is truncated and
+terminated, and that the existing allocation maps to a live identity while the freed one keeps a valid, retired
+identity (registry `alive` false): the "recent resource retirement" clause. `[dred]` 4 cases, 82 assertions;
+`[validation]` 32 cases, 4,222 assertions; strict gate clean.

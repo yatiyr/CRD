@@ -21,6 +21,7 @@
 #include <thread>
 
 #include "dx12_device_scope.hpp"
+#include "dx12_dred.hpp" // DIAG.7b(c): dx12_read_dred
 #include "dx12_execution.hpp"
 #include "dx12_frame_descriptors.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-a): the attach/detach helper under test
@@ -2076,4 +2077,263 @@ TEST_CASE("DIAG.7b(b): DRED is set before device creation on request and never i
         REQUIRE(SUCCEEDED(scope.create(device)));
         CHECK_FALSE(g::detail::dx12_dred_process_state().page_faults);
     }
+}
+
+// DIAG.7b(c): the removal-time DRED read, on a SIMULATED removal (ID3D12Device5::RemoveDevice: no GPU work, no hang,
+// the engine's own failure response). Classification is asserted, never breadcrumb content: a removal with no list in
+// flight may legitimately leave the breadcrumb list empty. (a) DRED on -> removed, breadcrumb and page-fault queries
+// answer (not Failed); (b) DRED off -> removed, the queries report NotAvailable rather than failure or empty data;
+// (c) a live device reads S_OK and no DRED data yet.
+namespace
+{
+struct DredLeg
+{
+    g::detail::Dx12DredReport report{};
+    bool                      removed = false;
+};
+
+DredLeg dred_leg(bool request_dred, bool remove)
+{
+    DredLeg                    leg;
+    g::detail::Dx12DeviceScope scope; // declared before the device: it must outlive it
+    scope.request_dred(request_dred, request_dred);
+    ComPtr<ID3D12Device> device;
+    if (FAILED(scope.create(device))) { return leg; }
+
+    // One named, completed submission so the device has done real work before the removal.
+    D3D12_COMMAND_QUEUE_DESC qd{};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ComPtr<ID3D12CommandQueue>        queue;
+    ComPtr<ID3D12CommandAllocator>    commands;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    ComPtr<ID3D12Fence>               fence;
+    if (SUCCEEDED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commands))) &&
+        SUCCEEDED(device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, commands.Get(), nullptr,
+                                            IID_PPV_ARGS(&list))) &&
+        SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
+    {
+        (void)queue->SetName(L"dred-test-queue");
+        (void)list->SetName(L"dred-test-list");
+        (void)list->Close();
+        ID3D12CommandList* lists[] = {list.Get()};
+        queue->ExecuteCommandLists(1U, lists);
+        (void)queue->Signal(fence.Get(), 1U);
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (event != nullptr)
+        {
+            if (SUCCEEDED(fence->SetEventOnCompletion(1U, event))) { (void)WaitForSingleObject(event, 5000U); }
+            CloseHandle(event);
+        }
+    }
+    if (remove)
+    {
+        ComPtr<ID3D12Device5> control;
+        if (SUCCEEDED(device.As(&control)))
+        {
+            control->RemoveDevice();
+            leg.removed = true;
+        }
+    }
+    leg.report = g::detail::dx12_read_dred(device.Get());
+    return leg;
+}
+
+const char* query_name(g::detail::Dx12DredQuery q)
+{
+    switch (q)
+    {
+    case g::detail::Dx12DredQuery::NotRun: return "NotRun";
+    case g::detail::Dx12DredQuery::Ok: return "Ok";
+    case g::detail::Dx12DredQuery::NotAvailable: return "NotAvailable";
+    case g::detail::Dx12DredQuery::Failed: return "Failed";
+    }
+    return "?";
+}
+
+void describe(const char* tag, const DredLeg& leg)
+{
+    const auto& r = leg.report;
+    UNSCOPED_INFO(tag << ": removed=" << leg.removed << std::hex << " reason=0x"
+                      << static_cast<unsigned>(r.removal_reason) << " state=" << static_cast<int>(r.device_state)
+                      << " breadcrumbs=" << query_name(r.breadcrumbs)
+                      << "(0x" << static_cast<unsigned>(r.breadcrumbs_result) << ") nodes=" << std::dec << r.node_count
+                      << " page_fault=" << query_name(r.page_fault) << std::hex << "(0x"
+                      << static_cast<unsigned>(r.page_fault_result) << ") va=0x" << r.page_fault_va << std::dec
+                      << " existing=" << r.existing_count << " freed=" << r.freed_count);
+}
+} // namespace
+
+TEST_CASE("DIAG.7b(c): DRED is read after a simulated removal and reports honest availability",
+          "[dx12][validation][dred]")
+{
+    using Q = g::detail::Dx12DredQuery;
+    const auto removed_hr = static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED);
+
+    // (a) DRED on, removed: both queries answer. No fault happened and nothing was in flight, so the data is empty.
+    const DredLeg on = dred_leg(true, true);
+    describe("dred-on removed", on);
+    REQUIRE(on.removed);
+    CHECK(on.report.removal_reason == removed_hr);
+    CHECK(on.report.breadcrumbs == Q::Ok);
+    CHECK(on.report.page_fault == Q::Ok);
+    CHECK(on.report.page_fault_va == 0U);
+    CHECK(on.report.existing_count + on.report.freed_count == 0U);
+    CHECK(on.report.device_state != g::detail::Dx12DredDeviceState::NotQueried);
+
+    // (b) DRED off, removed: the same removal, but the queries report NotAvailable -- not Failed, not empty data. The
+    // contrast with (a) also proves 7b(b)'s pre-creation settings reach the runtime.
+    const DredLeg off = dred_leg(false, true);
+    describe("dred-off removed", off);
+    REQUIRE(off.removed);
+    CHECK(off.report.removal_reason == removed_hr);
+    CHECK(off.report.breadcrumbs == Q::NotAvailable);
+    CHECK(off.report.page_fault == Q::NotAvailable);
+
+    // (c) A live device with DRED on: not removed, and DRED has nothing to report yet.
+    const DredLeg live = dred_leg(true, false);
+    describe("dred-on live", live);
+    CHECK_FALSE(live.removed);
+    CHECK(live.report.removal_reason == 0);
+    CHECK(live.report.breadcrumbs == Q::NotAvailable);
+    CHECK(live.report.page_fault == Q::NotAvailable);
+
+    // The null-device contract: nothing is read.
+    const g::detail::Dx12DredReport none = g::detail::dx12_read_dred(nullptr);
+    CHECK(none.breadcrumbs == Q::NotRun);
+    CHECK(none.page_fault == Q::NotRun);
+}
+
+// DIAG.7b(d): the production completion path records DRED with the removal's origin. A bounded dx12_wait on a fence
+// nobody signals times out; the engine's failure response forces RemoveDevice and records an EngineForced removal (the
+// SIMULATED error path). A second wait on the now-removed device finds it already removed and records Observed (the
+// classification an actual device loss takes). The record lives outside every context, so it survives their shutdown.
+TEST_CASE("DIAG.7b(d): a failed completion records DRED with its removal origin", "[dx12][validation][dred]")
+{
+    using g::detail::Dx12RemovalOrigin;
+    crd::memory::TlsfAllocator allocator(16U << 20U, nullptr, "DX12 7b(d) removal record test");
+    g::Dx12ValidationCapture   capture(&allocator, 256U);
+    const crd::u64             failures_before = capture.report().execution_failures;
+    const crd::u64             sequence_before = g::detail::dx12_last_removal().sequence;
+
+    {
+        g::detail::Dx12DeviceScope scope; // declared before the device: it must outlive it
+        scope.request_dred(true, true);
+        ComPtr<ID3D12Device> device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        ComPtr<ID3D12Fence> fence;
+        REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        REQUIRE(event != nullptr);
+
+        // (1) Timeout -> the engine removes the device itself: EngineForced, DRED answered.
+        CHECK(FAILED(g::detail::dx12_wait(device.Get(), fence.Get(), 1U, event, 50U)));
+        const g::detail::Dx12RemovalRecord forced = g::detail::dx12_last_removal();
+        CHECK(forced.sequence == sequence_before + 1U);
+        CHECK(forced.origin == Dx12RemovalOrigin::EngineForced);
+        CHECK(forced.dred.removal_reason == static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED));
+        CHECK(forced.dred.breadcrumbs == g::detail::Dx12DredQuery::Ok);
+        CHECK(forced.dred.page_fault == g::detail::Dx12DredQuery::Ok);
+
+        // (2) Any later completion on the removed device -> already removed when the engine looks: Observed.
+        CHECK(FAILED(g::detail::dx12_wait(device.Get(), fence.Get(), 1U, event, 50U)));
+        const g::detail::Dx12RemovalRecord observed = g::detail::dx12_last_removal();
+        CHECK(observed.sequence == sequence_before + 2U);
+        CHECK(observed.origin == Dx12RemovalOrigin::Observed);
+        CHECK(observed.dred.removal_reason == static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED));
+        CloseHandle(event);
+    }
+
+    // Both failures were also counted by the live capture, and the last record outlives the device and its scope.
+    CHECK(capture.report().execution_failures >= failures_before + 2U);
+    const g::detail::Dx12RemovalRecord after = g::detail::dx12_last_removal();
+    CHECK(after.sequence == sequence_before + 2U);
+    CHECK(after.origin == Dx12RemovalOrigin::Observed);
+}
+
+// DIAG.7b(e): DRED's lists map to Cerid identities. Measured first (2026-10-04, workstation hardware adapter): a forced
+// RemoveDevice leaves the breadcrumb list EMPTY even with a Cerid-named list holding a recorded operation in flight
+// behind an unsignalled queue wait, so real breadcrumb and page-fault data needs a genuine device fault (7b(h),
+// hardware-gated). The mapping itself is proven here on constructed DRED output lists, through the same fill functions
+// dx12_read_dred uses: identities parsed from list, queue and allocation names (a retired identity keeps its
+// retired provenance), unnamed objects parse none, counts keep counting past the stored capacity, and names are
+// truncated safely.
+TEST_CASE("DIAG.7b(e): DRED breadcrumbs and page-fault allocations map to Cerid identities", "[dx12][validation][dred]")
+{
+    g::IdentityRegistry& registry = g::identity_registry();
+    const g::ObjectIdentity pass  = registry.mint(g::ObjectKind::Pass);
+    const g::ObjectIdentity live  = registry.mint(g::ObjectKind::Resource);
+    const g::ObjectIdentity freed = registry.mint(g::ObjectKind::Resource);
+    REQUIRE(registry.retire(freed)); // recently freed: valid identity, no longer alive (retired provenance)
+
+    char pass_name[128];
+    char live_name[128];
+    char freed_name[128];
+    REQUIRE(g::format_debug_name(pass, "shadow pass", pass_name, sizeof(pass_name)) != 0U);
+    REQUIRE(g::format_debug_name(live, "gbuffer albedo", live_name, sizeof(live_name)) != 0U);
+    REQUIRE(g::format_debug_name(freed, "transient depth", freed_name, sizeof(freed_name)) != 0U);
+    const char* long_name = "an unnamed-by-cerid list whose debug name is far longer than the report keeps, so it "
+                            "must be truncated and still NUL-terminated";
+
+    // Ten breadcrumb nodes: [0] the Cerid-named pass list on an unnamed queue, [1] the over-long plain name, the
+    // rest plain.
+    constexpr crd::u32 node_total = 10U;
+    D3D12_AUTO_BREADCRUMB_NODE1 nodes[node_total]{};
+    const UINT32                completed[node_total] = {3U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+    for (crd::u32 i = 0; i < node_total; ++i)
+    {
+        nodes[i].pCommandListDebugNameA  = "plain list";
+        nodes[i].pCommandQueueDebugNameA = "direct queue";
+        nodes[i].BreadcrumbCount         = 5U;
+        nodes[i].pLastBreadcrumbValue    = &completed[i];
+        nodes[i].pNext                   = (i + 1U < node_total) ? &nodes[i + 1U] : nullptr;
+    }
+    nodes[0].pCommandListDebugNameA = pass_name;
+    nodes[1].pCommandListDebugNameA = long_name;
+    nodes[2].pLastBreadcrumbValue   = nullptr; // a node without a last-completed value
+
+    D3D12_DRED_ALLOCATION_NODE1 existing{};
+    existing.ObjectNameA    = live_name;
+    existing.AllocationType = D3D12_DRED_ALLOCATION_TYPE_RESOURCE;
+    D3D12_DRED_ALLOCATION_NODE1 recent{};
+    recent.ObjectNameA    = freed_name;
+    recent.AllocationType = D3D12_DRED_ALLOCATION_TYPE_RESOURCE;
+    D3D12_DRED_PAGE_FAULT_OUTPUT1 fault{};
+    fault.PageFaultVA                    = 0x00000001234560000ULL;
+    fault.pHeadExistingAllocationNode    = &existing;
+    fault.pHeadRecentFreedAllocationNode = &recent;
+
+    g::detail::Dx12DredReport report{};
+    g::detail::dx12_dred_fill_breadcrumbs(&nodes[0], report);
+    g::detail::dx12_dred_fill_page_fault(fault, report);
+
+    // Breadcrumbs: every node counted, capacity stored, the named list mapped, the unnamed queue not.
+    CHECK(report.node_count == node_total);
+    CHECK(report.nodes_stored == g::detail::kDx12DredMaxNodes);
+    CHECK(report.nodes[0].list_identity == pass);
+    CHECK(report.nodes[0].list_identity.kind == g::ObjectKind::Pass);
+    CHECK_FALSE(report.nodes[0].queue_identity.valid());
+    CHECK(report.nodes[0].op_count == 5U);
+    CHECK(report.nodes[0].has_last_completed);
+    CHECK(report.nodes[0].last_completed == 3U);
+    CHECK_FALSE(report.nodes[1].list_identity.valid());
+    CHECK(std::strlen(report.nodes[1].command_list) == g::detail::kDx12DredNameBytes - 1U); // truncated, terminated
+    CHECK(std::strncmp(report.nodes[1].command_list, long_name, g::detail::kDx12DredNameBytes - 1U) == 0);
+    CHECK_FALSE(report.nodes[2].has_last_completed);
+    CHECK(registry.alive(report.nodes[0].list_identity));
+
+    // Page fault: the VA, existing then recently-freed allocations, each mapped; the freed one is retired, not alive.
+    CHECK(report.page_fault_va == 0x00000001234560000ULL);
+    CHECK(report.existing_count == 1U);
+    CHECK(report.freed_count == 1U);
+    REQUIRE(report.allocations_stored == 2U);
+    CHECK(report.allocations[0].identity == live);
+    CHECK(report.allocations[0].type == static_cast<crd::u32>(D3D12_DRED_ALLOCATION_TYPE_RESOURCE));
+    CHECK(registry.alive(report.allocations[0].identity));
+    CHECK(report.allocations[1].identity == freed);
+    CHECK(report.allocations[1].identity.valid());
+    CHECK_FALSE(registry.alive(report.allocations[1].identity)); // retired provenance survives into the report
+
+    (void)registry.retire(pass);
+    (void)registry.retire(live);
 }

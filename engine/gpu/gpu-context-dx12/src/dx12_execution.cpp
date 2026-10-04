@@ -1,4 +1,5 @@
 #include "dx12_execution.hpp"
+#include "dx12_dred.hpp" // DIAG.7b(d): record DRED on every stopped device
 
 #include <crd/core/assert.hpp>
 
@@ -12,7 +13,11 @@ namespace
 {
 void stop_failed_device(ID3D12Device* device) noexcept
 {
-    if (FAILED(device->GetDeviceRemovedReason())) { return; }
+    if (FAILED(device->GetDeviceRemovedReason())) // the runtime/driver already removed it: an actual device loss
+    {
+        dx12_record_removal(device, Dx12RemovalOrigin::Observed);
+        return;
+    }
     Microsoft::WRL::ComPtr<ID3D12Device5> control;
     if (FAILED(device->QueryInterface(IID_PPV_ARGS(&control))))
     {
@@ -20,6 +25,7 @@ void stop_failed_device(ID3D12Device* device) noexcept
         CRD_FATAL("DX12 completion failed and the runtime cannot safely remove the device");
     }
     control->RemoveDevice();
+    dx12_record_removal(device, Dx12RemovalOrigin::EngineForced);
 }
 } // namespace
 
