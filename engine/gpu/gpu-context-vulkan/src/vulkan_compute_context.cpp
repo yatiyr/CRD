@@ -4,6 +4,7 @@
 
 #include <crd/gpu/vulkan_compute_context.hpp>
 
+#include "vulkan_execution.hpp"      // DIAG.7c(c): bounded, observed submit and fence wait
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per compute buffer
 
 #include <crd/containers/array.hpp>
@@ -705,8 +706,19 @@ void VulkanComputeContext::submit_and_wait()
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &impl.cmd;
-    vkQueueSubmit(impl.queue, 1, &si, impl.fence);
-    vkWaitForFences(impl.device, 1, &impl.fence, VK_TRUE, UINT64_MAX);
+    // DIAG.7c(c): bounded and observed. A failed submission or wait (device loss, timeout) latches the context
+    // invalid; the device's first failure is kept by the completion seam, and no result of this submission is read.
+    VkResult result = detail::vk_submit(impl.device, impl.queue, si, impl.fence, "compute submit");
+    if (result == VK_SUCCESS)
+    {
+        result = detail::vk_wait(impl.device, impl.fence, detail::kVkDefaultWaitNs, "compute fence wait");
+    }
+    if (result != VK_SUCCESS)
+    {
+        impl.ok          = false;
+        impl.last_gpu_ms = 0.0;
+        return;
+    }
     if (impl.ts_pool != VK_NULL_HANDLE)
     {
         crd::u64 ts[2] = {0, 0};

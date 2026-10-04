@@ -5,6 +5,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp> // the relocated GLSL→SPIR-V compiler (C1-c graph on-ramp)
 
+#include "vulkan_execution.hpp"      // DIAG.7c(c): the device's failure record is released with the device
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Program identity per compiled shader stage
 
 #include <crd/core/platform.hpp> // CRD_OS_* for the platform surface extension (C2-a)
@@ -76,6 +77,67 @@ private:
     ObjectIdentity                  m_identity{}; // DIAG.7a(d2b-vk): the one logical Program identity for this shader stage
 };
 
+// DIAG.7c(b): find `name` among the instance layers BEFORE requesting it (requesting an absent layer fails
+// vkCreateInstance with VK_ERROR_LAYER_NOT_PRESENT). Records the versions of the layer that will produce the reports.
+[[nodiscard]] VulkanValidationLayer query_validation_layer(const char* name)
+{
+    VulkanValidationLayer layer{};
+    layer.queried = true;
+    std::uint32_t count = 0;
+    (void)vkEnumerateInstanceLayerProperties(&count, nullptr);
+    auto props = std::make_unique<VkLayerProperties[]>(count == 0 ? 1 : count);
+    if (vkEnumerateInstanceLayerProperties(&count, props.get()) < VK_SUCCESS)
+    {
+        return layer;
+    }
+    for (std::uint32_t i = 0; i < count; ++i)
+    {
+        if (std::strcmp(props[i].layerName, name) == 0)
+        {
+            layer.present                = true;
+            layer.spec_version           = props[i].specVersion;
+            layer.implementation_version = props[i].implementationVersion;
+        }
+    }
+    return layer;
+}
+
+// DIAG.7a(f) + 7c(b): the creation-time activation report. Core and Sync are known once the instance exists;
+// GPU-assisted is provisional (FeatureAbsent) until the device features are queried. Every requested mode is LayerAbsent
+// when the layer is not installed.
+[[nodiscard]] ValidationActivation initial_activation(const GpuContextConfig& config, bool layer_ok,
+                                                      bool has_valfeat) noexcept
+{
+    ValidationActivation va{};
+    va.requested[0] = config.enable_validation;
+    va.active[0]    = config.enable_validation && layer_ok; // Core == the KHRONOS layer loaded
+    if (config.enable_validation)
+    {
+        va.reason[0] = layer_ok ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::LayerAbsent;
+    }
+    va.requested[1] = config.enable_sync_validation;
+    va.active[1]    = config.enable_sync_validation && has_valfeat;
+    if (config.enable_sync_validation && !layer_ok)
+    {
+        va.reason[1] = ValidationUnsupportedReason::LayerAbsent;
+    }
+    else if (config.enable_sync_validation)
+    {
+        va.reason[1] = va.active[1] ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::ExtensionAbsent;
+    }
+    va.requested[2] = config.enable_gpu_assisted_validation;
+    if (config.enable_gpu_assisted_validation && !layer_ok)
+    {
+        va.reason[2] = ValidationUnsupportedReason::LayerAbsent;
+    }
+    else if (config.enable_gpu_assisted_validation)
+    {
+        va.reason[2] =
+            has_valfeat ? ValidationUnsupportedReason::FeatureAbsent : ValidationUnsupportedReason::ExtensionAbsent;
+    }
+    return va;
+}
+
 class VulkanGpuContextImpl final : public VulkanGpuContext
 {
 public:
@@ -84,6 +146,7 @@ public:
     {
         if (m_device != VK_NULL_HANDLE)
         {
+            detail::vk_forget_device(m_device); // DIAG.7c(c): a reused handle must not inherit this device's failure
             vkDestroyDevice(m_device, nullptr);
         }
         if (m_instance != VK_NULL_HANDLE)
@@ -96,6 +159,7 @@ public:
     [[nodiscard]] GpuBackend       backend() const noexcept override { return GpuBackend::Vulkan; }
     [[nodiscard]] const char*      adapter_name() const noexcept override { return m_name; }
     [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f)
+    [[nodiscard]] VulkanValidationLayer validation_layer() const noexcept override { return m_validation_layer; } // DIAG.7c(b)
     [[nodiscard]] VkInstance       vk_instance() const noexcept override { return m_instance; }
     [[nodiscard]] VkPhysicalDevice vk_physical_device() const noexcept override { return m_physical; }
     [[nodiscard]] VkDevice         vk_device() const noexcept override { return m_device; }
@@ -361,7 +425,14 @@ private:
         // DIAG.7a(f): ANY requested validation mode (core/sync/GPU-assisted) needs the validation layer loaded.
         const bool any_validation =
             config.enable_validation || config.enable_sync_validation || config.enable_gpu_assisted_validation;
+        // DIAG.7c(b): query the layer BEFORE requesting it. Requesting an absent layer used to fail vkCreateInstance and
+        // invalidate the whole context; now the absence is reported per mode.
         if (any_validation)
+        {
+            m_validation_layer = query_validation_layer(layers[0]);
+        }
+        const bool layer_ok = any_validation && m_validation_layer.present;
+        if (layer_ok)
         {
             ici.enabledLayerCount = 1;
             ici.ppEnabledLayerNames = layers;
@@ -439,7 +510,7 @@ private:
             }
             // DIAG.7a(f): VK_EXT_validation_features is provided by the VALIDATION LAYER, not the loader, so it does
             // NOT appear in the null-layer enumeration above -- enumerate the layer explicitly to detect it.
-            if (any_validation)
+            if (layer_ok)
             {
                 std::uint32_t nle = 0;
                 vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &nle, nullptr);
@@ -452,6 +523,11 @@ private:
                         has_valfeat = true;
                     }
                 }
+            }
+            // DIAG.7c(b): the features extension belongs to the layer; without the layer there is nothing to chain.
+            if (!layer_ok)
+            {
+                has_valfeat = false;
             }
             // DIAG.7a(f): sync / GPU-assisted enables ride VkValidationFeaturesEXT, which needs this instance ext.
             const bool want_valfeat = config.enable_sync_validation || config.enable_gpu_assisted_validation;
@@ -491,31 +567,8 @@ private:
         {
             return;
         }
-        // DIAG.7a(f): record activation. Core + Sync known now (layer loaded == vkCreateInstance succeeded);
-        // GPU-assisted is provisional (FeatureAbsent) until the device features are queried below.
-        {
-            ValidationActivation& va = m_validation_activation;
-            va.requested[0] = config.enable_validation;
-            va.active[0]    = config.enable_validation; // Core == the KHRONOS layer loaded, which any requested mode guarantees
-            va.reason[0]    = config.enable_validation ? ValidationUnsupportedReason::None
-                                                       : ValidationUnsupportedReason::NotRequested;
-            va.requested[1] = config.enable_sync_validation;
-            va.active[1]    = config.enable_sync_validation && has_valfeat;
-            va.reason[1]    = ValidationUnsupportedReason::NotRequested;
-            if (config.enable_sync_validation)
-            {
-                va.reason[1] = va.active[1] ? ValidationUnsupportedReason::None
-                                            : ValidationUnsupportedReason::ExtensionAbsent;
-            }
-            va.requested[2] = config.enable_gpu_assisted_validation;
-            va.active[2]    = false;
-            va.reason[2]    = ValidationUnsupportedReason::NotRequested;
-            if (config.enable_gpu_assisted_validation)
-            {
-                va.reason[2] = has_valfeat ? ValidationUnsupportedReason::FeatureAbsent
-                                           : ValidationUnsupportedReason::ExtensionAbsent;
-            }
-        }
+        // DIAG.7a(f) + 7c(b): the creation-time activation report (GPU-assisted is resolved against device features below).
+        m_validation_activation = initial_activation(config, layer_ok, has_valfeat);
 
         std::uint32_t    npd = 16;
         VkPhysicalDevice pds[16];
@@ -1387,6 +1440,7 @@ private:
 
     VkInstance       m_instance        = VK_NULL_HANDLE;
     ValidationActivation m_validation_activation{}; // DIAG.7a(f): per-mode validation activation report
+    VulkanValidationLayer m_validation_layer{};     // DIAG.7c(b): the layer as found before it was requested
     VkPhysicalDevice m_physical        = VK_NULL_HANDLE;
     VkDevice         m_device          = VK_NULL_HANDLE;
     VkQueue          m_compute_queue   = VK_NULL_HANDLE;

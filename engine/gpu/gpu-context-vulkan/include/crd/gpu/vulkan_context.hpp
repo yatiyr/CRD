@@ -31,6 +31,17 @@ public:
     [[nodiscard]] virtual VkShaderModule vk_module() const noexcept = 0;
 };
 
+// DIAG.7c(b): what a context learned about `VK_LAYER_KHRONOS_validation`. The instance layers are enumerated BEFORE the
+// layer is requested, so an absent layer is a reported capability (every requested mode LayerAbsent, the context still
+// valid) instead of a failed vkCreateInstance. The versions pin the layer a validation report came from.
+struct VulkanValidationLayer
+{
+    bool     queried                = false; // a validation mode was requested, so the layers were enumerated
+    bool     present                = false; // the layer is installed and was enabled
+    crd::u32 spec_version           = 0;     // VkLayerProperties::specVersion (the Vulkan header it targets)
+    crd::u32 implementation_version = 0;     // VkLayerProperties::implementationVersion
+};
+
 // Concrete-Vulkan view of an IGpuContext. `backend() == GpuBackend::Vulkan` guarantees a safe downcast.
 class VulkanGpuContext : public IGpuContext
 {
@@ -134,6 +145,9 @@ public:
     // exists unconditionally, but calling it without this bit enabled is VUID-...-None-04445. Queried and
     // reported, never assumed — the REN-40-A gate caught a hardcoded "supported" that was simply false.
     [[nodiscard]] virtual bool draw_indirect_count() const noexcept { return false; }
+    // DIAG.7c(b): the Khronos validation layer as this context found it (pinned evidence for every validation report).
+    // Appended at END with a default (vtable-stable, D135).
+    [[nodiscard]] virtual VulkanValidationLayer validation_layer() const noexcept { return {}; }
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

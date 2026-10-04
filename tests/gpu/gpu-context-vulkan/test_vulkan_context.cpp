@@ -9,6 +9,7 @@
 
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): identity_registry().live_count/alive the identity tests assert on
 #include "vulkan_identity_naming.hpp"    // DIAG.7a(d2b-vk): the vk_attach/name/detach adapter under test (src-private)
+#include "vulkan_execution.hpp"         // DIAG.7c(c): the completion seam under test (src-private)
 
 #include <crd/draw/draw_assets.hpp>  // REN-38-F7: the AUTHORED draw suite (the overlay-draw seam gate)
 #include <crd/kir/ckir_cook.hpp>
@@ -189,6 +190,169 @@ TEST_CASE("DIAG.7a(f): Vulkan reports per-mode validation activation", "[gpu-con
             CHECK(va2.reason[i] == gpu::ValidationUnsupportedReason::NotRequested);
         }
     }
+}
+
+// DIAG.7c(b): the validation layer is queried BEFORE it is requested. A present layer is recorded with its versions (the
+// evidence every validation report rides on). An ABSENT layer -- made absent here through the loader's own layer filter,
+// VK_LOADER_LAYERS_DISABLE, not a stub -- leaves a working context that reports LayerAbsent for every requested mode,
+// where it used to fail vkCreateInstance and invalidate the whole context.
+namespace
+{
+void set_process_env(const char* name, const char* value)
+{
+#if defined(_WIN32)
+    (void)_putenv_s(name, value != nullptr ? value : ""); // "" removes it (and updates the process block the loader reads)
+#else
+    if (value != nullptr)
+    {
+        (void)setenv(name, value, 1);
+    }
+    else
+    {
+        (void)unsetenv(name);
+    }
+#endif
+}
+} // namespace
+
+TEST_CASE("DIAG.7c(b): an absent validation layer is reported per mode, never fatal",
+          "[gpu-context][vulkan][validation][gpu]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend                        = gpu::GpuBackend::Vulkan;
+    cfg.headless                       = true;
+    cfg.enable_validation              = true;
+    cfg.enable_sync_validation         = true;
+    cfg.enable_gpu_assisted_validation = true;
+    {
+        auto ctx = gpu::create_vulkan_gpu_context(cfg);
+        if (ctx == nullptr || !ctx->valid())
+        {
+            SKIP("no Vulkan device");
+        }
+        const gpu::VulkanValidationLayer layer = static_cast<const gpu::VulkanGpuContext*>(ctx.get())->validation_layer();
+        CHECK(layer.queried);
+        if (!layer.present)
+        {
+            SKIP("the Khronos validation layer is not installed here");
+        }
+        UNSCOPED_INFO("VVL spec " << VK_API_VERSION_MAJOR(layer.spec_version) << "."
+                                  << VK_API_VERSION_MINOR(layer.spec_version) << "."
+                                  << VK_API_VERSION_PATCH(layer.spec_version) << " impl "
+                                  << layer.implementation_version);
+        CHECK(layer.spec_version >= VK_MAKE_API_VERSION(0, 1, 3, 0));
+        CHECK(layer.implementation_version > 0U);
+        CHECK(ctx->validation_activation().is_active(gpu::ValidationMode::Core));
+    }
+
+    set_process_env("VK_LOADER_LAYERS_DISABLE", "VK_LAYER_KHRONOS_validation");
+    auto absent = gpu::create_vulkan_gpu_context(cfg);
+    set_process_env("VK_LOADER_LAYERS_DISABLE", nullptr);
+    REQUIRE(absent != nullptr);
+    CHECK(absent->valid()); // the device comes up without the layer
+    const gpu::VulkanValidationLayer missing =
+        static_cast<const gpu::VulkanGpuContext*>(absent.get())->validation_layer();
+    CHECK(missing.queried);
+    CHECK_FALSE(missing.present);
+    CHECK(missing.spec_version == 0U);
+    const gpu::ValidationActivation va = absent->validation_activation();
+    REQUIRE(va.consistent());
+    for (crd::usize i = 0; i < gpu::kValidationModeCount; ++i)
+    {
+        CHECK(va.requested[i]);
+        CHECK_FALSE(va.active[i]);
+        CHECK(va.reason[i] == gpu::ValidationUnsupportedReason::LayerAbsent);
+    }
+
+    // Nothing requested: the layers are not even enumerated.
+    gpu::GpuContextConfig plain;
+    plain.backend  = gpu::GpuBackend::Vulkan;
+    plain.headless = true;
+    auto quiet = gpu::create_vulkan_gpu_context(plain);
+    REQUIRE(quiet != nullptr);
+    CHECK_FALSE(static_cast<const gpu::VulkanGpuContext*>(quiet.get())->validation_layer().queried);
+}
+
+// DIAG.7c(c): the Vulkan completion seam. A healthy round trip records nothing. A bounded wait on a fence nobody signals
+// times out and is recorded as TimedOut, not as a loss (contained: no GPU work is pending). A loss is SIMULATED by an
+// injected VK_ERROR_DEVICE_LOST at the seam (Vulkan has no RemoveDevice): the compute context latches invalid, the
+// device's first failure keeps its result and operation through a later failure, a lost device is not called again, and
+// the record outlives the device as the last-known failure without leaking into a device that reuses the handle.
+TEST_CASE("DIAG.7c(c): a failed Vulkan completion keeps its first failure and latches the context",
+          "[gpu-context][vulkan][gpu][device-loss]")
+{
+    namespace d = gpu::detail;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto healthy = gpu::create_vulkan_gpu_context(cfg);
+    if (healthy == nullptr || !healthy->valid())
+    {
+        SKIP("no Vulkan device");
+    }
+    auto* const    vk_a     = static_cast<gpu::VulkanGpuContext*>(healthy.get());
+    const VkDevice device_a = vk_a->vk_device();
+    {
+        gpu::VulkanComputeContext compute(*vk_a, crd::memory::default_allocator());
+        REQUIRE(compute.valid());
+        (void)compute.begin();
+        compute.submit_and_wait();
+        CHECK(compute.valid());
+        CHECK(d::vk_device_failure(device_a).origin == d::VkFailureOrigin::None);
+    }
+    {
+        VkFenceCreateInfo fci{};
+        fci.sType     = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        REQUIRE(vkCreateFence(device_a, &fci, nullptr, &fence) == VK_SUCCESS);
+        CHECK(d::vk_wait(device_a, fence, 1'000'000ULL, "test wait") == VK_TIMEOUT);
+        vkDestroyFence(device_a, fence, nullptr);
+        const d::VkDeviceFailure timed_out = d::vk_device_failure(device_a);
+        CHECK(timed_out.origin == d::VkFailureOrigin::TimedOut);
+        CHECK(timed_out.first_result == static_cast<crd::i32>(VK_TIMEOUT));
+        CHECK_FALSE(timed_out.lost());
+        CHECK(timed_out.failures == 1U);
+    }
+
+    auto victim = gpu::create_vulkan_gpu_context(cfg);
+    REQUIRE(victim != nullptr);
+    REQUIRE(victim->valid());
+    auto* const    vk_b     = static_cast<gpu::VulkanGpuContext*>(victim.get());
+    const VkDevice device_b = vk_b->vk_device();
+    crd::u64       sequence = 0;
+    {
+        gpu::VulkanComputeContext compute(*vk_b, crd::memory::default_allocator());
+        REQUIRE(compute.valid());
+        d::vk_inject_next_result(VK_ERROR_DEVICE_LOST);
+        (void)compute.begin();
+        compute.submit_and_wait();
+        CHECK_FALSE(compute.valid()); // latched: nothing of the failed submission is read back
+        const d::VkDeviceFailure lost = d::vk_device_failure(device_b);
+        CHECK(lost.origin == d::VkFailureOrigin::Simulated);
+        CHECK(lost.lost());
+        REQUIRE(lost.operation != nullptr);
+        CHECK(std::strcmp(lost.operation, "compute submit") == 0);
+        CHECK(lost.failures == 1U);
+        sequence = lost.sequence;
+
+        // A later call on the lost device is answered without the driver; the first failure stays.
+        VkSubmitInfo empty{};
+        empty.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        CHECK(d::vk_submit(device_b, vk_b->compute_queue(), empty, VK_NULL_HANDLE, "later submit")
+              == VK_ERROR_DEVICE_LOST);
+        const d::VkDeviceFailure again = d::vk_device_failure(device_b);
+        CHECK(again.origin == d::VkFailureOrigin::Simulated);
+        CHECK(std::strcmp(again.operation, "compute submit") == 0);
+        CHECK(again.sequence == sequence);
+        CHECK(again.failures == 2U);
+    }
+    CHECK(d::vk_device_failure(device_a).origin == d::VkFailureOrigin::TimedOut); // per device, not process-wide
+
+    victim.reset(); // the device is destroyed; its record survives as the last-known failure only
+    const d::VkDeviceFailure last = d::vk_last_device_failure();
+    CHECK(last.sequence == sequence);
+    CHECK(last.lost());
+    CHECK(d::vk_device_failure(device_b).origin == d::VkFailureOrigin::None);
 }
 
 // D-007 C6: cooperative-VECTOR device enable (VK_NV_cooperative_vector) — the PER-INVOCATION matrix×vector inference primitive
