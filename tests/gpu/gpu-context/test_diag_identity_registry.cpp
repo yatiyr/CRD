@@ -131,32 +131,32 @@ TEST_CASE("IdentityRegistry mints uniquely under concurrent creators", "[gpu][di
     // Pins the documented thread-safety: many threads minting at once must yield distinct indices (a dropped lock
     // would let SlotMap's internal arrays race -> duplicate/garbage indices or a crash).
     g::IdentityRegistry reg;
-    constexpr crd::u32 kThreads = 4U;
-    constexpr crd::u32 kPer     = 100U;
-    constexpr crd::u32 kTotal   = kThreads * kPer;
-    crd::u32 indices[kTotal] = {}; // each thread writes only its own slice -> no data race on the array itself
+    constexpr crd::u32 thread_count = 4U;
+    constexpr crd::u32 per_thread     = 100U;
+    constexpr crd::u32 total   = thread_count * per_thread;
+    crd::u32 indices[total] = {}; // each thread writes only its own slice -> no data race on the array itself
     {
-        std::jthread workers[kThreads];
-        for (crd::u32 t = 0; t < kThreads; ++t)
+        std::jthread workers[thread_count];
+        for (crd::u32 t = 0; t < thread_count; ++t)
         {
             workers[t] = std::jthread([&reg, &indices, t]
             {
-                for (crd::u32 i = 0; i < kPer; ++i)
+                for (crd::u32 i = 0; i < per_thread; ++i)
                 {
-                    indices[t * kPer + i] = reg.mint(g::ObjectKind::Resource).index;
+                    indices[t * per_thread + i] = reg.mint(g::ObjectKind::Resource).index;
                 }
             });
         }
     } // jthreads join here
-    CHECK(reg.live_count(g::ObjectKind::Resource) == kTotal);
+    CHECK(reg.live_count(g::ObjectKind::Resource) == total);
 
-    bool seen[kTotal] = {};
+    bool seen[total] = {};
     bool in_range = true;
     bool distinct = true;
-    for (crd::u32 k = 0; k < kTotal; ++k)
+    for (crd::u32 k = 0; k < total; ++k)
     {
         const crd::u32 idx = indices[k];
-        if (idx >= kTotal) { in_range = false; continue; }
+        if (idx >= total) { in_range = false; continue; }
         if (seen[idx]) { distinct = false; }
         seen[idx] = true;
     }

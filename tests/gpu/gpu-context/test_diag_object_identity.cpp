@@ -110,18 +110,18 @@ TEST_CASE("GPU object identity encode refuses a too-small buffer without overrun
     // sits at index kObjectIdentityBufferSize, one past the largest legitimate write, and must survive untouched.
     char storage[g::kObjectIdentityBufferSize + 1U];
     std::memset(storage, '#', sizeof(storage));
-    constexpr crd::usize kCanary = g::kObjectIdentityBufferSize;
+    constexpr crd::usize canary = g::kObjectIdentityBufferSize;
 
     const g::ObjectIdentity prog{g::ObjectKind::Program, 0x2AU, 0x7U};
     const crd::usize need = std::strlen("crd:prog:0000002a:g00000007"); // 27 chars, needs 28 with NUL
     REQUIRE(g::encode(prog, storage, need) == 0U); // room for the chars but not the NUL -> refuse
     REQUIRE(storage[0] == '#');                    // nothing written on refusal
-    REQUIRE(storage[kCanary] == '#');              // canary intact
+    REQUIRE(storage[canary] == '#');              // canary intact
 
     // Exactly enough room (chars + NUL) succeeds and stops there.
     REQUIRE(g::encode(prog, storage, need + 1U) == need);
     REQUIRE(std::string_view{storage} == "crd:prog:0000002a:g00000007");
-    REQUIRE(storage[kCanary] == '#');              // did not run past what it needed
+    REQUIRE(storage[canary] == '#');              // did not run past what it needed
 }
 
 TEST_CASE("GPU object kind names are stable", "[gpu][diag][identity]")

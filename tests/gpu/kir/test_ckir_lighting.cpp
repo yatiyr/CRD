@@ -21,7 +21,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace kir = crd::kir;
-namespace lt  = crd::kir::lighting;
+namespace lgt = crd::kir::lighting;
 namespace ck  = crd::kir::cook;
 namespace mat = crd::kir::material;
 namespace rn  = crd::kir::render;
@@ -35,7 +35,7 @@ namespace fin = crd::kir::finish;
 namespace
 {
 constexpr int kN  = 20;
-constexpr double kPi = lt::kPi;
+constexpr double kPi = lgt::kPi;
 
 double rclamp01(double x) { const double lo = x > 0.0 ? x : 0.0; return lo < 1.0 ? lo : 1.0; }
 double rpow5(double x) { const double x2 = x * x; return x2 * x2 * x; }
@@ -148,7 +148,7 @@ TEST_CASE("B8-a: lighting brdf_direct (Cook-Torrance GGX + multiscatter) bit-exa
     const int lcol = g.vec3(g.constant(3.0, sh, kir::DType::F64), g.constant(2.5, sh, kir::DType::F64), g.constant(2.0, sh, kir::DType::F64)); // light colour·intensity
 
     const double lc[3] = {3.0, 2.5, 2.0};
-    const int    node  = lt::brdf_direct(g, base, me, ro, nn, vv, llv, lcol);
+    const int    node  = lgt::brdf_direct(g, base, me, ro, nn, vv, llv, lcol);
 
     double o[kN * 3];
     kir::eval_cpu(g, inp, &alloc, node, o);
@@ -460,7 +460,7 @@ TEST_CASE("B8-b: thin-film iridescence (Belcour-Barla) bit-exact vs glTF", "[kir
 
     const int outside = g.constant(1.0, sh, kir::DType::F64); // air
     const int basef0  = g.vec3(fr, fg, fb);
-    const int node    = lt::eval_iridescence(g, outside, e2, c1, th, basef0);
+    const int node    = lgt::eval_iridescence(g, outside, e2, c1, th, basef0);
 
     double o[kN * 3];
     kir::eval_cpu(g, inp, &alloc, node, o);
@@ -517,11 +517,11 @@ TEST_CASE("B8-b: transmission BTDF + Beer's-law absorption + refraction ray bit-
     int          bad     = 0;
     const auto   chkv    = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
 
-    chkv(lt::transmission_btdf(g, base, f0v, f90, al, io, nn, vv, llv), [&](int i, int c) {
+    chkv(lgt::transmission_btdf(g, base, f0v, f90, al, io, nn, vv, llv), [&](int i, int c) {
         const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; const double v_i[3] = {varr[0][i], varr[1][i], varr[2][i]}; const double l_i[3] = {larr[0][i], larr[1][i], larr[2][i]};
         return ref_transmission(basr, f0r, 1.0, alv[i], iov[i], n_i, v_i, l_i, c); });
-    chkv(lt::volume_attenuation(g, rad, di, attc, adst), [&](int i, int c) { return ref_volatten(radr, dsv[i], attr, 0.5, c); });
-    chkv(lt::refraction_ray(g, nn, vv, io, thk), [&](int i, int c) {
+    chkv(lgt::volume_attenuation(g, rad, di, attc, adst), [&](int i, int c) { return ref_volatten(radr, dsv[i], attr, 0.5, c); });
+    chkv(lgt::refraction_ray(g, nn, vv, io, thk), [&](int i, int c) {
         const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; const double v_i[3] = {varr[0][i], varr[1][i], varr[2][i]}; double r[3]; ref_refract_ray(n_i, v_i, iov[i], 0.25, r); return r[c]; });
 
     CHECK(bad == 0);
@@ -626,7 +626,7 @@ TEST_CASE("B8-d: LTC integrate_edge_vec + rect area light bit-exact vs Heitz ltc
     // 1) integrate_edge_vec bit-exact (the acos edge form factor)
     {
         double o[kN * 3];
-        kir::eval_cpu(g, inp, &alloc, lt::integrate_edge_vec(g, va, vb), o);
+        kir::eval_cpu(g, inp, &alloc, lgt::integrate_edge_vec(g, va, vb), o);
         for (int i = 0; i < kN; ++i)
         {
             const double a_i[3] = {aarr[0][i], aarr[1][i], aarr[2][i]};
@@ -661,8 +661,8 @@ TEST_CASE("B8-d: LTC integrate_edge_vec + rect area light bit-exact vs Heitz ltc
             if (o[i] != rltc_rect(nr, vr, p_i, mr, pts, scale, ts)) { ++bad; }
         }
     };
-    chk(lt::ltc_evaluate_rect(g, n, view, pp, ident, q0, q1, q2, q3, g.constant(inv2pi, sh, kir::DType::F64), true), ident_r, inv2pi, true);
-    chk(lt::ltc_evaluate_rect(g, n, view, pp, minv, q0, q1, q2, q3, g.constant(1.0, sh, kir::DType::F64), true), minv_r, 1.0, true);
+    chk(lgt::ltc_evaluate_rect(g, n, view, pp, ident, q0, q1, q2, q3, g.constant(inv2pi, sh, kir::DType::F64), true), ident_r, inv2pi, true);
+    chk(lgt::ltc_evaluate_rect(g, n, view, pp, minv, q0, q1, q2, q3, g.constant(1.0, sh, kir::DType::F64), true), minv_r, 1.0, true);
 
     CHECK(bad == 0);
 }
@@ -750,11 +750,11 @@ TEST_CASE("B8-e: IBL SH L2 irradiance + Karis split-sum specular bit-exact vs Fi
     int        bad = 0;
     const auto chkv = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
 
-    chkv(lt::ibl_diffuse(g, kc(0.8, 0.5, 0.3), lt::sh_irradiance(g, nn, shn)), [&](int i, int c) {
+    chkv(lgt::ibl_diffuse(g, kc(0.8, 0.5, 0.3), lgt::sh_irradiance(g, nn, shn)), [&](int i, int c) {
         const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; double irr[3]; rsh_irradiance(n_i, shr, irr);
         const double diff[3] = {0.8, 0.5, 0.3};
         return diff[c] * irr[c]; });
-    chkv(lt::ibl_specular(g, prefiltered, f0, pr, nv), [&](int i, int c) { return ref_ibl_specular(pref_r, f0r, prv[i], nvv[i], c); });
+    chkv(lgt::ibl_specular(g, prefiltered, f0, pr, nv), [&](int i, int c) { return ref_ibl_specular(pref_r, f0r, prv[i], nvv[i], c); });
 
     CHECK(bad == 0);
 }
@@ -810,9 +810,9 @@ TEST_CASE("B8-e: IBL generation (GGX importance sample + split-sum DFG integrand
     int        bad = 0;
     const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
 
-    chkv(lt::importance_sample_ggx(g, u2, rg), 3, [&](int i, int c) {
+    chkv(lgt::importance_sample_ggx(g, u2, rg), 3, [&](int i, int c) {
         const double u_i[2] = {uxv[i], uyv[i]}; double h[3]; rimportance_ggx(u_i, rgv[i], h); return h[c]; });
-    chkv(lt::dfg_integrand(g, u2, nv, rg), 2, [&](int i, int c) {
+    chkv(lgt::dfg_integrand(g, u2, nv, rg), 2, [&](int i, int c) {
         const double u_i[2] = {uxv[i], uyv[i]}; double ab[2]; rdfg_integrand(u_i, nvv[i], rgv[i], ab); return ab[c]; });
 
     CHECK(bad == 0);
@@ -951,8 +951,8 @@ TEST_CASE("B8-d: LTC line/tube area light bit-exact vs Heitz ltc_code", "[kir][l
             if (o[i] != rltc_line(nr, vr, p_i, mr, par, pbr, 0.5)) { ++bad; }
         }
     };
-    chk(lt::ltc_evaluate_line(g, n, view, pp, ident, pa, pb, rad), ident_r); // diffuse tube (Minv = I)
-    chk(lt::ltc_evaluate_line(g, n, view, pp, minv, pa, pb, rad), minv_r);    // specular tube (exercises mat_inverse)
+    chk(lgt::ltc_evaluate_line(g, n, view, pp, ident, pa, pb, rad), ident_r); // diffuse tube (Minv = I)
+    chk(lgt::ltc_evaluate_line(g, n, view, pp, minv, pa, pb, rad), minv_r);    // specular tube (exercises mat_inverse)
     CHECK(bad == 0);
 }
 
@@ -1028,7 +1028,7 @@ TEST_CASE("B8-d: LTC SolveCubic (Blinn ellipse cubic) bit-exact vs Heitz ltc_cod
     const int     coeff = g.vec4(c0, c1, c2, g.constant(1.0, sh, kir::DType::F64));
 
     double o[kN * 3];
-    kir::eval_cpu(g, inp, &alloc, lt::solve_cubic(g, coeff), o);
+    kir::eval_cpu(g, inp, &alloc, lgt::solve_cubic(g, coeff), o);
     int bad = 0;
     for (int i = 0; i < kN; ++i)
     {
@@ -1167,7 +1167,7 @@ TEST_CASE("B8-d: LTC LUT Minv reconstruction (isotropic + anisotropic) bit-exact
     int bad = 0;
     { // isotropic: columns (a,0,c),(0,1,0),(b,0,d) → column-major [a,0,c, 0,1,0, b,0,d]
         double o[kN * 9];
-        kir::eval_cpu(g, inp, &alloc, lt::ltc_matrix(g, v1), o);
+        kir::eval_cpu(g, inp, &alloc, lgt::ltc_matrix(g, v1), o);
         for (int i = 0; i < kN; ++i)
         {
             const double want[9] = {t1[0][i], 0.0, t1[2][i], 0.0, 1.0, 0.0, t1[1][i], 0.0, t1[3][i]};
@@ -1176,7 +1176,7 @@ TEST_CASE("B8-d: LTC LUT Minv reconstruction (isotropic + anisotropic) bit-exact
     }
     { // anisotropic: columns (m00,m01,m20),(m01,m11,0),(m02,0,m22)
         double o[kN * 9];
-        kir::eval_cpu(g, inp, &alloc, lt::ltc_matrix_aniso(g, v1, v2), o);
+        kir::eval_cpu(g, inp, &alloc, lgt::ltc_matrix_aniso(g, v1, v2), o);
         for (int i = 0; i < kN; ++i)
         {
             const double want[9] = {t1[0][i], t2[0][i], t1[2][i], t2[0][i], t2[1][i], 0.0, t1[1][i], 0.0, t1[3][i]};
@@ -1225,8 +1225,8 @@ TEST_CASE("B8-d: LTC disk/sphere area light bit-exact vs Heitz ltc_code", "[kir]
             if (o[i] != rltc_disk(nr, vr, p_i, mr, q0r, q1r, q2r, 0.9, true)) { ++bad; }
         }
     };
-    chk(lt::ltc_evaluate_disk(g, n, view, pp, ident, q0, q1, q2, scl, true), ident_r);
-    chk(lt::ltc_evaluate_disk(g, n, view, pp, minv, q0, q1, q2, scl, true), minv_r);
+    chk(lgt::ltc_evaluate_disk(g, n, view, pp, ident, q0, q1, q2, scl, true), ident_r);
+    chk(lgt::ltc_evaluate_disk(g, n, view, pp, minv, q0, q1, q2, scl, true), minv_r);
     CHECK(bad == 0);
 }
 
@@ -1303,10 +1303,10 @@ TEST_CASE("B8-f: shadow-map projection + bias stack (normal-offset/slope-scaled/
     const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
     const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
 
-    chkv(lt::shadow_project(g, wp, lvp), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; double o[3]; rshadow_project(w_i, vp16, o); return o[c]; });
-    chkv(lt::normal_offset_bias(g, wp, nn, nl, scale), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; double o[3]; rnormal_offset(w_i, n_i, nlv[i], 0.03, o); return o[c]; });
-    chk(lt::slope_scaled_bias(g, nl, base, maxb), [&](int i) { return rslope_scaled(nlv[i], 0.002, 0.01); });
-    chkv(lt::receiver_plane_bias(g, dxv, dyv), 2, [&](int i, int c) { const double dx_i[3] = {dxa[0][i], dxa[1][i], dxa[2][i]}; const double dy_i[3] = {dya[0][i], dya[1][i], dya[2][i]}; double o[2]; rreceiver_plane(dx_i, dy_i, o); return o[c]; });
+    chkv(lgt::shadow_project(g, wp, lvp), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; double o[3]; rshadow_project(w_i, vp16, o); return o[c]; });
+    chkv(lgt::normal_offset_bias(g, wp, nn, nl, scale), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; double o[3]; rnormal_offset(w_i, n_i, nlv[i], 0.03, o); return o[c]; });
+    chk(lgt::slope_scaled_bias(g, nl, base, maxb), [&](int i) { return rslope_scaled(nlv[i], 0.002, 0.01); });
+    chkv(lgt::receiver_plane_bias(g, dxv, dyv), 2, [&](int i, int c) { const double dx_i[3] = {dxa[0][i], dxa[1][i], dxa[2][i]}; const double dy_i[3] = {dya[0][i], dya[1][i], dya[2][i]}; double o[2]; rreceiver_plane(dx_i, dy_i, o); return o[c]; });
 
     CHECK(bad == 0);
 }
@@ -1407,10 +1407,10 @@ TEST_CASE("B8-g: filtered soft shadows (IGN/PCSS/EVSM/MSM) bit-exact vs referenc
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     const auto chk = [&](int node, auto ref) { int b = 0; double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++b; } } return b; };
 
-    const int b_ign  = chk(lt::detail::ign(g, g.vec2(fx, fy)), [&](int i) { return rign(fxv[i], fyv[i]); });
-    const int b_pcss = chk(lt::pcss_penumbra(g, zr, zb, ls), [&](int i) { return rpcss(zrv[i], zbv[i], lsv[i]); });
-    const int b_evsm = chk(lt::evsm_shadow(g, g.vec4(em0, em1, em2, em3), ez, kc(40.0), kc(8.0), kc(1e-4), kc(0.2)), [&](int i) { const double m[4] = {emv[0][i], emv[1][i], emv[2][i], emv[3][i]}; return revsm_shadow(m, ezv[i], 40.0, 8.0, 1e-4, 0.2); });
-    const int b_msm  = chk(lt::msm_hamburger(g, g.vec4(mm0, mm1, mm2, mm3), mz, kc(0.0), kc(0.003)), [&](int i) { const double m[4] = {mmv[0][i], mmv[1][i], mmv[2][i], mmv[3][i]}; return rmsm(m, mzv[i], 0.0, 0.003); });
+    const int b_ign  = chk(lgt::detail::ign(g, g.vec2(fx, fy)), [&](int i) { return rign(fxv[i], fyv[i]); });
+    const int b_pcss = chk(lgt::pcss_penumbra(g, zr, zb, ls), [&](int i) { return rpcss(zrv[i], zbv[i], lsv[i]); });
+    const int b_evsm = chk(lgt::evsm_shadow(g, g.vec4(em0, em1, em2, em3), ez, kc(40.0), kc(8.0), kc(1e-4), kc(0.2)), [&](int i) { const double m[4] = {emv[0][i], emv[1][i], emv[2][i], emv[3][i]}; return revsm_shadow(m, ezv[i], 40.0, 8.0, 1e-4, 0.2); });
+    const int b_msm  = chk(lgt::msm_hamburger(g, g.vec4(mm0, mm1, mm2, mm3), mz, kc(0.0), kc(0.003)), [&](int i) { const double m[4] = {mmv[0][i], mmv[1][i], mmv[2][i], mmv[3][i]}; return rmsm(m, mzv[i], 0.0, 0.003); });
     WARN("[softshadow] bad ign=" << b_ign << " pcss=" << b_pcss << " evsm=" << b_evsm << " msm=" << b_msm);
     CHECK(b_ign == 0);
     CHECK(b_pcss == 0);
@@ -1456,10 +1456,10 @@ TEST_CASE("B8-h: cascaded shadow maps (split/select/texel-snap/blend) bit-exact"
     const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
     const auto chkv = [&](int node, auto ref) { double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 2; ++c) { if (o[i * 2 + c] != ref(i, c)) { ++bad; } } } };
 
-    chk(lt::csm_split_practical(g, nf, ff, lam, ci, kc(4.0)), [&](int i) { return rcsm_split(nfv[i], ffv[i], lamv[i], civ[i], 4.0); });
-    chk(lt::csm_select_cascade(g, vd, s0, s1, s2), [&](int i) { return rcsm_select(vdv[i], s0v[i], s1v[i], s2v[i]); });
-    chkv(lt::csm_texel_snap(g, g.vec2(ux, uy), kc(1024.0)), [&](int i, int c) { const double u[2] = {uxv[i], uyv[i]}; double o[2]; rcsm_snap(u, 1024.0, o); return o[c]; });
-    chk(lt::csm_blend_factor(g, vd, spl, bw), [&](int i) { return rcsm_blend(vdv[i], splv[i], bwv[i]); });
+    chk(lgt::csm_split_practical(g, nf, ff, lam, ci, kc(4.0)), [&](int i) { return rcsm_split(nfv[i], ffv[i], lamv[i], civ[i], 4.0); });
+    chk(lgt::csm_select_cascade(g, vd, s0, s1, s2), [&](int i) { return rcsm_select(vdv[i], s0v[i], s1v[i], s2v[i]); });
+    chkv(lgt::csm_texel_snap(g, g.vec2(ux, uy), kc(1024.0)), [&](int i, int c) { const double u[2] = {uxv[i], uyv[i]}; double o[2]; rcsm_snap(u, 1024.0, o); return o[c]; });
+    chk(lgt::csm_blend_factor(g, vd, spl, bw), [&](int i) { return rcsm_blend(vdv[i], splv[i], bwv[i]); });
 
     CHECK(bad == 0);
 }
@@ -1514,11 +1514,11 @@ TEST_CASE("B8-i: screen-space + translucent shadows (contact / Fourier-opacity /
     const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
     const auto chkv = [&](int node, auto ref) { double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 2; ++c) { if (o[i * 2 + c] != ref(i, c)) { ++bad; } } } };
 
-    chk(lt::contact_shadow(g, g.vec4(rz0, rz1, rz2, rz3), g.vec4(sz0, sz1, sz2, sz3), kc(0.01), kc(0.5), kc(0.9)),
+    chk(lgt::contact_shadow(g, g.vec4(rz0, rz1, rz2, rz3), g.vec4(sz0, sz1, sz2, sz3), kc(0.01), kc(0.5), kc(0.9)),
         [&](int i) { const double rz[4] = {rz0v[i], rz1v[i], rz2v[i], rz3v[i]}; const double sz[4] = {sz0v[i], sz1v[i], sz2v[i], sz3v[i]}; return rcontact(rz, sz, 0.01, 0.5, 0.9); });
-    chk(lt::fourier_opacity_transmittance(g, fa0, fa1, fb1, fa2, fb2, fd), [&](int i) { return rfom(fa0v[i], fa1v[i], fb1v[i], fa2v[i], fb2v[i], fdv[i]); });
-    chk(lt::vsm_clipmap_level(g, vz, kc(1.0), kc(6.0)), [&](int i) { return rvsm_level(vzv[i], 1.0, 6.0); });
-    chkv(lt::vsm_page_coord(g, g.vec2(ux, uy), kc(16.0)), [&](int i, int c) { const double u[2] = {uxv[i], uyv[i]}; double o[2]; rvsm_page(u, 16.0, o); return o[c]; });
+    chk(lgt::fourier_opacity_transmittance(g, fa0, fa1, fb1, fa2, fb2, fd), [&](int i) { return rfom(fa0v[i], fa1v[i], fb1v[i], fa2v[i], fb2v[i], fdv[i]); });
+    chk(lgt::vsm_clipmap_level(g, vz, kc(1.0), kc(6.0)), [&](int i) { return rvsm_level(vzv[i], 1.0, 6.0); });
+    chkv(lgt::vsm_page_coord(g, g.vec2(ux, uy), kc(16.0)), [&](int i, int c) { const double u[2] = {uxv[i], uyv[i]}; double o[2]; rvsm_page(u, 16.0, o); return o[c]; });
 
     CHECK(bad == 0);
 }
@@ -2485,9 +2485,9 @@ TEST_CASE("B8-j: skinning (linear-blend position/normal + dual-quaternion) bit-e
     int        bad  = 0;
     const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
 
-    chk3(lt::lbs_skin_position(g, m0, m1, m2, m3, lw, pp), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {pxv[i], pyv[i], pzv[i]}; double o[3]; rlbs(bmats, w, p, false, o); return o[c]; });
-    chk3(lt::lbs_skin_normal(g, m0, m1, m2, m3, lw, nn), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {nxv[i], nyv[i], nzv[i]}; double o[3]; rlbs(bmats, w, p, true, o); return o[c]; });
-    chk3(lt::dquat_skin_position(g, r0, d0, r1, d1, dw0, dw1, pp), [&](int i, int c) { const double r1c[4] = {r1xv[i], r1yv[i], r1zv[i], r1wv[i]}; const double p[3] = {pxv[i], pyv[i], pzv[i]}; double o[3]; rdquat(rq0, dq0, r1c, dq1, dw0v[i], dw1v[i], p, o); return o[c]; });
+    chk3(lgt::lbs_skin_position(g, m0, m1, m2, m3, lw, pp), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {pxv[i], pyv[i], pzv[i]}; double o[3]; rlbs(bmats, w, p, false, o); return o[c]; });
+    chk3(lgt::lbs_skin_normal(g, m0, m1, m2, m3, lw, nn), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {nxv[i], nyv[i], nzv[i]}; double o[3]; rlbs(bmats, w, p, true, o); return o[c]; });
+    chk3(lgt::dquat_skin_position(g, r0, d0, r1, d1, dw0, dw1, pp), [&](int i, int c) { const double r1c[4] = {r1xv[i], r1yv[i], r1zv[i], r1wv[i]}; const double p[3] = {pxv[i], pyv[i], pzv[i]}; double o[3]; rdquat(rq0, dq0, r1c, dq1, dw0v[i], dw1v[i], p, o); return o[c]; });
 
     CHECK(bad == 0);
 }
@@ -2526,9 +2526,9 @@ TEST_CASE("B8-c: punctual lights (directional + point + spot) forward loop bit-e
     const int sdir = g.normalize(kc(0.0, -1.0, 0.0)); const int sscale = ks(4.0); const int soff = ks(-2.0);
 
     const int lit = g.binary(kir::KOp::Add, g.binary(kir::KOp::Add,
-                                lt::directional_light(g, base, met, rgh, nn, vv, ddir, dcol),
-                                lt::point_light(g, base, met, rgh, nn, vv, ww, ppos, pcol, pfall)),
-                             lt::spot_light(g, base, met, rgh, nn, vv, ww, spos, scol, sfall, sdir, sscale, soff));
+                                lgt::directional_light(g, base, met, rgh, nn, vv, ddir, dcol),
+                                lgt::point_light(g, base, met, rgh, nn, vv, ww, ppos, pcol, pfall)),
+                             lgt::spot_light(g, base, met, rgh, nn, vv, ww, spos, scol, sfall, sdir, sscale, soff));
 
     // reference
     const double bref[3] = {0.8, 0.3, 0.2};

@@ -103,7 +103,19 @@ node* node::get(cont::StringView key) noexcept
 
 const node* node::get(cont::StringView key) const noexcept
 {
-    return const_cast<node*>(this)->get(key);
+    if (m_kind != Kind::Table)
+    {
+        return nullptr;
+    }
+    const std::string_view want{key};
+    for (crd::usize i = 0; i < m_keys.size(); ++i)
+    {
+        if (std::string_view{m_keys[i]} == want)
+        {
+            return &m_children[i];
+        }
+    }
+    return nullptr;
 }
 
 node* node::get(crd::usize index) noexcept
@@ -431,9 +443,9 @@ private:
     crd::u32         m_error_line = 0;
     crd::u32         m_error_col = 0;
 
-    bool at_end() const noexcept { return m_p >= m_end; }
-    char peek() const noexcept { return at_end() ? '\0' : *m_p; }
-    char peek2() const noexcept { return (m_p + 1 >= m_end) ? '\0' : *(m_p + 1); }
+    [[nodiscard]] bool at_end() const noexcept { return m_p >= m_end; }
+    [[nodiscard]] char peek() const noexcept { return at_end() ? '\0' : *m_p; }
+    [[nodiscard]] char peek2() const noexcept { return (m_p + 1 >= m_end) ? '\0' : *(m_p + 1); }
 
     char advance() noexcept
     {

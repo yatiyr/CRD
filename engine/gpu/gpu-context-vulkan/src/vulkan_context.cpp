@@ -373,14 +373,20 @@ private:
                                                        : ValidationUnsupportedReason::NotRequested;
             va.requested[1] = config.enable_sync_validation;
             va.active[1]    = config.enable_sync_validation && has_valfeat;
-            va.reason[1]    = !config.enable_sync_validation ? ValidationUnsupportedReason::NotRequested
-                              : (va.active[1] ? ValidationUnsupportedReason::None
-                                             : ValidationUnsupportedReason::ExtensionAbsent);
+            va.reason[1]    = ValidationUnsupportedReason::NotRequested;
+            if (config.enable_sync_validation)
+            {
+                va.reason[1] = va.active[1] ? ValidationUnsupportedReason::None
+                                            : ValidationUnsupportedReason::ExtensionAbsent;
+            }
             va.requested[2] = config.enable_gpu_assisted_validation;
             va.active[2]    = false;
-            va.reason[2]    = !config.enable_gpu_assisted_validation ? ValidationUnsupportedReason::NotRequested
-                              : (!has_valfeat ? ValidationUnsupportedReason::ExtensionAbsent
-                                             : ValidationUnsupportedReason::FeatureAbsent);
+            va.reason[2]    = ValidationUnsupportedReason::NotRequested;
+            if (config.enable_gpu_assisted_validation)
+            {
+                va.reason[2] = has_valfeat ? ValidationUnsupportedReason::FeatureAbsent
+                                           : ValidationUnsupportedReason::ExtensionAbsent;
+            }
         }
 
         std::uint32_t    npd = 16;

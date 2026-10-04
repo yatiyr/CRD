@@ -3520,14 +3520,14 @@ TEST_CASE("D2b-vk: build_scene mints one Resource identity per acceleration-stru
     gpu::VulkanRayTracingContext rt(*vk);
     if (!rt.valid()) { WARN("no valid Vulkan RT context; skipping"); return; }
 
-    static const float verts[9] = {0.0F, 0.5F, 0.0F, -0.5F, -0.5F, 0.0F, 0.5F, -0.5F, 0.0F};
+    static const float kTriangle[9] = {0.0F, 0.5F, 0.0F, -0.5F, -0.5F, 0.0F, 0.5F, -0.5F, 0.0F};
     const crd::usize   before   = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
-        auto s1 = rt.build_scene(verts, 1U);
+        auto s1 = rt.build_scene(kTriangle, 1U);
         REQUIRE(s1 != nullptr);
         CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 1U); // TLAS+BLAS -> one id
         {
-            auto s2 = rt.build_scene(verts, 1U);
+            auto s2 = rt.build_scene(kTriangle, 1U);
             REQUIRE(s2 != nullptr);
             CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before + 2U); // a second scene -> +1
         }

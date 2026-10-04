@@ -10,7 +10,7 @@
 // installed handler reads the tally through progress_snapshot() and exits 42 only if it surfaced (60 otherwise,
 // 97 for a different assert). The fatal fires on a worker thread and _Exit terminates the process directly.
 
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // no sanitizer involved: this is a scheduler-liveness control
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is a scheduler-liveness control
 
 #include "specimen_common.hpp"
 

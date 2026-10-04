@@ -270,7 +270,8 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
     r.exit_code = static_cast<int>(code);
-    r.crashed = !r.timed_out && (code >= 0xC0000000U || code == 0xC0000409U);
+    // NTSTATUS error codes (0xC0000000 and up, fail-fast 0xC0000409 included) mean the process died on a fault.
+    r.crashed = !r.timed_out && code >= 0xC0000000U;
 
     CloseHandle(rd);
     CloseHandle(pi.hProcess);

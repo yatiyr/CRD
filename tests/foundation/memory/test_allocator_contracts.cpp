@@ -118,11 +118,11 @@ TEST_CASE("tlsf: randomized alloc/realloc/free sweep stays walker-clean and mode
     // An independent allocation-state model (DIAG.3d): after every operation the structural walker
     // must pass, live ranges must never overlap, and each block's payload must still hold the byte
     // pattern written into it -- catching any metadata scribble into user memory or a corrupted chain.
-    constexpr crd::usize kCapacity = 128U * 1024U;
-    constexpr int        kMaxLive = 64;
-    constexpr int        kIterations = 4000;
+    constexpr crd::usize capacity = 128U * 1024U;
+    constexpr int        max_live = 64;
+    constexpr int        iterations = 4000;
 
-    mem::TlsfAllocator heap(kCapacity, nullptr, "tlsf-fuzz");
+    mem::TlsfAllocator heap(capacity, nullptr, "tlsf-fuzz");
 
     struct Live
     {
@@ -130,7 +130,7 @@ TEST_CASE("tlsf: randomized alloc/realloc/free sweep stays walker-clean and mode
         crd::usize  size;
         crd::u8     pattern;
     };
-    Live live[kMaxLive] = {};
+    Live live[max_live] = {};
     int  live_count = 0;
 
     crd::u64   rng = 0x9E3779B97F4A7C15ULL;
@@ -162,10 +162,10 @@ TEST_CASE("tlsf: randomized alloc/realloc/free sweep stays walker-clean and mode
     bool no_overlap = true;
     bool data_intact = true;
 
-    for (int it = 0; it < kIterations; ++it)
+    for (int it = 0; it < iterations; ++it)
     {
         const crd::u64 roll = next() % 100U;
-        if (live_count < kMaxLive && (roll < 55U || live_count == 0)) // allocate
+        if (live_count < max_live && (roll < 55U || live_count == 0)) // allocate
         {
             const crd::usize size = 8U + static_cast<crd::usize>(next() % 1024U);
             const crd::usize align = (next() & 1U) ? 16U : 32U;

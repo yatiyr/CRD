@@ -29,7 +29,7 @@ struct Recorder
         }
         ++count;
     }
-    int count_of(mem::ViolationKind k) const
+    [[nodiscard]] int count_of(mem::ViolationKind k) const
     {
         int n = 0;
         for (int i = 0; i < count && i < kMax; ++i)

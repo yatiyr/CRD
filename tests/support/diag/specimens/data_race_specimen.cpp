@@ -14,17 +14,14 @@
 // route is absent, so pre-tag SANITIZER=none and let the harness report InstrumentAbsent rather than
 // expect a catch a non-TSan sanitizer cannot deliver. Detected before including the common header.
 #if defined(__SANITIZE_THREAD__)
-#define CRD_DIAG_ROUTE_TSAN 1
+#define CRD_DIAG_ROUTE_TSAN
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-#define CRD_DIAG_ROUTE_TSAN 1
+#define CRD_DIAG_ROUTE_TSAN
 #endif
 #endif
 #ifndef CRD_DIAG_ROUTE_TSAN
-#define CRD_DIAG_ROUTE_TSAN 0
-#endif
-#if !CRD_DIAG_ROUTE_TSAN
-#define CRD_DIAG_SPECIMEN_SANITIZER "none"
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT
 #endif
 
 #include "specimen_common.hpp"

@@ -8,7 +8,7 @@
 // fatal fires at all, control falls through to a clean exit 0 -- which the test rejects, so a broken guard can
 // never pass.
 
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // no sanitizer involved: this is a scheduler-liveness control
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is a scheduler-liveness control
 
 #include "specimen_common.hpp"
 

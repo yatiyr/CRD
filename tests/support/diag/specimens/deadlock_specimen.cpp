@@ -12,7 +12,7 @@
 // the time the K-th consecutive stale window fires, BOTH fibers have parked and the wait-graph snapshot carries
 // the complete two-node cycle.
 
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // no sanitizer involved: this is a scheduler-liveness control
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is a scheduler-liveness control
 
 #include "specimen_common.hpp"
 

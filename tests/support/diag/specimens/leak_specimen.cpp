@@ -12,23 +12,22 @@
 // route is the gcc/clang LSan (linux-gcc-asan).
 #if defined(__has_include) && !defined(_MSC_VER)
 #if __has_include(<sanitizer/lsan_interface.h>)
-#define CRD_DIAG_LSAN_ROUTE 1
+#define CRD_DIAG_LSAN_ROUTE
 #endif
 #endif
 #ifndef CRD_DIAG_LSAN_ROUTE
-#define CRD_DIAG_LSAN_ROUTE 0
-#endif
-#if !CRD_DIAG_LSAN_ROUTE
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // no functional LeakSanitizer route on this toolchain
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no functional LeakSanitizer route on this toolchain
 #endif
 
 #include "specimen_common.hpp"
 
 #include <cstdlib>
 
-#define CRD_DIAG_LEAK_ACTIVE (CRD_DIAG_HAS_ASAN && CRD_DIAG_LSAN_ROUTE)
+#if CRD_DIAG_HAS_ASAN && defined(CRD_DIAG_LSAN_ROUTE)
+#define CRD_DIAG_LEAK_ACTIVE
+#endif
 
-#if CRD_DIAG_LEAK_ACTIVE
+#ifdef CRD_DIAG_LEAK_ACTIVE
 #include <sanitizer/lsan_interface.h>
 
 static volatile void* g_sink = nullptr;
@@ -47,7 +46,7 @@ int main()
 {
     crd_diag_harden();
     crd_diag_announce();
-#if CRD_DIAG_LEAK_ACTIVE
+#ifdef CRD_DIAG_LEAK_ACTIVE
     leak_now();
     if (__lsan_do_recoverable_leak_check() != 0)
     {

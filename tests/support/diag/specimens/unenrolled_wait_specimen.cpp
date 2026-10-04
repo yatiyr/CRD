@@ -8,7 +8,7 @@
 // is the failure signal. _Exit runs on the worker thread and kills the process directly; we never
 // return to join().
 
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // no sanitizer involved: this is an engine-fatal control
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
 #include "specimen_common.hpp"
 

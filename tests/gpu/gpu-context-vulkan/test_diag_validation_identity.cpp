@@ -17,6 +17,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string_view>
 
 namespace
@@ -158,10 +159,10 @@ TEST_CASE("DIAG.7a(g): a Core hazard on a named Cerid buffer yields an error cor
     const crd::u32         family = vk->compute_family();
 
     // A small named Cerid buffer (TRANSFER_DST so vkCmdFillBuffer is a legal op whose SIZE the layer checks).
-    constexpr VkDeviceSize kSize = 16;
+    constexpr VkDeviceSize size_bytes = 16;
     VkBufferCreateInfo bci{};
     bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bci.size        = kSize;
+    bci.size        = size_bytes;
     bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -229,7 +230,7 @@ TEST_CASE("DIAG.7a(g): a Core hazard on a named Cerid buffer yields an error cor
         gpu::ValidationCapture capture(*vk);
         REQUIRE(vkResetCommandBuffer(cb, 0) == VK_SUCCESS);
         REQUIRE(vkBeginCommandBuffer(cb, &bi) == VK_SUCCESS);
-        vkCmdFillBuffer(cb, buffer, 0, kSize, 0U);          // legal
+        vkCmdFillBuffer(cb, buffer, 0, size_bytes, 0U);          // legal
         REQUIRE(vkEndCommandBuffer(cb) == VK_SUCCESS);      // a valid consumer ends cleanly
         CHECK(capture.error_or_warning_count() == 0U);      // clean, not merely "not correlated"
         CHECK(find_by_identity(capture, id) == nullptr);    // and nothing correlated to this buffer
@@ -316,11 +317,9 @@ struct HazardRig
 // A syncval hazard message names the class (WRITE_AFTER_WRITE) in its body; the VUID name is not stored.
 [[nodiscard]] bool mentions_waw(const gpu::ValidationCapture& capture)
 {
-    for (const auto& r : capture.messages())
-    {
-        if (std::string_view(r.message_text.c_str()).find("WRITE_AFTER_WRITE") != std::string_view::npos) { return true; }
-    }
-    return false;
+    return std::ranges::any_of(capture.messages(), [](const auto& r) {
+        return std::string_view(r.message_text.c_str()).find("WRITE_AFTER_WRITE") != std::string_view::npos;
+    });
 }
 } // namespace
 

@@ -26,7 +26,7 @@
 
 #pragma once
 
-#include <crd/math/mat.hpp>
+#include <crd/math/mat_types.hpp> // the types only: mat.hpp includes this header after them
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/vec4f.hpp>

@@ -11,16 +11,15 @@
 // InstrumentAbsent, an explicit unqualified route (the acceptance's partial-instrumentation dependency),
 // never converted into a skip-pass. Mirrors heap_overflow_specimen for the qualified case.
 #if defined(_MSC_VER)
-#define CRD_DIAG_SPECIMEN_SANITIZER "none" // stack-use-after-return not qualified on MSVC ASan
-#define CRD_DIAG_IS_MSVC 1
-#else
-#define CRD_DIAG_IS_MSVC 0
+#define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // stack-use-after-return not qualified on MSVC ASan
 #endif
 #include "specimen_common.hpp"
 
-#define CRD_DIAG_UAR_ACTIVE (CRD_DIAG_HAS_ASAN && !CRD_DIAG_IS_MSVC)
+#if CRD_DIAG_HAS_ASAN && !defined(_MSC_VER)
+#define CRD_DIAG_UAR_ACTIVE
+#endif
 
-#if CRD_DIAG_UAR_ACTIVE
+#ifdef CRD_DIAG_UAR_ACTIVE
 // Enable stack-use-after-return detection at ASan init (reading ASAN_OPTIONS in main would be too
 // late). halt_on_error keeps the first report fatal so the harness classifies the abort.
 extern "C" const char* __asan_default_options()
@@ -41,7 +40,7 @@ int main()
 {
     crd_diag_harden();
     crd_diag_announce();
-#if CRD_DIAG_UAR_ACTIVE
+#ifdef CRD_DIAG_UAR_ACTIVE
     stash_local();
     const int observed = *g_escaped; // read the now-dead frame -- stack-use-after-return
     return observed == 0x5A5A ? 0 : 1;

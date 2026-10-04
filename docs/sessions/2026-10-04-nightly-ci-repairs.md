@@ -239,3 +239,27 @@ directory; both crash tests assert the module is named and that the dump carries
 The new stack-guarantee test also exposed a race in its own first draft: `std::thread` can return before the new
 thread runs its `DLL_THREAD_ATTACH` callbacks, so a "pre-existing" thread could attach after `install()` and, correctly,
 be guaranteed. It now waits until that thread is demonstrably running before installing: 40 of 40 runs.
+
+## Sixth batch: the complete strict-analysis census
+
+Run 37220832553's `win-tidy`, the first lane built with `-k 0`, reported every independent finding at once: 36 unique
+findings in 21 files across 25 failing steps (the four in `dx12_validation_capture.cpp` were already repaired by the
+third batch). All are repaired; every touched file is clean under the local LLVM 20.1.8 gate.
+
+- **Include cycle** `mat.hpp` <-> `mat_simd_f32.hpp` (reported from every translation unit that includes `mat.hpp`
+  first). The Mat types move to the new `crd/math/mat_types.hpp`; `mat_simd_f32.hpp` includes the types only, and
+  `mat.hpp` is the entry point that includes both, so every header stays standalone and existing includers see the same
+  overload set. `crd-math-tests` (162 cases, including the bit-exact SIMD/scalar parity cases) pass.
+- **Specimen constant macros** (10, `cppcoreguidelines-macro-usage`). Specimens now define the value-less flag
+  `CRD_DIAG_SPECIMEN_ROUTE_ABSENT` and the common header turns it into the "none" sanitizer label; route detection uses
+  value-less presence flags (`CRD_DIAG_ROUTE_TSAN`, `CRD_DIAG_LSAN_ROUTE`, `CRD_DIAG_LEAK_ACTIVE`,
+  `CRD_DIAG_UAR_ACTIVE`) tested with `defined()`. Same conditions, same labels; `[diag]` jobs tests (73 cases) pass.
+- **Engine:** `toml.cpp` const `get(key)` searches instead of casting away const, three parser helpers are
+  `[[nodiscard]]`; `IdentityMode` is `crd::u8`; the Vulkan validation activation reasons drop nested conditionals.
+- **Tests:** function-local constants renamed to lower case, one static constant to `kTriangle`, a `[[nodiscard]]`
+  helper, an `any_of`, the lighting test's namespace alias `lt` (confusable with `It`) renamed `lgt`, and the harness's
+  redundant fail-fast clause folded into the NTSTATUS range test.
+
+Workstation verification: `crd-memory-tests` 140 cases, `crd-core-tests` 30, `crd-jobs-tests [diag]` 73,
+`crd-gpu-context-tests [identity]` 16, `crd-gpu-context-vulkan-tests [validation],[identity]` 20,
+`crd-gpu-context-dx12-tests [validation],[identity]` 39, `crd-kir-tests` lighting file 28, `crd-toml-tests` 6.

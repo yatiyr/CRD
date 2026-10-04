@@ -402,7 +402,7 @@ public:
     // factory targets (create_color_target and siblings); `None` for frame-graph transient / RTT nodes (REN-1/3/39/40)
     // that alias or borrow heap images -- those keep the defaulted-invalid identity (dtor detach is a no-op) and are the
     // frame-graph batch's to wire, matching batch 1's deferral of the transient Dx12Texture.
-    enum class IdentityMode { Mint, None };
+    enum class IdentityMode : crd::u8 { Mint, None };
 
     Dx12RasterTarget(ComPtr<ID3D12Resource> tex, ComPtr<ID3D12Resource> resolve, ComPtr<ID3D12Resource> depth,
                      ComPtr<ID3D12Resource> readback, ComPtr<ID3D12DescriptorHeap> rtv_heap,
