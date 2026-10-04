@@ -54,7 +54,11 @@ TEST_CASE("ceir 8g: emit collects diagnostics; has_errors reflects Error/Fatal; 
     bool has_note = false;
     for (usize i = 0; i + 6U <= rv.size(); ++i)
     {
-        if (std::memcmp(rv.data() + i, "note: ", 6U) == 0) { has_note = true; break; }
+        if (std::memcmp(rv.data() + i, "note: ", 6U) == 0)
+        {
+            has_note = true;
+            break;
+        }
     }
     CHECK(has_note);
 }
@@ -73,7 +77,11 @@ TEST_CASE("ceir 8g: a Fatal diagnostic sets has_errors", "[ceir][diagnostic]")
     bool             has_unknown = false;
     for (usize i = 0; i + 9U <= rv.size(); ++i)
     {
-        if (std::memcmp(rv.data() + i, "<unknown>", 9U) == 0) { has_unknown = true; break; }
+        if (std::memcmp(rv.data() + i, "<unknown>", 9U) == 0)
+        {
+            has_unknown = true;
+            break;
+        }
     }
     CHECK(has_unknown);
 }

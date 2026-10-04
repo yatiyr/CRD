@@ -41,7 +41,10 @@ inline constexpr crd::u32 kFourCC_MdTp = crd::resources::make_fourcc('M', 'D', '
 // MIDI-1 7-bit → 32-bit by the MIDI 2.0 upscaling rule (bit replication fills the added resolution)
 [[nodiscard]] constexpr crd::u32 midi1_velocity_to_32(crd::u8 v7) noexcept
 {
-    if (v7 == 0) { return 0; }
+    if (v7 == 0)
+    {
+        return 0;
+    }
     crd::u32 v = static_cast<crd::u32>(v7 & 0x7FU) << 25U;
     v |= v >> 7U;
     v |= v >> 14U;
@@ -117,7 +120,10 @@ public:
     MidiLoader() = default;
     explicit MidiLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override { return kFourCC_MIDI; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }

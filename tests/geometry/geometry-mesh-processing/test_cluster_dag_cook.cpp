@@ -208,11 +208,17 @@ TEST_CASE("REN-40-I5: determinism - two cooks produce identical output",
     REQUIRE(rep1.bvh_node_count == rep2.bvh_node_count);
 
     for (crd::usize i = 0; i < r1.packed_clusters.size(); ++i)
+    {
         REQUIRE(r1.packed_clusters[i] == r2.packed_clusters[i]);
+    }
     for (crd::usize i = 0; i < r1.packed_bvh.size(); ++i)
+    {
         REQUIRE(r1.packed_bvh[i] == r2.packed_bvh[i]);
+    }
     for (crd::usize i = 0; i < r1.cluster_triangles_packed.size(); ++i)
+    {
         REQUIRE(r1.cluster_triangles_packed[i] == r2.cluster_triangles_packed[i]);
+    }
 }
 
 TEST_CASE("REN-40-I5: root clusters have FLT_MAX parent error in packed data",

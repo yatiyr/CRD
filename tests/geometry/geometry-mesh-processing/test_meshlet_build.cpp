@@ -98,7 +98,10 @@ TEST_CASE("REN-40-I1: meshlet builder covers every triangle exactly once",
 
     crd::containers::Array<crd::u32> tri_count(&alloc);
     tri_count.resize(tc);
-    for (crd::u32 i = 0; i < tc; ++i) tri_count[i] = 0U;
+    for (crd::u32 i = 0; i < tc; ++i)
+    {
+        tri_count[i] = 0U;
+    }
 
     for (crd::u32 mi = 0; mi < static_cast<crd::u32>(result.meshlets.size()); ++mi)
     {
@@ -217,9 +220,13 @@ TEST_CASE("REN-40-I1: meshlet builder determinism",
         REQUIRE(r1.meshlets[i].triangle_count == r2.meshlets[i].triangle_count);
     }
     for (crd::u32 i = 0; i < static_cast<crd::u32>(r1.meshlet_vertices.size()); ++i)
+    {
         REQUIRE(r1.meshlet_vertices[i] == r2.meshlet_vertices[i]);
+    }
     for (crd::u32 i = 0; i < static_cast<crd::u32>(r1.meshlet_triangles.size()); ++i)
+    {
         REQUIRE(r1.meshlet_triangles[i] == r2.meshlet_triangles[i]);
+    }
 }
 
 TEST_CASE("REN-40-I1: meshlet builder rejects invalid input",
@@ -291,6 +298,8 @@ TEST_CASE("REN-40-I1: large mesh produces many meshlets with full coverage",
 
     crd::u32 sum_tc = 0U;
     for (crd::u32 mi = 0; mi < static_cast<crd::u32>(result.meshlets.size()); ++mi)
+    {
         sum_tc += result.meshlets[mi].triangle_count;
+    }
     REQUIRE(sum_tc == tc);
 }

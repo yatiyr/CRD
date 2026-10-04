@@ -76,8 +76,12 @@ fs::path first_crash_record(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".log" && it->path().filename().string().rfind("crash_", 0) == 0)
+        {
             return it->path();
+        }
+    }
     return {};
 }
 
@@ -86,11 +90,15 @@ cont::String read_text(const char* path)
     cont::String out;
     std::FILE*   f = std::fopen(path, "rb");
     if (f == nullptr)
+    {
         return out;
+    }
     char   buf[4096];
     size_t got = 0;
     while ((got = std::fread(buf, 1, sizeof(buf), f)) != 0)
+    {
         out.append(buf, got);
+    }
     std::fclose(f);
     return out;
 }
@@ -98,11 +106,17 @@ cont::String read_text(const char* path)
 int hexval(char c)
 {
     if (c >= '0' && c <= '9')
+    {
         return c - '0';
+    }
     if (c >= 'a' && c <= 'f')
+    {
         return c - 'a' + 10;
+    }
     if (c >= 'A' && c <= 'F')
+    {
         return c - 'A' + 10;
+    }
     return -1;
 }
 
@@ -112,11 +126,15 @@ std::size_t hex_decode(std::string_view hex, unsigned char* out, std::size_t cap
     for (std::size_t i = 0; i + 1 < hex.size() + 1 && n < cap; i += 2)
     {
         if (i + 1 >= hex.size())
+        {
             break;
+        }
         const int hi = hexval(hex[i]);
         const int lo = hexval(hex[i + 1]);
         if (hi < 0 || lo < 0)
+        {
             break;
+        }
         out[n++] = static_cast<unsigned char>((hi << 4) | lo);
     }
     return n;
@@ -127,11 +145,15 @@ std::string_view value_after(std::string_view sv, const char* key)
 {
     const std::size_t pos = sv.find(key);
     if (pos == std::string_view::npos)
+    {
         return {};
+    }
     const std::size_t start = pos + std::strlen(key);
     std::size_t       end   = sv.find_first_of(" \n", start);
     if (end == std::string_view::npos)
+    {
         end = sv.size();
+    }
     return sv.substr(start, end - start);
 }
 
@@ -143,7 +165,9 @@ std::size_t parse_elf_build_id(const char* path, unsigned char* out, std::size_t
     {
         std::FILE* fp = std::fopen(path, "rb");
         if (fp == nullptr)
+        {
             return 0;
+        }
         std::fseek(fp, 0, SEEK_END);
         const long sz = std::ftell(fp);
         std::fseek(fp, 0, SEEK_SET);
@@ -156,26 +180,38 @@ std::size_t parse_elf_build_id(const char* path, unsigned char* out, std::size_t
         std::fclose(fp);
     }
     if (f.size() < sizeof(Elf64_Ehdr))
+    {
         return 0;
+    }
     Elf64_Ehdr eh{};
     std::memcpy(&eh, f.data(), sizeof(eh));
     if (std::memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0)
+    {
         return 0;
+    }
     for (int i = 0; i < eh.e_phnum; ++i)
     {
         const std::size_t poff = static_cast<std::size_t>(eh.e_phoff) + static_cast<std::size_t>(i) * eh.e_phentsize;
         if (poff + sizeof(Elf64_Phdr) > f.size())
+        {
             break;
+        }
         Elf64_Phdr ph{};
         std::memcpy(&ph, f.data() + poff, sizeof(ph));
         if (ph.p_type != PT_NOTE)
+        {
             continue;
+        }
         std::size_t off = static_cast<std::size_t>(ph.p_offset);
         std::size_t rem = static_cast<std::size_t>(ph.p_filesz);
         if (off > f.size())
+        {
             continue;
+        }
         if (off + rem > f.size())
+        {
             rem = f.size() - off;
+        }
         while (rem >= sizeof(Elf64_Nhdr))
         {
             Elf64_Nhdr nh{};
@@ -184,13 +220,17 @@ std::size_t parse_elf_build_id(const char* path, unsigned char* out, std::size_t
             const std::size_t desc_pad = (static_cast<std::size_t>(nh.n_descsz) + 3U) & ~static_cast<std::size_t>(3);
             const std::size_t total    = sizeof(Elf64_Nhdr) + name_pad + desc_pad;
             if (total > rem)
+            {
                 break;
+            }
             if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U &&
                 std::memcmp(f.data() + off + sizeof(Elf64_Nhdr), "GNU", 4) == 0)
             {
                 std::size_t take = nh.n_descsz;
                 if (take > out_cap)
+                {
                     take = out_cap;
+                }
                 std::memcpy(out, f.data() + off + sizeof(Elf64_Nhdr) + name_pad, take);
                 return take;
             }
@@ -244,7 +284,9 @@ TEST_CASE("crash record (linux): carries the exe ELF build-id matching the on-di
     for (char c : mod_count_tok)
     {
         if (c < '0' || c > '9')
+        {
             break;
+        }
         modules = modules * 10 + (c - '0');
     }
     CHECK(modules >= 2);
@@ -257,17 +299,23 @@ TEST_CASE("crash record (linux): carries the exe ELF build-id matching the on-di
     {
         const std::size_t p = sv.find("module ", scan);
         if (p == std::string_view::npos)
+        {
             break;
+        }
         // The "modules N" header does not match "module " (the 7th char is 's', not a space), so every hit here is a
         // real module line. fields: module <base-hex> <id-hex-or-dash> <basename>
         const std::size_t base_start = p + 7;
         const std::size_t id_start   = sv.find(' ', base_start);
         if (id_start == std::string_view::npos)
+        {
             break;
+        }
         const std::size_t id_s = id_start + 1;
         std::size_t       id_e = sv.find_first_of(" \n", id_s);
         if (id_e == std::string_view::npos)
+        {
             id_e = sv.size();
+        }
         const std::string_view id = sv.substr(id_s, id_e - id_s);
         if (id != "-")
         {

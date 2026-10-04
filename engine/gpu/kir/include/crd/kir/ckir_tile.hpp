@@ -74,9 +74,19 @@ struct TuningEntry
 
 [[nodiscard]] inline bool tuning_device_eq(const char* want, const char* have) noexcept
 {
-    if (want == nullptr) { return true; } // wildcard
-    if (have == nullptr) { return false; }
-    while (*want != '\0' && *want == *have) { ++want; ++have; }
+    if (want == nullptr) // wildcard
+    {
+        return true;
+    }
+    if (have == nullptr)
+    {
+        return false;
+    }
+    while (*want != '\0' && *want == *have)
+    {
+        ++want;
+        ++have;
+    }
     return *want == *have;
 }
 
@@ -148,10 +158,16 @@ inline TileSchedule select_schedule(const KGraph& g, int node, const char* devic
             const crd::i64 kk = a.shape.dims[r - 1];
             const crd::i64 nn = b.shape.dims[b.shape.rank - 1];
             crd::i64       nbatch = 1;
-            for (int k = 0; k < r - 2; ++k) { nbatch *= a.shape.dims[k]; }
+            for (int k = 0; k < r - 2; ++k)
+            {
+                nbatch *= a.shape.dims[k];
+            }
             // 1. DB REPLAY (AS-2/AS-6): a per-DEVICE exact-shape auto-tuned winner overrides the hand heuristic.
             TileSchedule tuned;
-            if (nbatch == 1 && lookup_tuned(KOp::Contract, device, mm, nn, kk, tuned)) { return tuned; }
+            if (nbatch == 1 && lookup_tuned(KOp::Contract, device, mm, nn, kk, tuned))
+            {
+                return tuned;
+            }
             // 2. the hand-seeded heuristic: the v17-e N=1024 winner (128x128x8, warp 64x32, thread 8x8, 256 threads, DB).
             if (nbatch == 1 && mm >= 128 && nn >= 128 && (mm % 128) == 0 && (nn % 128) == 0 && (kk % 8) == 0)
             {
@@ -213,7 +229,10 @@ struct FuseInfo
 inline FuseInfo detect_fuse(const KGraph& g, int output, crd::memory::IAllocator* scratch)
 {
     FuseInfo fi;
-    if (g.node(output).op == KOp::Contract) { return fi; } // no epilogue → the plain path handles it
+    if (g.node(output).op == KOp::Contract) // no epilogue → the plain path handles it
+    {
+        return fi;
+    }
     const crd::i64                  ncol = g.node(output).shape.dims[g.node(output).shape.rank - 1];
     const int                       n    = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
@@ -224,29 +243,53 @@ inline FuseInfo detect_fuse(const KGraph& g, int output, crd::memory::IAllocator
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
         if (nd.op == KOp::Contract)
         {
-            if (fi.contract >= 0 && fi.contract != i) { return FuseInfo{}; }
+            if (fi.contract >= 0 && fi.contract != i)
+            {
+                return FuseInfo{};
+            }
             fi.contract = i;
             continue;
         }
         if (nd.op == KOp::Broadcast)
         {
             const KNode& src = g.node(nd.a);
-            if (src.op != KOp::Input || src.shape.numel() != ncol) { return FuseInfo{}; }
-            if (fi.n_bias >= kMaxFusedBias) { return FuseInfo{}; }
+            if (src.op != KOp::Input || src.shape.numel() != ncol)
+            {
+                return FuseInfo{};
+            }
+            if (fi.n_bias >= kMaxFusedBias)
+            {
+                return FuseInfo{};
+            }
             fi.bias_node[fi.n_bias] = i;
             fi.bias_iidx[fi.n_bias] = src.iidx;
             ++fi.n_bias;
             continue;
         }
-        if (nd.op == KOp::Input || !fuse_detail::is_ew(nd.op)) { return FuseInfo{}; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.op == KOp::Input || !fuse_detail::is_ew(nd.op))
+        {
+            return FuseInfo{};
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
     }
     fi.ok = (fi.contract >= 0);
     return fi;

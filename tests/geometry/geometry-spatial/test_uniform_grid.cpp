@@ -75,8 +75,16 @@ f32 point_aabb_d2(const Vec3f& p, const AABB3<f32>& a) noexcept
         const f32 v = p[static_cast<usize>(i)];
         const f32 lo = a.min[static_cast<usize>(i)];
         const f32 hi = a.max[static_cast<usize>(i)];
-        if (v < lo)      { const f32 d = lo - v; d2 += d * d; }
-        else if (v > hi) { const f32 d = v - hi; d2 += d * d; }
+        if (v < lo)
+        {
+            const f32 d = lo - v;
+            d2 += d * d;
+        }
+        else if (v > hi)
+        {
+            const f32 d = v - hi;
+            d2 += d * d;
+        }
     }
     return d2;
 }
@@ -184,11 +192,17 @@ TEST_CASE("UniformGrid overlap matches brute force on random AABB cloud",
         crd::containers::Array<u32> expected(&f.alloc);
         for (u32 i = 0; i < objs.size(); ++i)
         {
-            if (aabb_overlap(objs[i], q)) { expected.push_back(i); }
+            if (aabb_overlap(objs[i], q))
+            {
+                expected.push_back(i);
+            }
         }
         std::sort(expected.data(), expected.data() + expected.size());
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 
@@ -216,11 +230,17 @@ TEST_CASE("UniformGrid radius matches brute force", "[geometry-spatial][grid][ra
             crd::containers::Array<u32> expected(&f.alloc);
             for (u32 i = 0; i < objs.size(); ++i)
             {
-                if (point_aabb_d2(q, objs[i]) <= r2) { expected.push_back(i); }
+                if (point_aabb_d2(q, objs[i]) <= r2)
+                {
+                    expected.push_back(i);
+                }
             }
             std::sort(expected.data(), expected.data() + expected.size());
             REQUIRE(got.size() == expected.size());
-            for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+            for (usize i = 0; i < got.size(); ++i)
+            {
+                REQUIRE(got[i] == expected[i]);
+            }
         }
     }
 }
@@ -358,9 +378,15 @@ TEST_CASE("UniformGrid insert/remove cycle keeps surviving handles valid",
         ids.push_back(g.insert(aabb_around(Vec3f{static_cast<f32>(i) - 25.0F, 0, 0}, 0.3F), i));
     }
     REQUIRE(g.object_count() == 50U);
-    for (u32 i = 0; i < 50U; i += 2U) { g.remove(ids[i]); }
+    for (u32 i = 0; i < 50U; i += 2U)
+    {
+        g.remove(ids[i]);
+    }
     REQUIRE(g.object_count() == 25U);
-    for (u32 i = 1; i < 50U; i += 2U) { REQUIRE(g.object_payload(ids[i]) == i); }
+    for (u32 i = 1; i < 50U; i += 2U)
+    {
+        REQUIRE(g.object_payload(ids[i]) == i);
+    }
     crd::containers::Array<u32> hits(&f.alloc);
     g.overlap(AABB3<f32>{Vec3f{-100, -100, -100}, Vec3f{100, 100, 100}}, hits);
     REQUIRE(hits.size() == 25U);
@@ -388,7 +414,10 @@ TEST_CASE("UniformGrid find_overlapping_pairs matches brute force",
     {
         for (u32 j = i + 1U; j < objs.size(); ++j)
         {
-            if (aabb_overlap(objs[i], objs[j])) { expected.push_back(UniformGridPair{i, j}); }
+            if (aabb_overlap(objs[i], objs[j]))
+            {
+                expected.push_back(UniformGridPair{i, j});
+            }
         }
     }
     std::sort(expected.data(), expected.data() + expected.size(),
@@ -466,7 +495,10 @@ TEST_CASE("UniformGrid scratch overlap byte-identical to single-thread overload"
         g.overlap(q, scratch, sc);
         std::sort(sc.data(), sc.data() + sc.size());
         REQUIRE(single.size() == sc.size());
-        for (usize i = 0; i < single.size(); ++i) { REQUIRE(single[i] == sc[i]); }
+        for (usize i = 0; i < single.size(); ++i)
+        {
+            REQUIRE(single[i] == sc[i]);
+        }
     }
 }
 
@@ -496,7 +528,10 @@ TEST_CASE("UniformGrid scratch radius byte-identical to single-thread overload",
             g.radius(q, r, scratch, sc);
             std::sort(sc.data(), sc.data() + sc.size());
             REQUIRE(single.size() == sc.size());
-            for (usize i = 0; i < single.size(); ++i) { REQUIRE(single[i] == sc[i]); }
+            for (usize i = 0; i < single.size(); ++i)
+            {
+                REQUIRE(single[i] == sc[i]);
+            }
         }
     }
 }
@@ -600,10 +635,17 @@ TEST_CASE("UniformGrid concurrent queries via crd-jobs fiber pool",
                 {
                     for (usize i = 0; i < got.size(); ++i)
                     {
-                        if (got[i] != corpus_ptr->ref[q][i]) { ok = false; break; }
+                        if (got[i] != corpus_ptr->ref[q][i])
+                        {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);

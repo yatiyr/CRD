@@ -65,7 +65,10 @@ audio::AudioPcm make_material(u32 rate, u16 channels, u16 bits, usize frames)
     for (usize i = 0; i < frames; ++i)
     {
         i32 base = 0;
-        if (i < frames / 5) { base = amp / 2; } // constant head
+        if (i < frames / 5) // constant head
+        {
+            base = amp / 2;
+        }
         else if (i < 2 * frames / 5)
         {
             base = static_cast<i32>((i * 37) % static_cast<usize>(amp)) - amp / 2; // ramp
@@ -138,7 +141,10 @@ TEST_CASE("wav: 16/24-bit PCM and float-32 round-trip bit-exact", "[audio][wav]"
         f.sample_rate     = 44100;
         f.channels        = 1;
         f.bits_per_sample = 0;
-        for (int i = 0; i < 777; ++i) { f.fsamples.push_back(static_cast<f32>(i) * 0.001F - 0.35F); }
+        for (int i = 0; i < 777; ++i)
+        {
+            f.fsamples.push_back(static_cast<f32>(i) * 0.001F - 0.35F);
+        }
         const auto enc = audio::wav_encode(f, &galloc());
         REQUIRE(enc.size() > 0);
         audio::AudioPcm back(&galloc());
@@ -161,10 +167,19 @@ TEST_CASE("wav: refusals are typed; unknown chunks skip", "[audio][wav]")
     REQUIRE(enc.size() > 44);
     // splice a LIST chunk right after fmt (offset 12..36 = fmt; data starts at 36)
     containers::Array<u8> spliced(&galloc());
-    for (usize i = 0; i < 36; ++i) { spliced.push_back(enc[i]); }
+    for (usize i = 0; i < 36; ++i)
+    {
+        spliced.push_back(enc[i]);
+    }
     const u8 list[] = {'L', 'I', 'S', 'T', 4, 0, 0, 0, 'I', 'N', 'F', 'O'};
-    for (u8 b : list) { spliced.push_back(b); }
-    for (usize i = 36; i < enc.size(); ++i) { spliced.push_back(enc[i]); }
+    for (u8 b : list)
+    {
+        spliced.push_back(b);
+    }
+    for (usize i = 36; i < enc.size(); ++i)
+    {
+        spliced.push_back(enc[i]);
+    }
     // patch the RIFF size
     const u32 riff = static_cast<u32>(spliced.size() - 8);
     std::memcpy(spliced.data() + 4, &riff, 4);

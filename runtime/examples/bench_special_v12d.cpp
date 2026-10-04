@@ -59,14 +59,20 @@ void row(const char* name, CF cf, BF bf)
         [&]
         {
             double s = 0;
-            for (int i = 0; i < n; ++i) s += cf(kX[i]);
+            for (int i = 0; i < n; ++i)
+            {
+                s += cf(kX[i]);
+            }
             return s;
         });
     const double tb = per_call(
         [&]
         {
             double s = 0;
-            for (int i = 0; i < n; ++i) s += bf(kX[i]);
+            for (int i = 0; i < n; ++i)
+            {
+                s += bf(kX[i]);
+            }
             return s;
         });
     std::printf("%-10s  %8.2f   %8.2f   %.2fx %s\n", name, tc, tb, tb / tc, (tb > tc ? "WIN" : "lose"));

@@ -26,13 +26,31 @@ namespace
 [[nodiscard]] VhacdStatus
 validate_options(const VhacdOptions& opts) noexcept
 {
-    if (opts.max_parts == 0U)               { return VhacdStatus::InvalidOptions; }
-    if (opts.max_depth == 0U)               { return VhacdStatus::InvalidOptions; }
-    if (opts.splits_per_axis == 0U)         { return VhacdStatus::InvalidOptions; }
+    if (opts.max_parts == 0U)
+    {
+        return VhacdStatus::InvalidOptions;
+    }
+    if (opts.max_depth == 0U)
+    {
+        return VhacdStatus::InvalidOptions;
+    }
+    if (opts.splits_per_axis == 0U)
+    {
+        return VhacdStatus::InvalidOptions;
+    }
     if (!(opts.min_concavity >= 0.0F)
-        || !(opts.min_concavity <= 1.0F))   { return VhacdStatus::InvalidOptions; }
-    if (!(opts.alpha_imbalance >= 0.0F))    { return VhacdStatus::InvalidOptions; }
-    if (!(opts.beta_symmetry   >= 0.0F))    { return VhacdStatus::InvalidOptions; }
+        || !(opts.min_concavity <= 1.0F))
+    {
+        return VhacdStatus::InvalidOptions;
+    }
+    if (!(opts.alpha_imbalance >= 0.0F))
+    {
+        return VhacdStatus::InvalidOptions;
+    }
+    if (!(opts.beta_symmetry   >= 0.0F))
+    {
+        return VhacdStatus::InvalidOptions;
+    }
     return VhacdStatus::Ok;
 }
 
@@ -90,7 +108,10 @@ vhacd_decompose(const VoxelGrid&                                  grid,
     // follow-on once a real consumer hits the perf wall.
     for (crd::u32 iter = 0U; iter < opts.max_parts; ++iter)
     {
-        if (clusters.size() >= opts.max_parts) { break; }
+        if (clusters.size() >= opts.max_parts)
+        {
+            break;
+        }
 
         crd::containers::ConstSpan<crd::u32> sidecar_span(sidecar.data(), sidecar.size());
 
@@ -110,7 +131,10 @@ vhacd_decompose(const VoxelGrid&                                  grid,
         result.max_part_concavity = worst_value;
 
         // Termination: every cluster is "convex enough".
-        if (worst_value <= opts.min_concavity) { break; }
+        if (worst_value <= opts.min_concavity)
+        {
+            break;
+        }
 
         // Search the best split plane for the worst cluster.
         const auto split = detail::find_best_split(

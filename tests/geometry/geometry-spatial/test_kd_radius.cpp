@@ -29,7 +29,10 @@ crd::containers::Array<Vec3f> make_cloud(u32 n, u32 seed, crd::memory::IAllocato
     pts.reserve(n);
     std::mt19937 rng(seed);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < n; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     return pts;
 }
 
@@ -44,7 +47,10 @@ crd::containers::Array<u32> brute_radius(crd::containers::ConstSpan<Vec3f> pts,
     {
         const Vec3f d = pts[i] - q;
         const f32 d2 = d.x * d.x + d.y * d.y + d.z * d.z;
-        if (d2 <= r2) { out.push_back(i); }
+        if (d2 <= r2)
+        {
+            out.push_back(i);
+        }
     }
     std::sort(out.data(), out.data() + out.size());
     return out;
@@ -72,13 +78,19 @@ TEST_CASE("kd_radius matches brute force on random cloud", "[geometry-spatial][k
 
             crd::containers::Array<u32> got(&f.alloc);
             got.reserve(hits.size());
-            for (usize i = 0; i < hits.size(); ++i) { got.push_back(hits[i].payload); }
+            for (usize i = 0; i < hits.size(); ++i)
+            {
+                got.push_back(hits[i].payload);
+            }
             std::sort(got.data(), got.data() + got.size());
 
             auto expected = brute_radius(crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()},
                                            q, r, &f.alloc);
             REQUIRE(got.size() == expected.size());
-            for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+            for (usize i = 0; i < got.size(); ++i)
+            {
+                REQUIRE(got[i] == expected[i]);
+            }
         }
     }
 }
@@ -101,7 +113,17 @@ TEST_CASE("kd_radius zero-radius returns only coincident points", "[geometry-spa
     // Both hits must reference original index 0 OR 2 (the two coincident pts).
     bool saw_0 = false;
     bool saw_2 = false;
-    for (const auto& h : hits) { if (h.payload == 0U) saw_0 = true; if (h.payload == 2U) saw_2 = true; }
+    for (const auto& h : hits)
+    {
+        if (h.payload == 0U)
+        {
+            saw_0 = true;
+        }
+        if (h.payload == 2U)
+        {
+            saw_2 = true;
+        }
+    }
     REQUIRE(saw_0);
     REQUIRE(saw_2);
 }

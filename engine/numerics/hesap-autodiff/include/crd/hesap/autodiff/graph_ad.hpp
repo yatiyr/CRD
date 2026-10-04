@@ -86,9 +86,18 @@ public:
         for (int i = 0; i < n; ++i)
         {
             const GNode& g = m_nodes[static_cast<crd::usize>(i)];
-            if (g.op == GOp::Input) { vals[i] = in[static_cast<int>(g.c)]; }
-            else if (g.op == GOp::Const) { vals[i] = g.c; }
-            else { vals[i] = g_apply(g.op, vals[g.a], g.b >= 0 ? vals[g.b] : 0.0); }
+            if (g.op == GOp::Input)
+            {
+                vals[i] = in[static_cast<int>(g.c)];
+            }
+            else if (g.op == GOp::Const)
+            {
+                vals[i] = g.c;
+            }
+            else
+            {
+                vals[i] = g_apply(g.op, vals[g.a], g.b >= 0 ? vals[g.b] : 0.0);
+            }
         }
     }
 
@@ -102,7 +111,10 @@ public:
         for (int i = nfwd - 1; i >= 0; --i)
         {
             const int ci = adj[static_cast<crd::usize>(i)];
-            if (ci < 0) { continue; }
+            if (ci < 0)
+            {
+                continue;
+            }
             const GNode g = m_nodes[static_cast<crd::usize>(i)]; // COPY (pushes below can realloc m_nodes)
             switch (g.op)
             {
@@ -151,8 +163,16 @@ public:
         for (int i = 0; i < n; ++i) // const-fold in place
         {
             GNode& g = m_nodes[static_cast<crd::usize>(i)];
-            if (g.op == GOp::Const) { isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = g.c; continue; }
-            if (g.op == GOp::Input) { continue; }
+            if (g.op == GOp::Const)
+            {
+                isc[static_cast<crd::usize>(i)] = 1;
+                cval[static_cast<crd::usize>(i)] = g.c;
+                continue;
+            }
+            if (g.op == GOp::Input)
+            {
+                continue;
+            }
             const bool ac = g.a < 0 || isc[static_cast<crd::usize>(g.a)];
             const bool bc = g.b < 0 || isc[static_cast<crd::usize>(g.b)];
             if (ac && bc)
@@ -168,20 +188,35 @@ public:
         crd::containers::Array<crd::u8> keep(m_nodes.allocator());
         crd::containers::Array<int>     stk(m_nodes.allocator());
         keep.resize(static_cast<crd::usize>(n), 0);
-        for (int r = 0; r < n_roots; ++r) { stk.push_back(roots[r]); }
+        for (int r = 0; r < n_roots; ++r)
+        {
+            stk.push_back(roots[r]);
+        }
         while (stk.size() > 0)
         {
             const int i = stk[stk.size() - 1];
             stk.resize(stk.size() - 1);
-            if (keep[static_cast<crd::usize>(i)]) { continue; }
+            if (keep[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
             keep[static_cast<crd::usize>(i)] = 1;
             const GNode& g = m_nodes[static_cast<crd::usize>(i)];
-            if (g.a >= 0) { stk.push_back(g.a); }
-            if (g.b >= 0) { stk.push_back(g.b); }
+            if (g.a >= 0)
+            {
+                stk.push_back(g.a);
+            }
+            if (g.b >= 0)
+            {
+                stk.push_back(g.b);
+            }
         }
         // rebuild kept nodes in order with hash-cons CSE
         int cap = 1;
-        while (cap < 2 * n + 4) { cap <<= 1; }
+        while (cap < 2 * n + 4)
+        {
+            cap <<= 1;
+        }
         crd::containers::Array<int> table(m_nodes.allocator());
         crd::containers::Array<int> newid(m_nodes.allocator());
         table.resize(static_cast<crd::usize>(cap), -1);
@@ -189,15 +224,27 @@ public:
         crd::containers::Array<GNode> nn(m_nodes.allocator());
         for (int i = 0; i < n; ++i)
         {
-            if (!keep[static_cast<crd::usize>(i)]) { continue; }
+            if (!keep[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
             GNode g   = m_nodes[static_cast<crd::usize>(i)];
-            if (g.a >= 0) { g.a = newid[static_cast<crd::usize>(g.a)]; }
-            if (g.b >= 0) { g.b = newid[static_cast<crd::usize>(g.b)]; }
+            if (g.a >= 0)
+            {
+                g.a = newid[static_cast<crd::usize>(g.a)];
+            }
+            if (g.b >= 0)
+            {
+                g.b = newid[static_cast<crd::usize>(g.b)];
+            }
             const int found = intern(table, cap, nn, g);
             newid[static_cast<crd::usize>(i)] = found;
         }
         m_nodes = static_cast<crd::containers::Array<GNode>&&>(nn);
-        for (int r = 0; r < n_roots; ++r) { roots[r] = newid[static_cast<crd::usize>(roots[r])]; }
+        for (int r = 0; r < n_roots; ++r)
+        {
+            roots[r] = newid[static_cast<crd::usize>(roots[r])];
+        }
     }
 
     [[nodiscard]] crd::memory::IAllocator* alloc() const noexcept { return m_nodes.allocator(); }
@@ -205,7 +252,10 @@ public:
 private:
     void accum(crd::containers::Array<int>& adj, int nodeidx, int contrib)
     {
-        if (nodeidx < 0) { return; }
+        if (nodeidx < 0)
+        {
+            return;
+        }
         int& slot = adj[static_cast<crd::usize>(nodeidx)];
         slot = (slot < 0) ? contrib : bin(GOp::Add, slot, contrib);
     }
@@ -231,7 +281,10 @@ private:
         while (table[static_cast<crd::usize>(h)] >= 0)
         {
             const int id = table[static_cast<crd::usize>(h)];
-            if (same(nn[static_cast<crd::usize>(id)], g)) { return id; }
+            if (same(nn[static_cast<crd::usize>(id)], g))
+            {
+                return id;
+            }
             h = (h + 1) & static_cast<crd::u64>(cap - 1);
         }
         const int id = static_cast<int>(nn.size());
@@ -312,8 +365,14 @@ inline int emit_cpp(const Graph& g, const int* out_nodes, int n_out, const int* 
         case GOp::Tanh: p = ga_append(buf, cap, p, "  const double n%d = crd::math::tanh(n%d);\n", i, nd.a); break;
         }
     }
-    for (int k = 0; k < n_out; ++k) { p = ga_append(buf, cap, p, "  out[%d] = n%d;\n", k, out_nodes[k]); }
-    for (int k = 0; k < n_grad; ++k) { p = ga_append(buf, cap, p, "  grad[%d] = n%d;\n", k, grad_nodes[k]); }
+    for (int k = 0; k < n_out; ++k)
+    {
+        p = ga_append(buf, cap, p, "  out[%d] = n%d;\n", k, out_nodes[k]);
+    }
+    for (int k = 0; k < n_grad; ++k)
+    {
+        p = ga_append(buf, cap, p, "  grad[%d] = n%d;\n", k, grad_nodes[k]);
+    }
     p = ga_append(buf, cap, p, "}\n");
     return p;
 }

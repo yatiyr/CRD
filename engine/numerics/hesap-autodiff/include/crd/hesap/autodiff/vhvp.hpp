@@ -99,7 +99,11 @@ struct VVar
 {
     const crd::u32 id = t.make(VOp::Leaf, t.n());
     VNode&         nd = t.node(id);
-    for (int j = 0; j < t.n(); ++j) { nd.val[j] = x[j]; nd.tan[j] = v[j]; }
+    for (int j = 0; j < t.n(); ++j)
+    {
+        nd.val[j] = x[j];
+        nd.tan[j] = v[j];
+    }
     return {&t, id};
 }
 
@@ -130,7 +134,11 @@ struct VVar
     const VNode& nb = t.node(b.node);
     c.i0 = a.node;
     c.i1 = b.node;
-    for (int j = 0; j < n; ++j) { c.val[j] = na.val[j] + nb.val[j]; c.tan[j] = na.tan[j] + nb.tan[j]; }
+    for (int j = 0; j < n; ++j)
+    {
+        c.val[j] = na.val[j] + nb.val[j];
+        c.tan[j] = na.tan[j] + nb.tan[j];
+    }
     return {&t, id};
 }
 [[nodiscard]] inline VVar operator-(VVar a, VVar b) noexcept
@@ -143,7 +151,11 @@ struct VVar
     const VNode& nb = t.node(b.node);
     c.i0 = a.node;
     c.i1 = b.node;
-    for (int j = 0; j < n; ++j) { c.val[j] = na.val[j] - nb.val[j]; c.tan[j] = na.tan[j] - nb.tan[j]; }
+    for (int j = 0; j < n; ++j)
+    {
+        c.val[j] = na.val[j] - nb.val[j];
+        c.tan[j] = na.tan[j] - nb.tan[j];
+    }
     return {&t, id};
 }
 [[nodiscard]] inline VVar sin(VVar a) noexcept
@@ -195,7 +207,11 @@ struct VVar
     c.i0 = a.node;
     crd::f64 sv = 0.0;
     crd::f64 st = 0.0;
-    for (int j = 0; j < n; ++j) { sv += na.val[j]; st += na.tan[j]; }
+    for (int j = 0; j < n; ++j)
+    {
+        sv += na.val[j];
+        st += na.tan[j];
+    }
     c.val[0] = sv;
     c.tan[0] = st;
     return {&t, id};
@@ -211,7 +227,11 @@ inline void vhvp(VTape& tape, const Build& build, int n, crd::f64* grad, crd::f6
     for (crd::u32 id = 0; id < tape.count(); ++id)
     {
         VNode& nd = tape.node(id);
-        for (int j = 0; j < nd.len; ++j) { nd.adjv[j] = 0.0; nd.adjt[j] = 0.0; }
+        for (int j = 0; j < nd.len; ++j)
+        {
+            nd.adjv[j] = 0.0;
+            nd.adjt[j] = 0.0;
+        }
     }
     tape.node(y.node).adjv[0] = 1.0;
     tape.node(y.node).adjt[0] = 0.0;
@@ -227,14 +247,26 @@ inline void vhvp(VTape& tape, const Build& build, int n, crd::f64* grad, crd::f6
         {
             VNode& a = tape.node(c.i0);
             VNode& b = tape.node(c.i1);
-            for (int j = 0; j < m; ++j) { a.adjv[j] += c.adjv[j]; a.adjt[j] += c.adjt[j]; b.adjv[j] += c.adjv[j]; b.adjt[j] += c.adjt[j]; }
+            for (int j = 0; j < m; ++j)
+            {
+                a.adjv[j] += c.adjv[j];
+                a.adjt[j] += c.adjt[j];
+                b.adjv[j] += c.adjv[j];
+                b.adjt[j] += c.adjt[j];
+            }
             break;
         }
         case VOp::Sub:
         {
             VNode& a = tape.node(c.i0);
             VNode& b = tape.node(c.i1);
-            for (int j = 0; j < m; ++j) { a.adjv[j] += c.adjv[j]; a.adjt[j] += c.adjt[j]; b.adjv[j] -= c.adjv[j]; b.adjt[j] -= c.adjt[j]; }
+            for (int j = 0; j < m; ++j)
+            {
+                a.adjv[j] += c.adjv[j];
+                a.adjt[j] += c.adjt[j];
+                b.adjv[j] -= c.adjv[j];
+                b.adjt[j] -= c.adjt[j];
+            }
             break;
         }
         case VOp::Mul:
@@ -277,14 +309,22 @@ inline void vhvp(VTape& tape, const Build& build, int n, crd::f64* grad, crd::f6
             VNode&         a  = tape.node(c.i0);
             const crd::f64 av = c.adjv[0];
             const crd::f64 at = c.adjt[0];
-            for (int j = 0; j < a.len; ++j) { a.adjv[j] += av; a.adjt[j] += at; } // broadcast the scalar adjoint
+            for (int j = 0; j < a.len; ++j) // broadcast the scalar adjoint
+            {
+                a.adjv[j] += av;
+                a.adjt[j] += at;
+            }
             break;
         }
         }
     }
     // leaf is node 0 (built first); read grad = adjoint value, Hv = adjoint tangent
     const VNode& leaf = tape.node(0);
-    for (int j = 0; j < n; ++j) { grad[j] = leaf.adjv[j]; hv[j] = leaf.adjt[j]; }
+    for (int j = 0; j < n; ++j)
+    {
+        grad[j] = leaf.adjv[j];
+        hv[j] = leaf.adjt[j];
+    }
 }
 
 } // namespace crd::hesap::autodiff::reverse::vec

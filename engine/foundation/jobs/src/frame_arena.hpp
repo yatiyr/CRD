@@ -40,7 +40,9 @@ public:
     void shutdown() noexcept
     {
         if (m_data == nullptr)
+        {
             return;
+        }
         std::free(m_data); // NOLINT(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory)
         m_data     = nullptr;
         m_capacity = 0U;

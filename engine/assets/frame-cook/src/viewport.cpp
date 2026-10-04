@@ -59,18 +59,27 @@ crd::i64 ViewportRegistry::find(crd::containers::StringView id) const
 {
     for (crd::usize i = 0; i < m_v.size(); ++i)
     {
-        if (str_eq(m_v[i].desc.id, id)) { return static_cast<crd::i64>(i); }
+        if (str_eq(m_v[i].desc.id, id))
+        {
+            return static_cast<crd::i64>(i);
+        }
     }
     return -1;
 }
 
 void ViewportRegistry::depends_on(crd::u32 viewport, DependencyKind kind, crd::u64 key)
 {
-    if (viewport >= m_v.size()) { return; }
+    if (viewport >= m_v.size())
+    {
+        return;
+    }
     const crd::u64 w = dep_word(kind, key);
     for (crd::usize i = 0; i < m_v[viewport].deps.size(); ++i)
     {
-        if (m_v[viewport].deps[i] == w) { return; } // declared twice is once
+        if (m_v[viewport].deps[i] == w) // declared twice is once
+        {
+            return;
+        }
     }
     m_v[viewport].deps.push_back(w);
 }
@@ -83,8 +92,14 @@ crd::u32 ViewportRegistry::invalidate(DependencyKind kind, crd::u64 key)
     {
         for (crd::usize d = 0; d < m_v[i].deps.size(); ++d)
         {
-            if (m_v[i].deps[d] != w) { continue; }
-            if (!m_v[i].dirty) { ++n; }
+            if (m_v[i].deps[d] != w)
+            {
+                continue;
+            }
+            if (!m_v[i].dirty)
+            {
+                ++n;
+            }
             m_v[i].dirty = true;
             break;
         }
@@ -94,12 +109,18 @@ crd::u32 ViewportRegistry::invalidate(DependencyKind kind, crd::u64 key)
 
 void ViewportRegistry::invalidate_viewport(crd::u32 viewport)
 {
-    if (viewport < m_v.size()) { m_v[viewport].dirty = true; }
+    if (viewport < m_v.size())
+    {
+        m_v[viewport].dirty = true;
+    }
 }
 
 void ViewportRegistry::note_cost(crd::u32 viewport, double gpu_ms) noexcept
 {
-    if (viewport < m_v.size()) { m_v[viewport].last_gpu_ms = gpu_ms; }
+    if (viewport < m_v.size())
+    {
+        m_v[viewport].last_gpu_ms = gpu_ms;
+    }
 }
 
 void select_viewports(ViewportRegistry& reg, const ViewportBudget& budget, crd::u32 frame, ViewportSelection& out)
@@ -122,7 +143,10 @@ void select_viewports(ViewportRegistry& reg, const ViewportBudget& budget, crd::
     for (crd::u32 i = 0; i < reg.count(); ++i)
     {
         const ViewportState& s = reg.at(i);
-        if (s.desc.policy != ViewportPolicy::EveryFrame) { continue; }
+        if (s.desc.policy != ViewportPolicy::EveryFrame)
+        {
+            continue;
+        }
         out.active.push_back(i);
         out.charged_ms += cost_of(s);
         pixels += pixels_of(s);
@@ -134,8 +158,14 @@ void select_viewports(ViewportRegistry& reg, const ViewportBudget& budget, crd::
     for (crd::u32 i = 0; i < reg.count(); ++i)
     {
         const ViewportState& s = reg.at(i);
-        if (s.desc.policy == ViewportPolicy::EveryFrame) { continue; }
-        if (s.desc.policy == ViewportPolicy::OnDemand && !s.dirty) { continue; }
+        if (s.desc.policy == ViewportPolicy::EveryFrame)
+        {
+            continue;
+        }
+        if (s.desc.policy == ViewportPolicy::OnDemand && !s.dirty)
+        {
+            continue;
+        }
         if (s.desc.policy == ViewportPolicy::Periodic
             && (frame - s.last_rendered) < s.desc.period_frames && s.last_rendered != 0U)
         {
@@ -157,7 +187,10 @@ void select_viewports(ViewportRegistry& reg, const ViewportBudget& budget, crd::
         {
             const crd::u32 p  = cand[b - 1];
             const crd::u64 pk = static_cast<crd::u64>(reg.at(p).desc.priority) + reg.at(p).skipped;
-            if (pk >= vk) { break; }
+            if (pk >= vk)
+            {
+                break;
+            }
             cand[b] = cand[b - 1];
             --b;
         }
@@ -180,7 +213,10 @@ void select_viewports(ViewportRegistry& reg, const ViewportBudget& budget, crd::
             out.charged_ms += c;
             pixels += p;
         }
-        else { out.deferred.push_back(i); }
+        else
+        {
+            out.deferred.push_back(i);
+        }
     }
 }
 
@@ -195,7 +231,10 @@ void commit_selection(ViewportRegistry& reg, const ViewportSelection& sel, crd::
     }
     // ⛔ Deferred viewports stay DIRTY and age. Marking them clean here would be the silent-cap failure in its
     // purest form: the thumbnail never renders and nothing ever asks again.
-    for (crd::usize i = 0; i < sel.deferred.size(); ++i) { ++reg.at(sel.deferred[i]).skipped; }
+    for (crd::usize i = 0; i < sel.deferred.size(); ++i)
+    {
+        ++reg.at(sel.deferred[i]).skipped;
+    }
 }
 
 FrameCookError compose_frame(const ViewportRegistry& reg, crd::containers::ConstSpan<crd::u32> active,
@@ -221,11 +260,17 @@ FrameCookError compose_frame(const ViewportRegistry& reg, crd::containers::Const
     for (crd::usize i = 0; i < active.size(); ++i)
     {
         const crd::u32 vi = active[i];
-        if (vi >= reg.count()) { return FrameCookError::UnresolvedInclude; }
+        if (vi >= reg.count())
+        {
+            return FrameCookError::UnresolvedInclude;
+        }
         const ViewportDesc& d = reg.at(vi).desc;
         if (d.graph.size() == 0U || d.id.size() == 0U)
         {
-            if (where != nullptr) { copy_str(*where, d.id); }
+            if (where != nullptr)
+            {
+                copy_str(*where, d.id);
+            }
             return FrameCookError::IncludeMissingName;
         }
         // ⛔ Two viewports sharing an `as` namespace is the collision REN-37.6 exists to prevent — and here the
@@ -234,11 +279,17 @@ FrameCookError compose_frame(const ViewportRegistry& reg, crd::containers::Const
         {
             if (str_eq(out.includes[k].as, crd::containers::StringView(d.id.c_str(), d.id.size())))
             {
-                if (where != nullptr) { copy_str(*where, d.id); }
+                if (where != nullptr)
+                {
+                    copy_str(*where, d.id);
+                }
                 return FrameCookError::DuplicateInclude;
             }
         }
-        if (d.present) { ++presenters; }
+        if (d.present)
+        {
+            ++presenters;
+        }
 
         FrameIncludeDesc inc(alloc);
         copy_str(inc.graph, d.graph);
@@ -248,7 +299,10 @@ FrameCookError compose_frame(const ViewportRegistry& reg, crd::containers::Const
         // own target and never in the swapchain.
         FrameBinding b(alloc);
         set_str(b.from, crd::containers::StringView("@output"));
-        if (d.present) { set_str(b.to, crd::containers::StringView("@output")); }
+        if (d.present)
+        {
+            set_str(b.to, crd::containers::StringView("@output"));
+        }
         else
         {
             b.to.append("@vp.");
@@ -262,7 +316,10 @@ FrameCookError compose_frame(const ViewportRegistry& reg, crd::containers::Const
     // depend on declaration order — a bug that looks like flicker and points nowhere.
     if (presenters > 1U)
     {
-        if (where != nullptr) { set_str(*where, crd::containers::StringView("present")); }
+        if (where != nullptr)
+        {
+            set_str(*where, crd::containers::StringView("present"));
+        }
         return FrameCookError::DuplicateInclude;
     }
     return FrameCookError::Ok;

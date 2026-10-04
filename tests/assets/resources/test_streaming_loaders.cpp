@@ -83,7 +83,10 @@ fs::Path write_pack(const ResourceId& id, crd::u32 type_fourcc, const crd::conta
     const ResourceId                      pack_id = ResourceId::mint_random();
     crd::containers::Array<crd::u8>       pool(&g_scratch);
     crd::containers::Array<ManifestEntry> entries(&g_scratch);
-    for (const char* p = tag; *p != '\0'; ++p) { pool.push_back(static_cast<crd::u8>(*p)); }
+    for (const char* p = tag; *p != '\0'; ++p)
+    {
+        pool.push_back(static_cast<crd::u8>(*p));
+    }
     pool.push_back(0U);
     ManifestEntry e;
     e.id            = id;
@@ -104,7 +107,10 @@ fs::Path write_pack(const ResourceId& id, crd::u32 type_fourcc, const crd::conta
     CrdrWriter p2(&g_scratch, pack_id, kFourCC_PACK);
     manifest_write(p2, crd::containers::as_const_span(entries), crd::containers::as_const_span(pool));
     auto pack_bytes = p2.finish();
-    for (crd::usize i = 0; i < bytes.size(); ++i) { pack_bytes.push_back(bytes[i]); }
+    for (crd::usize i = 0; i < bytes.size(); ++i)
+    {
+        pack_bytes.push_back(bytes[i]);
+    }
 
     const auto              sid = pack_id.to_string(&g_scratch);
     crd::containers::String name("test_stream_", &g_scratch);

@@ -194,7 +194,10 @@ struct RtHairSwatchConfig
 
         const auto hit = g.trace_ray_curves(as, seg_b, po.x, po.y, po.z, pd.x, pd.y, pd.z, ks(cfg.ray_tmin), ks(far_clip));
         const int  miss = g.binary(KOp::CmpGe, hit.t, ks(far_clip - 1.0));
-        if (bounce == 0) { miss0 = miss; }
+        if (bounce == 0)
+        {
+            miss0 = miss;
+        }
 
         // ── the ENVIRONMENT the escaped ray gathers. Without one, indirect rays leave and collect nothing, and GI
         //    contributes exactly zero — a studio has walls and a bright ceiling, and hair picks that up everywhere its
@@ -408,7 +411,10 @@ struct RtHairSwatchConfig
             g.stmt_materialize(po.x); g.stmt_materialize(po.y); g.stmt_materialize(po.z);
             g.stmt_materialize(pd.x); g.stmt_materialize(pd.y); g.stmt_materialize(pd.z);
         }
-        for (int c = 0; c < 3; ++c) { g.stmt_materialize(radc[c]); }
+        for (int c = 0; c < 3; ++c)
+        {
+            g.stmt_materialize(radc[c]);
+        }
     }
 
     // ── THE GROUND PLANE (y = plane_y), analytic ──────────────────────────────────────────────────────────────────
@@ -469,9 +475,17 @@ struct RtHairSwatchConfig
     //    groom then washes out to a flat achromatic white, because the added term carries no σₐ and so destroys
     //    exactly the colour the BCSDF worked to produce. It reads as a translucent phantom.
     {
-        for (int c = 0; c < 3; ++c) { radc[c] = g.select(miss0, hd::add(g, radc[c], planec[c]), radc[c]); }
+        for (int c = 0; c < 3; ++c)
+        {
+            radc[c] = g.select(miss0, hd::add(g, radc[c], planec[c]), radc[c]);
+        }
     }
-    if (cfg.debug_aov == 1) { radc[0] = dbg_h; radc[1] = dbg_hit; radc[2] = ks(0.0); }
+    if (cfg.debug_aov == 1)
+    {
+        radc[0] = dbg_h;
+        radc[1] = dbg_hit;
+        radc[2] = ks(0.0);
+    }
 
     g.stmt_buffer_store(out_b, uadd(b3, cu(0U)), hd::add(g, g.buffer_load(out_b, uadd(b3, cu(0U))), hd::mul(g, radc[0], ks(cfg.exposure))));
     g.stmt_buffer_store(out_b, uadd(b3, cu(1U)), hd::add(g, g.buffer_load(out_b, uadd(b3, cu(1U))), hd::mul(g, radc[1], ks(cfg.exposure))));

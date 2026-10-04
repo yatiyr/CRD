@@ -25,7 +25,10 @@ TEST_CASE("B-cmp: CKIR radix-sort HISTOGRAM == direct per-block digit count", "[
 
     crd::containers::Array<crd::f64> keys(&alloc);
     keys.resize(n);
-    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>(i) * 2654435761U); } // Knuth hash ⇒ spread digits
+    for (int i = 0; i < n; ++i) // Knuth hash ⇒ spread digits
+    {
+        keys[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>(i) * 2654435761U);
+    }
 
     for (int shift = 0; shift < 32; shift += 8) // all four 8-bit digits
     {
@@ -42,7 +45,10 @@ TEST_CASE("B-cmp: CKIR radix-sort HISTOGRAM == direct per-block digit count", "[
         for (int blk = 0; blk < nblocks; ++blk)
         {
             int ref[nbins];
-            for (int b = 0; b < nbins; ++b) { ref[b] = 0; }
+            for (int b = 0; b < nbins; ++b)
+            {
+                ref[b] = 0;
+            }
             for (int j = 0; j < epb; ++j)
             {
                 const crd::usize kidx = static_cast<crd::usize>(blk) * static_cast<crd::usize>(epb) + static_cast<crd::usize>(j);
@@ -53,7 +59,10 @@ TEST_CASE("B-cmp: CKIR radix-sort HISTOGRAM == direct per-block digit count", "[
             for (int b = 0; b < nbins; ++b) // BIN-major layout: bhist[bin*nblocks + blk]
             {
                 const crd::usize hidx = static_cast<crd::usize>(b) * static_cast<crd::usize>(nblocks) + static_cast<crd::usize>(blk);
-                if (static_cast<int>(bhist[hidx]) != ref[b]) { ++bad; }
+                if (static_cast<int>(bhist[hidx]) != ref[b])
+                {
+                    ++bad;
+                }
             }
         }
         CHECK(bad == 0);
@@ -81,7 +90,10 @@ void run_full_sort_oracle(int threads, int radix_bits, int lanes)
     tot.resize(static_cast<crd::usize>(nbins), 0.0);
     gb.resize(static_cast<crd::usize>(nbins), 0.0);
     const int scan_threads = nblocks < threads ? nblocks : threads; // divides nblocks (16 here)
-    for (int i = 0; i < n; ++i) { ka[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>((i * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U))); }
+    for (int i = 0; i < n; ++i)
+    {
+        ka[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>((i * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U)));
+    }
 
     crd::f64* cur = ka.data();
     crd::f64* oth = kb.data();
@@ -111,7 +123,10 @@ void run_full_sort_oracle(int threads, int radix_bits, int lanes)
                 {
                     const crd::u32 got = static_cast<crd::u32>(gb[static_cast<crd::usize>(b)])
                                        + static_cast<crd::u32>(go[static_cast<crd::usize>(b) * static_cast<crd::usize>(nblocks) + static_cast<crd::usize>(blk)]); // BIN-major
-                    if (got != running) { ++offbad; }
+                    if (got != running)
+                    {
+                        ++offbad;
+                    }
                     running += static_cast<crd::u32>(bh[static_cast<crd::usize>(b) * static_cast<crd::usize>(nblocks) + static_cast<crd::usize>(blk)]); // BIN-major
                 }
             }
@@ -126,7 +141,13 @@ void run_full_sort_oracle(int threads, int radix_bits, int lanes)
 
     // `cur` holds the fully-sorted keys — verify ascending.
     int bad = 0;
-    for (int i = 1; i < n; ++i) { if (static_cast<crd::u32>(cur[static_cast<crd::usize>(i - 1)]) > static_cast<crd::u32>(cur[static_cast<crd::usize>(i)])) { ++bad; } }
+    for (int i = 1; i < n; ++i)
+    {
+        if (static_cast<crd::u32>(cur[static_cast<crd::usize>(i - 1)]) > static_cast<crd::u32>(cur[static_cast<crd::usize>(i)]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     // it is a PERMUTATION of the input (same multiset) — XOR + sum checksum is invariant under reordering.
     crd::u32 ix = 0U; crd::u32 sx = 0U; crd::u32 is = 0U; crd::u32 ss = 0U;
@@ -208,17 +229,31 @@ TEST_CASE("B-cmp: CKIR key-VALUE radix sort carries the payload bit-exactly", "[
     int badk = 0; int badv = 0;
     for (int i = 0; i < n; ++i)
     {
-        if (i > 0 && static_cast<crd::u32>(ck[static_cast<crd::usize>(i - 1)]) > static_cast<crd::u32>(ck[static_cast<crd::usize>(i)])) { ++badk; }
+        if (i > 0 && static_cast<crd::u32>(ck[static_cast<crd::usize>(i - 1)]) > static_cast<crd::u32>(ck[static_cast<crd::usize>(i)]))
+        {
+            ++badk;
+        }
         const crd::u32 idx = static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]);
-        if (idx >= static_cast<crd::u32>(n) || key0[static_cast<crd::usize>(idx)] != static_cast<crd::u32>(ck[static_cast<crd::usize>(i)])) { ++badv; }
+        if (idx >= static_cast<crd::u32>(n) || key0[static_cast<crd::usize>(idx)] != static_cast<crd::u32>(ck[static_cast<crd::usize>(i)]))
+        {
+            ++badv;
+        }
     }
     CHECK(badk == 0); // keys sorted
     CHECK(badv == 0); // every payload points back to the original key now at its position
     // the payload set is a permutation of 0..n-1 (XOR + sum checksum invariant).
     crd::u32 vx = 0U; crd::u32 vs = 0U;
-    for (int i = 0; i < n; ++i) { vx ^= static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]); vs += static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n; ++i)
+    {
+        vx ^= static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]);
+        vs += static_cast<crd::u32>(cv[static_cast<crd::usize>(i)]);
+    }
     crd::u32 rx = 0U; crd::u32 rs = 0U;
-    for (int i = 0; i < n; ++i) { rx ^= static_cast<crd::u32>(i); rs += static_cast<crd::u32>(i); }
+    for (int i = 0; i < n; ++i)
+    {
+        rx ^= static_cast<crd::u32>(i);
+        rs += static_cast<crd::u32>(i);
+    }
     CHECK(vx == rx);
     CHECK(vs == rs);
 }

@@ -157,8 +157,14 @@ TEST_CASE("REN-40-I8: exactly one LOD level covers the entire mesh",
         const crd::u32* w = cook.packed_clusters.data()
                           + static_cast<crd::usize>(sel[i]) * mp::kClusterGpuWords;
         const crd::u32 lvl = (w[2] >> 16U) & 0xFFFFU;
-        if (first_level == 0xFFFFFFFFU) first_level = lvl;
-        if (lvl != first_level) ++levels_seen;
+        if (first_level == 0xFFFFFFFFU)
+        {
+            first_level = lvl;
+        }
+        if (lvl != first_level)
+        {
+            ++levels_seen;
+        }
     }
     REQUIRE(levels_seen == 0U);
 }
@@ -190,10 +196,15 @@ TEST_CASE("REN-40-I8: no cluster is selected twice",
 
     crd::containers::Array<crd::u32> sorted(&alloc);
     sorted.resize(n);
-    for (crd::u32 i = 0; i < n; ++i) sorted[i] = sel[i];
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        sorted[i] = sel[i];
+    }
     crd::containers::sort(sorted.data(), sorted.data() + n);
     for (crd::u32 i = 1; i < n; ++i)
+    {
         REQUIRE(sorted[i] != sorted[i - 1U]);
+    }
 }
 
 TEST_CASE("REN-40-I8: BVH selection matches flat for all test distances",
@@ -235,7 +246,9 @@ TEST_CASE("REN-40-I8: BVH selection matches flat for all test distances",
         crd::containers::sort(sf.data(), sf.data() + nf);
         crd::containers::sort(sb.data(), sb.data() + nb);
         for (crd::u32 i = 0; i < nf; ++i)
+        {
             REQUIRE(sf[i] == sb[i]);
+        }
     }
 }
 
@@ -331,7 +344,11 @@ TEST_CASE("REN-40-I8: cook-select-unpack determinism end to end",
     REQUIRE(r1.triangle_count == r2.triangle_count);
     REQUIRE(r1.vertex_count == r2.vertex_count);
     for (crd::usize i = 0; i < r1.triangles.size(); ++i)
+    {
         REQUIRE(r1.triangles[i] == r2.triangles[i]);
+    }
     for (crd::usize i = 0; i < r1.positions.size(); ++i)
+    {
         REQUIRE(r1.positions[i] == r2.positions[i]);
+    }
 }

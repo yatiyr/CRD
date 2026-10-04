@@ -17,32 +17,73 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_resolve_geometry(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_resolve_material(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_resolve_program(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 2U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_resolve_technique(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("phase");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("phase");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

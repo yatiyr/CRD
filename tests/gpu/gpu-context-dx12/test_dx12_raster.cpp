@@ -42,7 +42,10 @@ inline int count_equal_even_pairs(g::IRasterTarget& t, crd::u32 dim)
         {
             const int rl = static_cast<int>(t.read_pixel(i, y) & 0xFFU);
             const int rr = static_cast<int>(t.read_pixel(i + 1U, y) & 0xFFU);
-            if (rl == rr) { ++n; }
+            if (rl == rr)
+            {
+                ++n;
+            }
         }
     }
     return n;
@@ -54,10 +57,18 @@ TEST_CASE("RET-2: DX12 gpu-context PRESENTS -- acquire/copy/present/resize throu
           "[dx12][raster][gpu][ret]")
 {
     auto ctx = g::create_dx12_raster_context();
-    if (ctx == nullptr || !ctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (ctx == nullptr || !ctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     void* hwnd = crd::gputest::create_test_window(256U, 256U);
-    if (hwnd == nullptr) { WARN("no platform window available; skipping"); return; }
+    if (hwnd == nullptr)
+    {
+        WARN("no platform window available; skipping");
+        return;
+    }
 
     auto surface = ctx->create_present_surface(hwnd, 256U, 256U, g::PresentMode::Fifo);
     REQUIRE(surface != nullptr);
@@ -96,7 +107,11 @@ TEST_CASE("RET-2: DX12 gpu-context PRESENTS -- acquire/copy/present/resize throu
 TEST_CASE("D-007 C4-a: D3D12 IRasterContext clears an offscreen target and reads it back", "[dx12][raster][gpu]")
 {
     auto ctx = g::create_dx12_raster_context();
-    if (ctx == nullptr || !ctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (ctx == nullptr || !ctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr crd::u32 img_w = 100U; // *4 = 400 bytes/row -> padded to 512 (256-byte aligned) in the readback
     constexpr crd::u32 img_h = 64U;
@@ -137,7 +152,11 @@ TEST_CASE("D-007 C4-b: DX12 IGpuContext create_program(KGraph) mints raster DXIL
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     // Probe dxc/DXIL (dxcompiler.dll missing on some CI hosts). Soft-skip like the Vulkan B3-d gate, so a genuine seam
@@ -145,7 +164,11 @@ TEST_CASE("D-007 C4-b: DX12 IGpuContext create_program(KGraph) mints raster DXIL
     const auto probe = g::compile_hlsl_to_dxil(
         g::ShaderStage::Vertex, crd::containers::StringView("float4 main() : SV_Position { return float4(0,0,0,1); }"),
         "c4b_probe", &alloc);
-    if (!probe.ok) { WARN("dxc/DXIL unavailable; skipping C4-b create_program seam"); return; }
+    if (!probe.ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping C4-b create_program seam");
+        return;
+    }
 
     // VERTEX: attribute(vec4, loc 0) -> clip position; attribute(vec4, loc 1) -> interpolant(loc 0).
     kir::KGraph vg(&alloc);
@@ -185,7 +208,11 @@ TEST_CASE("D-007 C4-b: DX12 IGpuContext create_program(KGraph) mints raster DXIL
 TEST_CASE("D-007 C4-b: DX12 graphics-PSO DRAW -- a red triangle over a blue clear", "[dx12][raster][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -200,7 +227,11 @@ TEST_CASE("D-007 C4-b: DX12 graphics-PSO DRAW -- a red triangle over a blue clea
 
     const auto vs_dxil =
         g::compile_hlsl_to_dxil(g::ShaderStage::Vertex, crd::containers::StringView(kVs), "tri_vs", &alloc);
-    if (!vs_dxil.ok) { WARN("dxc/DXIL unavailable; skipping C4-b draw"); return; }
+    if (!vs_dxil.ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping C4-b draw");
+        return;
+    }
     const auto fs_dxil =
         g::compile_hlsl_to_dxil(g::ShaderStage::Fragment, crd::containers::StringView(kFs), "tri_fs", &alloc);
     REQUIRE(fs_dxil.ok);
@@ -237,7 +268,11 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -251,7 +286,11 @@ TEST_CASE("D-007 B3-e: IR-authored triangle draws on DX12 (CKIR graph -> DXIL ->
     crd::gputest::build_triangle_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve); // KIR -> HLSL -> DXIL, all behind the seam
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping B3-e DX12 draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping B3-e DX12 draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
 
@@ -288,7 +327,11 @@ TEST_CASE("CEIR-34 R2: an alpha-blended, colour-LOAD overlay composites over the
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -301,7 +344,11 @@ TEST_CASE("CEIR-34 R2: an alpha-blended, colour-LOAD overlay composites over the
     kir::KEntry sfe;
     crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED
     auto svs = gctx->create_program(svg, sve);
-    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (svs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto sfs = gctx->create_program(sfg, sfe);
     REQUIRE(sfs != nullptr);
     auto scene = raster->create_raster_program(*svs, *sfs);
@@ -372,7 +419,11 @@ TEST_CASE("CEIR-34 R2: a ranged, depth-tested overlay composites over a colour+d
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -385,7 +436,11 @@ TEST_CASE("CEIR-34 R2: a ranged, depth-tested overlay composites over a colour+d
     kir::KEntry sfe;
     crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED
     auto svs = gctx->create_program(svg, sve);
-    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (svs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto sfs = gctx->create_program(sfg, sfe);
     REQUIRE(sfs != nullptr);
     auto scene = raster->create_raster_program(*svs, *sfs);
@@ -450,7 +505,11 @@ TEST_CASE("CEIR-34 R2: first_vertex reaches the shader's VertexIndex on DX12 (of
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -462,7 +521,11 @@ TEST_CASE("CEIR-34 R2: first_vertex reaches the shader's VertexIndex on DX12 (of
     kir::KEntry fe;
     crd::gputest::build_vid_offset_probe_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -497,7 +560,11 @@ TEST_CASE("CEIR-34 R2: a non-ranged depth-tested overlay composites over a colou
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -509,7 +576,11 @@ TEST_CASE("CEIR-34 R2: a non-ranged depth-tested overlay composites over a colou
     kir::KEntry sfe;
     crd::gputest::build_solid_fs(sfg, sfe, 1.0, 0.0, 0.0); // RED scene
     auto svs = gctx->create_program(svg, sve);
-    if (svs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (svs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto sfs = gctx->create_program(sfg, sfe);
     REQUIRE(sfs != nullptr);
     auto scene = raster->create_raster_program(*svs, *sfs);
@@ -579,9 +650,17 @@ TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     // The SAME shared CKIR triangle the B3-e tests draw — but EMITTED BY A MESH SHADER (build_triangle_mesh), not vertex-pulled.
@@ -593,13 +672,21 @@ TEST_CASE("D-007 B4: DX12 MESH-shader DispatchMesh renders a triangle (CKIR mesh
     crd::gputest::build_triangle_fs(fg, fe);
 
     auto mesh = gctx->create_program(mg, me); // CKIR mesh entry -> ms_6_5 HLSL -> DXIL, behind the seam
-    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping B4 DX12 mesh draw"); return; }
+    if (mesh == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping B4 DX12 mesh draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     REQUIRE(mesh->stage() == g::ShaderStage::Mesh);
 
     auto program = raster->create_mesh_program(*mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7 MeshShaderTier); skipping the mesh draw"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7 MeshShaderTier); skipping the mesh draw");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 32U;
@@ -625,9 +712,17 @@ TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh tr
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     constexpr crd::u32 n_tri   = 4U;
@@ -643,7 +738,11 @@ TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh tr
     crd::gputest::build_amplify_fs(fg, fe);
 
     auto task = gctx->create_program(tg, te); // CKIR task -> as_6_5 amplification HLSL -> DXIL
-    if (task == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (task == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto mesh = gctx->create_program(mg, me);
     auto fs   = gctx->create_program(fg, fe);
     REQUIRE(mesh != nullptr);
@@ -651,7 +750,11 @@ TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh tr
     REQUIRE(task->stage() == g::ShaderStage::Task);
 
     auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 64U;
@@ -664,7 +767,10 @@ TEST_CASE("D-007 B4: DX12 TASK amplification -- 1 task workgroup emits N mesh tr
     {
         const double   xc = -0.7 + static_cast<double>(c) * 0.45;
         const crd::u32 sx = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
-        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) { ++lit; } // red ≈ payload(220)
+        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) // red ≈ payload(220)
+        {
+            ++lit;
+        }
     }
     CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
 }
@@ -677,9 +783,17 @@ TEST_CASE("D-007 B4: DX12 TASK multi-field payload -- a 3-uint payload flows tas
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     constexpr crd::u32 pay_r = 200U;
@@ -696,13 +810,21 @@ TEST_CASE("D-007 B4: DX12 TASK multi-field payload -- a 3-uint payload flows tas
     crd::gputest::build_amplify_rgb_fs(fg, fe);
 
     auto task = gctx->create_program(tg, te);
-    if (task == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (task == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto mesh = gctx->create_program(mg, me);
     auto fs   = gctx->create_program(fg, fe);
     REQUIRE(mesh != nullptr);
     REQUIRE(fs != nullptr);
     auto program = raster->create_task_mesh_program(*task, *mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 64U;
@@ -730,12 +852,24 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
     namespace cu  = crd::gpu::compute_usage;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
     g::Dx12ComputeContext      compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 compute device; skipping"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 compute device; skipping");
+        return;
+    }
 
     // 1) the compute CULL: 8 meshlets, keys[i] = (i < 5) → 5 survivors written into args[0] (ThreadGroupCountX).
     constexpr crd::u32    n_meshlets = 8U;
@@ -748,7 +882,11 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
     kir::GlslKernel   kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_hlsl(cg, ce, &alloc, kern));
     auto pipe = compute.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 2, 0U);
-    if (pipe == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (pipe == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
 
     auto keys_dev = compute.create_buffer(n_meshlets * 4U, cu::storage | cu::transfer_dst, g::ComputeMemory::GpuOnly);
     auto args_dev = compute.create_buffer(3U * 4U, cu::storage | cu::indirect | cu::transfer_dst | cu::transfer_src,
@@ -758,7 +896,10 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
     auto args_rb  = compute.create_buffer(3U * 4U, cu::transfer_dst, g::ComputeMemory::GpuToCpu);
     REQUIRE(args_dev != nullptr);
     auto* kp = static_cast<crd::u32*>(keys_up->map());
-    for (crd::u32 i = 0; i < n_meshlets; ++i) { kp[i] = (i < survivors) ? 1U : 0U; }
+    for (crd::u32 i = 0; i < n_meshlets; ++i)
+    {
+        kp[i] = (i < survivors) ? 1U : 0U;
+    }
     keys_up->unmap();
     auto* ap = static_cast<crd::u32*>(args_up->map());
     ap[0] = 0U;
@@ -794,7 +935,11 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
     REQUIRE(meshp != nullptr);
     REQUIRE(fsp != nullptr);
     auto program = raster->create_mesh_program(*meshp, *fsp);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 64U;
@@ -809,8 +954,17 @@ TEST_CASE("D-007 B4: DX12 GPU-driven indirect meshlet dispatch -- a compute cull
         const double   xc  = -0.8 + static_cast<double>(w) * 0.2;
         const crd::u32 sx  = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
         const bool     red = (target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U;
-        if (w < survivors) { if (red) { ++rendered; } }
-        else if (!red) { ++culled; }
+        if (w < survivors)
+        {
+            if (red)
+            {
+                ++rendered;
+            }
+        }
+        else if (!red)
+        {
+            ++culled;
+        }
     }
     CHECK(rendered == static_cast<int>(survivors));            // all 5 survivors rendered via the indirect count
     CHECK(culled == static_cast<int>(n_meshlets - survivors)); // the 3 culled meshlets never dispatched
@@ -824,10 +978,22 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (DX12
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
-    if (!raster->supports_vrs()) { WARN("no D3D12 VRS tier 2; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
+    if (!raster->supports_vrs())
+    {
+        WARN("no D3D12 VRS tier 2; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph mg(&alloc);
@@ -837,11 +1003,19 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (DX12
     kir::KEntry fe;
     crd::gputest::build_vrs_ramp_fs(fg, fe);
     auto mesh = gctx->create_program(mg, me);
-    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (mesh == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_mesh_program(*mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 32U;
@@ -864,9 +1038,17 @@ TEST_CASE("D-007 B4-tess: DX12 tessellation -- a VS->HS->DS->PS quad subdivides 
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -883,7 +1065,11 @@ TEST_CASE("D-007 B4-tess: DX12 tessellation -- a VS->HS->DS->PS quad subdivides 
     crd::gputest::build_triangle_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto tcs = gctx->create_program(cg, ce); // CKIR TessControl -> hs_6_0 hull HLSL -> DXIL
     auto tes = gctx->create_program(eg, ee); // CKIR TessEval    -> ds_6_0 domain HLSL -> DXIL
     auto fs  = gctx->create_program(fg, fe);
@@ -918,9 +1104,17 @@ TEST_CASE("D-007 B4-vis-4: DX12 HW-raster visibility buffer writes SV_PrimitiveI
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -930,7 +1124,11 @@ TEST_CASE("D-007 B4-vis-4: DX12 HW-raster visibility buffer writes SV_PrimitiveI
     kir::KEntry fe;
     crd::gputest::build_visbuffer_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve); // VS → vs_6_0 DXIL
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe); // FS (SV_PrimitiveID → uint SV_Target) → ps_6_0 DXIL
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -949,8 +1147,14 @@ TEST_CASE("D-007 B4-vis-4: DX12 HW-raster visibility buffer writes SV_PrimitiveI
         for (crd::u32 x = 0; x < dim; ++x)
         {
             const crd::u32 id = target->read_pixel(x, y);
-            if (id == 0U) { ++n0; }
-            else if (id == 1U) { ++n1; }
+            if (id == 0U)
+            {
+                ++n0;
+            }
+            else if (id == 1U)
+            {
+                ++n1;
+            }
         }
     }
     CHECK(n0 + n1 == static_cast<int>(dim * dim)); // fullscreen coverage → every pixel is primitive id 0 or 1
@@ -968,9 +1172,17 @@ TEST_CASE("D-007 B4: DX12 ocean meshlets render via draw_mesh_bindless_depth (bi
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
-    if (raster == nullptr || !raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+    if (raster == nullptr || !raster->valid())
+    {
+        WARN("no D3D12 raster device; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
     crd::gputest::OceanCascadeRender ocr; // the production 4-cascade config (defaults)
@@ -987,11 +1199,19 @@ TEST_CASE("D-007 B4: DX12 ocean meshlets render via draw_mesh_bindless_depth (bi
     crd::gputest::build_ocean_water_geo_fs(mfg, mfe, ocr);
 
     auto mesh = gctx->create_program(mmg, mme); // CKIR ocean mesh -> ms_6_5 HLSL (SampleIndexedLod) -> DXIL
-    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (mesh == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(mfg, mfe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_mesh_program(*mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7); skipping");
+        return;
+    }
     REQUIRE(program->valid());
 
     // Synthetic RGBA8 cascade textures [nx, nz, height, foam]: a gentle deterministic ripple (no transcendentals) so the
@@ -1032,7 +1252,10 @@ TEST_CASE("D-007 B4: DX12 ocean meshlets render via draw_mesh_bindless_depth (bi
     {
         for (crd::u32 x = 0U; x < rdim; ++x)
         {
-            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++lit; }
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+            {
+                ++lit;
+            }
         }
     }
     WARN("[dx12 ocean mesh] lit pixels = " << lit << " / " << (rdim * rdim));
@@ -1047,7 +1270,11 @@ TEST_CASE("B16-a-4: water_shade RENDERS on DX12 (bluish body + sun glint)", "[dx
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -1061,7 +1288,11 @@ TEST_CASE("B16-a-4: water_shade RENDERS on DX12 (bluish body + sun glint)", "[dx
     crd::gputest::build_water_fs(fg, fe, dim);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping water DX12 draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping water DX12 draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1082,7 +1313,10 @@ TEST_CASE("B16-a-4: water_shade RENDERS on DX12 (bluish body + sun glint)", "[dx
         {
             const crd::u32 p   = target->read_pixel(x, y);
             const int      lum = static_cast<int>(p & 0xFFU) + static_cast<int>((p >> 8U) & 0xFFU) + static_cast<int>((p >> 16U) & 0xFFU);
-            if (lum > maxlum) { maxlum = lum; }
+            if (lum > maxlum)
+            {
+                maxlum = lum;
+            }
         }
     }
     WARN("[water-render-dx12] centre RGB=(" << cr << "," << cg << "," << cb << ") maxlum=" << maxlum);
@@ -1096,7 +1330,11 @@ TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw o
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1109,7 +1347,11 @@ TEST_CASE("D-007 B1-a: IR fragment derivatives (dFdx/dFdy of FragCoord.x) draw o
     crd::gputest::build_derivative_fs(fg, fe); // colour = (dFdx(FragCoord.x), dFdy(FragCoord.x), 0, 1)
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping B1-a DX12 draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping B1-a DX12 draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
 
@@ -1133,7 +1375,11 @@ TEST_CASE("D-007 B1-b: IR fragment discard (alpha-test on FragCoord.x) draws on 
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1146,7 +1392,11 @@ TEST_CASE("D-007 B1-b: IR fragment discard (alpha-test on FragCoord.x) draws on 
     crd::gputest::build_discard_fs(fg, fe); // red, but discards where FragCoord.x < 16 (left half → clear)
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping B1-b DX12 draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping B1-b DX12 draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
 
@@ -1172,7 +1422,11 @@ TEST_CASE("D-007 B1-c: IR flat integer interpolant (VS->FS) draws on DX12", "[dx
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1185,7 +1439,11 @@ TEST_CASE("D-007 B1-c: IR flat integer interpolant (VS->FS) draws on DX12", "[dx
     crd::gputest::build_flat_fs(fg, fe); // reads the flat int, colour = (200/255, 0, 0, 1)
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping B1-c DX12 draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping B1-c DX12 draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // an int varying only compiles because `nointerpolation` was emitted
 
@@ -1212,7 +1470,11 @@ TEST_CASE("D-007 B1-c: IR noperspective vs smooth interpolant diverge on a persp
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1225,7 +1487,11 @@ TEST_CASE("D-007 B1-c: IR noperspective vs smooth interpolant diverge on a persp
     crd::gputest::build_noperspective_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1252,7 +1518,11 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1265,7 +1535,11 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
     crd::gputest::build_centroid_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1288,8 +1562,14 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
             const auto     r  = static_cast<int>(px & 0xFFU);
             const auto     gg = static_cast<int>((px >> 8U) & 0xFFU);
             const int      d  = r > gg ? r - gg : gg - r;
-            if (d > max_diff) { max_diff = d; }
-            if (d >= 2) { ++n_diff; }
+            if (d > max_diff)
+            {
+                max_diff = d;
+            }
+            if (d >= 2)
+            {
+                ++n_diff;
+            }
         }
     }
     WARN("[centroid dx12] max|R-G| = " << max_diff << "  n_diff(>=2) = " << n_diff);
@@ -1302,7 +1582,11 @@ TEST_CASE("D-007 B1-c: IR sample interpolation forces per-sample shading on an M
     namespace kir = crd::kir;
 
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -1331,7 +1615,10 @@ TEST_CASE("D-007 B1-c: IR sample interpolation forces per-sample shading on an M
             for (crd::u32 x = 0; x < dim; ++x)
             {
                 const auto rr = static_cast<int>(target->read_pixel(x, y) & 0xFFU);
-                if (rr >= 40 && rr <= 215) { ++n; }
+                if (rr >= 40 && rr <= 215)
+                {
+                    ++n;
+                }
             }
         }
         return n;
@@ -1348,7 +1635,11 @@ TEST_CASE("D-007 B1-d: IR frag-depth write drives the depth test (DX12)", "[dx12
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1361,7 +1652,11 @@ TEST_CASE("D-007 B1-d: IR frag-depth write drives the depth test (DX12)", "[dx12
     crd::gputest::build_fragdepth_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1384,7 +1679,11 @@ TEST_CASE("D-007 B1-d: IR conservative depth (DepthGreater) frag-depth write (DX
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1398,7 +1697,11 @@ TEST_CASE("D-007 B1-d: IR conservative depth (DepthGreater) frag-depth write (DX
     fe.depth_mode = kir::DepthMode::Greater; // emits SV_DepthGreaterEqual; the ramp honours the promise
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // SV_DepthGreaterEqual must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1416,7 +1719,11 @@ TEST_CASE("D-007 B1-d: IR early_fragment_tests forces early-Z (DX12)", "[dx12][r
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1429,7 +1736,11 @@ TEST_CASE("D-007 B1-d: IR early_fragment_tests forces early-Z (DX12)", "[dx12][r
     crd::gputest::build_early_fragment_fs(fg, fe); // red, [earlydepthstencil]
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // [earlydepthstencil] must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1448,10 +1759,18 @@ TEST_CASE("D-007 B1-e: per-draw VRS 2x2 coarsens shading (DX12)", "[dx12][raster
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_vrs()) { WARN("adapter has no Tier-2 VRS; skipping"); return; }
+    if (!raster->supports_vrs())
+    {
+        WARN("adapter has no Tier-2 VRS; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -1462,7 +1781,11 @@ TEST_CASE("D-007 B1-e: per-draw VRS 2x2 coarsens shading (DX12)", "[dx12][raster
     crd::gputest::build_vrs_ramp_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1488,10 +1811,18 @@ TEST_CASE("D-007 B1-e: per-primitive VRS out (SV_ShadingRate) coarsens shading (
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_vrs()) { WARN("adapter has no Tier-2 VRS; skipping"); return; }
+    if (!raster->supports_vrs())
+    {
+        WARN("adapter has no Tier-2 VRS; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -1502,7 +1833,11 @@ TEST_CASE("D-007 B1-e: per-primitive VRS out (SV_ShadingRate) coarsens shading (
     crd::gputest::build_vrs_ramp_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // the VS emits SV_ShadingRate ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1523,10 +1858,18 @@ TEST_CASE("D-007 B1-e: attachment (image) VRS 2x2 coarsens shading (DX12)", "[dx
 {
     namespace kir = crd::kir;
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_vrs()) { WARN("adapter has no Tier-2 VRS; skipping"); return; }
+    if (!raster->supports_vrs())
+    {
+        WARN("adapter has no Tier-2 VRS; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -1537,7 +1880,11 @@ TEST_CASE("D-007 B1-e: attachment (image) VRS 2x2 coarsens shading (DX12)", "[dx
     crd::gputest::build_vrs_ramp_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1562,7 +1909,13 @@ inline int count_red(g::IRasterTarget& t, crd::u32 dim)
     int n = 0;
     for (crd::u32 y = 0; y < dim; ++y)
     {
-        for (crd::u32 x = 0; x < dim; ++x) { if ((t.read_pixel(x, y) & 0xFFU) > 200U) { ++n; } }
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            if ((t.read_pixel(x, y) & 0xFFU) > 200U)
+            {
+                ++n;
+            }
+        }
     }
     return n;
 }
@@ -1572,10 +1925,18 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (DX12
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_conservative_raster()) { WARN("adapter has no conservative raster; skipping"); return; }
+    if (!raster->supports_conservative_raster())
+    {
+        WARN("adapter has no conservative raster; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -1586,7 +1947,11 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (DX12
     crd::gputest::build_triangle_fs(fg, fe); // constant red
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1666,7 +2031,10 @@ struct InnerCoverageOracle
         const float extremes[4] = {x0 - max_x, min_x - x1, y0 - max_y, min_y - y1}; // > 0 = separated on that axis
         for (const float gap : extremes)
         {
-            if (gap > -band && gap < band) { return 0; }
+            if (gap > -band && gap < band)
+            {
+                return 0;
+            }
         }
         float worst    = 1.0e9F; // min over corners and edges: > 0 means every corner inside every half-plane
         bool  outside  = false;  // some edge has all four corners outside it: separated by that edge normal
@@ -1678,16 +2046,28 @@ struct InnerCoverageOracle
                 const float qx = (c & 1) != 0 ? x1 : x0;
                 const float qy = (c >> 1) != 0 ? y1 : y0;
                 const float d  = edge_distance(v, qx, qy);
-                if (d > -band && d < band) { return 0; }
+                if (d > -band && d < band)
+                {
+                    return 0;
+                }
                 worst      = std::min(worst, d);
                 corner_max = std::max(corner_max, d);
             }
-            if (corner_max < 0.0F) { outside = true; }
+            if (corner_max < 0.0F)
+            {
+                outside = true;
+            }
         }
-        if (worst > 0.0F) { return 1; }
+        if (worst > 0.0F)
+        {
+            return 1;
+        }
         for (const float gap : extremes)
         {
-            if (gap > 0.0F) { outside = true; }
+            if (gap > 0.0F)
+            {
+                outside = true;
+            }
         }
         return outside ? -2 : -1;
     }
@@ -1733,13 +2113,36 @@ void check_inner_coverage(g::IRasterContext& raster, g::IGpuProgram& vs, g::IGpu
         {
             const crd::u32 pixel    = target->read_pixel(x, y);
             int            rendered = 0; // the oracle's classes: +1 full, -1 touched, -2 untouched
-            if (pixel == 0xffffffffU) { ++white; rendered = 1; }
-            else if (pixel == 0xff0000ffU) { ++edge; rendered = -1; }
-            else if (pixel == 0xff000000U) { ++background; rendered = -2; }
-            else { ++mismatches; continue; }
+            if (pixel == 0xffffffffU)
+            {
+                ++white;
+                rendered = 1;
+            }
+            else if (pixel == 0xff0000ffU)
+            {
+                ++edge;
+                rendered = -1;
+            }
+            else if (pixel == 0xff000000U)
+            {
+                ++background;
+                rendered = -2;
+            }
+            else
+            {
+                ++mismatches;
+                continue;
+            }
             const int expected = oracle.classify(x, y);
-            if (expected == 0) { ++ambiguous; continue; }
-            if (rendered != expected) { ++mismatches; }
+            if (expected == 0)
+            {
+                ++ambiguous;
+                continue;
+            }
+            if (rendered != expected)
+            {
+                ++mismatches;
+            }
         }
     }
     WARN("[inner coverage dx12] interior=" << white << " edge=" << edge << " background=" << background
@@ -1778,7 +2181,10 @@ TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixe
     crd::gpu_test::qualify_dx12_workload(&alloc, [&]
     {
         auto gctx = g::create_dx12_gpu_context(&alloc);
-        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        if (gctx == nullptr || !gctx->valid())
+        {
+            SKIP("no D3D12 device/compiler available");
+        }
         auto raster = g::create_dx12_raster_context(&alloc);
         REQUIRE(raster != nullptr);
         const g::InnerCoverageRoute route = raster->inner_coverage_route();
@@ -1817,7 +2223,10 @@ TEST_CASE("D-007 B1-f: the barycentric inner-coverage route matches the pixel-co
             SKIP("adapter cannot run the barycentric route (needs conservative Tier 1, barycentrics and SM 6.1)");
         }
         auto gctx = g::create_dx12_gpu_context(&alloc);
-        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        if (gctx == nullptr || !gctx->valid())
+        {
+            SKIP("no D3D12 device/compiler available");
+        }
         auto raster = g::create_dx12_raster_context(&alloc);
         REQUIRE(raster != nullptr);
         REQUIRE(raster->inner_coverage_route() == g::InnerCoverageRoute::Barycentric);
@@ -1843,7 +2252,10 @@ TEST_CASE("D-007 B1-f: native SV_InnerCoverage conforms on a qualified provider 
     crd::gpu_test::qualify_dx12_workload(&alloc, [&]
     {
         auto gctx = g::create_dx12_gpu_context(&alloc);
-        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device/compiler available"); }
+        if (gctx == nullptr || !gctx->valid())
+        {
+            SKIP("no D3D12 device/compiler available");
+        }
         auto raster = g::create_dx12_raster_context(&alloc);
         REQUIRE(raster != nullptr);
         if (raster->inner_coverage_route() != g::InnerCoverageRoute::Native)
@@ -1872,10 +2284,18 @@ TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (DX12)", 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_fragment_interlock()) { WARN("adapter has no ROVs (fragment interlock); skipping"); return; }
+    if (!raster->supports_fragment_interlock())
+    {
+        WARN("adapter has no ROVs (fragment interlock); skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     constexpr crd::u32 dim = 32U;
@@ -1887,7 +2307,11 @@ TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (DX12)", 
     crd::gputest::build_interlock_fs(fg, fe, dim); // RasterizerOrderedStructuredBuffer RMW: storage[y*dim + x] += 1
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // RasterizerOrderedStructuredBuffer ⇒ must lower to valid DXIL (ROV)
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1911,7 +2335,11 @@ TEST_CASE("D-007 B2-a: IR 2D texture sample (left-red/right-green) draws on DX12
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -1924,7 +2352,11 @@ TEST_CASE("D-007 B2-a: IR 2D texture sample (left-red/right-green) draws on DX12
     crd::gputest::build_sample_fs(fg, fe); // Texture2D tex_0_1 + SamplerState samp_0_2 → tex.Sample(samp, uv)
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // the FS declares Texture2D + SamplerState ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -1955,7 +2387,11 @@ TEST_CASE("D-007 B2-b: IR sample-op family (Lod/Grad/texelFetch/gather/textureSi
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
@@ -1972,7 +2408,11 @@ TEST_CASE("D-007 B2-b: IR sample-op family (Lod/Grad/texelFetch/gather/textureSi
         kir::KGraph vg(&alloc); kir::KEntry ve; crd::gputest::build_textured_vs(vg, ve);
         kir::KGraph fg(&alloc); kir::KEntry fe; build_fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { dxc_ok = false; return; }
+        if (vs == nullptr)
+        {
+            dxc_ok = false;
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -1987,7 +2427,11 @@ TEST_CASE("D-007 B2-b: IR sample-op family (Lod/Grad/texelFetch/gather/textureSi
     crd::u32 l = 0;
     crd::u32 rt = 0;
     run(crd::gputest::build_samplelod_fs, l, rt);
-    if (!dxc_ok) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (!dxc_ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     CHECK((l & 0xFFU) > 200U); CHECK(((rt >> 8U) & 0xFFU) > 200U);
     run(crd::gputest::build_samplegrad_fs, l, rt);
     CHECK((l & 0xFFU) > 200U); CHECK(((rt >> 8U) & 0xFFU) > 200U);
@@ -2005,7 +2449,11 @@ TEST_CASE("D-007 B2-b: IR shadow-compare sample (SampleCmp on a depth texture) o
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2018,7 +2466,11 @@ TEST_CASE("D-007 B2-b: IR shadow-compare sample (SampleCmp on a depth texture) o
     crd::gputest::build_shadow_fs(fg, fe); // Texture2D<float> + SamplerComparisonState → SampleCmp
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // SampleCmp on a Texture2D<float> + SamplerComparisonState ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2046,7 +2498,11 @@ TEST_CASE("D-007 B8-f: IR shadow-map foundation + bias stack renders on DX12", "
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2058,7 +2514,11 @@ TEST_CASE("D-007 B8-f: IR shadow-map foundation + bias stack renders on DX12", "
     kir::KEntry fe;
     crd::gputest::build_shadow_foundation_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2086,7 +2546,11 @@ TEST_CASE("D-007 B8-g: IR PCF filtered soft shadows render on DX12", "[dx12][ras
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2098,7 +2562,11 @@ TEST_CASE("D-007 B8-g: IR PCF filtered soft shadows render on DX12", "[dx12][ras
     kir::KEntry fe;
     crd::gputest::build_pcf_shadow_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2126,7 +2594,11 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on D
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
@@ -2137,7 +2609,11 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on D
         kir::KGraph vg(&alloc); kir::KEntry ve; crd::gputest::build_textured_vs(vg, ve);
         kir::KGraph fg(&alloc); kir::KEntry fe; build_fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { dxc_ok = false; return; }
+        if (vs == nullptr)
+        {
+            dxc_ok = false;
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -2157,7 +2633,11 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on D
         auto t = raster->create_texture_dim(g::TextureKind::Tex1D, 16U, 1U, 1U, d);
         REQUIRE(t != nullptr);
         run(crd::gputest::build_sample_1d_fs, *t);
-        if (!dxc_ok) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (!dxc_ok)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
     }
     {
         crd::u8 d[16U * 16U * 2U * 4U];
@@ -2171,7 +2651,10 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on D
         crd::u8 d[8U * 8U * 6U * 4U];
         crd::gputest::fill_solid(d + 0U * 64U * 4U, 64U, 0U, 255U, 0U);   // +X green (right)
         crd::gputest::fill_solid(d + 1U * 64U * 4U, 64U, 255U, 0U, 0U);   // -X red   (left)
-        for (crd::u32 f = 2; f < 6; ++f) { crd::gputest::fill_solid(d + f * 64U * 4U, 64U, 0U, 0U, 255U); }
+        for (crd::u32 f = 2; f < 6; ++f)
+        {
+            crd::gputest::fill_solid(d + f * 64U * 4U, 64U, 0U, 0U, 255U);
+        }
         auto t = raster->create_texture_dim(g::TextureKind::Cube, 8U, 8U, 6U, d);
         REQUIRE(t != nullptr);
         run(crd::gputest::build_sample_cube_fs, *t);
@@ -2198,10 +2681,18 @@ TEST_CASE("D-007 B2-d: IR bindless texture array (dynamic index) on DX12", "[dx1
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_bindless()) { WARN("adapter below resource-binding Tier 2; skipping"); return; }
+    if (!raster->supports_bindless())
+    {
+        WARN("adapter below resource-binding Tier 2; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -2212,7 +2703,11 @@ TEST_CASE("D-007 B2-d: IR bindless texture array (dynamic index) on DX12", "[dx1
     crd::gputest::build_bindless_fs(fg, fe); // Texture2D tex[8] : register(t3) + NonUniformResourceIndex
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // Texture2D tex[8] + NonUniformResourceIndex ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2245,7 +2740,11 @@ TEST_CASE("D-007 B5-a: IR OpenPBR surface material writes the deferred G-buffer 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2258,7 +2757,11 @@ TEST_CASE("D-007 B5-a: IR OpenPBR surface material writes the deferred G-buffer 
     crd::gputest::build_surface_material_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // 4 SV_Target outputs (MRT) ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2289,7 +2792,11 @@ TEST_CASE("D-007 B5-b: IR full OpenPBR 1.1 slab (coat/fuzz/transmission/thin-fil
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2302,7 +2809,11 @@ TEST_CASE("D-007 B5-b: IR full OpenPBR 1.1 slab (coat/fuzz/transmission/thin-fil
     crd::gputest::build_surface_full_material_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // 8 SV_Target outputs ⇒ must lower to valid DXIL
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2330,7 +2841,11 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on DX1
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2340,7 +2855,11 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on DX1
         kir::KGraph vg(&alloc); kir::KEntry ve; crd::gputest::build_fullscreen_vs(vg, ve);
         kir::KGraph fg(&alloc); kir::KEntry fe; build_fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { dxc_ok = false; return nullptr; }
+        if (vs == nullptr)
+        {
+            dxc_ok = false;
+            return nullptr;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         return raster->create_raster_program(*vs, *fs);
@@ -2348,7 +2867,11 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on DX1
 
     { // shading-model tag (Gooch = 4)
         auto program = link(crd::gputest::build_gooch_material_fs);
-        if (!dxc_ok) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (!dxc_ok)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         REQUIRE(program != nullptr);
         auto gbuf = raster->create_gbuffer_target(16U, 16U, 4U);
         REQUIRE(gbuf != nullptr);
@@ -2382,7 +2905,11 @@ TEST_CASE("D-007 B6-a: IR MaterialX operator nodes (overlay per-channel branch) 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2396,7 +2923,11 @@ TEST_CASE("D-007 B6-a: IR MaterialX operator nodes (overlay per-channel branch) 
     crd::gputest::build_nodes_overlay_fs(fg, fe, dim); // overlay(fg,bg-ramp,1): branch flips at centre
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2419,7 +2950,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
@@ -2433,7 +2968,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
     crd::gputest::build_noise_perlin_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr); // the U32 hash must lower to valid DXIL (uint ops, logical >>)
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2449,8 +2988,14 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_noise_perlin_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 128) { any = true; }
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 128)
+        {
+            any = true;
+        }
     }
     WARN("[noise perlin dx12] col2 got=" << (target->read_pixel(2U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_noise_perlin_expected(2U));
     CHECK(bad == 0);
@@ -2461,7 +3006,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on DX12", "[
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
@@ -2475,7 +3024,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on DX12", "[
     crd::gputest::build_noise_worley_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2490,8 +3043,14 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on DX12", "[
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_noise_worley_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 0) { any = true; }
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 0)
+        {
+            any = true;
+        }
     }
     WARN("[noise worley dx12] col7 got=" << (target->read_pixel(7U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_noise_worley_expected(7U));
     CHECK(bad == 0);
@@ -2502,7 +3061,11 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2516,7 +3079,11 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
     crd::gputest::build_uv_place2d_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2531,8 +3098,14 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_uv_place2d_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 0 && got != 255) { any = true; }
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 0 && got != 255)
+        {
+            any = true;
+        }
     }
     WARN("[uv place2d dx12] col7 got=" << (target->read_pixel(7U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_uv_place2d_expected(7U));
     CHECK(bad == 0);
@@ -2543,7 +3116,11 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2557,7 +3134,11 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
     crd::gputest::build_npr_gooch_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2572,8 +3153,18 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_npr_gooch_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_npr_gooch_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[npr gooch dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                       << " want=" << crd::gputest::build_npr_gooch_expected(7U, 0) << "," << crd::gputest::build_npr_gooch_expected(7U, 1) << "," << crd::gputest::build_npr_gooch_expected(7U, 2));
@@ -2585,7 +3176,11 @@ TEST_CASE("D-007 B7-c: IR a LOWERED material (const-fold+DCE+CSE) renders identi
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -2599,7 +3194,11 @@ TEST_CASE("D-007 B7-c: IR a LOWERED material (const-fold+DCE+CSE) renders identi
     crd::gputest::build_lowered_overlay_fs(fg, fe, dim);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2621,7 +3220,11 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on DX1
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2635,7 +3238,11 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on DX1
     crd::gputest::build_lighting_brdf_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2650,8 +3257,18 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on DX1
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_brdf_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_brdf_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[brdf dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                  << " want=" << crd::gputest::build_lighting_brdf_expected(7U, 0) << "," << crd::gputest::build_lighting_brdf_expected(7U, 1) << "," << crd::gputest::build_lighting_brdf_expected(7U, 2));
@@ -2663,7 +3280,11 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on DX
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2677,7 +3298,11 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on DX
     crd::gputest::build_lighting_layered_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2692,8 +3317,18 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on DX
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_layered_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_layered_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[layered dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                     << " want=" << crd::gputest::build_lighting_layered_expected(7U, 0) << "," << crd::gputest::build_lighting_layered_expected(7U, 1) << "," << crd::gputest::build_lighting_layered_expected(7U, 2));
@@ -2705,7 +3340,11 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2719,7 +3358,11 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
     crd::gputest::build_lighting_glass_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2734,8 +3377,18 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_glass_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_glass_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[glass dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                   << " want=" << crd::gputest::build_lighting_glass_expected(7U, 0) << "," << crd::gputest::build_lighting_glass_expected(7U, 1) << "," << crd::gputest::build_lighting_glass_expected(7U, 2));
@@ -2747,7 +3400,11 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2761,7 +3418,11 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
     crd::gputest::build_lighting_lights_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2776,8 +3437,18 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_lights_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_lights_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[lights dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                    << " want=" << crd::gputest::build_lighting_lights_expected(7U, 0) << "," << crd::gputest::build_lighting_lights_expected(7U, 1) << "," << crd::gputest::build_lighting_lights_expected(7U, 2));
@@ -2789,7 +3460,11 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on DX12", "
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2803,7 +3478,11 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on DX12", "
     crd::gputest::build_lighting_area_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2818,8 +3497,18 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on DX12", "
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_area_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_area_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[area dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                  << " want=" << crd::gputest::build_lighting_area_expected(7U, 0) << "," << crd::gputest::build_lighting_area_expected(7U, 1) << "," << crd::gputest::build_lighting_area_expected(7U, 2));
@@ -2831,7 +3520,11 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on DX12", 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2845,7 +3538,11 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on DX12", 
     crd::gputest::build_lighting_tube_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2860,8 +3557,18 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on DX12", 
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_tube_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_tube_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[tube dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                  << " want=" << crd::gputest::build_lighting_tube_expected(7U, 0) << "," << crd::gputest::build_lighting_tube_expected(7U, 1) << "," << crd::gputest::build_lighting_tube_expected(7U, 2));
@@ -2873,7 +3580,11 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2887,7 +3598,11 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
     crd::gputest::build_lighting_disk_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2902,8 +3617,18 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_disk_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_disk_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[disk dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                  << " want=" << crd::gputest::build_lighting_disk_expected(7U, 0) << "," << crd::gputest::build_lighting_disk_expected(7U, 1) << "," << crd::gputest::build_lighting_disk_expected(7U, 2));
@@ -2915,7 +3640,11 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2929,7 +3658,11 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
     crd::gputest::build_lighting_ibl_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2944,8 +3677,18 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_ibl_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_ibl_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[ibl dx12] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                 << " want=" << crd::gputest::build_lighting_ibl_expected(7U, 0) << "," << crd::gputest::build_lighting_ibl_expected(7U, 1) << "," << crd::gputest::build_lighting_ibl_expected(7U, 2));
@@ -2957,7 +3700,11 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -2971,7 +3718,11 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
     crd::gputest::build_lighting_csm_fs(fg, fe);
 
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -2985,7 +3736,14 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_csm_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_csm_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     // cascade index (R) rises left→right across the three splits: near band = cascade 0, far band = cascade 3.
     CHECK(ch(target->read_pixel(3U, dim / 2U), 0) < ch(target->read_pixel(29U, dim / 2U), 0));
@@ -2998,7 +3756,11 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3020,7 +3782,11 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
         kir::KEntry fe;
         tc.fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (vs == nullptr)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3032,7 +3798,14 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -3044,7 +3817,11 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on D
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3065,7 +3842,11 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on D
         kir::KEntry fe;
         tc.fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (vs == nullptr)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3077,7 +3858,14 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on D
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
         WARN("[" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
@@ -3090,7 +3878,11 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3104,7 +3896,11 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
     kir::KEntry fe;
     crd::gputest::build_cook_forward_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -3117,7 +3913,14 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_cook_forward_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_cook_forward_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
     WARN("[cook-forward dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
@@ -3136,7 +3939,11 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3158,7 +3965,11 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
         kir::KEntry fe;
         tc.fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (vs == nullptr)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3170,7 +3981,14 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -3182,7 +4000,11 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3194,7 +4016,11 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
     kir::KEntry fe;
     crd::gputest::build_master_material_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -3215,7 +4041,14 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
     for (crd::u32 x = 2U; x < 13U; x += 2U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_master_lit_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_master_lit_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
     const int lit_r = ch(target->read_pixel(6U, dim / 2U), 0);
@@ -3230,7 +4063,11 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3254,7 +4091,11 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
         kir::KEntry fe;
         tc.fs(fg, fe);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (vs == nullptr)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3266,7 +4107,14 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -3278,7 +4126,11 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3304,7 +4156,11 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
         kir::KEntry fe;
         tc.fs(fg, fe);
         auto vs = gctx->create_program(vg2, ve2);
-        if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+        if (vs == nullptr)
+        {
+            WARN("dxc/DXIL unavailable; skipping");
+            return;
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3316,7 +4172,14 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
         WARN("[hdr-" << tc.tag << " dx12] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
@@ -3329,7 +4192,11 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
@@ -3338,13 +4205,23 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
     kir::KEntry                ve;
     crd::gputest::build_fullscreen_vs(vg, ve);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     for (int which = 0; which < 2; ++which)
     {
         kir::KGraph fg(&alloc);
         kir::KEntry fe;
-        if (which == 0) { crd::gputest::build_lighting_specular_fs(fg, fe); }
-        else { crd::gputest::build_lighting_aniso_fs(fg, fe); }
+        if (which == 0)
+        {
+            crd::gputest::build_lighting_specular_fs(fg, fe);
+        }
+        else
+        {
+            crd::gputest::build_lighting_aniso_fs(fg, fe);
+        }
         auto fs = gctx->create_program(fg, fe);
         REQUIRE(fs != nullptr);
         auto program = raster->create_raster_program(*vs, *fs);
@@ -3358,8 +4235,18 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = (which == 0) ? crd::gputest::build_lighting_specular_expected(x, c) : crd::gputest::build_lighting_aniso_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-            if (ch(px, 0) != ch(2U, 0)) { any = true; }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = (which == 0) ? crd::gputest::build_lighting_specular_expected(x, c) : crd::gputest::build_lighting_aniso_expected(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
+            if (ch(px, 0) != ch(2U, 0))
+            {
+                any = true;
+            }
         }
         WARN("[area-spec dx12 which=" << which << "] col7=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2));
         CHECK(bad == 0);
@@ -3408,7 +4295,11 @@ TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull pa
 {
     namespace kir = crd::kir;
     auto        gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -3420,7 +4311,11 @@ TEST_CASE("GEO-7: draw_storage_depth -- near occludes far on the storage-pull pa
     kir::KEntry fe;
     build_pull_depth_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -3780,7 +4675,11 @@ TEST_CASE("DX12 raster program mints one Program identity, not a Resource one",
           "[dx12][raster][program][identity][naming]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
@@ -3791,7 +4690,11 @@ TEST_CASE("DX12 raster program mints one Program identity, not a Resource one",
     static constexpr const char* kFs = "float4 main() : SV_Target { return float4(1.0,0.0,0.0,1.0); }\n";
     const auto vs_dxil =
         g::compile_hlsl_to_dxil(g::ShaderStage::Vertex, crd::containers::StringView(kVs), "prog_id_vs", &alloc);
-    if (!vs_dxil.ok) { WARN("dxc/DXIL unavailable; skipping program-identity"); return; }
+    if (!vs_dxil.ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping program-identity");
+        return;
+    }
     const auto fs_dxil =
         g::compile_hlsl_to_dxil(g::ShaderStage::Fragment, crd::containers::StringView(kFs), "prog_id_fs", &alloc);
     REQUIRE(fs_dxil.ok);

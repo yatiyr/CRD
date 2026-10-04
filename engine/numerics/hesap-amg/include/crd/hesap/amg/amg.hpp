@@ -98,7 +98,10 @@ public:
     // z = M⁻¹ r  (one V-cycle from a zero initial guess).
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = T{}; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            z[i] = T{};
+        }
         vcycle(0, r.data(), z.data(), m_opts.cycle);
         return true;
     }
@@ -110,7 +113,10 @@ public:
     [[nodiscard]] crd::usize operator_complexity() const noexcept
     {
         crd::usize tot = 0;
-        for (crd::u32 k = 0; k < m_levels.size(); ++k) { tot += m_levels[k].a.nnz(); }
+        for (crd::u32 k = 0; k < m_levels.size(); ++k)
+        {
+            tot += m_levels[k].a.nnz();
+        }
         tot += m_coarse_nnz;
         return tot;
     }
@@ -130,8 +136,14 @@ private:
 
     [[nodiscard]] static R mag(T v)
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     }
 
     void build(const Csr& a0)
@@ -140,7 +152,10 @@ private:
         for (crd::u32 lvl = 0; lvl < m_opts.max_levels; ++lvl)
         {
             const crd::u32 n = a.rows();
-            if (n <= m_opts.coarse_threshold) { break; }
+            if (n <= m_opts.coarse_threshold)
+            {
+                break;
+            }
             Level level(m_alloc);
             level.n = n;
             // 1/diag
@@ -153,7 +168,10 @@ private:
                 auto     srs      = rs_strength_matrix<T>(a, m_opts.rs_theta, m_alloc);
                 crd::u32 n_coarse = 0;
                 auto     cf       = rs_cf_split<T>(srs, n_coarse, m_alloc);
-                if (n_coarse == 0 || n_coarse >= n) { break; } // no coarsening progress ⇒ dense-solve `a`
+                if (n_coarse == 0 || n_coarse >= n) // no coarsening progress ⇒ dense-solve `a`
+                {
+                    break;
+                }
                 level.p = rs_direct_interpolation<T>(a, srs, cf, n_coarse, m_alloc);
                 level.r = crd::hesap::sparse::transpose<T>(level.p, m_alloc);
             }
@@ -163,7 +181,10 @@ private:
                 auto     s = strength_matrix<T>(a, m_opts.theta, m_alloc);
                 crd::u32 n_agg = 0;
                 auto     agg   = aggregate<T>(s, n_agg, m_alloc);
-                if (n_agg == 0 || n_agg >= n) { break; } // no coarsening progress ⇒ stop, dense-solve `a`
+                if (n_agg == 0 || n_agg >= n) // no coarsening progress ⇒ stop, dense-solve `a`
+                {
+                    break;
+                }
                 // Tentative T: constant (SA) or seeded from a relaxed near-nullspace candidate (αSA).
                 Csr tent(m_alloc);
                 if (m_opts.adaptive_candidate)
@@ -172,7 +193,10 @@ private:
                     relax_candidate(a, level.dinv, cand);
                     tent = tentative_prolongator_adaptive<T>(agg, n_agg, cand, m_alloc);
                 }
-                else { tent = tentative_prolongator<T>(agg, n_agg, m_alloc); }
+                else
+                {
+                    tent = tentative_prolongator<T>(agg, n_agg, m_alloc);
+                }
                 if (m_opts.smooth_prolongator)
                 {
                     const R rho   = estimate_drinv_a_radius<T>(a, level.dinv, m_alloc);
@@ -221,11 +245,23 @@ private:
         m_coarse_n   = a.rows();
         m_coarse_nnz = a.nnz();
         crd::hesap::dense::Matrix<T> dense(m_alloc, m_coarse_n, m_coarse_n);
-        for (crd::u32 i = 0; i < m_coarse_n; ++i) { for (crd::u32 j = 0; j < m_coarse_n; ++j) { dense.at(i, j) = T{}; } }
+        for (crd::u32 i = 0; i < m_coarse_n; ++i)
+        {
+            for (crd::u32 j = 0; j < m_coarse_n; ++j)
+            {
+                dense.at(i, j) = T{};
+            }
+        }
         const auto* o = a.pattern().outer_ptr.data();
         const auto* c = a.pattern().inner_idx.data();
         const T*    v = a.values().values.data();
-        for (crd::u32 i = 0; i < m_coarse_n; ++i) { for (crd::u32 q = o[i]; q < o[i + 1]; ++q) { dense.at(i, c[q]) = v[q]; } }
+        for (crd::u32 i = 0; i < m_coarse_n; ++i)
+        {
+            for (crd::u32 q = o[i]; q < o[i + 1]; ++q)
+            {
+                dense.at(i, c[q]) = v[q];
+            }
+        }
         m_coarse_lu = LuT(m_alloc, m_coarse_n);
         crd::hesap::dense::factor_lu<T, crd::hesap::dense::Layout::RowMajor>(m_coarse_lu, dense);
     }
@@ -238,14 +274,20 @@ private:
     {
         const crd::u32 n = a.rows();
         cand.resize(n);
-        for (crd::u32 i = 0; i < n; ++i) { cand[i] = T(R(1) + static_cast<R>(i % 7) / R(7)); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            cand[i] = T(R(1) + static_cast<R>(i % 7) / R(7));
+        }
         crd::containers::Array<T> ax(m_alloc);
         ax.resize(n);
         const T omega = T(R(static_cast<R>(2.0 / 3.0)));
         for (crd::u32 s = 0; s < m_opts.n_candidate_sweeps; ++s)
         {
             spmv(a, cand.data(), ax.data());
-            for (crd::u32 i = 0; i < n; ++i) { cand[i] = cand[i] - omega * dinv[i] * ax[i]; }
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                cand[i] = cand[i] - omega * dinv[i] * ax[i];
+            }
         }
     }
 
@@ -259,7 +301,14 @@ private:
         for (crd::u32 i = 0; i < n; ++i)
         {
             T d = T{};
-            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q) { if (inner[q] == i) { d = vals[q]; break; } }
+            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
+            {
+                if (inner[q] == i)
+                {
+                    d = vals[q];
+                    break;
+                }
+            }
             dinv[i] = (mag(d) > R(0)) ? T(R(1)) / d : T(R(1)); // 1/a_ii (complex division for complex A)
         }
     }
@@ -270,7 +319,13 @@ private:
         const auto* o = a.pattern().outer_ptr.data();
         const auto* c = a.pattern().inner_idx.data();
         const T*    v = a.values().values.data();
-        for (crd::u32 i = 0; i < a.rows(); ++i) { for (crd::u32 q = o[i]; q < o[i + 1]; ++q) { tb.add(i, c[q], v[q]); } }
+        for (crd::u32 i = 0; i < a.rows(); ++i)
+        {
+            for (crd::u32 q = o[i]; q < o[i + 1]; ++q)
+            {
+                tb.add(i, c[q], v[q]);
+            }
+        }
         return tb.compress();
     }
 
@@ -284,7 +339,10 @@ private:
         for (crd::u32 i = 0; i < n; ++i)
         {
             T s = T{};
-            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q) { s = s + vals[q] * x[inner[q]]; }
+            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
+            {
+                s = s + vals[q] * x[inner[q]];
+            }
             y[i] = s;
         }
     }
@@ -296,7 +354,10 @@ private:
         if (lvl == m_levels.size())
         {
             // coarsest: exact dense solve  x = A_coarse⁻¹ b
-            for (crd::u32 i = 0; i < m_coarse_n; ++i) { x[i] = b[i]; }
+            for (crd::u32 i = 0; i < m_coarse_n; ++i)
+            {
+                x[i] = b[i];
+            }
             crd::hesap::dense::solve_lu<T, crd::hesap::dense::Layout::RowMajor>(m_coarse_lu,
                 crd::containers::Span<T>{x, m_coarse_n});
             return;
@@ -308,15 +369,24 @@ private:
         crd::containers::Array<T> r(m_alloc), rc(m_alloc), ec(m_alloc), ax(m_alloc), dx(m_alloc);
         r.resize(n); ax.resize(n); dx.resize(n); rc.resize(nc == 0 ? 1 : nc); ec.resize(nc == 0 ? 1 : nc);
 
-        for (crd::u32 s = 0; s < m_opts.npre; ++s) { smooth(L, b, x, ax.data(), dx.data(), /*fwd=*/true); }
+        for (crd::u32 s = 0; s < m_opts.npre; ++s)
+        {
+            smooth(L, b, x, ax.data(), dx.data(), /*fwd=*/true);
+        }
         // residual r = b − A x
         spmv(L.a, x, ax.data());
-        for (crd::u32 i = 0; i < n; ++i) { r[i] = b[i] - ax[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            r[i] = b[i] - ax[i];
+        }
         // restrict rc = R r
         spmv(L.r, r.data(), rc.data());
         // coarse solve ec ≈ A_c⁻¹ rc. V (γ=1) / W (γ=2 recursions) / K (Krylov-accelerated).
         // The coarsest level is an exact dense solve, so cycle type matters only above it.
-        for (crd::u32 i = 0; i < nc; ++i) { ec[i] = T{}; }
+        for (crd::u32 i = 0; i < nc; ++i)
+        {
+            ec[i] = T{};
+        }
         const bool next_is_coarsest = (lvl + 1 == m_levels.size());
         if (next_is_coarsest)
         {
@@ -343,8 +413,14 @@ private:
         }
         // prolong x += P ec
         spmv(L.p, ec.data(), ax.data()); // ax = P ec
-        for (crd::u32 i = 0; i < n; ++i) { x[i] = x[i] + ax[i]; }
-        for (crd::u32 s = 0; s < m_opts.npost; ++s) { smooth(L, b, x, ax.data(), dx.data(), /*fwd=*/false); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x[i] = x[i] + ax[i];
+        }
+        for (crd::u32 s = 0; s < m_opts.npost; ++s)
+        {
+            smooth(L, b, x, ax.data(), dx.data(), /*fwd=*/false);
+        }
     }
 
     // K-cycle coarse solve (Notay AGMG 2010): approximately solve A_lvl x = b (x preset 0) with
@@ -362,21 +438,38 @@ private:
         z1.resize(n); z2.resize(n); c1.resize(n); c2.resize(n); r1.resize(n);
 
         // step 1: z1 = M⁻¹ b ; c1 = A z1 ; minimize ⇒ x = α z1, r1 = b − α c1.
-        for (crd::u32 i = 0; i < n; ++i) { z1[i] = T{}; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            z1[i] = T{};
+        }
         vcycle(lvl, b, z1.data(), Cycle::K);
         spmv(a, z1.data(), c1.data());
         const T c1c1 = dotc(c1.data(), c1.data(), n);
         const T alpha = safe_div(dotc(c1.data(), b, n), c1c1);
-        for (crd::u32 i = 0; i < n; ++i) { x[i] = alpha * z1[i]; r1[i] = b[i] - alpha * c1[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x[i] = alpha * z1[i];
+            r1[i] = b[i] - alpha * c1[i];
+        }
 
         // step 2: z2 = M⁻¹ r1 ; c2 = A z2 ; GCR-orthogonalize c2 ⊥ c1 (mirror on z2) ⇒ x += γ z2.
-        for (crd::u32 i = 0; i < n; ++i) { z2[i] = T{}; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            z2[i] = T{};
+        }
         vcycle(lvl, r1.data(), z2.data(), Cycle::K);
         spmv(a, z2.data(), c2.data());
         const T beta = safe_div(dotc(c1.data(), c2.data(), n), c1c1);
-        for (crd::u32 i = 0; i < n; ++i) { c2[i] = c2[i] - beta * c1[i]; z2[i] = z2[i] - beta * z1[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            c2[i] = c2[i] - beta * c1[i];
+            z2[i] = z2[i] - beta * z1[i];
+        }
         const T gamma = safe_div(dotc(c2.data(), r1.data(), n), dotc(c2.data(), c2.data(), n));
-        for (crd::u32 i = 0; i < n; ++i) { x[i] = x[i] + gamma * z2[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x[i] = x[i] + gamma * z2[i];
+        }
     }
 
     // Σ conj(x_i)·y_i (Hermitian inner product; conj is identity for real T).
@@ -385,8 +478,15 @@ private:
         T s = T{};
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if constexpr (crd::hesap::dense::is_complex_v<T>) { s = s + T{x[i].re, -x[i].im} * y[i]; }
-            else { s = s + x[i] * y[i]; }
+            if constexpr (crd::hesap::dense::is_complex_v<T>)
+            {
+                s = s + T{x[i].re, -x[i].im}
+                * y[i];
+            }
+            else
+            {
+                s = s + x[i] * y[i];
+            }
         }
         return s;
     }
@@ -403,11 +503,20 @@ private:
         {
             const crd::u32 n = L.n;
             spmv(L.a, x, sa);                                   // sa = A x
-            for (crd::u32 i = 0; i < n; ++i) { sa[i] = b[i] - sa[i]; } // sa = r = b − A x
+            for (crd::u32 i = 0; i < n; ++i) // sa = r = b − A x
+            {
+                sa[i] = b[i] - sa[i];
+            }
             (void)L.ilu->apply(crd::containers::ConstSpan<T>{sa, n}, crd::containers::Span<T>{sd, n}); // sd = M⁻¹ r
-            for (crd::u32 i = 0; i < n; ++i) { x[i] = x[i] + sd[i]; }
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                x[i] = x[i] + sd[i];
+            }
         }
-        else { gauss_seidel(L, b, x, forward); }
+        else
+        {
+            gauss_seidel(L, b, x, forward);
+        }
     }
 
     // One Gauss-Seidel sweep (in place): x_i ← (b_i − Σ_{j≠i} a_ij x_j)/a_ii, using
@@ -423,11 +532,29 @@ private:
         const T*       vals  = L.a.values().values.data();
         auto sweep = [&](crd::u32 i) {
             T s = T{};
-            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q) { if (inner[q] != i) { s = s + vals[q] * x[inner[q]]; } }
+            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
+            {
+                if (inner[q] != i)
+                {
+                    s = s + vals[q] * x[inner[q]];
+                }
+            }
             x[i] = L.dinv[i] * (b[i] - s); // dinv = 1/a_ii (complex for complex A)
         };
-        if (forward) { for (crd::u32 i = 0; i < n; ++i) { sweep(i); } }
-        else { for (crd::u32 i = n; i-- > 0;) { sweep(i); } }
+        if (forward)
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                sweep(i);
+            }
+        }
+        else
+        {
+            for (crd::u32 i = n; i-- > 0;)
+            {
+                sweep(i);
+            }
+        }
     }
 
     crd::memory::IAllocator* m_alloc;

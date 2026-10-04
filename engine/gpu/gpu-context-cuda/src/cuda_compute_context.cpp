@@ -25,7 +25,10 @@ namespace
 [[nodiscard]] bool compile_cubin(const char* src, const char* arch, bool fmad, crd::containers::Array<char>& cubin)
 {
     nvrtcProgram prog{};
-    if (nvrtcCreateProgram(&prog, src, "crd_cuda.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS) { return false; }
+    if (nvrtcCreateProgram(&prog, src, "crd_cuda.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS)
+    {
+        return false;
+    }
     char archopt[64];
     std::snprintf(archopt, sizeof(archopt), "--gpu-architecture=%s", arch);
     const char*       opts[] = {fmad ? "--fmad=true" : "--fmad=false", archopt};
@@ -65,8 +68,17 @@ public:
     CudaBuffer(CUdeviceptr dptr, void* host, bool pinned) noexcept : m_dptr(dptr), m_host(host), m_pinned(pinned) {}
     ~CudaBuffer() override
     {
-        if (m_pinned) { if (m_host != nullptr) { cuMemFreeHost(m_host); } }
-        else if (m_dptr != 0U) { cuMemFree(m_dptr); }
+        if (m_pinned)
+        {
+            if (m_host != nullptr)
+            {
+                cuMemFreeHost(m_host);
+            }
+        }
+        else if (m_dptr != 0U)
+        {
+            cuMemFree(m_dptr);
+        }
     }
     CudaBuffer(const CudaBuffer&)            = delete;
     CudaBuffer& operator=(const CudaBuffer&) = delete;
@@ -95,7 +107,13 @@ class CudaPipeline final : public ComputePipeline
 public:
     CudaPipeline(CUmodule mod, CUfunction fn, int n_bindings, crd::u32 block, crd::u32 /*push_size*/) noexcept
         : m_mod(mod), m_fn(fn), m_n(n_bindings), m_block(block) {}
-    ~CudaPipeline() override { if (m_mod != nullptr) { cuModuleUnload(m_mod); } }
+    ~CudaPipeline() override
+    {
+        if (m_mod != nullptr)
+        {
+            cuModuleUnload(m_mod);
+        }
+    }
     CudaPipeline(const CudaPipeline&)            = delete;
     CudaPipeline& operator=(const CudaPipeline&) = delete;
     CudaPipeline(CudaPipeline&&)                 = delete;
@@ -130,8 +148,14 @@ public:
     CudaGraphImpl(CUgraphExec exec, CUgraph graph, crd::u32 nodes) noexcept : m_exec(exec), m_graph(graph), m_nodes(nodes) {}
     ~CudaGraphImpl() override
     {
-        if (m_exec != nullptr) { cuGraphExecDestroy(m_exec); }
-        if (m_graph != nullptr) { cuGraphDestroy(m_graph); } // kept past instantiate for a future cuGraphExecUpdate (29z)
+        if (m_exec != nullptr)
+        {
+            cuGraphExecDestroy(m_exec);
+        }
+        if (m_graph != nullptr) // kept past instantiate for a future cuGraphExecUpdate (29z)
+        {
+            cuGraphDestroy(m_graph);
+        }
     }
     CudaGraphImpl(const CudaGraphImpl&)            = delete;
     CudaGraphImpl& operator=(const CudaGraphImpl&) = delete;
@@ -174,7 +198,10 @@ class CudaContextImpl final : public CudaComputeContext
         {
             auto&     cp = static_cast<CudaPipeline&>(pipeline);
             const int n  = static_cast<int>(bindings.size());
-            if (n > static_cast<int>(kCudaMaxBindings)) { return; }
+            if (n > static_cast<int>(kCudaMaxBindings))
+            {
+                return;
+            }
             CUdeviceptr dptrs[kCudaMaxBindings];
             void*       params[kCudaMaxBindings + 1];
             for (int i = 0; i < n; ++i)
@@ -201,14 +228,32 @@ class CudaContextImpl final : public CudaComputeContext
 public:
     explicit CudaContextImpl(crd::memory::IAllocator& alloc) noexcept : m_alloc(alloc), m_rec(*this)
     {
-        if (cuInit(0) != CUDA_SUCCESS) { return; }
+        if (cuInit(0) != CUDA_SUCCESS)
+        {
+            return;
+        }
         int count = 0;
-        if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count <= 0) { return; }
-        if (cuDeviceGet(&m_device, 0) != CUDA_SUCCESS) { return; }
+        if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count <= 0)
+        {
+            return;
+        }
+        if (cuDeviceGet(&m_device, 0) != CUDA_SUCCESS)
+        {
+            return;
+        }
         // Retain the device PRIMARY context — the refcounted singleton kir-cuda also retains ⇒ shared device, no dup init.
-        if (cuDevicePrimaryCtxRetain(&m_ctx, m_device) != CUDA_SUCCESS) { return; }
-        if (cuCtxSetCurrent(m_ctx) != CUDA_SUCCESS) { return; }
-        if (cuStreamCreate(&m_stream, CU_STREAM_DEFAULT) != CUDA_SUCCESS) { return; }
+        if (cuDevicePrimaryCtxRetain(&m_ctx, m_device) != CUDA_SUCCESS)
+        {
+            return;
+        }
+        if (cuCtxSetCurrent(m_ctx) != CUDA_SUCCESS)
+        {
+            return;
+        }
+        if (cuStreamCreate(&m_stream, CU_STREAM_DEFAULT) != CUDA_SUCCESS)
+        {
+            return;
+        }
         cuEventCreate(&m_ev0, CU_EVENT_DEFAULT);
         cuEventCreate(&m_ev1, CU_EVENT_DEFAULT);
         int major = 0;
@@ -227,10 +272,22 @@ public:
 
     ~CudaContextImpl() override
     {
-        if (m_ev0 != nullptr) { cuEventDestroy(m_ev0); }
-        if (m_ev1 != nullptr) { cuEventDestroy(m_ev1); }
-        if (m_stream != nullptr) { cuStreamDestroy(m_stream); }
-        if (m_ctx != nullptr) { cuDevicePrimaryCtxRelease(m_device); } // release our refcount on the shared primary ctx
+        if (m_ev0 != nullptr)
+        {
+            cuEventDestroy(m_ev0);
+        }
+        if (m_ev1 != nullptr)
+        {
+            cuEventDestroy(m_ev1);
+        }
+        if (m_stream != nullptr)
+        {
+            cuStreamDestroy(m_stream);
+        }
+        if (m_ctx != nullptr) // release our refcount on the shared primary ctx
+        {
+            cuDevicePrimaryCtxRelease(m_device);
+        }
     }
     CudaContextImpl(const CudaContextImpl&)            = delete;
     CudaContextImpl& operator=(const CudaContextImpl&) = delete;
@@ -243,11 +300,17 @@ public:
     [[nodiscard]] std::unique_ptr<ComputeBuffer> create_buffer(crd::u64 bytes, crd::u32 /*usage*/,
                                                                ComputeMemory memory) override
     {
-        if (!m_ok || bytes == 0U) { return nullptr; }
+        if (!m_ok || bytes == 0U)
+        {
+            return nullptr;
+        }
         if (memory == ComputeMemory::GpuOnly)
         {
             CUdeviceptr d = 0U;
-            if (cuMemAlloc(&d, bytes) != CUDA_SUCCESS) { return nullptr; }
+            if (cuMemAlloc(&d, bytes) != CUDA_SUCCESS)
+            {
+                return nullptr;
+            }
             return std::make_unique<CudaBuffer>(d, nullptr, /*pinned*/ false);
         }
         void* host = nullptr;
@@ -273,7 +336,10 @@ public:
                                                                              int n_bindings, crd::u32 local_size,
                                                                              crd::u32 push_size, bool fmad) override
     {
-        if (!m_ok) { return nullptr; }
+        if (!m_ok)
+        {
+            return nullptr;
+        }
         if (local_size == 0U || local_size > 1024U) // ⛔ blockDim.x must be a valid CUDA block (CUDA caps at 1024 threads/block)
         {
             std::fprintf(stderr, "create_pipeline_from_cuda: invalid local_size %u (must be 1..1024)\n", local_size);
@@ -281,15 +347,27 @@ public:
         }
         crd::containers::Array<char> src(&m_alloc);
         src.resize(cuda_source.size() + 1U, '\0');
-        for (crd::usize i = 0; i < cuda_source.size(); ++i) { src[i] = cuda_source[i]; }
+        for (crd::usize i = 0; i < cuda_source.size(); ++i)
+        {
+            src[i] = cuda_source[i];
+        }
         crd::containers::Array<char> name(&m_alloc);
         name.resize(entry.size() + 1U, '\0');
-        for (crd::usize i = 0; i < entry.size(); ++i) { name[i] = entry[i]; }
+        for (crd::usize i = 0; i < entry.size(); ++i)
+        {
+            name[i] = entry[i];
+        }
 
         crd::containers::Array<char> cubin(&m_alloc);
-        if (!compile_cubin(src.data(), m_arch, fmad, cubin)) { return nullptr; }
+        if (!compile_cubin(src.data(), m_arch, fmad, cubin))
+        {
+            return nullptr;
+        }
         CUmodule mod = nullptr;
-        if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return nullptr; }
+        if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
+        {
+            return nullptr;
+        }
         CUfunction fn = nullptr;
         if (cuModuleGetFunction(&fn, mod, name.data()) != CUDA_SUCCESS)
         {
@@ -301,17 +379,26 @@ public:
 
     [[nodiscard]] ComputeRecorder& begin() override
     {
-        if (m_ok) { cuEventRecord(m_ev0, m_stream); } // bracket the recorded work for last_gpu_ms
+        if (m_ok) // bracket the recorded work for last_gpu_ms
+        {
+            cuEventRecord(m_ev0, m_stream);
+        }
         return m_rec;
     }
 
     void submit_and_wait() override
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         cuEventRecord(m_ev1, m_stream);
         cuStreamSynchronize(m_stream);
         float ms = 0.0F;
-        if (cuEventElapsedTime(&ms, m_ev0, m_ev1) == CUDA_SUCCESS) { m_last_ms = static_cast<double>(ms); }
+        if (cuEventElapsedTime(&ms, m_ev0, m_ev1) == CUDA_SUCCESS)
+        {
+            m_last_ms = static_cast<double>(ms);
+        }
     }
 
     [[nodiscard]] crd::u32 subgroup_size() const noexcept override { return m_warp; }
@@ -338,7 +425,10 @@ public:
         CUgraph graph = nullptr;
         if (!was_capturing || cuStreamEndCapture(m_stream, &graph) != CUDA_SUCCESS || graph == nullptr)
         {
-            if (graph != nullptr) { cuGraphDestroy(graph); }
+            if (graph != nullptr)
+            {
+                cuGraphDestroy(graph);
+            }
             return std::make_unique<CudaGraphImpl>(nullptr, nullptr, 0U);
         }
         size_t nodes = 0;
@@ -356,20 +446,29 @@ public:
     // graph-launch time. Reusable (replay) — the exec is not re-instantiated.
     void launch(const CudaGraph& graph) override
     {
-        if (!m_ok || !graph.valid()) { return; }
+        if (!m_ok || !graph.valid())
+        {
+            return;
+        }
         cuEventRecord(m_ev0, m_stream);
         cuGraphLaunch(static_cast<const CudaGraphImpl&>(graph).exec(), m_stream);
         cuEventRecord(m_ev1, m_stream);
         cuStreamSynchronize(m_stream);
         float ms = 0.0F;
-        if (cuEventElapsedTime(&ms, m_ev0, m_ev1) == CUDA_SUCCESS) { m_last_ms = static_cast<double>(ms); }
+        if (cuEventElapsedTime(&ms, m_ev0, m_ev1) == CUDA_SUCCESS)
+        {
+            m_last_ms = static_cast<double>(ms);
+        }
     }
 
     // CEIR-29z: enqueue the graph on the stream WITHOUT a bracket or wait — for a two-class begin()/submit_and_wait() bracket
     // that records eager prefix + this graph + eager suffix as ONE submission (same-stream order carries the dependency).
     void enqueue(const CudaGraph& graph) override
     {
-        if (!m_ok || !graph.valid()) { return; }
+        if (!m_ok || !graph.valid())
+        {
+            return;
+        }
         cuGraphLaunch(static_cast<const CudaGraphImpl&>(graph).exec(), m_stream);
     }
 

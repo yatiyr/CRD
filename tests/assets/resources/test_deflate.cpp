@@ -23,7 +23,14 @@ void roundtrip_raw(const Array<crd::u8>& src, const char* label)
     Array<crd::u8> back(&s_df);
     REQUIRE(inflate_raw({comp.data(), comp.size()}, back));
     REQUIRE(back.size() == src.size());
-    int bad = 0; for (crd::usize i = 0; i < src.size(); ++i) { if (back[i] != src[i]) { ++bad; } }
+    int bad = 0;
+    for (crd::usize i = 0; i < src.size(); ++i)
+    {
+        if (back[i] != src[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 void roundtrip_zlib(const Array<crd::u8>& src, const char* label)
@@ -34,7 +41,14 @@ void roundtrip_zlib(const Array<crd::u8>& src, const char* label)
     Array<crd::u8> back(&s_df);
     REQUIRE(zlib_inflate({comp.data(), comp.size()}, back)); // also verifies the Adler-32 trailer
     REQUIRE(back.size() == src.size());
-    int bad = 0; for (crd::usize i = 0; i < src.size(); ++i) { if (back[i] != src[i]) { ++bad; } }
+    int bad = 0;
+    for (crd::usize i = 0; i < src.size(); ++i)
+    {
+        if (back[i] != src[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 } // namespace
@@ -66,12 +80,26 @@ TEST_CASE("deflate: inflate a REAL zlib DYNAMIC-Huffman stream (foreign encoder 
     Array<crd::u8> out(&s_df);
     REQUIRE(zlib_inflate({kComp, sizeof(kComp)}, out));
     REQUIRE(out.size() == 2600U);
-    crd::u64 sum = 0; for (crd::usize i = 0; i < out.size(); ++i) { sum += out[i]; }
+    crd::u64 sum = 0;
+    for (crd::usize i = 0; i < out.size(); ++i)
+    {
+        sum += out[i];
+    }
     CHECK(sum == 102315U);
     const crd::u8 first16[16] = {0, 0, 65, 65, 32, 10, 7, 3, 66, 66, 32, 10, 1, 1, 67, 67};
     const crd::u8 last16[16]  = {107, 122, 113, 120, 106, 107, 122, 113, 120, 106, 107, 122, 113, 120, 106, 107};
     int bad = 0;
-    for (int i = 0; i < 16; ++i) { if (out[static_cast<crd::usize>(i)] != first16[i]) { ++bad; } if (out[out.size() - 16U + static_cast<crd::usize>(i)] != last16[i]) { ++bad; } }
+    for (int i = 0; i < 16; ++i)
+    {
+        if (out[static_cast<crd::usize>(i)] != first16[i])
+        {
+            ++bad;
+        }
+        if (out[out.size() - 16U + static_cast<crd::usize>(i)] != last16[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -80,20 +108,55 @@ TEST_CASE("deflate: deflate->inflate round-trip (raw + zlib) on varied inputs", 
     // empty
     { Array<crd::u8> e(&s_df); roundtrip_raw(e, "empty"); roundtrip_zlib(e, "empty"); }
     // short literal
-    { Array<crd::u8> s(&s_df); const char* t = "hello, deflate"; for (const char* p = t; *p; ++p) { s.push_back(static_cast<crd::u8>(*p)); } roundtrip_raw(s, "hello"); roundtrip_zlib(s, "hello"); }
+    {
+        Array<crd::u8> s(&s_df); const char* t = "hello, deflate";
+        for (const char* p = t; *p; ++p)
+        {
+            s.push_back(static_cast<crd::u8>(*p));
+        }
+        roundtrip_raw(s, "hello"); roundtrip_zlib(s, "hello"); }
     // highly repetitive (LZ77 long matches + overlap)
-    { Array<crd::u8> s(&s_df); for (int i = 0; i < 5000; ++i) { s.push_back(static_cast<crd::u8>('a' + (i % 3))); } roundtrip_raw(s, "abc-rep"); roundtrip_zlib(s, "abc-rep"); }
+    {
+        Array<crd::u8> s(&s_df);
+        for (int i = 0; i < 5000; ++i)
+        {
+            s.push_back(static_cast<crd::u8>('a' + (i % 3)));
+        }
+        roundtrip_raw(s, "abc-rep"); roundtrip_zlib(s, "abc-rep"); }
     // all-constant (distance-1 overlap runs)
-    { Array<crd::u8> s(&s_df); for (int i = 0; i < 3000; ++i) { s.push_back(0x5AU); } roundtrip_raw(s, "const"); roundtrip_zlib(s, "const"); }
+    {
+        Array<crd::u8> s(&s_df);
+        for (int i = 0; i < 3000; ++i)
+        {
+            s.push_back(0x5AU);
+        }
+        roundtrip_raw(s, "const"); roundtrip_zlib(s, "const"); }
     // structured binary (like predicted EXR bytes)
-    { Array<crd::u8> s(&s_df); crd::u32 st = 12345U; for (int i = 0; i < 4096; ++i) { st = st * 1103515245U + 12345U; s.push_back(static_cast<crd::u8>((st >> 16U) & (i % 7 == 0 ? 0xFFU : 0x0FU))); } roundtrip_raw(s, "structured"); roundtrip_zlib(s, "structured"); }
+    {
+        Array<crd::u8> s(&s_df); crd::u32 st = 12345U;
+        for (int i = 0; i < 4096; ++i)
+        {
+            st = st * 1103515245U + 12345U;
+            s.push_back(static_cast<crd::u8>((st >> 16U) & (i % 7 == 0 ? 0xFFU : 0x0FU)));
+        }
+        roundtrip_raw(s, "structured"); roundtrip_zlib(s, "structured"); }
     // full byte range
-    { Array<crd::u8> s(&s_df); for (int i = 0; i < 256; ++i) { s.push_back(static_cast<crd::u8>(i)); } roundtrip_raw(s, "range256"); roundtrip_zlib(s, "range256"); }
+    {
+        Array<crd::u8> s(&s_df);
+        for (int i = 0; i < 256; ++i)
+        {
+            s.push_back(static_cast<crd::u8>(i));
+        }
+        roundtrip_raw(s, "range256"); roundtrip_zlib(s, "range256"); }
 }
 
 TEST_CASE("deflate: zlib output actually compresses a repetitive input", "[resources][deflate]")
 {
-    Array<crd::u8> s(&s_df); for (int i = 0; i < 4000; ++i) { s.push_back(static_cast<crd::u8>('x')); }
+    Array<crd::u8> s(&s_df);
+    for (int i = 0; i < 4000; ++i)
+    {
+        s.push_back(static_cast<crd::u8>('x'));
+    }
     Array<crd::u8> comp = zlib_deflate({s.data(), s.size()}, &s_df);
     CHECK(comp.size() < s.size() / 4U);
 }

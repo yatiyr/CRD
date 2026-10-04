@@ -70,7 +70,10 @@ template <typename KeyT>
 [[nodiscard]] int
 delta(const MortonPair<KeyT>* pairs, int n, int i, int j) noexcept
 {
-    if (j < 0 || j >= n) { return -1; }
+    if (j < 0 || j >= n)
+    {
+        return -1;
+    }
     const KeyT ki = pairs[i].code;
     const KeyT kj = pairs[j].code;
     if (ki != kj)
@@ -99,12 +102,18 @@ determine_range(const MortonPair<KeyT>* pairs, int n, int i) noexcept
     const int delta_min = (d == 1) ? d_neg : d_pos;
 
     int l_max = 2;
-    while (delta(pairs, n, i, i + l_max * d) > delta_min) { l_max *= 2; }
+    while (delta(pairs, n, i, i + l_max * d) > delta_min)
+    {
+        l_max *= 2;
+    }
 
     int l = 0;
     for (int t = l_max / 2; t >= 1; t /= 2)
     {
-        if (delta(pairs, n, i, i + (l + t) * d) > delta_min) { l += t; }
+        if (delta(pairs, n, i, i + (l + t) * d) > delta_min)
+        {
+            l += t;
+        }
     }
     const int j = i + l * d;
     return (d == 1) ? std::pair<int, int>{i, j} : std::pair<int, int>{j, i};
@@ -120,8 +129,14 @@ find_split(const MortonPair<KeyT>* pairs, int n, int first, int last) noexcept
     while (true)
     {
         t = (t + 1) / 2;
-        if (delta(pairs, n, first, first + (s + t)) > delta_node) { s += t; }
-        if (t <= 1) { break; }
+        if (delta(pairs, n, first, first + (s + t)) > delta_node)
+        {
+            s += t;
+        }
+        if (t <= 1)
+        {
+            break;
+        }
     }
     return first + s;
 }
@@ -164,7 +179,10 @@ build_lbvh_cpu_impl(crd::containers::ConstSpan<MortonPair<KeyT>>      sorted_pai
     CRD_ASSERT_MSG(n_usize <= static_cast<crd::usize>(INT_MAX),
                    "build_lbvh_cpu: N exceeds INT_MAX (Karras's signed-index arithmetic)");
 
-    if (n_usize == 0U) { return tree; }
+    if (n_usize == 0U)
+    {
+        return tree;
+    }
 
     const int n = static_cast<int>(n_usize);
 
@@ -292,7 +310,10 @@ build_lbvh_cpu_impl(crd::containers::ConstSpan<MortonPair<KeyT>>      sorted_pai
             carried = aabb_union(carried, nodes[parent].bounds[is_right ? 0U : 1U]);
 
             // Walk up.
-            if (nodes[parent].is_root()) { break; }
+            if (nodes[parent].is_root())
+            {
+                break;
+            }
             const bool next_is_right = nodes[parent].i_am_right_child();
             parent   = nodes[parent].parent();
             is_right = next_is_right;

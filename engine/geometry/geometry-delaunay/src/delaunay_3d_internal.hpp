@@ -121,14 +121,47 @@ inline crd::u32 find_face_with_vertices(const Tet& t, crd::u32 a, crd::u32 b, cr
         // same triangle regardless of which CCW rotation each tet sees.
         // For matching, we sort the triple by index.
         crd::u32 s0 = fa, s1 = fb, s2 = fc;
-        if (s0 > s1) { const crd::u32 tmp = s0; s0 = s1; s1 = tmp; }
-        if (s1 > s2) { const crd::u32 tmp = s1; s1 = s2; s2 = tmp; }
-        if (s0 > s1) { const crd::u32 tmp = s0; s0 = s1; s1 = tmp; }
+        if (s0 > s1)
+        {
+            const crd::u32 tmp = s0;
+            s0 = s1;
+            s1 = tmp;
+        }
+        if (s1 > s2)
+        {
+            const crd::u32 tmp = s1;
+            s1 = s2;
+            s2 = tmp;
+        }
+        if (s0 > s1)
+        {
+            const crd::u32 tmp = s0;
+            s0 = s1;
+            s1 = tmp;
+        }
         crd::u32 q0 = a, q1 = b, q2 = c;
-        if (q0 > q1) { const crd::u32 tmp = q0; q0 = q1; q1 = tmp; }
-        if (q1 > q2) { const crd::u32 tmp = q1; q1 = q2; q2 = tmp; }
-        if (q0 > q1) { const crd::u32 tmp = q0; q0 = q1; q1 = tmp; }
-        if (s0 == q0 && s1 == q1 && s2 == q2) { return i; }
+        if (q0 > q1)
+        {
+            const crd::u32 tmp = q0;
+            q0 = q1;
+            q1 = tmp;
+        }
+        if (q1 > q2)
+        {
+            const crd::u32 tmp = q1;
+            q1 = q2;
+            q2 = tmp;
+        }
+        if (q0 > q1)
+        {
+            const crd::u32 tmp = q0;
+            q0 = q1;
+            q1 = tmp;
+        }
+        if (s0 == q0 && s1 == q1 && s2 == q2)
+        {
+            return i;
+        }
     }
     return 4U;
 }
@@ -160,12 +193,30 @@ void build_super_tet(crd::containers::ConstSpan<crd::math::Vec3<T>> pts,
     T zmin = pts[0].z, zmax = pts[0].z;
     for (crd::usize i = 1; i < pts.size(); ++i)
     {
-        if (pts[i].x < xmin) { xmin = pts[i].x; }
-        if (pts[i].x > xmax) { xmax = pts[i].x; }
-        if (pts[i].y < ymin) { ymin = pts[i].y; }
-        if (pts[i].y > ymax) { ymax = pts[i].y; }
-        if (pts[i].z < zmin) { zmin = pts[i].z; }
-        if (pts[i].z > zmax) { zmax = pts[i].z; }
+        if (pts[i].x < xmin)
+        {
+            xmin = pts[i].x;
+        }
+        if (pts[i].x > xmax)
+        {
+            xmax = pts[i].x;
+        }
+        if (pts[i].y < ymin)
+        {
+            ymin = pts[i].y;
+        }
+        if (pts[i].y > ymax)
+        {
+            ymax = pts[i].y;
+        }
+        if (pts[i].z < zmin)
+        {
+            zmin = pts[i].z;
+        }
+        if (pts[i].z > zmax)
+        {
+            zmax = pts[i].z;
+        }
     }
     const T cx = (xmin + xmax) * static_cast<T>(0.5);
     const T cy = (ymin + ymax) * static_cast<T>(0.5);
@@ -174,8 +225,14 @@ void build_super_tet(crd::containers::ConstSpan<crd::math::Vec3<T>> pts,
     const T dy = ymax - ymin;
     const T dz = zmax - zmin;
     T       maxd = dx > dy ? dx : dy;
-    if (dz > maxd) { maxd = dz; }
-    if (maxd <= static_cast<T>(0)) { maxd = static_cast<T>(1); }
+    if (dz > maxd)
+    {
+        maxd = dz;
+    }
+    if (maxd <= static_cast<T>(0))
+    {
+        maxd = static_cast<T>(1);
+    }
     const T scale = maxd * static_cast<T>(1000);
 
     // Place 4 super-vertices symmetric about (cx, cy, cz). Ordering chosen
@@ -223,8 +280,14 @@ crd::u32 locate_tet(const TetPool&                                    pool,
     crd::u32 cur = hint;
     for (crd::u32 step = 0; step < max_steps; ++step)
     {
-        if (cur == k_null_tet) { return k_null_tet; }
-        if (!pool.alive(cur)) { return k_null_tet; }
+        if (cur == k_null_tet)
+        {
+            return k_null_tet;
+        }
+        if (!pool.alive(cur))
+        {
+            return k_null_tet;
+        }
         const Tet& t = pool[cur];
         crd::u32 cross_face = 4U;
         for (crd::u32 i = 0; i < 4U; ++i)
@@ -239,7 +302,10 @@ crd::u32 locate_tet(const TetPool&                                    pool,
                 break; // deterministic: lowest face index wins
             }
         }
-        if (cross_face >= 4U) { return cur; } // inside
+        if (cross_face >= 4U) // inside
+        {
+            return cur;
+        }
         cur = t.nbr[cross_face];
     }
     return k_null_tet;
@@ -278,10 +344,22 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
         for (crd::u32 k = 0; k < 4U; ++k)
         {
             const crd::u32 nbr = t.nbr[k];
-            if (nbr == k_null_tet) { continue; }
-            if (nbr >= is_bad.size()) { is_bad.resize(nbr + 1U, crd::u8{0}); }
-            if (is_bad[nbr] != 0U) { continue; }
-            if (!pool.alive(nbr)) { continue; }
+            if (nbr == k_null_tet)
+            {
+                continue;
+            }
+            if (nbr >= is_bad.size())
+            {
+                is_bad.resize(nbr + 1U, crd::u8{0});
+            }
+            if (is_bad[nbr] != 0U)
+            {
+                continue;
+            }
+            if (!pool.alive(nbr))
+            {
+                continue;
+            }
             const Tet& tn = pool[nbr];
             const T s = crd::geometry::primitives::insphere(
                 aug_pts[tn.v[0]], aug_pts[tn.v[1]], aug_pts[tn.v[2]], aug_pts[tn.v[3]], q_pos);
@@ -293,7 +371,10 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
             }
         }
     }
-    if (bad_tets.size() > out_cavity_max) { out_cavity_max = static_cast<crd::u32>(bad_tets.size()); }
+    if (bad_tets.size() > out_cavity_max)
+    {
+        out_cavity_max = static_cast<crd::u32>(bad_tets.size());
+    }
 
     // Phase 2: collect cavity boundary faces (with their outer-neighbour
     // ids). A face of a bad tet is a cavity boundary if its neighbour-tet
@@ -314,7 +395,10 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
         {
             const crd::u32 nbr = t.nbr[i];
             const bool nbr_bad = (nbr != k_null_tet) && (nbr < is_bad.size()) && (is_bad[nbr] != 0U);
-            if (nbr_bad) { continue; }
+            if (nbr_bad)
+            {
+                continue;
+            }
             CavityFace f{};
             f.v0        = t.v[face_vertices[i][0]];
             f.v1        = t.v[face_vertices[i][1]];
@@ -369,7 +453,10 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
         {
             Tet&           outer = pool[f.outer_nbr];
             const crd::u32 fk    = find_face_with_vertices(outer, f.v0, f.v1, f.v2);
-            if (fk < 4U) { outer.nbr[fk] = nti; }
+            if (fk < 4U)
+            {
+                outer.nbr[fk] = nti;
+            }
         }
         new_tets.push_back(nti);
     }
@@ -402,13 +489,24 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
         };
         for (crd::u32 fi = 0; fi < 3U; ++fi)
         {
-            if (ti.nbr[fi] != k_null_tet) { continue; }
+            if (ti.nbr[fi] != k_null_tet)
+            {
+                continue;
+            }
             crd::u32 e0 = edges[fi][0];
             crd::u32 e1 = edges[fi][1];
-            if (e0 > e1) { const crd::u32 tmp = e0; e0 = e1; e1 = tmp; }
+            if (e0 > e1)
+            {
+                const crd::u32 tmp = e0;
+                e0 = e1;
+                e1 = tmp;
+            }
             for (crd::u32 j = 0; j < new_tets.size(); ++j)
             {
-                if (i == j) { continue; }
+                if (i == j)
+                {
+                    continue;
+                }
                 const Tet& tj = pool[new_tets[j]];
                 // tj also has q as v[3]; its cavity-boundary edges are
                 // pairs of {tj.v[0], tj.v[1], tj.v[2]}.
@@ -421,7 +519,12 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
                 {
                     crd::u32 te0 = tj_edges[fj][0];
                     crd::u32 te1 = tj_edges[fj][1];
-                    if (te0 > te1) { const crd::u32 tmp = te0; te0 = te1; te1 = tmp; }
+                    if (te0 > te1)
+                    {
+                        const crd::u32 tmp = te0;
+                        te0 = te1;
+                        te1 = tmp;
+                    }
                     if (te0 == e0 && te1 == e1)
                     {
                         ti.nbr[fi] = new_tets[j];
@@ -429,7 +532,10 @@ crd::u32 insert_point_3d(TetPool&                                          pool,
                         break;
                     }
                 }
-                if (ti.nbr[fi] != k_null_tet) { break; }
+                if (ti.nbr[fi] != k_null_tet)
+                {
+                    break;
+                }
             }
         }
     }

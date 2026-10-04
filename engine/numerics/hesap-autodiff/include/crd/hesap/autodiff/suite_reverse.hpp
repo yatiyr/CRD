@@ -51,13 +51,19 @@ inline void conv_vjp(const crd::f64* h, int nh, const crd::f64* x, int nx, const
     for (int i = 0; i < nh; ++i)
     {
         crd::f64 s = 0.0;
-        for (int j = 0; j < nx; ++j) { s += gy[i + j] * x[j]; }
+        for (int j = 0; j < nx; ++j)
+        {
+            s += gy[i + j] * x[j];
+        }
         gh[i] = s;
     }
     for (int j = 0; j < nx; ++j)
     {
         crd::f64 s = 0.0;
-        for (int i = 0; i < nh; ++i) { s += gy[i + j] * h[i]; }
+        for (int i = 0; i < nh; ++i)
+        {
+            s += gy[i + j] * h[i];
+        }
         gx[j] = s;
     }
 }
@@ -68,8 +74,14 @@ inline void thomas_solve_vjp(const crd::f64* a, const crd::f64* b, const crd::f6
                              crd::f64* rbar, int n, crd::f64* at, crd::f64* ct, crd::f64* cp, crd::f64* dp) noexcept
 {
     at[0] = 0.0;                                       // Tᵀ sub'[i] = T[i-1][i] = c[i-1]
-    for (int i = 1; i < n; ++i) { at[i] = c[i - 1]; }
-    for (int i = 0; i < n - 1; ++i) { ct[i] = a[i + 1]; } // Tᵀ super'[i] = T[i+1][i] = a[i+1]
+    for (int i = 1; i < n; ++i)
+    {
+        at[i] = c[i - 1];
+    }
+    for (int i = 0; i < n - 1; ++i) // Tᵀ super'[i] = T[i+1][i] = a[i+1]
+    {
+        ct[i] = a[i + 1];
+    }
     ct[n - 1] = 0.0;
     forward::suite::thomas_solve(at, b, ct, ubar, rbar, n, cp, dp); // r̄ = Tᵀ⁻¹·ū
 }

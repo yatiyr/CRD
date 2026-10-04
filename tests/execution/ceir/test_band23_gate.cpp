@@ -56,7 +56,11 @@ void build_band23(Context& ctx, Module& m)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const b = func::func_body_block(f);

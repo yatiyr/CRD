@@ -44,14 +44,38 @@ enum class PlyType : crd::u8
 
 [[nodiscard]] PlyType type_from(const char* s) noexcept
 {
-    if (std::strcmp(s, "char") == 0 || std::strcmp(s, "int8") == 0) { return PlyType::I8; }
-    if (std::strcmp(s, "uchar") == 0 || std::strcmp(s, "uint8") == 0) { return PlyType::U8; }
-    if (std::strcmp(s, "short") == 0 || std::strcmp(s, "int16") == 0) { return PlyType::I16; }
-    if (std::strcmp(s, "ushort") == 0 || std::strcmp(s, "uint16") == 0) { return PlyType::U16; }
-    if (std::strcmp(s, "int") == 0 || std::strcmp(s, "int32") == 0) { return PlyType::I32; }
-    if (std::strcmp(s, "uint") == 0 || std::strcmp(s, "uint32") == 0) { return PlyType::U32; }
-    if (std::strcmp(s, "float") == 0 || std::strcmp(s, "float32") == 0) { return PlyType::F32; }
-    if (std::strcmp(s, "double") == 0 || std::strcmp(s, "float64") == 0) { return PlyType::F64; }
+    if (std::strcmp(s, "char") == 0 || std::strcmp(s, "int8") == 0)
+    {
+        return PlyType::I8;
+    }
+    if (std::strcmp(s, "uchar") == 0 || std::strcmp(s, "uint8") == 0)
+    {
+        return PlyType::U8;
+    }
+    if (std::strcmp(s, "short") == 0 || std::strcmp(s, "int16") == 0)
+    {
+        return PlyType::I16;
+    }
+    if (std::strcmp(s, "ushort") == 0 || std::strcmp(s, "uint16") == 0)
+    {
+        return PlyType::U16;
+    }
+    if (std::strcmp(s, "int") == 0 || std::strcmp(s, "int32") == 0)
+    {
+        return PlyType::I32;
+    }
+    if (std::strcmp(s, "uint") == 0 || std::strcmp(s, "uint32") == 0)
+    {
+        return PlyType::U32;
+    }
+    if (std::strcmp(s, "float") == 0 || std::strcmp(s, "float32") == 0)
+    {
+        return PlyType::F32;
+    }
+    if (std::strcmp(s, "double") == 0 || std::strcmp(s, "float64") == 0)
+    {
+        return PlyType::F64;
+    }
     return PlyType::None;
 }
 
@@ -74,14 +98,38 @@ enum class Sem : crd::u8
 
 [[nodiscard]] Sem vertex_sem(const char* name) noexcept
 {
-    if (std::strcmp(name, "x") == 0) { return Sem::X; }
-    if (std::strcmp(name, "y") == 0) { return Sem::Y; }
-    if (std::strcmp(name, "z") == 0) { return Sem::Z; }
-    if (std::strcmp(name, "nx") == 0) { return Sem::NX; }
-    if (std::strcmp(name, "ny") == 0) { return Sem::NY; }
-    if (std::strcmp(name, "nz") == 0) { return Sem::NZ; }
-    if (std::strcmp(name, "u") == 0 || std::strcmp(name, "s") == 0 || std::strcmp(name, "texture_u") == 0) { return Sem::U; }
-    if (std::strcmp(name, "v") == 0 || std::strcmp(name, "t") == 0 || std::strcmp(name, "texture_v") == 0) { return Sem::V; }
+    if (std::strcmp(name, "x") == 0)
+    {
+        return Sem::X;
+    }
+    if (std::strcmp(name, "y") == 0)
+    {
+        return Sem::Y;
+    }
+    if (std::strcmp(name, "z") == 0)
+    {
+        return Sem::Z;
+    }
+    if (std::strcmp(name, "nx") == 0)
+    {
+        return Sem::NX;
+    }
+    if (std::strcmp(name, "ny") == 0)
+    {
+        return Sem::NY;
+    }
+    if (std::strcmp(name, "nz") == 0)
+    {
+        return Sem::NZ;
+    }
+    if (std::strcmp(name, "u") == 0 || std::strcmp(name, "s") == 0 || std::strcmp(name, "texture_u") == 0)
+    {
+        return Sem::U;
+    }
+    if (std::strcmp(name, "v") == 0 || std::strcmp(name, "t") == 0 || std::strcmp(name, "texture_v") == 0)
+    {
+        return Sem::V;
+    }
     return Sem::Skip;
 }
 
@@ -127,13 +175,22 @@ struct LineScan
 
     bool next_line(const crd::u8*& ls, const crd::u8*& le) noexcept
     {
-        if (p == end) { return false; }
+        if (p == end)
+        {
+            return false;
+        }
         ls               = p;
         const crd::u8* q = p;
-        while (q < end && *q != '\n') { ++q; }
+        while (q < end && *q != '\n')
+        {
+            ++q;
+        }
         le = q;
         p  = (q < end) ? q + 1 : q;
-        while (le > ls && (*(le - 1) == '\r' || *(le - 1) == ' ')) { --le; }
+        while (le > ls && (*(le - 1) == '\r' || *(le - 1) == ' '))
+        {
+            --le;
+        }
         return true;
     }
 };
@@ -145,12 +202,21 @@ struct LineTok
 
     bool next(char* buf, crd::usize cap) noexcept
     {
-        while (p < end && (*p == ' ' || *p == '\t')) { ++p; }
-        if (p == end) { return false; }
+        while (p < end && (*p == ' ' || *p == '\t'))
+        {
+            ++p;
+        }
+        if (p == end)
+        {
+            return false;
+        }
         crd::usize n = 0;
         while (p < end && *p != ' ' && *p != '\t')
         {
-            if (n + 1 < cap) { buf[n++] = static_cast<char>(*p); }
+            if (n + 1 < cap)
+            {
+                buf[n++] = static_cast<char>(*p);
+            }
             ++p;
         }
         buf[n] = '\0';
@@ -168,63 +234,129 @@ struct LineTok
     char           kw[64];
     char           tok[64];
 
-    if (!scan.next_line(ls, le)) { return ImportStatus::NotRecognized; }
+    if (!scan.next_line(ls, le))
+    {
+        return ImportStatus::NotRecognized;
+    }
     LineTok first{ls, le};
-    if (!first.next(kw, sizeof(kw)) || std::strcmp(kw, "ply") != 0) { return ImportStatus::NotRecognized; }
+    if (!first.next(kw, sizeof(kw)) || std::strcmp(kw, "ply") != 0)
+    {
+        return ImportStatus::NotRecognized;
+    }
 
     bool have_format = false;
     while (scan.next_line(ls, le))
     {
         LineTok lt{ls, le};
-        if (!lt.next(kw, sizeof(kw))) { continue; }
-        if (std::strcmp(kw, "comment") == 0 || std::strcmp(kw, "obj_info") == 0) { continue; }
+        if (!lt.next(kw, sizeof(kw)))
+        {
+            continue;
+        }
+        if (std::strcmp(kw, "comment") == 0 || std::strcmp(kw, "obj_info") == 0)
+        {
+            continue;
+        }
         if (std::strcmp(kw, "format") == 0)
         {
-            if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
-            if (std::strcmp(tok, "ascii") == 0) { schema.format = PlyFormat::Ascii; }
-            else if (std::strcmp(tok, "binary_little_endian") == 0) { schema.format = PlyFormat::BinaryLE; }
-            else if (std::strcmp(tok, "binary_big_endian") == 0) { schema.format = PlyFormat::BinaryBE; }
-            else { return ImportStatus::Malformed; }
+            if (!lt.next(tok, sizeof(tok)))
+            {
+                return ImportStatus::Malformed;
+            }
+            if (std::strcmp(tok, "ascii") == 0)
+            {
+                schema.format = PlyFormat::Ascii;
+            }
+            else if (std::strcmp(tok, "binary_little_endian") == 0)
+            {
+                schema.format = PlyFormat::BinaryLE;
+            }
+            else if (std::strcmp(tok, "binary_big_endian") == 0)
+            {
+                schema.format = PlyFormat::BinaryBE;
+            }
+            else
+            {
+                return ImportStatus::Malformed;
+            }
             have_format = true;
             continue;
         }
         if (std::strcmp(kw, "element") == 0)
         {
-            if (schema.n_elements >= kMaxElements) { return ImportStatus::Malformed; }
-            if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
+            if (schema.n_elements >= kMaxElements)
+            {
+                return ImportStatus::Malformed;
+            }
+            if (!lt.next(tok, sizeof(tok)))
+            {
+                return ImportStatus::Malformed;
+            }
             PlyElement& e = schema.elements[schema.n_elements++];
             e.is_vertex   = std::strcmp(tok, "vertex") == 0;
             e.is_face     = std::strcmp(tok, "face") == 0;
-            if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
+            if (!lt.next(tok, sizeof(tok)))
+            {
+                return ImportStatus::Malformed;
+            }
             char*      endp = nullptr;
             const long long n = std::strtoll(tok, &endp, 10);
-            if (endp == tok || *endp != '\0' || n < 0) { return ImportStatus::Malformed; }
+            if (endp == tok || *endp != '\0' || n < 0)
+            {
+                return ImportStatus::Malformed;
+            }
             e.count = static_cast<crd::u64>(n);
             continue;
         }
         if (std::strcmp(kw, "property") == 0)
         {
-            if (schema.n_elements == 0) { return ImportStatus::Malformed; } // property before any element
+            if (schema.n_elements == 0) // property before any element
+            {
+                return ImportStatus::Malformed;
+            }
             PlyElement& e = schema.elements[schema.n_elements - 1];
-            if (e.n_props >= kMaxProps) { return ImportStatus::Malformed; }
-            if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
+            if (e.n_props >= kMaxProps)
+            {
+                return ImportStatus::Malformed;
+            }
+            if (!lt.next(tok, sizeof(tok)))
+            {
+                return ImportStatus::Malformed;
+            }
             PlyProperty& p = e.props[e.n_props];
             if (std::strcmp(tok, "list") == 0)
             {
-                if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
+                if (!lt.next(tok, sizeof(tok)))
+                {
+                    return ImportStatus::Malformed;
+                }
                 p.count_type = type_from(tok);
-                if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; }
+                if (!lt.next(tok, sizeof(tok)))
+                {
+                    return ImportStatus::Malformed;
+                }
                 p.type = type_from(tok);
-                if (p.count_type == PlyType::None || p.type == PlyType::None) { return ImportStatus::Malformed; }
-                if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; } // list name
+                if (p.count_type == PlyType::None || p.type == PlyType::None)
+                {
+                    return ImportStatus::Malformed;
+                }
+                if (!lt.next(tok, sizeof(tok))) // list name
+                {
+                    return ImportStatus::Malformed;
+                }
                 const bool is_idx = std::strcmp(tok, "vertex_indices") == 0 || std::strcmp(tok, "vertex_index") == 0;
                 p.sem             = (e.is_face && is_idx) ? Sem::FaceList : Sem::Skip;
             }
             else
             {
                 p.type = type_from(tok);
-                if (p.type == PlyType::None) { return ImportStatus::Malformed; }
-                if (!lt.next(tok, sizeof(tok))) { return ImportStatus::Malformed; } // property name
+                if (p.type == PlyType::None)
+                {
+                    return ImportStatus::Malformed;
+                }
+                if (!lt.next(tok, sizeof(tok))) // property name
+                {
+                    return ImportStatus::Malformed;
+                }
                 p.sem = e.is_vertex ? vertex_sem(tok) : Sem::Skip;
             }
             ++e.n_props;
@@ -232,7 +364,10 @@ struct LineTok
         }
         if (std::strcmp(kw, "end_header") == 0)
         {
-            if (!have_format) { return ImportStatus::Malformed; }
+            if (!have_format)
+            {
+                return ImportStatus::Malformed;
+            }
             body = scan.p;
             return ImportStatus::Ok;
         }
@@ -247,9 +382,15 @@ struct LineTok
 [[nodiscard]] bool read_binary_scalar(const crd::u8*& p, const crd::u8* end, PlyType t, bool swap, crd::f64& out) noexcept
 {
     const crd::usize sz = type_size(t);
-    if (static_cast<crd::usize>(end - p) < sz) { return false; }
+    if (static_cast<crd::usize>(end - p) < sz)
+    {
+        return false;
+    }
     crd::u8 raw[8];
-    for (crd::usize i = 0; i < sz; ++i) { raw[i] = swap ? p[sz - 1 - i] : p[i]; }
+    for (crd::usize i = 0; i < sz; ++i)
+    {
+        raw[i] = swap ? p[sz - 1 - i] : p[i];
+    }
     p += sz;
     switch (t)
     {
@@ -304,13 +445,22 @@ struct AsciiTok
 
     [[nodiscard]] bool next_f64(crd::f64& out, bool& bad) noexcept
     {
-        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) { ++p; }
-        if (p == end) { return false; }
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+        {
+            ++p;
+        }
+        if (p == end)
+        {
+            return false;
+        }
         char       buf[64];
         crd::usize n = 0;
         while (p < end && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
         {
-            if (n + 1 < sizeof(buf)) { buf[n++] = static_cast<char>(*p); }
+            if (n + 1 < sizeof(buf))
+            {
+                buf[n++] = static_cast<char>(*p);
+            }
             ++p;
         }
         buf[n]      = '\0';
@@ -329,7 +479,10 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
     const crd::u8* body = nullptr;
     {
         const ImportStatus st = parse_header(bytes, schema, body);
-        if (st != ImportStatus::Ok) { return st; }
+        if (st != ImportStatus::Ok)
+        {
+            return st;
+        }
     }
 
     ImportedMesh mesh(alloc);
@@ -390,9 +543,15 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
                 if (prop.count_type != PlyType::None) // LIST property
                 {
                     crd::f64 cnt = 0.0;
-                    if (!read_scalar(prop.count_type, cnt, fail)) { return fail; }
+                    if (!read_scalar(prop.count_type, cnt, fail))
+                    {
+                        return fail;
+                    }
                     const crd::i64 n = static_cast<crd::i64>(cnt);
-                    if (n < 0 || n > 255) { return ImportStatus::Malformed; } // an insane list count is corruption
+                    if (n < 0 || n > 255) // an insane list count is corruption
+                    {
+                        return ImportStatus::Malformed;
+                    }
                     if (prop.sem == Sem::FaceList)
                     {
                         crd::u32 fan_first = 0;
@@ -400,14 +559,20 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
                         for (crd::i64 k = 0; k < n; ++k)
                         {
                             crd::f64 vd = 0.0;
-                            if (!read_scalar(prop.type, vd, fail)) { return fail; }
+                            if (!read_scalar(prop.type, vd, fail))
+                            {
+                                return fail;
+                            }
                             const crd::i64 idx = static_cast<crd::i64>(vd);
                             if (idx < 0 || static_cast<crd::u64>(idx) >= static_cast<crd::u64>(mesh.positions.size()))
                             {
                                 return ImportStatus::Malformed;
                             }
                             const crd::u32 u = static_cast<crd::u32>(idx);
-                            if (k == 0) { fan_first = u; }
+                            if (k == 0)
+                            {
+                                fan_first = u;
+                            }
                             else if (k >= 2)
                             {
                                 mesh.indices.push_back(fan_first);
@@ -416,20 +581,29 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
                             }
                             fan_prev = u;
                         }
-                        if (n > 0 && n < 3) { ++out.warning_count; } // degenerate face record: skipped, not fatal
+                        if (n > 0 && n < 3) // degenerate face record: skipped, not fatal
+                        {
+                            ++out.warning_count;
+                        }
                     }
                     else
                     {
                         for (crd::i64 k = 0; k < n; ++k) // skipped list: read-and-discard EXACTLY
                         {
                             crd::f64 dump = 0.0;
-                            if (!read_scalar(prop.type, dump, fail)) { return fail; }
+                            if (!read_scalar(prop.type, dump, fail))
+                            {
+                                return fail;
+                            }
                         }
                     }
                     continue;
                 }
                 crd::f64 v = 0.0;
-                if (!read_scalar(prop.type, v, fail)) { return fail; }
+                if (!read_scalar(prop.type, v, fail))
+                {
+                    return fail;
+                }
                 switch (prop.sem)
                 {
                 case Sem::X: vx = static_cast<crd::f32>(v); break;
@@ -461,7 +635,10 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
 
             if (e.is_vertex)
             {
-                if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz)) { return ImportStatus::NonFiniteData; }
+                if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz))
+                {
+                    return ImportStatus::NonFiniteData;
+                }
                 mesh.positions.push_back(crd::math::Vec3<crd::f32>{vx, vy, vz});
                 mesh.normals.push_back(crd::math::Vec3<crd::f32>{nx, ny, nz});
                 mesh.uv0.push_back(crd::math::Vec2<crd::f32>{tu, tv});
@@ -471,9 +648,18 @@ ImportStatus parse_ply(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
         }
     }
 
-    if (!any_n) { mesh.normals.clear(); }
-    if (!any_uv) { mesh.uv0.clear(); }
-    if (!mesh.is_consistent()) { return ImportStatus::Malformed; }
+    if (!any_n)
+    {
+        mesh.normals.clear();
+    }
+    if (!any_uv)
+    {
+        mesh.uv0.clear();
+    }
+    if (!mesh.is_consistent())
+    {
+        return ImportStatus::Malformed;
+    }
     out.meshes.push_back(static_cast<ImportedMesh&&>(mesh));
     return ImportStatus::Ok;
 }

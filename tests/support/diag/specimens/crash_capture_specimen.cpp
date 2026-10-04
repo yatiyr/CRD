@@ -79,24 +79,34 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
 {
 #if defined(_WIN32)
     if (g_marker_written.exchange(true, std::memory_order_acq_rel))
+    {
         return;
+    }
     if (g_output_dir[0] == '\0')
+    {
         return;
+    }
 
     char path[1088];
     int  n = 0;
     for (int i = 0; g_output_dir[i] != '\0' && n < 1000; ++i)
+    {
         path[n++] = g_output_dir[i];
+    }
     const char* suffix = "\\report.marker";
     for (int i = 0; suffix[i] != '\0'; ++i)
+    {
         path[n++] = suffix[i];
+    }
     path[n] = '\0';
 
     char     body[16];
     int      bn = 0;
     unsigned v  = static_cast<unsigned>(report.write);
     if (v == 0U)
+    {
         body[bn++] = '0';
+    }
     char tmp[12];
     int  tn = 0;
     while (v != 0U)
@@ -105,7 +115,9 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
         v /= 10U;
     }
     while (tn > 0)
+    {
         body[bn++] = tmp[--tn];
+    }
 
     HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE)
@@ -151,7 +163,9 @@ int recurse(int depth) noexcept
 void overflow_body(bool guard) noexcept
 {
     if (guard)
+    {
         crd::crash::guard_current_thread_stack();
+    }
     (void)recurse(0);
 }
 
@@ -182,10 +196,14 @@ void chain_prev_handler(int sig, siginfo_t* /*info*/, void* /*ctx*/) noexcept
         char path[1088];
         int  n = 0;
         for (int i = 0; g_output_dir[i] != '\0' && n < 1000; ++i)
+        {
             path[n++] = g_output_dir[i];
+        }
         const char* suffix = "/chain.marker";
         for (int i = 0; suffix[i] != '\0'; ++i)
+        {
             path[n++] = suffix[i];
+        }
         path[n]        = '\0';
         const int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0)
@@ -231,13 +249,17 @@ int main(int argc, char** argv)
     const char* mode = argv[2];
 
     for (int i = 0; dir[i] != '\0' && i < 1023; ++i) // capture the dir for the marker path before anything can fault
+    {
         g_output_dir[i] = dir[i];
+    }
 
 #if defined(__linux__)
     // `chain`: install a prior SIGSEGV handler BEFORE crd::install() so crd saves it as the previous disposition and
     // chains to it after recording (the prior handler drops chain.marker, then re-raises to terminate).
     if (std::strcmp(mode, "chain") == 0)
+    {
         install_chain_prev_handler();
+    }
 #endif
 
     const crd::crash::InstallResult ir = crd::crash::install(dir);
@@ -266,7 +288,9 @@ int main(int argc, char** argv)
 #if defined(_WIN32)
         HMODULE h1 = LoadLibraryA("winhttp.dll");
         if (h1 != nullptr)
+        {
             (void)FreeLibrary(h1);        // refcount -> 0 -> traced unload
+        }
         (void)LoadLibraryA("winhttp.dll"); // reload -> live generation (deliberately not freed; the process now faults)
 #endif
         null_write();
@@ -385,7 +409,9 @@ int main(int argc, char** argv)
         j.fn = &fiber_overflow_job;
         (void)crd::jobs::run(j); // a background worker runs it; do NOT wait() -- that would pump it onto main
         for (int i = 0; i < 120; ++i)
+        {
             std::this_thread::sleep_for(std::chrono::milliseconds(25)); // ~3s safety bound; the worker fault kills us first
+        }
         crd::jobs::shutdown();
         return 61; // reached only if the worker never faulted (never expected)
     }

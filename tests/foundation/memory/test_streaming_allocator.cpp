@@ -98,7 +98,10 @@ TEST_CASE("StreamingAllocator enforces a per-category budget with the null polic
     for (int i = 0; i < 50; ++i)
     {
         void* p = sa.try_allocate_resident(0, 10 * 1024, 16);
-        if (p == nullptr) { break; } // budget reached; null policy can't shed -> graceful nullptr
+        if (p == nullptr) // budget reached; null policy can't shed -> graceful nullptr
+        {
+            break;
+        }
         ++succeeded;
     }
     REQUIRE(succeeded >= 1);                  // some fit

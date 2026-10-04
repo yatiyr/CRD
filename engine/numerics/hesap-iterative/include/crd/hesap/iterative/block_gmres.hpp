@@ -172,7 +172,10 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_fgmres(
     {
         // R₀ = B - A·X ; V₀,ρ = QR(R₀).
         (void)a.apply_block(x, s, crd::containers::Span<T>{W, n * s}, s, s);
-        for (crd::usize i = 0; i < n * s; ++i) { Rb[i] = b[i] - W[i]; }
+        for (crd::usize i = 0; i < n * s; ++i)
+        {
+            Rb[i] = b[i] - W[i];
+        }
 
         // Cycle-start convergence (true residual): tail of an all-in-top-block G.
         {
@@ -180,8 +183,16 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_fgmres(
             for (crd::u32 l = 0; l < s; ++l)
             {
                 R acc = R(0);
-                for (crd::usize k = 0; k < n; ++k) { const R mg = detail::krylov_mag<T>(Rb[k * s + l]); acc += mg * mg; }
-                if (std::sqrt(acc) > opts.rel_tol * ws.bnorm[l]) { conv = false; break; }
+                for (crd::usize k = 0; k < n; ++k)
+                {
+                    const R mg = detail::krylov_mag<T>(Rb[k * s + l]);
+                    acc += mg * mg;
+                }
+                if (std::sqrt(acc) > opts.rel_tol * ws.bnorm[l])
+                {
+                    conv = false;
+                    break;
+                }
             }
             if (conv)
             {
@@ -195,12 +206,21 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_fgmres(
         detail::block_qr<T>(Rb, n, s, ws.cm.data(), ws.rho.data()); // Rb → V₀ (orthonormal), rho = initial RHS
         dense::copy<T>(crd::containers::ConstSpan<T>{Rb, n * s}, ws.v(0));
         // G = [ρ; 0]  ((m+1)s × s).
-        for (crd::usize i = 0; i < (m + 1) * static_cast<crd::usize>(s) * s; ++i) { G[i] = T{}; }
+        for (crd::usize i = 0; i < (m + 1) * static_cast<crd::usize>(s) * s; ++i)
+        {
+            G[i] = T{};
+        }
         for (crd::u32 row = 0; row < s; ++row)
         {
-            for (crd::u32 col = 0; col < s; ++col) { G[static_cast<crd::usize>(row) * s + col] = ws.rho[static_cast<crd::usize>(row) * s + col]; }
+            for (crd::u32 col = 0; col < s; ++col)
+            {
+                G[static_cast<crd::usize>(row) * s + col] = ws.rho[static_cast<crd::usize>(row) * s + col];
+            }
         }
-        for (crd::usize i = 0; i < (m + 1) * static_cast<crd::usize>(s) * ld; ++i) { H[i] = T{}; }
+        for (crd::usize i = 0; i < (m + 1) * static_cast<crd::usize>(s) * ld; ++i)
+        {
+            H[i] = T{};
+        }
 
         crd::u32   ngiv = 0; // Givens generated this cycle
         crd::usize kdone = 0; // block-Arnoldi steps completed
@@ -275,10 +295,16 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_fgmres(
             if (opts.record_residuals)
             {
                 R worst = R(0);
-                for (crd::u32 l = 0; l < s; ++l) { worst = std::max(worst, detail::block_col_tail_norm<T>(G, s, used, (m + 1) * s, l)); }
+                for (crd::u32 l = 0; l < s; ++l)
+                {
+                    worst = std::max(worst, detail::block_col_tail_norm<T>(G, s, used, (m + 1) * s, l));
+                }
                 result.residual_history.push_back(worst);
             }
-            if (all_converged(G, used)) { break; }
+            if (all_converged(G, used))
+            {
+                break;
+            }
         }
 
         // Back-substitute R·Y = G[0:used,:] (upper-triangular, used×used), per RHS column.
@@ -314,10 +340,17 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_fgmres(
         for (crd::u32 l = 0; l < s; ++l)
         {
             R acc = R(0);
-            for (crd::usize k = 0; k < n; ++k) { const R d = detail::krylov_mag<T>(b[k * s + l] - W[k * s + l]); acc += d * d; }
+            for (crd::usize k = 0; k < n; ++k)
+            {
+                const R d = detail::krylov_mag<T>(b[k * s + l] - W[k * s + l]);
+                acc += d * d;
+            }
             const R rn = std::sqrt(acc);
             worst      = std::max(worst, rn);
-            if (rn > opts.rel_tol * ws.bnorm[l]) { conv = false; }
+            if (rn > opts.rel_tol * ws.bnorm[l])
+            {
+                conv = false;
+            }
         }
         result.final_residual_norm = worst;
         if (conv)

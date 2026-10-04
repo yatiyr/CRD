@@ -27,7 +27,10 @@ CookResult texture_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
-    if (!ctx.io->read_source(src_bytes)) { return result; }
+    if (!ctx.io->read_source(src_bytes))
+    {
+        return result;
+    }
 
     crd::resources::LdrImage image(ctx.allocator);
     const crd::resources::LdrError err =
@@ -49,7 +52,10 @@ CookResult texture_handler(const CookContext& ctx)
     }
 
     auto cooked = cook_texture_rgba(image, options, ctx.id, ctx.allocator);
-    if (cooked.empty()) { return result; }
+    if (cooked.empty())
+    {
+        return result;
+    }
 
     result.type_fourcc     = crd::resources::kFourCC_TXTR;
     result.cooked_bytes    = static_cast<crd::containers::Array<crd::u8>&&>(cooked);

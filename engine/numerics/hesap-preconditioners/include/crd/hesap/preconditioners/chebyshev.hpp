@@ -66,8 +66,14 @@ public:
         const R lam_max = (lambda_max_override > R(0)) ? lambda_max_override : estimate_lambda_max(alloc);
         m_hi = (lambda_max_override > R(0)) ? lambda_max_override : R(1.05) * lam_max;
         m_lo = (lambda_min_override > R(0)) ? lambda_min_override : m_hi * lo_ratio;
-        if (m_lo <= R(0)) { m_lo = m_hi * (R(1) / R(30)); }
-        if (m_hi <= m_lo) { m_hi = m_lo * R(2); } // degenerate spectrum guard
+        if (m_lo <= R(0))
+        {
+            m_lo = m_hi * (R(1) / R(30));
+        }
+        if (m_hi <= m_lo) // degenerate spectrum guard
+        {
+            m_hi = m_lo * R(2);
+        }
     }
 
     // z = p_{deg}(A)·r ≈ A⁻¹·r (Chebyshev iteration over [lo, hi]; deg-1 spmv).
@@ -83,24 +89,40 @@ public:
         const auto tmpsp = crd::containers::Span<T>{m_tmp.data(), m_n};
 
         // x_1 = (1/theta)·r   (x_0 = 0 ⇒ residual r_0 = r)
-        for (crd::u32 i = 0; i < m_n; ++i) { m_dx[i] = r[i] * T(R(1) / theta); m_x[i] = m_dx[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_dx[i] = r[i] * T(R(1) / theta);
+            m_x[i] = m_dx[i];
+        }
         R rho = R(1) / sigma;
 
         for (crd::u32 k = 1; k < m_deg; ++k)
         {
             // res = r − A·x
             (void)m_op.apply(crd::containers::ConstSpan<T>{m_x.data(), m_n}, tmpsp);
-            for (crd::u32 i = 0; i < m_n; ++i) { m_res[i] = r[i] - m_tmp[i]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                m_res[i] = r[i] - m_tmp[i];
+            }
 
             const R rho_new = R(1) / (R(2) * sigma - rho);
             // dx = (rho·rho_new)·dx + (2·rho_new/delta)·res
             const T c1 = T(rho * rho_new);
             const T c2 = T(R(2) * rho_new / delta);
-            for (crd::u32 i = 0; i < m_n; ++i) { m_dx[i] = c1 * m_dx[i] + c2 * m_res[i]; }
-            for (crd::u32 i = 0; i < m_n; ++i) { m_x[i] = m_x[i] + m_dx[i]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                m_dx[i] = c1 * m_dx[i] + c2 * m_res[i];
+            }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                m_x[i] = m_x[i] + m_dx[i];
+            }
             rho = rho_new;
         }
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = m_x[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            z[i] = m_x[i];
+        }
         return true;
     }
 
@@ -119,13 +141,25 @@ public:
 private:
     [[nodiscard]] static T cheb_conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
     [[nodiscard]] static R cheb_real(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return v.re; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return v.re;
+        }
+        else
+        {
+            return v;
+        }
     }
 
     // Deterministic power iteration for λmax (fixed non-uniform seed + fixed iters, Rayleigh
@@ -143,7 +177,10 @@ private:
         const auto vsp  = crd::containers::Span<T>{v.data(), m_n};
         const auto avsp = crd::containers::Span<T>{av.data(), m_n};
         R          n0   = crd::hesap::dense::nrm2<T>(crd::containers::ConstSpan<T>{v.data(), m_n});
-        if (n0 > R(0)) { crd::hesap::dense::scal<T>(T(R(1) / n0), vsp); }
+        if (n0 > R(0))
+        {
+            crd::hesap::dense::scal<T>(T(R(1) / n0), vsp);
+        }
 
         R              lam     = R(0);
         const crd::u32 kIters  = 20;
@@ -153,10 +190,16 @@ private:
             (void)m_op.apply(crd::containers::ConstSpan<T>{v.data(), m_n}, avsp); // av = A·v
             // Rayleigh quotient vᴴ·A·v (v normalized ⇒ denominator 1); sequential ⇒ deterministic.
             T num{};
-            for (crd::u32 i = 0; i < m_n; ++i) { num = num + cheb_conj(v[i]) * av[i]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                num = num + cheb_conj(v[i]) * av[i];
+            }
             lam = cheb_real(num);
             const R nrm = crd::hesap::dense::nrm2<T>(crd::containers::ConstSpan<T>{av.data(), m_n});
-            if (nrm < smlnum) { break; }
+            if (nrm < smlnum)
+            {
+                break;
+            }
             crd::hesap::dense::scal<T>(T(R(1) / nrm), avsp);
             crd::hesap::dense::copy<T>(crd::containers::ConstSpan<T>{av.data(), m_n}, vsp);
         }

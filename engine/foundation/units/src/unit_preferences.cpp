@@ -186,7 +186,10 @@ bool parse_value_with_suffix(crd::containers::StringView text,
                              const char* const* suffixes, crd::usize suffix_count,
                              double& out_value, crd::usize& out_unit_idx) noexcept
 {
-    if (text.empty()) { return false; }
+    if (text.empty())
+    {
+        return false;
+    }
     // Find the first non-digit / non-sign / non-decimal / non-exponent character that
     // begins the suffix. Conservative: scan from the right for matching suffix.
     for (crd::usize i = 0; i < suffix_count; ++i)
@@ -200,13 +203,22 @@ bool parse_value_with_suffix(crd::containers::StringView text,
                 // Numeric portion is everything before the suffix.
                 char buf[64] = {};
                 const auto num_len = text.size() - suf.size();
-                if (num_len == 0 || num_len >= sizeof(buf)) { return false; }
-                for (crd::usize j = 0; j < num_len; ++j) { buf[j] = text[j]; }
+                if (num_len == 0 || num_len >= sizeof(buf))
+                {
+                    return false;
+                }
+                for (crd::usize j = 0; j < num_len; ++j)
+                {
+                    buf[j] = text[j];
+                }
                 // Trim trailing whitespace before suffix start.
                 while (num_len > 0 && (buf[num_len - 1] == ' ' || buf[num_len - 1] == '\t')) {}
                 char* end = nullptr;
                 const double v = std::strtod(buf, &end); // NOLINT(cert-err34-c)
-                if (end == buf) { return false; }
+                if (end == buf)
+                {
+                    return false;
+                }
                 out_value = v;
                 out_unit_idx = i;
                 return true;
@@ -215,11 +227,20 @@ bool parse_value_with_suffix(crd::containers::StringView text,
     }
     // No suffix — interpret as bare SI value.
     char buf[64] = {};
-    if (text.size() >= sizeof(buf)) { return false; }
-    for (crd::usize j = 0; j < text.size(); ++j) { buf[j] = text[j]; }
+    if (text.size() >= sizeof(buf))
+    {
+        return false;
+    }
+    for (crd::usize j = 0; j < text.size(); ++j)
+    {
+        buf[j] = text[j];
+    }
     char* end = nullptr;
     const double v = std::strtod(buf, &end); // NOLINT(cert-err34-c)
-    if (end == buf) { return false; }
+    if (end == buf)
+    {
+        return false;
+    }
     out_value = v;
     out_unit_idx = static_cast<crd::usize>(-1); // sentinel = SI
     return true;
@@ -475,11 +496,20 @@ crd::containers::String format_temperature(crd::f32 kelvin, const UnitPreference
     char buf[64] = {};
     constexpr int max_prec = 17;
     const int     prec     = std::min(static_cast<int>(prefs.precision_digits), max_prec);
-    if (prefs.scientific_notation) { (void)std::snprintf(buf, sizeof(buf), "%.*e", prec, display); }
-    else                            { (void)std::snprintf(buf, sizeof(buf), "%.*g", prec, display); }
+    if (prefs.scientific_notation)
+    {
+        (void)std::snprintf(buf, sizeof(buf), "%.*e", prec, display);
+    }
+    else
+    {
+        (void)std::snprintf(buf, sizeof(buf), "%.*g", prec, display);
+    }
     crd::containers::String out(alloc != nullptr ? alloc : crd::memory::default_allocator());
     out.append(buf);
-    if (prefs.include_suffix) { out.append(suffix); }
+    if (prefs.include_suffix)
+    {
+        out.append(suffix);
+    }
     return out;
 }
 
@@ -496,7 +526,10 @@ std::optional<Length<T>> parse_length(crd::containers::StringView text, const Un
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Length<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Length<T>{static_cast<T>(val)};
+    }
     return Length<T>{static_cast<T>(val * kLengthFactor[unit_idx])};
 }
 
@@ -509,7 +542,10 @@ std::optional<Mass<T>> parse_mass(crd::containers::StringView text, const UnitPr
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Mass<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Mass<T>{static_cast<T>(val)};
+    }
     return Mass<T>{static_cast<T>(val * kMassFactor[unit_idx])};
 }
 
@@ -522,7 +558,10 @@ std::optional<Angle<T>> parse_angle(crd::containers::StringView text, const Unit
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Angle<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Angle<T>{static_cast<T>(val)};
+    }
     return Angle<T>{static_cast<T>(val * kAngleFactor[unit_idx])};
 }
 
@@ -535,7 +574,10 @@ std::optional<Velocity<T>> parse_velocity(crd::containers::StringView text, cons
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Velocity<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Velocity<T>{static_cast<T>(val)};
+    }
     return Velocity<T>{static_cast<T>(val * kVelocityFactor[unit_idx])};
 }
 
@@ -548,7 +590,10 @@ std::optional<Force<T>> parse_force(crd::containers::StringView text, const Unit
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Force<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Force<T>{static_cast<T>(val)};
+    }
     return Force<T>{static_cast<T>(val * kForceFactor[unit_idx])};
 }
 
@@ -561,14 +606,20 @@ std::optional<Pressure<T>> parse_pressure(crd::containers::StringView text, cons
     {
         return std::nullopt;
     }
-    if (unit_idx == static_cast<crd::usize>(-1)) { return Pressure<T>{static_cast<T>(val)}; }
+    if (unit_idx == static_cast<crd::usize>(-1))
+    {
+        return Pressure<T>{static_cast<T>(val)};
+    }
     return Pressure<T>{static_cast<T>(val * kPressureFactor[unit_idx])};
 }
 
 std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView text,
                                                      const UnitPreferences& /*prefs*/) noexcept
 {
-    if (text.empty()) { return std::nullopt; }
+    if (text.empty())
+    {
+        return std::nullopt;
+    }
     // Find suffix manually.
     static constexpr const char* kSuffixes[] = {"_kelvin", "_celsius", "_fahrenheit", "_rankine"};
     crd::usize matched = static_cast<crd::usize>(-1);
@@ -585,11 +636,20 @@ std::optional<crd::f32> parse_temperature_to_kelvin(crd::containers::StringView 
         }
     }
     char buf[64] = {};
-    if (num_len == 0 || num_len >= sizeof(buf)) { return std::nullopt; }
-    for (crd::usize j = 0; j < num_len; ++j) { buf[j] = text[j]; }
+    if (num_len == 0 || num_len >= sizeof(buf))
+    {
+        return std::nullopt;
+    }
+    for (crd::usize j = 0; j < num_len; ++j)
+    {
+        buf[j] = text[j];
+    }
     char* end = nullptr;
     const double v = std::strtod(buf, &end); // NOLINT(cert-err34-c)
-    if (end == buf) { return std::nullopt; }
+    if (end == buf)
+    {
+        return std::nullopt;
+    }
     double k = v; // Kelvin
     switch (matched)
     {

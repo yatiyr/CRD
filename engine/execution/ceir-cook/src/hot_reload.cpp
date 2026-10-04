@@ -56,27 +56,48 @@ struct GuardScope
 // valid only while the Context is live). Top-level func ops only (funcs are module-body children).
 void collect_exports(const Generation* g, containers::Array<containers::StringView>& out)
 {
-    if (g == nullptr || g->program.module == nullptr) { return; }
+    if (g == nullptr || g->program.module == nullptr)
+    {
+        return;
+    }
     Context&           ctx  = *g->ctx;
     const Module&      m    = *g->program.module;
     const SymbolTable* syms = m.symbols();
-    if (m.body() == nullptr) { return; }
+    if (m.body() == nullptr)
+    {
+        return;
+    }
     const OpId fk = func::func_kind(ctx);
     for (Block* b = m.body()->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (op->kind() != fk) { continue; }
+            if (op->kind() != fk)
+            {
+                continue;
+            }
             const AttrId nid = op->attr("sym_name");
-            if (!nid.valid()) { continue; }
+            if (!nid.valid())
+            {
+                continue;
+            }
             const AttrValue v = ctx.attr_value(nid);
-            if (v.kind != AttrKind::String && v.kind != AttrKind::SymbolRef) { continue; }
+            if (v.kind != AttrKind::String && v.kind != AttrKind::SymbolRef)
+            {
+                continue;
+            }
             Visibility vis = Visibility::Public; // absent from the table ⇒ conservatively exported
             if (syms != nullptr)
             {
-                if (const SymbolEntry* const e = syms->lookup(v.s)) { vis = e->visibility; }
+                if (const SymbolEntry* const e = syms->lookup(v.s))
+                {
+                    vis = e->visibility;
+                }
             }
-            if (vis == Visibility::Public) { out.push_back(v.s); }
+            if (vis == Visibility::Public)
+            {
+                out.push_back(v.s);
+            }
         }
     }
 }
@@ -100,7 +121,10 @@ ReloadSet::Entry* ReloadSet::find(AssetId id) noexcept
 {
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
-        if (m_entries[i].id == id) { return &m_entries[i]; }
+        if (m_entries[i].id == id)
+        {
+            return &m_entries[i];
+        }
     }
     return nullptr;
 }
@@ -109,7 +133,10 @@ const ReloadSet::Entry* ReloadSet::find(AssetId id) const noexcept
 {
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
-        if (m_entries[i].id == id) { return &m_entries[i]; }
+        if (m_entries[i].id == id)
+        {
+            return &m_entries[i];
+        }
     }
     return nullptr;
 }
@@ -125,7 +152,10 @@ Generation* ReloadSet::alloc_generation()
 
 void ReloadSet::destroy_generation(Generation* g) noexcept
 {
-    if (g == nullptr) { return; }
+    if (g == nullptr)
+    {
+        return;
+    }
     if (g->ctx != nullptr)
     {
         g->ctx->~Context();
@@ -155,18 +185,27 @@ bool ReloadSet::exports_collide(const Generation* cand, AssetId self) const
 {
     containers::Array<containers::StringView> ce(m_alloc);
     collect_exports(cand, ce);
-    if (ce.size() == 0U) { return false; }
+    if (ce.size() == 0U)
+    {
+        return false;
+    }
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
         const Entry& e = m_entries[i];
-        if (e.id == self || e.current == nullptr) { continue; }
+        if (e.id == self || e.current == nullptr)
+        {
+            continue;
+        }
         containers::Array<containers::StringView> oe(m_alloc);
         collect_exports(e.current, oe);
         for (crd::usize a = 0; a < ce.size(); ++a)
         {
             for (crd::usize b = 0; b < oe.size(); ++b)
             {
-                if (ce[a] == oe[b]) { return true; }
+                if (ce[a] == oe[b])
+                {
+                    return true;
+                }
             }
         }
     }
@@ -182,7 +221,10 @@ void ReloadSet::rebuild_graph()
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
         const Entry& e = m_entries[i];
-        if (e.current == nullptr) { continue; }
+        if (e.current == nullptr)
+        {
+            continue;
+        }
         m_dag.add_node(e.id.value);
         m_dag.set_revision(e.id.value, e.content_hash, e.contract_hash); // ⛔ interface rev = contract_hash (dependent-safety)
         containers::Array<containers::StringView> ex(m_alloc);
@@ -197,14 +239,20 @@ void ReloadSet::rebuild_graph()
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
         const Entry& a = m_entries[i];
-        if (a.current == nullptr) { continue; }
+        if (a.current == nullptr)
+        {
+            continue;
+        }
         const DependencyRecord deps = collect_dependencies(*a.current->ctx, *a.current->program.module, m_alloc);
         for (crd::usize c = 0; c < deps.called_funcs.size(); ++c)
         {
             const containers::StringView cn = deps.called_funcs[c];
             for (crd::usize k = 0; k < sym_names.size(); ++k)
             {
-                if (sym_names[k] == cn && sym_owner[k] != a.id.value) { m_dag.add_edge(a.id.value, sym_owner[k]); }
+                if (sym_names[k] == cn && sym_owner[k] != a.id.value)
+                {
+                    m_dag.add_edge(a.id.value, sym_owner[k]);
+                }
             }
         }
     }
@@ -212,18 +260,30 @@ void ReloadSet::rebuild_graph()
 
 AddResult ReloadSet::add(AssetId id, containers::ConstSpan<crd::u8> blob)
 {
-    if (m_reloading) { return AddResult{AddError::Reentrant}; } // ⛔ RAF-11: a mutation from inside a registrar/fn
+    if (m_reloading) // ⛔ RAF-11: a mutation from inside a registrar/fn
+    {
+        return AddResult{AddError::Reentrant};
+    }
     const GuardScope gs(m_reloading);
     return add_impl(id, blob);
 }
 
 AddResult ReloadSet::add_impl(AssetId id, containers::ConstSpan<crd::u8> blob)
 {
-    if (id.value == 0U) { return AddResult{AddError::InvalidAssetId, LoadError::Ok}; } // the dag silently drops node 0
-    if (find(id) != nullptr) { return AddResult{AddError::AlreadyPresent, LoadError::Ok}; }
+    if (id.value == 0U) // the dag silently drops node 0
+    {
+        return AddResult{AddError::InvalidAssetId, LoadError::Ok};
+    }
+    if (find(id) != nullptr)
+    {
+        return AddResult{AddError::AlreadyPresent, LoadError::Ok};
+    }
     LoadError         le   = LoadError::Ok;
     Generation* const cand = load_generation(blob, le);
-    if (cand == nullptr) { return AddResult{AddError::LoadFailed, le}; }
+    if (cand == nullptr)
+    {
+        return AddResult{AddError::LoadFailed, le};
+    }
     if (exports_collide(cand, id))
     {
         destroy_generation(cand);
@@ -243,7 +303,10 @@ AddResult ReloadSet::add_impl(AssetId id, containers::ConstSpan<crd::u8> blob)
 
 ReloadResult ReloadSet::reload(AssetId id, containers::ConstSpan<crd::u8> blob)
 {
-    if (m_reloading) { return ReloadResult{.load_ok = false, .reentrant = true}; } // ⛔ RAF-11 reentrant guard
+    if (m_reloading) // ⛔ RAF-11 reentrant guard
+    {
+        return ReloadResult{.load_ok = false, .reentrant = true};
+    }
     const GuardScope gs(m_reloading);
     return reload_impl(id, blob);
 }
@@ -251,20 +314,38 @@ ReloadResult ReloadSet::reload(AssetId id, containers::ConstSpan<crd::u8> blob)
 ReloadResult ReloadSet::reload_impl(AssetId id, containers::ConstSpan<crd::u8> blob)
 {
     Entry* const e = find(id);
-    if (e == nullptr) { return ReloadResult{.load_ok = false}; } // absent — no-op
+    if (e == nullptr) // absent — no-op
+    {
+        return ReloadResult{.load_ok = false};
+    }
     LoadError         le   = LoadError::Ok;
     Generation* const cand = load_generation(blob, le);
-    if (cand == nullptr) { return ReloadResult{.load_ok = false, .load_error = le}; }
+    if (cand == nullptr)
+    {
+        return ReloadResult{.load_ok = false, .load_error = le};
+    }
 
     const crd::u64 nc = cand->program.content_hash;
     const crd::u64 ni = cand->program.interface_hash;
     const crd::u64 nk = contract_hash(*cand->ctx, *cand->program.module, m_alloc);
 
     ReloadDecision dec;
-    if (nc == e->content_hash) { dec = ReloadDecision::NoChange; }
-    else if (ni == e->interface_hash) { dec = ReloadDecision::HotSwap; }
-    else if (nk == e->contract_hash) { dec = ReloadDecision::NeedsMigration; } // only the §20 state schema changed → stage 3
-    else { dec = ReloadDecision::ContractChange; }
+    if (nc == e->content_hash)
+    {
+        dec = ReloadDecision::NoChange;
+    }
+    else if (ni == e->interface_hash)
+    {
+        dec = ReloadDecision::HotSwap;
+    }
+    else if (nk == e->contract_hash) // only the §20 state schema changed → stage 3
+    {
+        dec = ReloadDecision::NeedsMigration;
+    }
+    else
+    {
+        dec = ReloadDecision::ContractChange;
+    }
 
     ReloadResult r;
     r.decision = dec;
@@ -303,7 +384,10 @@ bool ReloadSet::cook_source(AssetId id, containers::StringView source, container
     CookResult cr = cook_program_text(*cctx, source, id.value, m_alloc, m_alloc);
     out_cook       = cr.error;
     const bool cok = cr.ok();
-    if (cok) { out_blob = std::move(cr.blob); } // move out BEFORE the cook Context dies (bytes are m_alloc-owned)
+    if (cok) // move out BEFORE the cook Context dies (bytes are m_alloc-owned)
+    {
+        out_blob = std::move(cr.blob);
+    }
     cctx->~Context();
     m_alloc->deallocate(cctx);
     return cok;
@@ -311,31 +395,49 @@ bool ReloadSet::cook_source(AssetId id, containers::StringView source, container
 
 AddResult ReloadSet::add_source(AssetId id, containers::StringView source)
 {
-    if (m_reloading) { return AddResult{AddError::Reentrant}; }
+    if (m_reloading)
+    {
+        return AddResult{AddError::Reentrant};
+    }
     const GuardScope           gs(m_reloading);
     containers::Array<crd::u8> blob(m_alloc);
     CookError                  ce = CookError::Ok;
-    if (!cook_source(id, source, blob, ce)) { return AddResult{AddError::CookFailed, LoadError::Ok, ce}; }
+    if (!cook_source(id, source, blob, ce))
+    {
+        return AddResult{AddError::CookFailed, LoadError::Ok, ce};
+    }
     return add_impl(id, containers::ConstSpan<crd::u8>(blob.data(), blob.size()));
 }
 
 ReloadResult ReloadSet::reload_source(AssetId id, containers::StringView source)
 {
-    if (m_reloading) { return ReloadResult{.load_ok = false, .reentrant = true}; }
+    if (m_reloading)
+    {
+        return ReloadResult{.load_ok = false, .reentrant = true};
+    }
     const GuardScope           gs(m_reloading);
     containers::Array<crd::u8> blob(m_alloc);
     CookError                  ce = CookError::Ok;
-    if (!cook_source(id, source, blob, ce)) { return ReloadResult{.load_ok = false, .cook_error = ce}; }
+    if (!cook_source(id, source, blob, ce))
+    {
+        return ReloadResult{.load_ok = false, .cook_error = ce};
+    }
     return reload_impl(id, containers::ConstSpan<crd::u8>(blob.data(), blob.size()));
 }
 
 void ReloadSet::remove(AssetId id)
 {
-    if (m_reloading) { return; } // ⛔ RAF-11 reentrant guard — a remove from inside a registrar/fn is ignored
+    if (m_reloading) // ⛔ RAF-11 reentrant guard — a remove from inside a registrar/fn is ignored
+    {
+        return;
+    }
     const GuardScope gs(m_reloading);
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
-        if (m_entries[i].id != id) { continue; }
+        if (m_entries[i].id != id)
+        {
+            continue;
+        }
         destroy_generation(m_entries[i].zombie);
         destroy_generation(m_entries[i].current);
         m_entries[i] = m_entries[m_entries.size() - 1U]; // swap-with-last (entry order is irrelevant)
@@ -386,15 +488,24 @@ bool ReloadSet::affected(AssetId id, containers::Array<AssetId>& out) const
 {
     out.clear();
     containers::Array<crd::u64> ids(m_alloc);
-    if (!m_dag.affected_by(id.value, ids)) { return false; } // a cycle
-    for (crd::usize i = 0; i < ids.size(); ++i) { out.push_back(AssetId{ids[i]}); }
+    if (!m_dag.affected_by(id.value, ids)) // a cycle
+    {
+        return false;
+    }
+    for (crd::usize i = 0; i < ids.size(); ++i)
+    {
+        out.push_back(AssetId{ids[i]});
+    }
     return true;
 }
 
 void ReloadSet::register_migration(AssetId id, MigrationFn fn, void* user)
 {
     Entry* const e = find(id); // register AFTER add; a no-op if absent (a re-added asset is a new contract)
-    if (e == nullptr) { return; }
+    if (e == nullptr)
+    {
+        return;
+    }
     e->migration_fn   = fn; // last-registration-wins (a deliberate re-register flow, not a silent drop)
     e->migration_user = user;
 }
@@ -402,7 +513,10 @@ void ReloadSet::register_migration(AssetId id, MigrationFn fn, void* user)
 Migration ReloadSet::migration(AssetId id) const
 {
     const Entry* const e = find(id);
-    if (e == nullptr) { return Migration{}; }
+    if (e == nullptr)
+    {
+        return Migration{};
+    }
     return Migration{e->migration_fn, e->migration_user};
 }
 
@@ -411,7 +525,10 @@ crd::u32 migrate_state(const exec::Interpreter& old_in, exec::Interpreter& new_i
 {
     containers::Array<exec::StateSnapshot> cells(scratch);
     old_in.snapshot_state_by_id(cells, scratch);
-    if (fn != nullptr && !fn(cells, user)) { return 0U; } // REFUSED → restore nothing (the new session init-fills)
+    if (fn != nullptr && !fn(cells, user)) // REFUSED → restore nothing (the new session init-fills)
+    {
+        return 0U;
+    }
     return new_in.restore_state_by_id(new_module, containers::ConstSpan<exec::StateSnapshot>(cells.data(), cells.size()));
 }
 } // namespace crd::ceir::cook

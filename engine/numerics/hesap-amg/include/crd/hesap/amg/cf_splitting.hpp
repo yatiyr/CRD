@@ -60,7 +60,10 @@ rs_cf_split(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sparse
     {
         state[i]  = kUndecided;
         lambda[i] = static_cast<crd::i32>(sto[i + 1] - sto[i]); // |Sᵀ row i|
-        if (lambda[i] > maxlam) { maxlam = lambda[i]; }
+        if (lambda[i] > maxlam)
+        {
+            maxlam = lambda[i];
+        }
     }
 
     // Bucketed max-priority: bucket[v] = doubly-linked list of undecided points with λ==v.
@@ -71,40 +74,81 @@ rs_cf_split(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sparse
     (void)maxlam;
     crd::containers::Array<crd::i32> head(alloc), nxt(alloc), prv(alloc);
     head.resize(nb); nxt.resize(n == 0 ? 1 : n); prv.resize(n == 0 ? 1 : n);
-    for (crd::u32 v = 0; v < nb; ++v) { head[v] = -1; }
+    for (crd::u32 v = 0; v < nb; ++v)
+    {
+        head[v] = -1;
+    }
     auto bucket_push = [&](crd::u32 i) {
         const crd::i32 v = lambda[i] < 0 ? 0 : lambda[i];
         nxt[i] = head[v]; prv[i] = -1;
-        if (head[v] >= 0) { prv[head[v]] = static_cast<crd::i32>(i); }
+        if (head[v] >= 0)
+        {
+            prv[head[v]] = static_cast<crd::i32>(i);
+        }
         head[v] = static_cast<crd::i32>(i);
     };
     auto bucket_remove = [&](crd::u32 i) {
         const crd::i32 v = lambda[i] < 0 ? 0 : lambda[i];
-        if (prv[i] >= 0) { nxt[prv[i]] = nxt[i]; } else { head[v] = nxt[i]; }
-        if (nxt[i] >= 0) { prv[nxt[i]] = prv[i]; }
+        if (prv[i] >= 0)
+        {
+            nxt[prv[i]] = nxt[i];
+        }
+        else
+        {
+            head[v] = nxt[i];
+        }
+        if (nxt[i] >= 0)
+        {
+            prv[nxt[i]] = prv[i];
+        }
     };
-    for (crd::u32 i = 0; i < n; ++i) { if (state[i] == kUndecided && lambda[i] > 0) { bucket_push(i); } }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        if (state[i] == kUndecided && lambda[i] > 0)
+        {
+            bucket_push(i);
+        }
+    }
 
     crd::u32 cur_max = (maxlam > 0) ? static_cast<crd::u32>(maxlam) : 0;
     auto bump = [&](crd::u32 k, crd::i32 delta) {
-        if (state[k] != kUndecided || lambda[k] <= 0) { lambda[k] += delta; return; } // not in a bucket
+        if (state[k] != kUndecided || lambda[k] <= 0) // not in a bucket
+        {
+            lambda[k] += delta;
+            return;
+        }
         bucket_remove(k);
         lambda[k] += delta;
         if (lambda[k] > 0)
         {
             bucket_push(k);
-            if (static_cast<crd::u32>(lambda[k]) > cur_max) { cur_max = static_cast<crd::u32>(lambda[k]); }
+            if (static_cast<crd::u32>(lambda[k]) > cur_max)
+            {
+                cur_max = static_cast<crd::u32>(lambda[k]);
+            }
         }
     };
 
     crd::u32 n_coarse = 0;
     for (;;)
     {
-        while (cur_max > 0 && head[cur_max] < 0) { --cur_max; }
-        if (cur_max == 0) { break; } // no undecided point with λ>0 left
+        while (cur_max > 0 && head[cur_max] < 0)
+        {
+            --cur_max;
+        }
+        if (cur_max == 0) // no undecided point with λ>0 left
+        {
+            break;
+        }
         // lowest-index point in the top bucket (deterministic tie-break).
         crd::i32 pick = -1;
-        for (crd::i32 c = head[cur_max]; c >= 0; c = nxt[c]) { if (pick < 0 || c < pick) { pick = c; } }
+        for (crd::i32 c = head[cur_max]; c >= 0; c = nxt[c])
+        {
+            if (pick < 0 || c < pick)
+            {
+                pick = c;
+            }
+        }
         const crd::u32 i = static_cast<crd::u32>(pick);
         bucket_remove(i);
         state[i] = kCmark;
@@ -113,20 +157,29 @@ rs_cf_split(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sparse
         for (crd::u32 q = sto[i]; q < sto[i + 1]; ++q)
         {
             const crd::u32 j = sti[q];
-            if (state[j] != kUndecided) { continue; }
+            if (state[j] != kUndecided)
+            {
+                continue;
+            }
             bucket_remove(j);
             state[j] = kFmark;
             for (crd::u32 r = so[j]; r < so[j + 1]; ++r)
             {
                 const crd::u32 k = si[r];
-                if (state[k] == kUndecided) { bump(k, +1); }
+                if (state[k] == kUndecided)
+                {
+                    bump(k, +1);
+                }
             }
         }
         // points i depends on become slightly less valuable.
         for (crd::u32 q = so[i]; q < so[i + 1]; ++q)
         {
             const crd::u32 j = si[q];
-            if (state[j] == kUndecided) { bump(j, -1); }
+            if (state[j] == kUndecided)
+            {
+                bump(j, -1);
+            }
         }
     }
 
@@ -141,10 +194,25 @@ rs_cf_split(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sparse
         changed = false;
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if (state[i] == kCmark || so[i] == so[i + 1]) { continue; } // C, or no strong deps
+            if (state[i] == kCmark || so[i] == so[i + 1]) // C, or no strong deps
+            {
+                continue;
+            }
             bool has_c = false;
-            for (crd::u32 q = so[i]; q < so[i + 1]; ++q) { if (state[si[q]] == kCmark) { has_c = true; break; } }
-            if (!has_c) { state[i] = kCmark; ++n_coarse; changed = true; }
+            for (crd::u32 q = so[i]; q < so[i + 1]; ++q)
+            {
+                if (state[si[q]] == kCmark)
+                {
+                    has_c = true;
+                    break;
+                }
+            }
+            if (!has_c)
+            {
+                state[i] = kCmark;
+                ++n_coarse;
+                changed = true;
+            }
         }
     }
 

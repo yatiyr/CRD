@@ -67,7 +67,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 void make_quad(crd::containers::Array<Vec3<f32>>& pos,
@@ -78,7 +81,10 @@ void make_quad(crd::containers::Array<Vec3<f32>>& pos,
     pos.push_back(Vec3<f32>{1, 1, 0});
     pos.push_back(Vec3<f32>{0, 1, 0});
     const u32 tris[] = {0, 1, 2,  0, 2, 3};
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 template <typename T>
@@ -87,7 +93,10 @@ T signed_volume(const HalfEdgeMesh<T>& m)
     T vol = T{0};
     for (u32 f = 0; f < m.face_pool_size(); ++f)
     {
-        if (!m.face_alive(f)) { continue; }
+        if (!m.face_alive(f))
+        {
+            continue;
+        }
         const u32 h0 = m.face(f).first_he;
         const u32 h1 = m.he(h0).next;
         const u32 h2 = m.he(h1).next;
@@ -176,7 +185,10 @@ TEST_CASE("taubin_smooth: n_iterations=0 returns clone of input",
     // Vertices unchanged (no iterations).
     for (u32 v = 0; v < out.vertex_pool_size(); ++v)
     {
-        if (!out.vertex_alive(v)) { continue; }
+        if (!out.vertex_alive(v))
+        {
+            continue;
+        }
         const auto& p_in = m.vertex(v).position;
         const auto& p_out = out.vertex(v).position;
         CHECK(p_in.x == p_out.x);
@@ -290,7 +302,10 @@ TEST_CASE("taubin_smooth: determinism - same input -> byte-identical positions",
     REQUIRE(out_a.vertex_pool_size() == out_b.vertex_pool_size());
     for (u32 v = 0; v < out_a.vertex_pool_size(); ++v)
     {
-        if (!out_a.vertex_alive(v)) { continue; }
+        if (!out_a.vertex_alive(v))
+        {
+            continue;
+        }
         REQUIRE(out_b.vertex_alive(v));
         const auto& pa = out_a.vertex(v).position;
         const auto& pb = out_b.vertex(v).position;
@@ -322,7 +337,10 @@ TEST_CASE("taubin_smooth: f64 precision tier",
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
     HalfEdgeMesh<f64> m{&f.alloc};
     REQUIRE(m.build_from(crd::containers::ConstSpan<Vec3<f64>>{pos.data(), pos.size()},
                           crd::containers::ConstSpan<u32>{idx.data(), idx.size()})

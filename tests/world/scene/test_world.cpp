@@ -114,9 +114,13 @@ TEST_CASE("Iteration after destroy/flush only yields surviving entities", "[scen
     {
         ++count;
         if (e == a)
+        {
             saw_a = true;
+        }
         if (e == c)
+        {
             saw_c = true;
+        }
         CHECK_FALSE(e == b);
     }
     CHECK(count == 2);

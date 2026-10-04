@@ -284,7 +284,9 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
                 const crd::f64 d = x[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
+                {
                     max_err = ad;
+                }
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",
@@ -383,7 +385,9 @@ void bench_qr(crd::memory::IAllocator* alloc)
                 const crd::f64 d = bx[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
+                {
                     max_err = ad;
+                }
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",
@@ -482,7 +486,9 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
                 const crd::f64 d = x[i] - ex(i);
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
+                {
                     max_err = ad;
+                }
             }
         }
         std::fprintf(stdout, "%-12s | %-6zu | %8.2f (iters=%-4d)      | %8.2f (iters=%-4d)      | %.2fx     | %.2e\n",

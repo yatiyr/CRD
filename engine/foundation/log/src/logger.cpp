@@ -30,7 +30,10 @@ namespace
 usize next_pow2_at_least(usize n) noexcept
 {
     usize p = 1;
-    while (p < n) { p <<= 1U; }
+    while (p < n)
+    {
+        p <<= 1U;
+    }
     return p;
 }
 

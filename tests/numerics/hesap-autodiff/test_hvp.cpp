@@ -31,8 +31,14 @@ struct F1
         using crd::math::exp;
         using crd::math::sin;
         S acc = exp(x[0]);
-        for (int i = 1; i < n; ++i) { acc = acc + x[i - 1] * x[i]; }
-        for (int i = 0; i < n; ++i) { acc = acc + sin(x[i]); }
+        for (int i = 1; i < n; ++i)
+        {
+            acc = acc + x[i - 1] * x[i];
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            acc = acc + sin(x[i]);
+        }
         return acc;
     }
 };
@@ -44,7 +50,10 @@ struct FQuad
     S operator()(const S* x, int n) const
     {
         S acc = 0.5 * g_a[0] * x[0] * x[0] + g_b[0] * x[0];
-        for (int i = 1; i < n; ++i) { acc = acc + 0.5 * g_a[i] * x[i] * x[i] + g_b[i] * x[i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            acc = acc + 0.5 * g_a[i] * x[i] * x[i] + g_b[i] * x[i];
+        }
         return acc;
     }
 };
@@ -56,7 +65,11 @@ struct FConv
     {
         S d0  = x[0] - g_t[0];
         S acc = d0 * d0 + 0.1 * x[0] * x[0] * x[0] * x[0];
-        for (int i = 1; i < n; ++i) { S d = x[i] - g_t[i]; acc = acc + d * d + 0.1 * x[i] * x[i] * x[i] * x[i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            S d = x[i] - g_t[i];
+            acc = acc + d * d + 0.1 * x[i] * x[i] * x[i] * x[i];
+        }
         return acc;
     }
 };
@@ -70,7 +83,11 @@ TEST_CASE("v16-e: forward-over-reverse HVP == hyper-dual H*v == FD, deterministi
     rev::RVar<D>               scr[n];
     f64                        x[n];
     f64                        v[n];
-    for (int i = 0; i < n; ++i) { x[i] = 0.3 + 0.2 * std::sin(1.0 + i); v[i] = 0.5 * std::cos(0.4 + i); }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = 0.3 + 0.2 * std::sin(1.0 + i);
+        v[i] = 0.5 * std::cos(0.4 + i);
+    }
 
     f64 grad[n];
     f64 hv[n];
@@ -90,13 +107,19 @@ TEST_CASE("v16-e: forward-over-reverse HVP == hyper-dual H*v == FD, deterministi
     for (int i = 0; i < n; ++i)
     {
         f64 s = 0.0;
-        for (int j = 0; j < n; ++j) { s += hess[i * n + j] * v[j]; }
+        for (int j = 0; j < n; ++j)
+        {
+            s += hess[i * n + j] * v[j];
+        }
         CHECK_THAT(hv[i], WithinAbs(s, 1e-9));
     }
     // curvature vᵀHv in one pass
     const f64 curv = fwd::curvature<n>(F1{}, x, v);
     f64       v_hv  = 0.0;
-    for (int i = 0; i < n; ++i) { v_hv += v[i] * hv[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        v_hv += v[i] * hv[i];
+    }
     CHECK_THAT(v_hv, WithinAbs(curv, 1e-9));
 
     // grad-part == central FD of f
@@ -120,16 +143,27 @@ TEST_CASE("v16-e: forward-over-reverse HVP == hyper-dual H*v == FD, deterministi
     f64       xp[n];
     f64       xm[n];
     const f64 e = 1e-6;
-    for (int i = 0; i < n; ++i) { xp[i] = x[i] + e * v[i]; xm[i] = x[i] - e * v[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        xp[i] = x[i] + e * v[i];
+        xm[i] = x[i] - e * v[i];
+    }
     rev::hvp(F1{}, {xp, n}, {zeros, n}, {gp, n}, {dummy, n}, tape, {scr, n});
     rev::hvp(F1{}, {xm, n}, {zeros, n}, {gm, n}, {dummy, n}, tape, {scr, n});
-    for (int i = 0; i < n; ++i) { CHECK_THAT(hv[i], WithinAbs((gp[i] - gm[i]) / (2.0 * e), 1e-5)); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK_THAT(hv[i], WithinAbs((gp[i] - gm[i]) / (2.0 * e), 1e-5));
+    }
 }
 
 TEST_CASE("v16-e: Newton-CG (HVP-based, Hessian-free) solves a quadratic EXACTLY in one step", "[autodiff][reverse][hvp]")
 {
     constexpr int n = 5;
-    for (int i = 0; i < n; ++i) { g_a[i] = 1.0 + 0.5 * i; g_b[i] = -0.3 + 0.2 * i; }
+    for (int i = 0; i < n; ++i)
+    {
+        g_a[i] = 1.0 + 0.5 * i;
+        g_b[i] = -0.3 + 0.2 * i;
+    }
     crd::memory::TlsfAllocator alloc(4 << 20);
     rev::RTape<D>              tape(&alloc);
     rev::RVar<D>               scr[n];
@@ -139,17 +173,26 @@ TEST_CASE("v16-e: Newton-CG (HVP-based, Hessian-free) solves a quadratic EXACTLY
     f64                        r[n];
     f64                        d[n];
     f64                        p[n];
-    for (int i = 0; i < n; ++i) { x[i] = 2.0 + i; }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = 2.0 + i;
+    }
     const f64 gn = rev::newton_cg_step(FQuad{}, {x, n}, n + 2, 1e-14, tape, {scr, n}, {g, n}, {hv, n}, {r, n},
                                        {d, n}, {p, n});
     CHECK(gn < 1e-16); // exact Newton on a quadratic: gradient vanishes in ONE step
-    for (int i = 0; i < n; ++i) { CHECK_THAT(x[i], WithinAbs(-g_b[i] / g_a[i], 1e-9)); } // reached the minimiser
+    for (int i = 0; i < n; ++i) // reached the minimiser
+    {
+        CHECK_THAT(x[i], WithinAbs(-g_b[i] / g_a[i], 1e-9));
+    }
 }
 
 TEST_CASE("v16-e: Newton-CG drives a convex non-quadratic to a vanishing gradient", "[autodiff][reverse][hvp]")
 {
     constexpr int n = 4;
-    for (int i = 0; i < n; ++i) { g_t[i] = 0.5 + 0.3 * i; }
+    for (int i = 0; i < n; ++i)
+    {
+        g_t[i] = 0.5 + 0.3 * i;
+    }
     crd::memory::TlsfAllocator alloc(4 << 20);
     rev::RTape<D>              tape(&alloc);
     rev::RVar<D>               scr[n];
@@ -159,7 +202,10 @@ TEST_CASE("v16-e: Newton-CG drives a convex non-quadratic to a vanishing gradien
     f64                        r[n];
     f64                        d[n];
     f64                        p[n];
-    for (int i = 0; i < n; ++i) { x[i] = g_t[i] + 1.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = g_t[i] + 1.0;
+    }
     f64 gn = 1.0;
     for (int step = 0; step < 12; ++step)
     {

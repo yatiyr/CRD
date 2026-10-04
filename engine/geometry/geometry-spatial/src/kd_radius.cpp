@@ -85,8 +85,14 @@ void kd_radius_impl(const KdTree<T>&                       tree,
 
         // Push so RIGHT pops AFTER LEFT (LIFO): push right first.
         CRD_ASSERT(sp + 2U <= k_max_kd_depth * 2U);
-        if (visit_right) { stack[sp++] = right; }
-        if (visit_left)  { stack[sp++] = left;  }
+        if (visit_right)
+        {
+            stack[sp++] = right;
+        }
+        if (visit_left)
+        {
+            stack[sp++] = left;
+        }
     }
 }
 

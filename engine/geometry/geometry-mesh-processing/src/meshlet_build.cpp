@@ -62,8 +62,14 @@ void build_adjacency(const crd::u32* indices, crd::u32 tri_count, crd::u32 /*ver
 
     // Sort edges by (v0, v1) for pairing
     auto less = [](const EdgeEntry& a, const EdgeEntry& b) {
-        if (a.v0 != b.v0) return a.v0 < b.v0;
-        if (a.v1 != b.v1) return a.v1 < b.v1;
+        if (a.v0 != b.v0)
+        {
+            return a.v0 < b.v0;
+        }
+        if (a.v1 != b.v1)
+        {
+            return a.v1 < b.v1;
+        }
         return a.tri < b.tri;
     };
 
@@ -100,14 +106,27 @@ void build_adjacency(const crd::u32* indices, crd::u32 tri_count, crd::u32 /*ver
                 while (i < mid && j < hi)
                 {
                     if (less(edges[i], edges[j]))
+                    {
                         tmp[k++] = edges[i++];
+                    }
                     else
+                    {
                         tmp[k++] = edges[j++];
+                    }
                 }
-                while (i < mid) tmp[k++] = edges[i++];
-                while (j < hi)  tmp[k++] = edges[j++];
+                while (i < mid)
+                {
+                    tmp[k++] = edges[i++];
+                }
+                while (j < hi)
+                {
+                    tmp[k++] = edges[j++];
+                }
             }
-            for (crd::u32 i = 0; i < n; ++i) edges[i] = tmp[i];
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                edges[i] = tmp[i];
+            }
         }
     }
 
@@ -162,13 +181,19 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
 
     crd::containers::Array<crd::u8> tri_used(scratch);
     tri_used.resize(tri_count);
-    for (crd::u32 i = 0; i < tri_count; ++i) tri_used[i] = 0U;
+    for (crd::u32 i = 0; i < tri_count; ++i)
+    {
+        tri_used[i] = 0U;
+    }
 
     // Per-vertex: which meshlet slot it occupies (reset per meshlet)
     crd::containers::Array<crd::u32> vert_slot(scratch);
     vert_slot.resize(vertex_count);
     constexpr crd::u32 no_slot = ~0U;
-    for (crd::u32 i = 0; i < vertex_count; ++i) vert_slot[i] = no_slot;
+    for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
+        vert_slot[i] = no_slot;
+    }
 
     // Frontier: triangles adjacent to current meshlet, scored by vertex reuse
     crd::containers::Array<crd::u32> frontier(scratch);
@@ -181,11 +206,17 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
     // Per-vertex generation to avoid resetting the whole vert_slot array each meshlet
     crd::containers::Array<crd::u32> vert_gen(scratch);
     vert_gen.resize(vertex_count);
-    for (crd::u32 i = 0; i < vertex_count; ++i) vert_gen[i] = 0U;
+    for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
+        vert_gen[i] = 0U;
+    }
 
     for (crd::u32 seed = 0; seed < tri_count; ++seed)
     {
-        if (tri_used[seed] != 0U) continue;
+        if (tri_used[seed] != 0U)
+        {
+            continue;
+        }
 
         ++meshlet_gen;
         cur_verts.clear();
@@ -223,9 +254,16 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
                     bool already = false;
                     for (crd::u32 fi = 0; fi < frontier.size(); ++fi)
                     {
-                        if (frontier[fi] == nb) { already = true; break; }
+                        if (frontier[fi] == nb)
+                        {
+                            already = true;
+                            break;
+                        }
                     }
-                    if (!already) frontier.push_back(nb);
+                    if (!already)
+                    {
+                        frontier.push_back(nb);
+                    }
                 }
             }
         };
@@ -255,11 +293,35 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
 
                 crd::u32 reuse = 0U;
                 crd::u32 nv    = 0U;
-                if (vert_gen[i0] == meshlet_gen) ++reuse; else ++nv;
-                if (vert_gen[i1] == meshlet_gen) ++reuse; else ++nv;
-                if (vert_gen[i2] == meshlet_gen) ++reuse; else ++nv;
+                if (vert_gen[i0] == meshlet_gen)
+                {
+                    ++reuse;
+                }
+                else
+                {
+                    ++nv;
+                }
+                if (vert_gen[i1] == meshlet_gen)
+                {
+                    ++reuse;
+                }
+                else
+                {
+                    ++nv;
+                }
+                if (vert_gen[i2] == meshlet_gen)
+                {
+                    ++reuse;
+                }
+                else
+                {
+                    ++nv;
+                }
 
-                if (cur_vc + nv > max_v) continue;
+                if (cur_vc + nv > max_v)
+                {
+                    continue;
+                }
 
                 if (reuse > best_score || (reuse == best_score && nv < best_new_verts))
                 {
@@ -274,15 +336,27 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
                 bool found = false;
                 for (crd::u32 fi = 0; fi < frontier.size(); ++fi)
                 {
-                    if (tri_used[frontier[fi]] != 0U) continue;
+                    if (tri_used[frontier[fi]] != 0U)
+                    {
+                        continue;
+                    }
                     const crd::u32 t  = frontier[fi];
                     const crd::u32 i0 = indices[t * 3 + 0];
                     const crd::u32 i1 = indices[t * 3 + 1];
                     const crd::u32 i2 = indices[t * 3 + 2];
                     crd::u32 nv = 0U;
-                    if (vert_gen[i0] != meshlet_gen) ++nv;
-                    if (vert_gen[i1] != meshlet_gen) ++nv;
-                    if (vert_gen[i2] != meshlet_gen) ++nv;
+                    if (vert_gen[i0] != meshlet_gen)
+                    {
+                        ++nv;
+                    }
+                    if (vert_gen[i1] != meshlet_gen)
+                    {
+                        ++nv;
+                    }
+                    if (vert_gen[i2] != meshlet_gen)
+                    {
+                        ++nv;
+                    }
                     if (cur_vc + nv <= max_v)
                     {
                         best_idx = fi;
@@ -290,7 +364,10 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
                         break;
                     }
                 }
-                if (!found) break;
+                if (!found)
+                {
+                    break;
+                }
             }
 
             if (best_idx < frontier.size() && tri_used[frontier[best_idx]] == 0U)
@@ -314,9 +391,13 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
         m.triangle_count  = static_cast<crd::u8>(cur_tc);
         out.meshlets.push_back(m);
         for (crd::u32 i = 0; i < cur_verts.size(); ++i)
+        {
             out.meshlet_vertices.push_back(cur_verts[i]);
+        }
         for (crd::u32 i = 0; i < cur_tris.size(); ++i)
+        {
             out.meshlet_triangles.push_back(cur_tris[i]);
+        }
     }
 
     out.total_triangles = tri_count;
@@ -328,7 +409,9 @@ MeshletBuildReport build_meshlets(const crd::f32* /*positions*/, crd::u32 vertex
     {
         crd::u32 total_vert_refs = 0U;
         for (crd::u32 i = 0; i < out.meshlets.size(); ++i)
+        {
             total_vert_refs += out.meshlets[i].vertex_count;
+        }
         report.avg_vertex_reuse = total_vert_refs > 0U
                                       ? static_cast<crd::f32>(tri_count * 3U) /
                                             static_cast<crd::f32>(total_vert_refs)

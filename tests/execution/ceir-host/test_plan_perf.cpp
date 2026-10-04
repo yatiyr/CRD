@@ -78,7 +78,10 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a straight-line plan (exact d
     CHECK(prof.dispatch[static_cast<u8>(plan::Op::ConstI)] == 2U);
     CHECK(prof.dispatch[static_cast<u8>(plan::Op::AddI)] == 1U);
     CHECK(prof.depth_overflow == 0U);
-    for (crd::u32 i = 0; i < host::PlanProfile::kMaxOps; ++i) { CHECK(prof.self_s[i] >= 0.0); } // non-negative (monotonic)
+    for (crd::u32 i = 0; i < host::PlanProfile::kMaxOps; ++i) // non-negative (monotonic)
+    {
+        CHECK(prof.self_s[i] >= 0.0);
+    }
 
 #if CRD_PERF_ENABLED
     // the published counters read back (same name -> same interned CounterId -> same value).

@@ -104,7 +104,10 @@ void project_and_render(crd::memory::TlsfAllocator& alloc, crd::containers::Arra
     // depth sort (slot 12), nearest-first
     crd::containers::Array<int> ord(&alloc);
     ord.resize(static_cast<crd::usize>(ns), 0);
-    for (int i = 0; i < ns; ++i) { ord[static_cast<crd::usize>(i)] = i; }
+    for (int i = 0; i < ns; ++i)
+    {
+        ord[static_cast<crd::usize>(i)] = i;
+    }
     for (int i = 1; i < ns; ++i)
     {
         const int    key = ord[static_cast<crd::usize>(i)];
@@ -123,7 +126,10 @@ void project_and_render(crd::memory::TlsfAllocator& alloc, crd::containers::Arra
     sorted.resize(static_cast<crd::usize>(ns) * 19U, 0.0);
     for (int i = 0; i < ns; ++i)
     {
-        for (int k = 0; k < 19; ++k) { sorted[static_cast<crd::usize>(i) * 19U + static_cast<crd::usize>(k)] = prep[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 19U + static_cast<crd::usize>(k)]; }
+        for (int k = 0; k < 19; ++k)
+        {
+            sorted[static_cast<crd::usize>(i) * 19U + static_cast<crd::usize>(k)] = prep[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 19U + static_cast<crd::usize>(k)];
+        }
     }
 
     kir::gsplat::Gsplat2dRenderConfig rcfg;
@@ -211,7 +217,10 @@ TEST_CASE("ckir 2dgs render: SLANTED surfel gives a per-pixel depth gradient (th
     for (int x = 12; x <= 20; ++x)
     {
         const double t = at(x, 16, 3);
-        if (t > 0.9) { continue; } // only pixels the surfel actually covers
+        if (t > 0.9) // only pixels the surfel actually covers
+        {
+            continue;
+        }
         const double dx  = (static_cast<double>(x) + 0.5 - cx) / fx;
         const double lam = ll / (dx + 1.0);
         CHECK(crd::math::abs(sd(x, 16) - lam) < 2.0e-2);

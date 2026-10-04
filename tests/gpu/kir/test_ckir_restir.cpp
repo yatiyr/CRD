@@ -24,10 +24,17 @@ crd::usize uz(int v) { return static_cast<crd::usize>(v); }
 void stats(const crd::containers::Array<crd::f64>& res, int n, double& mean, double& var)
 {
     mean = 0.0;
-    for (int p = 0; p < n; ++p) { mean += res[uz(p * 4 + 0)] * res[uz(p * 4 + 2)]; }
+    for (int p = 0; p < n; ++p)
+    {
+        mean += res[uz(p * 4 + 0)] * res[uz(p * 4 + 2)];
+    }
     mean /= n;
     var = 0.0;
-    for (int p = 0; p < n; ++p) { const double est = res[uz(p * 4 + 0)] * res[uz(p * 4 + 2)]; var += (est - mean) * (est - mean); }
+    for (int p = 0; p < n; ++p)
+    {
+        const double est = res[uz(p * 4 + 0)] * res[uz(p * 4 + 2)];
+        var += (est - mean) * (est - mean);
+    }
     var /= n;
 }
 } // namespace
@@ -48,7 +55,11 @@ TEST_CASE("ReSTIR RIS: the estimate is UNBIASED -- mean over pixels == the true 
     const int    lights = 16;
     double       fj[16];
     double       truth = 0.0;
-    for (int j = 0; j < lights; ++j) { fj[j] = 0.1 + 0.12 * static_cast<double>(j); truth += fj[j]; }
+    for (int j = 0; j < lights; ++j)
+    {
+        fj[j] = 0.1 + 0.12 * static_cast<double>(j);
+        truth += fj[j];
+    }
     truth /= lights;
 
     crd::containers::Array<crd::f64> cand(&alloc);
@@ -93,7 +104,11 @@ TEST_CASE("ReSTIR temporal reuse: merging reservoirs across frames DROPS varianc
     const int lights = 16;
     double    fj[16];
     double    truth = 0.0;
-    for (int j = 0; j < lights; ++j) { fj[j] = 0.1 + 0.12 * static_cast<double>(j); truth += fj[j]; }
+    for (int j = 0; j < lights; ++j)
+    {
+        fj[j] = 0.1 + 0.12 * static_cast<double>(j);
+        truth += fj[j];
+    }
     truth /= lights;
 
     crd::containers::Array<crd::f64> cand(&alloc);
@@ -143,10 +158,16 @@ TEST_CASE("ReSTIR temporal reuse: merging reservoirs across frames DROPS varianc
     {
         gen();
         run_ris(cur);
-        for (int p = 0; p < n; ++p) { xi[uz(p)] = rnd(); }
+        for (int p = 0; p < n; ++p)
+        {
+            xi[uz(p)] = rnd();
+        }
         kir::KernelBuffer b[4] = {{cur.data(), n * 4, 0, 0}, {prev.data(), n * 4, 0, 1}, {xi.data(), n, 0, 2}, {merged.data(), n * 4, 0, 3}};
         kir::eval_cpu_kernel(gt, etmp, b, 4, etmp.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
-        for (int i = 0; i < n * 4; ++i) { prev[uz(i)] = merged[uz(i)]; }
+        for (int i = 0; i < n * 4; ++i)
+        {
+            prev[uz(i)] = merged[uz(i)];
+        }
     }
     double mean_t = 0.0;
     double var_t  = 0.0;
@@ -173,7 +194,11 @@ TEST_CASE("ReSTIR spatial reuse: merging K neighbour reservoirs DROPS variance f
     const int lights = 16;
     double    fj[16];
     double    truth = 0.0;
-    for (int j = 0; j < lights; ++j) { fj[j] = 0.1 + 0.12 * static_cast<double>(j); truth += fj[j]; }
+    for (int j = 0; j < lights; ++j)
+    {
+        fj[j] = 0.1 + 0.12 * static_cast<double>(j);
+        truth += fj[j];
+    }
     truth /= lights;
 
     crd::containers::Array<crd::f64> cand(&alloc);

@@ -73,25 +73,49 @@ inline TriSchedule build_tri_schedule(const crd::u32* ptr, const crd::u32* col, 
         for (crd::u32 p = ptr[i]; p < ptr[i + 1]; ++p)
         {
             const crd::u32 dep = level[col[p]] + 1; // dep already finalized in this sweep order
-            if (dep > lv) { lv = dep; }
+            if (dep > lv)
+            {
+                lv = dep;
+            }
         }
         level[i] = lv;
-        if (lv > maxlev) { maxlev = lv; }
+        if (lv > maxlev)
+        {
+            maxlev = lv;
+        }
     }
     const crd::u32 n_levels = maxlev + 1;
     s.level_ptr.resize(n_levels + 1);
-    for (crd::u32 k = 0; k <= n_levels; ++k) { s.level_ptr[k] = 0; }
-    for (crd::usize i = 0; i < n; ++i) { ++s.level_ptr[level[i] + 1]; } // counts
-    for (crd::u32 k = 0; k < n_levels; ++k) { s.level_ptr[k + 1] += s.level_ptr[k]; } // prefix sum
+    for (crd::u32 k = 0; k <= n_levels; ++k)
+    {
+        s.level_ptr[k] = 0;
+    }
+    for (crd::usize i = 0; i < n; ++i) // counts
+    {
+        ++s.level_ptr[level[i] + 1];
+    }
+    for (crd::u32 k = 0; k < n_levels; ++k) // prefix sum
+    {
+        s.level_ptr[k + 1] += s.level_ptr[k];
+    }
     s.level_set.resize(n);
     crd::containers::Array<crd::u32> cursor(alloc);
     cursor.resize(n_levels);
-    for (crd::u32 k = 0; k < n_levels; ++k) { cursor[k] = s.level_ptr[k]; }
-    for (crd::usize i = 0; i < n; ++i) { s.level_set[cursor[level[i]]++] = static_cast<crd::u32>(i); } // stable by row
+    for (crd::u32 k = 0; k < n_levels; ++k)
+    {
+        cursor[k] = s.level_ptr[k];
+    }
+    for (crd::usize i = 0; i < n; ++i) // stable by row
+    {
+        s.level_set[cursor[level[i]]++] = static_cast<crd::u32>(i);
+    }
     for (crd::u32 k = 0; k < n_levels; ++k)
     {
         const crd::u32 w = s.level_ptr[k + 1] - s.level_ptr[k];
-        if (w > s.max_width) { s.max_width = w; }
+        if (w > s.max_width)
+        {
+            s.max_width = w;
+        }
     }
     return s;
 }
@@ -102,7 +126,10 @@ inline void tri_solve_row(crd::u32 i, const crd::u32* ptr, const crd::u32* col, 
                           const T* rhs, T* out) noexcept
 {
     T acc = rhs[i];
-    for (crd::u32 p = ptr[i]; p < ptr[i + 1]; ++p) { acc = acc - val[p] * out[col[p]]; }
+    for (crd::u32 p = ptr[i]; p < ptr[i + 1]; ++p)
+    {
+        acc = acc - val[p] * out[col[p]];
+    }
     out[i] = (inv_diag != nullptr) ? acc * inv_diag[i] : acc;
 }
 
@@ -119,7 +146,10 @@ inline void tri_solve_levelsched(const crd::u32* ptr, const crd::u32* col, const
         const crd::u32 w  = hi - lo;
         if (!parallel || w < 256U) // narrow levels: serial (no barrier); wide levels: parallel_for
         {
-            for (crd::u32 t = lo; t < hi; ++t) { tri_solve_row<T>(s.level_set[t], ptr, col, val, inv_diag, rhs, out); }
+            for (crd::u32 t = lo; t < hi; ++t)
+            {
+                tri_solve_row<T>(s.level_set[t], ptr, col, val, inv_diag, rhs, out);
+            }
         }
         else
         {

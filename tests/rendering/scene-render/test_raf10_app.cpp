@@ -72,7 +72,10 @@ memory::TlsfAllocator& galloc()
         const f32   z       = (corner & 4U) != 0U ? 0.5F : -0.5F;
         const f32   rec[12] = {x, y, z, 0, 1, 0, 0, 0, 0, 0, 0, 1};
         const auto* b       = reinterpret_cast<const u8*>(rec);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32 idx[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
                          2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
@@ -80,7 +83,10 @@ memory::TlsfAllocator& galloc()
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -104,7 +110,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     const auto art_bytes = build_cube_mesh_crdr(id);
     containers::Array<u8> pool(a);
     const char            name[] = "cube";
-    for (char c : name) { pool.push_back(static_cast<u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<u8>(c));
+    }
     containers::Array<resources::ManifestEntry> entries(a);
     resources::ManifestEntry                    e;
     e.id          = id;
@@ -121,7 +130,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
     resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (u8 b : art_bytes) { pack.push_back(b); }
+    for (u8 b : art_bytes)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
 
@@ -182,9 +194,15 @@ void app_grade_executor(const renderpass::PassPayload& /*payload*/, rendergraph:
                         gpu::ICommandEncoder& encoder)
 {
     gpu::IRasterTarget* color = ctx.color_target(renderpass::pass_param_id(containers::StringView("color")));
-    if (!ctx.ok() || color == nullptr) { return; }
+    if (!ctx.ok() || color == nullptr)
+    {
+        return;
+    }
     gpu::ITexture* scene = ctx.texture(renderpass::pass_param_id(containers::StringView("input0")));
-    if (scene == nullptr) { return; }
+    if (scene == nullptr)
+    {
+        return;
+    }
     gpu::RenderingDesc rd;
     rd.width  = color->width();
     rd.height = color->height();
@@ -212,7 +230,10 @@ void app_grade_executor(const renderpass::PassPayload& /*payload*/, rendergraph:
     {
         for (u32 x = 0; x < w; ++x)
         {
-            if (t.read_pixel(x, y) != bg) { ++n; }
+            if (t.read_pixel(x, y) != bg)
+            {
+                ++n;
+            }
         }
     }
     return n;
@@ -224,7 +245,10 @@ void app_grade_executor(const renderpass::PassPayload& /*payload*/, rendergraph:
     {
         for (u32 x = 0; x < w; ++x)
         {
-            if (a.read_pixel(x, y) != b.read_pixel(x, y)) { ++d; }
+            if (a.read_pixel(x, y) != b.read_pixel(x, y))
+            {
+                ++d;
+            }
         }
     }
     return d;
@@ -349,8 +373,14 @@ TEST_CASE("RAF-10 GATE: an application customises the renderer without engine ed
     }
     const char* eroot = std::getenv("CRD_ASSETS_DIR");
     const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
-    if (eroot == nullptr || eroot[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
-    if (aroot == nullptr || aroot[0] == '\0') { aroot = CRD_RAF10_APP_ASSETS_DIR; } // compiled fallback (see CMakeLists SCAR)
+    if (eroot == nullptr || eroot[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
+    if (aroot == nullptr || aroot[0] == '\0') // compiled fallback (see CMakeLists SCAR)
+    {
+        aroot = CRD_RAF10_APP_ASSETS_DIR;
+    }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
     run_raf10_app(*vk, *raster, eroot, aroot);
@@ -362,13 +392,25 @@ TEST_CASE("RAF-10 GATE (DX12): an application customises the renderer without en
           "[scene-render][raf10][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr) { SKIP("no D3D12 device"); }
+    if (gctx == nullptr)
+    {
+        SKIP("no D3D12 device");
+    }
     auto raster = gpu::create_dx12_raster_context();
-    if (raster == nullptr) { SKIP("no D3D12 raster context"); }
+    if (raster == nullptr)
+    {
+        SKIP("no D3D12 raster context");
+    }
     const char* eroot = std::getenv("CRD_ASSETS_DIR");
     const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
-    if (eroot == nullptr || eroot[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
-    if (aroot == nullptr || aroot[0] == '\0') { aroot = CRD_RAF10_APP_ASSETS_DIR; } // compiled fallback (see CMakeLists SCAR)
+    if (eroot == nullptr || eroot[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
+    if (aroot == nullptr || aroot[0] == '\0') // compiled fallback (see CMakeLists SCAR)
+    {
+        aroot = CRD_RAF10_APP_ASSETS_DIR;
+    }
     run_raf10_app(*gctx, *raster, eroot, aroot);
 }
 #endif

@@ -17,9 +17,18 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_spmv(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 4U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 4U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 } // namespace

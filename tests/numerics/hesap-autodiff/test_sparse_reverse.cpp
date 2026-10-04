@@ -35,7 +35,10 @@ TEST_CASE("v16-c: CSR spmv VJP (values + x) == central FD, deterministic", "[aut
         f64 y[m];
         sp::csr_spmv(row_ptr, col_idx, vals, x, y, m);
         f64 s = 0.0;
-        for (int i = 0; i < m; ++i) { s += c[i] * y[i]; }
+        for (int i = 0; i < m; ++i)
+        {
+            s += c[i] * y[i];
+        }
         return s;
     };
     const f64 h = 1e-6;
@@ -83,7 +86,10 @@ TEST_CASE("v16-c: CSR spmm VJP (values + X) == central FD", "[autodiff][reverse]
         f64 y[m * p];
         sp::csr_spmm(row_ptr, col_idx, vals, x, y, m, p);
         f64 s = 0.0;
-        for (int i = 0; i < m * p; ++i) { s += c[i] * y[i]; }
+        for (int i = 0; i < m * p; ++i)
+        {
+            s += c[i] * y[i];
+        }
         return s;
     };
     const f64 h = 1e-6;
@@ -128,7 +134,10 @@ TEST_CASE("v16-c: CSR sparse solve VJP (values + b) == central FD, factor-reuse,
     // sanity: A·x == b
     f64 chk[n];
     sp::csr_spmv(row_ptr, col_idx, vals, x, chk, n);
-    for (int i = 0; i < n; ++i) { CHECK_THAT(chk[i], WithinAbs(b[i], 1e-10)); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK_THAT(chk[i], WithinAbs(b[i], 1e-10));
+    }
 
     f64 gvals[nnz];
     f64 gb[n];
@@ -148,7 +157,10 @@ TEST_CASE("v16-c: CSR sparse solve VJP (values + b) == central FD, factor-reuse,
         int pl[n];
         sp::csr_solve(row_ptr, col_idx, vals, b, xl, n, al, pl);
         f64 s = 0.0;
-        for (int i = 0; i < n; ++i) { s += c[i] * xl[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            s += c[i] * xl[i];
+        }
         return s;
     };
     const f64 h = 1e-6;

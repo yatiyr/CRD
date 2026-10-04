@@ -124,7 +124,10 @@ TEST_CASE("v9a-b1-parallel N=16 calibration: byte-identical to serial reference"
                     42U, 3U, 42U, 0U,   5U, 100U, 1U, 17U};
     crd::containers::Array<crd::u32> in(&alloc);
     in.resize(16U);
-    for (crd::u32 i = 0; i < 16U; ++i) { in[i] = a[i]; }
+    for (crd::u32 i = 0; i < 16U; ++i)
+    {
+        in[i] = a[i];
+    }
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
 
     // N=16 falls below the threshold; parallel must transparently fall back
@@ -195,8 +198,14 @@ TEST_CASE("v9a-b1-parallel cross-chunk equal keys preserve monotonic input-index
     {
         if (out[i].code == equal_key)
         {
-            if      (out[i].index == idx_chunk0) { pos_chunk0 = i; }
-            else if (out[i].index == idx_chunk7) { pos_chunk7 = i; }
+            if      (out[i].index == idx_chunk0)
+            {
+                pos_chunk0 = i;
+            }
+            else if (out[i].index == idx_chunk7)
+            {
+                pos_chunk7 = i;
+            }
         }
     }
     REQUIRE(pos_chunk0 != UINT32_MAX);

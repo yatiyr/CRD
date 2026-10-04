@@ -44,11 +44,17 @@ using Bytes = crd::containers::Array<crd::u8>;
 void put_u8(Bytes& b, crd::u8 v) { b.push_back(v); }
 void put_u32(Bytes& b, crd::u32 v)
 {
-    for (crd::u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 void put_u64(Bytes& b, crd::u64 v)
 {
-    for (crd::u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 64U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 void put_f32(Bytes& b, float v)
 {
@@ -60,12 +66,18 @@ void put_f64(Bytes& b, double v)
 {
     crd::u64 bits = 0;
     std::memcpy(&bits, &v, sizeof(bits));
-    for (crd::u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<crd::u8>((bits >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 64U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((bits >> s) & 0xFFU));
+    }
 }
 void put_str(Bytes& b, const crd::containers::String& s)
 {
     put_u32(b, static_cast<crd::u32>(s.size()));
-    for (crd::usize i = 0; i < s.size(); ++i) { b.push_back(static_cast<crd::u8>(s.c_str()[i])); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        b.push_back(static_cast<crd::u8>(s.c_str()[i]));
+    }
 }
 
 struct Cursor
@@ -76,23 +88,38 @@ struct Cursor
 
     bool have(crd::u64 n) noexcept
     {
-        if (!ok || pos + n > in.size()) { ok = false; }
+        if (!ok || pos + n > in.size())
+        {
+            ok = false;
+        }
         return ok;
     }
     crd::u8  u8v() noexcept { return have(1U) ? in[pos++] : static_cast<crd::u8>(0); }
     crd::u32 u32v() noexcept
     {
-        if (!have(4U)) { return 0U; }
+        if (!have(4U))
+        {
+            return 0U;
+        }
         crd::u32 v = 0;
-        for (crd::u32 i = 0; i < 4U; ++i) { v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U);
+        }
         pos += 4U;
         return v;
     }
     crd::u64 u64v() noexcept
     {
-        if (!have(8U)) { return 0U; }
+        if (!have(8U))
+        {
+            return 0U;
+        }
         crd::u64 v = 0;
-        for (crd::u32 i = 0; i < 8U; ++i) { v |= static_cast<crd::u64>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 8U; ++i)
+        {
+            v |= static_cast<crd::u64>(in[pos + i]) << (i * 8U);
+        }
         pos += 8U;
         return v;
     }
@@ -105,9 +132,15 @@ struct Cursor
     }
     double f64v() noexcept
     {
-        if (!have(8U)) { return 0.0; }
+        if (!have(8U))
+        {
+            return 0.0;
+        }
         crd::u64 bits = 0;
-        for (crd::u32 i = 0; i < 8U; ++i) { bits |= static_cast<crd::u64>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 8U; ++i)
+        {
+            bits |= static_cast<crd::u64>(in[pos + i]) << (i * 8U);
+        }
         pos += 8U;
         double v = 0.0;
         std::memcpy(&v, &bits, sizeof(v));
@@ -116,7 +149,10 @@ struct Cursor
     void strv(crd::containers::String& out) noexcept
     {
         const crd::u32 n = u32v();
-        if (!have(n)) { return; }
+        if (!have(n))
+        {
+            return;
+        }
         out.clear();
         for (crd::u32 i = 0; i < n; ++i)
         {
@@ -134,106 +170,322 @@ struct Cursor
 bool to_shading_rate(std::string_view s, crd::gpu::ShadingRate& out)
 {
     using R = crd::gpu::ShadingRate;
-    if (s == "1x1") { out = R::Rate1x1; return true; }
-    if (s == "1x2") { out = R::Rate1x2; return true; }
-    if (s == "2x1") { out = R::Rate2x1; return true; }
-    if (s == "2x2") { out = R::Rate2x2; return true; }
-    if (s == "2x4") { out = R::Rate2x4; return true; }
-    if (s == "4x2") { out = R::Rate4x2; return true; }
-    if (s == "4x4") { out = R::Rate4x4; return true; }
+    if (s == "1x1")
+    {
+        out = R::Rate1x1;
+        return true;
+    }
+    if (s == "1x2")
+    {
+        out = R::Rate1x2;
+        return true;
+    }
+    if (s == "2x1")
+    {
+        out = R::Rate2x1;
+        return true;
+    }
+    if (s == "2x2")
+    {
+        out = R::Rate2x2;
+        return true;
+    }
+    if (s == "2x4")
+    {
+        out = R::Rate2x4;
+        return true;
+    }
+    if (s == "4x2")
+    {
+        out = R::Rate4x2;
+        return true;
+    }
+    if (s == "4x4")
+    {
+        out = R::Rate4x4;
+        return true;
+    }
     return false;
 }
 bool to_rate_combiner(std::string_view s, crd::gpu::ShadingRateCombiner& out)
 {
     using C = crd::gpu::ShadingRateCombiner;
-    if (s == "keep")    { out = C::Keep;    return true; }
-    if (s == "replace") { out = C::Replace; return true; }
-    if (s == "min")     { out = C::Min;     return true; }
-    if (s == "max")     { out = C::Max;     return true; }
-    if (s == "mul")     { out = C::Mul;     return true; }
+    if (s == "keep")
+    {
+        out = C::Keep;
+        return true;
+    }
+    if (s == "replace")
+    {
+        out = C::Replace;
+        return true;
+    }
+    if (s == "min")
+    {
+        out = C::Min;
+        return true;
+    }
+    if (s == "max")
+    {
+        out = C::Max;
+        return true;
+    }
+    if (s == "mul")
+    {
+        out = C::Mul;
+        return true;
+    }
     return false;
 }
 bool to_conservative(std::string_view s, crd::gpu::ConservativeMode& out)
 {
     using M = crd::gpu::ConservativeMode;
-    if (s == "off")          { out = M::Off;          return true; }
-    if (s == "overestimate") { out = M::Overestimate; return true; }
-    if (s == "underestimate"){ out = M::Underestimate;return true; }
+    if (s == "off")
+    {
+        out = M::Off;
+        return true;
+    }
+    if (s == "overestimate")
+    {
+        out = M::Overestimate;
+        return true;
+    }
+    if (s == "underestimate")
+    {
+        out = M::Underestimate;
+        return true;
+    }
     return false;
 }
 // REN-38-B8: the closed sampler sets.
 bool to_sampler_filter(std::string_view s, crd::gpu::SamplerFilter& out)
 {
-    if (s == "nearest") { out = crd::gpu::SamplerFilter::Nearest; return true; }
-    if (s == "linear")  { out = crd::gpu::SamplerFilter::Linear;  return true; }
+    if (s == "nearest")
+    {
+        out = crd::gpu::SamplerFilter::Nearest;
+        return true;
+    }
+    if (s == "linear")
+    {
+        out = crd::gpu::SamplerFilter::Linear;
+        return true;
+    }
     return false;
 }
 bool to_sampler_address(std::string_view s, crd::gpu::SamplerAddress& out)
 {
     using A = crd::gpu::SamplerAddress;
-    if (s == "repeat")          { out = A::Repeat;        return true; }
-    if (s == "clamp")           { out = A::ClampToEdge;   return true; }
-    if (s == "clamp_to_border") { out = A::ClampToBorder; return true; }
-    if (s == "mirror")          { out = A::Mirror;        return true; }
+    if (s == "repeat")
+    {
+        out = A::Repeat;
+        return true;
+    }
+    if (s == "clamp")
+    {
+        out = A::ClampToEdge;
+        return true;
+    }
+    if (s == "clamp_to_border")
+    {
+        out = A::ClampToBorder;
+        return true;
+    }
+    if (s == "mirror")
+    {
+        out = A::Mirror;
+        return true;
+    }
     return false;
 }
 bool to_queue(std::string_view s, FrameQueue& out)
 {
-    if (s == "graphics") { out = FrameQueue::Graphics; return true; }
-    if (s == "async")    { out = FrameQueue::Async;    return true; }
+    if (s == "graphics")
+    {
+        out = FrameQueue::Graphics;
+        return true;
+    }
+    if (s == "async")
+    {
+        out = FrameQueue::Async;
+        return true;
+    }
     return false;
 }
 // REN-38-B2: the closed set of resource SHAPES.
 bool to_dimension(std::string_view s, crd::gpu::FgImageKind& out)
 {
     using K = crd::gpu::FgImageKind;
-    if (s == "2d")         { out = K::Tex2D;     return true; }
-    if (s == "3d")         { out = K::Tex3D;     return true; }
-    if (s == "cube")       { out = K::Cube;      return true; }
-    if (s == "cube_array") { out = K::CubeArray; return true; }
+    if (s == "2d")
+    {
+        out = K::Tex2D;
+        return true;
+    }
+    if (s == "3d")
+    {
+        out = K::Tex3D;
+        return true;
+    }
+    if (s == "cube")
+    {
+        out = K::Cube;
+        return true;
+    }
+    if (s == "cube_array")
+    {
+        out = K::CubeArray;
+        return true;
+    }
     return false;
 }
 bool to_blit_filter(std::string_view s, FrameBlitFilter& out)
 {
-    if (s == "nearest") { out = FrameBlitFilter::Nearest; return true; }
-    if (s == "linear")  { out = FrameBlitFilter::Linear;  return true; }
+    if (s == "nearest")
+    {
+        out = FrameBlitFilter::Nearest;
+        return true;
+    }
+    if (s == "linear")
+    {
+        out = FrameBlitFilter::Linear;
+        return true;
+    }
     return false;
 }
 bool to_format(std::string_view s, crd::gpu::FgImageFormat& out)
 {
     using F = crd::gpu::FgImageFormat;
-    if (s == "RGBA8Unorm") { out = F::RGBA8Unorm; return true; }
-    if (s == "RGBA8Srgb")  { out = F::RGBA8Srgb;  return true; }
-    if (s == "RGBA16F")    { out = F::RGBA16F;    return true; }
-    if (s == "R16F")       { out = F::R16F;       return true; }
-    if (s == "R32F")       { out = F::R32F;       return true; }
-    if (s == "R32Uint")    { out = F::R32Uint;    return true; }
-    if (s == "D32Float")   { out = F::D32Float;   return true; }
+    if (s == "RGBA8Unorm")
+    {
+        out = F::RGBA8Unorm;
+        return true;
+    }
+    if (s == "RGBA8Srgb")
+    {
+        out = F::RGBA8Srgb;
+        return true;
+    }
+    if (s == "RGBA16F")
+    {
+        out = F::RGBA16F;
+        return true;
+    }
+    if (s == "R16F")
+    {
+        out = F::R16F;
+        return true;
+    }
+    if (s == "R32F")
+    {
+        out = F::R32F;
+        return true;
+    }
+    if (s == "R32Uint")
+    {
+        out = F::R32Uint;
+        return true;
+    }
+    if (s == "D32Float")
+    {
+        out = F::D32Float;
+        return true;
+    }
     // REN-38-B7: the rest of the vocabulary. Names match the enum exactly — an asset should never have to learn a
     // second spelling for a format it can already read in the header.
-    if (s == "RG16F")      { out = F::RG16F;      return true; }
-    if (s == "RG32F")      { out = F::RG32F;      return true; }
-    if (s == "RGBA32F")    { out = F::RGBA32F;    return true; }
-    if (s == "R11G11B10F") { out = F::R11G11B10F; return true; }
-    if (s == "RGB10A2")    { out = F::RGB10A2;    return true; }
-    if (s == "R8")         { out = F::R8;         return true; }
-    if (s == "RG8")        { out = F::RG8;        return true; }
-    if (s == "RGBA16Unorm"){ out = F::RGBA16Unorm;return true; }
-    if (s == "D24S8")      { out = F::D24S8;      return true; }
-    if (s == "D32FloatS8") { out = F::D32FloatS8; return true; }
+    if (s == "RG16F")
+    {
+        out = F::RG16F;
+        return true;
+    }
+    if (s == "RG32F")
+    {
+        out = F::RG32F;
+        return true;
+    }
+    if (s == "RGBA32F")
+    {
+        out = F::RGBA32F;
+        return true;
+    }
+    if (s == "R11G11B10F")
+    {
+        out = F::R11G11B10F;
+        return true;
+    }
+    if (s == "RGB10A2")
+    {
+        out = F::RGB10A2;
+        return true;
+    }
+    if (s == "R8")
+    {
+        out = F::R8;
+        return true;
+    }
+    if (s == "RG8")
+    {
+        out = F::RG8;
+        return true;
+    }
+    if (s == "RGBA16Unorm")
+    {
+        out = F::RGBA16Unorm;
+        return true;
+    }
+    if (s == "D24S8")
+    {
+        out = F::D24S8;
+        return true;
+    }
+    if (s == "D32FloatS8")
+    {
+        out = F::D32FloatS8;
+        return true;
+    }
     return false;
 }
 bool to_compare(std::string_view s, crd::gpu::DepthCompare& out)
 {
     using C = crd::gpu::DepthCompare;
-    if (s == "Never")        { out = C::Never;        return true; }
-    if (s == "Less")         { out = C::Less;         return true; }
-    if (s == "Equal")        { out = C::Equal;        return true; }
-    if (s == "LessEqual")    { out = C::LessEqual;    return true; }
-    if (s == "Greater")      { out = C::Greater;      return true; }
-    if (s == "NotEqual")     { out = C::NotEqual;     return true; }
-    if (s == "GreaterEqual") { out = C::GreaterEqual; return true; }
-    if (s == "Always")       { out = C::Always;       return true; }
+    if (s == "Never")
+    {
+        out = C::Never;
+        return true;
+    }
+    if (s == "Less")
+    {
+        out = C::Less;
+        return true;
+    }
+    if (s == "Equal")
+    {
+        out = C::Equal;
+        return true;
+    }
+    if (s == "LessEqual")
+    {
+        out = C::LessEqual;
+        return true;
+    }
+    if (s == "Greater")
+    {
+        out = C::Greater;
+        return true;
+    }
+    if (s == "NotEqual")
+    {
+        out = C::NotEqual;
+        return true;
+    }
+    if (s == "GreaterEqual")
+    {
+        out = C::GreaterEqual;
+        return true;
+    }
+    if (s == "Always")
+    {
+        out = C::Always;
+        return true;
+    }
     return false;
 }
 // ── REN-38 audit: the PASS-STATE closed sets. Same rule as every set here: a typo is a NAMED rejection, never
@@ -242,44 +494,124 @@ bool to_compare(std::string_view s, crd::gpu::DepthCompare& out)
 bool to_face_cull(std::string_view s, crd::gpu::FaceCull& out)
 {
     using F = crd::gpu::FaceCull;
-    if (s == "none")  { out = F::None;  return true; }
-    if (s == "back")  { out = F::Back;  return true; }
-    if (s == "front") { out = F::Front; return true; }
+    if (s == "none")
+    {
+        out = F::None;
+        return true;
+    }
+    if (s == "back")
+    {
+        out = F::Back;
+        return true;
+    }
+    if (s == "front")
+    {
+        out = F::Front;
+        return true;
+    }
     return false;
 }
 bool to_front_face(std::string_view s, crd::gpu::FrontFace& out)
 {
     using F = crd::gpu::FrontFace;
-    if (s == "ccw") { out = F::CounterClockwise; return true; }
-    if (s == "cw")  { out = F::Clockwise;        return true; }
+    if (s == "ccw")
+    {
+        out = F::CounterClockwise;
+        return true;
+    }
+    if (s == "cw")
+    {
+        out = F::Clockwise;
+        return true;
+    }
     return false;
 }
 bool to_stencil_op(std::string_view s, crd::gpu::StencilOp& out)
 {
     using O = crd::gpu::StencilOp;
-    if (s == "keep")       { out = O::Keep;      return true; }
-    if (s == "zero")       { out = O::Zero;      return true; }
-    if (s == "replace")    { out = O::Replace;   return true; }
-    if (s == "incr_clamp") { out = O::IncrClamp; return true; }
-    if (s == "decr_clamp") { out = O::DecrClamp; return true; }
-    if (s == "invert")     { out = O::Invert;    return true; }
-    if (s == "incr_wrap")  { out = O::IncrWrap;  return true; }
-    if (s == "decr_wrap")  { out = O::DecrWrap;  return true; }
+    if (s == "keep")
+    {
+        out = O::Keep;
+        return true;
+    }
+    if (s == "zero")
+    {
+        out = O::Zero;
+        return true;
+    }
+    if (s == "replace")
+    {
+        out = O::Replace;
+        return true;
+    }
+    if (s == "incr_clamp")
+    {
+        out = O::IncrClamp;
+        return true;
+    }
+    if (s == "decr_clamp")
+    {
+        out = O::DecrClamp;
+        return true;
+    }
+    if (s == "invert")
+    {
+        out = O::Invert;
+        return true;
+    }
+    if (s == "incr_wrap")
+    {
+        out = O::IncrWrap;
+        return true;
+    }
+    if (s == "decr_wrap")
+    {
+        out = O::DecrWrap;
+        return true;
+    }
     return false;
 }
 bool to_material_pass(std::string_view s, FrameMaterialPass& out)
 {
-    if (s == "Shadow")       { out = FrameMaterialPass::Shadow;       return true; }
-    if (s == "DepthPrepass") { out = FrameMaterialPass::DepthPrepass; return true; }
-    if (s == "GBuffer")      { out = FrameMaterialPass::GBuffer;      return true; }
-    if (s == "Forward")      { out = FrameMaterialPass::Forward;      return true; }
+    if (s == "Shadow")
+    {
+        out = FrameMaterialPass::Shadow;
+        return true;
+    }
+    if (s == "DepthPrepass")
+    {
+        out = FrameMaterialPass::DepthPrepass;
+        return true;
+    }
+    if (s == "GBuffer")
+    {
+        out = FrameMaterialPass::GBuffer;
+        return true;
+    }
+    if (s == "Forward")
+    {
+        out = FrameMaterialPass::Forward;
+        return true;
+    }
     return false;
 }
 bool to_cull(std::string_view s, FrameCullMode& out)
 {
-    if (s == "none")              { out = FrameCullMode::None;             return true; }
-    if (s == "frustum")           { out = FrameCullMode::Frustum;          return true; }
-    if (s == "frustum+occlusion") { out = FrameCullMode::FrustumOcclusion; return true; }
+    if (s == "none")
+    {
+        out = FrameCullMode::None;
+        return true;
+    }
+    if (s == "frustum")
+    {
+        out = FrameCullMode::Frustum;
+        return true;
+    }
+    if (s == "frustum+occlusion")
+    {
+        out = FrameCullMode::FrustumOcclusion;
+        return true;
+    }
     return false;
 }
 // REN-38-A15: the closed blend set. A small named set rather than raw src/dst/op factors, so the cooker can
@@ -287,41 +619,103 @@ bool to_cull(std::string_view s, FrameCullMode& out)
 bool to_blend(std::string_view s, crd::gpu::BlendMode& out)
 {
     using B = crd::gpu::BlendMode;
-    if (s == "opaque")             { out = B::Opaque;             return true; }
-    if (s == "alpha")              { out = B::Alpha;              return true; }
-    if (s == "premultiplied")      { out = B::PremultipliedAlpha; return true; }
-    if (s == "additive")           { out = B::Additive;           return true; }
-    if (s == "multiply")           { out = B::Multiply;           return true; }
-    if (s == "revealage_multiply") { out = B::RevealageMultiply;  return true; }
-    if (s == "reveal_composite")   { out = B::RevealComposite;    return true; }
+    if (s == "opaque")
+    {
+        out = B::Opaque;
+        return true;
+    }
+    if (s == "alpha")
+    {
+        out = B::Alpha;
+        return true;
+    }
+    if (s == "premultiplied")
+    {
+        out = B::PremultipliedAlpha;
+        return true;
+    }
+    if (s == "additive")
+    {
+        out = B::Additive;
+        return true;
+    }
+    if (s == "multiply")
+    {
+        out = B::Multiply;
+        return true;
+    }
+    if (s == "revealage_multiply")
+    {
+        out = B::RevealageMultiply;
+        return true;
+    }
+    if (s == "reveal_composite")
+    {
+        out = B::RevealComposite;
+        return true;
+    }
     return false;
 }
 bool to_sort(std::string_view s, FrameSortMode& out)
 {
-    if (s == "none")           { out = FrameSortMode::None;        return true; }
-    if (s == "front_to_back")  { out = FrameSortMode::FrontToBack; return true; }
-    if (s == "back_to_front")  { out = FrameSortMode::BackToFront; return true; }
-    if (s == "material")       { out = FrameSortMode::Material;    return true; }
+    if (s == "none")
+    {
+        out = FrameSortMode::None;
+        return true;
+    }
+    if (s == "front_to_back")
+    {
+        out = FrameSortMode::FrontToBack;
+        return true;
+    }
+    if (s == "back_to_front")
+    {
+        out = FrameSortMode::BackToFront;
+        return true;
+    }
+    if (s == "material")
+    {
+        out = FrameSortMode::Material;
+        return true;
+    }
     return false;
 }
 // `light.0.cascades` → (LightCascades, 0). The numeric arg is parsed out of the generator name.
 bool to_for_each(std::string_view s, FrameForEach& out, crd::u32& arg)
 {
     arg = 0U;
-    if (s == "views.stereo")          { out = FrameForEach::StereoViews;         return true; }
-    if (s == "cube.faces")            { out = FrameForEach::CubeFaces;           return true; }
-    if (s == "lights.shadow_casting") { out = FrameForEach::ShadowCastingLights; return true; }
+    if (s == "views.stereo")
+    {
+        out = FrameForEach::StereoViews;
+        return true;
+    }
+    if (s == "cube.faces")
+    {
+        out = FrameForEach::CubeFaces;
+        return true;
+    }
+    if (s == "lights.shadow_casting")
+    {
+        out = FrameForEach::ShadowCastingLights;
+        return true;
+    }
     if (s.size() > 7U && s.starts_with("light.") && s.ends_with(".cascades"))
     {
         crd::u32 n   = 0U;
         bool     any = false;
         for (crd::usize i = 6; i < s.size() - 9U; ++i)
         {
-            if (s[i] < '0' || s[i] > '9') { return false; }
+            if (s[i] < '0' || s[i] > '9')
+            {
+                return false;
+            }
             n = (n * 10U) + static_cast<crd::u32>(s[i] - '0');
             any = true;
         }
-        if (!any) { return false; }
+        if (!any)
+        {
+            return false;
+        }
         out = FrameForEach::LightCascades;
         arg = n;
         return true;
@@ -340,7 +734,10 @@ void set_str(crd::containers::String& dst, std::string_view s)
 }
 void set_where(crd::containers::String* where, std::string_view s)
 {
-    if (where != nullptr) { set_str(*where, s); }
+    if (where != nullptr)
+    {
+        set_str(*where, s);
+    }
 }
 bool str_eq(const crd::containers::String& a, std::string_view b)
 {
@@ -451,7 +848,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     auto* alloc = out.resources.allocator();
     const std::string_view text(toml_text.data(), toml_text.size());
     const crd::toml::parse_result res = crd::toml::parse(text);
-    if (!res) { return FrameCookError::ParseFailed; }
+    if (!res)
+    {
+        return FrameCookError::ParseFailed;
+    }
     const crd::toml::node& root = res.table();
 
     // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
@@ -470,7 +870,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     out.memory_budget_bytes = 0U;
 
     const auto sch = root["schema"].value<int64_t>();
-    if (!sch || *sch != static_cast<int64_t>(kFrameSchemaVersion)) { return FrameCookError::BadSchema; }
+    if (!sch || *sch != static_cast<int64_t>(kFrameSchemaVersion))
+    {
+        return FrameCookError::BadSchema;
+    }
     out.schema = kFrameSchemaVersion;
     // REN-38-B6: the graph-level transient budget, stated in MEGABYTES because that is the unit a platform target
     // is actually written in. Converted here so nothing downstream has to remember the factor.
@@ -480,16 +883,25 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
     }
 
     const auto nm = root["name"].value<std::string_view>();
-    if (!nm || nm->empty()) { return FrameCookError::MissingName; }
+    if (!nm || nm->empty())
+    {
+        return FrameCookError::MissingName;
+    }
     set_str(out.name, *nm);
 
-    if (const auto fb = root["fallback"].value<std::string_view>()) { set_str(out.fallback, *fb); }
+    if (const auto fb = root["fallback"].value<std::string_view>())
+    {
+        set_str(out.fallback, *fb);
+    }
     if (const auto* caps = root["requires"].as_array())
     {
         for (const auto& c : *caps)
         {
             const auto s = c.value<std::string_view>();
-            if (!s) { return FrameCookError::ParseFailed; }
+            if (!s)
+            {
+                return FrameCookError::ParseFailed;
+            }
             crd::containers::String cap(alloc);
             set_str(cap, *s);
             out.requires_caps.push_back(static_cast<crd::containers::String&&>(cap));
@@ -502,24 +914,37 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FrameIncludeDesc inc(alloc);
             const auto gname = (*t)["graph"].value<std::string_view>();
             const auto as    = (*t)["as"].value<std::string_view>();
-            if (!gname || gname->empty() || !as || as->empty()) { return FrameCookError::IncludeMissingName; }
+            if (!gname || gname->empty() || !as || as->empty())
+            {
+                return FrameCookError::IncludeMissingName;
+            }
             set_str(inc.graph, *gname);
             set_str(inc.as, *as);
             inc.atomic = (*t)["atomic"].value_or(false);
             for (crd::usize i = 0; i < out.includes.size(); ++i)
             {
-                if (str_eq(out.includes[i].as, *as)) { set_where(where, *as); return FrameCookError::DuplicateInclude; }
+                if (str_eq(out.includes[i].as, *as))
+                {
+                    set_where(where, *as);
+                    return FrameCookError::DuplicateInclude;
+                }
             }
             if (const crd::toml::node* bt = (*t)["bind"].as_table())
             {
                 for (const auto& [k, v] : bt->items())
                 {
                     const auto sv = v.value<std::string_view>();
-                    if (!sv) { return FrameCookError::ParseFailed; }
+                    if (!sv)
+                    {
+                        return FrameCookError::ParseFailed;
+                    }
                     FrameBinding b(alloc);
                     set_str(b.from, std::string_view(k));
                     set_str(b.to, *sv);
@@ -534,10 +959,16 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FrameAnchorDesc a(alloc);
             const auto an = (*t)["name"].value<std::string_view>();
-            if (!an || an->empty()) { return FrameCookError::MissingName; }
+            if (!an || an->empty())
+            {
+                return FrameCookError::MissingName;
+            }
             set_str(a.name, *an);
             const auto list = [&](const char* key, crd::containers::Array<crd::containers::String>& dst) -> bool {
                 if (const auto* ar = (*t)[key].as_array())
@@ -545,7 +976,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     for (const auto& e : *ar)
                     {
                         const auto sv = e.value<std::string_view>();
-                        if (!sv) { return false; }
+                        if (!sv)
+                        {
+                            return false;
+                        }
                         crd::containers::String v(alloc);
                         set_str(v, *sv);
                         dst.push_back(static_cast<crd::containers::String&&>(v));
@@ -553,7 +987,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 }
                 return true;
             };
-            if (!list("after", a.after) || !list("before", a.before)) { return FrameCookError::ParseFailed; }
+            if (!list("after", a.after) || !list("before", a.before))
+            {
+                return FrameCookError::ParseFailed;
+            }
             out.anchors.push_back(static_cast<FrameAnchorDesc&&>(a));
         }
     }
@@ -562,11 +999,17 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FrameInjectDesc inj(alloc);
             const auto at = (*t)["at"].value<std::string_view>();
             const auto ps = (*t)["pass"].value<std::string_view>();
-            if (!at || at->empty() || !ps || ps->empty()) { return FrameCookError::MissingName; }
+            if (!at || at->empty() || !ps || ps->empty())
+            {
+                return FrameCookError::MissingName;
+            }
             set_str(inj.anchor, *at);
             set_str(inj.pass, *ps);
             out.injects.push_back(static_cast<FrameInjectDesc&&>(inj));
@@ -579,33 +1022,81 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FrameResourceDesc r(alloc);
             const auto rn = (*t)["name"].value<std::string_view>();
-            if (!rn || rn->empty()) { return FrameCookError::MissingName; }
+            if (!rn || rn->empty())
+            {
+                return FrameCookError::MissingName;
+            }
             set_str(r.name, *rn);
             for (crd::usize i = 0; i < out.resources.size(); ++i)
             {
-                if (str_eq(out.resources[i].name, *rn)) { set_where(where, *rn); return FrameCookError::DuplicateName; }
+                if (str_eq(out.resources[i].name, *rn))
+                {
+                    set_where(where, *rn);
+                    return FrameCookError::DuplicateName;
+                }
             }
             const auto kind = (*t)["kind"].value_or(std::string_view{"transient_image"});
             // REN-38-B3/B4: the closed set of resource kinds. ⛔ An UNKNOWN kind must be a NAMED rejection — the
             // old `?:` silently treated every typo as a transient IMAGE, so `kind = "indirect_args"` with a
             // misspelling would have produced a 2-D texture and a pass that reads garbage arguments.
-            if (kind == "transient_buffer")           { r.kind = FrameResourceKind::TransientBuffer; }
-            else if (kind == "indirect_args")         { r.kind = FrameResourceKind::IndirectArgs; }
-            else if (kind == "external_buffer")       { r.kind = FrameResourceKind::ExternalBuffer; }
-            else if (kind == "persistent_image")      { r.kind = FrameResourceKind::PersistentImage; }
-            else if (kind == "pingpong_image")        { r.kind = FrameResourceKind::PingPongImage; }
-            else if (kind == "structured_buffer")     { r.kind = FrameResourceKind::StructuredBuffer; }
-            else if (kind == "counter_buffer")        { r.kind = FrameResourceKind::CounterBuffer; }
-            else if (kind == "external_texture")      { r.kind = FrameResourceKind::ExternalTexture; }
-            else if (kind == "acceleration_structure"){ r.kind = FrameResourceKind::AccelerationStructure; }
-            else if (kind == "transient_image")       { r.kind = FrameResourceKind::TransientImage; }
-            else { set_where(where, kind); return FrameCookError::UnknownFormat; }
+            if (kind == "transient_buffer")
+            {
+                r.kind = FrameResourceKind::TransientBuffer;
+            }
+            else if (kind == "indirect_args")
+            {
+                r.kind = FrameResourceKind::IndirectArgs;
+            }
+            else if (kind == "external_buffer")
+            {
+                r.kind = FrameResourceKind::ExternalBuffer;
+            }
+            else if (kind == "persistent_image")
+            {
+                r.kind = FrameResourceKind::PersistentImage;
+            }
+            else if (kind == "pingpong_image")
+            {
+                r.kind = FrameResourceKind::PingPongImage;
+            }
+            else if (kind == "structured_buffer")
+            {
+                r.kind = FrameResourceKind::StructuredBuffer;
+            }
+            else if (kind == "counter_buffer")
+            {
+                r.kind = FrameResourceKind::CounterBuffer;
+            }
+            else if (kind == "external_texture")
+            {
+                r.kind = FrameResourceKind::ExternalTexture;
+            }
+            else if (kind == "acceleration_structure")
+            {
+                r.kind = FrameResourceKind::AccelerationStructure;
+            }
+            else if (kind == "transient_image")
+            {
+                r.kind = FrameResourceKind::TransientImage;
+            }
+            else
+            {
+                set_where(where, kind);
+                return FrameCookError::UnknownFormat;
+            }
             if (const auto f = (*t)["format"].value<std::string_view>())
             {
-                if (!to_format(*f, r.format)) { set_where(where, *f); return FrameCookError::UnknownFormat; }
+                if (!to_format(*f, r.format))
+                {
+                    set_where(where, *f);
+                    return FrameCookError::UnknownFormat;
+                }
             }
             r.width      = static_cast<crd::u32>((*t)["width"].value_or<int64_t>(0));
             r.height     = static_cast<crd::u32>((*t)["height"].value_or<int64_t>(0));
@@ -619,7 +1110,11 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             r.mips       = static_cast<crd::u32>((*t)["mips"].value_or<int64_t>(1));
             if (const auto dv = (*t)["dimension"].value<std::string_view>())
             {
-                if (!to_dimension(*dv, r.kind_2d)) { set_where(where, *dv); return FrameCookError::UnknownDimension; }
+                if (!to_dimension(*dv, r.kind_2d))
+                {
+                    set_where(where, *dv);
+                    return FrameCookError::UnknownDimension;
+                }
             }
             r.no_alias   = (*t)["no_alias"].value_or(false); // REN-38-B6
             r.resizable  = (*t)["resizable"].value_or(false); // REN-41: persistent image follows the output on resize
@@ -628,11 +1123,17 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             r.size_bytes = static_cast<crd::u32>((*t)["size_bytes"].value_or<int64_t>(0));
             // REN-38-B3: elements × stride IS the size. Stating both would let them disagree, and the resulting
             // buffer would be a different length than the shader indexes — so one is derived, never checked.
-            if (r.size_bytes == 0U && r.stride != 0U && r.count != 0U) { r.size_bytes = r.stride * r.count; }
+            if (r.size_bytes == 0U && r.stride != 0U && r.count != 0U)
+            {
+                r.size_bytes = r.stride * r.count;
+            }
             // ⛔ A COUNTER buffer's first 4 bytes ARE the counter, so its payload starts after them. Folding that
             // into the declared size here means no author ever has to remember the +4, and no two techniques can
             // disagree about whether it was already included.
-            if (r.kind == FrameResourceKind::CounterBuffer) { r.size_bytes += 4U; }
+            if (r.kind == FrameResourceKind::CounterBuffer)
+            {
+                r.size_bytes += 4U;
+            }
             if (r.kind == FrameResourceKind::TransientImage
                 && ((r.width == 0U || r.height == 0U) && r.scale <= 0.0F))
             {
@@ -654,14 +1155,24 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FrameDrawListDesc d(alloc);
             const auto dn = (*t)["name"].value<std::string_view>();
-            if (!dn || dn->empty()) { return FrameCookError::MissingName; }
+            if (!dn || dn->empty())
+            {
+                return FrameCookError::MissingName;
+            }
             set_str(d.name, *dn);
             for (crd::usize i = 0; i < out.draw_lists.size(); ++i)
             {
-                if (str_eq(out.draw_lists[i].name, *dn)) { set_where(where, *dn); return FrameCookError::DuplicateName; }
+                if (str_eq(out.draw_lists[i].name, *dn))
+                {
+                    set_where(where, *dn);
+                    return FrameCookError::DuplicateName;
+                }
             }
             const auto comps = [&](const char* key, crd::containers::Array<crd::containers::String>& dst) {
                 if (const auto* a2 = (*t)[key].as_array())
@@ -669,7 +1180,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     for (const auto& c : *a2)
                     {
                         const auto s = c.value<std::string_view>();
-                        if (!s) { continue; }
+                        if (!s)
+                        {
+                            continue;
+                        }
                         crd::containers::String cs(alloc);
                         set_str(cs, *s);
                         dst.push_back(static_cast<crd::containers::String&&>(cs));
@@ -681,11 +1195,19 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             comps("none", d.none);
             if (const auto c = (*t)["cull"].value<std::string_view>())
             {
-                if (!to_cull(*c, d.cull)) { set_where(where, *c); return FrameCookError::UnknownCull; }
+                if (!to_cull(*c, d.cull))
+                {
+                    set_where(where, *c);
+                    return FrameCookError::UnknownCull;
+                }
             }
             if (const auto s = (*t)["sort"].value<std::string_view>())
             {
-                if (!to_sort(*s, d.sort)) { set_where(where, *s); return FrameCookError::UnknownSort; }
+                if (!to_sort(*s, d.sort))
+                {
+                    set_where(where, *s);
+                    return FrameCookError::UnknownSort;
+                }
             }
             d.limit = static_cast<crd::u32>((*t)["limit"].value_or<int64_t>(0));
             out.draw_lists.push_back(static_cast<FrameDrawListDesc&&>(d));
@@ -698,7 +1220,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return FrameCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return FrameCookError::ParseFailed;
+            }
             FramePassDesc p(alloc);
             // ⭐ RAF-12.3 §7 fold: parse the executor-specific config into LOCALS (preserving the intricate
             // accumulation of has_sampler / stencil_enable / the blend list), then fold them into `p.params` right
@@ -728,11 +1253,18 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             bool l_has_depth    = false;
             bool l_has_filter   = false;
             const auto pn = (*t)["name"].value<std::string_view>();
-            if (!pn || pn->empty()) { return FrameCookError::MissingName; }
+            if (!pn || pn->empty())
+            {
+                return FrameCookError::MissingName;
+            }
             set_str(p.name, *pn);
             for (crd::usize i = 0; i < out.passes.size(); ++i)
             {
-                if (str_eq(out.passes[i].name, *pn)) { set_where(where, *pn); return FrameCookError::DuplicateName; }
+                if (str_eq(out.passes[i].name, *pn))
+                {
+                    set_where(where, *pn);
+                    return FrameCookError::DuplicateName;
+                }
             }
             const auto kd = (*t)["kind"].value<std::string_view>();
             if (!kd || !pass_mechanic_from_kind(crd::containers::StringView(kd->data(), kd->size()), p))
@@ -746,7 +1278,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     for (const auto& c : *a2)
                     {
                         const auto s = c.value<std::string_view>();
-                        if (!s) { continue; }
+                        if (!s)
+                        {
+                            continue;
+                        }
                         FrameResourceRef r(alloc);
                         parse_ref(*s, r);
                         dst.push_back(static_cast<FrameResourceRef&&>(r));
@@ -766,7 +1301,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             sset(pp::kView, "view");
             sset(pp::kShader, "shader");
             sset(pp::kKernel, "kernel");
-            if (const auto v = (*t)["executor"].value<std::string_view>())  { set_str(p.executor, *v); } // RAF-10: custom
+            if (const auto v = (*t)["executor"].value<std::string_view>()) // RAF-10: custom
+            {
+                set_str(p.executor, *v);
+            }
             // RAF-12.3: a `kind = "custom"` pass left its `executor_id` INVALID (the table has no app id); resolve it
             // from the just-read `executor` field, the same hash a record uses. A builtin's id is already set.
             if (!p.executor_id.valid() && !p.executor.empty())
@@ -783,25 +1321,45 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             sset(pp::kTechnique, "technique");
             if (const auto v = (*t)["filter"].value<std::string_view>())
             {
-                if (!to_blit_filter(*v, l_filter)) { set_where(where, *v); return FrameCookError::UnknownFilter; }
+                if (!to_blit_filter(*v, l_filter))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownFilter;
+                }
                 l_has_filter = true;
             }
             // REN-38-A13 / A14: per-pass render state and queue placement.
             if (const auto v = (*t)["shading_rate"].value<std::string_view>())
             {
-                if (!to_shading_rate(*v, l_sr)) { set_where(where, *v); return FrameCookError::UnknownShadingRate; }
+                if (!to_shading_rate(*v, l_sr))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownShadingRate;
+                }
             }
             if (const auto v = (*t)["rate_combiner"].value<std::string_view>())
             {
-                if (!to_rate_combiner(*v, l_rc)) { set_where(where, *v); return FrameCookError::UnknownRateCombiner; }
+                if (!to_rate_combiner(*v, l_rc))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownRateCombiner;
+                }
             }
             if (const auto v = (*t)["conservative"].value<std::string_view>())
             {
-                if (!to_conservative(*v, l_cons)) { set_where(where, *v); return FrameCookError::UnknownConservative; }
+                if (!to_conservative(*v, l_cons))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownConservative;
+                }
             }
             if (const auto v = (*t)["queue"].value<std::string_view>())
             {
-                if (!to_queue(*v, p.queue)) { set_where(where, *v); return FrameCookError::UnknownQueue; }
+                if (!to_queue(*v, p.queue))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownQueue;
+                }
             }
             // ── ⭐ REN-38-B8: the pass's sampler. Any one field present makes the pass sampler-declaring. ──
             if (const auto v = (*t)["filter"].value<std::string_view>())
@@ -848,26 +1406,48 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 {
                     const auto bs = b.value<std::string_view>();
                     crd::gpu::BlendMode bm{};
-                    if (!bs || !to_blend(*bs, bm)) { set_where(where, bs ? *bs : ""); return FrameCookError::UnknownBlend; }
+                    if (!bs || !to_blend(*bs, bm))
+                    {
+                        set_where(where, bs ? *bs : "");
+                        return FrameCookError::UnknownBlend;
+                    }
                     l_blend.push_back(bm);
                 }
             }
             if (const auto v = (*t)["material_pass"].value<std::string_view>())
             {
-                if (!to_material_pass(*v, l_material)) { set_where(where, *v); return FrameCookError::UnknownMaterialPass; }
+                if (!to_material_pass(*v, l_material))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownMaterialPass;
+                }
             }
             if (const auto v = (*t)["for_each"].value<std::string_view>())
             {
-                if (!to_for_each(*v, p.for_each, p.for_each_arg)) { set_where(where, *v); return FrameCookError::UnknownForEach; }
+                if (!to_for_each(*v, p.for_each, p.for_each_arg))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownForEach;
+                }
             }
             if (const auto v = (*t)["depth"].value<std::string_view>())
             {
-                if (!to_compare(*v, l_depth)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                if (!to_compare(*v, l_depth))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownCompare;
+                }
                 l_has_depth = true;
             }
             // ── ⭐ REN-38 audit: the PASS-STATE vocabulary. Every default is the historical hardwired value. ──
-            if (const auto v = (*t)["depth_write"].value<bool>()) { l_state.depth_write = *v; }
-            if (const auto v = (*t)["depth_bias"].value<double>()) { l_state.depth_bias = static_cast<float>(*v); }
+            if (const auto v = (*t)["depth_write"].value<bool>())
+            {
+                l_state.depth_write = *v;
+            }
+            if (const auto v = (*t)["depth_bias"].value<double>())
+            {
+                l_state.depth_bias = static_cast<float>(*v);
+            }
             if (const auto v = (*t)["depth_bias_slope"].value<double>())
             {
                 l_state.depth_bias_slope = static_cast<float>(*v);
@@ -878,59 +1458,113 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             }
             if (const auto v = (*t)["face_cull"].value<std::string_view>())
             {
-                if (!to_face_cull(*v, l_state.face_cull)) { set_where(where, *v); return FrameCookError::UnknownFaceCull; }
+                if (!to_face_cull(*v, l_state.face_cull))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownFaceCull;
+                }
             }
             if (const auto v = (*t)["front_face"].value<std::string_view>())
             {
-                if (!to_front_face(*v, l_state.front_face)) { set_where(where, *v); return FrameCookError::UnknownFrontFace; }
+                if (!to_front_face(*v, l_state.front_face))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownFrontFace;
+                }
             }
             // REN-38-F11: this pass LOADS its target instead of clearing (mask-then-test pass pairs)
-            if (const auto v = (*t)["load"].value<bool>()) { l_load = *v; }
+            if (const auto v = (*t)["load"].value<bool>())
+            {
+                l_load = *v;
+            }
             // REN-40-G1: load DEPTH only (clear colour) — the depth-prepass pattern
-            if (const auto v = (*t)["load_depth"].value<bool>()) { l_load_depth = *v; }
+            if (const auto v = (*t)["load_depth"].value<bool>())
+            {
+                l_load_depth = *v;
+            }
             // REN-40-G3: a separate depth image used as the depth attachment
-            if (const auto v = (*t)["shared_depth"].value<std::string_view>()) { set_pass_str(p, crd::containers::StringView(pp::kSharedDepth), crd::containers::StringView(v->data(), v->size())); }
-            if (const auto v = (*t)["depth_as_float"].value<bool>()) { l_depth_as_float = *v; }
-            if (const auto v = (*t)["untracked_storage"].value<bool>()) { l_untracked = *v; }
-            if (const auto v = (*t)["stencil"].value<bool>()) { l_state.stencil_enable = *v; }
+            if (const auto v = (*t)["shared_depth"].value<std::string_view>())
+            {
+                set_pass_str(p, crd::containers::StringView(pp::kSharedDepth), crd::containers::StringView(v->data(), v->size()));
+            }
+            if (const auto v = (*t)["depth_as_float"].value<bool>())
+            {
+                l_depth_as_float = *v;
+            }
+            if (const auto v = (*t)["untracked_storage"].value<bool>())
+            {
+                l_untracked = *v;
+            }
+            if (const auto v = (*t)["stencil"].value<bool>())
+            {
+                l_state.stencil_enable = *v;
+            }
             if (const auto v = (*t)["stencil_compare"].value<std::string_view>())
             {
-                if (!to_compare(*v, l_state.stencil_compare)) { set_where(where, *v); return FrameCookError::UnknownCompare; }
+                if (!to_compare(*v, l_state.stencil_compare))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownCompare;
+                }
                 l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_ref"].value<int64_t>())
             {
                 // ⛔ Stencil is EIGHT BITS on every backend; a reference of 256 silently truncating to 0 would
                 // make a portal pass mark one value and test another — refused by name instead.
-                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_ref"); return FrameCookError::BadStencilValue; }
+                if (*v < 0 || *v > 255)
+                {
+                    set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_ref");
+                    return FrameCookError::BadStencilValue;
+                }
                 l_state.stencil_ref    = static_cast<crd::u32>(*v);
                 l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_read_mask"].value<int64_t>())
             {
-                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_read_mask"); return FrameCookError::BadStencilValue; }
+                if (*v < 0 || *v > 255)
+                {
+                    set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_read_mask");
+                    return FrameCookError::BadStencilValue;
+                }
                 l_state.stencil_read_mask = static_cast<crd::u32>(*v);
                 l_state.stencil_enable    = true;
             }
             if (const auto v = (*t)["stencil_write_mask"].value<int64_t>())
             {
-                if (*v < 0 || *v > 255) { set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_write_mask"); return FrameCookError::BadStencilValue; }
+                if (*v < 0 || *v > 255)
+                {
+                    set_where(where, p.name.size() > 0U ? p.name.c_str() : "stencil_write_mask");
+                    return FrameCookError::BadStencilValue;
+                }
                 l_state.stencil_write_mask = static_cast<crd::u32>(*v);
                 l_state.stencil_enable     = true;
             }
             if (const auto v = (*t)["stencil_fail"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, l_state.stencil_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                if (!to_stencil_op(*v, l_state.stencil_fail))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownStencilOp;
+                }
                 l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_depth_fail"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, l_state.stencil_depth_fail)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                if (!to_stencil_op(*v, l_state.stencil_depth_fail))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownStencilOp;
+                }
                 l_state.stencil_enable = true;
             }
             if (const auto v = (*t)["stencil_pass"].value<std::string_view>())
             {
-                if (!to_stencil_op(*v, l_state.stencil_pass)) { set_where(where, *v); return FrameCookError::UnknownStencilOp; }
+                if (!to_stencil_op(*v, l_state.stencil_pass))
+                {
+                    set_where(where, *v);
+                    return FrameCookError::UnknownStencilOp;
+                }
                 l_state.stencil_enable = true;
             }
             if (const auto* cc = (*t)["clear_color"].as_array())
@@ -939,7 +1573,10 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                 crd::u32 i = 0;
                 for (const auto& c : *cc)
                 {
-                    if (i < 4U) { l_clear_color[i++] = static_cast<float>(c.value_or<double>(0.0)); }
+                    if (i < 4U)
+                    {
+                        l_clear_color[i++] = static_cast<float>(c.value_or<double>(0.0));
+                    }
                 }
             }
             if (const auto cd = (*t)["clear_depth"].value<double>())
@@ -957,15 +1594,40 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     {
                         prm.type = FrameParamType::Vec4;
                         crd::u32 i = 0;
-                        for (const auto& e : *av) { if (i < 4U) { prm.v[i++] = e.value_or<double>(0.0); } }
+                        for (const auto& e : *av)
+                        {
+                            if (i < 4U)
+                            {
+                                prm.v[i++] = e.value_or<double>(0.0);
+                            }
+                        }
                     }
-                    else if (v.is_boolean())      { prm.type = FrameParamType::Bool;  prm.v[0] = v.value_or(false) ? 1.0 : 0.0; }
-                    else if (v.is_integer())      { prm.type = FrameParamType::Int;   prm.v[0] = static_cast<double>(v.value_or<int64_t>(0)); }
+                    else if (v.is_boolean())
+                    {
+                        prm.type = FrameParamType::Bool;
+                        prm.v[0] = v.value_or(false) ? 1.0 : 0.0;
+                    }
+                    else if (v.is_integer())
+                    {
+                        prm.type = FrameParamType::Int;
+                        prm.v[0] = static_cast<double>(v.value_or<int64_t>(0));
+                    }
                     // CEIR-31b-4-b-iv-g-2: a STRING value under [pass.params] (e.g. `derive_spec_2_read = "blur_src"`). Without
                     // this case a string fell to the Float else and became 0.0 — the payload silently lost. The binary blob
                     // already round-trips `prm.str` (put_str/strv), so this one line makes the whole String seam round-trip.
-                    else if (v.is_string())       { prm.type = FrameParamType::String; if (const auto sv = v.value<std::string_view>()) { set_str(prm.str, *sv); } }
-                    else                          { prm.type = FrameParamType::Float; prm.v[0] = v.value_or<double>(0.0); }
+                    else if (v.is_string())
+                    {
+                        prm.type = FrameParamType::String;
+                        if (const auto sv = v.value<std::string_view>())
+                        {
+                            set_str(prm.str, *sv);
+                        }
+                    }
+                    else
+                    {
+                        prm.type = FrameParamType::Float;
+                        prm.v[0] = v.value_or<double>(0.0);
+                    }
                     p.params.push_back(static_cast<FrameParam&&>(prm));
                 }
             }
@@ -974,12 +1636,27 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
             // blob + TOML round-trips are byte-stable, and `pass_*`/`pass_sampler`/`pass_state` reconstruct exactly.
             {
                 using SVp = crd::containers::StringView;
-                if (l_has_clear_color) { set_pass_vec4(p, SVp(pp::kClearColor), l_clear_color); }
-                if (l_has_clear_depth) { set_pass_f32(p, SVp(pp::kClearDepth), l_clear_depth); }
+                if (l_has_clear_color)
+                {
+                    set_pass_vec4(p, SVp(pp::kClearColor), l_clear_color);
+                }
+                if (l_has_clear_depth)
+                {
+                    set_pass_f32(p, SVp(pp::kClearDepth), l_clear_depth);
+                }
                 // CONDITIONAL (round-trip symmetry with the builder + emitter): fold only when authored / non-default.
-                if (l_has_depth) { set_pass_enum(p, SVp(pp::kDepthCompare), static_cast<crd::u32>(l_depth)); }
-                if (l_material != FrameMaterialPass::None) { set_pass_enum(p, SVp(pp::kMaterialPass), static_cast<crd::u32>(l_material)); }
-                if (l_has_filter) { set_pass_enum(p, SVp(pp::kFilter), static_cast<crd::u32>(l_filter)); }
+                if (l_has_depth)
+                {
+                    set_pass_enum(p, SVp(pp::kDepthCompare), static_cast<crd::u32>(l_depth));
+                }
+                if (l_material != FrameMaterialPass::None)
+                {
+                    set_pass_enum(p, SVp(pp::kMaterialPass), static_cast<crd::u32>(l_material));
+                }
+                if (l_has_filter)
+                {
+                    set_pass_enum(p, SVp(pp::kFilter), static_cast<crd::u32>(l_filter));
+                }
                 if (l_blend.size() > 0U)
                 {
                     set_pass_u32(p, SVp(pp::kBlendCount), static_cast<crd::u32>(l_blend.size()));
@@ -988,9 +1665,18 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                         set_pass_enum(p, SVp(pp::kBlendSlot[k]), static_cast<crd::u32>(l_blend[k]));
                     }
                 }
-                if (l_sr != crd::gpu::ShadingRate::Rate1x1) { set_pass_enum(p, SVp(pp::kShadingRate), static_cast<crd::u32>(l_sr)); }
-                if (l_rc != crd::gpu::ShadingRateCombiner::Keep) { set_pass_enum(p, SVp(pp::kRateCombiner), static_cast<crd::u32>(l_rc)); }
-                if (l_cons != crd::gpu::ConservativeMode::Off) { set_pass_enum(p, SVp(pp::kConservative), static_cast<crd::u32>(l_cons)); }
+                if (l_sr != crd::gpu::ShadingRate::Rate1x1)
+                {
+                    set_pass_enum(p, SVp(pp::kShadingRate), static_cast<crd::u32>(l_sr));
+                }
+                if (l_rc != crd::gpu::ShadingRateCombiner::Keep)
+                {
+                    set_pass_enum(p, SVp(pp::kRateCombiner), static_cast<crd::u32>(l_rc));
+                }
+                if (l_cons != crd::gpu::ConservativeMode::Off)
+                {
+                    set_pass_enum(p, SVp(pp::kConservative), static_cast<crd::u32>(l_cons));
+                }
                 set_pass_flag(p, SVp(pp::kLoad), l_load);
                 set_pass_flag(p, SVp(pp::kLoadDepth), l_load_depth);
                 set_pass_flag(p, SVp(pp::kDepthAsFloat), l_depth_as_float);
@@ -1006,19 +1692,43 @@ FrameCookError parse_frame_toml(crd::containers::StringView toml_text, FrameGrap
                     set_pass_u32(p, SVp(pp::kSamplerAniso), l_sampler.anisotropy);
                     set_pass_f32(p, SVp(pp::kSamplerBias), l_sampler.mip_bias);
                 }
-                if (!l_state.depth_write) { set_pass_flag(p, SVp(pp::kDepthWriteOff), true); }
-                if (l_state.depth_bias != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBias), l_state.depth_bias); }
-                if (l_state.depth_bias_slope != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBiasSlope), l_state.depth_bias_slope); }
-                if (l_state.depth_bias_clamp != 0.0F) { set_pass_f32(p, SVp(pp::kDepthBiasClamp), l_state.depth_bias_clamp); }
-                if (l_state.face_cull != crd::gpu::FaceCull::None) { set_pass_enum(p, SVp(pp::kFaceCull), static_cast<crd::u32>(l_state.face_cull)); }
-                if (l_state.front_face != crd::gpu::FrontFace::CounterClockwise) { set_pass_enum(p, SVp(pp::kFrontFace), static_cast<crd::u32>(l_state.front_face)); }
+                if (!l_state.depth_write)
+                {
+                    set_pass_flag(p, SVp(pp::kDepthWriteOff), true);
+                }
+                if (l_state.depth_bias != 0.0F)
+                {
+                    set_pass_f32(p, SVp(pp::kDepthBias), l_state.depth_bias);
+                }
+                if (l_state.depth_bias_slope != 0.0F)
+                {
+                    set_pass_f32(p, SVp(pp::kDepthBiasSlope), l_state.depth_bias_slope);
+                }
+                if (l_state.depth_bias_clamp != 0.0F)
+                {
+                    set_pass_f32(p, SVp(pp::kDepthBiasClamp), l_state.depth_bias_clamp);
+                }
+                if (l_state.face_cull != crd::gpu::FaceCull::None)
+                {
+                    set_pass_enum(p, SVp(pp::kFaceCull), static_cast<crd::u32>(l_state.face_cull));
+                }
+                if (l_state.front_face != crd::gpu::FrontFace::CounterClockwise)
+                {
+                    set_pass_enum(p, SVp(pp::kFrontFace), static_cast<crd::u32>(l_state.front_face));
+                }
                 if (l_state.stencil_enable)
                 {
                     set_pass_flag(p, SVp(pp::kStencil), true);
                     set_pass_enum(p, SVp(pp::kStencilCompare), static_cast<crd::u32>(l_state.stencil_compare));
                     set_pass_u32(p, SVp(pp::kStencilRef), l_state.stencil_ref);
-                    if (l_state.stencil_read_mask != 0xFFU) { set_pass_u32(p, SVp(pp::kStencilReadMask), l_state.stencil_read_mask); }
-                    if (l_state.stencil_write_mask != 0xFFU) { set_pass_u32(p, SVp(pp::kStencilWriteMask), l_state.stencil_write_mask); }
+                    if (l_state.stencil_read_mask != 0xFFU)
+                    {
+                        set_pass_u32(p, SVp(pp::kStencilReadMask), l_state.stencil_read_mask);
+                    }
+                    if (l_state.stencil_write_mask != 0xFFU)
+                    {
+                        set_pass_u32(p, SVp(pp::kStencilWriteMask), l_state.stencil_write_mask);
+                    }
                     set_pass_enum(p, SVp(pp::kStencilFail), static_cast<crd::u32>(l_state.stencil_fail));
                     set_pass_enum(p, SVp(pp::kStencilDepthFail), static_cast<crd::u32>(l_state.stencil_depth_fail));
                     set_pass_enum(p, SVp(pp::kStencilPass), static_cast<crd::u32>(l_state.stencil_pass));
@@ -1080,7 +1790,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             for (crd::usize i = 0; i < p.params.size(); ++i)
             {
                 crd::u32 id_i = 0U;
-                if (!parse_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), id_i)) { continue; }
+                if (!parse_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), id_i))
+                {
+                    continue;
+                }
                 if (++nspec > kMaxSpecConsts)
                 {
                     set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -1103,15 +1816,24 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             {
                 crd::u32        did = 0U;
                 DeriveSpecField fi{};
-                if (!parse_derive_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), did, fi)) { continue; }
+                if (!parse_derive_spec_param(crd::containers::StringView(p.params[i].name.c_str(), p.params[i].name.size()), did, fi))
+                {
+                    continue;
+                }
                 bool first = true; // has an EARLIER param already carried this id? then it was validated there.
                 for (crd::usize k = 0; k < i && first; ++k)
                 {
                     crd::u32        dk = 0U;
                     DeriveSpecField fk{};
-                    if (parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) && dk == did) { first = false; }
+                    if (parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) && dk == did)
+                    {
+                        first = false;
+                    }
                 }
-                if (!first) { continue; }
+                if (!first)
+                {
+                    continue;
+                }
                 if (++nspec > kMaxSpecConsts) // a derived id joins the same 16-slot record buffer as the literals
                 {
                     set_where(where, std::string_view(p.name.c_str(), p.name.size()));
@@ -1125,7 +1847,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
                 {
                     crd::u32        dk = 0U;
                     DeriveSpecField fk{};
-                    if (!parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) || dk != did) { continue; }
+                    if (!parse_derive_spec_param(crd::containers::StringView(p.params[k].name.c_str(), p.params[k].name.size()), dk, fk) || dk != did)
+                    {
+                        continue;
+                    }
                     const FrameParam** slot = &po;
                     if (fk == DeriveSpecField::Read)
                     {
@@ -1302,7 +2027,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             {
                 const FrameResourceDesc* rd = find_resource(p.writes[w].name);
                 // a DEPTH write is not the id target (it routes to the depth attachment) — only colour writes carry the id.
-                if (rd == nullptr || crd::gpu::fg_format_has_depth(rd->format)) { continue; }
+                if (rd == nullptr || crd::gpu::fg_format_has_depth(rd->format))
+                {
+                    continue;
+                }
                 if (rd->format != crd::gpu::FgImageFormat::R32Uint)
                 {
                     set_where(where, std::string_view(p.writes[w].name.c_str(), p.writes[w].name.size()));
@@ -1400,7 +2128,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             for (crd::usize r = 0; r < p.reads.size() && args == nullptr; ++r)
             {
                 const FrameResourceDesc* rd = find_resource(p.reads[r].name);
-                if (rd != nullptr && rd->kind == FrameResourceKind::IndirectArgs) { args = rd; }
+                if (rd != nullptr && rd->kind == FrameResourceKind::IndirectArgs)
+                {
+                    args = rd;
+                }
             }
             if (args == nullptr)
             {
@@ -1430,7 +2161,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             for (crd::usize k = 0; !has_count && k < p.params.size(); ++k)
             {
                 const std::string_view pn(p.params[k].name.c_str(), p.params[k].name.size());
-                if ((pn == "patches" || pn == "groups") && p.params[k].v[0] > 0.0) { has_count = true; }
+                if ((pn == "patches" || pn == "groups") && p.params[k].v[0] > 0.0)
+                {
+                    has_count = true;
+                }
             }
             if (!has_count)
             {
@@ -1501,7 +2235,10 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
         const auto check_refs = [&](const crd::containers::Array<FrameResourceRef>& refs) -> FrameCookError {
             for (crd::usize i = 0; i < refs.size(); ++i)
             {
-                if (is_sentinel(refs[i].name)) { continue; } // `@output` and subgraph `@`-parameters
+                if (is_sentinel(refs[i].name)) // `@output` and subgraph `@`-parameters
+                {
+                    continue;
+                }
                 const FrameResourceDesc* r = find_resource(refs[i].name);
                 if (r == nullptr)
                 {
@@ -1522,9 +2259,15 @@ FrameCookError pass_contract_diag(const FramePassDesc& p, crd::containers::Const
             return FrameCookError::Ok;
         };
         const FrameCookError e1 = check_refs(p.reads);
-        if (e1 != FrameCookError::Ok) { return e1; }
+        if (e1 != FrameCookError::Ok)
+        {
+            return e1;
+        }
         const FrameCookError e2 = check_refs(p.writes);
-        if (e2 != FrameCookError::Ok) { return e2; }
+        if (e2 != FrameCookError::Ok)
+        {
+            return e2;
+        }
     return FrameCookError::Ok;
 }
 
@@ -1547,8 +2290,15 @@ FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
     crd::containers::Array<crd::u8> edge(alloc);
     edge.resize(np * np, 0U);
     const auto add_dep = [&](crd::usize from, crd::usize to) {
-        if (from == to) { return; }
-        if (edge[(from * np) + to] == 0U) { edge[(from * np) + to] = 1U; ++indeg[to]; }
+        if (from == to)
+        {
+            return;
+        }
+        if (edge[(from * np) + to] == 0U)
+        {
+            edge[(from * np) + to] = 1U;
+            ++indeg[to];
+        }
     };
     // ── ⭐⭐ REN-41: WHEN "read then a LATER pass writes it" is a WAR (no cycle) vs a forward RAW (a cycle). ──
     // A read that matches a writer declared AFTER the reader is a legitimate WAR (reader-before-writer, no
@@ -1591,7 +2341,10 @@ FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
     {
         for (crd::usize b = 0; b < np; ++b)
         {
-            if (a == b) { continue; }
+            if (a == b)
+            {
+                continue;
+            }
             for (crd::usize r = 0; r < desc.passes[a].reads.size(); ++r)
             {
                 const crd::containers::String& rn = desc.passes[a].reads[r].name;
@@ -1605,14 +2358,23 @@ FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
                         break;
                     }
                 }
-                if (!matched) { continue; }
+                if (!matched)
+                {
+                    continue;
+                }
                 // A LATER writer (b > a) is a legitimate WAR (reader before writer, edge a→b) only when the read
                 // is satisfiable — the resource has a frame-start value or an earlier producer this frame.
                 // Otherwise, and for any EARLIER writer, the writer must precede the reader (edge b→a): an ordinary
                 // RAW, or the forward-reference RAW on a producer-less single-frame resource that surfaces a cycle.
                 const bool war = b > a && (has_frame_start_value(rn) || written_before(rn, a));
-                if (war) { add_dep(a, b); }
-                else     { add_dep(b, a); }
+                if (war)
+                {
+                    add_dep(a, b);
+                }
+                else
+                {
+                    add_dep(b, a);
+                }
             }
         }
     }
@@ -1633,13 +2395,19 @@ FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
                     }
                 }
             }
-            if (waw) { add_dep(a, b); } // WAW: later writer b depends on earlier writer a
+            if (waw) // WAW: later writer b depends on earlier writer a
+            {
+                add_dep(a, b);
+            }
         }
     }
     crd::containers::Array<crd::u32> queue(alloc);
     for (crd::usize i = 0; i < np; ++i)
     {
-        if (indeg[i] == 0U) { queue.push_back(static_cast<crd::u32>(i)); }
+        if (indeg[i] == 0U)
+        {
+            queue.push_back(static_cast<crd::u32>(i));
+        }
     }
     crd::usize visited = 0;
     for (crd::usize qi = 0; qi < queue.size(); ++qi)
@@ -1654,7 +2422,10 @@ FrameCookError dependency_cycle_diag(const FrameGraphDesc& desc)
             }
         }
     }
-    if (visited != np) { return FrameCookError::DependencyCycle; }
+    if (visited != np)
+    {
+        return FrameCookError::DependencyCycle;
+    }
 
     return FrameCookError::Ok;
 }
@@ -1691,10 +2462,18 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             // ⛔ Elements with no SIZE. DX12 carries the stride in the UAV, and a wrong one reads every element at
             // the wrong offset — an error that GROWS with the index, so element 0 looks right and element 1000 is
             // nonsense. There is no safe default to pick here, so there is none.
-            if (r.stride == 0U) { set_where(where, ew); return FrameCookError::StructuredNeedsStride; }
+            if (r.stride == 0U)
+            {
+                set_where(where, ew);
+                return FrameCookError::StructuredNeedsStride;
+            }
             // ⛔ Both APIs require a 4-byte-aligned structure stride. Rounding it up silently would change the
             // element the shader lands on; refusing names the resource while the author can still fix it.
-            if ((r.stride % 4U) != 0U) { set_where(where, ew); return FrameCookError::StrideNotAligned; }
+            if ((r.stride % 4U) != 0U)
+            {
+                set_where(where, ew);
+                return FrameCookError::StrideNotAligned;
+            }
         }
         // ── ⭐ REN-38-B1: what a PERSISTENT / PING-PONG resource may say. ──
         if (r.kind == FrameResourceKind::PersistentImage || r.kind == FrameResourceKind::PingPongImage)
@@ -1720,12 +2499,18 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
                     for (crd::usize k = 0; k < desc.passes[pi2].reads.size(); ++k)
                     {
                         if (str_eq(r.name, std::string_view(desc.passes[pi2].reads[k].name.c_str(),
-                                                            desc.passes[pi2].reads[k].name.size()))) { read = true; }
+                                                            desc.passes[pi2].reads[k].name.size())))
+                        {
+                            read = true;
+                        }
                     }
                     for (crd::usize k = 0; k < desc.passes[pi2].writes.size(); ++k)
                     {
                         if (str_eq(r.name, std::string_view(desc.passes[pi2].writes[k].name.c_str(),
-                                                            desc.passes[pi2].writes[k].name.size()))) { wrote = true; }
+                                                            desc.passes[pi2].writes[k].name.size())))
+                        {
+                            wrote = true;
+                        }
                     }
                 }
                 if (!(read && wrote) && !composed)
@@ -1757,14 +2542,28 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             // ⛔ MIPS: 0 is not "full chain" — guessing what an author meant is how a bloom chain silently gets a
             // different length than the technique reading it expects. And a chain cannot outlive its extent: the
             // levels halve to 1x1 and no further, so more levels than that is a request the device must refuse.
-            if (r.mips == 0U) { set_where(where, ew); return FrameCookError::BadMipCount; }
+            if (r.mips == 0U)
+            {
+                set_where(where, ew);
+                return FrameCookError::BadMipCount;
+            }
             crd::u32 ext = r.width > r.height ? r.width : r.height;
-            if (ext == 0U && r.scale > 0.0F) { ext = 0U; } // scale-relative: the runtime checks against the output
+            if (ext == 0U && r.scale > 0.0F) // scale-relative: the runtime checks against the output
+            {
+                ext = 0U;
+            }
             if (ext != 0U)
             {
                 crd::u32 max_mips = 1U;
-                while ((ext >> max_mips) != 0U) { ++max_mips; }
-                if (r.mips > max_mips) { set_where(where, ew); return FrameCookError::BadMipCount; }
+                while ((ext >> max_mips) != 0U)
+                {
+                    ++max_mips;
+                }
+                if (r.mips > max_mips)
+                {
+                    set_where(where, ew);
+                    return FrameCookError::BadMipCount;
+                }
             }
         }
     }
@@ -1777,7 +2576,10 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
     for (crd::usize i = 0; i < desc.resources.size(); ++i)
     {
         const FrameResourceDesc& r = desc.resources[i];
-        if (r.kind != FrameResourceKind::AccelerationStructure) { continue; }
+        if (r.kind != FrameResourceKind::AccelerationStructure)
+        {
+            continue;
+        }
         if (r.size_bytes != 0U || r.width != 0U || r.height != 0U || r.scale > 0.0F)
         {
             set_where(where, std::string_view(r.name.c_str(), r.name.size()));
@@ -1797,7 +2599,10 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         }
         for (crd::usize i = 0; i < p.writes.size(); ++i)
         {
-            if (is_output(p.writes[i].name)) { wrote_output = true; }
+            if (is_output(p.writes[i].name))
+            {
+                wrote_output = true;
+            }
         }
     }
     // ⭐ CEIR-20b: a HEADLESS frame (only work/compute/raytrace/transfer passes — NO raster) produces DEVICE BUFFERS the
@@ -1813,7 +2618,10 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
             break;
         }
     }
-    if (!wrote_output && !composed && has_raster) { return FrameCookError::NoOutputPass; }
+    if (!wrote_output && !composed && has_raster)
+    {
+        return FrameCookError::NoOutputPass;
+    }
 
     // every DECLARED resource must be produced by some pass (an unwritten transient is dead weight and, more
     // importantly, a sign the author mistyped a name — `build()` already rejects it at runtime; we reject earlier)
@@ -1823,7 +2631,10 @@ FrameCookError validate_frame_graph(const FrameGraphDesc& desc, crd::containers:
         // this graph writes it and requiring one would make every ray-tracing asset invalid. The rule this loop
         // enforces is "a resource the GRAPH owns must have a producer"; an AS is not one the graph owns.
         // ⛔ REN-38-B5: an EXTERNAL TEXTURE is the host's too — read-only content with its own update schedule.
-        if (desc.resources[ri].kind == FrameResourceKind::ExternalTexture) { continue; }
+        if (desc.resources[ri].kind == FrameResourceKind::ExternalTexture)
+        {
+            continue;
+        }
         // ⛔ An ACCELERATION STRUCTURE and an EXTERNAL BUFFER are both the HOST's — no pass in this graph writes
         // them, and demanding a producer would make every ray-tracing asset, and every graph that consumes scene
         // geometry, invalid. The rule is "a resource the GRAPH owns must have a producer"; neither is one.
@@ -1998,8 +2809,14 @@ bool pass_flag(const FramePassDesc& p, crd::containers::StringView name) noexcep
 bool pass_vec4(const FramePassDesc& p, crd::containers::StringView name, float out[4]) noexcept
 {
     const FrameParam* fp = find_pass_param(p, name);
-    if (fp == nullptr) { return false; }
-    for (crd::u32 i = 0; i < 4U; ++i) { out[i] = static_cast<float>(fp->v[i]); }
+    if (fp == nullptr)
+    {
+        return false;
+    }
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        out[i] = static_cast<float>(fp->v[i]);
+    }
     return true;
 }
 namespace
@@ -2022,7 +2839,10 @@ FrameParam& upsert_pass_param(FramePassDesc& p, crd::containers::StringView name
 } // namespace
 void set_pass_str(FramePassDesc& p, crd::containers::StringView name, crd::containers::StringView value)
 {
-    if (value.empty()) { return; }
+    if (value.empty())
+    {
+        return;
+    }
     FrameParam& fp = upsert_pass_param(p, name);
     fp.type        = FrameParamType::String;
     set_str(fp.str, std::string_view(value.data(), value.size()));
@@ -2047,7 +2867,10 @@ void set_pass_enum(FramePassDesc& p, crd::containers::StringView name, crd::u32 
 }
 void set_pass_flag(FramePassDesc& p, crd::containers::StringView name, bool value)
 {
-    if (!value) { return; }
+    if (!value)
+    {
+        return;
+    }
     FrameParam& fp = upsert_pass_param(p, name);
     fp.type        = FrameParamType::Bool;
     fp.v[0]        = 1.0;
@@ -2056,7 +2879,10 @@ void set_pass_vec4(FramePassDesc& p, crd::containers::StringView name, const flo
 {
     FrameParam& fp = upsert_pass_param(p, name);
     fp.type        = FrameParamType::Vec4;
-    for (crd::u32 i = 0; i < 4U; ++i) { fp.v[i] = static_cast<double>(v[i]); }
+    for (crd::u32 i = 0; i < 4U; ++i)
+    {
+        fp.v[i] = static_cast<double>(v[i]);
+    }
 }
 
 crd::gpu::SamplerDesc pass_sampler(const FramePassDesc& p) noexcept
@@ -2117,14 +2943,23 @@ bool parse_spec_param(crd::containers::StringView name, crd::u32& id_out) noexce
 {
     constexpr char       pfx[]   = "spec_";
     constexpr crd::usize pfx_len = sizeof(pfx) - 1U; // 5
-    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0) { return false; }
+    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0)
+    {
+        return false;
+    }
     crd::u64 v = 0U;
     for (crd::usize i = pfx_len; i < name.size(); ++i)
     {
         const char c = name[i];
-        if (c < '0' || c > '9') { return false; }                  // a non-digit tail is not a spec param
+        if (c < '0' || c > '9') // a non-digit tail is not a spec param
+        {
+            return false;
+        }
         v = v * 10U + static_cast<crd::u64>(c - '0');
-        if (v > 0xFFFF'FFFFULL) { return false; }                  // an id that overflows u32 is not a valid constant_id
+        if (v > 0xFFFF'FFFFULL) // an id that overflows u32 is not a valid constant_id
+        {
+            return false;
+        }
     }
     id_out = static_cast<crd::u32>(v);
     return true;
@@ -2134,24 +2969,48 @@ bool parse_derive_spec_param(crd::containers::StringView name, crd::u32& id_out,
 {
     constexpr char       pfx[]   = "derive_spec_";
     constexpr crd::usize pfx_len = sizeof(pfx) - 1U; // 12
-    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0) { return false; }
+    if (name.size() <= pfx_len || std::memcmp(name.data(), pfx, pfx_len) != 0)
+    {
+        return false;
+    }
     crd::u64   v   = 0U;
     crd::usize i   = pfx_len;
     bool       any = false;
     for (; i < name.size() && name[i] >= '0' && name[i] <= '9'; ++i)
     {
         v = v * 10U + static_cast<crd::u64>(name[i] - '0');
-        if (v > 0xFFFF'FFFFULL) { return false; } // an id that overflows u32 is not a valid constant_id
+        if (v > 0xFFFF'FFFFULL) // an id that overflows u32 is not a valid constant_id
+        {
+            return false;
+        }
         any = true;
     }
-    if (!any) { return false; }                               // no digits ("derive_spec_read") — not a derive param
-    if (i >= name.size() || name[i] != '_') { return false; } // must be <digits>_<field>
+    if (!any) // no digits ("derive_spec_read") — not a derive param
+    {
+        return false;
+    }
+    if (i >= name.size() || name[i] != '_') // must be <digits>_<field>
+    {
+        return false;
+    }
     ++i;                                                      // skip the '_'
     const std::string_view field(name.data() + i, name.size() - i);
-    if (field == "read")      { field_out = DeriveSpecField::Read; }
-    else if (field == "axis") { field_out = DeriveSpecField::Axis; }
-    else if (field == "op")   { field_out = DeriveSpecField::Op; }
-    else { return false; }                                    // an unknown field — an ordinary unknown param, as today
+    if (field == "read")
+    {
+        field_out = DeriveSpecField::Read;
+    }
+    else if (field == "axis")
+    {
+        field_out = DeriveSpecField::Axis;
+    }
+    else if (field == "op")
+    {
+        field_out = DeriveSpecField::Op;
+    }
+    else // an unknown field — an ordinary unknown param, as today
+    {
+        return false;
+    }
     id_out = static_cast<crd::u32>(v);
     return true;
 }
@@ -2167,7 +3026,10 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
     put_str(out, desc.fallback);
 
     put_u32(out, static_cast<crd::u32>(desc.requires_caps.size()));
-    for (crd::usize i = 0; i < desc.requires_caps.size(); ++i) { put_str(out, desc.requires_caps[i]); }
+    for (crd::usize i = 0; i < desc.requires_caps.size(); ++i)
+    {
+        put_str(out, desc.requires_caps[i]);
+    }
 
     put_u32(out, static_cast<crd::u32>(desc.resources.size()));
     for (crd::usize i = 0; i < desc.resources.size(); ++i)
@@ -2195,7 +3057,10 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_str(out, d.name);
         const auto put_list = [&](const crd::containers::Array<crd::containers::String>& l) {
             put_u32(out, static_cast<crd::u32>(l.size()));
-            for (crd::usize k = 0; k < l.size(); ++k) { put_str(out, l[k]); }
+            for (crd::usize k = 0; k < l.size(); ++k)
+            {
+                put_str(out, l[k]);
+            }
         };
         put_list(d.all);
         put_list(d.any);
@@ -2232,7 +3097,10 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         {
             put_str(out, p.params[k].name);
             put_u8(out, static_cast<crd::u8>(p.params[k].type));
-            for (crd::u32 c = 0; c < 4U; ++c) { put_f64(out, p.params[k].v[c]); }
+            for (crd::u32 c = 0; c < 4U; ++c)
+            {
+                put_f64(out, p.params[k].v[c]);
+            }
             put_str(out, p.params[k].str); // RAF-12.3: the String payload (shader/kernel/draw_list/view/technique/…)
         }
     }
@@ -2257,7 +3125,10 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
         put_str(out, desc.anchors[i].name);
         const auto put_list = [&](const crd::containers::Array<crd::containers::String>& l) {
             put_u32(out, static_cast<crd::u32>(l.size()));
-            for (crd::usize k = 0; k < l.size(); ++k) { put_str(out, l[k]); }
+            for (crd::usize k = 0; k < l.size(); ++k)
+            {
+                put_str(out, l[k]);
+            }
         };
         put_list(desc.anchors[i].after);
         put_list(desc.anchors[i].before);
@@ -2274,8 +3145,14 @@ crd::containers::Array<crd::u8> cook_frame_graph(const FrameGraphDesc& desc, crd
 bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc& out)
 {
     Cursor c{bytes, 0, true};
-    if (c.u32v() != kFourCC || !c.ok) { return false; }
-    if (c.u32v() != kBlobVersion) { return false; }
+    if (c.u32v() != kFourCC || !c.ok)
+    {
+        return false;
+    }
+    if (c.u32v() != kBlobVersion)
+    {
+        return false;
+    }
     // ⛔ RESET FIRST — the same load-button scar the TOML parser above carries: deserializing into a reused
     // descriptor APPENDED every list and kept stale scalars the blob never wrote.
     out.name.clear();
@@ -2294,7 +3171,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     auto* alloc = out.resources.allocator();
 
     const crd::u32 ncap = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < ncap; ++i)
     {
         crd::containers::String s(alloc);
@@ -2303,7 +3183,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     }
 
     const crd::u32 nres = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < nres; ++i)
     {
         FrameResourceDesc r(alloc);
@@ -2324,7 +3207,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     }
 
     const crd::u32 ndl = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < ndl; ++i)
     {
         FrameDrawListDesc d(alloc);
@@ -2348,7 +3234,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
     }
 
     const crd::u32 npass = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < npass; ++i)
     {
         FramePassDesc p(alloc);
@@ -2377,7 +3266,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
             FrameParam prm(alloc);
             c.strv(prm.name);
             prm.type = static_cast<FrameParamType>(c.u8v());
-            for (crd::u32 v = 0; v < 4U; ++v) { prm.v[v] = c.f64v(); }
+            for (crd::u32 v = 0; v < 4U; ++v)
+            {
+                prm.v[v] = c.f64v();
+            }
             c.strv(prm.str); // RAF-12.3: the String payload
             p.params.push_back(static_cast<FrameParam&&>(prm));
         }
@@ -2386,7 +3278,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
 
     // REN-37.6: composition records.
     const crd::u32 ninc = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < ninc; ++i)
     {
         FrameIncludeDesc inc(alloc);
@@ -2404,7 +3299,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         out.includes.push_back(static_cast<FrameIncludeDesc&&>(inc));
     }
     const crd::u32 nanc = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < nanc; ++i)
     {
         FrameAnchorDesc a(alloc);
@@ -2423,7 +3321,10 @@ bool read_frame_graph(crd::containers::ConstSpan<crd::u8> bytes, FrameGraphDesc&
         out.anchors.push_back(static_cast<FrameAnchorDesc&&>(a));
     }
     const crd::u32 nij = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < nij; ++i)
     {
         FrameInjectDesc inj(alloc);

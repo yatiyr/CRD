@@ -64,7 +64,10 @@ memory::TlsfAllocator& galloc()
 [[nodiscard]] bool read_shipped_asset(const char* rel, containers::String& out)
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { return false; }
+    if (root == nullptr || root[0] == '\0')
+    {
+        return false;
+    }
     containers::String p(&galloc());
     p.append(root);
     p.append("/");
@@ -86,10 +89,21 @@ void copy_tree(const platform::fs::Path& src, const platform::fs::Path& dst)
         const containers::StringView   g = e.generic();
         usize                          cut = 0U;
         bool                           has = false;
-        for (usize k = g.size(); k-- > 0U;) { if (g[k] == '/') { cut = k + 1U; has = true; break; } }
+        for (usize k = g.size(); k-- > 0U;)
+        {
+            if (g[k] == '/')
+            {
+                cut = k + 1U;
+                has = true;
+                break;
+            }
+        }
         const containers::StringView name(g.data() + (has ? cut : 0U), has ? g.size() - cut : g.size());
         const platform::fs::Path      child = dst / name;
-        if (platform::fs::is_directory(e)) { copy_tree(e, child); }
+        if (platform::fs::is_directory(e))
+        {
+            copy_tree(e, child);
+        }
         else
         {
             containers::Array<u8> bytes(&galloc());
@@ -113,7 +127,10 @@ void copy_tree(const platform::fs::Path& src, const platform::fs::Path& dst)
         const f32 z       = (corner & 4U) != 0U ? 0.5F : -0.5F;
         const f32 rec[12] = {x, y, z, 0, 1, 0, 0, 0, 0, 0, 0, 1};
         const auto* b     = reinterpret_cast<const u8*>(rec);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32 idx[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
                          2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
@@ -121,7 +138,10 @@ void copy_tree(const platform::fs::Path& src, const platform::fs::Path& dst)
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -174,7 +194,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
 
     containers::Array<u8> pool(a);
     const char name[] = "cube";
-    for (char c : name) { pool.push_back(static_cast<u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<u8>(c));
+    }
 
     containers::Array<resources::ManifestEntry> entries(a);
     resources::ManifestEntry e;
@@ -193,7 +216,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
     resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (u8 b : art_bytes) { pack.push_back(b); }
+    for (u8 b : art_bytes)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
 
@@ -213,7 +239,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
         const f32 z       = (corner & 4U) != 0U ? 0.5F : -0.5F;
         const f32 rec[12] = {x, y, z, 0, 1, 0, 0, 0, 0, 0, 0, 1};
         const auto* b     = reinterpret_cast<const u8*>(rec);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32 idx[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
                          2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
@@ -221,7 +250,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -239,9 +271,15 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
         const u16 joints[4]  = {0, 0, 0, 0};
         const f32 weights[4] = {1.0F, 0.0F, 0.0F, 0.0F};
         const auto* jp = reinterpret_cast<const u8*>(joints);
-        for (u32 k = 0; k < 8U; ++k) { skin.push_back(jp[k]); }
+        for (u32 k = 0; k < 8U; ++k)
+        {
+            skin.push_back(jp[k]);
+        }
         const auto* wp = reinterpret_cast<const u8*>(weights);
-        for (u32 k = 0; k < 16U; ++k) { skin.push_back(wp[k]); }
+        for (u32 k = 0; k < 16U; ++k)
+        {
+            skin.push_back(wp[k]);
+        }
     }
     resources::CrdrWriter w(a, id, resources::kFourCC_MESH);
     w.add_chunk(resources::kFourCC_VERT, containers::as_const_span(verts));
@@ -257,7 +295,10 @@ void write_resource_pack(const platform::fs::Path& path, const resources::Resour
     auto* a = &galloc();
     containers::Array<u8> pool(a);
     const char name[] = "res";
-    for (char c : name) { pool.push_back(static_cast<u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<u8>(c));
+    }
     containers::Array<resources::ManifestEntry> entries(a);
     resources::ManifestEntry                    e;
     e.id          = id;
@@ -274,7 +315,10 @@ void write_resource_pack(const platform::fs::Path& path, const resources::Resour
     resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
     resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (u8 b : art_bytes) { pack.push_back(b); }
+    for (u8 b : art_bytes)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
 
@@ -325,14 +369,20 @@ struct CubeExtractor final : scene::IAabbExtractor
     for (u32 cnr = 0; cnr < 4U; ++cnr)
     {
         const auto* b = reinterpret_cast<const u8*>(quad[cnr]);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32             idx[6] = {0, 1, 2, 2, 1, 3};
     containers::Array<u8> indices(a);
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -364,14 +414,20 @@ struct CubeExtractor final : scene::IAabbExtractor
     for (u32 cnr = 0; cnr < 4U; ++cnr)
     {
         const auto* b = reinterpret_cast<const u8*>(quad[cnr]);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32             idx[6] = {0, 1, 2, 2, 1, 3};
     containers::Array<u8> indices(a);
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -414,7 +470,10 @@ void write_one_pack(const platform::fs::Path& path, const resources::ResourceId&
     for (const char* p = name;; ++p)
     {
         pool.push_back(static_cast<u8>(*p));
-        if (*p == '\0') { break; }
+        if (*p == '\0')
+        {
+            break;
+        }
     }
     containers::Array<resources::ManifestEntry> entries(a);
     resources::ManifestEntry                    e;
@@ -432,7 +491,10 @@ void write_one_pack(const platform::fs::Path& path, const resources::ResourceId&
     resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
     resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (u8 b : art) { pack.push_back(b); }
+    for (u8 b : art)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
 
@@ -538,7 +600,10 @@ TEST_CASE("GEO-7 GATE: 10k instances -- chunk-grain sync + BVH/frustum cull + ON
     {
         for (u32 sx = 8U; sx < 256U; sx += 16U)
         {
-            if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U) { ++lit; }
+            if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U)
+            {
+                ++lit;
+            }
         }
     }
     CHECK(lit > 40U); // 256 samples; the cube field covers well over a quarter of the frame
@@ -705,7 +770,10 @@ TEST_CASE("CEIR-18c GATE: the authored engine://frame/deferred renderer shades a
     }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->supports_bindless()) { SKIP("device does not support bindless texture arrays (the G-buffer read heap)"); }
+    if (!raster->supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the G-buffer read heap)");
+    }
 
     // ── the SHIPPED deferred asset (gates-run-configs: the shipped file from CRD_ASSETS_DIR, not an inline graph) ──
     containers::String graph(&galloc());
@@ -770,7 +838,10 @@ TEST_CASE("CEIR-18c GATE: the authored engine://frame/deferred renderer shades a
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[18c capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -812,7 +883,10 @@ TEST_CASE("CEIR-18c GATE (DX12): the authored engine://frame/deferred renderer s
           "[scene-render][ceir18][deferred][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -853,7 +927,10 @@ TEST_CASE("CEIR-18c GATE (DX12): the authored engine://frame/deferred renderer s
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     const auto s1 = renderer.sync(world);
     CHECK(s1.total_instances == 1U);
@@ -976,7 +1053,10 @@ TEST_CASE("REN-3.2-b GATE: an occluder CASTS a cascade shadow onto the receiver 
     containers::Array<u32> unshadowed(&galloc());
     for (u32 y = 0; y < 256U; y += 4U)
     {
-        for (u32 x = 0; x < 256U; x += 4U) { unshadowed.push_back(target->read_pixel(x, y)); }
+        for (u32 x = 0; x < 256U; x += 4U)
+        {
+            unshadowed.push_back(target->read_pixel(x, y));
+        }
     }
 
     // (b) shadows ON - the same scene, the same camera
@@ -999,9 +1079,15 @@ TEST_CASE("REN-3.2-b GATE: an occluder CASTS a cascade shadow onto the receiver 
             {
                 ++darker;
                 const u32 drop = before - after;
-                if (drop > max_drop) { max_drop = drop; }
+                if (drop > max_drop)
+                {
+                    max_drop = drop;
+                }
             }
-            else if (before + 12U < after) { ++brighter; }
+            else if (before + 12U < after)
+            {
+                ++brighter;
+            }
         }
     }
     // a real shadow: a meaningful patch darkened...
@@ -1297,10 +1383,16 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
         const char* base = shadows ? "frame/forward_csm.frame.toml" : "frame/forward_basic.frame.toml";
         const char* tok  = shadows ? "\"forward_csm\"" : "\"standard_forward\"";
         containers::String text(&galloc());
-        if (!read_shipped_asset(base, text)) { return false; }
+        if (!read_shipped_asset(base, text))
+        {
+            return false;
+        }
         const char* hay = text.c_str();
         const char* at  = std::strstr(hay, tok);
-        if (at == nullptr) { return false; }
+        if (at == nullptr)
+        {
+            return false;
+        }
         const usize toklen = std::strlen(tok);
         out.clear();
         out.append(hay, static_cast<usize>(at - hay));
@@ -1329,21 +1421,30 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
             r.set_forward_technique(poison);
             r.set_shadow_technique(poison);
         }
-        if (!r.init_programs(*vk)) { return false; }
+        if (!r.init_programs(*vk))
+        {
+            return false;
+        }
         scenerender::CsmConfig ccfg;
         ccfg.cascade_count = 4;
         ccfg.map_size      = 1024;
         ccfg.far_plane     = 120.0F;
         r.set_csm_config(ccfg);
         (void)r.sync(world);
-        if (shadows) { REQUIRE(r.set_shadows_enabled(true)); }
+        if (shadows)
+        {
+            REQUIRE(r.set_shadows_enabled(true));
+        }
         auto target = raster->create_color_depth_target(256U, 256U);
         REQUIRE(target != nullptr);
         REQUIRE(r.render(*target, vp, light, clear, nullptr).draws > 0U);
         out.clear();
         for (u32 y = 0; y < 256U; y += 4U)
         {
-            for (u32 x = 0; x < 256U; x += 4U) { out.push_back(target->read_pixel(x, y)); }
+            for (u32 x = 0; x < 256U; x += 4U)
+            {
+                out.push_back(target->read_pixel(x, y));
+            }
         }
         return true;
     };
@@ -1365,10 +1466,19 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
     for (usize i = 0; i < lit.size(); ++i)
     {
         const u32 v = lit[i] & 0xFFU;
-        if ((lit[i] & 0x00FFFFFFU) == 0U) { continue; } // background
+        if ((lit[i] & 0x00FFFFFFU) == 0U) // background
+        {
+            continue;
+        }
         ++covered;
-        if (v < lit_min) { lit_min = v; }
-        if (v > lit_max) { lit_max = v; }
+        if (v < lit_min)
+        {
+            lit_min = v;
+        }
+        if (v > lit_max)
+        {
+            lit_max = v;
+        }
     }
     CHECK(covered > 500U);
     CHECK(lit_max > lit_min); // a real shading gradient, not a constant
@@ -1379,8 +1489,14 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
     u32 flat_cov  = 0U;
     for (usize i = 0; i < lit.size(); ++i)
     {
-        if ((flat[i] & 0x00FFFFFFU) != 0U) { ++flat_cov; }
-        if ((lit[i] & 0x00FFFFFFU) != (flat[i] & 0x00FFFFFFU)) { ++differing; }
+        if ((flat[i] & 0x00FFFFFFU) != 0U)
+        {
+            ++flat_cov;
+        }
+        if ((lit[i] & 0x00FFFFFFU) != (flat[i] & 0x00FFFFFFU))
+        {
+            ++differing;
+        }
     }
     CHECK(flat_cov > 500U);          // unlit still draws the geometry...
     CHECK(differing > covered / 4U); // ...but shades a large fraction of it differently
@@ -1393,8 +1509,14 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
     {
         const u32 before = lit[i] & 0xFFU;
         const u32 after  = shadowed[i] & 0xFFU;
-        if (after + 12U < before) { ++darker; }
-        else if (before + 12U < after) { ++brighter; }
+        if (after + 12U < before)
+        {
+            ++darker;
+        }
+        else if (before + 12U < after)
+        {
+            ++brighter;
+        }
     }
     CHECK(darker > 20U);
     CHECK(darker < lit.size() / 2U);
@@ -1423,12 +1545,24 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
         if ((authored[i] & 0x00FFFFFFU) != 0U)
         {
             ++a_cov;
-            if (v < a_min) { a_min = v; }
-            if (v > a_max) { a_max = v; }
+            if (v < a_min)
+            {
+                a_min = v;
+            }
+            if (v > a_max)
+            {
+                a_max = v;
+            }
         }
         const u32 before = lit[i] & 0xFFU;
-        if (v + 12U < before) { ++a_dark; }
-        else if (before + 12U < v) { ++a_bright; }
+        if (v + 12U < before)
+        {
+            ++a_dark;
+        }
+        else if (before + 12U < v)
+        {
+            ++a_bright;
+        }
     }
     CHECK(a_cov > 500U);       // it draws the scene
     CHECK(a_max > a_min);      // …with a real shading gradient, not a constant
@@ -1447,7 +1581,10 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
     u32 identical = 0U;
     for (usize i = 0; i < flat.size(); ++i)
     {
-        if ((poisoned[i] & 0x00FFFFFFU) == (flat[i] & 0x00FFFFFFU)) { ++identical; }
+        if ((poisoned[i] & 0x00FFFFFFU) == (flat[i] & 0x00FFFFFFU))
+        {
+            ++identical;
+        }
     }
     CHECK(identical == poisoned.size()); // the setter changed NOTHING — the installed graph's `unlit` decided the shader
 
@@ -1492,7 +1629,10 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
         containers::Array<u32> before(&galloc());
         for (u32 y = 0; y < 256U; y += 4U)
         {
-            for (u32 x = 0; x < 256U; x += 4U) { before.push_back(t0->read_pixel(x, y)); }
+            for (u32 x = 0; x < 256U; x += 4U)
+            {
+                before.push_back(t0->read_pixel(x, y));
+            }
         }
         containers::String bad(&galloc());
         REQUIRE(make_graph("no_such_technique", false, bad));
@@ -1506,7 +1646,10 @@ TEST_CASE("REN-37.2/CEIR-18a-3 GATE: the frame graph's forward technique NAME dr
         {
             for (u32 x = 0; x < 256U; x += 4U)
             {
-                if ((t1->read_pixel(x, y) & 0x00FFFFFFU) == (before[idx] & 0x00FFFFFFU)) { ++same; }
+                if ((t1->read_pixel(x, y) & 0x00FFFFFFU) == (before[idx] & 0x00FFFFFFU))
+                {
+                    ++same;
+                }
                 ++idx;
             }
         }
@@ -1609,7 +1752,10 @@ TEST_CASE("REN-37.8 GATE: TWO viewports contribute to ONE graph and cost ONE sub
         {
             for (u32 x = 0; x < dim; x += 2U)
             {
-                if ((rt.read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++n; }
+                if ((rt.read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+                {
+                    ++n;
+                }
             }
         }
         return n;
@@ -1729,7 +1875,10 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
     {
         gpu::IRasterTarget* rt = reg.at(sel.active[i]).desc.target;
         REQUIRE(rt != nullptr);
-        if (renderer.contribute(*fg, *rt, proj * view, light, clear, nullptr).draws > 0U) { ++drew; }
+        if (renderer.contribute(*fg, *rt, proj * view, light, clear, nullptr).draws > 0U)
+        {
+            ++drew;
+        }
     }
     CHECK(drew == 3U);
     CHECK(fg->last_submit_count() == 0U); // ⛔ no contributor executed anything
@@ -1745,7 +1894,10 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
         {
             for (u32 x = 0; x < dim; x += 2U)
             {
-                if ((rt.read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++n; }
+                if ((rt.read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+                {
+                    ++n;
+                }
             }
         }
         return n;
@@ -1766,7 +1918,10 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
     framecook::select_viewports(reg, budget, 2U, sel);
     REQUIRE(sel.active.size() == 2U);
     bool has_b = false;
-    for (usize i = 0; i < sel.active.size(); ++i) { has_b = has_b || sel.active[i] == vp_b; }
+    for (usize i = 0; i < sel.active.size(); ++i)
+    {
+        has_b = has_b || sel.active[i] == vp_b;
+    }
     CHECK(has_b);
 
     (void)vp_a;
@@ -1859,7 +2014,10 @@ TEST_CASE("REN-38-F6 GATE: TESS, MESH and VISBUFFER families render through auth
                 if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U)
                 {
                     ++lit_total;
-                    if (sx < 43U) { ++lit_left; }
+                    if (sx < 43U)
+                    {
+                        ++lit_left;
+                    }
                 }
             }
         }
@@ -1947,7 +2105,10 @@ TEST_CASE("REN-38-F6 GATE: the authored CULL graph computes real frustum visibil
     REQUIRE(flags != nullptr);
     REQUIRE(raster->download_storage(*flags));
     u32 visible = 0;
-    for (u32 i = 0; i < near_count + far_count; ++i) { visible += flags->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        visible += flags->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("visible " << visible << " of " << (near_count + far_count));
     CHECK(visible >= 1U);
     CHECK(visible <= near_count); // every far instance culled; near ones (mostly) survive
@@ -1958,7 +2119,10 @@ TEST_CASE("REN-38-F6 GATE: the authored CULL graph computes real frustum visibil
     REQUIRE(marks != nullptr);
     REQUIRE(raster->download_storage(*marks));
     u32 marked = 0;
-    for (u32 i = 0; i < near_count + far_count; ++i) { marked += marks->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        marked += marks->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("marked " << marked);
     CHECK(marked == visible);
     CHECK(marked >= 1U);
@@ -1979,7 +2143,10 @@ TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS 
     }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+    if (!raster->supports_rt_pipeline())
+    {
+        SKIP("adapter has no ray-tracing pipeline");
+    }
 
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
@@ -2030,7 +2197,10 @@ TEST_CASE("REN-38-F6 GATE: the authored RT PIPELINE graph traces the scene TLAS 
     REQUIRE(raster->download_storage(*hits));
     u32 written = 0;
     // the raygen writes `out[LaunchId.x] = payload[0]` — one f32 record per ray, hit 1.0 / miss -1.0
-    for (u32 i = 0; i < 4U; ++i) { written += hits->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < 4U; ++i)
+    {
+        written += hits->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("written ray records: " << written << " of 4");
     CHECK(written == 4U);
 }
@@ -2083,7 +2253,10 @@ static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
     }
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
     (void)renderer.sync(world);
     renderer.set_scene_accel(scene_as);
 
@@ -2115,7 +2288,13 @@ static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
     u32 invalid = 0U;
     for (u32 y = 0; y < img_h; ++y)
     {
-        for (u32 x = 0; x < img_w; ++x) { if (wpw(x, y) < 0.5F) { ++invalid; } }
+        for (u32 x = 0; x < img_w; ++x)
+        {
+            if (wpw(x, y) < 0.5F)
+            {
+                ++invalid;
+            }
+        }
     }
     UNSCOPED_INFO("STAGE1 invalid (.w!=1) pixels: " << invalid);
     REQUIRE(invalid == 0U); // the receiver fills the view; a no-dispatch prepass reads .w==0 everywhere and dies HERE
@@ -2123,7 +2302,10 @@ static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
     const float ysign = raster.ndc_y_points_down() ? 1.0F : -1.0F;
     const auto  reproj_ok = [&](u32 px, u32 py) -> bool {
         const math::Vec4f clip = view_proj * math::Vec4f{wpx(px, py), wpy(px, py), wpz(px, py), 1.0F};
-        if (clip.w <= 0.0F) { return false; }
+        if (clip.w <= 0.0F)
+        {
+            return false;
+        }
         const float ndc_x  = clip.x / clip.w;
         const float ndc_y  = clip.y / clip.w;
         const float true_x = 2.0F * (static_cast<float>(px) + 0.5F) / static_cast<float>(img_w) - 1.0F;
@@ -2162,20 +2344,43 @@ static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
         {
             const float wy    = wpy(x, y);
             const float denom = 8.0F - wy;
-            if (denom <= 0.0F) { continue; }
+            if (denom <= 0.0F)
+            {
+                continue;
+            }
             const float t  = (occ_y - wy) / denom;
-            if (t <= 0.0F || t >= 1.0F) { continue; }
+            if (t <= 0.0F || t >= 1.0F)
+            {
+                continue;
+            }
             const float hx = wpx(x, y) * (1.0F - t);
             const float hz = wpz(x, y) * (1.0F - t);
             const float qx = crd::math::abs(hx - occ_cx) - occ_h; // <0 inside the x-extent, >0 outside
             const float qz = crd::math::abs(hz - occ_cz) - occ_h;
             // SKIP the ambiguous band hugging the rectangle border (near an x-edge while within/near z, or vice versa).
             const bool near_boundary = (crd::math::abs(qx) < band && qz < band) || (crd::math::abs(qz) < band && qx < band);
-            if (near_boundary) { continue; }
+            if (near_boundary)
+            {
+                continue;
+            }
             const bool  occ = (qx < 0.0F) && (qz < 0.0F);
             const float m   = mask(x, y);
-            if (occ) { ++shad_cnt; if (m >= 0.5F) { ++disagree; } }   // occluded ⇒ mask ≈ 0 (SHADOWED)
-            else { ++lit_cnt; if (m < 0.5F) { ++disagree; } }         // clear    ⇒ mask ≈ 1 (LIT)
+            if (occ) // occluded ⇒ mask ≈ 0 (SHADOWED)
+            {
+                ++shad_cnt;
+                if (m >= 0.5F)
+                {
+                    ++disagree;
+                }
+            }
+            else // clear    ⇒ mask ≈ 1 (LIT)
+            {
+                ++lit_cnt;
+                if (m < 0.5F)
+                {
+                    ++disagree;
+                }
+            }
         }
     }
     UNSCOPED_INFO("STAGE2 shadowed=" << shad_cnt << " lit=" << lit_cnt << " disagree=" << disagree);
@@ -2204,16 +2409,41 @@ static void rt_shadow_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
         {
             const float wy    = wpy(x, y);
             const float denom = 8.0F - wy;
-            if (denom <= 0.0F) { continue; }
+            if (denom <= 0.0F)
+            {
+                continue;
+            }
             const float t = (occ_y - wy) / denom;
-            if (t <= 0.0F || t >= 1.0F) { continue; }
+            if (t <= 0.0F || t >= 1.0F)
+            {
+                continue;
+            }
             const float qx = crd::math::abs(wpx(x, y) * (1.0F - t) - occ_cx) - occ_h;
             const float qz = crd::math::abs(wpz(x, y) * (1.0F - t) - occ_cz) - occ_h;
             const bool  near_boundary = (crd::math::abs(qx) < band && qz < band) || (crd::math::abs(qz) < band && qx < band);
-            if (near_boundary) { continue; }
+            if (near_boundary)
+            {
+                continue;
+            }
             const u32 px_lum = lum(x, y);
-            if ((qx < 0.0F) && (qz < 0.0F)) { ++s3_shad; shad_sum += px_lum; if (px_lum > 48U) { ++shad_lit; } } // shad ⇒ black
-            else { ++s3_lit; lit_sum += px_lum; if (px_lum < 24U) { ++lit_dark; } }                              // lit ⇒ scene_hdr
+            if ((qx < 0.0F) && (qz < 0.0F)) // shad ⇒ black
+            {
+                ++s3_shad;
+                shad_sum += px_lum;
+                if (px_lum > 48U)
+                {
+                    ++shad_lit;
+                }
+            }
+            else // lit ⇒ scene_hdr
+            {
+                ++s3_lit;
+                lit_sum += px_lum;
+                if (px_lum < 24U)
+                {
+                    ++lit_dark;
+                }
+            }
         }
     }
     const double shad_mean = s3_shad > 0U ? static_cast<double>(shad_sum) / s3_shad : 0.0;
@@ -2243,7 +2473,10 @@ TEST_CASE("CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-tra
     }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+    if (!raster->supports_rt_pipeline())
+    {
+        SKIP("adapter has no ray-tracing pipeline");
+    }
 
     gpu::ValidationCapture      capture(*vk); // the validation layer is the oracle on this never-before-run hybrid path
 
@@ -2260,7 +2493,10 @@ TEST_CASE("CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-tra
     // backend SKIP). See scar feedback_ceir19b_hybrid_rt_frame_never_run_scars #3 for the fetch-VVL private-prefix recipe.
     const crd::u32     vvl_ver               = gpu::validation_layer_spec_version();
     constexpr crd::u32 vvl_08608_fix_version = (1U << 22) | (4U << 12) | 313U; // == VK_MAKE_API_VERSION(0,1,4,313)
-    if (vvl_ver < vvl_08608_fix_version) { capture.whitelist(0x29056f6a); }
+    if (vvl_ver < vvl_08608_fix_version)
+    {
+        capture.whitelist(0x29056f6a);
+    }
 
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
@@ -2293,7 +2529,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
           "[scene-render][ren38][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -2316,7 +2555,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     (void)renderer.sync(world);
 
     auto target = raster->create_color_depth_target(128U, 128U);
@@ -2352,7 +2594,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): TESS, MESH and VISBUFFER families render throu
                 if ((target->read_pixel(sx, sy) & 0x00FFFFFFU) != 0U)
                 {
                     ++lit_total;
-                    if (sx < 43U) { ++lit_left; }
+                    if (sx < 43U)
+                    {
+                        ++lit_left;
+                    }
                 }
             }
         }
@@ -2384,7 +2629,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
           "[scene-render][ren38][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -2412,7 +2660,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     (void)renderer.sync(world);
     REQUIRE(renderer.mesh_groups().size() == 1U);
 
@@ -2430,7 +2681,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
     REQUIRE(flags != nullptr);
     REQUIRE(raster->download_storage(*flags));
     u32 visible = 0;
-    for (u32 i = 0; i < near_count + far_count; ++i) { visible += flags->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        visible += flags->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("visible " << visible << " of " << (near_count + far_count));
     CHECK(visible >= 1U);
     CHECK(visible <= near_count);
@@ -2441,7 +2695,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored CULL graph computes real frustum 
     REQUIRE(marks != nullptr);
     REQUIRE(raster->download_storage(*marks));
     u32 marked = 0;
-    for (u32 i = 0; i < near_count + far_count; ++i) { marked += marks->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < near_count + far_count; ++i)
+    {
+        marked += marks->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("marked " << marked);
     CHECK(marked == visible);
     CHECK(marked >= 1U);
@@ -2454,13 +2711,22 @@ TEST_CASE("CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-tra
           "[scene-render][ceir19b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+    if (!raster->supports_rt_pipeline())
+    {
+        SKIP("adapter has no DXR ray-tracing pipeline");
+    }
 
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    if (!rt.valid())
+    {
+        SKIP("no DXR-capable device");
+    }
     auto scene_as = rt.build_scene_instanced(kRtShadowOccluderTris, 2U, kRtShadowIdentity12, 1U, /*opaque=*/true);
     REQUIRE(scene_as != nullptr);
     const math::Mat4f view = math::look_at(math::Vec3f{0.0F, 10.0F, 0.001F}, math::Vec3f{0, 0, 0}, math::Vec3f{0, 0, -1});
@@ -2472,13 +2738,22 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
           "[scene-render][ren38][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+    if (!raster->supports_rt_pipeline())
+    {
+        SKIP("adapter has no DXR ray-tracing pipeline");
+    }
 
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    if (!rt.valid())
+    {
+        SKIP("no DXR-capable device");
+    }
     const float tri[9]       = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     auto        scene_as     = rt.build_scene_instanced(tri, 1U, identity, 1U, /*opaque=*/false);
@@ -2503,7 +2778,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     (void)renderer.sync(world);
     renderer.set_scene_accel(scene_as.get());
 
@@ -2521,7 +2799,10 @@ TEST_CASE("REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scen
     REQUIRE(hits != nullptr);
     REQUIRE(raster->download_storage(*hits));
     u32 written = 0;
-    for (u32 i = 0; i < 4U; ++i) { written += hits->read_u32(i) != 0U ? 1U : 0U; }
+    for (u32 i = 0; i < 4U; ++i)
+    {
+        written += hits->read_u32(i) != 0U ? 1U : 0U;
+    }
     UNSCOPED_INFO("written ray records: " << written << " of 4");
     CHECK(written == 4U);
 }
@@ -2565,7 +2846,10 @@ TEST_CASE("REN-38-F15 GATE: an edited disk asset is live and a corrupt one refus
     // (set_asset_root validates the default frame pair, and the scene_tess frame cooks its stages BY NAME from
     // the root), THEN overwrite the one declaration under test below. No embedded pack shadows anything now.
     const char* canon = std::getenv("CRD_ASSETS_DIR");
-    if (canon == nullptr || canon[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (canon == nullptr || canon[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     copy_tree(platform::fs::Path(canon),
               platform::fs::Path(containers::StringView(root.c_str(), root.size())));
     containers::String vdir(&galloc());
@@ -2725,10 +3009,18 @@ void raf11_run_reload_sequence(scenerender::SceneRenderer& renderer, const conta
         bool bumped = false;
         for (usize i = 0; i + 4U <= lt.size() && !bumped; ++i)
         {
-            if (std::memcmp(lt.c_str() + i, "taps", 4U) != 0) { continue; }
+            if (std::memcmp(lt.c_str() + i, "taps", 4U) != 0)
+            {
+                continue;
+            }
             for (usize j = i + 4U; j < lt.size() && lt.c_str()[j] != '\n'; ++j) // the '4' after "taps =" on this line
             {
-                if (lt.c_str()[j] == '4') { lt.data()[j] = '8'; bumped = true; break; }
+                if (lt.c_str()[j] == '4')
+                {
+                    lt.data()[j] = '8';
+                    bumped = true;
+                    break;
+                }
             }
         }
         REQUIRE(bumped); // the shipped technique must carry a PCF tap count to widen
@@ -2770,7 +3062,10 @@ void raf11_run_reload_sequence(scenerender::SceneRenderer& renderer, const conta
 [[nodiscard]] bool raf11_mirror_shipped_root(containers::String& root, const char* tag)
 {
     const char* canon = std::getenv("CRD_ASSETS_DIR");
-    if (canon == nullptr || canon[0] == '\0') { return false; }
+    if (canon == nullptr || canon[0] == '\0')
+    {
+        return false;
+    }
     root.append(platform::fs::temp_directory().generic());
     root.append(tag);
     char stamp[32];
@@ -2789,12 +3084,18 @@ TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs o
     cfg.headless = true;
     auto  ctx = gpu::create_vulkan_gpu_context(cfg);
     auto* vk  = ctx != nullptr ? static_cast<gpu::VulkanGpuContext*>(ctx.get()) : nullptr;
-    if (vk == nullptr) { SKIP("no Vulkan device"); }
+    if (vk == nullptr)
+    {
+        SKIP("no Vulkan device");
+    }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
 
     containers::String root(&galloc());
-    if (!raf11_mirror_shipped_root(root, "/crd_raf11_vk_")) { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (!raf11_mirror_shipped_root(root, "/crd_raf11_vk_"))
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
 
     resources::ResourceManager rm(&galloc());
     scenerender::SceneRenderer  renderer(&galloc());
@@ -2810,18 +3111,27 @@ TEST_CASE("RAF-11 GATE: shader/technique/material hot reload re-cooks programs o
           "[scene-render][raf11][reload][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
     containers::String root(&galloc());
-    if (!raf11_mirror_shipped_root(root, "/crd_raf11_dx_")) { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (!raf11_mirror_shipped_root(root, "/crd_raf11_dx_"))
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
 
     resources::ResourceManager rm(&galloc());
     scenerender::SceneRenderer  renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
     REQUIRE(renderer.set_asset_root(root.c_str()));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     raf11_run_reload_sequence(renderer, root);
     (void)platform::fs::remove_all(platform::fs::Path(containers::StringView(root.c_str(), root.size())));
 }
@@ -2944,11 +3254,20 @@ TEST_CASE("REN-38 GATE: a TEXTURED receiver is ALSO SHADOWED in one frame (Vulka
         {
             const u32 px = target->read_pixel(x, y);
             unshadowed.push_back(px);
-            if ((px & 0x00FFFFFFU) == 0U) { continue; } // background
+            if ((px & 0x00FFFFFFU) == 0U) // background
+            {
+                continue;
+            }
             const u32 r = px & 0xFFU;
             const u32 g = (px >> 8U) & 0xFFU;
-            if (x < 120U && r > g + 40U) { ++red_left; }   // the RED texel dominates screen-left
-            if (x > 136U && g > r + 40U) { ++grn_right; }  // the GREEN texel dominates screen-right
+            if (x < 120U && r > g + 40U) // the RED texel dominates screen-left
+            {
+                ++red_left;
+            }
+            if (x > 136U && g > r + 40U) // the GREEN texel dominates screen-right
+            {
+                ++grn_right;
+            }
         }
     }
     // (a) the TEXTURE is visible: both texels of the base-colour map show through on their own halves
@@ -2970,12 +3289,24 @@ TEST_CASE("REN-38 GATE: a TEXTURED receiver is ALSO SHADOWED in one frame (Vulka
             const u32 before = unshadowed[idx++];
             const u32 lb     = ((before & 0xFFU) + ((before >> 8U) & 0xFFU) + ((before >> 16U) & 0xFFU)) / 3U;
             const u32 la     = ((px & 0xFFU) + ((px >> 8U) & 0xFFU) + ((px >> 16U) & 0xFFU)) / 3U;
-            if (la + 12U < lb) { ++darker; }
-            if ((px & 0x00FFFFFFU) == 0U) { continue; }
+            if (la + 12U < lb)
+            {
+                ++darker;
+            }
+            if ((px & 0x00FFFFFFU) == 0U)
+            {
+                continue;
+            }
             const u32 r = px & 0xFFU;
             const u32 g = (px >> 8U) & 0xFFU;
-            if (x < 120U && r > g + 40U) { ++red_left2; }
-            if (x > 136U && g > r + 40U) { ++grn_right2; }
+            if (x < 120U && r > g + 40U)
+            {
+                ++red_left2;
+            }
+            if (x > 136U && g > r + 40U)
+            {
+                ++grn_right2;
+            }
         }
     }
     // (b) the SHADOW lands: a compact patch darkened on the textured receiver...
@@ -3069,9 +3400,18 @@ TEST_CASE("REN-38 GATE: two mesh groups render as ONE multi-draw batch from the 
         for (u32 x = 0U; x < 256U; x += 2U)
         {
             const u32 px = target->read_pixel(x, y);
-            if ((px & 0x00FFFFFFU) == 0U) { continue; }
-            if (x < 120U) { ++left; }
-            if (x > 136U) { ++right; }
+            if ((px & 0x00FFFFFFU) == 0U)
+            {
+                continue;
+            }
+            if (x < 120U)
+            {
+                ++left;
+            }
+            if (x > 136U)
+            {
+                ++right;
+            }
         }
     }
     INFO("coverage left=" << left << " right=" << right);
@@ -3209,7 +3549,10 @@ shader = "%s"
     {
         for (u32 x = 0; x < 128U; x += 2U)
         {
-            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU)) { ++differs; }
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU))
+            {
+                ++differs;
+            }
         }
     }
     INFO("pixels differing from the background: " << differs);
@@ -3223,7 +3566,10 @@ TEST_CASE("38-G1 GATE (DX12): an authored POST graph tonemaps the frame (scene -
           "[scene-render][ren38][g1][post][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -3245,7 +3591,10 @@ TEST_CASE("38-G1 GATE (DX12): an authored POST graph tonemaps the frame (scene -
     }
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     (void)renderer.sync(world);
 
     const auto frame_toml = [](const char* shader, const char* fname) {
@@ -3313,7 +3662,10 @@ shader = "%s"
 
     scenerender::SceneRenderer r2(&galloc());
     REQUIRE(r2.init(*raster, rm));
-    if (!r2.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!r2.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     (void)r2.sync(world);
     REQUIRE(r2.set_frame_graph_toml(frame_toml("crd://post/tonemap_agx", "g1dx_post_agx")));
     REQUIRE(r2.render(*target, vp, light, clear, nullptr).draws > 0U);
@@ -3327,7 +3679,10 @@ shader = "%s"
     {
         for (u32 x = 0; x < 128U; x += 2U)
         {
-            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU)) { ++differs; }
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != (agx_px & 0x00FFFFFFU))
+            {
+                ++differs;
+            }
         }
     }
     INFO("pixels differing from the background: " << differs);
@@ -3356,7 +3711,10 @@ namespace
     }
     kir::KGraph g(a);
     const int   out = matcook::cook_post_graph(pdesc, g, &where);
-    if (out < 0) { return false; }
+    if (out < 0)
+    {
+        return false;
+    }
     const auto  sh1  = kir::make_shape({1});
     const int   onef = g.constant(1.0, sh1, kir::DType::F32);
     kir::KEntry fe;
@@ -3422,7 +3780,10 @@ TEST_CASE("RAF-10 GATE (DX12): every post tonemap op lowers from a sampled vec4"
           "[scene-render][raf10][post][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr) { SKIP("no D3D12 device"); }
+    if (gctx == nullptr)
+    {
+        SKIP("no D3D12 device");
+    }
     check_post_ops_lower(*gctx);
 }
 #endif // _WIN32
@@ -3486,8 +3847,14 @@ TEST_CASE("REN-38 GATE: 64 consecutive frames all render (the per-frame recorder
         // ⛔ `draws` counts the draw list built BEFORE recording — it stays positive when the RECORD fails,
         // which is exactly how the arena bug hid. `timed_passes` comes from device timestamps AFTER execute:
         // it is zero when nothing ran. Assert on the signal that can only come from the GPU.
-        if (st.draws > 0U && st.timed_passes > 0U) { ++drew; }
-        else if (first_bad == 0U) { first_bad = f; }
+        if (st.draws > 0U && st.timed_passes > 0U)
+        {
+            ++drew;
+        }
+        else if (first_bad == 0U)
+        {
+            first_bad = f;
+        }
     }
     INFO("frames that drew: " << drew << "/64; first failing frame: " << first_bad);
     // ⛔ EVERY frame, not "most": the arena bug is silent until frame 33 and total afterwards
@@ -3499,7 +3866,10 @@ TEST_CASE("REN-38 GATE: 64 consecutive frames all render (the per-frame recorder
     {
         for (u32 x = 0; x < 64U; x += 2U)
         {
-            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+            if ((target->read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     CHECK(covered > 50U);
@@ -3635,7 +4005,10 @@ TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders a shadowed fra
         SKIP("no graphics-capable Vulkan device with shader objects");
     }
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
 
@@ -3680,7 +4053,10 @@ TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders a shadowed fra
     {
         for (u32 x = 0; x < 256U; ++x)
         {
-            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("covered=" << covered);
@@ -3700,9 +4076,15 @@ TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders a shado
           "[scene-render][raf9][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -3744,7 +4126,10 @@ TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders a shado
     {
         for (u32 x = 0; x < 256U; ++x)
         {
-            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U) { ++covered; }
+            if ((id_tgt->read_pixel(x, y) & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("covered=" << covered);
@@ -3934,7 +4319,10 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
         out.clear();
         for (u32 y = 0; y < dim; y += 2U)
         {
-            for (u32 x = 0; x < dim; x += 2U) { out.push_back(t.read_pixel(x, y) & 0xFFU); }
+            for (u32 x = 0; x < dim; x += 2U)
+            {
+                out.push_back(t.read_pixel(x, y) & 0xFFU);
+            }
         }
     };
     // the largest vertically-adjacent jump, restricted to a per-PIXEL mask. ⛔⛔ Restricting to the CHANGED PIXELS
@@ -3947,11 +4335,17 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
         {
             for (u32 rx = 0; rx < grid; ++rx)
             {
-                if (mask[(ry * grid) + rx] == 0U && mask[((ry - 1U) * grid) + rx] == 0U) { continue; }
+                if (mask[(ry * grid) + rx] == 0U && mask[((ry - 1U) * grid) + rx] == 0U)
+                {
+                    continue;
+                }
                 const u32 a = px[((ry - 1U) * grid) + rx];
                 const u32 b = px[(ry * grid) + rx];
                 const u32 d = a > b ? a - b : b - a;
-                if (d > worst) { worst = d; }
+                if (d > worst)
+                {
+                    worst = d;
+                }
             }
         }
         return worst;
@@ -3995,7 +4389,11 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
     {
         for (u32 rx = 0; rx < grid; ++rx)
         {
-            if (hard_px[(ry * grid) + rx] != soft_px[(ry * grid) + rx]) { cmask[(ry * grid) + rx] = 1U; ++changed; }
+            if (hard_px[(ry * grid) + rx] != soft_px[(ry * grid) + rx])
+            {
+                cmask[(ry * grid) + rx] = 1U;
+                ++changed;
+            }
         }
     }
     // ⛔ FIRST: the cross-fade must actually REACH the shader. Without this every "it got smoother" assertion
@@ -4031,7 +4429,10 @@ TEST_CASE("REN-40-D GATE: cascade cross-fade removes the seam step, and blend=0 
         {
             for (u32 x = 0; x < dim; x += 2U)
             {
-                if (hard_px[idx++] != (target->read_pixel(x, y) & 0xFFU)) { ++differ; }
+                if (hard_px[idx++] != (target->read_pixel(x, y) & 0xFFU))
+                {
+                    ++differ;
+                }
             }
         }
         CHECK(differ == 0U);
@@ -4117,7 +4518,11 @@ TEST_CASE("REN-40-D GATE: PCSS widens the penumbra with blocker distance, PCF do
         for (u32 x = x_lo; x <= x_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < core_v) { core_v = v; core = x; }
+            if (v < core_v)
+            {
+                core_v = v;
+                core = x;
+            }
         }
         const u32 w_lo = core > x_lo + 24U ? core - 24U : x_lo;
         const u32 w_hi = core + 24U < x_hi ? core + 24U : x_hi;
@@ -4126,17 +4531,29 @@ TEST_CASE("REN-40-D GATE: PCSS widens the penumbra with blocker distance, PCF do
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < lo) { lo = v; }
-            if (v > hi) { hi = v; }
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
         }
         Edge e{0U, hi - lo};
-        if (e.contrast < 40U) { return e; } // no shadow on this line at all
+        if (e.contrast < 40U) // no shadow on this line at all
+        {
+            return e;
+        }
         const u32 band_lo = lo + (e.contrast * 15U / 100U);
         const u32 band_hi = lo + (e.contrast * 85U / 100U);
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v > band_lo && v < band_hi) { ++e.partial; }
+            if (v > band_lo && v < band_hi)
+            {
+                ++e.partial;
+            }
         }
         return e;
     };
@@ -4224,7 +4641,10 @@ TEST_CASE("REN-40-D GATE (DX12): PCSS widens the penumbra with blocker distance,
           "[scene-render][ren40][csm][pcss][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -4264,7 +4684,11 @@ TEST_CASE("REN-40-D GATE (DX12): PCSS widens the penumbra with blocker distance,
         for (u32 x = x_lo; x <= x_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < core_v) { core_v = v; core = x; }
+            if (v < core_v)
+            {
+                core_v = v;
+                core = x;
+            }
         }
         const u32 w_lo = core > x_lo + 24U ? core - 24U : x_lo;
         const u32 w_hi = core + 24U < x_hi ? core + 24U : x_hi;
@@ -4273,17 +4697,29 @@ TEST_CASE("REN-40-D GATE (DX12): PCSS widens the penumbra with blocker distance,
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < lo) { lo = v; }
-            if (v > hi) { hi = v; }
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
         }
         Edge e{0U, hi - lo};
-        if (e.contrast < 40U) { return e; }
+        if (e.contrast < 40U)
+        {
+            return e;
+        }
         const u32 band_lo = lo + (e.contrast * 15U / 100U);
         const u32 band_hi = lo + (e.contrast * 85U / 100U);
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v > band_lo && v < band_hi) { ++e.partial; }
+            if (v > band_lo && v < band_hi)
+            {
+                ++e.partial;
+            }
         }
         return e;
     };
@@ -4309,7 +4745,10 @@ TEST_CASE("REN-40-D GATE (DX12): PCSS widens the penumbra with blocker distance,
         r.set_soft_shadows(pcss, 100U);
         r.set_soft_shadow_quality(96U, 16U);
         r.set_pcf_taps(16U);
-        if (!r.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+        if (!r.init_programs(*gctx))
+        {
+            SKIP("dxc/DXIL unavailable");
+        }
         r.set_csm_config(ccfg);
         // ⛔ REQUIRE, not CHECK-and-continue: false here IS the s6 defect this twin exists to catch — the
         // program set failed to build and the frame would render unshadowed, making every arm below vacuous.
@@ -4403,7 +4842,11 @@ TEST_CASE("REN-40-D GATE: EVSM and MSM moment shadows render soft with a lit flo
         for (u32 x = 4U; x <= 251U; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < core_v) { core_v = v; core = x; }
+            if (v < core_v)
+            {
+                core_v = v;
+                core = x;
+            }
         }
         const u32 w_lo = core > 28U ? core - 24U : 4U;
         const u32 w_hi = core + 24U < 251U ? core + 24U : 251U;
@@ -4412,20 +4855,32 @@ TEST_CASE("REN-40-D GATE: EVSM and MSM moment shadows render soft with a lit flo
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < lo) { lo = v; }
-            if (v > hi) { hi = v; }
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
         }
         Probe p{0U, hi - lo, 0U};
         // the open floor: the OPPOSITE side of the frame from the shadow core, same scanline
         const u32 fx = core >= dim / 2U ? 24U : dim - 24U;
         p.floor      = t.read_pixel(fx, row) & 0xFFU;
-        if (p.contrast < 40U) { return p; }
+        if (p.contrast < 40U)
+        {
+            return p;
+        }
         const u32 blo = lo + (p.contrast * 15U / 100U);
         const u32 bhi = lo + (p.contrast * 85U / 100U);
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v > blo && v < bhi) { ++p.partial; }
+            if (v > blo && v < bhi)
+            {
+                ++p.partial;
+            }
         }
         return p;
     };
@@ -4501,7 +4956,10 @@ TEST_CASE("REN-40-D GATE (DX12): EVSM and MSM moment shadows render soft with a 
           "[scene-render][ren40][csm][moment][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -4540,7 +4998,11 @@ TEST_CASE("REN-40-D GATE (DX12): EVSM and MSM moment shadows render soft with a 
         for (u32 x = 4U; x <= 251U; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < core_v) { core_v = v; core = x; }
+            if (v < core_v)
+            {
+                core_v = v;
+                core = x;
+            }
         }
         const u32 w_lo = core > 28U ? core - 24U : 4U;
         const u32 w_hi = core + 24U < 251U ? core + 24U : 251U;
@@ -4549,20 +5011,32 @@ TEST_CASE("REN-40-D GATE (DX12): EVSM and MSM moment shadows render soft with a 
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v < lo) { lo = v; }
-            if (v > hi) { hi = v; }
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
         }
         Probe p{0U, hi - lo, 0U};
         // the open floor: the OPPOSITE side of the frame from the shadow core, same scanline
         const u32 fx = core >= dim / 2U ? 24U : dim - 24U;
         p.floor      = t.read_pixel(fx, row) & 0xFFU;
-        if (p.contrast < 40U) { return p; }
+        if (p.contrast < 40U)
+        {
+            return p;
+        }
         const u32 blo = lo + (p.contrast * 15U / 100U);
         const u32 bhi = lo + (p.contrast * 85U / 100U);
         for (u32 x = w_lo; x <= w_hi; ++x)
         {
             const u32 v = t.read_pixel(x, row) & 0xFFU;
-            if (v > blo && v < bhi) { ++p.partial; }
+            if (v > blo && v < bhi)
+            {
+                ++p.partial;
+            }
         }
         return p;
     };
@@ -4592,7 +5066,10 @@ TEST_CASE("REN-40-D GATE (DX12): EVSM and MSM moment shadows render soft with a 
         // 4-tap edge is still ~2 px against the prefilter's ~6+, so the dichotomy survives — and the acne-free
         // floor is asserted BY the moment arms against this arm's floor, which is exactly property 1.
         r.set_pcf_taps(4U);
-        if (!r.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+        if (!r.init_programs(*gctx))
+        {
+            SKIP("dxc/DXIL unavailable");
+        }
         r.set_csm_config(ccfg);
         REQUIRE(r.set_shadows_enabled(true));
         (void)r.sync(world);
@@ -4754,12 +5231,21 @@ TEST_CASE("REN-40-F GATE: GPU skinning palette is bit-identical to the CPU palet
         anim::SkeletonResource sk(&galloc());
         sk.parents.push_back(-1);
         const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
-        for (f32 v : rest) { sk.rest.push_back(v); }
+        for (f32 v : rest)
+        {
+            sk.rest.push_back(v);
+        }
         const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        for (f32 v : ibm)
+        {
+            sk.inverse_binds.push_back(v);
+        }
         sk.name_offsets.push_back(0);
         const char jn[] = "root";
-        for (const char c : jn) { sk.name_pool.push_back(c); }
+        for (const char c : jn)
+        {
+            sk.name_pool.push_back(c);
+        }
         auto art = anim::skeleton_build(sk, skel_id, &galloc());
         write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
     }
@@ -4776,7 +5262,10 @@ TEST_CASE("REN-40-F GATE: GPU skinning palette is bit-identical to the CPU palet
         trk.values_off = 2;
         cl.tracks.push_back(trk);
         const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
-        for (f32 v : d) { cl.data.push_back(v); }
+        for (f32 v : d)
+        {
+            cl.data.push_back(v);
+        }
         auto art = anim::anim_clip_build(cl, clip_id, &galloc());
         write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
     }
@@ -4846,8 +5335,14 @@ TEST_CASE("REN-40-F GATE: GPU skinning palette is bit-identical to the CPU palet
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -4881,12 +5376,21 @@ TEST_CASE("REN-40-F GATE (DX12): GPU skinning palette is bit-identical to the CP
         anim::SkeletonResource sk(&galloc());
         sk.parents.push_back(-1);
         const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
-        for (f32 v : rest) { sk.rest.push_back(v); }
+        for (f32 v : rest)
+        {
+            sk.rest.push_back(v);
+        }
         const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        for (f32 v : ibm)
+        {
+            sk.inverse_binds.push_back(v);
+        }
         sk.name_offsets.push_back(0);
         const char jn[] = "root";
-        for (const char c : jn) { sk.name_pool.push_back(c); }
+        for (const char c : jn)
+        {
+            sk.name_pool.push_back(c);
+        }
         auto art = anim::skeleton_build(sk, skel_id, &galloc());
         write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
     }
@@ -4903,7 +5407,10 @@ TEST_CASE("REN-40-F GATE (DX12): GPU skinning palette is bit-identical to the CP
         trk.values_off = 2;
         cl.tracks.push_back(trk);
         const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
-        for (f32 v : d) { cl.data.push_back(v); }
+        for (f32 v : d)
+        {
+            cl.data.push_back(v);
+        }
         auto art = anim::anim_clip_build(cl, clip_id, &galloc());
         write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
     }
@@ -4970,8 +5477,14 @@ TEST_CASE("REN-40-F GATE (DX12): GPU skinning palette is bit-identical to the CP
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -5329,8 +5842,14 @@ TEST_CASE("REN-40-G1 GATE: depth prepass with shared_depth is pixel-identical to
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -5407,7 +5926,10 @@ TEST_CASE("REN-40-G2 GATE: R11G11B10F scene_hdr produces correct lit output afte
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
+            if (a != b)
+            {
+                ++diffs;
+            }
             const i32 dr = static_cast<i32>((a >> 16U) & 0xFFU) - static_cast<i32>((b >> 16U) & 0xFFU);
             const i32 dg = static_cast<i32>((a >> 8U)  & 0xFFU) - static_cast<i32>((b >> 8U)  & 0xFFU);
             const i32 db = static_cast<i32>(a & 0xFFU)          - static_cast<i32>(b & 0xFFU);
@@ -5416,8 +5938,14 @@ TEST_CASE("REN-40-G2 GATE: R11G11B10F scene_hdr produces correct lit output afte
             const i32 mz = (db > 0 ? db : -db);
             const i32 mxy   = mx > my ? mx : my;
             const i32 worst = mxy > mz ? mxy : mz;
-            if (worst > 4) { ++big_diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (worst > 4)
+            {
+                ++big_diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " big_diffs=" << big_diffs << " covered=" << covered);
@@ -5539,8 +6067,14 @@ TEST_CASE("REN-40-G3 GATE: GPU occlusion culling produces pixel-identical output
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -5597,7 +6131,10 @@ void velocity_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
 
     containers::String toml(&galloc());
     REQUIRE(read_shipped_asset("frame/velocity_debug.frame.toml", toml));
@@ -5625,7 +6162,10 @@ void velocity_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         for (int dx = -2; dx <= 2; ++dx)
         {
             const int x = cx + dx;
-            if (x < 0 || x >= static_cast<int>(dim)) { continue; }
+            if (x < 0 || x >= static_cast<int>(dim))
+            {
+                continue;
+            }
             for (u32 y = 0; y < dim; ++y)
             {
                 const u32 px = t.read_pixel(static_cast<u32>(x), y);
@@ -5783,7 +6323,10 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     containers::Array<u32> leaves(&alloc);
     for (u32 c = 0; c < nclusters; ++c)
     {
-        if ((cdag.packed_clusters[c * mp::kClusterGpuWords + 2U] >> 16U) == 0U) { leaves.push_back(c); }
+        if ((cdag.packed_clusters[c * mp::kClusterGpuWords + 2U] >> 16U) == 0U)
+        {
+            leaves.push_back(c);
+        }
     }
     REQUIRE(leaves.size() > 0U);
     mp::ClusterUnpackResult oracle(&alloc);
@@ -5811,8 +6354,14 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     buf[scenerender::kClusterHdrTrianglesOff] = triangles_off;
     buf[scenerender::kClusterHdrPositionsOff] = positions_off;
     std::memcpy(&buf[6U], &vp, 16U * 4U); // view_proj column-major, matching Gx::mul_view_proj (header word 6)
-    for (usize i = 0; i < cdag.packed_clusters.size(); ++i) { buf[clusters_off + i] = cdag.packed_clusters[i]; }
-    for (usize i = 0; i < cdag.cluster_vertices.size(); ++i) { buf[vertices_off + i] = cdag.cluster_vertices[i]; }
+    for (usize i = 0; i < cdag.packed_clusters.size(); ++i)
+    {
+        buf[clusters_off + i] = cdag.packed_clusters[i];
+    }
+    for (usize i = 0; i < cdag.cluster_vertices.size(); ++i)
+    {
+        buf[vertices_off + i] = cdag.cluster_vertices[i];
+    }
     for (usize i = 0; i < cdag.cluster_triangles_packed.size(); ++i)
     {
         buf[triangles_off + i] = cdag.cluster_triangles_packed[i];
@@ -5826,8 +6375,14 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     resources::ResourceManager rm(&galloc());
     scenerender::SceneRenderer  renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
-    if (!renderer.supports_clusters()) { SKIP("no mesh-shader support on this device"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
+    if (!renderer.supports_clusters())
+    {
+        SKIP("no mesh-shader support on this device");
+    }
 
     auto cbuf = raster.create_storage_buffer(total_words * 4U);
     REQUIRE(cbuf != nullptr);
@@ -5886,24 +6441,64 @@ void cluster_mesh_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
             proj_pt(oracle.triangles[t * 3U + 0U], ax, ad, au, oa);
             proj_pt(oracle.triangles[t * 3U + 1U], bx, bd, bu, ob);
             proj_pt(oracle.triangles[t * 3U + 2U], cx, cd, cu, oc);
-            if (!oa || !ob || !oc) { continue; }
+            if (!oa || !ob || !oc)
+            {
+                continue;
+            }
             const f32 ay = y_up ? au : ad;
             const f32 by = y_up ? bu : bd;
             const f32 cy = y_up ? cu : cd;
             const f32 area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-            if (math::deterministic::abs(area) < 1.0e-9F) { continue; }
+            if (math::deterministic::abs(area) < 1.0e-9F)
+            {
+                continue;
+            }
             const f32  inv  = 1.0F / area;
-            const auto lo3  = [](f32 u, f32 v, f32 w) { f32 m = u; if (v < m) { m = v; } if (w < m) { m = w; } return m; };
-            const auto hi3  = [](f32 u, f32 v, f32 w) { f32 m = u; if (v > m) { m = v; } if (w > m) { m = w; } return m; };
+            const auto lo3  = [](f32 u, f32 v, f32 w)
+            {
+                f32 m = u;
+                if (v < m)
+                {
+                    m = v;
+                }
+                if (w < m)
+                {
+                    m = w;
+                }
+                return m; };
+            const auto hi3  = [](f32 u, f32 v, f32 w)
+            {
+                f32 m = u;
+                if (v > m)
+                {
+                    m = v;
+                }
+                if (w > m)
+                {
+                    m = w;
+                }
+                return m; };
             const int  cap  = static_cast<int>(dim) - 1;
             int        lx   = static_cast<int>(math::deterministic::floor(lo3(ax, bx, cx)));
             int        hx   = static_cast<int>(math::deterministic::ceil(hi3(ax, bx, cx)));
             int        ly   = static_cast<int>(math::deterministic::floor(lo3(ay, by, cy)));
             int        hy   = static_cast<int>(math::deterministic::ceil(hi3(ay, by, cy)));
-            if (lx < 0) { lx = 0; }
-            if (ly < 0) { ly = 0; }
-            if (hx > cap) { hx = cap; }
-            if (hy > cap) { hy = cap; }
+            if (lx < 0)
+            {
+                lx = 0;
+            }
+            if (ly < 0)
+            {
+                ly = 0;
+            }
+            if (hx > cap)
+            {
+                hx = cap;
+            }
+            if (hy > cap)
+            {
+                hy = cap;
+            }
             for (int yy = ly; yy <= hy; ++yy)
             {
                 for (int xx = lx; xx <= hx; ++xx)
@@ -6018,7 +6613,10 @@ TEST_CASE("CEIR-17d GATE: the shipped GPU-cull config's device verdict EQUALS th
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+    if (!renderer.init_programs(*vk))
+    {
+        SKIP("shader compiler unavailable");
+    }
     // ⛔ ORDERING (scene_renderer.hpp:714 scar): the cull + verify + shadow flags change which kernels the graph cooks, so
     // set them BEFORE `set_frame_graph_toml`. `set_gpu_cull_verify` keeps the CPU cull running as the reference (without
     // it, scene_renderer.cpp:5996 clears the CPU verdict and `cpu_instances` would be 0).
@@ -6111,12 +6709,21 @@ TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identic
         anim::SkeletonResource sk(&galloc());
         sk.parents.push_back(-1);
         const f32 rest[10] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
-        for (f32 v : rest) { sk.rest.push_back(v); }
+        for (f32 v : rest)
+        {
+            sk.rest.push_back(v);
+        }
         const f32 ibm[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        for (f32 v : ibm) { sk.inverse_binds.push_back(v); }
+        for (f32 v : ibm)
+        {
+            sk.inverse_binds.push_back(v);
+        }
         sk.name_offsets.push_back(0);
         const char jn[] = "root";
-        for (const char c : jn) { sk.name_pool.push_back(c); }
+        for (const char c : jn)
+        {
+            sk.name_pool.push_back(c);
+        }
         auto art = anim::skeleton_build(sk, skel_id, &galloc());
         write_resource_pack(skel_pack.path, skel_id, anim::kFourCC_SKEL, art);
     }
@@ -6133,7 +6740,10 @@ TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identic
         trk.values_off = 2;
         cl.tracks.push_back(trk);
         const f32 d[8] = {0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 0.0F, 0.0F};
-        for (f32 v : d) { cl.data.push_back(v); }
+        for (f32 v : d)
+        {
+            cl.data.push_back(v);
+        }
         auto art = anim::anim_clip_build(cl, clip_id, &galloc());
         write_resource_pack(clip_pack.path, clip_id, anim::kFourCC_ANIM, art);
     }
@@ -6206,7 +6816,10 @@ TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identic
     {
         scenerender::SceneRenderer probe(&galloc());
         REQUIRE(probe.init(*raster, rm));
-        if (!probe.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+        if (!probe.init_programs(*vk))
+        {
+            SKIP("shader compiler unavailable");
+        }
         if (!probe.set_shadows_enabled(true))
         {
             SKIP("device cannot enable cascade shadows (forward_csm_gpu requires them)");
@@ -6244,8 +6857,14 @@ TEST_CASE("CEIR-17e GATE: GPU skinning through the shipped config is bit-identic
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != bg) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != bg)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered << " bg=" << bg << " draws=" << r_gpu.draws
@@ -6328,7 +6947,10 @@ TEST_CASE("CEIR-18e GATE: the shipped GPU-driven config renders correct LIT geom
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*vk)) { SKIP("shader compiler unavailable"); }
+    if (!renderer.init_programs(*vk))
+    {
+        SKIP("shader compiler unavailable");
+    }
     // ⛔ ORDERING (scar): cull + verify + shadow flags change which kernels the graph cooks — set them BEFORE the graph.
     renderer.set_gpu_cull(true);
     renderer.set_gpu_cull_verify(true);
@@ -6408,7 +7030,10 @@ TEST_CASE("CEIR-18e GATE: the shipped GPU-driven config renders correct LIT geom
     {
         for (u32 x = 0; x < dim; ++x)
         {
-            if (luma(x, y) > bg_luma + 15) { ++lit_px; }
+            if (luma(x, y) > bg_luma + 15)
+            {
+                ++lit_px;
+            }
         }
     }
     UNSCOPED_INFO("[18e] lit_px=" << lit_px);
@@ -6472,7 +7097,10 @@ void impostor_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     // first run). `set_gpu_cull` / `set_shadows_enabled` stay AFTER init_programs (they only flip flags read at the
     // frame-graph cook, exactly as 17d/18e and the sandbox order them).
     REQUIRE(renderer.set_lod_policy_asset("lod/scene_default.crdlod")); // impostor_grid=8 → the impostor slot exists
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
     renderer.set_gpu_cull(true);
     renderer.set_gpu_cull_verify(true);
     if (!renderer.set_shadows_enabled(true))
@@ -6535,7 +7163,10 @@ void impostor_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         i32 s = 0;
         for (i32 dy = -2; dy <= 2; ++dy)
         {
-            for (i32 dx = -2; dx <= 2; ++dx) { s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy)); }
+            for (i32 dx = -2; dx <= 2; ++dx)
+            {
+                s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy));
+            }
         }
         return s / 25;
     };
@@ -6612,7 +7243,10 @@ void point_light_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     // `technique`, not a C++ setter. forward_plus (installed below) names `forward_authored` (cook_lighting from
     // scene_forward.crdl: CSM shadows AND the point loop), so no set_shadow_technique is needed — the asset selects it.
     // This init cooks the default forward_csm; set_frame_graph_toml then re-cooks the FS from forward_plus's technique.
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
     if (!renderer.set_shadows_enabled(true))
     {
         SKIP("device cannot enable cascade shadows (forward_csm requires them)");
@@ -6642,7 +7276,10 @@ void point_light_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         i32 s = 0;
         for (i32 dy = -3; dy <= 3; ++dy)
         {
-            for (i32 dx = -3; dx <= 3; ++dx) { s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy)); }
+            for (i32 dx = -3; dx <= 3; ++dx)
+            {
+                s += luma(static_cast<u32>(cx + dx), static_cast<u32>(cy + dy));
+            }
         }
         return s / 49;
     };
@@ -6738,7 +7375,10 @@ void point_cluster_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
     REQUIRE(renderer.init(raster, rm));
     // ⭐⭐ CEIR-18a-3: the CLUSTERED technique is named IN THE GRAPH now (installed below), not via a setter — this init
     // cooks the default forward_csm, and set_frame_graph_toml re-cooks the FS from the installed forward-pass technique.
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
     if (!renderer.set_shadows_enabled(true))
     {
         SKIP("device cannot enable cascade shadows (the clustered technique carries CSM)");
@@ -6799,10 +7439,22 @@ void point_cluster_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& raster)
         {
             const u32 cluster  = cx + cy * grid_n;
             u32       lightrec = null_rec;
-            if (cx == 1U) { lightrec = red_rec; }                        // column 1 → RED
-            else if (cx == 2U) { lightrec = grn_rec; }                   // column 2 → GREEN
-            else if (cx == 0U) { lightrec = (cy % 2U == 0U) ? red_rec : grn_rec; } // column 0 → row-alternating
-            for (u32 s = 0; s < cap_n; ++s) { list[cluster * cap_n + s] = (s == 0U) ? lightrec : null_rec; }
+            if (cx == 1U) // column 1 → RED
+            {
+                lightrec = red_rec;
+            }
+            else if (cx == 2U) // column 2 → GREEN
+            {
+                lightrec = grn_rec;
+            }
+            else if (cx == 0U) // column 0 → row-alternating
+            {
+                lightrec = (cy % 2U == 0U) ? red_rec : grn_rec;
+            }
+            for (u32 s = 0; s < cap_n; ++s)
+            {
+                list[cluster * cap_n + s] = (s == 0U) ? lightrec : null_rec;
+            }
         }
     }
     REQUIRE(renderer.set_cluster_light_list(containers::ConstSpan<u32>(list.data(), list.size())));
@@ -6892,9 +7544,15 @@ TEST_CASE("CEIR-18b: compute_froxel_slices AABBs agree with the published z-boun
     scenerender::compute_froxel_slices(vp, gx, gy, gz, 0.01F, /*flip_y*/ false, aabb, bounds);
 
     // (1) the boundary table is MONOTONIC increasing and EXPONENTIAL (constant ratio) — the Doom z-slicing.
-    for (u32 i = 0; i < gz; ++i) { CHECK(bounds[i] < bounds[i + 1U]); }
+    for (u32 i = 0; i < gz; ++i)
+    {
+        CHECK(bounds[i] < bounds[i + 1U]);
+    }
     const f32 r0 = bounds[1] / bounds[0];
-    for (u32 i = 1; i < gz; ++i) { CHECK(std::fabs(bounds[i + 1U] / bounds[i] - r0) < r0 * 0.01F); }
+    for (u32 i = 1; i < gz; ++i)
+    {
+        CHECK(std::fabs(bounds[i + 1U] / bounds[i] - r0) < r0 * 0.01F);
+    }
 
     // (2) NON-CIRCULAR containment: world points spanning the frustum; clip.w via the matrix's row 3 (the FS formula).
     const math::Vec3f pts[5] = {{0, 0, 4.5F}, {0, 0, 3.0F}, {0, 0, 0.0F}, {0, 0, -3.0F}, {1.0F, 1.0F, 0.0F}};
@@ -6904,19 +7562,37 @@ TEST_CASE("CEIR-18b: compute_froxel_slices AABBs agree with the published z-boun
     for (const math::Vec3f& pw : pts)
     {
         const math::Vec4f clip = vp * math::Vec4f{pw.x, pw.y, pw.z, 1.0F};
-        if (clip.w <= 0.0F) { continue; }
+        if (clip.w <= 0.0F)
+        {
+            continue;
+        }
         const f32 ndc_x = clip.x / clip.w;
         const f32 ndc_y = clip.y / clip.w;
         const f32 cw    = clip.w;
-        if (ndc_x < -1.0F || ndc_x > 1.0F || ndc_y < -1.0F || ndc_y > 1.0F) { continue; } // outside the frustum
+        if (ndc_x < -1.0F || ndc_x > 1.0F || ndc_y < -1.0F || ndc_y > 1.0F) // outside the frustum
+        {
+            continue;
+        }
         u32 s = 0U;                                                                       // slice = the Step-sum
-        for (u32 i = 1; i < gz; ++i) { if (cw >= bounds[i]) { ++s; } }
+        for (u32 i = 1; i < gz; ++i)
+        {
+            if (cw >= bounds[i])
+            {
+                ++s;
+            }
+        }
         const f32 u = (ndc_x + 1.0F) * 0.5F; // flip_y=false ⇒ ny=2v-1 ⇒ v=(ndc_y+1)/2
         const f32 v = (ndc_y + 1.0F) * 0.5F;
         u32       tx = static_cast<u32>(u * static_cast<f32>(gx));
         u32       ty = static_cast<u32>(v * static_cast<f32>(gy));
-        if (tx >= gx) { tx = gx - 1U; }
-        if (ty >= gy) { ty = gy - 1U; }
+        if (tx >= gx)
+        {
+            tx = gx - 1U;
+        }
+        if (ty >= gy)
+        {
+            ty = gy - 1U;
+        }
         const u32 c   = s * gx * gy + ty * gx + tx;
         const f32 eps = 1.0e-3F;
         CHECK(pw.x >= aabb[c * 6U + 0U] - eps);
@@ -6925,7 +7601,11 @@ TEST_CASE("CEIR-18b: compute_froxel_slices AABBs agree with the published z-boun
         CHECK(pw.y <= aabb[c * 6U + 4U] + eps);
         CHECK(pw.z >= aabb[c * 6U + 2U] - eps);
         CHECK(pw.z <= aabb[c * 6U + 5U] + eps);
-        if (!seen[s]) { seen[s] = true; ++distinct; }
+        if (!seen[s])
+        {
+            seen[s] = true;
+            ++distinct;
+        }
         ++tested;
     }
     CHECK(tested >= 3U);   // non-vacuous
@@ -6961,8 +7641,14 @@ void point_light_cull_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& rast
     REQUIRE(renderer.init(raster, rm));
     renderer.set_forward_technique("forward_authored_clustered");
     renderer.set_shadow_technique("forward_authored_clustered");
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
-    if (!renderer.set_shadows_enabled(true)) { SKIP("device cannot enable cascade shadows"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows");
+    }
     (void)renderer.sync(world);
 
     auto target = raster.create_color_depth_target(256U, 256U);
@@ -7105,8 +7791,14 @@ void point_light_cull_3d_gate_body(gpu::IGpuContext& ctx, gpu::IRasterContext& r
     // draws the non-3D FS and the far probe dies mysteriously.
     renderer.set_forward_technique("forward_authored_clustered_3d");
     renderer.set_shadow_technique("forward_authored_clustered_3d");
-    if (!renderer.init_programs(ctx)) { SKIP("shader backend unavailable"); }
-    if (!renderer.set_shadows_enabled(true)) { SKIP("device cannot enable cascade shadows"); }
+    if (!renderer.init_programs(ctx))
+    {
+        SKIP("shader backend unavailable");
+    }
+    if (!renderer.set_shadows_enabled(true))
+    {
+        SKIP("device cannot enable cascade shadows");
+    }
     (void)renderer.sync(world);
 
     auto target = raster.create_color_depth_target(256U, 256U);
@@ -7250,8 +7942,14 @@ TEST_CASE("REN-40-G1 GATE (DX12): depth prepass with shared_depth is pixel-ident
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -7332,8 +8030,14 @@ TEST_CASE("REN-40-G2 GATE (DX12): R11G11B10F scene_hdr produces correct lit outp
             const i32 mz = (db > 0 ? db : -db);
             const i32 mxy   = mx > my ? mx : my;
             const i32 worst = mxy > mz ? mxy : mz;
-            if (worst > 4) { ++big_diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (worst > 4)
+            {
+                ++big_diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("big_diffs=" << big_diffs << " covered=" << covered);
@@ -7409,8 +8113,14 @@ TEST_CASE("REN-40-G3 GATE (DX12): GPU occlusion culling produces pixel-identical
         {
             const u32 a = ref->read_pixel(x, y);
             const u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     INFO("diffs=" << diffs << " covered=" << covered);
@@ -7430,7 +8140,10 @@ TEST_CASE("CEIR-18e GATE (DX12): the shipped GPU-driven config renders correct L
           "[scene-render][ceir][ceir18][ren40][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -7469,7 +8182,10 @@ TEST_CASE("CEIR-18e GATE (DX12): the shipped GPU-driven config renders correct L
 
     scenerender::SceneRenderer renderer(&galloc());
     REQUIRE(renderer.init(*raster, rm));
-    if (!renderer.init_programs(*gctx)) { SKIP("dxc/DXIL unavailable"); }
+    if (!renderer.init_programs(*gctx))
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     renderer.set_gpu_cull(true);
     renderer.set_gpu_cull_verify(true);
     if (!renderer.set_shadows_enabled(true))
@@ -7537,7 +8253,10 @@ TEST_CASE("CEIR-18e GATE (DX12): the shipped GPU-driven config renders correct L
     {
         for (u32 x = 0; x < dim; ++x)
         {
-            if (luma(x, y) > bg_luma + 15) { ++lit_px; }
+            if (luma(x, y) > bg_luma + 15)
+            {
+                ++lit_px;
+            }
         }
     }
     UNSCOPED_INFO("[18e-dx] lit_px=" << lit_px);
@@ -7562,7 +8281,10 @@ TEST_CASE("REN-41 GATE (DX12): the cluster mesh shader unpacks a packed DAG to m
           "[scene-render][ren41][cluster][nanite][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     cluster_mesh_gate_body(*gctx, *raster); // SKIPs inside if no mesh-shader support / DXIL unavailable
@@ -7574,7 +8296,10 @@ TEST_CASE("CEIR-18p IMPOSTOR STEP 0.5 GATE (DX12): the shipped octahedral-impost
     crd::gpu_test::qualify_dx12_workload(&galloc(), [&]()
     {
         auto gctx = gpu::create_dx12_gpu_context();
-        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+        if (gctx == nullptr || !gctx->valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         auto raster = gpu::create_dx12_raster_context();
         REQUIRE(raster != nullptr);
         impostor_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
@@ -7585,7 +8310,10 @@ TEST_CASE("CEIR-18a-2 STAGE 1 GATE (DX12): the live forward pass consumes the sc
           "[scene-render][ceir][ceir18][ceir18a][light][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     point_light_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
@@ -7595,7 +8323,10 @@ TEST_CASE("CEIR-18a-2 STAGE 2a GATE (DX12): the clustered forward pass consumes 
           "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     point_cluster_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
@@ -7605,7 +8336,10 @@ TEST_CASE("CEIR-18a-2 STAGE 2b-iv GATE (DX12): the device light-cull produces th
           "[scene-render][ceir][ceir18][ceir18a][ceir18a2][cluster][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     point_light_cull_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable
@@ -7615,7 +8349,10 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered two-depth image proves the FS 
           "[scene-render][ceir][ceir18][ceir18b][cluster][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     point_light_cull_3d_gate_body(*gctx, *raster); // SKIPs inside if dxc/DXIL is unavailable

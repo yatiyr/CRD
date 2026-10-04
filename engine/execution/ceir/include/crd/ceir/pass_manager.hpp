@@ -33,7 +33,10 @@ public:
     {
         for (usize i = 0; i < m_cache.size(); ++i)
         {
-            if (m_cache[i].id == T::kId) { return static_cast<const T*>(m_cache[i].result); } // cached (never-redundant)
+            if (m_cache[i].id == T::kId) // cached (never-redundant)
+            {
+                return static_cast<const T*>(m_cache[i].result);
+            }
         }
         const T* const result = T::compute(ctx, m, m_arena); // compute once (never-stale after an invalidation)
         m_cache.push_back(Entry{T::kId, result});
@@ -45,7 +48,10 @@ public:
     {
         for (usize i = 0; i < m_cache.size(); ++i)
         {
-            if (m_cache[i].id == id) { return true; }
+            if (m_cache[i].id == id)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -58,10 +64,19 @@ public:
         for (usize i = 0; i < m_cache.size(); ++i)
         {
             bool keep = false;
-            for (usize p = 0; p < preserved.size() && !keep; ++p) { keep = m_cache[i].id == preserved[p]; }
-            if (keep) { m_cache[w++] = m_cache[i]; }
+            for (usize p = 0; p < preserved.size() && !keep; ++p)
+            {
+                keep = m_cache[i].id == preserved[p];
+            }
+            if (keep)
+            {
+                m_cache[w++] = m_cache[i];
+            }
         }
-        while (m_cache.size() > w) { m_cache.pop_back(); }
+        while (m_cache.size() > w)
+        {
+            m_cache.pop_back();
+        }
     }
     void invalidate_all() noexcept { m_cache.clear(); } // preserve_none
 
@@ -100,8 +115,14 @@ public:
         {
             const Pass& p       = m_passes[i];
             const bool  changed = p.run != nullptr && p.run(ctx, m, diag);
-            if (changed) { am.invalidate(p.preserved); } // unchanged ⇒ preserve-all (invalidate nothing)
-            if (diag.has_fatal()) { break; }             // ⛔ Fatal short-circuits — do NOT run later passes
+            if (changed) // unchanged ⇒ preserve-all (invalidate nothing)
+            {
+                am.invalidate(p.preserved);
+            }
+            if (diag.has_fatal()) // ⛔ Fatal short-circuits — do NOT run later passes
+            {
+                break;
+            }
         }
     }
     [[nodiscard]] usize size() const noexcept { return m_passes.size(); }

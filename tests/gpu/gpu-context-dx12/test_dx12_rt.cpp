@@ -59,7 +59,10 @@ crd::containers::Array<crd::u8> dxil_of(kir::KGraph& g, const kir::KEntry& e, cr
     REQUIRE(res.ok);
     crd::containers::Array<crd::u8> out(a);
     out.resize(res.dxil.size(), 0U);
-    for (crd::usize i = 0; i < res.dxil.size(); ++i) { out[i] = res.dxil[i]; }
+    for (crd::usize i = 0; i < res.dxil.size(); ++i)
+    {
+        out[i] = res.dxil[i];
+    }
     return out;
 }
 using B = gpu::Dx12RayTracingContext::Binding;
@@ -69,7 +72,11 @@ using B = gpu::Dx12RayTracingContext::Binding;
 TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[gpu-context][dx12][gpu][rt]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KGraph                g(&alloc);
@@ -85,7 +92,13 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
                             {0.2F, 0.2F, 0.0F, 0.0F, 0.0F, -1.0F},  // away ⇒ miss
                             {5.0F, 5.0F, 0.0F, 0.0F, 0.0F, 1.0F},   // outside ⇒ miss
                             {0.1F, 0.1F, 1.0F, 0.0F, 0.0F, 1.0F}};  // from z=1 ⇒ t=1
-    for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c];
+        }
+    }
 
     // ── CPU oracle ──
     crd::containers::Array<crd::f64> geo(&alloc);
@@ -93,9 +106,15 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
     crd::containers::Array<crd::f64> oref(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     rays64.resize(rays.size(), 0.0);
-    for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     oref.resize(k_n, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
@@ -119,7 +138,11 @@ TEST_CASE("D-007 RT-1 DX12: inline rayQuery closest-hit t == CPU reference", "[g
 TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-context][dx12][gpu][rt]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::rt::PathTraceConfig   pcfg;
@@ -155,10 +178,20 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
     crd::containers::Array<crd::f64> refc(&alloc);
     geo.resize(1U + 2U * 9U, 0.0);
     geo[0] = 2.0;
-    for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 18; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(6U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
-    for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-    for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
+    for (crd::usize i = 0; i < ppos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(ppos[i]);
+        nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]);
+    }
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
     kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, 1U);
     // GPU
@@ -170,7 +203,10 @@ TEST_CASE("D-007 RT-3 DX12: path-tracing megakernel == CPU reference", "[gpu-con
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 4), 1U));
 
     double worst = 0.0;
-    for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
+    for (crd::u32 p = 0; p < k_n * 3U; ++p)
+    {
+        worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p]));
+    }
     INFO("DX12 pathtrace worst |GPU-ref|=" << worst);
     CHECK(worst < 0.06); // DX12 path radiance == CPU oracle (transcendental ULP + rare grazing flips) — same bar as Vulkan
 }
@@ -182,7 +218,10 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
     crd::gpu_test::qualify_dx12_workload(&alloc, [&]()
     {
         gpu::Dx12RayTracingContext rt;
-        if (!rt.valid()) { SKIP("no D3D12 DXR-1.1 device available"); }
+        if (!rt.valid())
+        {
+            SKIP("no D3D12 DXR-1.1 device available");
+        }
 
         kir::rt::PathTraceNeeConfig pcfg;
         pcfg.samples = 32U; pcfg.bounces = 2U;
@@ -221,10 +260,20 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
         crd::containers::Array<crd::f64> refc(&alloc);
         geo.resize(1U + 4U * 9U, 0.0);
         geo[0] = 4.0;
-        for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+        for (int i = 0; i < 36; ++i)
+        {
+            geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+        }
         pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(12U, 0.0); refc.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
-        for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-        for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_nf[i]); }
+        for (crd::usize i = 0; i < ppos.size(); ++i)
+        {
+            pos64[i] = static_cast<crd::f64>(ppos[i]);
+            nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+        }
+        for (int i = 0; i < 12; ++i)
+        {
+            tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_nf[i]);
+        }
         kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
         kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, 1U);
         auto scene = rt.build_scene(verts, 4U);
@@ -237,8 +286,15 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
         double worst = 0.0;
         double lmin  = 1.0e30;
         double lmax  = 0.0;
-        for (crd::u32 p = 0; p < k_n * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p])); }
-        for (crd::u32 p = 0; p < k_n; ++p) { lmin = crd::math::min(lmin, refc[p * 3U]); lmax = crd::math::max(lmax, refc[p * 3U]); }
+        for (crd::u32 p = 0; p < k_n * 3U; ++p)
+        {
+            worst = crd::math::max(worst, crd::math::abs(static_cast<double>(got[p]) - refc[p]));
+        }
+        for (crd::u32 p = 0; p < k_n; ++p)
+        {
+            lmin = crd::math::min(lmin, refc[p * 3U]);
+            lmax = crd::math::max(lmax, refc[p * 3U]);
+        }
         INFO("DX12 nee/mis worst |GPU-ref|=" << worst << "  range=[" << lmin << ", " << lmax << "]");
         // WARP (software; GitHub CI has no GPU) diverges from the fp64 oracle by ~0.05 on this MIS radiance (observed worst
         // 0.0524, radiance range ~[0.18, 1.22]); relax the bar on WARP ONLY (a real dispatch error is O(0.1..1)), keep the
@@ -253,7 +309,11 @@ TEST_CASE("D-007 RT-4 DX12: NEE+MIS area-light path tracer == CPU reference", "[
 TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU reference", "[gpu-context][dx12][gpu][rt]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KGraph                g(&alloc);
@@ -268,7 +328,13 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
     crd::containers::Array<float> rays(&alloc);
     rays.resize(static_cast<crd::usize>(k_n) * 6U, 0.0F);
     const float rd[4][6] = {{0.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {2.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {4.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}, {6.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}};
-    for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c];
+        }
+    }
 
     crd::containers::Array<crd::f64> geo(&alloc);
     crd::containers::Array<crd::f64> rays64(&alloc);
@@ -286,7 +352,10 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
         }
     }
     rays64.resize(rays.size(), 0.0);
-    for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     oref.resize(k_n, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
@@ -299,9 +368,15 @@ TEST_CASE("D-007 RT-6 DX12: multi-instance TLAS (per-instance transforms) == CPU
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(dxil.data(), dxil.size()), crd::containers::ConstSpan<B>(bind, 2), 1U));
 
     INFO("DX12 instanced t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
-    for (int r = 0; r < 3; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - 2.0) < 1.0e-4); }
+    for (int r = 0; r < 3; ++r)
+    {
+        CHECK(crd::math::abs(static_cast<double>(got[r]) - 2.0) < 1.0e-4);
+    }
     CHECK(got[3] > 1.0e29);
-    for (int r = 0; r < 4; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - oref[r]) < 1.0e-4); }
+    for (int r = 0; r < 4; ++r)
+    {
+        CHECK(crd::math::abs(static_cast<double>(got[r]) - oref[r]) < 1.0e-4);
+    }
 }
 
 // D-007 P2 DX12: the CKIR-authored RT-pipeline stages lower to valid DXR HLSL — raygen/closest-hit/miss emitted from KEntry via
@@ -327,7 +402,11 @@ TEST_CASE("D-007 P2 DX12: CKIR RT pipeline stages lower to valid DXR HLSL", "[gp
     const auto cch = gpu::compile_hlsl_to_dxil(gpu::ShaderStage::ClosestHit, crd::containers::to_view(kch.source), "ch", &alloc);
     const auto cms = gpu::compile_hlsl_to_dxil(gpu::ShaderStage::Miss, crd::containers::to_view(kms.source), "ms", &alloc);
     INFO("rg err: " << crg.error_message.c_str());
-    if (!crg.ok) { WARN("dxc unavailable / lib_6_3 unsupported; skipping"); return; }
+    if (!crg.ok)
+    {
+        WARN("dxc unavailable / lib_6_3 unsupported; skipping");
+        return;
+    }
     CHECK(crg.ok);            // raygen → DXIL library
     CHECK(cch.ok);            // closest-hit
     CHECK(cms.ok);            // miss
@@ -345,7 +424,11 @@ TEST_CASE("D-007 P2 DX12: CKIR RT pipeline stages lower to valid DXR HLSL", "[gp
 TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU oracle", "[gpu-context][dx12][gpu][rt]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(64U << 20U);
     const auto                 uz = [](int v) { return static_cast<crd::usize>(v); };
@@ -373,7 +456,10 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
             q[7] = 0.09F * (1.0F - t1) + 0.02F;
         }
     }
-    for (int i = 0; i < nseg * 8; ++i) { segd[uz(i)] = static_cast<double>(segf[uz(i)]); }
+    for (int i = 0; i < nseg * 8; ++i)
+    {
+        segd[uz(i)] = static_cast<double>(segf[uz(i)]);
+    }
 
     crd::containers::Array<float>  rayf(&alloc);
     crd::containers::Array<double> rayd(&alloc);
@@ -391,7 +477,10 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
         r[4] = static_cast<float>(rnd() * 0.2 - 0.1);
         r[5] = 1.0F;
     }
-    for (int i = 0; i < nray * 6; ++i) { rayd[uz(i)] = static_cast<double>(rayf[uz(i)]); }
+    for (int i = 0; i < nray * 6; ++i)
+    {
+        rayd[uz(i)] = static_cast<double>(rayf[uz(i)]);
+    }
 
     // ── the kernel: one TraceRayCurves per lane ──
     // ⚠ DX12 buffer bindings live at u1.. (u0 unused, TLAS is the root SRV t0), so the segment/ray/out bindings are
@@ -460,15 +549,31 @@ TEST_CASE("D-007 B18-f DX12: CKIR TraceRayCurves on DXR procedural AABBs == CPU 
         if (ch != gh)
         {
             ++disagree;
-            if (ch) { ++cpu_only; } else { ++gpu_only; }
+            if (ch)
+            {
+                ++cpu_only;
+            }
+            else
+            {
+                ++gpu_only;
+            }
             continue;
         }
-        if (!ch) { continue; }
+        if (!ch)
+        {
+            continue;
+        }
         ++hits;
         const double dt = crd::math::abs(static_cast<double>(outf[uz(i * 2)]) - ref[uz(i * 2)]);
         const double du = crd::math::abs(static_cast<double>(outf[uz(i * 2 + 1)]) - ref[uz(i * 2 + 1)]);
-        if (dt > worst) { worst = dt; }
-        if (du > worst) { worst = du; }
+        if (dt > worst)
+        {
+            worst = dt;
+        }
+        if (du > worst)
+        {
+            worst = du;
+        }
     }
     INFO("DX12 curve traversal: " << nray << " rays over " << nseg << " segments, " << hits << " hits, maxabs = " << worst
                                   << ", disagreements = " << disagree << " (oracle-only " << cpu_only << ", device-only "
@@ -512,7 +617,10 @@ crd::u32 rt_fold(crd::u32 h, crd::u32 v) { return rt_tri32(h ^ v); }
 cg::RtSceneHandle rt_gate_dx_build_scene(const ceir::Operation* /*accel_op*/, void* user)
 {
     auto* s = static_cast<RtGateStateDx*>(user);
-    if (s->scene == nullptr) { s->scene = s->rt->build_scene(s->verts, s->ntris); } // fused: build once on the first AccelBuild
+    if (s->scene == nullptr) // fused: build once on the first AccelBuild
+    {
+        s->scene = s->rt->build_scene(s->verts, s->ntris);
+    }
     return (s->scene != nullptr) ? cg::RtSceneHandle{1U} : cg::RtSceneHandle{0U};
 }
 crd::containers::ConstSpan<crd::u8> rt_gate_dx_kernel_bytes(const ceir::Operation* /*ray_query*/, void* user)
@@ -525,7 +633,10 @@ bool rt_gate_dx_trace_dispatch(cg::RtSceneHandle tlas, crd::containers::ConstSpa
                                crd::u32 /*gz*/, void* user)
 {
     auto* s = static_cast<RtGateStateDx*>(user);
-    if (tlas == 0U || s->scene == nullptr) { return false; }
+    if (tlas == 0U || s->scene == nullptr)
+    {
+        return false;
+    }
     s->last_gx = gx; // pin: the harness CHECKs the shade dispatch's gx == the compact's hit_count readback
     gpu::Dx12RayTracingContext::Binding vb[8];
     const crd::u32                      n = static_cast<crd::u32>(binds.size() < 8U ? binds.size() : 8U);
@@ -544,7 +655,11 @@ TEST_CASE("CEIR-19c DX12: the ceir.rt->gpu bridge (execute_rt_lowered) traces th
           "[gpu-context][dx12][gpu][rt][ceir19c]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -579,7 +694,10 @@ TEST_CASE("CEIR-19c DX12: the ceir.rt->gpu bridge (execute_rt_lowered) traces th
     {
         if (r < 4U)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col];
+            }
         }
         else
         {
@@ -658,10 +776,16 @@ TEST_CASE("CEIR-19c DX12: the ceir.rt->gpu bridge (execute_rt_lowered) traces th
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> ref_t(&alloc);
     crd::containers::Array<crd::f64> ref_p(&alloc);
     ref_t.resize(nrays, 0.0);
@@ -682,7 +806,11 @@ TEST_CASE("CEIR-19c DX12: the ceir.rt->gpu bridge (execute_rt_lowered) traces th
                     << gpu_t[r] << " ref_t=" << ref_t[r]);
         CHECK(gpu_hit == cpu_hit);
         CHECK(gpu_prim[r] == static_cast<crd::u32>(ref_p[r]));
-        if (cpu_hit) { CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref_t[r]) < 1.0e-3); ++checked_hits; }
+        if (cpu_hit)
+        {
+            CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref_t[r]) < 1.0e-3);
+            ++checked_hits;
+        }
     }
     CHECK(checked_hits >= 2U);
 
@@ -702,7 +830,11 @@ TEST_CASE("CEIR-19c DX12: the authored serial-compact kernel compacts hit-flags 
           "[gpu-context][dx12][gpu][rt][ceir19c]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
     std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
@@ -788,7 +920,10 @@ TEST_CASE("CEIR-19c DX12: the authored serial-compact kernel compacts hit-flags 
     geo.resize(1U, 0.0);
     crd::containers::Array<crd::f64> flags64(&alloc);
     flags64.resize(k_n, 0.0);
-    for (crd::u32 i = 0; i < k_n; ++i) { flags64[i] = static_cast<crd::f64>(flags[i]); }
+    for (crd::u32 i = 0; i < k_n; ++i)
+    {
+        flags64[i] = static_cast<crd::f64>(flags[i]);
+    }
     crd::containers::Array<crd::f64> comp_ref(&alloc);
     crd::containers::Array<crd::f64> count_ref(&alloc);
     comp_ref.resize(k_n, 0.0);
@@ -812,7 +947,11 @@ TEST_CASE("CEIR-19c DX12: the authored wavefront trace kernel writes hit-flags =
           "[gpu-context][dx12][gpu][rt][ceir19c]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
     std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
@@ -841,7 +980,10 @@ TEST_CASE("CEIR-19c DX12: the authored wavefront trace kernel writes hit-flags =
     {
         if (r < 4U)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col];
+            }
         }
         else
         {
@@ -915,10 +1057,16 @@ TEST_CASE("CEIR-19c DX12: the authored wavefront trace kernel writes hit-flags =
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> flag_ref(&alloc);
     crd::containers::Array<crd::f64> t_ref(&alloc);
     flag_ref.resize(nrays, 0.0);
@@ -945,7 +1093,11 @@ TEST_CASE("CEIR-19c DX12: the authored wavefront shade kernel writes lit/shadowe
           "[gpu-context][dx12][gpu][rt][ceir19c]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
     std::ifstream f(CRD_REPO_DIR "/assets/ckir/wavefront_shade.ckir", std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
@@ -1032,17 +1184,29 @@ TEST_CASE("CEIR-19c DX12: the authored wavefront shade kernel writes lit/shadowe
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> comp64(&alloc);
     crd::containers::Array<crd::f64> rays64(&alloc);
     crd::containers::Array<crd::f64> hitt64(&alloc);
     crd::containers::Array<crd::f64> dec_ref(&alloc);
     comp64.resize(2U, 0.0);
-    for (crd::u32 i = 0; i < 2U; ++i) { comp64[i] = static_cast<crd::f64>(compacted[i]); }
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        comp64[i] = static_cast<crd::f64>(compacted[i]);
+    }
     rays64.resize(12U, 0.0);
-    for (crd::u32 i = 0; i < 12U; ++i) { rays64[i] = static_cast<crd::f64>(rays_in[i]); }
+    for (crd::u32 i = 0; i < 12U; ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays_in[i]);
+    }
     hitt64.resize(2U, 0.0);
-    for (crd::u32 i = 0; i < 2U; ++i) { hitt64[i] = static_cast<crd::f64>(hitt_in[i]); }
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        hitt64[i] = static_cast<crd::f64>(hitt_in[i]);
+    }
     dec_ref.resize(2U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
                                  {comp64.data(), 2, 0, 1},
@@ -1062,7 +1226,11 @@ TEST_CASE("CEIR-19c DX12: the AUTHORED wavefront host-loop (trace->compact->shad
           "[gpu-context][dx12][gpu][rt][ceir19c]")
 {
     gpu::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U << 20U);
 
     kir::KGraph                     kg_tr(&alloc);
@@ -1106,7 +1274,10 @@ TEST_CASE("CEIR-19c DX12: the AUTHORED wavefront host-loop (trace->compact->shad
     {
         if (r < nrays)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)];
+            }
         }
         else
         {
@@ -1191,10 +1362,16 @@ TEST_CASE("CEIR-19c DX12: the AUTHORED wavefront host-loop (trace->compact->shad
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + 27U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 27; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 27; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nbuf) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> hf_ref(&alloc);
     crd::containers::Array<crd::f64> ht_ref(&alloc);
     crd::containers::Array<crd::f64> comp_ref(&alloc);
@@ -1283,10 +1460,22 @@ TEST_CASE("CEIR-19c DX12: the AUTHORED wavefront host-loop (trace->compact->shad
 
         gpu_hash    = rt_fold(gpu_hash, hit_count);
         oracle_hash = rt_fold(oracle_hash, ohc);
-        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, compacted[j]); }
-        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j])); }
-        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, decisions[j]); }
-        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j])); }
+        for (crd::u32 j = 0; j < hit_count; ++j)
+        {
+            gpu_hash = rt_fold(gpu_hash, compacted[j]);
+        }
+        for (crd::u32 j = 0; j < ohc; ++j)
+        {
+            oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j]));
+        }
+        for (crd::u32 j = 0; j < hit_count; ++j)
+        {
+            gpu_hash = rt_fold(gpu_hash, decisions[j]);
+        }
+        for (crd::u32 j = 0; j < ohc; ++j)
+        {
+            oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j]));
+        }
         gpu_hash    = rt_fold(gpu_hash, next_count);
         oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(nc_ref[0]));
         CHECK(gpu_hash == oracle_hash);

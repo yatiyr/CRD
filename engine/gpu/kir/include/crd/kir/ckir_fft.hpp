@@ -37,7 +37,10 @@ struct Fft1dPlan
 [[nodiscard]] inline int fft_log2(int n) noexcept
 {
     int p = 0;
-    while ((1 << p) < n) { ++p; }
+    while ((1 << p) < n)
+    {
+        ++p;
+    }
     return p;
 }
 
@@ -95,7 +98,10 @@ struct Fft1dPlan
         const int  twidx  = g.binary(KOp::Shl, jidx, ku(static_cast<crd::u32>(p - 1 - s))); // j << (p-1-s)
         const int  wr     = g.buffer_load(tw_re, twidx);
         int        wi     = g.buffer_load(tw_im, twidx);
-        if (inverse) { wi = g.unary(KOp::Neg, wi); } // W_N^{-k} = conj(W_N^k)
+        if (inverse) // W_N^{-k} = conj(W_N^k)
+        {
+            wi = g.unary(KOp::Neg, wi);
+        }
         const int  x0r = g.shared_load(sre, in0);
         const int  x0i = g.shared_load(sim, in0);
         const int  x1r = g.shared_load(sre, in1);
@@ -133,7 +139,10 @@ struct Fft1dPlan
 [[nodiscard]] inline int fft_log4(int n) noexcept
 {
     int p = 0;
-    while ((1 << (2 * p)) < n) { ++p; }
+    while ((1 << (2 * p)) < n)
+    {
+        ++p;
+    }
     return p;
 }
 
@@ -198,11 +207,19 @@ struct Fft1dPlan
             const int inm = add(add(mul(gidx, ku(static_cast<crd::u32>(rs))), jidx), ku(static_cast<crd::u32>(m * quarter)));
             const int sr  = g.shared_load(sre, inm);
             const int sii = g.shared_load(sim, inm);
-            if (m == 0) { ar[0] = sr; ai[0] = sii; continue; }
+            if (m == 0)
+            {
+                ar[0] = sr;
+                ai[0] = sii;
+                continue;
+            }
             const int twidx = mul(jidx, ku(static_cast<crd::u32>(m * nl))); // (m*j)*(N/L)
             const int wr    = g.buffer_load(tw_re, twidx);
             int       wi    = g.buffer_load(tw_im, twidx);
-            if (inverse) { wi = g.unary(KOp::Neg, wi); }
+            if (inverse)
+            {
+                wi = g.unary(KOp::Neg, wi);
+            }
             ar[m] = sub(mul(sr, wr), mul(sii, wi)); // (s * w).re
             ai[m] = add(mul(sr, wi), mul(sii, wr)); // (s * w).im
         }
@@ -317,11 +334,19 @@ struct Fft1dPlan
             const int inm = add(add(mul(gidx, ku(static_cast<crd::u32>(rs))), jidx), ku(static_cast<crd::u32>(m * quarter)));
             const int sr  = g.shared_load(cre, inm);
             const int sii = g.shared_load(cim, inm);
-            if (m == 0) { ar[0] = sr; ai[0] = sii; continue; }
+            if (m == 0)
+            {
+                ar[0] = sr;
+                ai[0] = sii;
+                continue;
+            }
             const int twidx = mul(jidx, ku(static_cast<crd::u32>(m * nl)));
             const int wr    = g.buffer_load(tw_re, twidx);
             int       wi    = g.buffer_load(tw_im, twidx);
-            if (inv) { wi = neg(wi); }
+            if (inv)
+            {
+                wi = neg(wi);
+            }
             ar[m] = sub(mul(sr, wr), mul(sii, wi));
             ai[m] = add(mul(sr, wi), mul(sii, wr));
         }
@@ -332,8 +357,20 @@ struct Fft1dPlan
         int       xr[4]; int xi[4];
         xr[0] = add(t0r, t2r); xi[0] = add(t0i, t2i);
         xr[2] = sub(t0r, t2r); xi[2] = sub(t0i, t2i);
-        if (!inv) { xr[1] = add(t1r, t3i); xi[1] = sub(t1i, t3r); xr[3] = sub(t1r, t3i); xi[3] = add(t1i, t3r); }
-        else      { xr[1] = sub(t1r, t3i); xi[1] = add(t1i, t3r); xr[3] = add(t1r, t3i); xi[3] = sub(t1i, t3r); }
+        if (!inv)
+        {
+            xr[1] = add(t1r, t3i);
+            xi[1] = sub(t1i, t3r);
+            xr[3] = sub(t1r, t3i);
+            xi[3] = add(t1i, t3r);
+        }
+        else
+        {
+            xr[1] = sub(t1r, t3i);
+            xi[1] = add(t1i, t3r);
+            xr[3] = add(t1r, t3i);
+            xi[3] = sub(t1i, t3r);
+        }
         for (int k = 0; k < 4; ++k)
         {
             const int outk = add(add(mul(gidx, ku(static_cast<crd::u32>(ll))), jidx), ku(static_cast<crd::u32>(k * rs)));
@@ -351,7 +388,11 @@ struct Fft1dPlan
         g.stmt_shared_store(cim, idx, g.buffer_load(in_im, boff(idx)));
     }
     g.stmt_barrier();
-    for (int s = 0; s < p4; ++s) { stage(s, false); flip(); } // FORWARD FFT (current = FFT(x))
+    for (int s = 0; s < p4; ++s) // FORWARD FFT (current = FFT(x))
+    {
+        stage(s, false);
+        flip();
+    }
     for (int m = 0; m < 4; ++m) // ×FILTER SPECTRUM — read CURRENT, write OTHER (disjoint ⇒ no lazy-eval RAW hazard), then flip
     {
         const int idx = add(tid, ku(static_cast<crd::u32>(m * quarter)));
@@ -364,7 +405,11 @@ struct Fft1dPlan
     }
     g.stmt_barrier();
     flip();
-    for (int s = 0; s < p4; ++s) { stage(s, true); flip(); } // INVERSE FFT (current = N * conv)
+    for (int s = 0; s < p4; ++s) // INVERSE FFT (current = N * conv)
+    {
+        stage(s, true);
+        flip();
+    }
     const int invn = g.constant(sc, sh1, DType::F32); // `scale` (default 1/N); exact in f32 when a power of two
     for (int m = 0; m < 4; ++m)
     {
@@ -388,7 +433,10 @@ struct Fft1dPlan
 [[nodiscard]] inline int fft_log8(int n) noexcept
 {
     int p = 0;
-    while ((1 << (3 * p)) < n) { ++p; }
+    while ((1 << (3 * p)) < n)
+    {
+        ++p;
+    }
     return p;
 }
 
@@ -436,8 +484,20 @@ struct Fft1dPlan
         const int t3r = sub(pr[1], pr[3]); const int t3i = sub(pi[1], pi[3]);
         xr[0] = add(t0r, t2r); xi[0] = add(t0i, t2i);
         xr[2] = sub(t0r, t2r); xi[2] = sub(t0i, t2i);
-        if (!inverse) { xr[1] = add(t1r, t3i); xi[1] = sub(t1i, t3r); xr[3] = sub(t1r, t3i); xi[3] = add(t1i, t3r); }
-        else          { xr[1] = sub(t1r, t3i); xi[1] = add(t1i, t3r); xr[3] = add(t1r, t3i); xi[3] = sub(t1i, t3r); }
+        if (!inverse)
+        {
+            xr[1] = add(t1r, t3i);
+            xi[1] = sub(t1i, t3r);
+            xr[3] = sub(t1r, t3i);
+            xi[3] = add(t1i, t3r);
+        }
+        else
+        {
+            xr[1] = sub(t1r, t3i);
+            xi[1] = add(t1i, t3r);
+            xr[3] = add(t1r, t3i);
+            xi[3] = sub(t1i, t3r);
+        }
     };
 
     const int mark = g.kernel_stmt_mark();
@@ -469,11 +529,19 @@ struct Fft1dPlan
             const int inm = add(add(mul(gidx, ku(static_cast<crd::u32>(rs))), jidx), ku(static_cast<crd::u32>(m * eighth)));
             const int sr  = g.shared_load(sre, inm);
             const int sii = g.shared_load(sim, inm);
-            if (m == 0) { ar[0] = sr; ai[0] = sii; continue; }
+            if (m == 0)
+            {
+                ar[0] = sr;
+                ai[0] = sii;
+                continue;
+            }
             const int twidx = mul(jidx, ku(static_cast<crd::u32>(m * nl)));
             const int wr    = g.buffer_load(tw_re, twidx);
             int       wi    = g.buffer_load(tw_im, twidx);
-            if (inverse) { wi = neg(wi); }
+            if (inverse)
+            {
+                wi = neg(wi);
+            }
             cmul(sr, sii, wr, wi, ar[m], ai[m]);
         }
         // 8-point DFT: even/odd 4-DFTs + radix-2 combine with W_8^k.
@@ -486,7 +554,16 @@ struct Fft1dPlan
         dft4(odr, odi, orr, oii);
         int wr8[4]; int wi8[4];
         wr8[0] = orr[0]; wi8[0] = oii[0];                                                        // W_8^0 = 1
-        if (!inverse) { wr8[2] = oii[2]; wi8[2] = neg(orr[2]); } else { wr8[2] = neg(oii[2]); wi8[2] = orr[2]; } // W_8^2 = ∓i
+        if (!inverse)
+        {
+            wr8[2] = oii[2];
+            wi8[2] = neg(orr[2]);
+        }
+        else // W_8^2 = ∓i
+        {
+            wr8[2] = neg(oii[2]);
+            wi8[2] = orr[2];
+        }
         cmul(orr[1], oii[1], cc, inverse ? cc : neg(cc), wr8[1], wi8[1]);                         // W_8^1 = (c, ∓c)
         cmul(orr[3], oii[3], neg(cc), inverse ? cc : neg(cc), wr8[3], wi8[3]);                    // W_8^3 = (-c, ∓c)
         int xr[8]; int xi[8];
@@ -588,13 +665,22 @@ struct Fft1dPlan
             const int ctile   = g.binary(KOp::Mod, wgix, ku(static_cast<crd::u32>(tpi)));
             gcol              = add(mul(image, ku(static_cast<crd::u32>(bstride))), add(mul(ctile, ku(static_cast<crd::u32>(tile_c))), col));
         }
-        else { gcol = add(mul(wgix, ku(static_cast<crd::u32>(tile_c))), col); }
+        else
+        {
+            gcol = add(mul(wgix, ku(static_cast<crd::u32>(tile_c))), col);
+        }
     }
     int base = -1; // contiguous batched base (one image per workgroup); -1 = unused (tiled/strided compute the offset in boff)
-    if (!tiled && col_stride <= 0 && batched) { base = mul(wgix, ku(static_cast<crd::u32>(n))); }
+    if (!tiled && col_stride <= 0 && batched)
+    {
+        base = mul(wgix, ku(static_cast<crd::u32>(n)));
+    }
     // global element offset: tiled/strided column of a row-major image, else contiguous batched. filter/col share it.
     const auto boff = [&](int idx) {
-        if (col_stride > 0) { return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), tiled ? gcol : wgix); }
+        if (col_stride > 0)
+        {
+            return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), tiled ? gcol : wgix);
+        }
         return batched ? add(base, idx) : idx;
     };
     // shared slot: each column owns the [col*cstride, +n) slice (padded so tile_c columns don't collide on banks).
@@ -612,8 +698,20 @@ struct Fft1dPlan
         const int t3r = sub(pr[1], pr[3]); const int t3i = sub(pi[1], pi[3]);
         xr[0] = add(t0r, t2r); xi[0] = add(t0i, t2i);
         xr[2] = sub(t0r, t2r); xi[2] = sub(t0i, t2i);
-        if (!inverse) { xr[1] = add(t1r, t3i); xi[1] = sub(t1i, t3r); xr[3] = sub(t1r, t3i); xi[3] = add(t1i, t3r); }
-        else          { xr[1] = sub(t1r, t3i); xi[1] = add(t1i, t3r); xr[3] = add(t1r, t3i); xi[3] = sub(t1i, t3r); }
+        if (!inverse)
+        {
+            xr[1] = add(t1r, t3i);
+            xi[1] = sub(t1i, t3r);
+            xr[3] = sub(t1r, t3i);
+            xi[3] = add(t1i, t3r);
+        }
+        else
+        {
+            xr[1] = sub(t1r, t3i);
+            xi[1] = add(t1i, t3r);
+            xr[3] = add(t1r, t3i);
+            xi[3] = sub(t1i, t3r);
+        }
     };
     // exact-as-possible 16-point DFT on pre-twiddled inputs a[0..15]: X[k] = sum_n a[n] W_16^{nk}, decomposed 16 = 4x4:
     // u_c[a] = a[4a+c] -> U_c = DFT4(u_c) -> V_c[e] = W_16^{ce} U_c[e] (table: W_N^{ce*N/16}) -> X[e+4d] = DFT4_over_c(V)[d].
@@ -632,7 +730,10 @@ struct Fft1dPlan
                 const int twidx = c * e * (n / 16);
                 const int wr    = g.buffer_load(tw_re, ku(static_cast<crd::u32>(twidx)));
                 int       wi    = g.buffer_load(tw_im, ku(static_cast<crd::u32>(twidx)));
-                if (inverse) { wi = neg(wi); }
+                if (inverse)
+                {
+                    wi = neg(wi);
+                }
                 cmul(ur[c][e], ui[c][e], wr, wi, ur[c][e], ui[c][e]);
             }
         }
@@ -642,7 +743,11 @@ struct Fft1dPlan
             const int pi[4] = {ui[0][e], ui[1][e], ui[2][e], ui[3][e]};
             int       yr[4]; int yi[4];
             dft4(pr, pi, yr, yi);
-            for (int d = 0; d < 4; ++d) { xr[e + 4 * d] = yr[d]; xi[e + 4 * d] = yi[d]; }
+            for (int d = 0; d < 4; ++d)
+            {
+                xr[e + 4 * d] = yr[d];
+                xi[e + 4 * d] = yi[d];
+            }
         }
     };
 
@@ -670,16 +775,27 @@ struct Fft1dPlan
             {
                 const int leg = b * radix + m;
                 const int inm = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(r))), jidxs[b]), ku(static_cast<crd::u32>(m * (n / radix))));
-                if (first) { rr[leg] = g.buffer_load(in_re, boff(inm)); ri[leg] = g.buffer_load(in_im, boff(inm)); }
+                if (first)
+                {
+                    rr[leg] = g.buffer_load(in_re, boff(inm));
+                    ri[leg] = g.buffer_load(in_im, boff(inm));
+                }
                 else
                 {
                     rr[leg] = g.shared_load(x_re, sp(inm));
                     ri[leg] = g.shared_load(x_im, sp(inm));
-                    if (freeze) { g.stmt_materialize(rr[leg]); g.stmt_materialize(ri[leg]); }
+                    if (freeze)
+                    {
+                        g.stmt_materialize(rr[leg]);
+                        g.stmt_materialize(ri[leg]);
+                    }
                 }
             }
         }
-        if (freeze) { g.stmt_barrier(); } // inputs frozen in registers ⇒ safe to overwrite X below
+        if (freeze) // inputs frozen in registers ⇒ safe to overwrite X below
+        {
+            g.stmt_barrier();
+        }
 
         // PRE-TWIDDLE + BUTTERFLY (registers) → xr[16], xi[16].
         int xr[16]; int xi[16];
@@ -689,15 +805,29 @@ struct Fft1dPlan
             for (int m = 0; m < radix; ++m)
             {
                 const int leg = b * radix + m;
-                if (m == 0) { ar[0] = rr[leg]; ai[0] = ri[leg]; continue; }
+                if (m == 0)
+                {
+                    ar[0] = rr[leg];
+                    ai[0] = ri[leg];
+                    continue;
+                }
                 const int twidx = mul(jidxs[b], ku(static_cast<crd::u32>(m * nl))); // W_L^{jm} = W_N^{jm·N/L}
                 const int wr    = g.buffer_load(tw_re, twidx);
                 int       wi    = g.buffer_load(tw_im, twidx);
-                if (inverse) { wi = neg(wi); }
+                if (inverse)
+                {
+                    wi = neg(wi);
+                }
                 cmul(rr[leg], ri[leg], wr, wi, ar[m], ai[m]);
             }
-            if (r16) { dft16(ar, ai, &xr[0], &xi[0]); }
-            else { dft4(ar, ai, &xr[b * 4], &xi[b * 4]); }
+            if (r16)
+            {
+                dft16(ar, ai, &xr[0], &xi[0]);
+            }
+            else
+            {
+                dft4(ar, ai, &xr[b * 4], &xi[b * 4]);
+            }
         }
 
         // WRITE the thread's 16 outputs (to GLOBAL if last, else to X).
@@ -707,11 +837,22 @@ struct Fft1dPlan
             {
                 const int leg  = b * radix + k;
                 const int outk = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(ll))), jidxs[b]), ku(static_cast<crd::u32>(k * r)));
-                if (last) { g.stmt_buffer_store(out_re, boff(outk), xr[leg]); g.stmt_buffer_store(out_im, boff(outk), xi[leg]); }
-                else { g.stmt_shared_store(x_re, sp(outk), xr[leg]); g.stmt_shared_store(x_im, sp(outk), xi[leg]); }
+                if (last)
+                {
+                    g.stmt_buffer_store(out_re, boff(outk), xr[leg]);
+                    g.stmt_buffer_store(out_im, boff(outk), xi[leg]);
+                }
+                else
+                {
+                    g.stmt_shared_store(x_re, sp(outk), xr[leg]);
+                    g.stmt_shared_store(x_im, sp(outk), xi[leg]);
+                }
             }
         }
-        if (!last) { g.stmt_barrier(); }
+        if (!last)
+        {
+            g.stmt_barrier();
+        }
         r = ll;
     }
 
@@ -803,7 +944,11 @@ struct Fft1dPlan
             const int pi[4] = {ui[0][e], ui[1][e], ui[2][e], ui[3][e]};
             int       yr[4]; int yi[4];
             dft4(pr, pi, yr, yi);
-            for (int d = 0; d < 4; ++d) { xr[e + 4 * d] = yr[d]; xi[e + 4 * d] = yi[d]; }
+            for (int d = 0; d < 4; ++d)
+            {
+                xr[e + 4 * d] = yr[d];
+                xi[e + 4 * d] = yi[d];
+            }
         }
     };
 
@@ -830,16 +975,27 @@ struct Fft1dPlan
             {
                 const int leg = b * radix + m;
                 const int inm = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(r))), jidxs[b]), ku(static_cast<crd::u32>(m * (n / radix))));
-                if (first) { rr[leg] = g.buffer_load(in_re, add(inbase, inm)); ri[leg] = zero; } // REAL input ⇒ imag 0
+                if (first) // REAL input ⇒ imag 0
+                {
+                    rr[leg] = g.buffer_load(in_re, add(inbase, inm));
+                    ri[leg] = zero;
+                }
                 else
                 {
                     rr[leg] = g.shared_load(x_re, inm);
                     ri[leg] = g.shared_load(x_im, inm);
-                    if (freeze) { g.stmt_materialize(rr[leg]); g.stmt_materialize(ri[leg]); }
+                    if (freeze)
+                    {
+                        g.stmt_materialize(rr[leg]);
+                        g.stmt_materialize(ri[leg]);
+                    }
                 }
             }
         }
-        if (freeze) { g.stmt_barrier(); }
+        if (freeze)
+        {
+            g.stmt_barrier();
+        }
 
         int xr[16]; int xi[16];
         for (int b = 0; b < nbut; ++b)
@@ -848,14 +1004,25 @@ struct Fft1dPlan
             for (int m = 0; m < radix; ++m)
             {
                 const int leg = b * radix + m;
-                if (m == 0) { ar[0] = rr[leg]; ai[0] = ri[leg]; continue; }
+                if (m == 0)
+                {
+                    ar[0] = rr[leg];
+                    ai[0] = ri[leg];
+                    continue;
+                }
                 const int twidx = mul(jidxs[b], ku(static_cast<crd::u32>(m * nl)));
                 const int wr    = g.buffer_load(tw_re, twidx);
                 const int wi    = g.buffer_load(tw_im, twidx);
                 cmul(rr[leg], ri[leg], wr, wi, ar[m], ai[m]);
             }
-            if (r16) { dft16(ar, ai, &xr[0], &xi[0]); }
-            else { dft4(ar, ai, &xr[b * 4], &xi[b * 4]); }
+            if (r16)
+            {
+                dft16(ar, ai, &xr[0], &xi[0]);
+            }
+            else
+            {
+                dft4(ar, ai, &xr[b * 4], &xi[b * 4]);
+            }
         }
 
         // FREEZE every value/base the conditional stores touch into enclosing-scope temps BEFORE the per-output `if` blocks:
@@ -864,8 +1031,16 @@ struct Fft1dPlan
         if (last)
         {
             g.stmt_materialize(obase);
-            for (int b = 0; b < nbut; ++b) { g.stmt_materialize(gidxs[b]); g.stmt_materialize(jidxs[b]); }
-            for (int j = 0; j < nbut * radix; ++j) { g.stmt_materialize(xr[j]); g.stmt_materialize(xi[j]); }
+            for (int b = 0; b < nbut; ++b)
+            {
+                g.stmt_materialize(gidxs[b]);
+                g.stmt_materialize(jidxs[b]);
+            }
+            for (int j = 0; j < nbut * radix; ++j)
+            {
+                g.stmt_materialize(xr[j]);
+                g.stmt_materialize(xi[j]);
+            }
         }
         for (int b = 0; b < nbut; ++b)
         {
@@ -881,10 +1056,17 @@ struct Fft1dPlan
                     g.stmt_buffer_store(out_im, add(obase, outk), xi[leg]);
                     g.stmt_if_end(ifid);
                 }
-                else { g.stmt_shared_store(x_re, outk, xr[leg]); g.stmt_shared_store(x_im, outk, xi[leg]); }
+                else
+                {
+                    g.stmt_shared_store(x_re, outk, xr[leg]);
+                    g.stmt_shared_store(x_im, outk, xi[leg]);
+                }
             }
         }
-        if (!last) { g.stmt_barrier(); }
+        if (!last)
+        {
+            g.stmt_barrier();
+        }
         r = ll;
     }
 
@@ -965,7 +1147,11 @@ struct Fft1dPlan
             const int pi[4] = {ui[0][e], ui[1][e], ui[2][e], ui[3][e]};
             int       yr[4]; int yi[4];
             dft4(pr, pi, yr, yi);
-            for (int d = 0; d < 4; ++d) { xr[e + 4 * d] = yr[d]; xi[e + 4 * d] = yi[d]; }
+            for (int d = 0; d < 4; ++d)
+            {
+                xr[e + 4 * d] = yr[d];
+                xi[e + 4 * d] = yi[d];
+            }
         }
     };
 
@@ -1005,11 +1191,18 @@ struct Fft1dPlan
                 {
                     rr[leg] = g.shared_load(x_re, inm);
                     ri[leg] = g.shared_load(x_im, inm);
-                    if (freeze) { g.stmt_materialize(rr[leg]); g.stmt_materialize(ri[leg]); }
+                    if (freeze)
+                    {
+                        g.stmt_materialize(rr[leg]);
+                        g.stmt_materialize(ri[leg]);
+                    }
                 }
             }
         }
-        if (freeze) { g.stmt_barrier(); }
+        if (freeze)
+        {
+            g.stmt_barrier();
+        }
 
         int xr[16]; int xi[16];
         for (int b = 0; b < nbut; ++b)
@@ -1018,14 +1211,25 @@ struct Fft1dPlan
             for (int m = 0; m < radix; ++m)
             {
                 const int leg = b * radix + m;
-                if (m == 0) { ar[0] = rr[leg]; ai[0] = ri[leg]; continue; }
+                if (m == 0)
+                {
+                    ar[0] = rr[leg];
+                    ai[0] = ri[leg];
+                    continue;
+                }
                 const int twidx = mul(jidxs[b], ku(static_cast<crd::u32>(m * nl)));
                 const int wr    = g.buffer_load(tw_re, twidx);
                 const int wi    = neg(g.buffer_load(tw_im, twidx)); // inverse
                 cmul(rr[leg], ri[leg], wr, wi, ar[m], ai[m]);
             }
-            if (r16) { dft16(ar, ai, &xr[0], &xi[0]); }
-            else { dft4(ar, ai, &xr[b * 4], &xi[b * 4]); }
+            if (r16)
+            {
+                dft16(ar, ai, &xr[0], &xi[0]);
+            }
+            else
+            {
+                dft4(ar, ai, &xr[b * 4], &xi[b * 4]);
+            }
         }
 
         for (int b = 0; b < nbut; ++b)
@@ -1034,11 +1238,21 @@ struct Fft1dPlan
             {
                 const int leg  = b * radix + k;
                 const int outk = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(ll))), jidxs[b]), ku(static_cast<crd::u32>(k * r)));
-                if (last) { g.stmt_buffer_store(out_re, add(obase, outk), xr[leg]); } // REAL part only (imag ≈ 0, discarded)
-                else { g.stmt_shared_store(x_re, outk, xr[leg]); g.stmt_shared_store(x_im, outk, xi[leg]); }
+                if (last) // REAL part only (imag ≈ 0, discarded)
+                {
+                    g.stmt_buffer_store(out_re, add(obase, outk), xr[leg]);
+                }
+                else
+                {
+                    g.stmt_shared_store(x_re, outk, xr[leg]);
+                    g.stmt_shared_store(x_im, outk, xi[leg]);
+                }
             }
         }
-        if (!last) { g.stmt_barrier(); }
+        if (!last)
+        {
+            g.stmt_barrier();
+        }
         r = ll;
     }
 
@@ -1093,8 +1307,20 @@ struct Fft1dPlan
     const int  wgcol     = (col_stride > 0) ? g.builtin(KBuiltin::WorkgroupIndex) : -1; // the image column this block owns
     const int  base      = (col_stride <= 0 && batched) ? mul(g.builtin(KBuiltin::WorkgroupIndex), ku(static_cast<crd::u32>(n))) : -1;
     // strided: idx*col_stride + column (row-major column of an image). contiguous: WorkgroupIndex*n + idx. filter shares it.
-    const auto boff      = [&](int idx) { if (col_stride > 0) { return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), wgcol); } return batched ? add(base, idx) : idx; };
-    const auto boff_filt = [&](int idx) { if (col_stride > 0) { return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), wgcol); } return (batched && batched_filter) ? add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(static_cast<crd::u32>(n))), idx) : idx; };
+    const auto boff      = [&](int idx)
+    {
+        if (col_stride > 0)
+        {
+            return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), wgcol);
+        }
+        return batched ? add(base, idx) : idx; };
+    const auto boff_filt = [&](int idx)
+    {
+        if (col_stride > 0)
+        {
+            return add(mul(idx, ku(static_cast<crd::u32>(col_stride))), wgcol);
+        }
+        return (batched && batched_filter) ? add(mul(g.builtin(KBuiltin::WorkgroupIndex), ku(static_cast<crd::u32>(n))), idx) : idx; };
 
     int        cre = a_re; int cim = a_im; int ore = b_re; int oim = b_im;
     const auto flip = [&]() { const int tr = cre; cre = ore; ore = tr; const int ti = cim; cim = oim; oim = ti; };
@@ -1110,8 +1336,20 @@ struct Fft1dPlan
         const int t3r = sub(pr[1], pr[3]); const int t3i = sub(pi[1], pi[3]);
         xr[0] = add(t0r, t2r); xi[0] = add(t0i, t2i);
         xr[2] = sub(t0r, t2r); xi[2] = sub(t0i, t2i);
-        if (!inv) { xr[1] = add(t1r, t3i); xi[1] = sub(t1i, t3r); xr[3] = sub(t1r, t3i); xi[3] = add(t1i, t3r); }
-        else      { xr[1] = sub(t1r, t3i); xi[1] = add(t1i, t3r); xr[3] = add(t1r, t3i); xi[3] = sub(t1i, t3r); }
+        if (!inv)
+        {
+            xr[1] = add(t1r, t3i);
+            xi[1] = sub(t1i, t3r);
+            xr[3] = sub(t1r, t3i);
+            xi[3] = add(t1i, t3r);
+        }
+        else
+        {
+            xr[1] = sub(t1r, t3i);
+            xi[1] = add(t1i, t3r);
+            xr[3] = add(t1r, t3i);
+            xi[3] = sub(t1i, t3r);
+        }
     };
     const auto dft16 = [&](bool inv, const int* ar, const int* ai, int* xr, int* xi) {
         int ur[4][4]; int ui[4][4];
@@ -1128,7 +1366,10 @@ struct Fft1dPlan
                 const int twidx = c * e * (n / 16);
                 const int wr    = g.buffer_load(tw_re, ku(static_cast<crd::u32>(twidx)));
                 int       wi    = g.buffer_load(tw_im, ku(static_cast<crd::u32>(twidx)));
-                if (inv) { wi = neg(wi); }
+                if (inv)
+                {
+                    wi = neg(wi);
+                }
                 cmul(ur[c][e], ui[c][e], wr, wi, ur[c][e], ui[c][e]);
             }
         }
@@ -1138,7 +1379,11 @@ struct Fft1dPlan
             const int pi[4] = {ui[0][e], ui[1][e], ui[2][e], ui[3][e]};
             int       yr[4]; int yi[4];
             dft4(inv, pr, pi, yr, yi);
-            for (int d = 0; d < 4; ++d) { xr[e + 4 * d] = yr[d]; xi[e + 4 * d] = yi[d]; }
+            for (int d = 0; d < 4; ++d)
+            {
+                xr[e + 4 * d] = yr[d];
+                xi[e + 4 * d] = yi[d];
+            }
         }
     };
     const int invn = g.constant(sc, sh1, DType::F32);
@@ -1147,7 +1392,10 @@ struct Fft1dPlan
     // (elementwise, so it composes with any output permutation) — the fwd-last stage absorbs the whole multiply pass.
     const auto stage = [&](int s, int rr, bool inv, bool first_g, bool fuse_filt, bool last_g) -> int {
         const auto ld = [&](int idx, bool im) {
-            if (first_g) { return g.buffer_load(im ? in_im : in_re, boff(idx)); }
+            if (first_g)
+            {
+                return g.buffer_load(im ? in_im : in_re, boff(idx));
+            }
             return g.shared_load(im ? cim : cre, idx);
         };
         const auto st = [&](int idx, int vre, int vim) {
@@ -1180,11 +1428,19 @@ struct Fft1dPlan
                 const int inm = add(add(mul(gidx, ku(static_cast<crd::u32>(rr))), jidx), ku(static_cast<crd::u32>(m * tthreads)));
                 const int sr  = ld(inm, false);
                 const int sii = ld(inm, true);
-                if (m == 0) { ar16[0] = sr; ai16[0] = sii; continue; }
+                if (m == 0)
+                {
+                    ar16[0] = sr;
+                    ai16[0] = sii;
+                    continue;
+                }
                 const int twidx = mul(jidx, ku(static_cast<crd::u32>(m * nl)));
                 const int wr    = g.buffer_load(tw_re, twidx);
                 int       wi    = g.buffer_load(tw_im, twidx);
-                if (inv) { wi = neg(wi); }
+                if (inv)
+                {
+                    wi = neg(wi);
+                }
                 cmul(sr, sii, wr, wi, ar16[m], ai16[m]);
             }
             int xr16[16]; int xi16[16];
@@ -1194,7 +1450,10 @@ struct Fft1dPlan
                 const int outk = add(add(mul(gidx, ku(static_cast<crd::u32>(ll))), jidx), ku(static_cast<crd::u32>(k * rr)));
                 st(outk, xr16[k], xi16[k]);
             }
-            if (!last_g) { g.stmt_barrier(); }
+            if (!last_g)
+            {
+                g.stmt_barrier();
+            }
             return ll;
         }
         const int ll = 4 * rr;
@@ -1210,11 +1469,19 @@ struct Fft1dPlan
                 const int inm = add(add(mul(gidx, ku(static_cast<crd::u32>(rr))), jidx), ku(static_cast<crd::u32>(m * (n / 4))));
                 const int sr  = ld(inm, false);
                 const int sii = ld(inm, true);
-                if (m == 0) { ar4[0] = sr; ai4[0] = sii; continue; }
+                if (m == 0)
+                {
+                    ar4[0] = sr;
+                    ai4[0] = sii;
+                    continue;
+                }
                 const int twidx = mul(jidx, ku(static_cast<crd::u32>(m * nl)));
                 const int wr    = g.buffer_load(tw_re, twidx);
                 int       wi    = g.buffer_load(tw_im, twidx);
-                if (inv) { wi = neg(wi); }
+                if (inv)
+                {
+                    wi = neg(wi);
+                }
                 cmul(sr, sii, wr, wi, ar4[m], ai4[m]);
             }
             int xr4[4]; int xi4[4];
@@ -1225,7 +1492,10 @@ struct Fft1dPlan
                 st(outk, xr4[k], xi4[k]);
             }
         }
-        if (!last_g) { g.stmt_barrier(); }
+        if (!last_g)
+        {
+            g.stmt_barrier();
+        }
         return ll;
     };
 
@@ -1234,9 +1504,17 @@ struct Fft1dPlan
     // (was 2·nstages+3). Same values in the same order ⇒ bit-exactness unchanged.
     const int mark = g.kernel_stmt_mark();
     int       r    = 1;
-    for (int s = 0; s < nstages; ++s) { r = stage(s, r, false, s == 0, s == nstages - 1, false); flip(); } // FORWARD ×filt
+    for (int s = 0; s < nstages; ++s) // FORWARD ×filt
+    {
+        r = stage(s, r, false, s == 0, s == nstages - 1, false);
+        flip();
+    }
     r = 1;
-    for (int s = 0; s < nstages; ++s) { r = stage(s, r, true, false, false, s == nstages - 1); flip(); } // INVERSE ×scale
+    for (int s = 0; s < nstages; ++s) // INVERSE ×scale
+    {
+        r = stage(s, r, true, false, false, s == nstages - 1);
+        flip();
+    }
 
     Fft1dPlan plan;
     plan.entry.stage             = KStage::Compute;
@@ -1324,8 +1602,20 @@ struct Fft1dPlan
         const int t3r = sub(pr[1], pr[3]); const int t3i = sub(pi[1], pi[3]);
         xr[0] = add(t0r, t2r); xi[0] = add(t0i, t2i);
         xr[2] = sub(t0r, t2r); xi[2] = sub(t0i, t2i);
-        if (!inv) { xr[1] = add(t1r, t3i); xi[1] = sub(t1i, t3r); xr[3] = sub(t1r, t3i); xi[3] = add(t1i, t3r); }
-        else      { xr[1] = sub(t1r, t3i); xi[1] = add(t1i, t3r); xr[3] = add(t1r, t3i); xi[3] = sub(t1i, t3r); }
+        if (!inv)
+        {
+            xr[1] = add(t1r, t3i);
+            xi[1] = sub(t1i, t3r);
+            xr[3] = sub(t1r, t3i);
+            xi[3] = add(t1i, t3r);
+        }
+        else
+        {
+            xr[1] = sub(t1r, t3i);
+            xi[1] = add(t1i, t3r);
+            xr[3] = add(t1r, t3i);
+            xi[3] = sub(t1i, t3r);
+        }
     };
     const auto dft16 = [&](bool inv, const int* ar, const int* ai, int* xr, int* xi) {
         int ur[4][4]; int ui[4][4];
@@ -1342,7 +1632,10 @@ struct Fft1dPlan
                 const int twidx = c * e * (n / 16);
                 const int wr    = g.buffer_load(tw_re, ku(static_cast<crd::u32>(twidx)));
                 int       wi    = g.buffer_load(tw_im, ku(static_cast<crd::u32>(twidx)));
-                if (inv) { wi = neg(wi); }
+                if (inv)
+                {
+                    wi = neg(wi);
+                }
                 cmul(ur[c][e], ui[c][e], wr, wi, ur[c][e], ui[c][e]);
             }
         }
@@ -1352,7 +1645,11 @@ struct Fft1dPlan
             const int pi[4] = {ui[0][e], ui[1][e], ui[2][e], ui[3][e]};
             int       yr[4]; int yi[4];
             dft4(inv, pr, pi, yr, yi);
-            for (int d = 0; d < 4; ++d) { xr[e + 4 * d] = yr[d]; xi[e + 4 * d] = yi[d]; }
+            for (int d = 0; d < 4; ++d)
+            {
+                xr[e + 4 * d] = yr[d];
+                xi[e + 4 * d] = yi[d];
+            }
         }
     };
 
@@ -1362,7 +1659,10 @@ struct Fft1dPlan
     {
         const bool inv     = si >= nstages;
         const int  s       = inv ? si - nstages : si;
-        if (s == 0) { r = 1; }
+        if (s == 0)
+        {
+            r = 1;
+        }
         const bool rd_glob = si == 0;                 // fwd stage 0 reads the image
         const bool wr_glob = si == 2 * nstages - 1;   // inv last writes the image (×scale)
         const bool r16     = s < n16;
@@ -1383,16 +1683,27 @@ struct Fft1dPlan
             {
                 const int leg = b * radix + m;
                 const int inm = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(r))), jidxs[b]), ku(static_cast<crd::u32>(m * (n / radix))));
-                if (rd_glob) { rr[leg] = g.buffer_load(in_re, boff(inm)); ri[leg] = g.buffer_load(in_im, boff(inm)); }
+                if (rd_glob)
+                {
+                    rr[leg] = g.buffer_load(in_re, boff(inm));
+                    ri[leg] = g.buffer_load(in_im, boff(inm));
+                }
                 else
                 {
                     rr[leg] = g.shared_load(x_re, sp(inm));
                     ri[leg] = g.shared_load(x_im, sp(inm));
-                    if (freeze) { g.stmt_materialize(rr[leg]); g.stmt_materialize(ri[leg]); }
+                    if (freeze)
+                    {
+                        g.stmt_materialize(rr[leg]);
+                        g.stmt_materialize(ri[leg]);
+                    }
                 }
             }
         }
-        if (freeze) { g.stmt_barrier(); }
+        if (freeze)
+        {
+            g.stmt_barrier();
+        }
 
         int xr[16]; int xi[16];
         for (int b = 0; b < nbut; ++b)
@@ -1401,15 +1712,29 @@ struct Fft1dPlan
             for (int m = 0; m < radix; ++m)
             {
                 const int leg = b * radix + m;
-                if (m == 0) { ar[0] = rr[leg]; ai[0] = ri[leg]; continue; }
+                if (m == 0)
+                {
+                    ar[0] = rr[leg];
+                    ai[0] = ri[leg];
+                    continue;
+                }
                 const int twidx = mul(jidxs[b], ku(static_cast<crd::u32>(m * nl)));
                 const int wr    = g.buffer_load(tw_re, twidx);
                 int       wi    = g.buffer_load(tw_im, twidx);
-                if (inv) { wi = neg(wi); }
+                if (inv)
+                {
+                    wi = neg(wi);
+                }
                 cmul(rr[leg], ri[leg], wr, wi, ar[m], ai[m]);
             }
-            if (r16) { dft16(inv, ar, ai, &xr[0], &xi[0]); }
-            else { dft4(inv, ar, ai, &xr[b * 4], &xi[b * 4]); }
+            if (r16)
+            {
+                dft16(inv, ar, ai, &xr[0], &xi[0]);
+            }
+            else
+            {
+                dft4(inv, ar, ai, &xr[b * 4], &xi[b * 4]);
+            }
         }
 
         for (int b = 0; b < nbut; ++b)
@@ -1419,16 +1744,26 @@ struct Fft1dPlan
                 const int leg  = b * radix + k;
                 const int outk = add(add(mul(gidxs[b], ku(static_cast<crd::u32>(ll))), jidxs[b]), ku(static_cast<crd::u32>(k * r)));
                 int       vr = xr[leg]; int vi = xi[leg];
-                if (fuse_f) { cmul(vr, vi, g.buffer_load(filt_re, foff(outk)), g.buffer_load(filt_im, foff(outk)), vr, vi); }
+                if (fuse_f)
+                {
+                    cmul(vr, vi, g.buffer_load(filt_re, foff(outk)), g.buffer_load(filt_im, foff(outk)), vr, vi);
+                }
                 if (wr_glob)
                 {
                     g.stmt_buffer_store(out_re, boff(outk), mul(vr, invn));
                     g.stmt_buffer_store(out_im, boff(outk), mul(vi, invn));
                 }
-                else { g.stmt_shared_store(x_re, sp(outk), vr); g.stmt_shared_store(x_im, sp(outk), vi); }
+                else
+                {
+                    g.stmt_shared_store(x_re, sp(outk), vr);
+                    g.stmt_shared_store(x_im, sp(outk), vi);
+                }
             }
         }
-        if (!wr_glob) { g.stmt_barrier(); }
+        if (!wr_glob)
+        {
+            g.stmt_barrier();
+        }
         r = ll;
     }
 
@@ -1505,9 +1840,18 @@ struct Fft1dPlan
 [[nodiscard]] inline Fft1dPlan build_fft1d_batched(KGraph& g, int n, bool inverse)
 {
     const int lg = fft_log2(n);
-    if ((lg % 2) == 0 && n >= 1024) { return build_fft1d_radix16(g, n, inverse, true); } // 4^k, register-blocked (n/16 >= 64 threads)
-    if ((lg % 2) == 0) { return build_fft1d_radix4(g, n, inverse, true); }               // small 4^k (radix-16's tiny blocks lose)
-    if ((lg % 3) == 0) { return build_fft1d_radix8(g, n, inverse, true); }               // 8^k
+    if ((lg % 2) == 0 && n >= 1024) // 4^k, register-blocked (n/16 >= 64 threads)
+    {
+        return build_fft1d_radix16(g, n, inverse, true);
+    }
+    if ((lg % 2) == 0) // small 4^k (radix-16's tiny blocks lose)
+    {
+        return build_fft1d_radix4(g, n, inverse, true);
+    }
+    if ((lg % 3) == 0) // 8^k
+    {
+        return build_fft1d_radix8(g, n, inverse, true);
+    }
     return build_fft1d_radix2(g, n, inverse, true);                                      // any 2^k
 }
 

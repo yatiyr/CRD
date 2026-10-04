@@ -115,8 +115,16 @@ TEST_CASE("aggregate_top_level_by_name merges by name", "[perf-ui][aggregate]")
     crd::u32 c20 = 0;
     for (crd::u32 i = 0U; i < n; ++i)
     {
-        if (out[i].name.value == 10U) { t10 = out[i].total_ns; c10 = out[i].occurrences; }
-        if (out[i].name.value == 20U) { t20 = out[i].total_ns; c20 = out[i].occurrences; }
+        if (out[i].name.value == 10U)
+        {
+            t10 = out[i].total_ns;
+            c10 = out[i].occurrences;
+        }
+        if (out[i].name.value == 20U)
+        {
+            t20 = out[i].total_ns;
+            c20 = out[i].occurrences;
+        }
     }
     CHECK(t10 == 100U + 150U);
     CHECK(c10 == 2U);

@@ -22,34 +22,58 @@ void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v)
 {
     crd::u8 raw[4];
     std::memcpy(raw, &v, 4);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v)
 {
     crd::u8 raw[4];
     std::memcpy(raw, &v, 4);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 void push_u16(crd::containers::Array<crd::u8>& b, crd::u16 v)
 {
     crd::u8 raw[2];
     std::memcpy(raw, &v, 2);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 // header (80 bytes, `text` copied in) + count; caller then pushes triangles.
 void push_header(crd::containers::Array<crd::u8>& b, const char* text, crd::u32 count)
 {
     const crd::usize len = std::strlen(text);
-    for (crd::usize i = 0; i < 80; ++i) { b.push_back(i < len ? static_cast<crd::u8>(text[i]) : crd::u8{0}); }
+    for (crd::usize i = 0; i < 80; ++i)
+    {
+        b.push_back(i < len ? static_cast<crd::u8>(text[i]) : crd::u8{0});
+    }
     push_u32(b, count);
 }
 void push_tri(crd::containers::Array<crd::u8>& b, const crd::f32* n, const crd::f32* v0, const crd::f32* v1,
               const crd::f32* v2)
 {
-    for (int i = 0; i < 3; ++i) { push_f32(b, n[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v0[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v1[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v2[i]); }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, n[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v0[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v1[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v2[i]);
+    }
     push_u16(b, 0);
 }
 
@@ -89,7 +113,10 @@ TEST_CASE("assetio: binary STL parses -- counts, positions, given normals, consi
     CHECK(m.has_normals());
     CHECK(m.positions[1].x == 1.0F);
     CHECK(m.positions[5].y == 1.0F);
-    for (crd::usize i = 0; i < m.normals.size(); ++i) { CHECK(m.normals[i].z == 1.0F); } // the file's normals, kept
+    for (crd::usize i = 0; i < m.normals.size(); ++i) // the file's normals, kept
+    {
+        CHECK(m.normals[i].z == 1.0F);
+    }
     // the crd-geometry seam: a valid view into the substrate
     const auto view = m.as_view();
     CHECK(view.triangle_count() == 2U);

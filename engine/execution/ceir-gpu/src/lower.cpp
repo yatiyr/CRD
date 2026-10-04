@@ -20,7 +20,10 @@ struct Access
 [[nodiscard]] bool parse_access(containers::StringView s, containers::Array<crd::u8>& toks)
 {
     toks.clear();
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     crd::usize start = 0;
     for (crd::usize i = 0; i <= s.size(); ++i)
     {
@@ -29,10 +32,22 @@ struct Access
             const crd::usize  len = i - start;
             const char* const t   = s.data() + start;
             crd::u8           v   = 0U;
-            if (len == 1U && t[0] == 'r') { v = 1U; }
-            else if (len == 1U && t[0] == 'w') { v = 2U; }
-            else if (len == 2U && t[0] == 'r' && t[1] == 'w') { v = 3U; }
-            else { return false; }
+            if (len == 1U && t[0] == 'r')
+            {
+                v = 1U;
+            }
+            else if (len == 1U && t[0] == 'w')
+            {
+                v = 2U;
+            }
+            else if (len == 2U && t[0] == 'r' && t[1] == 'w')
+            {
+                v = 3U;
+            }
+            else
+            {
+                return false;
+            }
             toks.push_back(v);
             start = i + 1U;
         }
@@ -91,10 +106,19 @@ void gather(const Context& ctx, const Operation* op, containers::Array<Access>& 
     {
         const EffectRecord& e = effs[i];
         const EffectAccess  a = effect_access(e.family);
-        if (a.klass != ResourceClass::Memory && a.klass != ResourceClass::Universe) { continue; } // memory-orderable only
+        if (a.klass != ResourceClass::Memory && a.klass != ResourceClass::Universe) // memory-orderable only
+        {
+            continue;
+        }
         const Value* res = nullptr;
-        if (e.target == EffectTarget::Operand && e.index < op->num_operands()) { res = op->operand(e.index); }
-        else if (e.target == EffectTarget::Result && e.index < op->num_results()) { res = op->result(e.index); }
+        if (e.target == EffectTarget::Operand && e.index < op->num_operands())
+        {
+            res = op->operand(e.index);
+        }
+        else if (e.target == EffectTarget::Result && e.index < op->num_results())
+        {
+            res = op->result(e.index);
+        }
         out.push_back({ctx.resource_root(res), a.reads, a.writes}); // ⭐ CEIR-13d part 3: view-normalized (nullptr passes through)
     }
 }
@@ -104,15 +128,30 @@ void gather(const Context& ctx, const Operation* op, containers::Array<Access>& 
 // resource through `resource_root` first (CEIR-13d part 3), so distinct views of one buffer DO conflict here.
 [[nodiscard]] bool conflict(const Access& a, const Access& b)
 {
-    if (!(a.reads || a.writes) || !(b.reads || b.writes)) { return false; }
-    if (!(a.writes || b.writes)) { return false; } // read-read: no order
+    if (!(a.reads || a.writes) || !(b.reads || b.writes))
+    {
+        return false;
+    }
+    if (!(a.writes || b.writes)) // read-read: no order
+    {
+        return false;
+    }
     return a.resource == b.resource || a.resource == nullptr || b.resource == nullptr;
 }
 [[nodiscard]] HazardKind pair_hazard(const Access& a, const Access& b) // a BEFORE b (mirrors context.cpp::pair_hazard)
 {
-    if (a.writes && b.writes) { return HazardKind::Waw; }
-    if (a.writes && b.reads) { return HazardKind::Raw; }
-    if (a.reads && b.writes) { return HazardKind::War; }
+    if (a.writes && b.writes)
+    {
+        return HazardKind::Waw;
+    }
+    if (a.writes && b.reads)
+    {
+        return HazardKind::Raw;
+    }
+    if (a.reads && b.writes)
+    {
+        return HazardKind::War;
+    }
     return HazardKind::None;
 }
 // ⛔ CEIR-13z-3: the whole-op `precise_hazard` (op-vs-op strongest) was RETIRED — `lower_region` now scans conflicts
@@ -124,21 +163,50 @@ void gather(const Context& ctx, const Operation* op, containers::Array<Access>& 
 [[nodiscard]] bool resolve_const_u32(const Context& ctx, const Value* v, crd::u32& out)
 {
     const Operation* const def = v->defining_op();
-    if (def == nullptr) { return false; } // block arg ⇒ dynamic dispatch dims (§42)
-    if (ctx.op_name(def->kind()) != containers::StringView("arith.const")) { return false; }
+    if (def == nullptr) // block arg ⇒ dynamic dispatch dims (§42)
+    {
+        return false;
+    }
+    if (ctx.op_name(def->kind()) != containers::StringView("arith.const"))
+    {
+        return false;
+    }
     const AttrValue av = ctx.attr_value(def->attr(containers::StringView("value")));
-    if (av.kind != AttrKind::Int) { return false; }
+    if (av.kind != AttrKind::Int)
+    {
+        return false;
+    }
     out = static_cast<crd::u32>(av.i);
     return true;
 }
 // The 13b transfer op → LoweredTransferKind; false if `nm` is not a transfer op.
 [[nodiscard]] bool transfer_kind_of(containers::StringView nm, LoweredTransferKind& out)
 {
-    if (nm == containers::StringView("transfer.copy")) { out = LoweredTransferKind::Copy; return true; }
-    if (nm == containers::StringView("transfer.upload")) { out = LoweredTransferKind::Upload; return true; }
-    if (nm == containers::StringView("transfer.readback")) { out = LoweredTransferKind::Readback; return true; }
-    if (nm == containers::StringView("transfer.clear")) { out = LoweredTransferKind::Clear; return true; }
-    if (nm == containers::StringView("transfer.mip_gen")) { out = LoweredTransferKind::MipGen; return true; }
+    if (nm == containers::StringView("transfer.copy"))
+    {
+        out = LoweredTransferKind::Copy;
+        return true;
+    }
+    if (nm == containers::StringView("transfer.upload"))
+    {
+        out = LoweredTransferKind::Upload;
+        return true;
+    }
+    if (nm == containers::StringView("transfer.readback"))
+    {
+        out = LoweredTransferKind::Readback;
+        return true;
+    }
+    if (nm == containers::StringView("transfer.clear"))
+    {
+        out = LoweredTransferKind::Clear;
+        return true;
+    }
+    if (nm == containers::StringView("transfer.mip_gen"))
+    {
+        out = LoweredTransferKind::MipGen;
+        return true;
+    }
     return false;
 }
 
@@ -156,13 +224,19 @@ void gather(const Context& ctx, const Operation* op, containers::Array<Access>& 
     const containers::ConstSpan<EffectRecord> fx = ctx.op_effects(op->kind());
     for (crd::u32 i = 0; i < static_cast<crd::u32>(fx.size()); ++i)
     {
-        if (fx[i].family == EffectFamily::GPUCommand) { return true; }
+        if (fx[i].family == EffectFamily::GPUCommand)
+        {
+            return true;
+        }
     }
     return false;
 }
 void lower_scope_body(const Context& ctx, const Region* r, containers::Array<LoweredCommand>& out) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -174,7 +248,10 @@ void lower_scope_body(const Context& ctx, const Region* r, containers::Array<Low
                 d.op   = op;
                 out.push_back(d);
             }
-            for (crd::u32 i = 0; i < op->num_regions(); ++i) { lower_scope_body(ctx, op->region(i), out); }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                lower_scope_body(ctx, op->region(i), out);
+            }
         }
     }
 }
@@ -227,9 +304,16 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
             bool               seen = false; // dedup: an in-place read+write binds one resource twice
             for (crd::u32 s = 0; s < bi; ++s)
             {
-                if (bacc[s].resource == res) { seen = true; break; }
+                if (bacc[s].resource == res)
+                {
+                    seen = true;
+                    break;
+                }
             }
-            if (seen) { continue; }
+            if (seen)
+            {
+                continue;
+            }
 
             HazardKind       strongest = HazardKind::None;
             const Operation* bef       = nullptr;
@@ -272,7 +356,10 @@ void lower_region(const Context& ctx, const Block& block, containers::Array<Lowe
             bgn.kind = LoweredKind::BeginRender;
             bgn.op   = op;
             out.push_back(bgn);
-            for (crd::u32 i = 0; i < op->num_regions(); ++i) { lower_scope_body(ctx, op->region(i), out); }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                lower_scope_body(ctx, op->region(i), out);
+            }
             LoweredCommand end;
             end.kind = LoweredKind::EndRender;
             end.op   = op;

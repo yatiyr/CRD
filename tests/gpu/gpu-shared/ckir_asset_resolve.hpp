@@ -27,15 +27,33 @@ inline bool resolve_ckir_asset(crd::containers::StringView symbol, crd::kir::KGr
 {
     auto* const alloc = static_cast<crd::memory::IAllocator*>(user);
     const char* path  = nullptr;
-    if (symbol == crd::containers::StringView("relu")) { path = CRD_REPO_DIR "/assets/ckir/relu.ckir"; }
-    else if (symbol == crd::containers::StringView("viz_magnitude")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir"; }
-    else if (symbol == crd::containers::StringView("viz_normalize")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir"; }
-    if (path == nullptr) { return false; }
+    if (symbol == crd::containers::StringView("relu"))
+    {
+        path = CRD_REPO_DIR "/assets/ckir/relu.ckir";
+    }
+    else if (symbol == crd::containers::StringView("viz_magnitude"))
+    {
+        path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir";
+    }
+    else if (symbol == crd::containers::StringView("viz_normalize"))
+    {
+        path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir";
+    }
+    if (path == nullptr)
+    {
+        return false;
+    }
 
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
-    if (sz <= 0) { return false; }
+    if (sz <= 0)
+    {
+        return false;
+    }
     f.seekg(0);
     crd::containers::Array<char> src(alloc);
     src.resize(static_cast<crd::usize>(sz), '\0');

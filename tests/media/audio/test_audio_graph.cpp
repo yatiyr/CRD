@@ -207,7 +207,10 @@ TEST_CASE("THE 4-TRACK GATE: offline render bit-stable, mix verifiable, master e
     // — verified through SUPERPOSITION: render with src0 muted (unbind ↔ zero buffer) and compare halves
     containers::Array<f32> silence(&galloc());
     silence.resize(tone0.samples.size());
-    for (usize i = 0; i < silence.size(); ++i) { silence[i] = 0.0F; }
+    for (usize i = 0; i < silence.size(); ++i)
+    {
+        silence[i] = 0.0F;
+    }
     audio::GraphSourceBinding only1[5] = {};
     only1[0] = {containers::ConstSpan<f32>(silence.data(), silence.size()), 1};
     only1[1] = bindings[1];
@@ -241,7 +244,10 @@ TEST_CASE("THE 4-TRACK GATE: offline render bit-stable, mix verifiable, master e
     out.sample_rate     = 48000;
     out.channels        = 2;
     out.bits_per_sample = 0;
-    for (f32 v : master) { out.fsamples.push_back(v); }
+    for (f32 v : master)
+    {
+        out.fsamples.push_back(v);
+    }
     CHECK(audio::wav_encode(out, &galloc()).size() > 0);
 
     // a missing source binding REFUSES (never silence-instead-of-music)

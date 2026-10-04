@@ -27,10 +27,16 @@ void* TextureResourceLoader::load(const LoadContext& ctx)
     // parse SCRATCH on the owned heap (transient — dies with this call); only the RESIDENT payload goes to
     // m_payload, so a streaming category is charged for exactly what stays resident
     CrdrFile file(&m_owned);
-    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok) { return nullptr; }
+    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok)
+    {
+        return nullptr;
+    }
 
     const CrdrChunk* head = crdr_find_chunk(file, kFourCC_HEAD);
-    if (head == nullptr || head->payload.size() < kHeadChunkSize) { return nullptr; }
+    if (head == nullptr || head->payload.size() < kHeadChunkSize)
+    {
+        return nullptr;
+    }
 
     crd::u32 width     = 0;
     crd::u32 height    = 0;
@@ -41,12 +47,21 @@ void* TextureResourceLoader::load(const LoadContext& ctx)
     std::memcpy(&mip_count, head->payload.data() + 8, sizeof(crd::u32));
     std::memcpy(&fmt_byte, head->payload.data() + 12, sizeof(crd::u8));
 
-    if (width == 0 || height == 0 || mip_count == 0 || mip_count > kMaxMipLevels) { return nullptr; }
-    if (fmt_byte > static_cast<crd::u8>(TextureFormat::RGBA8UnormSrgb)) { return nullptr; }
+    if (width == 0 || height == 0 || mip_count == 0 || mip_count > kMaxMipLevels)
+    {
+        return nullptr;
+    }
+    if (fmt_byte > static_cast<crd::u8>(TextureFormat::RGBA8UnormSrgb))
+    {
+        return nullptr;
+    }
     const TextureFormat fmt = static_cast<TextureFormat>(fmt_byte);
 
     void* raw = m_payload->try_allocate(sizeof(TextureResource), alignof(TextureResource));
-    if (raw == nullptr) { return nullptr; } // over-budget on a streaming heap — graceful, never fatal
+    if (raw == nullptr) // over-budget on a streaming heap — graceful, never fatal
+    {
+        return nullptr;
+    }
     auto* res      = new (raw) TextureResource(m_payload);
     res->format    = fmt;
     res->mip_count = mip_count;
@@ -88,7 +103,10 @@ void* TextureResourceLoader::load(const LoadContext& ctx)
 
 void TextureResourceLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto* res = static_cast<TextureResource*>(payload);
     res->~TextureResource();
     m_payload->deallocate(res);

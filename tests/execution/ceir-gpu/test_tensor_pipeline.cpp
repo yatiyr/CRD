@@ -73,7 +73,11 @@ TypeId ti(Context& ctx, TypeId shape) { return ctx.type_tensor(ctx.type_i32(), s
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -86,9 +90,16 @@ Module* build_transform(Context& ctx, bool fuse, bool share, u32 n_dir = 2U)
 {
     Module* const m   = ctx.create_module();
     Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     top->append(transform::build_fuse(ctx, ctx.attr_bool(fuse)));
-    if (n_dir >= 2U) { top->append(transform::build_share_storage(ctx, ctx.attr_bool(share))); }
+    if (n_dir >= 2U)
+    {
+        top->append(transform::build_share_storage(ctx, ctx.attr_bool(share)));
+    }
     return m;
 }
 // CEIR-28a: append one tune.entry cache row (KEY device/env/program_hash/shape -> schedule fuse/share).
@@ -153,7 +164,10 @@ Operation* mk_dispatch(Context& ctx, const Kit& k, Block* b, Value* gx, Value* g
     ops.push_back(gx);
     ops.push_back(gy);
     ops.push_back(gz);
-    for (u32 i = 0; i < nb; ++i) { ops.push_back(binds[i]); }
+    for (u32 i = 0; i < nb; ++i)
+    {
+        ops.push_back(binds[i]);
+    }
     Operation* const op = ctx.create_operation(k.disp, ConstSpan<Value*>(ops.data(), ops.size()), 0U); // RESULTLESS
     ctx.set_attr(op, StringView("kernel"), ctx.attr_symbol(StringView(kernel)));
     ctx.set_attr(op, StringView("access"), ctx.attr_string(StringView(access)));
@@ -300,10 +314,20 @@ TEST_CASE("ceir 22c-1: plan_tensor_pipeline wires gemm->reshape(alias)->fft->red
         if (pb.role == gpu::BufferRole::ExternalIn)
         {
             ++externals;
-            if (pb.fill == gpu::FillKind::Zeros) { saw_zeros = true; }
-            if (pb.fill == gpu::FillKind::FftTwiddle) { saw_twid = true; }
+            if (pb.fill == gpu::FillKind::Zeros)
+            {
+                saw_zeros = true;
+            }
+            if (pb.fill == gpu::FillKind::FftTwiddle)
+            {
+                saw_twid = true;
+            }
         }
-        if (pb.role == gpu::BufferRole::Output) { saw_out = true; CHECK(pb.bytes == 4U); } // rank-0 sum = 1 f32
+        if (pb.role == gpu::BufferRole::Output) // rank-0 sum = 1 f32
+        {
+            saw_out = true;
+            CHECK(pb.bytes == 4U);
+        }
     }
     CHECK(saw_alias);            // the rank-bridge reshape alias
     CHECK(saw_zeros);            // the fft imaginary input seeded Zeros
@@ -456,8 +480,14 @@ TEST_CASE("ceir 27a: a ceir.transform schedule asset loads into PlanOptions (bot
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             ++n;
-            if (op->kind() == fk) { ++n_fuse; }
-            if (op->kind() == sk) { ++n_share; }
+            if (op->kind() == fk)
+            {
+                ++n_fuse;
+            }
+            if (op->kind() == sk)
+            {
+                ++n_share;
+            }
         }
         REQUIRE(n == 2U);
         REQUIRE(n_fuse == 1U);
@@ -503,7 +533,11 @@ TEST_CASE("ceir 27a: a ceir.transform schedule asset loads into PlanOptions (bot
     //        last-write-wins SILENTLY, so the module-wide walk is the guard the walk-then-load discipline relies on) ──
     Module* const dup = ctx.create_module();
     Block*        dtop = dup->body()->first_block();
-    if (dtop == nullptr) { dtop = ctx.create_block(0U); dup->body()->append(dtop); }
+    if (dtop == nullptr)
+    {
+        dtop = ctx.create_block(0U);
+        dup->body()->append(dtop);
+    }
     dtop->append(transform::build_fuse(ctx, ctx.attr_bool(true)));
     dtop->append(transform::build_fuse(ctx, ctx.attr_bool(false))); // the DUPLICATE (second transform.fuse)
     const transform::TransformMisuse mis = transform::find_transform_misuse(ctx, *dup);
@@ -584,7 +618,11 @@ TEST_CASE("ceir 28a: a ceir.tune config cache loads + plan_options_from_tune_cac
     // ── (a) a 2-row cache (distinct device keys), walks clean, loads 2 entries with the expected fields ──
     Module* const cache = ctx.create_module();
     Block*        cb    = cache->body()->first_block();
-    if (cb == nullptr) { cb = ctx.create_block(0U); cache->body()->append(cb); }
+    if (cb == nullptr)
+    {
+        cb = ctx.create_block(0U);
+        cache->body()->append(cb);
+    }
     add_tune_entry(ctx, cb, "vk:rtx4070ti", "win32", 101U, "mlp:4x8x8", /*fuse=*/true, /*share=*/false);
     add_tune_entry(ctx, cb, "dx12:rtx4070ti", "win32", 101U, "mlp:4x8x8", /*fuse=*/false, /*share=*/true);
     {
@@ -594,7 +632,10 @@ TEST_CASE("ceir 28a: a ceir.tune config cache loads + plan_options_from_tune_cac
         for (const Operation* op = cb->first_op(); op != nullptr; op = op->next_in_block())
         {
             ++n;
-            if (op->kind() == ek) { ++n_entry; }
+            if (op->kind() == ek)
+            {
+                ++n_entry;
+            }
         }
         CHECK(n == 2U);
         CHECK(n_entry == 2U);
@@ -645,7 +686,11 @@ TEST_CASE("ceir 28a: a ceir.tune config cache loads + plan_options_from_tune_cac
     // ── (e) DuplicateKey: two rows with the SAME full key ⇒ find_tune_misuse rejects (the loader would be ambiguous) ──
     Module* const dup = ctx.create_module();
     Block*        db  = dup->body()->first_block();
-    if (db == nullptr) { db = ctx.create_block(0U); dup->body()->append(db); }
+    if (db == nullptr)
+    {
+        db = ctx.create_block(0U);
+        dup->body()->append(db);
+    }
     add_tune_entry(ctx, db, "vk:rtx4070ti", "win32", 7U, "mlp:2x2x2", true, true);
     add_tune_entry(ctx, db, "vk:rtx4070ti", "win32", 7U, "mlp:2x2x2", false, false); // same KEY, different schedule
     CHECK(tune::find_tune_misuse(ctx, *dup).kind == tune::TuneMisuseKind::DuplicateKey);
@@ -655,7 +700,11 @@ TEST_CASE("ceir 28a: a ceir.tune config cache loads + plan_options_from_tune_cac
     //        silently load both ⇒ the loader would be ambiguous. This two-block module is the discriminating input. ──
     Module* const mb = ctx.create_module();
     Block*        b0 = mb->body()->first_block();
-    if (b0 == nullptr) { b0 = ctx.create_block(0U); mb->body()->append(b0); }
+    if (b0 == nullptr)
+    {
+        b0 = ctx.create_block(0U);
+        mb->body()->append(b0);
+    }
     Block* const b1 = ctx.create_block(0U);
     mb->body()->append(b1);
     add_tune_entry(ctx, b0, "vk:rtx4070ti", "win32", 5U, "s", true, false);
@@ -729,7 +778,13 @@ TEST_CASE("ceir 28c: plan_tensor_pipeline_cached selects the cached schedule (hi
     (void)tune::register_tune_ops(ctx); // tune.entry cache rows
 
     const auto has_kind = [](const gpu::TensorPipelinePlan& p, gpu::StageKind kind) {
-        for (usize i = 0; i < p.stages.size(); ++i) { if (p.stages[i].kind == kind) { return true; } }
+        for (usize i = 0; i < p.stages.size(); ++i)
+        {
+            if (p.stages[i].kind == kind)
+            {
+                return true;
+            }
+        }
         return false;
     };
 
@@ -755,7 +810,11 @@ TEST_CASE("ceir 28c: plan_tensor_pipeline_cached selects the cached schedule (hi
     // hits row1 ONLY if it hashes exactly `m`; a wrong hash lands on the trap (fuse=true, 2 stages) or misses — either would betray it.
     Module* const cache = ctx.create_module();
     Block*        cb    = cache->body()->first_block();
-    if (cb == nullptr) { cb = ctx.create_block(0U); cache->body()->append(cb); }
+    if (cb == nullptr)
+    {
+        cb = ctx.create_block(0U);
+        cache->body()->append(cb);
+    }
     add_tune_entry(ctx, cb, device, env, h, shape, /*fuse=*/false, /*share=*/true);
     add_tune_entry(ctx, cb, device, env, h + 1U, shape, /*fuse=*/true, /*share=*/true); // the wrong-hash trap
     REQUIRE(tune::find_tune_misuse(ctx, *cache).kind == tune::TuneMisuseKind::None);
@@ -889,7 +948,11 @@ TEST_CASE("ceir 22c-3a: design-B pipeline plans 5 stages with the two viz dispat
     int n_out_bufs = 0;
     for (usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == gpu::BufferRole::Output) { ++n_out_bufs; CHECK(static_cast<i32>(i) == norm); }
+        if (plan.buffers[i].role == gpu::BufferRole::Output)
+        {
+            ++n_out_bufs;
+            CHECK(static_cast<i32>(i) == norm);
+        }
     }
     CHECK(n_out_bufs == 1);
 }
@@ -979,7 +1042,13 @@ TEST_CASE("ceir 23b-2b: dequantize->gemm(weight) COLLAPSES to one QuantGemm stag
     CHECK(plan.buffers[static_cast<usize>(plan.stages[0].bind[3])].role == gpu::BufferRole::Output);
     // ⭐ the dequantize's RESULT is NEVER allocated (the §54 fusion win): no plan buffer realizes it.
     bool dq_allocated = false;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].value == dq->result(0U)) { dq_allocated = true; } }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        if (plan.buffers[i].value == dq->result(0U))
+        {
+            dq_allocated = true;
+        }
+    }
     CHECK(!dq_allocated);
 }
 
@@ -990,11 +1059,23 @@ TEST_CASE("ceir 26e-2b a plain f32 gemm-relu epilogue FUSES to one GemmRelu stag
     Context                       ctx(&root);
     const Kit                     k(ctx);
     const auto                    buf_of = [](const gpu::TensorPipelinePlan& p, const Value* v) -> crd::i32 {
-        for (usize i = 0; i < p.buffers.size(); ++i) { if (p.buffers[i].value == v) { return static_cast<crd::i32>(i); } }
+        for (usize i = 0; i < p.buffers.size(); ++i)
+        {
+            if (p.buffers[i].value == v)
+            {
+                return static_cast<crd::i32>(i);
+            }
+        }
         return -1;
     };
     const auto has_gemmrelu = [](const gpu::TensorPipelinePlan& p) {
-        for (usize i = 0; i < p.stages.size(); ++i) { if (p.stages[i].kind == gpu::StageKind::GemmRelu) { return true; } }
+        for (usize i = 0; i < p.stages.size(); ++i)
+        {
+            if (p.stages[i].kind == gpu::StageKind::GemmRelu)
+            {
+                return true;
+            }
+        }
         return false;
     };
 
@@ -1148,7 +1229,13 @@ TEST_CASE("ceir 23b-2b NEG wrong-slot: dequantize feeding gemm.operand-0 (ACTIVA
     CHECK(!has_qgemm);
     // the dequant result IS allocated here (it is a real consumed intermediate).
     bool dq_allocated = false;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].value == dq->result(0U)) { dq_allocated = true; } }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        if (plan.buffers[i].value == dq->result(0U))
+        {
+            dq_allocated = true;
+        }
+    }
     CHECK(dq_allocated);
 }
 
@@ -1273,7 +1360,10 @@ TEST_CASE("ceir 23b-2b NEG non-plain gemm: a beta!=0 (accumulating) gemm does NO
     // the accumulating gemm is NOT collapsed into a QuantGemm — no fused stage appears in the plan (whatever the unfused Gemm
     // synth then does with beta!=0 is a separate matter; the fusion gate must simply not have fired).
     bool has_qgemm = false;
-    for (usize i = 0; i < plan.stages.size(); ++i) { has_qgemm = has_qgemm || plan.stages[i].kind == gpu::StageKind::QuantGemm; }
+    for (usize i = 0; i < plan.stages.size(); ++i)
+    {
+        has_qgemm = has_qgemm || plan.stages[i].kind == gpu::StageKind::QuantGemm;
+    }
     CHECK(!has_qgemm);
 }
 
@@ -1421,7 +1511,10 @@ TEST_CASE("ceir 25b-4b STEP 1: build_gradient(gemm(A,A)->reduce(sum)) plans as a
     CHECK(plan.buffers[static_cast<usize>(out_bind)].role == gpu::BufferRole::Output);
     CHECK(plan.buffers[static_cast<usize>(out_bind)].value == grads[0]);
     u32 n_output = 0;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { n_output += plan.buffers[i].role == gpu::BufferRole::Output ? 1U : 0U; }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        n_output += plan.buffers[i].role == gpu::BufferRole::Output ? 1U : 0U;
+    }
     CHECK(n_output == 1U);
 
     // (c) the reduce-VJP reshape ([3]->[3,1], the 1D right-align dodge) is a zero-copy ALIAS of the caller-uploaded SEED, and the
@@ -1555,10 +1648,19 @@ TEST_CASE("ceir 25c-1b-2 / 26a-2: vjp_mlp backward plans device-resident - write
     crd::i32 relu_vjp_idx = -1;
     for (usize i = 0; i < plan.stages.size(); ++i)
     {
-        if (plan.stages[i].kind != gpu::StageKind::VizDispatch) { continue; }
+        if (plan.stages[i].kind != gpu::StageKind::VizDispatch)
+        {
+            continue;
+        }
         const AttrValue kv = ctx.attr_value(plan.stages[i].op->attr(StringView("kernel")));
-        if (kv.s == StringView("relu")) { relu_idx = static_cast<crd::i32>(i); }
-        else if (kv.s == StringView("relu_vjp")) { relu_vjp_idx = static_cast<crd::i32>(i); }
+        if (kv.s == StringView("relu"))
+        {
+            relu_idx = static_cast<crd::i32>(i);
+        }
+        else if (kv.s == StringView("relu_vjp"))
+        {
+            relu_vjp_idx = static_cast<crd::i32>(i);
+        }
     }
     REQUIRE(relu_idx >= 0);
     REQUIRE(relu_vjp_idx >= 0);
@@ -1574,7 +1676,13 @@ TEST_CASE("ceir 25c-1b-2 / 26a-2: vjp_mlp backward plans device-resident - write
         for (usize s = 0; s < plan.stages.size(); ++s)
         {
             const gpu::PlanStage& st = plan.stages[s];
-            for (u32 j = 0; j + st.n_out < st.nbind; ++j) { if (st.bind[j] == buf) { return static_cast<crd::i32>(s); } }
+            for (u32 j = 0; j + st.n_out < st.nbind; ++j)
+            {
+                if (st.bind[j] == buf)
+                {
+                    return static_cast<crd::i32>(s);
+                }
+            }
         }
         return -1;
     };
@@ -1599,7 +1707,10 @@ TEST_CASE("ceir 25c-1b-2 / 26a-2: vjp_mlp backward plans device-resident - write
     const auto buf_of = [&](const Value* v) -> crd::i32 {
         for (usize i = 0; i < plan.buffers.size(); ++i)
         {
-            if (plan.buffers[i].value == v) { return static_cast<crd::i32>(i); }
+            if (plan.buffers[i].value == v)
+            {
+                return static_cast<crd::i32>(i);
+            }
         }
         return -1;
     };
@@ -1612,7 +1723,10 @@ TEST_CASE("ceir 25c-1b-2 / 26a-2: vjp_mlp backward plans device-resident - write
     const gpu::PlanStage& last = plan.stages[plan.stages.size() - 1U];
     CHECK(last.bind[last.nbind - 1U] == g0); // grads[0] is the FINAL stage's trailing write
     u32 n_out_bufs = 0;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { n_out_bufs += plan.buffers[i].role == gpu::BufferRole::Output ? 1U : 0U; }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        n_out_bufs += plan.buffers[i].role == gpu::BufferRole::Output ? 1U : 0U;
+    }
     CHECK(n_out_bufs == 1U);
 
     // the dLoss=dOut seed handle is an ExternalIn (the 25c-2 device gate uploads M=non-uniform into THIS buffer) — the STEP 1 (c) mirror.
@@ -1671,10 +1785,19 @@ TEST_CASE("ceir 26a-2 NEGATIVE: an UNPINNED readback gradient IS deleted by DCE 
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
         const AttrId ka = op->attr(StringView("kernel"));
-        if (!ka.valid()) { continue; }
+        if (!ka.valid())
+        {
+            continue;
+        }
         const AttrValue kv = ctx.attr_value(ka);
-        if (kv.s == StringView("relu")) { have_relu = true; }
-        else if (kv.s == StringView("relu_vjp")) { have_relu_vjp = true; }
+        if (kv.s == StringView("relu"))
+        {
+            have_relu = true;
+        }
+        else if (kv.s == StringView("relu_vjp"))
+        {
+            have_relu_vjp = true;
+        }
     }
     CHECK(have_relu);
     CHECK(have_relu_vjp);
@@ -1721,7 +1844,10 @@ TEST_CASE("ceir 26b-2: canonicalize folds tensor.reshape-of-reshape + composes w
     int         alias_before  = 0;
     for (usize i = 0; i < raw.buffers.size(); ++i)
     {
-        if (raw.buffers[i].role == gpu::BufferRole::Alias) { ++alias_before; }
+        if (raw.buffers[i].role == gpu::BufferRole::Alias)
+        {
+            ++alias_before;
+        }
     }
     REQUIRE(alias_before == 2); // r1, r2
 
@@ -1755,7 +1881,10 @@ TEST_CASE("ceir 26b-2: canonicalize folds tensor.reshape-of-reshape + composes w
     int alias_after = 0;
     for (usize i = 0; i < opt.buffers.size(); ++i)
     {
-        if (opt.buffers[i].role == gpu::BufferRole::Alias) { ++alias_after; }
+        if (opt.buffers[i].role == gpu::BufferRole::Alias)
+        {
+            ++alias_after;
+        }
     }
     CHECK(alias_after == alias_before - 1); // 2 -> 1
 
@@ -1835,7 +1964,13 @@ TEST_CASE("ceir 26b-3: canonicalize eliminates a directly-authored identity resh
     const gpu::TensorPipelinePlan raw = gpu::plan_tensor_pipeline(ctx, *m, &root);
     REQUIRE(raw.reject == gpu::PlanReject::None);
     int raw_alias = 0;
-    for (usize i = 0; i < raw.buffers.size(); ++i) { if (raw.buffers[i].role == gpu::BufferRole::Alias) { ++raw_alias; } }
+    for (usize i = 0; i < raw.buffers.size(); ++i)
+    {
+        if (raw.buffers[i].role == gpu::BufferRole::Alias)
+        {
+            ++raw_alias;
+        }
+    }
     REQUIRE(raw_alias == 1);
 
     DiagnosticEngine diag(ctx, &root);
@@ -1855,7 +1990,13 @@ TEST_CASE("ceir 26b-3: canonicalize eliminates a directly-authored identity resh
     REQUIRE(opt.reject == gpu::PlanReject::None);
     CHECK(opt.stages.size() == 2U); // Gemm + Reduce (no alias; the reshape is gone)
     int opt_alias = 0;
-    for (usize i = 0; i < opt.buffers.size(); ++i) { if (opt.buffers[i].role == gpu::BufferRole::Alias) { ++opt_alias; } }
+    for (usize i = 0; i < opt.buffers.size(); ++i)
+    {
+        if (opt.buffers[i].role == gpu::BufferRole::Alias)
+        {
+            ++opt_alias;
+        }
+    }
     CHECK(opt_alias == 0); // 1 -> 0
 }
 
@@ -1914,9 +2055,18 @@ TEST_CASE("ceir 26c-2a: CSE collapses a duplicate gemm and the plan drops one Ge
     i32 raw_g_out_b = -1;
     for (usize i = 0; i < raw.stages.size(); ++i)
     {
-        if (raw.stages[i].kind != gpu::StageKind::Gemm) { continue; }
-        if (raw_g_out_a < 0) { raw_g_out_a = raw.stages[i].bind[2]; }
-        else { raw_g_out_b = raw.stages[i].bind[2]; }
+        if (raw.stages[i].kind != gpu::StageKind::Gemm)
+        {
+            continue;
+        }
+        if (raw_g_out_a < 0)
+        {
+            raw_g_out_a = raw.stages[i].bind[2];
+        }
+        else
+        {
+            raw_g_out_b = raw.stages[i].bind[2];
+        }
     }
     REQUIRE(raw_g_out_a >= 0);
     REQUIRE(raw_g_out_b >= 0);
@@ -1929,9 +2079,18 @@ TEST_CASE("ceir 26c-2a: CSE collapses a duplicate gemm and the plan drops one Ge
     i32 raw_r_out_b = -1;
     for (usize i = 0; i < raw.stages.size(); ++i)
     {
-        if (raw.stages[i].kind != gpu::StageKind::Reduce) { continue; }
-        if (raw_r_out_a < 0) { raw_r_out_a = raw.stages[i].bind[1]; }
-        else { raw_r_out_b = raw.stages[i].bind[1]; }
+        if (raw.stages[i].kind != gpu::StageKind::Reduce)
+        {
+            continue;
+        }
+        if (raw_r_out_a < 0)
+        {
+            raw_r_out_a = raw.stages[i].bind[1];
+        }
+        else
+        {
+            raw_r_out_b = raw.stages[i].bind[1];
+        }
     }
     REQUIRE(raw_r_out_a >= 0);
     REQUIRE(raw_r_out_b >= 0);
@@ -1965,17 +2124,29 @@ TEST_CASE("ceir 26c-2a: CSE collapses a duplicate gemm and the plan drops one Ge
     i32 opt_gemm_out = -1;
     for (usize i = 0; i < opt.stages.size(); ++i)
     {
-        if (opt.stages[i].kind == gpu::StageKind::Gemm) { opt_gemm_out = opt.stages[i].bind[2]; }
+        if (opt.stages[i].kind == gpu::StageKind::Gemm)
+        {
+            opt_gemm_out = opt.stages[i].bind[2];
+        }
     }
     REQUIRE(opt_gemm_out >= 0);
     i32 opt_r_out_a = -1;
     i32 opt_r_out_b = -1;
     for (usize i = 0; i < opt.stages.size(); ++i)
     {
-        if (opt.stages[i].kind != gpu::StageKind::Reduce) { continue; }
+        if (opt.stages[i].kind != gpu::StageKind::Reduce)
+        {
+            continue;
+        }
         CHECK(opt.stages[i].bind[0] == opt_gemm_out); // ⛔ both reduces read the ONE surviving gemm output %d1
-        if (opt_r_out_a < 0) { opt_r_out_a = opt.stages[i].bind[1]; }
-        else { opt_r_out_b = opt.stages[i].bind[1]; }
+        if (opt_r_out_a < 0)
+        {
+            opt_r_out_a = opt.stages[i].bind[1];
+        }
+        else
+        {
+            opt_r_out_b = opt.stages[i].bind[1];
+        }
     }
     REQUIRE(opt_r_out_a >= 0);
     REQUIRE(opt_r_out_b >= 0);
@@ -1993,14 +2164,23 @@ TEST_CASE("ceir 26f-2: disjoint-lifetime Intermediates share storage (tenant+gro
     Context                       ctx(&root);
     const Kit                     k(ctx);
     const auto                    buf_of = [](const gpu::TensorPipelinePlan& p, const Value* v) -> crd::i32 {
-        for (usize i = 0; i < p.buffers.size(); ++i) { if (p.buffers[i].value == v) { return static_cast<crd::i32>(i); } }
+        for (usize i = 0; i < p.buffers.size(); ++i)
+        {
+            if (p.buffers[i].value == v)
+            {
+                return static_cast<crd::i32>(i);
+            }
+        }
         return -1;
     };
     const auto n_landlords = [](const gpu::TensorPipelinePlan& p) { // Intermediates that OWN their storage (alias_of < 0)
         crd::u32 n = 0;
         for (usize i = 0; i < p.buffers.size(); ++i)
         {
-            if (p.buffers[i].role == gpu::BufferRole::Intermediate && p.buffers[i].alias_of < 0) { ++n; }
+            if (p.buffers[i].role == gpu::BufferRole::Intermediate && p.buffers[i].alias_of < 0)
+            {
+                ++n;
+            }
         }
         return n;
     };
@@ -2116,7 +2296,13 @@ TEST_CASE("ceir 26f-2b: n_out==0 reader never lends (no-barrier WAR) and attenti
     Context                       ctx(&root);
     const Kit                     k(ctx);
     const auto                    buf_of = [](const gpu::TensorPipelinePlan& p, const Value* v) -> crd::i32 {
-        for (usize i = 0; i < p.buffers.size(); ++i) { if (p.buffers[i].value == v) { return static_cast<crd::i32>(i); } }
+        for (usize i = 0; i < p.buffers.size(); ++i)
+        {
+            if (p.buffers[i].value == v)
+            {
+                return static_cast<crd::i32>(i);
+            }
+        }
         return -1;
     };
 
@@ -2179,8 +2365,14 @@ TEST_CASE("ceir 26f-2b: n_out==0 reader never lends (no-barrier WAR) and attenti
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             const StringView nm = ctx.op_name(op->kind());
-            if (nm == StringView("tensor.transpose")) { kt = op->result(0U); }
-            else if (nm == StringView("compute.dispatch")) { probs = op->operand(op->num_operands() - 1U); }
+            if (nm == StringView("tensor.transpose"))
+            {
+                kt = op->result(0U);
+            }
+            else if (nm == StringView("compute.dispatch"))
+            {
+                probs = op->operand(op->num_operands() - 1U);
+            }
         }
         REQUIRE(kt != nullptr);
         REQUIRE(probs != nullptr);
@@ -2189,7 +2381,13 @@ TEST_CASE("ceir 26f-2b: n_out==0 reader never lends (no-barrier WAR) and attenti
         REQUIRE(plan.reject == gpu::PlanReject::None);
 
         crd::u32 n_tenant = 0U;
-        for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].alias_of >= 0) { ++n_tenant; } }
+        for (usize i = 0; i < plan.buffers.size(); ++i)
+        {
+            if (plan.buffers[i].alias_of >= 0)
+            {
+                ++n_tenant;
+            }
+        }
         CHECK(n_tenant == 1U); // ⭐ EXACTLY one tenant in the whole attention plan
 
         const crd::i32 bkt = buf_of(plan, kt);
@@ -2212,7 +2410,13 @@ TEST_CASE("ceir 26f-3c: func.return-pinning is the DISCRIMINATOR -- the same cha
     Context                       ctx(&root);
     const Kit                     k(ctx);
     const auto                    buf_of = [](const gpu::TensorPipelinePlan& p, const Value* v) -> crd::i32 {
-        for (usize i = 0; i < p.buffers.size(); ++i) { if (p.buffers[i].value == v) { return static_cast<crd::i32>(i); } }
+        for (usize i = 0; i < p.buffers.size(); ++i)
+        {
+            if (p.buffers[i].value == v)
+            {
+                return static_cast<crd::i32>(i);
+            }
+        }
         return -1;
     };
 

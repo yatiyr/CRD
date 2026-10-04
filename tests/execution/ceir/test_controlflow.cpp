@@ -123,9 +123,18 @@ Operation* build_if(Context& ctx, const Ops& o, Block* b, crd::i64 cond_value, O
     Value*           cc[2]  = {c, c};
     Operation* const marker = ctx.create_operation(o.addi, ConstSpan<Value*>(cc, 2U), 1U, ctx.type_i32()); // well-formed splice witness
     thenb->append(marker);
-    if (marker_out != nullptr) { *marker_out = marker; }
-    if (then_multiblock) { ifop->region(0)->append(ctx.create_block(0U)); } // a second block -> fold must bail
-    if (then_has_yield) { thenb->append(ctx.create_operation(o.yield, {}, 0U)); }
+    if (marker_out != nullptr)
+    {
+        *marker_out = marker;
+    }
+    if (then_multiblock) // a second block -> fold must bail
+    {
+        ifop->region(0)->append(ctx.create_block(0U));
+    }
+    if (then_has_yield)
+    {
+        thenb->append(ctx.create_operation(o.yield, {}, 0U));
+    }
     Block* const elseb = ctx.create_block(0U);
     ifop->region(1)->append(elseb);
     elseb->append(ctx.create_operation(o.yield, {}, 0U));

@@ -416,7 +416,11 @@ TEST_CASE("ceir 31z-(1): the committed audio_mix3.ceir (a 3-input mix) is anti-d
     Operation* pf = nullptr;
     for (Operation* op = pr.module->body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) == StringView("func.func")) { pf = op; break; }
+        if (ctx.op_name(op->kind()) == StringView("func.func"))
+        {
+            pf = op;
+            break;
+        }
     }
     REQUIRE(pf != nullptr);
     Block* const fb = pf->region(0)->first_block();
@@ -429,7 +433,10 @@ TEST_CASE("ceir 31z-(1): the committed audio_mix3.ceir (a 3-input mix) is anti-d
     {
         const StringView nm = ctx.op_name(op->kind());
         ++n_ops;
-        if (nm == StringView("audio.source")) { ++n_source; }
+        if (nm == StringView("audio.source"))
+        {
+            ++n_source;
+        }
         else if (nm == StringView("audio.mix"))
         {
             ++n_mix;
@@ -625,7 +632,11 @@ TEST_CASE("ceir 31a-2b-ii: the sample_rate func attr round-trips through text an
         Operation* pf = nullptr;
         for (Operation* op = pr.module->body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx2.op_name(op->kind()) == StringView("func.func")) { pf = op; break; }
+            if (ctx2.op_name(op->kind()) == StringView("func.func"))
+            {
+                pf = op;
+                break;
+            }
         }
         REQUIRE(pf != nullptr);
         const AttrId sra = pf->attr("sample_rate");
@@ -690,7 +701,11 @@ TEST_CASE("ceir 31a-3: the committed audio_full_chain.ceir (all six nodes + samp
     Operation* pf = nullptr;
     for (Operation* op = pr.module->body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) == StringView("func.func")) { pf = op; break; }
+        if (ctx.op_name(op->kind()) == StringView("func.func"))
+        {
+            pf = op;
+            break;
+        }
     }
     REQUIRE(pf != nullptr);
     const AttrId sra = pf->attr("sample_rate");
@@ -714,12 +729,30 @@ TEST_CASE("ceir 31a-3: the committed audio_full_chain.ceir (all six nodes + samp
     {
         const StringView nm = ctx.op_name(op->kind());
         ++n_ops;
-        if (nm == StringView("audio.source")) { ++n_source; }
-        else if (nm == StringView("audio.gain")) { ++n_gain; }
-        else if (nm == StringView("audio.biquad")) { ++n_biquad; }
-        else if (nm == StringView("audio.delay")) { ++n_delay; }
-        else if (nm == StringView("audio.compressor")) { ++n_compressor; }
-        else if (nm == StringView("audio.mix")) { ++n_mix; }
+        if (nm == StringView("audio.source"))
+        {
+            ++n_source;
+        }
+        else if (nm == StringView("audio.gain"))
+        {
+            ++n_gain;
+        }
+        else if (nm == StringView("audio.biquad"))
+        {
+            ++n_biquad;
+        }
+        else if (nm == StringView("audio.delay"))
+        {
+            ++n_delay;
+        }
+        else if (nm == StringView("audio.compressor"))
+        {
+            ++n_compressor;
+        }
+        else if (nm == StringView("audio.mix"))
+        {
+            ++n_mix;
+        }
     }
     CHECK(n_ops == 7U);
     CHECK(n_source == 2U);

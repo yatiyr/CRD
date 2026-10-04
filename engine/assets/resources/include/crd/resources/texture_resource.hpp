@@ -65,7 +65,10 @@ public:
     TextureResourceLoader() = default;
     explicit TextureResourceLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
 
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override;

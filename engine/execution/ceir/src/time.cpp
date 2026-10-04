@@ -13,7 +13,10 @@ namespace
 // (the 8a substitute-through-Extern precedent). 0/>1 members, or a non-numeric member (`time.wall<!string>`), reject.
 bool verify_time_domain(const Context& ctx, const Type& t) noexcept
 {
-    if (t.members.size() != 1U) { return false; }
+    if (t.members.size() != 1U)
+    {
+        return false;
+    }
     const TypeKind k = ctx.type_of(t.members[0]).kind;
     return k == TypeKind::Int || k == TypeKind::Float || k == TypeKind::Quantity || k == TypeKind::TypeParam;
 }

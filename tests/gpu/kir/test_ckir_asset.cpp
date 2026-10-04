@@ -228,7 +228,10 @@ int first_diff(const crd::containers::Array<crd::u8>& x, const crd::containers::
     const crd::usize n = x.size() < y.size() ? x.size() : y.size();
     for (crd::usize i = 0; i < n; ++i)
     {
-        if (x[i] != y[i]) { return static_cast<int>(i); }
+        if (x[i] != y[i])
+        {
+            return static_cast<int>(i);
+        }
     }
     return x.size() == y.size() ? -1 : static_cast<int>(n);
 }
@@ -241,9 +244,15 @@ int ckir_roundtrip_diff(kir::KGraph& g, const kir::KEntry& e, crd::memory::IAllo
     kir::KGraph             g2(a);
     kir::KEntry             e2;
     const auto              rr = kir::ckir_read(crd::containers::StringView(text.c_str(), text.size()), g2, e2);
-    if (!rr.ok) { return -2; } // read failed outright
+    if (!rr.ok) // read failed outright
+    {
+        return -2;
+    }
     const auto blob2 = kir::serialize_graph(g2, e2, a);
-    if (blob.size() != blob2.size()) { return static_cast<int>(blob.size() < blob2.size() ? blob.size() : blob2.size()); }
+    if (blob.size() != blob2.size())
+    {
+        return static_cast<int>(blob.size() < blob2.size() ? blob.size() : blob2.size());
+    }
     return first_diff(blob, blob2);
 }
 
@@ -343,11 +352,23 @@ TEST_CASE("CEIR-18q: the CKIR op/stmt NAME TABLES are a bijection (no duplicate 
     // first_index(name[v]) == v iff name[v] is UNIQUE; a duplicated name returns the earlier index ⇒ fails here (and WOULD
     // make write/read lossy — two ops writing the same token). Count/gap drift is caught by the static_asserts in the header.
     const auto first_index = [](const char* const* names, int count, const char* name) {
-        for (int k = 0; k < count; ++k) { if (std::strcmp(names[k], name) == 0) { return k; } }
+        for (int k = 0; k < count; ++k)
+        {
+            if (std::strcmp(names[k], name) == 0)
+            {
+                return k;
+            }
+        }
         return -1;
     };
-    for (int v = 0; v < ad::kKOpCount; ++v) { CHECK(first_index(ad::kKOpNames, ad::kKOpCount, ad::kKOpNames[v]) == v); }
-    for (int v = 0; v < ad::kKStmtCount; ++v) { CHECK(first_index(ad::kKStmtNames, ad::kKStmtCount, ad::kKStmtNames[v]) == v); }
+    for (int v = 0; v < ad::kKOpCount; ++v)
+    {
+        CHECK(first_index(ad::kKOpNames, ad::kKOpCount, ad::kKOpNames[v]) == v);
+    }
+    for (int v = 0; v < ad::kKStmtCount; ++v)
+    {
+        CHECK(first_index(ad::kKStmtNames, ad::kKStmtCount, ad::kKStmtNames[v]) == v);
+    }
 }
 
 TEST_CASE("CEIR-18q: ckir_write/read round-trips a scale kernel AND a raster fragment entry byte-identically",
@@ -448,7 +469,10 @@ struct FuzzRng
 {
     crd::containers::Array<crd::u8> b(alloc);
     b.reserve(count);
-    for (crd::usize i = 0U; i < count; ++i) { b.push_back(src[i]); }
+    for (crd::usize i = 0U; i < count; ++i)
+    {
+        b.push_back(src[i]);
+    }
     return b;
 }
 
@@ -479,7 +503,10 @@ struct FuzzRng
         b.reserve(n - 1U);
         for (crd::usize i = 0U; i < n; ++i)
         {
-            if (i != pos) { b.push_back(src[i]); }
+            if (i != pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     case 2U: // insert an arbitrary byte before pos
@@ -488,7 +515,10 @@ struct FuzzRng
         b.reserve(n + 1U);
         for (crd::usize i = 0U; i < n; ++i)
         {
-            if (i == pos) { b.push_back(v); }
+            if (i == pos)
+            {
+                b.push_back(v);
+            }
             b.push_back(src[i]);
         }
         break;
@@ -498,7 +528,10 @@ struct FuzzRng
         for (crd::usize i = 0U; i < n; ++i)
         {
             b.push_back(src[i]);
-            if (i == pos) { b.push_back(src[i]); }
+            if (i == pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     default: // swap two bytes
@@ -508,8 +541,14 @@ struct FuzzRng
         for (crd::usize i = 0U; i < n; ++i)
         {
             crd::u8 v = src[i];
-            if (i == pos) { v = src[q]; }
-            else if (i == q) { v = src[pos]; }
+            if (i == pos)
+            {
+                v = src[q];
+            }
+            else if (i == q)
+            {
+                v = src[pos];
+            }
             b.push_back(v);
         }
         break;
@@ -522,7 +561,10 @@ struct FuzzRng
 // fills KGraph&/KEntry& by reference and has no module pointer, so an acceptance is simply ok.)
 [[nodiscard]] bool ckir_result_wf(const kir::CkirReadResult& r, crd::usize input_size) noexcept
 {
-    if (r.ok) { return true; }
+    if (r.ok)
+    {
+        return true;
+    }
     return r.error_offset <= input_size && r.error != nullptr && r.error[0] != '\0';
 }
 } // namespace
@@ -559,7 +601,10 @@ TEST_CASE("ceir fuzz: ckir_read survives byte mutation of a .ckir and never cras
             // ckir_roundtrip_diff returns -1 on byte-identity (-2 if the re-read fails). Pushes into ckir_write/serialize.
             CHECK(ckir_roundtrip_diff(g, e, &root) == -1);
         }
-        else { ++rejects; }
+        else
+        {
+            ++rejects;
+        }
         return (static_cast<crd::u64>(r.ok) << 63U) ^ static_cast<crd::u64>(r.error_offset);
     };
 
@@ -698,8 +743,14 @@ TEST_CASE("CEIR-31b-1a: the committed ui_backdrop_fetch.ckir parses, round-trips
     for (int i = 0; i < static_cast<int>(g.size()); ++i)
     {
         const kir::KOp op = g.node(i).op;
-        if (op == kir::KOp::TexSample) { ++n_texsample; }
-        if (op == kir::KOp::StorageLoad) { ++n_storageload; }
+        if (op == kir::KOp::TexSample)
+        {
+            ++n_texsample;
+        }
+        if (op == kir::KOp::StorageLoad)
+        {
+            ++n_storageload;
+        }
     }
     CHECK(n_texsample == 1);
     CHECK(n_storageload == 0);
@@ -761,11 +812,26 @@ TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir parses, round-trips
     for (int i = 0; i < static_cast<int>(g.size()); ++i)
     {
         const kir::KNode& nd = g.node(i);
-        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
-        if (nd.op == kir::KOp::BitXor) { ++n_bitxor; }
-        if (nd.op == kir::KOp::Shr) { ++n_shr; }
-        if (nd.op == kir::KOp::StorageLoad) { ++n_storageload; }
-        if (kir::is_spec_const(nd)) { ++n_specconst; }
+        if (nd.op == kir::KOp::TexSample)
+        {
+            ++n_texsample;
+        }
+        if (nd.op == kir::KOp::BitXor)
+        {
+            ++n_bitxor;
+        }
+        if (nd.op == kir::KOp::Shr)
+        {
+            ++n_shr;
+        }
+        if (nd.op == kir::KOp::StorageLoad)
+        {
+            ++n_storageload;
+        }
+        if (kir::is_spec_const(nd))
+        {
+            ++n_specconst;
+        }
     }
     CHECK(n_texsample == 1);
     CHECK(n_specconst == 5);
@@ -813,8 +879,14 @@ TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir embeds the eval-ver
         int            n_b31_s3 = 0;
         for (int i = 0; i < 8; ++i)
         {
-            if ((ref_hash_stage1(xs[i], ys[i]) >> 31U) == 1U) { ++n_b31_s1; }
-            if ((ref_hash_stage3(xs[i], ys[i]) >> 31U) == 1U) { ++n_b31_s3; }
+            if ((ref_hash_stage1(xs[i], ys[i]) >> 31U) == 1U)
+            {
+                ++n_b31_s1;
+            }
+            if ((ref_hash_stage3(xs[i], ys[i]) >> 31U) == 1U)
+            {
+                ++n_b31_s3;
+            }
         }
         // ⛔ BOTH `>>` shifts (>>15 on stage1, >>13 on stage3) must be logical; probe bit 31 at BOTH so the coverage can't
         // silently drop if a constant is edited. (stage1 gives 3, stage3 gives 5 with these 8 pairs.)
@@ -827,10 +899,16 @@ TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir embeds the eval-ver
             in[2 * i]     = static_cast<crd::f64>(xs[i]);
             in[2 * i + 1] = static_cast<crd::f64>(ys[i]);
         }
-        for (double& o : out) { o = -1.0; }
+        for (double& o : out)
+        {
+            o = -1.0;
+        }
         kir::KernelBuffer bufs[2] = {{in, 16, 0, 0}, {out, 8, 0, 1}};
         kir::eval_cpu_kernel(g, e, bufs, 2, 8U, &a, 1U);
-        for (int i = 0; i < 8; ++i) { CHECK(static_cast<crd::u32>(out[i]) == ref_hash(xs[i], ys[i])); }
+        for (int i = 0; i < 8; ++i)
+        {
+            CHECK(static_cast<crd::u32>(out[i]) == ref_hash(xs[i], ys[i]));
+        }
     }
 
     // (2) NODE + WIRING MATCH: parse the committed file; assert n17..n32 == a run of the SAME helpers.
@@ -856,11 +934,26 @@ TEST_CASE("CEIR-31b-1a-iii: the committed ui_tint_noise.ckir embeds the eval-ver
     const int c0    = 17;        // committed n17 = Const A (the hash run start; n15/n16 = the Cast x/y inputs)
     const int delta = c0 - first;
     const auto match_operand = [&](int rop, int cop) {
-        if (rop < 0) { CHECK(cop < 0); }                      // unused-slot sentinel
-        else if (rop >= first) { CHECK(cop == rop + delta); } // intra-run operand -> constant offset
-        else if (rop == rx) { CHECK(cop == 15); }             // the x input <-> committed n15
-        else if (rop == ry) { CHECK(cop == 16); }             // the y input <-> committed n16
-        else { CHECK(false); }                                // an operand outside the run that is not x/y
+        if (rop < 0) // unused-slot sentinel
+        {
+            CHECK(cop < 0);
+        }
+        else if (rop >= first) // intra-run operand -> constant offset
+        {
+            CHECK(cop == rop + delta);
+        }
+        else if (rop == rx) // the x input <-> committed n15
+        {
+            CHECK(cop == 15);
+        }
+        else if (rop == ry) // the y input <-> committed n16
+        {
+            CHECK(cop == 16);
+        }
+        else // an operand outside the run that is not x/y
+        {
+            CHECK(false);
+        }
     };
     for (int k = 0; k < 16; ++k)
     {
@@ -914,15 +1007,36 @@ TEST_CASE("CEIR-31b-1b: the committed ui_blur.ckir is a sigma=R/3 separable Gaus
     for (int i = 0; i < static_cast<int>(g.size()); ++i)
     {
         const kir::KNode& nd = g.node(i);
-        if (nd.op == kir::KOp::Texture) { ++n_tex; }
-        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
-        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
-        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
-        if (nd.op == kir::KOp::Vec3) { ++n_vec3; }
-        if (kir::is_spec_const(nd)) { ++n_spec; }
+        if (nd.op == kir::KOp::Texture)
+        {
+            ++n_tex;
+        }
+        if (nd.op == kir::KOp::Sampler)
+        {
+            ++n_samp;
+        }
+        if (nd.op == kir::KOp::TexSample)
+        {
+            ++n_texsample;
+        }
+        if (nd.op == kir::KOp::StorageLoad)
+        {
+            ++n_storage;
+        }
+        if (nd.op == kir::KOp::Vec3)
+        {
+            ++n_vec3;
+        }
+        if (kir::is_spec_const(nd))
+        {
+            ++n_spec;
+        }
         else if (nd.op == kir::KOp::Const && nd.dtype() == kir::DType::F32 && nd.cval > 0.0 && nd.cval < 1.0)
         {
-            if (n_weight < 9) { wfile[n_weight] = static_cast<float>(nd.cval); }
+            if (n_weight < 9)
+            {
+                wfile[n_weight] = static_cast<float>(nd.cval);
+            }
             ++n_weight;
         }
     }
@@ -937,14 +1051,23 @@ TEST_CASE("CEIR-31b-1b: the committed ui_blur.ckir is a sigma=R/3 separable Gaus
     // WEIGHTS == the σ=R/3 oracle bit-exact; symmetric; monotone-from-center; f32 left-to-right sum within 1 ulp of 1.0.
     float wref[9] = {0.0F};
     blur_weights_r4_sigma_r3(wref);
-    for (int k = 0; k < 9; ++k) { CHECK(wfile[k] == wref[k]); }
-    for (int k = 0; k < 4; ++k) { CHECK(wfile[k] == wfile[8 - k]); }
+    for (int k = 0; k < 9; ++k)
+    {
+        CHECK(wfile[k] == wref[k]);
+    }
+    for (int k = 0; k < 4; ++k)
+    {
+        CHECK(wfile[k] == wfile[8 - k]);
+    }
     CHECK(wfile[4] > wfile[3]);
     CHECK(wfile[3] > wfile[2]);
     CHECK(wfile[2] > wfile[1]);
     CHECK(wfile[1] > wfile[0]);
     float ssum = 0.0F;
-    for (float wv : wfile) { ssum = ssum + wv; } // left-to-right (the named order)
+    for (float wv : wfile) // left-to-right (the named order)
+    {
+        ssum = ssum + wv;
+    }
     const float dev = ssum - 1.0F;
     CHECK(dev <= 0x1p-23F); // one f32 ulp
     CHECK(dev >= -0x1p-23F);
@@ -1001,18 +1124,40 @@ TEST_CASE("CEIR-31b-3-b: the committed ui_composite.ckir is a bindless 3-texture
     for (int i = 0; i < static_cast<int>(g.size()); ++i)
     {
         const kir::KNode& nd = g.node(i);
-        if (nd.op == kir::KOp::Texture) { ++n_tex; tex_count = static_cast<int>(nd.type.count); }
-        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
-        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
-        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
-        if (nd.op == kir::KOp::Mix) { ++n_mix; }
+        if (nd.op == kir::KOp::Texture)
+        {
+            ++n_tex;
+            tex_count = static_cast<int>(nd.type.count);
+        }
+        if (nd.op == kir::KOp::Sampler)
+        {
+            ++n_samp;
+        }
+        if (nd.op == kir::KOp::TexSample)
+        {
+            ++n_texsample;
+        }
+        if (nd.op == kir::KOp::StorageLoad)
+        {
+            ++n_storage;
+        }
+        if (nd.op == kir::KOp::Mix)
+        {
+            ++n_mix;
+        }
         if (nd.op == kir::KOp::SampleIndexed)
         {
             ++n_sampidx;
             const kir::KNode& idx   = g.node(nd.d); // the 4th operand = the bindless layer index
             const int         layer = static_cast<int>(idx.cval);
-            if (idx.op == kir::KOp::Const && layer >= 0 && layer < 3) { ++layer_seen[layer]; }
-            else { ++layer_other; }
+            if (idx.op == kir::KOp::Const && layer >= 0 && layer < 3)
+            {
+                ++layer_seen[layer];
+            }
+            else
+            {
+                ++layer_other;
+            }
         }
     }
     CHECK(n_tex == 1);
@@ -1081,20 +1226,50 @@ TEST_CASE("CEIR-31b-4-a: the committed ui_mask_rect.ckir is a 4-spec-const hard 
     for (int i = 0; i < static_cast<int>(g.size()); ++i)
     {
         const kir::KNode& nd = g.node(i);
-        if (nd.op == kir::KOp::Texture) { ++n_tex; }
-        if (nd.op == kir::KOp::Sampler) { ++n_samp; }
-        if (nd.op == kir::KOp::TexSample) { ++n_texsample; }
-        if (nd.op == kir::KOp::SampleIndexed) { ++n_sampidx; }
-        if (nd.op == kir::KOp::StorageLoad) { ++n_storage; }
-        if (nd.op == kir::KOp::Step) { ++n_step; }
-        if (nd.op == kir::KOp::Splat) { ++n_splat; }
-        if (nd.op == kir::KOp::StageIn) { ++n_stagein; }
-        if (nd.op == kir::KOp::Swizzle) { ++n_swizzle; }
+        if (nd.op == kir::KOp::Texture)
+        {
+            ++n_tex;
+        }
+        if (nd.op == kir::KOp::Sampler)
+        {
+            ++n_samp;
+        }
+        if (nd.op == kir::KOp::TexSample)
+        {
+            ++n_texsample;
+        }
+        if (nd.op == kir::KOp::SampleIndexed)
+        {
+            ++n_sampidx;
+        }
+        if (nd.op == kir::KOp::StorageLoad)
+        {
+            ++n_storage;
+        }
+        if (nd.op == kir::KOp::Step)
+        {
+            ++n_step;
+        }
+        if (nd.op == kir::KOp::Splat)
+        {
+            ++n_splat;
+        }
+        if (nd.op == kir::KOp::StageIn)
+        {
+            ++n_stagein;
+        }
+        if (nd.op == kir::KOp::Swizzle)
+        {
+            ++n_swizzle;
+        }
         if (kir::is_spec_const(nd))
         {
             ++n_spec;
             const crd::u32 id = kir::spec_const_id(nd);
-            if (id < 4U) { spec_def[id] = nd.cval; }
+            if (id < 4U)
+            {
+                spec_def[id] = nd.cval;
+            }
         }
     }
     CHECK(n_tex == 0);       // ⛔ the discriminator: the ONLY ui kernel reading NO texture (its pass is reads=[])
@@ -1165,7 +1340,10 @@ TEST_CASE("CEIR-18b: the committed scene_light_cull_3d.ckir parses, round-trips 
     crd::containers::Array<char> src2d(&a);
     slurp(CRD_REPO_DIR "/assets/ckir/scene_light_cull.ckir", src2d);
     bool differs = src2d.size() != src3d.size();
-    for (crd::usize i = 0; !differs && i < src2d.size(); ++i) { differs = src2d[i] != src3d[i]; }
+    for (crd::usize i = 0; !differs && i < src2d.size(); ++i)
+    {
+        differs = src2d[i] != src3d[i];
+    }
     CHECK(differs);
 }
 
@@ -1831,14 +2009,23 @@ TEST_CASE("CEIR-18p: the committed impostor assets parse, round-trip; FS carries
     };
     const auto count_specs = [](const kir::KGraph& g) {
         int n = 0;
-        for (int i = 0; i < g.size(); ++i) { if (kir::is_spec_const(g.node(i))) { ++n; } }
+        for (int i = 0; i < g.size(); ++i)
+        {
+            if (kir::is_spec_const(g.node(i)))
+            {
+                ++n;
+            }
+        }
         return n;
     };
     const auto has_spec_id = [](const kir::KGraph& g, crd::u32 id) {
         for (int i = 0; i < g.size(); ++i)
         {
             const kir::KNode& nd = g.node(i);
-            if (kir::is_spec_const(nd) && kir::spec_const_id(nd) == id) { return true; }
+            if (kir::is_spec_const(nd) && kir::spec_const_id(nd) == id)
+            {
+                return true;
+            }
         }
         return false;
     };
@@ -2015,7 +2202,10 @@ TEST_CASE("CEIR-25c-0: (re)generate assets/ckir/relu_vjp.ckir from the builder",
     const crd::containers::String      text = kir::ckir_write(g, e, &a);
     FILE*                              f    = nullptr;
 #ifdef _MSC_VER
-    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", "wb") != 0) { f = nullptr; }
+    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", "wb") != 0)
+    {
+        f = nullptr;
+    }
 #else
     f = std::fopen(CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir", "wb");
 #endif
@@ -2040,17 +2230,33 @@ void softmax_eval_case(crd::u32 sq, crd::u32 sk)
     crd::f64       scores[16];
     crd::f64       probs[16];
     crd::f64       scale[1] = {0.5}; // 1/√D stand-in
-    for (crd::u32 i = 0; i < n; ++i) { scores[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5); }
-    for (crd::u32 i = 0; i < n; ++i) { probs[i] = -999.0; }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        scores[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5);
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        probs[i] = -999.0;
+    }
     kir::KernelBuffer bufs[3] = {{scores, static_cast<int>(n), 0, 0}, {scale, 1, 0, 1}, {probs, static_cast<int>(n), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, sq, &a, 1U);
     const auto ad = [](crd::f64 x) { return x < 0.0 ? -x : x; };
     for (crd::u32 r = 0; r < sq; ++r)
     {
         crd::f64 m = -1e300;
-        for (crd::u32 c = 0; c < sk; ++c) { const crd::f64 v = scale[0] * scores[r * sk + c]; if (v > m) { m = v; } }
+        for (crd::u32 c = 0; c < sk; ++c)
+        {
+            const crd::f64 v = scale[0] * scores[r * sk + c];
+            if (v > m)
+            {
+                m = v;
+            }
+        }
         crd::f64 denom = 0.0;
-        for (crd::u32 c = 0; c < sk; ++c) { denom += std::exp(scale[0] * scores[r * sk + c] - m); }
+        for (crd::u32 c = 0; c < sk; ++c)
+        {
+            denom += std::exp(scale[0] * scores[r * sk + c] - m);
+        }
         for (crd::u32 c = 0; c < sk; ++c)
         {
             const crd::f64 ref = std::exp(scale[0] * scores[r * sk + c] - m) / denom;
@@ -2076,7 +2282,10 @@ TEST_CASE("CEIR-26d-3b: (re)generate assets/ckir/softmax.ckir from the builder",
     const crd::containers::String text = kir::ckir_write(g, e, &a);
     FILE*                         f    = nullptr;
 #ifdef _MSC_VER
-    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/softmax.ckir", "wb") != 0) { f = nullptr; }
+    if (fopen_s(&f, CRD_REPO_DIR "/assets/ckir/softmax.ckir", "wb") != 0)
+    {
+        f = nullptr;
+    }
 #else
     f = std::fopen(CRD_REPO_DIR "/assets/ckir/softmax.ckir", "wb");
 #endif

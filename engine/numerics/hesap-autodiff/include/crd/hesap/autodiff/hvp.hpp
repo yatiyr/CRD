@@ -99,7 +99,10 @@ public:
     {
         const crd::usize n = m_node.size();
         m_adjoint.resize(n);
-        for (crd::usize i = 0; i < n; ++i) { m_adjoint[i] = static_cast<T>(0); }
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            m_adjoint[i] = static_cast<T>(0);
+        }
     }
     [[nodiscard]] T    value(crd::u32 id) const noexcept { return m_node[id].value; }
     [[nodiscard]] T    grad(crd::u32 id) const noexcept { return m_adjoint[id]; }
@@ -225,7 +228,10 @@ inline void hvp(const F& f, ConstSpan<crd::f64> x, ConstSpan<crd::f64> v, Span<c
 {
     tape.reset();
     const int n = static_cast<int>(x.size());
-    for (int i = 0; i < n; ++i) { scr[i] = make_leaf(tape, Dual<crd::f64>{x[i], v[i]}); } // value x_i, tangent v_i
+    for (int i = 0; i < n; ++i) // value x_i, tangent v_i
+    {
+        scr[i] = make_leaf(tape, Dual<crd::f64>{x[i], v[i]});
+    }
     const RVar<Dual<crd::f64>> y = f(scr.data(), n);
     tape.finalize(); // size + zero the compact adjoint array (bulk)
     tape.seed(y.node, Dual<crd::f64>{1.0, 0.0});
@@ -248,33 +254,69 @@ inline crd::f64 newton_cg_step(const F& f, Span<crd::f64> x, int cg_iters, crd::
 {
     const int n = static_cast<int>(x.size());
     // g = ∇f(x) (HVP with v=0 gives the gradient in grad; hv unused)
-    for (int i = 0; i < n; ++i) { d[i] = 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        d[i] = 0.0;
+    }
     hvp(f, x, ConstSpan<crd::f64>(d.data(), n), g, hv, tape, scr);
     // CG solve H p = −g :  p=0, r=−g, d=r
-    for (int i = 0; i < n; ++i) { p[i] = 0.0; r[i] = -g[i]; d[i] = r[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        p[i] = 0.0;
+        r[i] = -g[i];
+        d[i] = r[i];
+    }
     crd::f64 rs = 0.0;
-    for (int i = 0; i < n; ++i) { rs += r[i] * r[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        rs += r[i] * r[i];
+    }
     const crd::f64 rs0 = rs;
     for (int it = 0; it < cg_iters && rs > cg_tol * cg_tol * rs0; ++it)
     {
         hvp(f, x, ConstSpan<crd::f64>(d.data(), n), g, hv, tape, scr); // hv = H·d  (g reused = ∇f, ignored here)
         crd::f64 d_hd = 0.0;
-        for (int i = 0; i < n; ++i) { d_hd += d[i] * hv[i]; }
-        if (d_hd <= 0.0) { break; } // negative curvature — stop (trust-region would use the boundary)
+        for (int i = 0; i < n; ++i)
+        {
+            d_hd += d[i] * hv[i];
+        }
+        if (d_hd <= 0.0) // negative curvature — stop (trust-region would use the boundary)
+        {
+            break;
+        }
         const crd::f64 alpha = rs / d_hd;
-        for (int i = 0; i < n; ++i) { p[i] += alpha * d[i]; r[i] -= alpha * hv[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] += alpha * d[i];
+            r[i] -= alpha * hv[i];
+        }
         crd::f64 rs_new = 0.0;
-        for (int i = 0; i < n; ++i) { rs_new += r[i] * r[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            rs_new += r[i] * r[i];
+        }
         const crd::f64 beta = rs_new / rs;
-        for (int i = 0; i < n; ++i) { d[i] = r[i] + beta * d[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            d[i] = r[i] + beta * d[i];
+        }
         rs = rs_new;
     }
-    for (int i = 0; i < n; ++i) { x[i] += p[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] += p[i];
+    }
     // report the new gradient norm²
-    for (int i = 0; i < n; ++i) { d[i] = 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        d[i] = 0.0;
+    }
     hvp(f, x, ConstSpan<crd::f64>(d.data(), n), g, hv, tape, scr);
     crd::f64 gn = 0.0;
-    for (int i = 0; i < n; ++i) { gn += g[i] * g[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        gn += g[i] * g[i];
+    }
     return gn;
 }
 

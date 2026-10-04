@@ -106,7 +106,10 @@ TEST_CASE("v9a-b2 GPU radix N=16 calibration: byte-identical to v9a-b1 CPU oracl
                         42U, 3U, 42U, 0U,   5U, 100U, 1U, 17U};
         crd::containers::Array<crd::u32> arr;
         arr.resize(16U);
-        for (crd::u32 i = 0; i < 16U; ++i) { arr[i] = a[i]; }
+        for (crd::u32 i = 0; i < 16U; ++i)
+        {
+            arr[i] = a[i];
+        }
         return arr;
     }();
     const auto in_span = crd::containers::ConstSpan<crd::u32>(in.data(), in.size());
@@ -140,7 +143,11 @@ TEST_CASE("v9a-b2 GPU radix N=16 calibration: byte-identical to v9a-b1 CPU oracl
 
 TEST_CASE("v9a-b2 GPU radix empty input yields empty output", "[radix][gpu]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -161,7 +168,11 @@ TEST_CASE("v9a-b2 GPU radix empty input yields empty output", "[radix][gpu]")
 
 TEST_CASE("v9a-b2 GPU radix N=1 yields single pair {code, 0}", "[radix][gpu]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -190,7 +201,11 @@ TEST_CASE("v9a-b2 GPU radix N=1 yields single pair {code, 0}", "[radix][gpu]")
 TEST_CASE("v9a-b2 GPU radix all-equal keys: stable (input index order preserved)",
           "[radix][gpu][stability]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -228,7 +243,11 @@ TEST_CASE("v9a-b2 GPU radix all-equal keys: stable (input index order preserved)
 TEST_CASE("v9a-b2 GPU radix N=10000: byte-identical to v9a-b1 CPU oracle",
           "[radix][gpu][oracle]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -271,7 +290,11 @@ TEST_CASE("v9a-b2 GPU radix N=10000: byte-identical to v9a-b1 CPU oracle",
 TEST_CASE("v9a-b2 GPU radix N=262144 (multi-block): byte-identical to CPU oracle",
           "[radix][gpu][oracle][large]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -318,7 +341,11 @@ TEST_CASE("v9a-b2 GPU radix N=262144 (multi-block): byte-identical to CPU oracle
 TEST_CASE("v9a-b2 GPU radix is deterministic across 3 dispatches (D146)",
           "[radix][gpu][determinism]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(32U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -358,7 +385,11 @@ TEST_CASE("v9a-b2 GPU radix is deterministic across 3 dispatches (D146)",
 TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
           "[radix][gpu][integration]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -417,7 +448,11 @@ TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
 TEST_CASE("v9a-b2 GPU radix perf budget: 1M items end-to-end",
           "[radix][gpu][perf]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(256U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});

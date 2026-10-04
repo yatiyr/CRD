@@ -83,7 +83,10 @@ struct HeapMinCmp
 {
     bool operator()(const HeapEntry<T>& l, const HeapEntry<T>& r) const noexcept
     {
-        if (l.cost != r.cost) { return l.cost > r.cost; }
+        if (l.cost != r.cost)
+        {
+            return l.cost > r.cost;
+        }
         return l.he_canonical > r.he_canonical;
     }
 };
@@ -92,7 +95,10 @@ template <crd::math::MathScalar T>
 inline crd::u32 canonical_he(const HalfEdgeMesh<T>& mesh, crd::u32 h) noexcept
 {
     const crd::u32 t = mesh.he(h).twin;
-    if (t == k_null_he) { return h; }
+    if (t == k_null_he)
+    {
+        return h;
+    }
     return (h < t) ? h : t;
 }
 
@@ -111,7 +117,10 @@ std::optional<crd::containers::FixedArray<T, 4>> face_plane(const HalfEdgeMesh<T
     const auto     e2  = p2 - p0;
     const auto     n   = crd::math::cross(e1, e2);
     const T        len = crd::math::length(n);
-    if (len < static_cast<T>(1e-20)) { return std::nullopt; }
+    if (len < static_cast<T>(1e-20))
+    {
+        return std::nullopt;
+    }
     const T inv_len = T{1} / len;
     const T a       = n.x * inv_len;
     const T b       = n.y * inv_len;
@@ -140,14 +149,23 @@ void compute_initial_quadrics(const HalfEdgeMesh<T>&                          me
     // Pass 1: interior face quadrics (+ the per-channel linear models).
     for (crd::u32 f = 0; f < mesh.face_pool_size(); ++f)
     {
-        if (!mesh.face_alive(f)) { continue; }
+        if (!mesh.face_alive(f))
+        {
+            continue;
+        }
         const auto plane = face_plane(mesh, f);
-        if (!plane) { continue; }
+        if (!plane)
+        {
+            continue;
+        }
         AttributeGradient<T> grad[M > 0U ? M : 1U]{};
         crd::u32             corner[3]  = {k_null_vertex, k_null_vertex, k_null_vertex};
         crd::u32             n_corner   = 0U;
         mesh.for_each_face_he(f, [&](crd::u32 h) {
-            if (n_corner < 3U) { corner[n_corner] = mesh.he(h).origin; }
+            if (n_corner < 3U)
+            {
+                corner[n_corner] = mesh.he(h).origin;
+            }
             ++n_corner;
         });
         if constexpr (M > 0U)
@@ -173,20 +191,38 @@ void compute_initial_quadrics(const HalfEdgeMesh<T>&                          me
     }
 
     // Pass 2: Garland 1998 boundary-preservation quadrics.
-    if (boundary_weight <= T{0}) { return; }
+    if (boundary_weight <= T{0})
+    {
+        return;
+    }
     for (crd::u32 h = 0; h < mesh.he_pool_size(); ++h)
     {
-        if (!mesh.he_alive(h)) { continue; }
-        if (!mesh.he_is_boundary(h)) { continue; }
+        if (!mesh.he_alive(h))
+        {
+            continue;
+        }
+        if (!mesh.he_is_boundary(h))
+        {
+            continue;
+        }
         // The interior twin of the boundary HE bounds the only incident
         // face. We need that face's plane to build the perpendicular
         // boundary plane.
         const crd::u32 t = mesh.he(h).twin;
-        if (t == k_null_he) { continue; }
+        if (t == k_null_he)
+        {
+            continue;
+        }
         const crd::u32 f = mesh.he(t).face;
-        if (f == k_null_face) { continue; }
+        if (f == k_null_face)
+        {
+            continue;
+        }
         const auto plane_f = face_plane(mesh, f);
-        if (!plane_f) { continue; }
+        if (!plane_f)
+        {
+            continue;
+        }
         const crd::math::Vec3<T> n_f{(*plane_f)[0], (*plane_f)[1], (*plane_f)[2]};
         const crd::u32           v_a     = mesh.he(h).origin;
         const crd::u32           v_b     = mesh.he(mesh.he(h).next).origin;
@@ -195,7 +231,10 @@ void compute_initial_quadrics(const HalfEdgeMesh<T>&                          me
         const auto               edge    = pb - pa;
         const auto               n_b_raw = crd::math::cross(edge, n_f);
         const T                  len     = crd::math::length(n_b_raw);
-        if (len < static_cast<T>(1e-20)) { continue; }
+        if (len < static_cast<T>(1e-20))
+        {
+            continue;
+        }
         const T inv_len = T{1} / len;
         const T a       = n_b_raw.x * inv_len;
         const T b       = n_b_raw.y * inv_len;
@@ -224,9 +263,15 @@ bool no_inversion(const HalfEdgeMesh<T>&    mesh,
 {
     bool ok = true;
     mesh.for_each_outgoing_he(merged, [&](crd::u32 ho) {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         const crd::u32 f = mesh.he(ho).face;
-        if (f == k_null_face || f == f_skip_1 || f == f_skip_2) { return; }
+        if (f == k_null_face || f == f_skip_1 || f == f_skip_2)
+        {
+            return;
+        }
         // Get the three vertices of face f and compute old normal.
         const crd::u32 ha = ho;
         const crd::u32 hb = mesh.he(ha).next;
@@ -247,15 +292,27 @@ bool no_inversion(const HalfEdgeMesh<T>&    mesh,
         const auto pb_new = (vb == merged || vb == other_endpoint) ? v_opt : pb;
         const auto pc_new = (vc == merged || vc == other_endpoint) ? v_opt : pc;
         const auto n_new  = crd::math::cross(pb_new - pa_new, pc_new - pa_new);
-        if (crd::math::dot(n_old, n_new) <= T{0}) { ok = false; }
+        if (crd::math::dot(n_old, n_new) <= T{0})
+        {
+            ok = false;
+        }
     });
-    if (!ok) { return false; }
+    if (!ok)
+    {
+        return false;
+    }
     // Also walk other_endpoint's faces (the ones not deleted by collapse —
     // they migrate to merged after collapse).
     mesh.for_each_outgoing_he(other_endpoint, [&](crd::u32 ho) {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         const crd::u32 f = mesh.he(ho).face;
-        if (f == k_null_face || f == f_skip_1 || f == f_skip_2) { return; }
+        if (f == k_null_face || f == f_skip_1 || f == f_skip_2)
+        {
+            return;
+        }
         const crd::u32 ha = ho;
         const crd::u32 hb = mesh.he(ha).next;
         const crd::u32 hc = mesh.he(hb).next;
@@ -270,7 +327,10 @@ bool no_inversion(const HalfEdgeMesh<T>&    mesh,
         const auto pb_new = (vb == merged || vb == other_endpoint) ? v_opt : pb;
         const auto pc_new = (vc == merged || vc == other_endpoint) ? v_opt : pc;
         const auto n_new  = crd::math::cross(pb_new - pa_new, pc_new - pa_new);
-        if (crd::math::dot(n_old, n_new) <= T{0}) { ok = false; }
+        if (crd::math::dot(n_old, n_new) <= T{0})
+        {
+            ok = false;
+        }
     });
     return ok;
 }
@@ -295,10 +355,16 @@ std::optional<EdgeCost<T>> evaluate_edge(const HalfEdgeMesh<T>&                 
 {
     const crd::u32 a = mesh.he(h).origin;
     const crd::u32 b = mesh.he_dest(h);
-    if (b == k_null_vertex) { return std::nullopt; }
+    if (b == k_null_vertex)
+    {
+        return std::nullopt;
+    }
     const bool la = (a < is_locked.size()) && (is_locked[a] != 0U);
     const bool lb = (b < is_locked.size()) && (is_locked[b] != 0U);
-    if (la && lb) { return std::nullopt; }
+    if (la && lb)
+    {
+        return std::nullopt;
+    }
 
     const auto combined_q = vertex_q[a] + vertex_q[b];
     // ⭐ the FOLD is what keeps the rest of this function unchanged: eliminating
@@ -370,7 +436,10 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
 {
     QemDecimateReport report{};
     auto              report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* out_alloc = opts.output_allocator != nullptr
@@ -438,8 +507,14 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
             for (crd::u32 v_in = 0; v_in < remap_in.size(); ++v_in)
             {
                 const crd::u32 v_out = remap_in[v_in];
-                if (v_out == k_null_vertex || v_out >= output.vertex_pool_size()) { continue; }
-                for (crd::u32 j = 0; j < M; ++j) { attrs[(v_out * M) + j] = attrs_in[(v_in * M) + j]; }
+                if (v_out == k_null_vertex || v_out >= output.vertex_pool_size())
+                {
+                    continue;
+                }
+                for (crd::u32 j = 0; j < M; ++j)
+                {
+                    attrs[(v_out * M) + j] = attrs_in[(v_in * M) + j];
+                }
             }
         }
     }
@@ -469,10 +544,19 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
         for (crd::u32 i = 0; i < opts.locked_vertices.size(); ++i)
         {
             const crd::u32 v_in = opts.locked_vertices[i];
-            if (v_in >= remap.size()) { continue; }
+            if (v_in >= remap.size())
+            {
+                continue;
+            }
             const crd::u32 v_out = remap[v_in];
-            if (v_out == k_null_vertex) { continue; }
-            if (v_out < is_locked.size()) { is_locked[v_out] = 1U; }
+            if (v_out == k_null_vertex)
+            {
+                continue;
+            }
+            if (v_out < is_locked.size())
+            {
+                is_locked[v_out] = 1U;
+            }
         }
     }
 
@@ -485,12 +569,27 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
     heap.reserve(output.he_pool_size() / 2U);
     for (crd::u32 h = 0; h < output.he_pool_size(); ++h)
     {
-        if (!output.he_alive(h)) { continue; }
-        if (output.he_is_boundary(h)) { continue; }
-        if (h != canonical_he(output, h)) { continue; }
+        if (!output.he_alive(h))
+        {
+            continue;
+        }
+        if (output.he_is_boundary(h))
+        {
+            continue;
+        }
+        if (h != canonical_he(output, h))
+        {
+            continue;
+        }
         const auto cand = evaluate_edge<T, M>(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
-        if (!cand) { continue; }
-        if (cand->singular_fallback) { ++report.singular_fallbacks; }
+        if (!cand)
+        {
+            continue;
+        }
+        if (cand->singular_fallback)
+        {
+            ++report.singular_fallbacks;
+        }
         push_edge(heap, edge_generation, cand->cost, h);
     }
 
@@ -511,19 +610,37 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
         heap.pop_back();
 
         // Validate entry.
-        if (entry.he_canonical >= edge_generation.size()) { continue; }
-        if (edge_generation[entry.he_canonical] != entry.generation) { continue; }
-        if (!output.he_alive(entry.he_canonical)) { continue; }
-        if (output.he_is_boundary(entry.he_canonical)) { continue; }
+        if (entry.he_canonical >= edge_generation.size())
+        {
+            continue;
+        }
+        if (edge_generation[entry.he_canonical] != entry.generation)
+        {
+            continue;
+        }
+        if (!output.he_alive(entry.he_canonical))
+        {
+            continue;
+        }
+        if (output.he_is_boundary(entry.he_canonical))
+        {
+            continue;
+        }
 
         // Cost-threshold check (after popping = min cost).
-        if (has_error && entry.cost > opts.max_error_threshold) { break; }
+        if (has_error && entry.cost > opts.max_error_threshold)
+        {
+            break;
+        }
 
         const crd::u32 h = entry.he_canonical;
 
         // Re-evaluate (quadrics or locks may have shifted since push).
         const auto cand = evaluate_edge<T, M>(output, vertex_q, is_locked, h, opts.singular_det_epsilon);
-        if (!cand) { continue; }
+        if (!cand)
+        {
+            continue;
+        }
 
         // Capture topology around the collapse BEFORE applying.
         const crd::u32 a   = output.he(h).origin;
@@ -555,16 +672,28 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
         {
             T merged[M]{};
             attributes_at(vertex_q[a], cand->v_opt, merged);
-            for (crd::u32 j = 0; j < M; ++j) { attrs[(a * M) + j] = merged[j]; }
+            for (crd::u32 j = 0; j < M; ++j)
+            {
+                attrs[(a * M) + j] = merged[j];
+            }
         }
 
         // Re-evaluate every edge in a's new 1-ring.
         output.for_each_outgoing_he(a, [&](crd::u32 ho) {
-            if (output.he_is_boundary(ho)) { return; }
+            if (output.he_is_boundary(ho))
+            {
+                return;
+            }
             const crd::u32 c = canonical_he(output, ho);
             const auto     new_cand = evaluate_edge<T, M>(output, vertex_q, is_locked, c, opts.singular_det_epsilon);
-            if (!new_cand) { return; }
-            if (new_cand->singular_fallback) { ++report.singular_fallbacks; }
+            if (!new_cand)
+            {
+                return;
+            }
+            if (new_cand->singular_fallback)
+            {
+                ++report.singular_fallbacks;
+            }
             push_edge(heap, edge_generation, new_cand->cost, c);
         });
 
@@ -591,8 +720,14 @@ HalfEdgeMesh<T> qem_decimate_impl(const HalfEdgeMesh<T>&            input,
             for (crd::u32 v_slot = 0; v_slot < remap_out.size(); ++v_slot)
             {
                 const crd::u32 v_new = remap_out[v_slot];
-                if (v_new == k_null_vertex || v_new >= pos_f.size()) { continue; }
-                for (crd::u32 j = 0; j < M; ++j) { (*attrs_out)[(v_new * M) + j] = attrs[(v_slot * M) + j]; }
+                if (v_new == k_null_vertex || v_new >= pos_f.size())
+                {
+                    continue;
+                }
+                for (crd::u32 j = 0; j < M; ++j)
+                {
+                    (*attrs_out)[(v_new * M) + j] = attrs[(v_slot * M) + j];
+                }
             }
         }
     }

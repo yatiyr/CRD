@@ -21,7 +21,10 @@ constexpr VkDeviceSize kMinBlockSize       = VkDeviceSize{16} << 20;  // pooled-
     for (crd::u32 i = 0; i < props.memoryTypeCount; ++i)
     {
         const bool allowed = (type_bits & (1U << i)) != 0U;
-        if (allowed && (props.memoryTypes[i].propertyFlags & required) == required) { return i; }
+        if (allowed && (props.memoryTypes[i].propertyFlags & required) == required)
+        {
+            return i;
+        }
     }
     return 0xFFFFFFFFU;
 }
@@ -61,8 +64,14 @@ void VulkanGpuAllocator::destroy_all() noexcept
     for (crd::usize i = 0; i < m_blocks.size(); ++i)
     {
         Block* b = m_blocks[i];
-        if (b == nullptr) { continue; } // a compacted tombstone
-        if (b->mapped != nullptr) { vkUnmapMemory(m_device, b->memory); }
+        if (b == nullptr) // a compacted tombstone
+        {
+            continue;
+        }
+        if (b->mapped != nullptr)
+        {
+            vkUnmapMemory(m_device, b->memory);
+        }
         vkFreeMemory(m_device, b->memory, nullptr);
         b->~Block();
         crd::memory::default_allocator()->deallocate(b);
@@ -76,15 +85,24 @@ VulkanGpuAllocator::Block* VulkanGpuAllocator::create_block(crd::u32 mti, bool l
     const crd::u32     heap_index = m_mem_props.memoryTypes[mti].heapIndex;
     const VkDeviceSize heap_size  = m_mem_props.memoryHeaps[heap_index].size;
     VkDeviceSize       block_size = kMaxBlockSize < heap_size / 8 ? kMaxBlockSize : heap_size / 8;
-    if (block_size < kMinBlockSize) { block_size = kMinBlockSize; }
-    if (block_size < at_least) { block_size = at_least; }
+    if (block_size < kMinBlockSize)
+    {
+        block_size = kMinBlockSize;
+    }
+    if (block_size < at_least)
+    {
+        block_size = at_least;
+    }
 
     VkMemoryAllocateInfo mai{};
     mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     mai.allocationSize  = block_size;
     mai.memoryTypeIndex = mti;
     VkDeviceMemory mem  = VK_NULL_HANDLE;
-    if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) { return nullptr; }
+    if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
 
     void* mapped = nullptr;
     if ((m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U)
@@ -116,15 +134,24 @@ bool VulkanGpuAllocator::allocate(const VkMemoryRequirements& reqs, VkMemoryProp
 {
     out = {};
     const crd::u32 mti = pick_memory_type(m_mem_props, reqs.memoryTypeBits, required);
-    if (mti == 0xFFFFFFFFU) { return false; }
+    if (mti == 0xFFFFFFFFU)
+    {
+        return false;
+    }
 
     VkDeviceSize alignment = reqs.alignment == 0 ? 1 : reqs.alignment;
     const bool   host_vis  = (m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
     const bool   host_coh  = (m_mem_props.memoryTypes[mti].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0U;
-    if (host_vis && !host_coh && alignment < m_non_coherent_atom) { alignment = m_non_coherent_atom; }
+    if (host_vis && !host_coh && alignment < m_non_coherent_atom)
+    {
+        alignment = m_non_coherent_atom;
+    }
 
     const std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_torn_down) { return false; }
+    if (m_torn_down)
+    {
+        return false;
+    }
 
     if (reqs.size >= kDedicatedThreshold) // its own VkDeviceMemory, never pooled
     {
@@ -133,7 +160,10 @@ bool VulkanGpuAllocator::allocate(const VkMemoryRequirements& reqs, VkMemoryProp
         mai.allocationSize  = reqs.size;
         mai.memoryTypeIndex = mti;
         VkDeviceMemory mem  = VK_NULL_HANDLE;
-        if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) { return false; }
+        if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS)
+        {
+            return false;
+        }
         void* mapped = nullptr;
         if (map && host_vis && vkMapMemory(m_device, mem, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS)
         {
@@ -165,7 +195,10 @@ bool VulkanGpuAllocator::allocate(const VkMemoryRequirements& reqs, VkMemoryProp
     for (crd::u32 i = 0; i < static_cast<crd::u32>(m_blocks.size()); ++i)
     {
         Block* b = m_blocks[i];
-        if (b == nullptr || b->memory_type_index != mti || b->linear != linear) { continue; }
+        if (b == nullptr || b->memory_type_index != mti || b->linear != linear)
+        {
+            continue;
+        }
         const crd::memory::OffsetAllocator::Allocation a = b->oa.allocate(size32, algn32);
         if (a.valid())
         {
@@ -175,9 +208,15 @@ bool VulkanGpuAllocator::allocate(const VkMemoryRequirements& reqs, VkMemoryProp
     }
 
     Block* nb = create_block(mti, linear, reqs.size);
-    if (nb == nullptr) { return false; }
+    if (nb == nullptr)
+    {
+        return false;
+    }
     const crd::memory::OffsetAllocator::Allocation a = nb->oa.allocate(size32, algn32);
-    if (!a.valid()) { return false; } // a fresh block always fits a sub-threshold request
+    if (!a.valid()) // a fresh block always fits a sub-threshold request
+    {
+        return false;
+    }
     crd::u32 nb_index = 0;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(m_blocks.size()); ++i) // the slot create_block placed it in
     {
@@ -193,17 +232,29 @@ bool VulkanGpuAllocator::allocate(const VkMemoryRequirements& reqs, VkMemoryProp
 
 void VulkanGpuAllocator::free(const GpuAllocation& allocation) noexcept
 {
-    if (!allocation.valid()) { return; }
+    if (!allocation.valid())
+    {
+        return;
+    }
     const std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_torn_down) { return; } // the defensive tombstone — the lifetime contract is the law, this is the net
+    if (m_torn_down) // the defensive tombstone — the lifetime contract is the law, this is the net
+    {
+        return;
+    }
     if (allocation.dedicated)
     {
         vkFreeMemory(m_device, allocation.memory, nullptr); // implicitly unmaps
         return;
     }
-    if (allocation.block_index >= m_blocks.size()) { return; }
+    if (allocation.block_index >= m_blocks.size())
+    {
+        return;
+    }
     Block* b = m_blocks[allocation.block_index];
-    if (b == nullptr) { return; } // freed into a compacted tombstone — the lifetime contract was violated upstream
+    if (b == nullptr) // freed into a compacted tombstone — the lifetime contract was violated upstream
+    {
+        return;
+    }
     b->oa.free(allocation.suballoc);
     --b->live_count;
 }
@@ -214,7 +265,10 @@ crd::u32 VulkanGpuAllocator::block_count() const noexcept
     crd::u32 alive = 0;
     for (crd::usize i = 0; i < m_blocks.size(); ++i)
     {
-        if (m_blocks[i] != nullptr) { ++alive; }
+        if (m_blocks[i] != nullptr)
+        {
+            ++alive;
+        }
     }
     return alive;
 }
@@ -224,13 +278,22 @@ crd::u32 VulkanGpuAllocator::compact() noexcept
     // Index stability is the law: live GpuAllocations store their block_index, so a live block NEVER moves.
     // Released slots become nullptr TOMBSTONES; create_block reuses them before appending.
     const std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_torn_down) { return 0; }
+    if (m_torn_down)
+    {
+        return 0;
+    }
     crd::u32 released = 0;
     for (crd::usize i = 0; i < m_blocks.size(); ++i)
     {
         Block* b = m_blocks[i];
-        if (b == nullptr || b->live_count != 0U) { continue; }
-        if (b->mapped != nullptr) { vkUnmapMemory(m_device, b->memory); }
+        if (b == nullptr || b->live_count != 0U)
+        {
+            continue;
+        }
+        if (b->mapped != nullptr)
+        {
+            vkUnmapMemory(m_device, b->memory);
+        }
         vkFreeMemory(m_device, b->memory, nullptr);
         b->~Block();
         crd::memory::default_allocator()->deallocate(b);

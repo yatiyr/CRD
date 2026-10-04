@@ -71,7 +71,10 @@ static_assert(kManifestCount == 21U);
     while (true)
     {
         const crd::usize next = s.find(needle, pos);
-        if (next == crd::containers::StringView::npos) { break; }
+        if (next == crd::containers::StringView::npos)
+        {
+            break;
+        }
         ++count;
         pos = next + needle.size();
     }

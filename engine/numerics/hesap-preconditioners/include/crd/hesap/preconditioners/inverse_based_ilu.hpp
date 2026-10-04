@@ -89,7 +89,11 @@ public:
         crd::hesap::dense::Matrix<T> dense_adj(alloc, m_n, m_n); // S̃ᴴ (conjugate-transpose) for apply_adjoint
         for (crd::u32 i = 0; i < m_n; ++i)
         {
-            for (crd::u32 j = 0; j < m_n; ++j) { dense.at(i, j) = T{}; dense_adj.at(i, j) = T{}; }
+            for (crd::u32 j = 0; j < m_n; ++j)
+            {
+                dense.at(i, j) = T{};
+                dense_adj.at(i, j) = T{};
+            }
         }
         const auto* rp = s.pattern().outer_ptr.data();
         const auto* ci = s.pattern().inner_idx.data();
@@ -99,8 +103,14 @@ public:
             for (crd::u32 q = rp[i]; q < rp[i + 1]; ++q)
             {
                 dense.at(i, ci[q]) = vv[q];
-                if constexpr (crd::hesap::dense::is_complex_v<T>) { dense_adj.at(ci[q], i) = T{vv[q].re, -vv[q].im}; }
-                else { dense_adj.at(ci[q], i) = vv[q]; }
+                if constexpr (crd::hesap::dense::is_complex_v<T>)
+                {
+                    dense_adj.at(ci[q], i) = T{vv[q].re, -vv[q].im};
+                }
+                else
+                {
+                    dense_adj.at(ci[q], i) = vv[q];
+                }
             }
         }
         factor_robust(m_lu, dense, m_n);
@@ -109,7 +119,10 @@ public:
 
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = r[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            z[i] = r[i];
+        }
         crd::hesap::dense::solve_lu<T, crd::hesap::dense::Layout::RowMajor>(m_lu, z);
         return true;
     }
@@ -117,7 +130,10 @@ public:
     // S̃⁻ᴴ r via the LU of S̃ᴴ (factored at construction; the leaf is small ⇒ the second factor is cheap).
     [[nodiscard]] bool apply_adjoint(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = r[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            z[i] = r[i];
+        }
         crd::hesap::dense::solve_lu<T, crd::hesap::dense::Layout::RowMajor>(m_lu_adj, z);
         return true;
     }
@@ -139,21 +155,46 @@ private:
     {
         namespace hd = crd::hesap::dense;
         hd::factor_lu<T, hd::Layout::RowMajor>(lu, dense);
-        if (!lu.is_singular()) { return; }
+        if (!lu.is_singular())
+        {
+            return;
+        }
         auto mag = [](const T& v) -> R {
-            if constexpr (hd::is_complex_v<T>) { return crd::hesap::abs(v); }
-            else { return v < R(0) ? -v : v; }
+            if constexpr (hd::is_complex_v<T>)
+            {
+                return crd::hesap::abs(v);
+            }
+            else
+            {
+                return v < R(0) ? -v : v;
+            }
         };
         R maxdiag = R(0);
-        for (crd::u32 i = 0; i < n; ++i) { const R a = mag(dense.at(i, i)); if (a > maxdiag) { maxdiag = a; } }
-        if (maxdiag <= R(0)) { maxdiag = R(1); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const R a = mag(dense.at(i, i));
+            if (a > maxdiag)
+            {
+                maxdiag = a;
+            }
+        }
+        if (maxdiag <= R(0))
+        {
+            maxdiag = R(1);
+        }
         R shift = std::sqrt(std::numeric_limits<R>::epsilon()) * maxdiag; // relative pivot floor
         for (int tries = 0; tries < 40 && lu.is_singular(); ++tries)
         {
             for (crd::u32 i = 0; i < n; ++i)
             {
-                if constexpr (hd::is_complex_v<T>) { dense.at(i, i).re += shift; }
-                else { dense.at(i, i) += shift; }
+                if constexpr (hd::is_complex_v<T>)
+                {
+                    dense.at(i, i).re += shift;
+                }
+                else
+                {
+                    dense.at(i, i) += shift;
+                }
             }
             hd::factor_lu<T, hd::Layout::RowMajor>(lu, dense);
             shift *= R(2); // geometric growth until non-singular (bounded retries)
@@ -229,7 +270,10 @@ public:
             m_rscaled.resize(m_n);
             m_zb.resize(m_n);
         }
-        else { factor(a); }
+        else
+        {
+            factor(a);
+        }
     }
 
     // z = M⁻¹ r. If MC64 is active at this level, B = D_r·A·D_c·Pᶜ was factored, so
@@ -240,17 +284,32 @@ public:
         if (m_reorder)
         {
             // A⁻¹ = Pᵀ·B⁻¹·P : r' = P r (gather by perm), B⁻¹ r', scatter z = Pᵀ z'.
-            for (crd::u32 i = 0; i < m_n; ++i) { m_rscaled[i] = r[m_rperm[i]]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                m_rscaled[i] = r[m_rperm[i]];
+            }
             (void)apply_core(crd::containers::ConstSpan<T>{m_rscaled.data(), m_n}, crd::containers::Span<T>{m_zb.data(), m_n});
-            for (crd::u32 i = 0; i < m_n; ++i) { z[m_rperm[i]] = m_zb[i]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                z[m_rperm[i]] = m_zb[i];
+            }
             return true;
         }
-        if (!m_has_transform) { return apply_core(r, z); }
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rscaled[i] = T(static_cast<R>(m_dr[i])) * r[i]; } // D_r·r
+        if (!m_has_transform)
+        {
+            return apply_core(r, z);
+        }
+        for (crd::u32 i = 0; i < m_n; ++i) // D_r·r
+        {
+            m_rscaled[i] = T(static_cast<R>(m_dr[i])) * r[i];
+        }
         (void)apply_core(crd::containers::ConstSpan<T>{m_rscaled.data(), m_n},
                          crd::containers::Span<T>{m_zb.data(), m_n});                            // B⁻¹·(D_r·r)
         const auto* cp = m_colperm.data();
-        for (crd::u32 k = 0; k < m_n; ++k) { z[cp[k]] = T(static_cast<R>(m_dc[cp[k]])) * m_zb[k]; } // D_c·Pᶜ
+        for (crd::u32 k = 0; k < m_n; ++k) // D_c·Pᶜ
+        {
+            z[cp[k]] = T(static_cast<R>(m_dc[cp[k]])) * m_zb[k];
+        }
         return true;
     }
 
@@ -260,32 +319,53 @@ public:
         const crd::u32 p = static_cast<crd::u32>(m_accperm.size());
         const crd::u32 m = static_cast<crd::u32>(m_defperm.size());
         // y_B = L_B⁻¹ r_B  (gather r into accepted order, unit-lower forward solve).
-        for (crd::u32 c = 0; c < p; ++c) { m_yb[c] = r[m_accperm[c]]; }
+        for (crd::u32 c = 0; c < p; ++c)
+        {
+            m_yb[c] = r[m_accperm[c]];
+        }
         solve_unit_lower(m_lb, p, m_yb.data());
         // t = r_C − Lᴱ·y_B  (Lᴱ is m×p, stored by accepted column c).
-        for (crd::u32 d = 0; d < m; ++d) { m_yc[d] = r[m_defperm[d]]; }
+        for (crd::u32 d = 0; d < m; ++d)
+        {
+            m_yc[d] = r[m_defperm[d]];
+        }
         for (crd::u32 c = 0; c < p; ++c)
         {
             const T yc = m_yb[c];
-            for (crd::u32 q = m_le.ptr[c]; q < m_le.ptr[c + 1]; ++q) { m_yc[m_le.idx[q]] -= m_le.val[q] * yc; }
+            for (crd::u32 q = m_le.ptr[c]; q < m_le.ptr[c + 1]; ++q)
+            {
+                m_yc[m_le.idx[q]] -= m_le.val[q] * yc;
+            }
         }
         // y_C = S̃⁻¹ t   (leaf solve; if no deferred block, nothing to do).
         if (m > 0 && m_leaf)
         {
             (void)m_leaf->apply(crd::containers::ConstSpan<T>{m_yc.data(), m}, crd::containers::Span<T>{m_tmp.data(), m});
-            for (crd::u32 d = 0; d < m; ++d) { m_yc[d] = m_tmp[d]; }
+            for (crd::u32 d = 0; d < m; ++d)
+            {
+                m_yc[d] = m_tmp[d];
+            }
         }
         // x_B = U_B⁻¹( D_B⁻¹ y_B − Uꜰ·y_C ).  m_yb currently holds L_B⁻¹ r_B = y_B.
         for (crd::u32 c = 0; c < p; ++c)
         {
             T v = m_yb[c] * m_dinv[c]; // D_B⁻¹ y_B
-            for (crd::u32 q = m_uf.ptr[c]; q < m_uf.ptr[c + 1]; ++q) { v -= m_uf.val[q] * m_yc[m_uf.idx[q]]; } // − Uꜰ y_C
+            for (crd::u32 q = m_uf.ptr[c]; q < m_uf.ptr[c + 1]; ++q) // − Uꜰ y_C
+            {
+                v -= m_uf.val[q] * m_yc[m_uf.idx[q]];
+            }
             m_yb[c] = v;
         }
         solve_unit_upper(m_ub, p, m_yb.data());
         // scatter: x_B into accepted positions, x_C into deferred positions.
-        for (crd::u32 c = 0; c < p; ++c) { z[m_accperm[c]] = m_yb[c]; }
-        for (crd::u32 d = 0; d < m; ++d) { z[m_defperm[d]] = m_yc[d]; }
+        for (crd::u32 c = 0; c < p; ++c)
+        {
+            z[m_accperm[c]] = m_yb[c];
+        }
+        for (crd::u32 d = 0; d < m; ++d)
+        {
+            z[m_defperm[d]] = m_yc[d];
+        }
         return true;
     }
 
@@ -296,17 +376,32 @@ public:
         if (m_reorder)
         {
             // A⁻ᴴ = Pᵀ·B⁻ᴴ·P (P real permutation ⇒ same gather/scatter as apply, with the adjoint core).
-            for (crd::u32 i = 0; i < m_n; ++i) { m_rscaled[i] = r[m_rperm[i]]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                m_rscaled[i] = r[m_rperm[i]];
+            }
             (void)apply_adjoint_core(crd::containers::ConstSpan<T>{m_rscaled.data(), m_n}, crd::containers::Span<T>{m_zb.data(), m_n});
-            for (crd::u32 i = 0; i < m_n; ++i) { z[m_rperm[i]] = m_zb[i]; }
+            for (crd::u32 i = 0; i < m_n; ++i)
+            {
+                z[m_rperm[i]] = m_zb[i];
+            }
             return true;
         }
-        if (!m_has_transform) { return apply_adjoint_core(r, z); }
+        if (!m_has_transform)
+        {
+            return apply_adjoint_core(r, z);
+        }
         const auto* cp = m_colperm.data();
-        for (crd::u32 k = 0; k < m_n; ++k) { m_rscaled[k] = T(static_cast<R>(m_dc[cp[k]])) * r[cp[k]]; } // Pᶜᵀ·D_c·r
+        for (crd::u32 k = 0; k < m_n; ++k) // Pᶜᵀ·D_c·r
+        {
+            m_rscaled[k] = T(static_cast<R>(m_dc[cp[k]])) * r[cp[k]];
+        }
         (void)apply_adjoint_core(crd::containers::ConstSpan<T>{m_rscaled.data(), m_n},
                                  crd::containers::Span<T>{m_zb.data(), m_n});                            // B⁻ᴴ
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = T(static_cast<R>(m_dr[i])) * m_zb[i]; }              // D_r
+        for (crd::u32 i = 0; i < m_n; ++i) // D_r
+        {
+            z[i] = T(static_cast<R>(m_dr[i])) * m_zb[i];
+        }
         return true;
     }
 
@@ -319,32 +414,53 @@ public:
         const crd::u32 p = static_cast<crd::u32>(m_accperm.size());
         const crd::u32 m = static_cast<crd::u32>(m_defperm.size());
         // b = U_B⁻ᴴ r_B
-        for (crd::u32 c = 0; c < p; ++c) { m_yb[c] = r[m_accperm[c]]; }
+        for (crd::u32 c = 0; c < p; ++c)
+        {
+            m_yb[c] = r[m_accperm[c]];
+        }
         solve_unit_upper_transpose(m_ub, p, m_yb.data());
         // t_C = r_C − Uꜰᴴ b   ((Uꜰᴴ b)[d] = Σ_c conj(Uꜰ[c,d]) b[c]; Uꜰ stored CSR by acc row c)
-        for (crd::u32 d = 0; d < m; ++d) { m_yc[d] = r[m_defperm[d]]; }
+        for (crd::u32 d = 0; d < m; ++d)
+        {
+            m_yc[d] = r[m_defperm[d]];
+        }
         for (crd::u32 c = 0; c < p; ++c)
         {
             const T bc = m_yb[c];
-            for (crd::u32 q = m_uf.ptr[c]; q < m_uf.ptr[c + 1]; ++q) { m_yc[m_uf.idx[q]] -= conj(m_uf.val[q]) * bc; }
+            for (crd::u32 q = m_uf.ptr[c]; q < m_uf.ptr[c + 1]; ++q)
+            {
+                m_yc[m_uf.idx[q]] -= conj(m_uf.val[q]) * bc;
+            }
         }
         // w_C = S̃⁻ᴴ t_C   (leaf adjoint)
         if (m > 0 && m_leaf)
         {
             (void)m_leaf->apply_adjoint(crd::containers::ConstSpan<T>{m_yc.data(), m},
                                         crd::containers::Span<T>{m_tmp.data(), m});
-            for (crd::u32 d = 0; d < m; ++d) { m_yc[d] = m_tmp[d]; }
+            for (crd::u32 d = 0; d < m; ++d)
+            {
+                m_yc[d] = m_tmp[d];
+            }
         }
         // w_B = L_B⁻ᴴ( D_B⁻ᴴ b − Lᴱᴴ w_C )   ((Lᴱᴴ w_C)[c] = Σ_d conj(Lᴱ[d,c]) w_C[d]; Lᴱ CSC by acc col c)
         for (crd::u32 c = 0; c < p; ++c)
         {
             T v = conj(m_dinv[c]) * m_yb[c]; // D_B⁻ᴴ b
-            for (crd::u32 q = m_le.ptr[c]; q < m_le.ptr[c + 1]; ++q) { v -= conj(m_le.val[q]) * m_yc[m_le.idx[q]]; }
+            for (crd::u32 q = m_le.ptr[c]; q < m_le.ptr[c + 1]; ++q)
+            {
+                v -= conj(m_le.val[q]) * m_yc[m_le.idx[q]];
+            }
             m_yb[c] = v;
         }
         solve_unit_lower_transpose(m_lb, p, m_yb.data());
-        for (crd::u32 c = 0; c < p; ++c) { z[m_accperm[c]] = m_yb[c]; }
-        for (crd::u32 d = 0; d < m; ++d) { z[m_defperm[d]] = m_yc[d]; }
+        for (crd::u32 c = 0; c < p; ++c)
+        {
+            z[m_accperm[c]] = m_yb[c];
+        }
+        for (crd::u32 d = 0; d < m; ++d)
+        {
+            z[m_defperm[d]] = m_yc[d];
+        }
         return true;
     }
 
@@ -375,8 +491,14 @@ private:
 
     [[nodiscard]] static R mag(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     }
 
     // Solve L x = x in place (L unit lower, CSC by column, off-diagonal only).
@@ -385,7 +507,10 @@ private:
         for (crd::u32 c = 0; c < p; ++c)
         {
             const T xc = x[c];
-            for (crd::u32 q = l.ptr[c]; q < l.ptr[c + 1]; ++q) { x[l.idx[q]] -= l.val[q] * xc; }
+            for (crd::u32 q = l.ptr[c]; q < l.ptr[c + 1]; ++q)
+            {
+                x[l.idx[q]] -= l.val[q] * xc;
+            }
         }
     }
     // Solve U x = x in place (U unit upper, CSR by row, off-diagonal only).
@@ -394,15 +519,24 @@ private:
         for (crd::u32 r = p; r-- > 0;)
         {
             T xr = x[r];
-            for (crd::u32 q = u.ptr[r]; q < u.ptr[r + 1]; ++q) { xr -= u.val[q] * x[u.idx[q]]; }
+            for (crd::u32 q = u.ptr[r]; q < u.ptr[r + 1]; ++q)
+            {
+                xr -= u.val[q] * x[u.idx[q]];
+            }
             x[r] = xr;
         }
     }
 
     [[nodiscard]] static T conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
 
     // Solve Lᴴ x = x  (Lᴴ unit UPPER; L is the unit-lower CSC-by-column block). Column c of L
@@ -413,7 +547,10 @@ private:
         for (crd::u32 c = p; c-- > 0;)
         {
             T xc = x[c];
-            for (crd::u32 q = l.ptr[c]; q < l.ptr[c + 1]; ++q) { xc -= conj(l.val[q]) * x[l.idx[q]]; }
+            for (crd::u32 q = l.ptr[c]; q < l.ptr[c + 1]; ++q)
+            {
+                xc -= conj(l.val[q]) * x[l.idx[q]];
+            }
             x[c] = xc;
         }
     }
@@ -425,7 +562,10 @@ private:
         for (crd::u32 r = 0; r < p; ++r)
         {
             const T xr = x[r];
-            for (crd::u32 q = u.ptr[r]; q < u.ptr[r + 1]; ++q) { x[u.idx[q]] -= conj(u.val[q]) * xr; }
+            for (crd::u32 q = u.ptr[r]; q < u.ptr[r + 1]; ++q)
+            {
+                x[u.idx[q]] -= conj(u.val[q]) * xr;
+            }
         }
     }
 
@@ -443,7 +583,11 @@ private:
 
         // Global magnitude + pivot floor (collapsed pivot guard).
         R amax = R(0);
-        for (crd::usize q = 0; q < a.values().values.size(); ++q) { const R t = mag(va[q]); amax = t > amax ? t : amax; }
+        for (crd::usize q = 0; q < a.values().values.size(); ++q)
+        {
+            const R t = mag(va[q]);
+            amax = t > amax ? t : amax;
+        }
         const R floor = std::sqrt(std::numeric_limits<R>::epsilon()) * amax + std::numeric_limits<R>::min();
 
         // Factor storage (built by accepted order). L_B/Lᴱ filled post-sweep from
@@ -459,13 +603,20 @@ private:
         m_accperm.clear();
         m_defperm.clear();
         m_accof.resize(n);
-        for (crd::u32 i = 0; i < n; ++i) { m_accof[i] = kInvalid; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            m_accof[i] = kInvalid;
+        }
 
         // ICE accumulators (Algorithm 3.1), indexed by ORIGINAL index.
         crd::containers::Array<T> nu(m_alloc), mu(m_alloc); // L-est / U-est running sums
         nu.resize(n);
         mu.resize(n);
-        for (crd::u32 i = 0; i < n; ++i) { nu[i] = T{}; mu[i] = T{}; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            nu[i] = T{};
+            mu[i] = T{};
+        }
 
         // Dense scatter for the current row z (cols>=k) and column w (rows>k).
         crd::containers::Array<T>        zval(m_alloc), wval(m_alloc);
@@ -473,7 +624,11 @@ private:
         crd::containers::Array<crd::u8>  zmark(m_alloc), wmark(m_alloc);
         zval.resize(n); wval.resize(n); zmark.resize(n); wmark.resize(n);
         zlist.resize(n); wlist.resize(n);
-        for (crd::u32 i = 0; i < n; ++i) { zmark[i] = 0; wmark[i] = 0; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            zmark[i] = 0;
+            wmark[i] = 0;
+        }
 
         // Bi-index linked lists over ACCEPTED columns/rows (Li-Saad-Chow §2.2).
         // *first[c] = scan position into lcol/urow for accepted column/row c.
@@ -483,24 +638,45 @@ private:
         crd::containers::Array<crd::u32> ufirst(m_alloc), ulist(m_alloc), unext(m_alloc);
         lfirst.resize(n); ufirst.resize(n); lnext.resize(n); unext.resize(n);
         llist.resize(n); ulist.resize(n);
-        for (crd::u32 i = 0; i < n; ++i) { llist[i] = kInvalid; ulist[i] = kInvalid; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            llist[i] = kInvalid;
+            ulist[i] = kInvalid;
+        }
 
         for (crd::u32 k = 0; k < n; ++k)
         {
             // ---- z = row k over cols >= k  (z[k] = pivot accumulation) ----
             crd::u32 zn = 0;
             auto scatter_z = [&](crd::u32 j, T v) {
-                if (zmark[j] == 0) { zmark[j] = 1; zval[j] = v; zlist[zn++] = j; }
-                else { zval[j] += v; }
+                if (zmark[j] == 0)
+                {
+                    zmark[j] = 1;
+                    zval[j] = v;
+                    zlist[zn++] = j;
+                }
+                else
+                {
+                    zval[j] += v;
+                }
             };
-            for (crd::u32 q = ria[k]; q < ria[k + 1]; ++q) { if (cia[q] >= k) { scatter_z(cia[q], va[q]); } }
+            for (crd::u32 q = ria[k]; q < ria[k + 1]; ++q)
+            {
+                if (cia[q] >= k)
+                {
+                    scatter_z(cia[q], va[q]);
+                }
+            }
             // updates: for accepted cols i in llist[k] (l(k,i)!=0): z -= l(k,i)·d_i·u(i,k:n)
             for (crd::u32 ci = llist[k]; ci != kInvalid;)
             {
                 const crd::u32 cnext = lnext[ci];
                 const T        lki   = lcol.val[lfirst[ci]];  // l(k,i), i = accperm[ci]
                 const T        coef  = lki * dval[ci];        // l(k,i)·d_i
-                for (crd::u32 qq = ufirst[ci]; qq < urow.ptr[ci + 1]; ++qq) { scatter_z(urow.idx[qq], -coef * urow.val[qq]); }
+                for (crd::u32 qq = ufirst[ci]; qq < urow.ptr[ci + 1]; ++qq)
+                {
+                    scatter_z(urow.idx[qq], -coef * urow.val[qq]);
+                }
                 advance_l(ci, lcol, lfirst, llist, lnext);    // advance past row k, re-thread llist
                 ci = cnext;
             }
@@ -510,10 +686,24 @@ private:
             // ---- w = col k over rows > k ----
             crd::u32 wn = 0;
             auto scatter_w = [&](crd::u32 j, T v) {
-                if (wmark[j] == 0) { wmark[j] = 1; wval[j] = v; wlist[wn++] = j; }
-                else { wval[j] += v; }
+                if (wmark[j] == 0)
+                {
+                    wmark[j] = 1;
+                    wval[j] = v;
+                    wlist[wn++] = j;
+                }
+                else
+                {
+                    wval[j] += v;
+                }
             };
-            for (crd::u32 q = rit[k]; q < rit[k + 1]; ++q) { if (cit[q] > k) { scatter_w(cit[q], vt[q]); } }
+            for (crd::u32 q = rit[k]; q < rit[k + 1]; ++q)
+            {
+                if (cit[q] > k)
+                {
+                    scatter_w(cit[q], vt[q]);
+                }
+            }
             // updates: for accepted rows i in ulist[k] (u(i,k)!=0): w -= u(i,k)·d_i·l(k+1:n,i)
             for (crd::u32 ci = ulist[k]; ci != kInvalid;)
             {
@@ -522,7 +712,10 @@ private:
                 const T        coef  = uik * dval[ci];        // u(i,k)·d_i
                 for (crd::u32 qq = lfirst[ci]; qq < lcol.ptr[ci + 1]; ++qq)
                 {
-                    if (lcol.idx[qq] > k) { scatter_w(lcol.idx[qq], -coef * lcol.val[qq]); }
+                    if (lcol.idx[qq] > k)
+                    {
+                        scatter_w(lcol.idx[qq], -coef * lcol.val[qq]);
+                    }
                 }
                 advance_u(ci, urow, ufirst, ulist, unext);
                 ci = cnext;
@@ -540,8 +733,14 @@ private:
             const R  estL = mag(xi);
             const R  estU = mag(ze);
 #ifdef CRD_MLILU_DEBUG
-            if (estL > m_dbg_maxL) { m_dbg_maxL = estL; }
-            if (estU > m_dbg_maxU) { m_dbg_maxU = estU; }
+            if (estL > m_dbg_maxL)
+            {
+                m_dbg_maxL = estL;
+            }
+            if (estU > m_dbg_maxU)
+            {
+                m_dbg_maxU = estU;
+            }
 #endif
 
             const bool pivot_ok = mag(d) >= floor;
@@ -576,8 +775,14 @@ private:
             dval.push_back(pivot + T(m_milu) * (drop_u + drop_l));
 
             // commit ICE: ν_j += ξ·l(j,k);  μ_j += ζ·u(k,j)  over KEPT entries.
-            for (crd::u32 q = lcol.ptr[c]; q < lcol.ptr[c + 1]; ++q) { nu[lcol.idx[q]] += xi * lcol.val[q]; }
-            for (crd::u32 q = urow.ptr[c]; q < urow.ptr[c + 1]; ++q) { mu[urow.idx[q]] += ze * urow.val[q]; }
+            for (crd::u32 q = lcol.ptr[c]; q < lcol.ptr[c + 1]; ++q)
+            {
+                nu[lcol.idx[q]] += xi * lcol.val[q];
+            }
+            for (crd::u32 q = urow.ptr[c]; q < urow.ptr[c + 1]; ++q)
+            {
+                mu[urow.idx[q]] += ze * urow.val[q];
+            }
 
             // thread this new column/row into the bi-index at its first entry.
             thread_first(c, lcol, lfirst, llist, lnext);
@@ -599,12 +804,20 @@ private:
         m_dr.resize(m_n);
         m_dc.resize(m_n);
         m_colperm.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { m_dr[i] = mc.dr[i]; m_dc[i] = mc.dc[i]; m_colperm[i] = mc.colperm[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_dr[i] = mc.dr[i];
+            m_dc[i] = mc.dc[i];
+            m_colperm[i] = mc.colperm[i];
+        }
         m_has_transform = true;
 
         crd::containers::Array<crd::u32> invperm(m_alloc); // invperm[colperm[k]] = k
         invperm.resize(m_n);
-        for (crd::u32 k = 0; k < m_n; ++k) { invperm[mc.colperm[k]] = k; }
+        for (crd::u32 k = 0; k < m_n; ++k)
+        {
+            invperm[mc.colperm[k]] = k;
+        }
 
         const auto* outer = a.pattern().outer_ptr.data();
         const auto* inner = a.pattern().inner_idx.data();
@@ -630,21 +843,31 @@ private:
         auto perm = crd::hesap::ordering::amd_order(a.pattern(), m_alloc);
         m_rperm.resize(m_n);
         m_rinv.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rperm[i] = perm.perm[i]; m_rinv[i] = perm.inv_perm[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_rperm[i] = perm.perm[i];
+            m_rinv[i] = perm.inv_perm[i];
+        }
         const auto* outer = a.pattern().outer_ptr.data();
         const auto* inner = a.pattern().inner_idx.data();
         const T*    vals  = a.values().values.data();
         crd::hesap::sparse::TripletBuilder<T> tb(m_alloc, m_n, m_n);
         for (crd::u32 r = 0; r < m_n; ++r)
         {
-            for (crd::u32 q = outer[r]; q < outer[r + 1]; ++q) { tb.add(m_rinv[r], m_rinv[inner[q]], vals[q]); }
+            for (crd::u32 q = outer[r]; q < outer[r + 1]; ++q)
+            {
+                tb.add(m_rinv[r], m_rinv[inner[q]], vals[q]);
+            }
         }
         return tb.compress();
     }
 
     static void clear_marks(const crd::containers::Array<crd::u32>& list, crd::u32 cnt, crd::containers::Array<crd::u8>& mark)
     {
-        for (crd::u32 t = 0; t < cnt; ++t) { mark[list[t]] = 0; }
+        for (crd::u32 t = 0; t < cnt; ++t)
+        {
+            mark[list[t]] = 0;
+        }
     }
 
     // Keep the inverse-based survivors of a scattered row/col, scaled by 1/d,
@@ -661,9 +884,16 @@ private:
         for (crd::u32 t = 0; t < cnt; ++t)
         {
             const crd::u32 j = list[t];
-            if (j <= k) { continue; }
+            if (j <= k)
+            {
+                continue;
+            }
             const T sv = vals[j] * dinv;
-            if (mag(sv) * est <= m_droptol) { dropped += vals[j]; continue; } // inverse-based drop
+            if (mag(sv) * est <= m_droptol) // inverse-based drop
+            {
+                dropped += vals[j];
+                continue;
+            }
             m_sortbuf.push_back(j);
         }
         // insertion sort by original index (counts are small per row/col)
@@ -671,7 +901,11 @@ private:
         {
             const crd::u32 key = m_sortbuf[a];
             crd::u32 b = a;
-            while (b > 0 && m_sortbuf[b - 1] > key) { m_sortbuf[b] = m_sortbuf[b - 1]; --b; }
+            while (b > 0 && m_sortbuf[b - 1] > key)
+            {
+                m_sortbuf[b] = m_sortbuf[b - 1];
+                --b;
+            }
             m_sortbuf[b] = key;
         }
         for (crd::u32 a = 0; a < m_sortbuf.size(); ++a)
@@ -697,7 +931,10 @@ private:
             next[c]             = list[head];
             list[head]          = c;
         }
-        else { first[c] = e; }
+        else
+        {
+            first[c] = e;
+        }
     }
 
     // After consuming column c's current entry, advance its scan pointer to the
@@ -739,11 +976,20 @@ private:
         // deferred-local index for an original index (kInvalid if accepted).
         crd::containers::Array<crd::u32> defof(m_alloc);
         defof.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { defof[i] = kInvalid; }
-        for (crd::u32 d = 0; d < m; ++d) { defof[m_defperm[d]] = d; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            defof[i] = kInvalid;
+        }
+        for (crd::u32 d = 0; d < m; ++d)
+        {
+            defof[m_defperm[d]] = d;
+        }
 
         m_dinv.resize(p);
-        for (crd::u32 c = 0; c < p; ++c) { m_dinv[c] = T(R(1)) / dval[c]; }
+        for (crd::u32 c = 0; c < p; ++c)
+        {
+            m_dinv[c] = T(R(1)) / dval[c];
+        }
 
         m_lb.reset(); m_ub.reset(); m_le.reset(); m_uf.reset();
         for (crd::u32 c = 0; c < p; ++c)
@@ -753,8 +999,16 @@ private:
             {
                 const crd::u32 orow = lcol.idx[q];
                 const crd::u32 acc  = m_accof[orow];
-                if (acc != kInvalid) { m_lb.idx.push_back(acc); m_lb.val.push_back(lcol.val[q]); }
-                else { m_le.idx.push_back(defof[orow]); m_le.val.push_back(lcol.val[q]); }
+                if (acc != kInvalid)
+                {
+                    m_lb.idx.push_back(acc);
+                    m_lb.val.push_back(lcol.val[q]);
+                }
+                else
+                {
+                    m_le.idx.push_back(defof[orow]);
+                    m_le.val.push_back(lcol.val[q]);
+                }
             }
             m_lb.ptr.push_back(static_cast<crd::u32>(m_lb.idx.size()));
             m_le.ptr.push_back(static_cast<crd::u32>(m_le.idx.size()));
@@ -763,8 +1017,16 @@ private:
             {
                 const crd::u32 ocol = urow.idx[q];
                 const crd::u32 acc  = m_accof[ocol];
-                if (acc != kInvalid) { m_ub.idx.push_back(acc); m_ub.val.push_back(urow.val[q]); }
-                else { m_uf.idx.push_back(defof[ocol]); m_uf.val.push_back(urow.val[q]); }
+                if (acc != kInvalid)
+                {
+                    m_ub.idx.push_back(acc);
+                    m_ub.val.push_back(urow.val[q]);
+                }
+                else
+                {
+                    m_uf.idx.push_back(defof[ocol]);
+                    m_uf.val.push_back(urow.val[q]);
+                }
             }
             m_ub.ptr.push_back(static_cast<crd::u32>(m_ub.idx.size()));
             m_uf.ptr.push_back(static_cast<crd::u32>(m_uf.idx.size()));
@@ -790,7 +1052,10 @@ private:
         crd::containers::Array<crd::u32> alist(m_alloc);
         crd::containers::Array<crd::u8>  amark(m_alloc);
         acc.resize(m == 0 ? 1 : m); amark.resize(m == 0 ? 1 : m);
-        for (crd::u32 i = 0; i < m; ++i) { amark[i] = 0; }
+        for (crd::u32 i = 0; i < m; ++i)
+        {
+            amark[i] = 0;
+        }
 
         const auto* ria = a.pattern().outer_ptr.data();
         const auto* cia = a.pattern().inner_idx.data();
@@ -808,9 +1073,21 @@ private:
             for (crd::u32 q = ria[orow]; q < ria[orow + 1]; ++q)
             {
                 const crd::u32 dc = defof[cia[q]];
-                if (dc == kInvalid) { continue; }
-                if (amark[dc] == 0) { amark[dc] = 1; acc[dc] = va[q]; alist[an_push(alist, an)] = dc; ++an; }
-                else { acc[dc] += va[q]; }
+                if (dc == kInvalid)
+                {
+                    continue;
+                }
+                if (amark[dc] == 0)
+                {
+                    amark[dc] = 1;
+                    acc[dc] = va[q];
+                    alist[an_push(alist, an)] = dc;
+                    ++an;
+                }
+                else
+                {
+                    acc[dc] += va[q];
+                }
             }
             // − Σ_c Lᴱ[d,c]·D[c]·Uꜰ[c,:]
             for (crd::u32 qq = le_byrow.ptr[d]; qq < le_byrow.ptr[d + 1]; ++qq)
@@ -821,13 +1098,27 @@ private:
                 {
                     const crd::u32 dc = m_uf.idx[r];
                     const T        contrib = -coef * m_uf.val[r];
-                    if (amark[dc] == 0) { amark[dc] = 1; acc[dc] = contrib; alist[an_push(alist, an)] = dc; ++an; }
-                    else { acc[dc] += contrib; }
+                    if (amark[dc] == 0)
+                    {
+                        amark[dc] = 1;
+                        acc[dc] = contrib;
+                        alist[an_push(alist, an)] = dc;
+                        ++an;
+                    }
+                    else
+                    {
+                        acc[dc] += contrib;
+                    }
                 }
             }
             // emit row d in ascending col order
             insertion_sort_u32(alist, an);
-            for (crd::u32 t = 0; t < an; ++t) { const crd::u32 dc = alist[t]; tb.add(d, dc, acc[dc]); amark[dc] = 0; }
+            for (crd::u32 t = 0; t < an; ++t)
+            {
+                const crd::u32 dc = alist[t];
+                tb.add(d, dc, acc[dc]);
+                amark[dc] = 0;
+            }
         }
         Csr shat = tb.compress();
 #ifdef CRD_MLILU_DEBUG
@@ -866,14 +1157,26 @@ private:
         const crd::u32 p = static_cast<crd::u32>(src_bycol.ptr.size()) - 1;
         dst_byrow.ptr.clear(); dst_byrow.idx.clear(); dst_byrow.val.clear();
         dst_byrow.ptr.resize(static_cast<crd::usize>(m) + 1);
-        for (crd::u32 i = 0; i <= m; ++i) { dst_byrow.ptr[i] = 0; }
-        for (crd::u32 q = 0; q < src_bycol.idx.size(); ++q) { dst_byrow.ptr[src_bycol.idx[q] + 1]++; }
-        for (crd::u32 i = 0; i < m; ++i) { dst_byrow.ptr[i + 1] += dst_byrow.ptr[i]; }
+        for (crd::u32 i = 0; i <= m; ++i)
+        {
+            dst_byrow.ptr[i] = 0;
+        }
+        for (crd::u32 q = 0; q < src_bycol.idx.size(); ++q)
+        {
+            dst_byrow.ptr[src_bycol.idx[q] + 1]++;
+        }
+        for (crd::u32 i = 0; i < m; ++i)
+        {
+            dst_byrow.ptr[i + 1] += dst_byrow.ptr[i];
+        }
         dst_byrow.idx.resize(src_bycol.idx.size());
         dst_byrow.val.resize(src_bycol.idx.size());
         crd::containers::Array<crd::u32> cur(m_alloc);
         cur.resize(m == 0 ? 1 : m);
-        for (crd::u32 i = 0; i < m; ++i) { cur[i] = dst_byrow.ptr[i]; }
+        for (crd::u32 i = 0; i < m; ++i)
+        {
+            cur[i] = dst_byrow.ptr[i];
+        }
         for (crd::u32 c = 0; c < p; ++c)
         {
             for (crd::u32 q = src_bycol.ptr[c]; q < src_bycol.ptr[c + 1]; ++q)
@@ -888,7 +1191,10 @@ private:
 
     [[nodiscard]] static crd::u32 an_push(crd::containers::Array<crd::u32>& list, crd::u32 an)
     {
-        if (an >= list.size()) { list.push_back(0); }
+        if (an >= list.size())
+        {
+            list.push_back(0);
+        }
         return an;
     }
     static void insertion_sort_u32(crd::containers::Array<crd::u32>& v, crd::u32 cnt)
@@ -897,7 +1203,11 @@ private:
         {
             const crd::u32 key = v[a];
             crd::u32 b = a;
-            while (b > 0 && v[b - 1] > key) { v[b] = v[b - 1]; --b; }
+            while (b > 0 && v[b - 1] > key)
+            {
+                v[b] = v[b - 1];
+                --b;
+            }
             v[b] = key;
         }
     }

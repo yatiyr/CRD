@@ -35,13 +35,19 @@ constexpr crd::u64 kPipelineCacheBytes = 256U << 20U;
 
 void cache_write_u64(crd::u8* bytes, crd::u64 value) noexcept
 {
-    for (crd::u32 index = 0; index < 8U; ++index) { bytes[index] = static_cast<crd::u8>(value >> (index * 8U)); }
+    for (crd::u32 index = 0; index < 8U; ++index)
+    {
+        bytes[index] = static_cast<crd::u8>(value >> (index * 8U));
+    }
 }
 
 crd::u64 cache_read_u64(const crd::u8* bytes) noexcept
 {
     crd::u64 value = 0U;
-    for (crd::u32 index = 0; index < 8U; ++index) { value |= static_cast<crd::u64>(bytes[index]) << (index * 8U); }
+    for (crd::u32 index = 0; index < 8U; ++index)
+    {
+        value |= static_cast<crd::u64>(bytes[index]) << (index * 8U);
+    }
     return value;
 }
 
@@ -85,10 +91,16 @@ bool compile_dxil(IDxcCompiler3* dxc, const char* src, ComPtr<IDxcBlob>& obj)
     buf.Encoding          = DXC_CP_UTF8;
     const wchar_t* args[] = {L"-T", L"cs_6_0", L"-E", L"cs_main"};
     ComPtr<IDxcResult>    result;
-    if (FAILED(dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result)))) { return false; }
+    if (FAILED(dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result))))
+    {
+        return false;
+    }
     HRESULT status = S_OK;
     result->GetStatus(&status);
-    if (FAILED(status)) { return false; }
+    if (FAILED(status))
+    {
+        return false;
+    }
     return SUCCEEDED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&obj), nullptr)) && obj != nullptr;
 }
 } // namespace
@@ -168,7 +180,10 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
     void ensure_state(BufferImpl& b, D3D12_RESOURCE_STATES want)
     {
-        if (b.fixed || b.state == want) { return; }
+        if (b.fixed || b.state == want)
+        {
+            return;
+        }
         D3D12_RESOURCE_BARRIER t{};
         t.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         t.Transition.pResource   = b.res.Get();
@@ -181,7 +196,10 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
     void copy(ComputeBuffer& src, ComputeBuffer& dst, crd::u64 src_off, crd::u64 dst_off, crd::u64 bytes) override
     {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         auto& s = static_cast<BufferImpl&>(src);
         auto& d = static_cast<BufferImpl&>(dst);
         ensure_state(s, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -191,10 +209,16 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
     void barrier(ComputeBuffer& buf, ComputeAccess /*from*/, ComputeAccess to) override
     {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         auto&      b    = static_cast<BufferImpl&>(buf);
         const auto want = access_state(to);
-        if (b.fixed) { return; }
+        if (b.fixed)
+        {
+            return;
+        }
         if (b.state == want)
         {
             if (want == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) // WAW/RAW between dispatches → UAV barrier
@@ -234,14 +258,20 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
         list->SetComputeRootSignature(p.root.Get());
         list->SetComputeRootDescriptorTable(0, gpu);
-        if (push_size > 0U && push != nullptr) { list->SetComputeRoot32BitConstants(1, push_size / 4U, push, 0); }
+        if (push_size > 0U && push != nullptr)
+        {
+            list->SetComputeRoot32BitConstants(1, push_size / 4U, push, 0);
+        }
         list->SetPipelineState(p.pso.Get());
     }
 
     void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
                   crd::u32 push_size, crd::u32 gx, crd::u32 gy, crd::u32 gz) override
     {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         bind_compute(pipeline, bindings, push, push_size);
         list->Dispatch(gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, gz > 0U ? gz : 1U);
     }
@@ -251,7 +281,10 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     void dispatch_indirect(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
                            crd::u32 push_size, ComputeBuffer& args, crd::u64 args_offset) override
     {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         if (!dispatch_sig)
         {
             D3D12_INDIRECT_ARGUMENT_DESC arg{};
@@ -273,10 +306,16 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
 {
     auto& impl = *m_impl;
     impl.alloc = alloc;
-    if (FAILED(impl.validation.create(impl.device))) { return; }
+    if (FAILED(impl.validation.create(impl.device)))
+    {
+        return;
+    }
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
+    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue))))
+    {
+        return;
+    }
 
     // CGP-0: the timestamp query heap (2 timestamps) + a 16-byte READBACK buffer for the resolved ticks. Best-effort:
     // any failure leaves ts_ok=false and last_gpu_ms() returns 0. A compute queue supports timestamps on all D3D12 tier-1+
@@ -298,25 +337,46 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
             }
         }
     }
-    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc)))) { return; }
-    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list)))) { return; }
-    if (FAILED(impl.list->Close())) { return; }
-    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence)))) { return; }
+    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list))))
+    {
+        return;
+    }
+    if (FAILED(impl.list->Close()))
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence))))
+    {
+        return;
+    }
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = kHeapDescriptors;
     hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(impl.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&impl.heap)))) { return; }
+    if (FAILED(impl.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&impl.heap))))
+    {
+        return;
+    }
     impl.heap_incr = impl.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     const HMODULE dxc_dll = LoadLibraryW(L"dxcompiler.dll");
-    if (dxc_dll == nullptr) { return; }
+    if (dxc_dll == nullptr)
+    {
+        return;
+    }
     // NOLINTNEXTLINE(clang-diagnostic-cast-function-type-strict) — GetProcAddress returns FARPROC; a direct
     // reinterpret_cast to the real proc type is the standard Win32 idiom (no void* hop, per bugprone-casting-through-void).
     auto* create = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(dxc_dll, "DxcCreateInstance"));
-    if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc)))) { return; }
+    if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc))))
+    {
+        return;
+    }
 
     // D4: the PSO cache — an empty ID3D12PipelineLibrary (best-effort; unsupported ⇒ pipe_lib stays null and we create PSOs directly).
     if (SUCCEEDED(impl.device.As(&impl.device1)))
@@ -329,7 +389,10 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
 
 Dx12ComputeContext::~Dx12ComputeContext()
 {
-    if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
+    if (m_impl->event != nullptr)
+    {
+        CloseHandle(m_impl->event);
+    }
 }
 
 bool Dx12ComputeContext::valid() const noexcept
@@ -342,9 +405,15 @@ bool Dx12ComputeContext::supports_shader_int64() const noexcept { return false; 
 // on every current adapter; NV/Intel 32, AMD RDNA 32).
 crd::u32 Dx12ComputeContext::subgroup_size() const noexcept
 {
-    if (m_impl->device == nullptr) { return 0U; }
+    if (m_impl->device == nullptr)
+    {
+        return 0U;
+    }
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 o1{};
-    if (FAILED(m_impl->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &o1, sizeof(o1)))) { return 0U; }
+    if (FAILED(m_impl->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &o1, sizeof(o1))))
+    {
+        return 0U;
+    }
     return o1.WaveOps != FALSE ? o1.WaveLaneCountMin : 0U;
 }
 crd::u32 Dx12ComputeContext::shared_memory_bytes() const noexcept { return 32768U; } // D3D12 CS TGSM spec limit
@@ -355,9 +424,15 @@ void Dx12ComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& ou
 {
     auto& impl = *m_impl;
     out.resize(0);
-    if (!impl.pipe_lib) { return; }
+    if (!impl.pipe_lib)
+    {
+        return;
+    }
     const SIZE_T sz = impl.pipe_lib->GetSerializedSize();
-    if (sz == 0U || sz > kPipelineCacheBytes || impl.pipe_keys.size() > kPipelineCacheKeys) { return; }
+    if (sz == 0U || sz > kPipelineCacheBytes || impl.pipe_keys.size() > kPipelineCacheKeys)
+    {
+        return;
+    }
     const crd::usize offset = kPipelineCacheHeader + impl.pipe_keys.size() * 8U;
     out.resize(offset + sz);
     cache_write_u64(out.data(), kPipelineCacheMagic);
@@ -369,7 +444,11 @@ void Dx12ComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& ou
         cache_write_u64(out.data() + cursor, key);
         cursor += 8U;
     }
-    if (FAILED(impl.pipe_lib->Serialize(out.data() + offset, sz))) { out.resize(0); return; }
+    if (FAILED(impl.pipe_lib->Serialize(out.data() + offset, sz)))
+    {
+        out.resize(0);
+        return;
+    }
     cache_write_u64(out.data() + 24U, crd::containers::fnv1a_64(out.data() + kPipelineCacheHeader,
                                                               out.size() - kPipelineCacheHeader));
 }
@@ -379,17 +458,29 @@ void Dx12ComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& ou
 bool Dx12ComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob)
 {
     auto& impl = *m_impl;
-    if (!impl.device1) { return false; }
+    if (!impl.device1)
+    {
+        return false;
+    }
     crd::containers::Array<crd::u8> fresh_blob(impl.alloc);
     crd::containers::HashSet<crd::u64> fresh_keys(impl.alloc);
     if (!blob.empty())
     {
-        if (blob.size() < kPipelineCacheHeader || cache_read_u64(blob.data()) != kPipelineCacheMagic) { return false; }
+        if (blob.size() < kPipelineCacheHeader || cache_read_u64(blob.data()) != kPipelineCacheMagic)
+        {
+            return false;
+        }
         const crd::u64 count = cache_read_u64(blob.data() + 8U);
         const crd::u64 bytes = cache_read_u64(blob.data() + 16U);
-        if (count > kPipelineCacheKeys || bytes == 0U || bytes > kPipelineCacheBytes) { return false; }
+        if (count > kPipelineCacheKeys || bytes == 0U || bytes > kPipelineCacheBytes)
+        {
+            return false;
+        }
         const crd::u64 offset = kPipelineCacheHeader + count * 8U;
-        if (offset > blob.size() || bytes != blob.size() - offset) { return false; }
+        if (offset > blob.size() || bytes != blob.size() - offset)
+        {
+            return false;
+        }
         if (cache_read_u64(blob.data() + 24U) != crd::containers::fnv1a_64(blob.data() + kPipelineCacheHeader,
                                                                          blob.size() - kPipelineCacheHeader))
         {
@@ -398,14 +489,20 @@ bool Dx12ComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8>
         fresh_keys.reserve(static_cast<crd::usize>(count));
         for (crd::u64 index = 0; index < count; ++index)
         {
-            if (!fresh_keys.insert(cache_read_u64(blob.data() + kPipelineCacheHeader + index * 8U))) { return false; }
+            if (!fresh_keys.insert(cache_read_u64(blob.data() + kPipelineCacheHeader + index * 8U)))
+            {
+                return false;
+            }
         }
         fresh_blob.resize(static_cast<crd::usize>(bytes));
         std::memcpy(fresh_blob.data(), blob.data() + offset, static_cast<crd::usize>(bytes));
     }
     ComPtr<ID3D12PipelineLibrary> fresh;
     if (FAILED(impl.device1->CreatePipelineLibrary(fresh_blob.empty() ? nullptr : fresh_blob.data(), fresh_blob.size(),
-                                                  IID_PPV_ARGS(&fresh)))) { return false; }
+                                                  IID_PPV_ARGS(&fresh))))
+    {
+        return false;
+    }
     impl.pipe_lib.Reset();
     impl.lib_blob = std::move(fresh_blob);
     impl.pipe_keys = std::move(fresh_keys);
@@ -416,7 +513,10 @@ bool Dx12ComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8>
 std::unique_ptr<ComputeBuffer> Dx12ComputeContext::create_buffer(crd::u64 bytes, crd::u32 /*usage*/, ComputeMemory memory)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || bytes == 0U) { return nullptr; }
+    if (!impl.ok || bytes == 0U)
+    {
+        return nullptr;
+    }
     auto b   = std::make_unique<BufferImpl>();
     b->bytes = bytes;
     switch (memory)
@@ -437,7 +537,10 @@ std::unique_ptr<ComputeBuffer> Dx12ComputeContext::create_buffer(crd::u64 bytes,
         b->fixed = true;
         break;
     }
-    if (b->res == nullptr) { return nullptr; }
+    if (b->res == nullptr)
+    {
+        return nullptr;
+    }
     // DIAG.7a(d2b-dx12-b) batch 4: mint one ObjectKind::Resource identity on the buffer's single native resource (all
     // three ComputeMemory heaps use the one `res`). Placed after the last early-return so only a live resource is minted.
     b->m_identity = detail::dx12_attach_identity(b->res.Get(), ObjectKind::Resource, "dx12-compute-buffer");
@@ -471,9 +574,15 @@ static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device
     rsd.pParameters   = rp;
     ComPtr<ID3DBlob> sig;
     ComPtr<ID3DBlob> serr;
-    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr))) { return nullptr; }
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr)))
+    {
+        return nullptr;
+    }
     auto pl = std::make_unique<PipelineImpl>();
-    if (FAILED(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&pl->root)))) { return nullptr; }
+    if (FAILED(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&pl->root))))
+    {
+        return nullptr;
+    }
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature     = pl->root.Get();
@@ -493,16 +602,26 @@ static std::unique_ptr<ComputePipeline> build_dxil_pipeline(ID3D12Device* device
         if (keys.contains(h))
         {
             const HRESULT result = lib->LoadComputePipeline(name, &pd, IID_PPV_ARGS(&pl->pso));
-            if (FAILED(result)) { detail::dx12_execution_failure(result, "load indexed compute pipeline"); return nullptr; }
+            if (FAILED(result))
+            {
+                detail::dx12_execution_failure(result, "load indexed compute pipeline");
+                return nullptr;
+            }
             made = true;
         }
         else if (SUCCEEDED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso))))
         {
-            if (keys.size() < kPipelineCacheKeys && SUCCEEDED(lib->StorePipeline(name, pl->pso.Get()))) { keys.insert(h); }
+            if (keys.size() < kPipelineCacheKeys && SUCCEEDED(lib->StorePipeline(name, pl->pso.Get())))
+            {
+                keys.insert(h);
+            }
             made = true;
         }
     }
-    if (!made && FAILED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso)))) { return nullptr; }
+    if (!made && FAILED(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pl->pso))))
+    {
+        return nullptr;
+    }
     // DIAG.7a(d2b-dx12-b) batch 3b: root sig + PSO are both live past the last early-return -> mint ONE Program identity
     // on the root signature (the primary) and stamp it onto the PSO. The PSO's WKPDID debug name is a SEPARATE channel
     // from the pipeline-library `pName` cache key above (an FNV hash of the DXIL, deliberately run-stable), so naming
@@ -518,11 +637,17 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_hlsl(c
                                                                                int n_bindings, crd::u32 push_size)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_bindings <= 0) { return nullptr; }
+    if (!impl.ok || n_bindings <= 0)
+    {
+        return nullptr;
+    }
 
     const crd::containers::String src(hlsl.data(), hlsl.size(), impl.alloc); // dxc needs a null-terminated buffer
     ComPtr<IDxcBlob>              dxil;
-    if (!compile_dxil(impl.dxc.Get(), src.c_str(), dxil)) { return nullptr; }
+    if (!compile_dxil(impl.dxc.Get(), src.c_str(), dxil))
+    {
+        return nullptr;
+    }
     return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), impl.pipe_keys, dxil->GetBufferPointer(), dxil->GetBufferSize(), n_bindings, push_size);
 }
 
@@ -530,7 +655,10 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_dxil(c
                                                                                int n_bindings, crd::u32 push_size)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_bindings <= 0 || dxil.empty()) { return nullptr; }
+    if (!impl.ok || n_bindings <= 0 || dxil.empty())
+    {
+        return nullptr;
+    }
     return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), impl.pipe_keys, dxil.data(), static_cast<SIZE_T>(dxil.size()), n_bindings, push_size);
 }
 
@@ -555,14 +683,21 @@ ComputeRecorder& Dx12ComputeContext::begin()
     impl.list->SetDescriptorHeaps(1, heaps);
     impl.heap_next = 0;
     // CGP-0: start timestamp (D3D12 timestamps use EndQuery — there is no BeginQuery for the TIMESTAMP type).
-    if (impl.ts_ok) { impl.list->EndQuery(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0U); }
+    if (impl.ts_ok)
+    {
+        impl.list->EndQuery(impl.ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0U);
+    }
     return impl;
 }
 
 void Dx12ComputeContext::submit_and_wait()
 {
     auto& impl = *m_impl;
-    if (!valid()) { impl.ok = false; return; }
+    if (!valid())
+    {
+        impl.ok = false;
+        return;
+    }
     // CGP-0: end timestamp + resolve the two ticks into the READBACK buffer (both before Close).
     if (impl.ts_ok)
     {

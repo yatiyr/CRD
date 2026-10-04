@@ -39,7 +39,10 @@ TEST_CASE("B14-d hash-grid encoder: zero table, trilinear partition-of-unity, de
     out.resize(uz(n * lf));
     crd::u32 s   = 12345U;
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
-    for (int i = 0; i < n * 3; ++i) { pos[uz(i)] = rnd(); } // positions in [0,1)³
+    for (int i = 0; i < n * 3; ++i) // positions in [0,1)³
+    {
+        pos[uz(i)] = rnd();
+    }
 
     const auto run = [&]() {
         kir::KernelBuffer b[3] = {{pos.data(), n * 3, 0, 0}, {tab.data(), ts, 0, 1}, {out.data(), n * lf, 0, 2}};
@@ -47,36 +50,61 @@ TEST_CASE("B14-d hash-grid encoder: zero table, trilinear partition-of-unity, de
     };
 
     // (1) a ZERO feature table ⇒ zero encoding everywhere.
-    for (int i = 0; i < ts; ++i) { tab[uz(i)] = 0.0; }
+    for (int i = 0; i < ts; ++i)
+    {
+        tab[uz(i)] = 0.0;
+    }
     run();
     double mx = 0.0;
-    for (int i = 0; i < n * lf; ++i) { mx = std::fabs(out[uz(i)]) > mx ? std::fabs(out[uz(i)]) : mx; }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        mx = std::fabs(out[uz(i)]) > mx ? std::fabs(out[uz(i)]) : mx;
+    }
     CHECK(mx == 0.0);
 
     // (2) PARTITION OF UNITY: a CONSTANT table (all features = C) ⇒ every encoded feature == C (the 8 trilinear weights sum to
     // 1, regardless of which entries the corners hash to). The single strongest correctness check for a trilinear encoder.
     const double c = 0.375;
-    for (int i = 0; i < ts; ++i) { tab[uz(i)] = c; }
+    for (int i = 0; i < ts; ++i)
+    {
+        tab[uz(i)] = c;
+    }
     run();
     double maxerr = 0.0;
-    for (int i = 0; i < n * lf; ++i) { maxerr = std::fabs(out[uz(i)] - c) > maxerr ? std::fabs(out[uz(i)] - c) : maxerr; }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        maxerr = std::fabs(out[uz(i)] - c) > maxerr ? std::fabs(out[uz(i)] - c) : maxerr;
+    }
     CHECK(maxerr < 1e-6); // trilinear weights partition unity ⇒ Σ w·C = C (f32 sum ULP only)
 
     // (3) DETERMINISM: a varied (index-hashed) table, run twice ⇒ byte-identical.
-    for (int i = 0; i < ts; ++i) { tab[uz(i)] = static_cast<double>((i * 2654435761ULL >> 15) & 255ULL) / 255.0; }
+    for (int i = 0; i < ts; ++i)
+    {
+        tab[uz(i)] = static_cast<double>((i * 2654435761ULL >> 15) & 255ULL) / 255.0;
+    }
     run();
     crd::containers::Array<crd::f64> first(&alloc);
     first.resize(uz(n * lf));
-    for (int i = 0; i < n * lf; ++i) { first[uz(i)] = out[uz(i)]; }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        first[uz(i)] = out[uz(i)];
+    }
     run();
     double ddiff = 0.0;
-    for (int i = 0; i < n * lf; ++i) { ddiff = std::fabs(out[uz(i)] - first[uz(i)]) > ddiff ? std::fabs(out[uz(i)] - first[uz(i)]) : ddiff; }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        ddiff = std::fabs(out[uz(i)] - first[uz(i)]) > ddiff ? std::fabs(out[uz(i)] - first[uz(i)]) : ddiff;
+    }
     CHECK(ddiff == 0.0);
 
     // the varied table also produces a genuinely NON-constant encoding (the features actually vary across positions).
     double lo = 1e30;
     double hi = -1e30;
-    for (int i = 0; i < n * lf; ++i) { lo = out[uz(i)] < lo ? out[uz(i)] : lo; hi = out[uz(i)] > hi ? out[uz(i)] : hi; }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        lo = out[uz(i)] < lo ? out[uz(i)] : lo;
+        hi = out[uz(i)] > hi ? out[uz(i)] : hi;
+    }
     CHECK(hi - lo > 0.1);
 }
 
@@ -106,11 +134,26 @@ TEST_CASE("B14-d MLP inference: one ReLU hidden layer == a hand-computed forward
     out.resize(uz(n * o));
     crd::u32 s   = 999U;
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(static_cast<float>(static_cast<double>(s >> 8) / static_cast<double>(1U << 24) * 2.0 - 1.0)); };
-    for (int i = 0; i < n * d; ++i) { enc[uz(i)] = rnd(); }
-    for (int i = 0; i < h * d; ++i) { w1[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < h; ++i) { b1[uz(i)] = rnd() * 0.1; }
-    for (int i = 0; i < o * h; ++i) { w2[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < o; ++i) { b2[uz(i)] = rnd() * 0.1; }
+    for (int i = 0; i < n * d; ++i)
+    {
+        enc[uz(i)] = rnd();
+    }
+    for (int i = 0; i < h * d; ++i)
+    {
+        w1[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < h; ++i)
+    {
+        b1[uz(i)] = rnd() * 0.1;
+    }
+    for (int i = 0; i < o * h; ++i)
+    {
+        w2[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < o; ++i)
+    {
+        b2[uz(i)] = rnd() * 0.1;
+    }
 
     kir::KernelBuffer bufs[6] = {{enc.data(), n * d, 0, 0}, {w1.data(), h * d, 0, 1}, {b1.data(), h, 0, 2},
                                  {w2.data(), o * h, 0, 3}, {b2.data(), o, 0, 4}, {out.data(), n * o, 0, 5}};
@@ -125,13 +168,19 @@ TEST_CASE("B14-d MLP inference: one ReLU hidden layer == a hand-computed forward
         for (int j = 0; j < h; ++j)
         {
             double acc = b1[uz(j)];
-            for (int k = 0; k < d; ++k) { acc = f32(acc + f32(f32(w1[uz(j * d + k)]) * f32(enc[uz(p * d + k)]))); }
+            for (int k = 0; k < d; ++k)
+            {
+                acc = f32(acc + f32(f32(w1[uz(j * d + k)]) * f32(enc[uz(p * d + k)])));
+            }
             hh[j] = acc > 0.0 ? acc : 0.0;
         }
         for (int c = 0; c < o; ++c)
         {
             double acc = b2[uz(c)];
-            for (int j = 0; j < h; ++j) { acc = f32(acc + f32(f32(w2[uz(c * h + j)]) * f32(hh[j]))); }
+            for (int j = 0; j < h; ++j)
+            {
+                acc = f32(acc + f32(f32(w2[uz(c * h + j)]) * f32(hh[j])));
+            }
             maxerr = std::fabs(acc - out[uz(p * o + c)]) > maxerr ? std::fabs(acc - out[uz(p * o + c)]) : maxerr;
         }
     }
@@ -168,12 +217,30 @@ TEST_CASE("B14-d training backprop: the analytic weight gradient == finite diffe
     gw2.resize(uz(n * o * h));
     crd::u32 s   = 321U;
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24) * 2.0 - 1.0; };
-    for (int i = 0; i < n * d; ++i) { enc[uz(i)] = rnd(); }
-    for (int i = 0; i < h * d; ++i) { w1[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < h; ++i) { b1[uz(i)] = rnd() * 0.2; } // biased so some pre-activations are negative (ReLU mask exercised)
-    for (int i = 0; i < o * h; ++i) { w2[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < o; ++i) { b2[uz(i)] = rnd() * 0.1; }
-    for (int i = 0; i < n * o; ++i) { tgt[uz(i)] = rnd(); }
+    for (int i = 0; i < n * d; ++i)
+    {
+        enc[uz(i)] = rnd();
+    }
+    for (int i = 0; i < h * d; ++i)
+    {
+        w1[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < h; ++i) // biased so some pre-activations are negative (ReLU mask exercised)
+    {
+        b1[uz(i)] = rnd() * 0.2;
+    }
+    for (int i = 0; i < o * h; ++i)
+    {
+        w2[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < o; ++i)
+    {
+        b2[uz(i)] = rnd() * 0.1;
+    }
+    for (int i = 0; i < n * o; ++i)
+    {
+        tgt[uz(i)] = rnd();
+    }
 
     kir::KernelBuffer bufs[8] = {{enc.data(), n * d, 0, 0}, {w1.data(), h * d, 0, 1}, {b1.data(), h, 0, 2}, {w2.data(), o * h, 0, 3},
                                  {b2.data(), o, 0, 4}, {tgt.data(), n * o, 0, 5}, {gw1.data(), n * h * d, 0, 6}, {gw2.data(), n * o * h, 0, 7}};
@@ -185,14 +252,22 @@ TEST_CASE("B14-d training backprop: the analytic weight gradient == finite diffe
         for (int j = 0; j < h; ++j)
         {
             double acc = b1[uz(j)];
-            for (int k = 0; k < d; ++k) { double ww = w1[uz(j * d + k)] + (j * d + k == pw1 ? dw1 : 0.0); acc += ww * enc[uz(p * d + k)]; }
+            for (int k = 0; k < d; ++k)
+            {
+                double ww = w1[uz(j * d + k)] + (j * d + k == pw1 ? dw1 : 0.0);
+                acc += ww * enc[uz(p * d + k)];
+            }
             hh[j] = acc > 0.0 ? acc : 0.0;
         }
         double l = 0.0;
         for (int c = 0; c < o; ++c)
         {
             double acc = b2[uz(c)];
-            for (int j = 0; j < h; ++j) { double ww = w2[uz(c * h + j)] + (c * h + j == pw2 ? dw2 : 0.0); acc += ww * hh[j]; }
+            for (int j = 0; j < h; ++j)
+            {
+                double ww = w2[uz(c * h + j)] + (c * h + j == pw2 ? dw2 : 0.0);
+                acc += ww * hh[j];
+            }
             l += (acc - tgt[uz(p * o + c)]) * (acc - tgt[uz(p * o + c)]);
         }
         return l;
@@ -218,6 +293,9 @@ TEST_CASE("B14-d training backprop: the analytic weight gradient == finite diffe
 
     // the gradients are genuinely non-trivial (not all zero — the network is actually learning signal).
     double gmax = 0.0;
-    for (int i = 0; i < n * o * h; ++i) { gmax = std::fabs(gw2[uz(i)]) > gmax ? std::fabs(gw2[uz(i)]) : gmax; }
+    for (int i = 0; i < n * o * h; ++i)
+    {
+        gmax = std::fabs(gw2[uz(i)]) > gmax ? std::fabs(gw2[uz(i)]) : gmax;
+    }
     CHECK(gmax > 0.05);
 }

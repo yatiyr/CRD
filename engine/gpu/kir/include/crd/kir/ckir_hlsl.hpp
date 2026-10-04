@@ -30,13 +30,28 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_fusable(nd.op)) { return false; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (!is_fusable(nd.op))
+        {
+            return false;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
@@ -55,23 +70,50 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
 
     crd::containers::String& s = out.source;
     s.clear();
-    for (int b = 0; b < out.n_inputs; ++b) { s.append("RWStructuredBuffer<"); s.append(ctype(in_dtype[b])); s.append("> in"); app_uint(s, b); s.append(" : register(u"); app_uint(s, b); s.append(");\n"); }
+    for (int b = 0; b < out.n_inputs; ++b)
+    {
+        s.append("RWStructuredBuffer<");
+        s.append(ctype(in_dtype[b]));
+        s.append("> in");
+        app_uint(s, b);
+        s.append(" : register(u");
+        app_uint(s, b);
+        s.append(");\n");
+    }
     s.append("RWStructuredBuffer<"); s.append(buf_ctype(g.node(output).dtype())); s.append("> outb : register(u"); app_uint(s, out.n_inputs); s.append(");\n");
     s.append("cbuffer PC : register(b0) { uint n; };\n");
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= n) return;\n");
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         const bool ii = dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype());
-        if (nd.dtype() == DType::Bool) { s.append("  bool t"); }
-        else { s.append(ii ? "  int t" : "  precise float t"); }
+        if (nd.dtype() == DType::Bool)
+        {
+            s.append("  bool t");
+        }
+        else
+        {
+            s.append(ii ? "  int t" : "  precise float t");
+        }
         app_uint(s, i); s.append(" = ");
         const auto ta = [&](int id) { s.append("t"); app_uint(s, id); };
         switch (nd.op)
         {
         case KOp::Input: s.append("in"); app_uint(s, binding_of[static_cast<crd::usize>(i)]); s.append("[gid]"); break;
-        case KOp::Const: if (ii) { app_ilit(s, nd.cval); } else { app_flit(s, nd.cval); } break;
+        case KOp::Const:
+                if (ii)
+                {
+                    app_ilit(s, nd.cval);
+                }
+                else
+                {
+                    app_flit(s, nd.cval);
+                }
+                break;
         case KOp::Cast: s.append(ii ? "int(" : "float("); ta(nd.a); s.append(")"); break;
         case KOp::Neg: s.append("-"); ta(nd.a); break;
         case KOp::Recip: s.append("1.0/"); ta(nd.a); break;
@@ -136,7 +178,18 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Cbrt: s.append("(sign("); ta(nd.a); s.append(") * pow(abs("); ta(nd.a); s.append("), 0.3333333333333333))"); break; // no builtin
         case KOp::Mod: s.append("fmod("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break; // C fmod (sign of x)
         case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
-        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        case KOp::Select: s.append("(");
+                if (g.node(nd.c).dtype() == DType::Bool)
+                {
+                    ta(nd.c);
+                }
+                else
+                {
+                    s.append("(");
+                    ta(nd.c);
+                    s.append(" != 0.0)");
+                }
+                s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         // B11: wave ops in the fused elementwise path (symmetry with the GLSL emitter; kernels use the pv path above).
         case KOp::SubgroupBallot: s.append("WaveActiveBallot("); ta(nd.a); s.append(" != 0u).x"); break;
         case KOp::SubgroupBallotExclCount: s.append("countbits("); ta(nd.a); s.append(" & ((1u << WaveGetLaneIndex()) - 1u))"); break;
@@ -161,8 +214,17 @@ inline bool emit_elementwise_hlsl(const KGraph& g, int output, crd::memory::IAll
     }
     // a bool result is stored as float 0.0/1.0 (RWStructuredBuffer<bool> has no defined layout).
     s.append("  outb[gid] = ");
-    if (g.node(output).dtype() == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); }
-    else { s.append("t"); app_uint(s, output); }
+    if (g.node(output).dtype() == DType::Bool)
+    {
+        s.append("float(t");
+        app_uint(s, output);
+        s.append(")");
+    }
+    else
+    {
+        s.append("t");
+        app_uint(s, output);
+    }
     s.append(";\n}\n");
     return true;
 }
@@ -183,13 +245,68 @@ inline const char* hmat(int rows, int cols) noexcept
 }
 inline const char* htype(KType t) noexcept
 {
-    if (t.kind == TKind::Mat) { return hmat(t.rows, t.cols); }
+    if (t.kind == TKind::Mat)
+    {
+        return hmat(t.rows, t.cols);
+    }
     if (t.kind == TKind::Vec)
     {
-        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bool2"; case 3: return "bool3"; case 4: return "bool4"; default: break; } }
-        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uint2"; case 3: return "uint3"; case 4: return "uint4"; default: break; } }
-        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "int2"; case 3: return "int3"; case 4: return "int4"; default: break; } }
-        else { switch (t.rows) { case 2: return "float2"; case 3: return "float3"; case 4: return "float4"; default: break; } }
+        if (t.scalar == DType::Bool)
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "bool2";
+                case 3:
+                    return "bool3";
+                case 4:
+                    return "bool4";
+                default:
+                    break;
+            }
+        }
+        else if (glsl_detail::dt_is_uint(t.scalar))
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "uint2";
+                case 3:
+                    return "uint3";
+                case 4:
+                    return "uint4";
+                default:
+                    break;
+            }
+        }
+        else if (glsl_detail::dt_is_int(t.scalar))
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "int2";
+                case 3:
+                    return "int3";
+                case 4:
+                    return "int4";
+                default:
+                    break;
+            }
+        }
+        else
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "float2";
+                case 3:
+                    return "float3";
+                case 4:
+                    return "float4";
+                default:
+                    break;
+            }
+        }
     }
     return glsl_detail::ctype(t.scalar);
 }
@@ -201,7 +318,12 @@ inline const char* hlsl_tex_dim(const KType& t) noexcept
     switch (t.tex_dim())
     {
     case TexDim::Tex1D:   return t.tex_arrayed() ? "Texture1DArray" : "Texture1D";
-    case TexDim::Tex2D:   if (t.tex_ms()) { return "Texture2DMS"; } return t.tex_arrayed() ? "Texture2DArray" : "Texture2D";
+    case TexDim::Tex2D:
+            if (t.tex_ms())
+            {
+                return "Texture2DMS";
+            }
+            return t.tex_arrayed() ? "Texture2DArray" : "Texture2D";
     case TexDim::Tex3D:   return "Texture3D";
     case TexDim::TexCube: return t.tex_arrayed() ? "TextureCubeArray" : "TextureCube";
     }
@@ -209,8 +331,14 @@ inline const char* hlsl_tex_dim(const KType& t) noexcept
 }
 inline const char* hlsl_tex_elem(DType d) noexcept
 {
-    if (glsl_detail::dt_is_uint(d)) { return "uint4"; }
-    if (glsl_detail::dt_is_int(d)) { return "int4"; }
+    if (glsl_detail::dt_is_uint(d))
+    {
+        return "uint4";
+    }
+    if (glsl_detail::dt_is_int(d))
+    {
+        return "int4";
+    }
     return "float4";
 }
 
@@ -227,8 +355,14 @@ inline const char* hlsl_tex_elem(DType d) noexcept
 inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (!entry.is_kernel()) { return false; }
-    if (entry.local_size[0] == 0U) { return false; } // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    if (!entry.is_kernel())
+    {
+        return false;
+    }
+    if (entry.local_size[0] == 0U) // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    {
+        return false;
+    }
     // the resolver (bind_authored_local_size) BEFORE emit — refuse loudly rather than emit `numthreads(0,..)` or a silent
     // 1-thread kernel; the caller surfaces this as an unresolved stage (UnresolvedKernel). Mirrors the GLSL twin.
     const int                n = g.size();
@@ -243,7 +377,10 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             // RAW UAV: the DX12 compute context binds every storage buffer as a RWByteAddressBuffer (R32_TYPELESS, no
             // element type baked into the descriptor — see dx12_compute_context.cpp). So loads/stores are byte-addressed
             // (index * 4) with asfloat/asuint reinterpret. 32-bit element types only (F32/U32/I32); F64 storage → refuse.
-            if ((nd.axes & 2U) != 0U) { s.append("globallycoherent "); } // cross-workgroup visible (spin-wait publish/read)
+            if ((nd.axes & 2U) != 0U) // cross-workgroup visible (spin-wait publish/read)
+            {
+                s.append("globallycoherent ");
+            }
             s.append("RWByteAddressBuffer buf"); app_uint(s, nd.iidx);
             s.append(" : register(u"); app_uint(s, nd.iidx); s.append(");\n");
         }
@@ -278,13 +415,56 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         bool qa = false;
         bool qt = false;
         bool sl = false;
-        for (int i = 0; i < n; ++i) { switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
-        if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
-        if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); }
-        if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n");
+        }
+        if (qt)
+        {
+            s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (sl)
+        {
+            s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
     }
     s.append("[numthreads("); app_uint(s, static_cast<int>(entry.local_size[0]));
     s.append(", ");            app_uint(s, static_cast<int>(entry.local_size[1]));
@@ -315,31 +495,66 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         }
     };
     const auto pv = [&](auto&& self, int node) -> void {
-        if (temped[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        if (temped[static_cast<crd::usize>(node)] != 0U)
+        {
+            s.append("t");
+            app_uint(s, static_cast<crd::u32>(node));
+            return;
+        }
         const KNode& nd  = g.node(node);
         const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
         switch (nd.op)
         {
         case KOp::Const:
-            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            if (nd.dtype() == DType::Bool)
+            {
+                s.append(nd.cval != 0.0 ? "true" : "false");
+            }
             // %lld (full 64-bit) via app_int_const — NOT static_cast<int> (MSVC clamps a u32 const > INT_MAX to INT_MIN).
-            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
-            else { app_flit(s, nd.cval); }
+            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype()))
+            {
+                app_int_const(s, nd.cval, nd.dtype());
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+            }
             break;
         case KOp::Builtin:
-            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("lidx"); }
-            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("wgid3.x"); }
-            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId) { s.append("dtid"); }
-            else { ok = false; s.append("0u"); }
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex)
+            {
+                s.append("lidx");
+            }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex)
+            {
+                s.append("wgid3.x");
+            }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId)
+            {
+                s.append("dtid");
+            }
+            else
+            {
+                ok = false;
+                s.append("0u");
+            }
             break;
         case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
         case KOp::BufferLoad: { // asfloat/asint(bufN.Load(idx*4)) — RAW byte-addressed UAV (see BufferDecl); uint loads bare
             const DType bt = g.node(nd.a).dtype();
-            if (bt == DType::F64) { ok = false; s.append("0.0"); break; }
+            if (bt == DType::F64)
+            {
+                ok = false;
+                s.append("0.0");
+                break;
+            }
             const char* pre = !(dt_is_int(bt) || dt_is_uint(bt)) ? "asfloat(" : dt_is_int(bt) ? "asint(" : ""; // NOLINT(readability-avoid-nested-conditional-operator) 3-way reinterpret select
             s.append(pre);
             s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append(".Load(("); self(self, nd.b); s.append(") * 4u)");
-            if (pre[0] != '\0') { s.append(")"); }
+            if (pre[0] != '\0')
+            {
+                s.append(")");
+            }
             break;
         }
         case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
@@ -357,8 +572,16 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Shr: bin(" >> "); break;
         case KOp::Select: // a=true b=false c=cond; wrap a non-bool cond in `!= 0.0` (mirrors the elementwise HLSL Select)
             s.append("(");
-            if (g.node(nd.c).dtype() == DType::Bool) { self(self, nd.c); }
-            else { s.append("("); self(self, nd.c); s.append(" != 0.0)"); }
+            if (g.node(nd.c).dtype() == DType::Bool)
+            {
+                self(self, nd.c);
+            }
+            else
+            {
+                s.append("(");
+                self(self, nd.c);
+                s.append(" != 0.0)");
+            }
             s.append(" ? "); self(self, nd.a); s.append(" : "); self(self, nd.b); s.append(")");
             break;
         default: ok = false; s.append("0"); break;
@@ -419,7 +642,16 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Div: b2(" / "); break;
         case KOp::Min: f2("min"); break;
         case KOp::Max: f2("max"); break;
-        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("fmod"); } break;
+        case KOp::Mod:
+                if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype()))
+                {
+                    b2(" % ");
+                }
+                else
+                {
+                    f2("fmod");
+                }
+                break;
         case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::Clamp: s.append("min(max("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append("), "); pv(pv, nd.c); s.append(")"); break; // B4-vis: bbox clamp — min(max()) matches the GLSL emitter + oracle bit-for-bit
         // ── SUBGROUP (wave) ops — the DX12 mirror of the GLSL subgroupBallot path (the radix-sort scatter's deterministic rank).
@@ -448,8 +680,28 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Vec3: s.append(htype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::VecComp: pv(pv, nd.a); s.append("."); { const char sw[2] = {"xyzw"[nd.iidx], '\0'}; s.append(sw); } break;
-        case KOp::Swizzle: pv(pv, nd.a); s.append("."); { const char xyzw[4] = {'x','y','z','w'}; for (int k = 0; k < nd.comps(); ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } } break;
-        case KOp::Splat: s.append(htype(nd.type)); s.append("("); { for (int k = 0; k < nd.comps(); ++k) { if (k) { s.append(", "); } pv(pv, nd.a); } } s.append(")"); break;
+        case KOp::Swizzle: pv(pv, nd.a); s.append(".");
+        {
+            const char xyzw[4] = {'x','y','z','w'};
+            for (int k = 0; k < nd.comps(); ++k)
+            {
+                const char sw[2] = {xyzw[nd.perm[k]], '\0'};
+                s.append(sw);
+            }
+        }
+        break;
+        case KOp::Splat: s.append(htype(nd.type)); s.append("(");
+        {
+            for (int k = 0; k < nd.comps(); ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                pv(pv, nd.a);
+            }
+        }
+        s.append(")"); break;
         case KOp::Dot: s.append("dot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::Cross: s.append("cross("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::Normalize: s.append("normalize("); pv(pv, nd.a); s.append(")"); break;
@@ -462,8 +714,35 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::MatTranspose: s.append("transpose("); pv(pv, nd.a); s.append(")"); break;
         case KOp::Determinant: s.append("determinant("); pv(pv, nd.a); s.append(")"); break;
         case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); pv(pv, nd.a); s.append(")"); break;
-        case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } pv(pv, nd.a); s.append("."); const char sw[2] = {"xyzw"[r], '\0'}; s.append(sw); s.append(" * "); pv(pv, nd.b); } s.append(")"); break; }
-        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } pv(pv, operand[k]); } s.append("))"); break; }
+        case KOp::OuterProduct:
+        {
+            const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("(");
+            for (int r = 0; r < orows; ++r)
+            {
+                if (r)
+                {
+                    s.append(", ");
+                }
+                pv(pv, nd.a);
+                s.append(".");
+                const char sw[2] = {"xyzw"[r], '\0'};
+                s.append(sw);
+                s.append(" * ");
+                pv(pv, nd.b);
+            }
+            s.append(")"); break; }
+        case KOp::MatFromCols:
+        {
+            const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("(");
+            for (int k = 0; k < mcols; ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                pv(pv, operand[k]);
+            }
+            s.append("))"); break; }
         case KOp::VecAny: s.append("any("); pv(pv, nd.a); s.append(")"); break;
         case KOp::VecAll: s.append("all("); pv(pv, nd.a); s.append(")"); break;
         case KOp::Slerp: s.append("crd_slerp("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
@@ -483,14 +762,31 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             const KNode& sm = g.node(nd.b);
             const auto tex_dot  = [&]() { s.append("tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx)); s.append("."); };
             const auto samp_ref = [&]() { s.append("samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); };
-            switch (nd.op) {
+            switch (nd.op)
+            {
             case KOp::TexSample:  tex_dot(); s.append("Sample(");      samp_ref(); s.append(", "); pv(pv, nd.c); s.append(")"); break;
             case KOp::SampleLod:  tex_dot(); s.append("SampleLevel("); samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
             case KOp::SampleGrad: tex_dot(); s.append("SampleGrad(");  samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(", "); pv(pv, g.ext_operand(nd, 0)); s.append(")"); break;
             case KOp::SampleCmp:  tex_dot(); s.append("SampleCmp(");   samp_ref(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
             case KOp::TexelFetch:
-                if (tx.type.tex_ms()) { tex_dot(); s.append("Load("); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); }
-                else { tex_dot(); s.append("Load(int3("); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append("))"); }
+                if (tx.type.tex_ms())
+                {
+                    tex_dot();
+                    s.append("Load(");
+                    pv(pv, nd.c);
+                    s.append(", ");
+                    pv(pv, nd.d);
+                    s.append(")");
+                }
+                else
+                {
+                    tex_dot();
+                    s.append("Load(int3(");
+                    pv(pv, nd.c);
+                    s.append(", ");
+                    pv(pv, nd.d);
+                    s.append("))");
+                }
                 break;
             case KOp::TexGather:
             {
@@ -507,16 +803,38 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
         }
     };
     const auto decl = [&](auto&& self, int node) -> void {
-        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
+        if (declseen[static_cast<crd::usize>(node)] != 0U) // DAG memo — see declseen above
+        {
+            return;
+        }
         // ⛔⛔ B18-e: during the hoist pre-pass, DEFER a node that consumes a materialized value to its in-order emission.
-        if (in_hoist && order.must_defer(node)) { return; }
+        if (in_hoist && order.must_defer(node))
+        {
+            return;
+        }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
-        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
-        if (nd.a >= 0) { self(self, nd.a); }
-        if (nd.b >= 0) { self(self, nd.b); }
-        if (nd.c >= 0) { self(self, nd.c); }
-        if (nd.d >= 0) { self(self, nd.d); }
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) // resource leaf: only the index carries temps
+        {
+            self(self, nd.b);
+            return;
+        }
+        if (nd.a >= 0)
+        {
+            self(self, nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            self(self, nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            self(self, nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            self(self, nd.d);
+        }
         if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
         {
             temped[static_cast<crd::usize>(node)] = 1U;
@@ -543,7 +861,12 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::For: i = st.body_begin + st.body_count; break;
             case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
-            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            case KStmtKind::TraceRayCurves:
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        decl(decl, g.stmt_ext_operand(st, k));
+                    }
+                    ++i; break;
             default: ++i; break;
             }
         }
@@ -558,10 +881,24 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             {
             case KStmtKind::BufferStore: { // bufN.Store(idx*4, asuint(val)) — RAW byte-addressed UAV; uint stores bare
                 const DType bt = g.node(st.target).dtype();
-                if (bt == DType::F64) { ok = false; ++i; break; }
+                if (bt == DType::F64)
+                {
+                    ok = false;
+                    ++i;
+                    break;
+                }
                 decl(decl, st.index); decl(decl, st.value);
                 s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append(".Store(("); pv(pv, st.index); s.append(") * 4u, ");
-                if (dt_is_uint(bt)) { pv(pv, st.value); } else { s.append("asuint("); pv(pv, st.value); s.append(")"); }
+                if (dt_is_uint(bt))
+                {
+                    pv(pv, st.value);
+                }
+                else
+                {
+                    s.append("asuint(");
+                    pv(pv, st.value);
+                    s.append(")");
+                }
                 s.append(");\n");
                 ++i;
                 break;
@@ -599,7 +936,10 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
                 temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break;
             case KStmtKind::TraceRayCurves: // B18-f: procedural curve BLAS — the shader intersects each candidate AABB's
             {                               // linear swept sphere and COMMITS it; hardware cannot resolve this itself.
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < 8; ++k)
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd  = g.node(st.target).iidx;
                 const crd::u32 sbuf = g.node(g.stmt_ext_operand(st, 8)).iidx;
@@ -674,7 +1014,10 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             }
             case KStmtKind::TraceRayClosest: // B9/RT-1: inline DXR ray query — closest-hit distance `t` (or tmax on miss)
             {
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < 8; ++k)
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd = g.node(st.target).iidx;
                 const crd::u32 res = static_cast<crd::u32>(st.result);
@@ -691,7 +1034,10 @@ inline bool emit_compute_kernel_hlsl(const KGraph& g, const KEntry& entry, crd::
             }
             case KStmtKind::TraceRayHit: // B9/RT-2: inline DXR ray query — closest-hit distance `t` + PRIMITIVE INDEX
             {
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < 8; ++k)
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd  = g.node(st.target).iidx;
                 const crd::u32 res  = static_cast<crd::u32>(st.result);
@@ -751,7 +1097,10 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
                                       crd::u32 max_grid, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (!emit_compute_kernel_hlsl(g, entry, scratch, out)) { return false; }
+    if (!emit_compute_kernel_hlsl(g, entry, scratch, out))
+    {
+        return false;
+    }
     // The tested compute HLSL: <decls+helpers>[numthreads(A,B,C)]\nvoid cs_main(uint lidx : SV_GroupIndex, ...) {\n<body>}\n
     crd::containers::String cs(scratch);
     cs.append(out.source.data(), out.source.size()); // move aside; rebuild out.source in place
@@ -763,14 +1112,24 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             bool m = true;
             for (crd::usize j = 0; j < patn; ++j)
             {
-                if (d[i + j] != pat[j]) { m = false; break; }
+                if (d[i + j] != pat[j])
+                {
+                    m = false;
+                    break;
+                }
             }
-            if (m) { return i; }
+            if (m)
+            {
+                return i;
+            }
         }
         return source_size;
     };
     const crd::usize cut1 = find_fwd("void cs_main(", 13U, 0U); // the compute entry
-    if (cut1 == source_size) { return false; }
+    if (cut1 == source_size)
+    {
+        return false;
+    }
     crd::usize cut0 = cut1; // back up to the "[numthreads(" that precedes cs_main
     for (crd::usize i = cut1; i > 0;)
     {
@@ -780,7 +1139,11 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             bool m = true;
             for (crd::usize j = 0; j < 12U; ++j)
             {
-                if (d[i + j] != "[numthreads("[j]) { m = false; break; }
+                if (d[i + j] != "[numthreads("[j])
+                {
+                    m = false;
+                    break;
+                }
             }
             if (m)
             {
@@ -789,7 +1152,10 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             }
         }
     }
-    if (cut0 == cut1) { return false; }
+    if (cut0 == cut1)
+    {
+        return false;
+    }
     crd::usize cut2 = source_size; // the first "{\n" after cs_main( — the body start
     for (crd::usize i = cut1; i + 2U <= source_size; ++i)
     {
@@ -799,7 +1165,10 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
             break;
         }
     }
-    if (cut2 == source_size || source_size < 2U || d[source_size - 2U] != '}') { return false; } // source ends with the cs_main "}\n"
+    if (cut2 == source_size || source_size < 2U || d[source_size - 2U] != '}') // source ends with the cs_main "}\n"
+    {
+        return false;
+    }
     const crd::usize body_end = source_size - 2U;
 
     crd::containers::String& s = out.source;
@@ -807,7 +1176,10 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
     s.append(d, cut0); // decls + helpers (verbatim)
     s.append("struct CrdLaunchRec { uint3 grid : SV_DispatchGrid; };\n");
     s.append("[Shader(\"node\")]\n[NodeLaunch(\"broadcasting\")]\n");
-    if (kind == WorkGraphNodeKind::Produce) { s.append("[NodeIsProgramEntry]\n[NodeDispatchGrid(1, 1, 1)]\n"); }
+    if (kind == WorkGraphNodeKind::Produce)
+    {
+        s.append("[NodeIsProgramEntry]\n[NodeDispatchGrid(1, 1, 1)]\n");
+    }
     else
     {
         s.append("[NodeMaxDispatchGrid(");
@@ -829,7 +1201,10 @@ inline bool emit_work_graph_node_hlsl(const KGraph& g, const KEntry& entry, Work
         s.append(consumer_id.data(), consumer_id.size());
         s.append("\")] NodeOutput<CrdLaunchRec> crd_out, ");
     }
-    else { s.append("DispatchNodeInputRecord<CrdLaunchRec> crd_in, "); }
+    else
+    {
+        s.append("DispatchNodeInputRecord<CrdLaunchRec> crd_in, ");
+    }
     s.append("uint lidx : SV_GroupIndex, uint3 wgid3 : SV_GroupID, uint3 dtid : SV_DispatchThreadID) {\n");
     s.append(d + cut2, body_end - cut2); // the tested DAG body (verbatim)
     if (kind == WorkGraphNodeKind::Produce)
@@ -871,7 +1246,10 @@ inline bool emit_work_graph_library_hlsl(const WorkGraphNodeDesc* nodes, crd::u3
                                          crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (num_nodes == 0U || nodes == nullptr) { return false; }
+    if (num_nodes == 0U || nodes == nullptr)
+    {
+        return false;
+    }
     crd::containers::String& s = out.source;
     s.clear();
     // 1. the UNION of UAV decls across all nodes (deduped by register/iidx; globallycoherent if any node asks).
@@ -885,7 +1263,10 @@ inline bool emit_work_graph_library_hlsl(const WorkGraphNodeDesc* nodes, crd::u3
             if (nd.op == KOp::BufferDecl && nd.iidx >= 0 && nd.iidx < 64 && seen[nd.iidx] == 0U)
             {
                 seen[nd.iidx] = 1U;
-                if ((nd.axes & 2U) != 0U) { s.append("globallycoherent "); }
+                if ((nd.axes & 2U) != 0U)
+                {
+                    s.append("globallycoherent ");
+                }
                 s.append("RWByteAddressBuffer buf");
                 app_uint(s, nd.iidx);
                 s.append(" : register(u");
@@ -914,11 +1295,22 @@ inline bool emit_work_graph_library_hlsl(const WorkGraphNodeDesc* nodes, crd::u3
             bool m = true;
             for (crd::usize j = 0; j < needle.size(); ++j)
             {
-                if (d[i + j] != needle[j]) { m = false; break; }
+                if (d[i + j] != needle[j])
+                {
+                    m = false;
+                    break;
+                }
             }
-            if (m) { pos = i; break; }
+            if (m)
+            {
+                pos = i;
+                break;
+            }
         }
-        if (pos == source_size) { return false; }
+        if (pos == source_size)
+        {
+            return false;
+        }
         s.append(d + pos, source_size - pos);
     }
     return true;
@@ -945,24 +1337,63 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
 
     int payload_n  = 1;
     int callable_n = 0; // REN-38-F13: components of the callable-data block (0 = none in this graph)
-    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
-    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::CallableDataDecl) { callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        if (g.node(i).op == KOp::RayPayloadDecl)
+        {
+            payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1;
+        }
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        if (g.node(i).op == KOp::CallableDataDecl)
+        {
+            callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1;
+        }
+    }
     s.append("struct RtPayload { ");
-    for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+    for (int c = 0; c < payload_n; ++c)
+    {
+        s.append("float m");
+        app_uint(s, c);
+        s.append("; ");
+    }
     s.append("};\n");
     if (callable_n > 0 || st == KStage::Callable)
     {
         s.append("struct CallData { ");
-        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c)
+        {
+            s.append("float m");
+            app_uint(s, c);
+            s.append("; ");
+        }
         s.append("};\n");
     }
     // REN-38-F13: DXR ReportHit needs an ATTRIBUTES argument even when the hit carries none
-    if (st == KStage::Intersection) { s.append("struct RtAttr { float2 v; };\n"); }
+    if (st == KStage::Intersection)
+    {
+        s.append("struct RtAttr { float2 v; };\n");
+    }
     for (int i = 0; i < n; ++i)
     {
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::AccelStructDecl) { s.append("RaytracingAccelerationStructure as"); app_uint(s, nd.iidx); s.append(" : register(t"); app_uint(s, nd.iidx); s.append(");\n"); }
-        else if (nd.op == KOp::BufferDecl) { s.append("RWByteAddressBuffer buf"); app_uint(s, nd.iidx); s.append(" : register(u"); app_uint(s, nd.iidx); s.append(");\n"); }
+        if (nd.op == KOp::AccelStructDecl)
+        {
+            s.append("RaytracingAccelerationStructure as");
+            app_uint(s, nd.iidx);
+            s.append(" : register(t");
+            app_uint(s, nd.iidx);
+            s.append(");\n");
+        }
+        else if (nd.op == KOp::BufferDecl)
+        {
+            s.append("RWByteAddressBuffer buf");
+            app_uint(s, nd.iidx);
+            s.append(" : register(u");
+            app_uint(s, nd.iidx);
+            s.append(");\n");
+        }
     }
     const int  b0 = entry.kernel_body_begin;
     const int  bn = entry.kernel_body_count;
@@ -973,9 +1404,28 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         switch (nd.op)
         {
         case KOp::Const:
-            if (nd.dtype() == DType::U32) { char b[32]; std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval))); s.append(b); }
-            else if (nd.dtype() == DType::I32) { char b[32]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval))); s.append(b); }
-            else { char b[40]; std::snprintf(b, sizeof(b), "%.9g", nd.cval); s.append(b); if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr) { s.append(".0"); } }
+            if (nd.dtype() == DType::U32)
+            {
+                char b[32];
+                std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval)));
+                s.append(b);
+            }
+            else if (nd.dtype() == DType::I32)
+            {
+                char b[32];
+                std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval)));
+                s.append(b);
+            }
+            else
+            {
+                char b[40];
+                std::snprintf(b, sizeof(b), "%.9g", nd.cval);
+                s.append(b);
+                if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr)
+                {
+                    s.append(".0");
+                }
+            }
             break;
         case KOp::Builtin:
             switch (static_cast<KBuiltin>(nd.iidx))
@@ -1021,8 +1471,14 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         case KOp::Cast:
         {
             const char* ctor = "int(";
-            if (nd.dtype() == DType::F32) { ctor = "float("; }
-            else if (nd.dtype() == DType::U32) { ctor = "uint("; }
+            if (nd.dtype() == DType::F32)
+            {
+                ctor = "float(";
+            }
+            else if (nd.dtype() == DType::U32)
+            {
+                ctor = "uint(";
+            }
             s.append(ctor);
             self(self, nd.a);
             s.append(")");
@@ -1047,26 +1503,51 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
     };
     const auto vv = [&](int node) { pv(pv, node); };
 
-    if (st == KStage::RayGen) { s.append("[shader(\"raygeneration\")]\nvoid main() {\n  RtPayload pl;\n"); }
-    else if (st == KStage::ClosestHit) { s.append("[shader(\"closesthit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n"); }
+    if (st == KStage::RayGen)
+    {
+        s.append("[shader(\"raygeneration\")]\nvoid main() {\n  RtPayload pl;\n");
+    }
+    else if (st == KStage::ClosestHit)
+    {
+        s.append("[shader(\"closesthit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n");
+    }
     // REN-38 audit: the ANY-HIT arm was MISSING — an any-hit entry fell into the miss branch below, emitted
     // `[shader("miss")]` without the `attr` parameter its body reads, and DXC refused it. The emitter-lag scar
     // in its RT-stage form: the GLSL emitter had the arm (P4 was Vulkan-proven) and this one silently lagged.
-    else if (st == KStage::AnyHit) { s.append("[shader(\"anyhit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n"); }
+    else if (st == KStage::AnyHit)
+    {
+        s.append("[shader(\"anyhit\")]\nvoid main(inout RtPayload pl, in BuiltInTriangleIntersectionAttributes attr) {\n");
+    }
     // REN-38-F13: the last two stage kinds. An intersection shader has no payload; a callable sees its data
     // block as the inout parameter (the caller's CallShader argument).
-    else if (st == KStage::Intersection) { s.append("[shader(\"intersection\")]\nvoid main() {\n"); }
-    else if (st == KStage::Callable) { s.append("[shader(\"callable\")]\nvoid main(inout CallData cd) {\n"); }
-    else { s.append("[shader(\"miss\")]\nvoid main(inout RtPayload pl) {\n"); }
+    else if (st == KStage::Intersection)
+    {
+        s.append("[shader(\"intersection\")]\nvoid main() {\n");
+    }
+    else if (st == KStage::Callable)
+    {
+        s.append("[shader(\"callable\")]\nvoid main(inout CallData cd) {\n");
+    }
+    else
+    {
+        s.append("[shader(\"miss\")]\nvoid main(inout RtPayload pl) {\n");
+    }
     // the caller-side callable data block lives as a local (CallShader takes it inout)
-    if (callable_n > 0 && st != KStage::Callable) { s.append("  CallData cd = (CallData)0;\n"); }
+    if (callable_n > 0 && st != KStage::Callable)
+    {
+        s.append("  CallData cd = (CallData)0;\n");
+    }
 
     // REN-38-F13: `If` bodies nest inside the flat statement range — track where each one closes.
     int if_end[8];
     int if_depth = 0;
     for (int i = 0; i < bn; ++i)
     {
-        while (if_depth > 0 && i == if_end[if_depth - 1]) { s.append("  }\n"); --if_depth; }
+        while (if_depth > 0 && i == if_end[if_depth - 1])
+        {
+            s.append("  }\n");
+            --if_depth;
+        }
         const KStmt& stm = g.stmt(b0 + i);
         switch (stm.kind)
         {
@@ -1074,7 +1555,10 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
             s.append("  if (");
             vv(stm.value);
             s.append(") {\n");
-            if (if_depth < 8) { if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count; }
+            if (if_depth < 8)
+            {
+                if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count;
+            }
             break;
         case KStmtKind::TraceRayPipeline:
         {
@@ -1100,7 +1584,11 @@ inline bool emit_rt_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory
         default: break;
         }
     }
-    while (if_depth > 0) { s.append("  }\n"); --if_depth; }
+    while (if_depth > 0)
+    {
+        s.append("  }\n");
+        --if_depth;
+    }
     s.append("}\n");
     return true;
 }
@@ -1135,7 +1623,10 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     const auto   tex_dot  = [&]() { const KNode& tx = g.node(nd.a); s.append("tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx)); s.append("."); };
     const auto   samp_ref = [&]() { const KNode& sm = g.node(nd.b); s.append("samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); };
 
-    if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; } // B0-4 SROA: aggregates materialize nothing
+    if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) // B0-4 SROA: aggregates materialize nothing
+    {
+        return true;
+    }
     if (nd.op == KOp::TexSize) // B2-b: HLSL GetDimensions is a void method with out-params — emit its own statement pair.
     {
         const KNode& tx = g.node(nd.a);
@@ -1147,17 +1638,39 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     if (nd.op == KOp::FieldGet || nd.op == KOp::ArrayGet)
     {
         const KNode& agg = g.node(nd.a);
-        if (agg.op == KOp::StructMake || agg.op == KOp::ArrayMake) { emit_stmt_prefix_hlsl(g, i, s); ta(g.ext_operand(agg, nd.iidx)); s.append(";\n"); return true; }
+        if (agg.op == KOp::StructMake || agg.op == KOp::ArrayMake)
+        {
+            emit_stmt_prefix_hlsl(g, i, s);
+            ta(g.ext_operand(agg, nd.iidx));
+            s.append(";\n");
+            return true;
+        }
         return leaf(g, i, s); // raster UBO member (compute leaf returns false ⇒ matches the old `return false`)
     }
-    if (leaf(g, i, s)) { return true; } // stage-specific leaf owns the whole statement (Input / StageIn / Builtin)
+    if (leaf(g, i, s)) // stage-specific leaf owns the whole statement (Input / StageIn / Builtin)
+    {
+        return true;
+    }
 
     emit_stmt_prefix_hlsl(g, i, s);
     switch (nd.op)
     {
     // Emit an integer literal for int/uint constants (parity with GLSL; avoids `int t = 0.0` and truncation surprises).
     // UNSIGNED gets the `u` suffix so 32-bit masks / hash seeds > INT_MAX (B6-b noise) are valid `uint` literals.
-    case KOp::Const: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_ilit(s, nd.cval); if (dt_is_uint(nd.dtype())) { s.append("u"); } } else { app_flit(s, nd.cval); } break;
+    case KOp::Const:
+            if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype()))
+            {
+                app_ilit(s, nd.cval);
+                if (dt_is_uint(nd.dtype()))
+                {
+                    s.append("u");
+                }
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+            }
+            break;
     case KOp::Cast: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
     case KOp::Neg: s.append("-"); ta(nd.a); break;
     case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
@@ -1174,8 +1687,24 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     case KOp::SampleGrad: tex_dot(); s.append("SampleGrad(");  samp_ref(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(", "); ta(g.ext_operand(nd, 0)); s.append(")"); break; // B2-b
     case KOp::SampleCmp:  tex_dot(); s.append("SampleCmp(");   samp_ref(); s.append(", "); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); break; // B2-b shadow → float
     case KOp::TexelFetch: // B2-b integer fetch (no filtering). A 2DMS texture's Load takes (coord, sampleIndex); others int3(coord, lod).
-        if (g.node(nd.a).type.tex_ms()) { tex_dot(); s.append("Load("); ta(nd.c); s.append(", "); ta(nd.d); s.append(")"); }
-        else { tex_dot(); s.append("Load(int3("); ta(nd.c); s.append(", "); ta(nd.d); s.append("))"); }
+        if (g.node(nd.a).type.tex_ms())
+        {
+            tex_dot();
+            s.append("Load(");
+            ta(nd.c);
+            s.append(", ");
+            ta(nd.d);
+            s.append(")");
+        }
+        else
+        {
+            tex_dot();
+            s.append("Load(int3(");
+            ta(nd.c);
+            s.append(", ");
+            ta(nd.d);
+            s.append("))");
+        }
         break;
     case KOp::SampleIndexed: // B2-d: index a bindless texture ARRAY (NonUniformResourceIndex — the index varies per fragment).
     {
@@ -1219,8 +1748,23 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     case KOp::Vec3: s.append("float3("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::VecConcat: s.append(htype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
-    case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
-    case KOp::Splat: s.append(htype(nd.type)); s.append("("); for (int k = 0; k < c; ++k) { if (k) { s.append(", "); } ta(nd.a); } s.append(")"); break;
+    case KOp::Swizzle: ta(nd.a); s.append(".");
+            for (int k = 0; k < c; ++k)
+            {
+                const char sw[2] = {xyzw[nd.perm[k]], '\0'};
+                s.append(sw);
+            }
+            break;
+    case KOp::Splat: s.append(htype(nd.type)); s.append("(");
+            for (int k = 0; k < c; ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                ta(nd.a);
+            }
+            s.append(")"); break;
     case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::Normalize: s.append("normalize("); ta(nd.a); s.append(")"); break;
@@ -1236,19 +1780,57 @@ inline bool emit_value_stmt_hlsl(const KGraph& g, int i, crd::containers::String
     case KOp::CmpGe: s.append("("); ta(nd.a); s.append(" >= "); ta(nd.b); s.append(")"); break;
     case KOp::CmpEq: s.append("("); ta(nd.a); s.append(" == "); ta(nd.b); s.append(")"); break;
     case KOp::CmpNe: s.append("("); ta(nd.a); s.append(" != "); ta(nd.b); s.append(")"); break;
-    case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+    case KOp::Select: s.append("(");
+            if (g.node(nd.c).dtype() == DType::Bool)
+            {
+                ta(nd.c);
+            }
+            else
+            {
+                s.append("(");
+                ta(nd.c);
+                s.append(" != 0.0)");
+            }
+            s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
     case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
     case KOp::QuatRotate: s.append("crd_qrot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::QuatAxisAngle: s.append("crd_qaa("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-    case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append("))"); break; }
+    case KOp::MatFromCols:
+    {
+        const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append("transpose("); s.append(hmat(mcols, nd.type.rows)); s.append("(");
+        for (int k = 0; k < mcols; ++k)
+        {
+            if (k)
+            {
+                s.append(", ");
+            }
+            ta(operand[k]);
+        }
+        s.append("))"); break; }
     case KOp::MatVecMul: // HLSL spells both as mul(); the row-major construct at MatFromCols keeps the convention
     case KOp::MatMatMul: s.append("mul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::MatTranspose: s.append("transpose("); ta(nd.a); s.append(")"); break;
     case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
     case KOp::MatInverse: s.append(nd.type.rows == 2 ? "crd_inv2(" : "crd_inv3("); ta(nd.a); s.append(")"); break;
-    case KOp::OuterProduct: { const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("("); for (int r = 0; r < orows; ++r) { if (r) { s.append(", "); } ta(nd.a); s.append("."); const char sw[2] = {xyzw[r], '\0'}; s.append(sw); s.append(" * "); ta(nd.b); } s.append(")"); break; }
+    case KOp::OuterProduct:
+    {
+        const int orows = nd.type.rows; s.append(hmat(orows, nd.type.cols)); s.append("(");
+        for (int r = 0; r < orows; ++r)
+        {
+            if (r)
+            {
+                s.append(", ");
+            }
+            ta(nd.a);
+            s.append(".");
+            const char sw[2] = {xyzw[r], '\0'};
+            s.append(sw);
+            s.append(" * ");
+            ta(nd.b);
+        }
+        s.append(")"); break; }
     case KOp::QuatToMat3: s.append("crd_qmat("); ta(nd.a); s.append(")"); break;
     // B6: the remaining scalar-math + integer bitwise ops (parity with the GLSL raster emitter + the HLSL compute path).
     // Materials (B6-a) use trunc/ceil/round/sign/tan/asin/acos/atan2/smoothstep; noise (B6-b) uses the bitwise ops for the
@@ -1338,7 +1920,10 @@ namespace hlsl_detail
 // declarations into registers, so VS/DS/MS output declarations must use the same order as fragment inputs.
 inline bool stage_output_order(const KEntry& entry, int (&order)[kMaxStageOutputs]) noexcept
 {
-    if (entry.n_out < 0 || entry.n_out > kMaxStageOutputs) { return false; }
+    if (entry.n_out < 0 || entry.n_out > kMaxStageOutputs)
+    {
+        return false;
+    }
     for (int index = 0; index < entry.n_out; ++index)
     {
         int slot = index;
@@ -1372,36 +1957,72 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
                             HlslInnerCoverage inner_coverage = HlslInnerCoverage::Native)
 {
     int output_order[kMaxStageOutputs]{};
-    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
+    if (!hlsl_detail::stage_output_order(entry, output_order))
+    {
+        return false;
+    }
     using namespace glsl_detail;
-    if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment) { return false; }
+    if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment)
+    {
+        return false;
+    }
     const bool is_vertex = (entry.stage == KStage::Vertex);
-    if (is_vertex && entry.position < 0) { return false; }
+    if (is_vertex && entry.position < 0)
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
     push_root(entry.frag_depth);
     push_root(entry.discard_cond); // B1-b: the alpha-test condition must be reachable so its temp is emitted
     push_root(entry.shading_rate); // B1-e: per-primitive VRS rate node must be reachable
     push_root(entry.storage_write_index); // B1-f: the storage write's index + value must be reachable
     push_root(entry.storage_write_value);
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -1426,11 +2047,20 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     {
         for (int i = 0; i < n; ++i)
         {
-            if (g.node(i).op != KOp::StageIn || static_cast<crd::u32>(g.node(i).iidx) != loc) { continue; }
-            if (is_vertex && !reach[static_cast<crd::usize>(i)]) { continue; } // a VS input is a real attribute — keep reach
+            if (g.node(i).op != KOp::StageIn || static_cast<crd::u32>(g.node(i).iidx) != loc)
+            {
+                continue;
+            }
+            if (is_vertex && !reach[static_cast<crd::usize>(i)]) // a VS input is a real attribute — keep reach
+            {
+                continue;
+            }
             const KNode& nd = g.node(i);
             s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(")]] ");
-            if (!is_vertex) { s.append(hlsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
+            if (!is_vertex) // B1-c: interp on FS interpolant inputs
+            {
+                s.append(hlsl_interp(static_cast<Interp>(nd.dset)));
+            }
             s.append(htype(nd.type)); s.append(" a"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
             break; // ⛔ ONE member per location (injected + real StageIns at a location collapse to one decl)
         }
@@ -1438,20 +2068,32 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     bool bary_declared = false; // B1-f fallback: SV_Barycentrics is declared once however many reads exist
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::Builtin) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::Builtin)
+        {
+            continue;
+        }
         // REN-38: DrawIndex is NOT a system value — it arrives as a ROOT CONSTANT (b7), declared in the
         // prologue and read as `pc_draw_index`; ExecuteIndirect's command signature varies it per command.
-        if (static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex) { continue; }
+        if (static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::DrawIndex)
+        {
+            continue;
+        }
         if (!is_vertex && inner_coverage == HlslInnerCoverage::Barycentric
             && static_cast<KBuiltin>(g.node(i).iidx) == KBuiltin::InnerCoverage)
         {
-            if (!bary_declared) { s.append("  noperspective float3 bary_ic : SV_Barycentrics;\n"); }
+            if (!bary_declared)
+            {
+                s.append("  noperspective float3 bary_ic : SV_Barycentrics;\n");
+            }
             bary_declared = true;
             continue;
         }
         const char* bt = nullptr;
         const char* sv = nullptr;
-        if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(g.node(i).iidx), bt, sv)) { return false; } // unsupported builtin
+        if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(g.node(i).iidx), bt, sv)) // unsupported builtin
+        {
+            return false;
+        }
         s.append("  ");
         // B1-d: DXIL forbids the default `linear noperspective` on the SV_Position input when the shader outputs
         // conservative depth (SV_DepthGreaterEqual/LessEqual) — it must be `noperspective centroid` (or run per-sample).
@@ -1474,12 +2116,42 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     {
         const int k = output_order[index];
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
-        if (is_vertex) { s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] "); s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n"); }
-        else { s.append("  "); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : SV_Target"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n"); }
+        if (nid < 0)
+        {
+            continue;
+        }
+        if (is_vertex)
+        {
+            s.append("  [[vk::location(");
+            app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+            s.append(")]] ");
+            s.append(hlsl_interp(entry.out[k].interp));
+            s.append(htype(g.node(nid).type));
+            s.append(" o");
+            app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+            s.append(" : TEXCOORD");
+            app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+            s.append(";\n");
+        }
+        else
+        {
+            s.append("  ");
+            s.append(htype(g.node(nid).type));
+            s.append(" o");
+            app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+            s.append(" : SV_Target");
+            app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+            s.append(";\n");
+        }
     }
-    if (is_vertex) { s.append("  float4 clip : SV_Position;\n"); }
-    if (is_vertex && entry.shading_rate >= 0) { s.append("  uint sr : SV_ShadingRate;\n"); } // B1-e: per-primitive VRS out
+    if (is_vertex)
+    {
+        s.append("  float4 clip : SV_Position;\n");
+    }
+    if (is_vertex && entry.shading_rate >= 0) // B1-e: per-primitive VRS out
+    {
+        s.append("  uint sr : SV_ShadingRate;\n");
+    }
     if (!is_vertex && entry.frag_depth >= 0) // B1-d: conservative depth ⇒ the SV_Depth* semantic that keeps early-Z
     {
         s.append("  float o_depth : ");
@@ -1490,21 +2162,41 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     // uniform blocks -> cbuffer (register(bBinding, spaceSet)); members are HLSL globals, named u{S}_{B}_f{N}
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(htype(g.struct_field(sid, f)));
+            s.append(" u");
+            app_uint(s, static_cast<crd::u32>(nd.dset));
+            s.append("_");
+            app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append("_f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("};\n");
     }
     // B1-f (FS) + GEO-1 (VS vertex pulling): does this stage touch the storage buffer? FS may read+write (+ROV); a
     // VERTEX stage may READ (StorageLoad by SV_VertexID — the bindless vertex-feeding path). Writes stay FS-only.
     bool fs_uses_storage = false;
-    if (!is_vertex && entry.storage_write_index >= 0) { fs_uses_storage = true; }
+    if (!is_vertex && entry.storage_write_index >= 0)
+    {
+        fs_uses_storage = true;
+    }
     for (int i = 0; !fs_uses_storage && i < n; ++i)
     {
-        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            fs_uses_storage = true;
+        }
     }
     if (fs_uses_storage) // B1-f: the storage buffer at u0 / set 0-binding 0 (matches draw_storage's root UAV / descriptor).
     {                    // ROV (RasterizerOrdered) when FS interlock — DXIL serialises overlapping-pixel access automatically.
@@ -1534,7 +2226,10 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     }
     for (int i = 0; i < n; ++i) // B2: separable texture (register(tB, spaceS)) + sampler (register(sB, spaceS)) declarations
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::Texture)
         {
@@ -1542,7 +2237,12 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
             // A shadow/depth texture is single-channel (`Texture2D<float>`) so `.SampleCmp` is well-typed; colour is float4.
             s.append(hlsl_tex_dim(nd.type)); s.append("<"); s.append(nd.type.tex_shadow() ? "float" : hlsl_tex_elem(nd.type.scalar)); s.append("> tex_");
             app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); } // B2-d: bindless array
+            if (nd.type.count > 1U) // B2-d: bindless array
+            {
+                s.append("[");
+                app_uint(s, static_cast<crd::u32>(nd.type.count));
+                s.append("]");
+            }
             s.append(" : register(t"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(");\n");
         }
         else if (nd.op == KOp::Sampler)
@@ -1562,38 +2262,152 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
         bool qt = false;
         bool iv = false;
         bool iv2 = false;
-        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::Slerp: sl = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::MatInverse: if (g.node(i).type.rows == 2) { iv2 = true; } else { iv = true; } break; default: break; } }
-        if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
-        if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
-        if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); }
-        if (iv2) { s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n"); }
-        if (iv) { s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::MatInverse:
+                    if (g.node(i).type.rows == 2)
+                    {
+                        iv2 = true;
+                    }
+                    else
+                    {
+                        iv = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n");
+        }
+        if (sl)
+        {
+            s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
+        if (qt)
+        {
+            s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (iv2)
+        {
+            s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n");
+        }
+        if (iv)
+        {
+            s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n");
+        }
     }
     if (bary_declared) // B1-f fallback: exact pixel-corner test on screen-space-linear barycentrics (HlslInnerCoverage)
     {
         s.append("uint crd_inner_coverage_bary(float3 b){float3 r=0.5*(abs(ddx(b))+abs(ddy(b)));"
                  "return all(b-r>=0.0)?1u:0u;}\n");
     }
-    if (!is_vertex && entry.early_fragment_tests) { s.append("[earlydepthstencil]\n"); } // B1-d: force early-Z
+    if (!is_vertex && entry.early_fragment_tests) // B1-d: force early-Z
+    {
+        s.append("[earlydepthstencil]\n");
+    }
     s.append(is_vertex ? "VSOut main(VSIn i) {\n  VSOut o;\n" : "PSOut main(PSIn i) {\n  PSOut o;\n");
 
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& v = g.node(i);
+        if (v.op == KOp::For)
+        {
+            continue;
+        }
+        const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc;
+        const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]);
+        if (loop_leaf || from_operand)
+        {
+            varying[static_cast<crd::usize>(i)] = 1;
+        }
+    }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
-    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+    for (int fi = 0; fi < n; ++fi)
+    {
+        if (g.node(fi).op != KOp::For)
+        {
+            continue;
+        }
+        rstk.push_back(g.node(fi).c);
+        while (rstk.size() > 0)
+        {
+            const int bid = rstk[rstk.size() - 1];
+            rstk.resize(rstk.size() - 1);
+            if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1)
+            {
+                continue;
+            }
+            body_of[static_cast<crd::usize>(bid)] = fi;
+            const KNode& bn = g.node(bid);
+            rstk.push_back(bn.a);
+            rstk.push_back(bn.b);
+            rstk.push_back(bn.c);
+            rstk.push_back(bn.d);
+        }
+    }
 
     const auto raster_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; } // the cbuffer materializes nothing; only its FieldGets read members
-        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; } // B2: opaque binding leaves — declared in the prologue
-        if (lnd.op == KOp::StageIn) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("i.a"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true; }
+        if (lnd.op == KOp::UniformBlock) // the cbuffer materializes nothing; only its FieldGets read members
+        {
+            return true;
+        }
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) // B2: opaque binding leaves — declared in the prologue
+        {
+            return true;
+        }
+        if (lnd.op == KOp::StageIn)
+        {
+            emit_stmt_prefix_hlsl(gg, li, ss);
+            ss.append("i.a");
+            app_uint(ss, static_cast<crd::u32>(lnd.iidx));
+            ss.append(";\n");
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             if (static_cast<KBuiltin>(lnd.iidx) == KBuiltin::DrawIndex) // REN-38: the root constant, not an SV
@@ -1607,13 +2421,19 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
             }
             const char* bt = nullptr;
             const char* sv = nullptr;
-            if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(lnd.iidx), bt, sv)) { return false; }
+            if (!hlsl_vsfs_builtin(static_cast<KBuiltin>(lnd.iidx), bt, sv))
+            {
+                return false;
+            }
             emit_stmt_prefix_hlsl(gg, li, ss); ss.append("i.bi"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1622,7 +2442,10 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For)
         {
@@ -1630,15 +2453,40 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
-                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                if (body_of[static_cast<crd::usize>(bid)] != i)
+                {
+                    continue;
+                }
                 const KNode& bn = g.node(bid);
-                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(htype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
-                else if (!emit_value_stmt_hlsl(g, bid, s, raster_leaf)) { return false; }
+                if (bn.op == KOp::LoopIndex)
+                {
+                    s.append("  precise float t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = float(li_");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(");\n");
+                }
+                else if (bn.op == KOp::LoopAcc)
+                {
+                    s.append("  precise ");
+                    s.append(htype(bn.type));
+                    s.append(" t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = t");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(";\n");
+                }
+                else if (!emit_value_stmt_hlsl(g, bid, s, raster_leaf))
+                {
+                    return false;
+                }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
-        else if (!emit_value_stmt_hlsl(g, i, s, raster_leaf)) { return false; }
+        else if (!emit_value_stmt_hlsl(g, i, s, raster_leaf))
+        {
+            return false;
+        }
     }
 
     if (!is_vertex && entry.storage_write_index >= 0) // B1-f: the storage-buffer write (ROV serialises it when interlock)
@@ -1650,10 +2498,37 @@ inline bool emit_stage_hlsl(const KGraph& g, const KEntry& entry, crd::memory::I
     {
         s.append("  if (t"); app_uint(s, static_cast<crd::u32>(entry.discard_cond)); s.append(") { discard; }\n");
     }
-    if (is_vertex) { s.append("  o.clip = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n"); }
-    if (is_vertex && entry.shading_rate >= 0) { s.append("  o.sr = (uint)t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B1-e
-    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o.o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
-    if (!is_vertex && entry.frag_depth >= 0) { s.append("  o.o_depth = t"); app_uint(s, static_cast<crd::u32>(entry.frag_depth)); s.append(";\n"); }
+    if (is_vertex)
+    {
+        s.append("  o.clip = t");
+        app_uint(s, static_cast<crd::u32>(entry.position));
+        s.append(";\n");
+    }
+    if (is_vertex && entry.shading_rate >= 0) // B1-e
+    {
+        s.append("  o.sr = (uint)t");
+        app_uint(s, static_cast<crd::u32>(entry.shading_rate));
+        s.append(";\n");
+    }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0)
+        {
+            continue;
+        }
+        s.append("  o.o");
+        app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+        s.append(" = t");
+        app_uint(s, static_cast<crd::u32>(nid));
+        s.append(";\n");
+    }
+    if (!is_vertex && entry.frag_depth >= 0)
+    {
+        s.append("  o.o_depth = t");
+        app_uint(s, static_cast<crd::u32>(entry.frag_depth));
+        s.append(";\n");
+    }
     s.append("  return o;\n}\n");
     return true;
 }
@@ -1679,14 +2554,32 @@ inline bool emit_tesc_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -1698,9 +2591,18 @@ inline bool emit_tesc_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("HSConst PatchConstFn(InputPatch<CP, "); app_uint(s, entry.tess_patch_size); s.append("> ip) {\n  HSConst o;\n");
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; }
-        if (!emit_value_stmt_hlsl(g, i, s, hull_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For)
+        {
+            return false;
+        }
+        if (!emit_value_stmt_hlsl(g, i, s, hull_leaf))
+        {
+            return false;
+        }
     }
     s.append("  o.edges[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; o.edges[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer));
     s.append("; o.edges[2] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append("; o.edges[3] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_outer)); s.append(";\n");
@@ -1720,31 +2622,67 @@ inline bool emit_tesc_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     int output_order[kMaxStageOutputs]{};
-    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
+    if (!hlsl_detail::stage_output_order(entry, output_order))
+    {
+        return false;
+    }
     using namespace glsl_detail;
-    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0) { return false; }
+    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0)
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     bool needs_patch = false;
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition) { needs_patch = true; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition)
+        {
+            needs_patch = true;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -1756,19 +2694,36 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     {
         const int k = output_order[index];
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] ");
         s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
     }
     s.append("  float4 clip : SV_Position;\n};\n");
     for (int i = 0; i < n; ++i) // uniform blocks -> cbuffer (a displacement may read a uniform amplitude / time)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(htype(g.struct_field(sid, f)));
+            s.append(" u");
+            app_uint(s, static_cast<crd::u32>(nd.dset));
+            s.append("_");
+            app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append("_f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("};\n");
     }
     for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
@@ -1785,14 +2740,27 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin b = static_cast<KBuiltin>(lnd.iidx);
-            if (b == KBuiltin::TessPatchPosition) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("patch_pos;\n"); return true; }
-            if (b == KBuiltin::TessCoord) { emit_stmt_prefix_hlsl(gg, li, ss); ss.append("float3(dl.x, dl.y, 0.0);\n"); return true; }
+            if (b == KBuiltin::TessPatchPosition)
+            {
+                emit_stmt_prefix_hlsl(gg, li, ss);
+                ss.append("patch_pos;\n");
+                return true;
+            }
+            if (b == KBuiltin::TessCoord)
+            {
+                emit_stmt_prefix_hlsl(gg, li, ss);
+                ss.append("float3(dl.x, dl.y, 0.0);\n");
+                return true;
+            }
             return false;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1806,12 +2774,33 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     }
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; }
-        if (!emit_value_stmt_hlsl(g, i, s, dom_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For)
+        {
+            return false;
+        }
+        if (!emit_value_stmt_hlsl(g, i, s, dom_leaf))
+        {
+            return false;
+        }
     }
     s.append("  o.clip = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
-    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o.o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0)
+        {
+            continue;
+        }
+        s.append("  o.o");
+        app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+        s.append(" = t");
+        app_uint(s, static_cast<crd::u32>(nid));
+        s.append(";\n");
+    }
     s.append("  return o;\n}\n");
     return true;
 }
@@ -1828,38 +2817,76 @@ inline bool emit_tese_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (entry.stage != KStage::Task || entry.task_emit < 0) { return false; }
+    if (entry.stage != KStage::Task || entry.task_emit < 0)
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
     stk.push_back(entry.task_emit);
-    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) { stk.push_back(entry.task_payload[pf]); }
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf)
+    {
+        stk.push_back(entry.task_payload[pf]);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
     s.clear();
     for (int i = 0; i < n; ++i) // uniform blocks → cbuffer (a task may read uniforms to compute the count)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(htype(g.struct_field(sid, f)));
+            s.append(" u");
+            app_uint(s, static_cast<crd::u32>(nd.dset));
+            s.append("_");
+            app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append("_f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("};\n");
     }
     for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
@@ -1877,21 +2904,36 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::UniformBlock)
+        {
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
             emit_stmt_prefix_hlsl(gg, li, ss);
-            if (bi == KBuiltin::LocalInvocationIndex) { ss.append("tid"); }
-            else if (bi == KBuiltin::WorkgroupIndex) { ss.append("gid.x"); }
-            else { return false; }
+            if (bi == KBuiltin::LocalInvocationIndex)
+            {
+                ss.append("tid");
+            }
+            else if (bi == KBuiltin::WorkgroupIndex)
+            {
+                ss.append("gid.x");
+            }
+            else
+            {
+                return false;
+            }
             ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1899,9 +2941,18 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     };
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
-        if (!emit_value_stmt_hlsl(g, i, s, task_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For) // a task's amplification count is a scalar expr — no loops
+        {
+            return false;
+        }
+        if (!emit_value_stmt_hlsl(g, i, s, task_leaf))
+        {
+            return false;
+        }
     }
     for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) // write each active payload field
     {
@@ -1914,9 +2965,15 @@ inline bool emit_task_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     int output_order[kMaxStageOutputs]{};
-    if (!hlsl_detail::stage_output_order(entry, output_order)) { return false; }
+    if (!hlsl_detail::stage_output_order(entry, output_order))
+    {
+        return false;
+    }
     using namespace glsl_detail;
-    if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0) { return false; }
+    if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0)
+    {
+        return false;
+    }
     const crd::u32 n_verts    = entry.mesh_vertices;
     const crd::u32 n_prims    = entry.mesh_primitives;
     const crd::u32 local_size = n_verts > n_prims ? n_verts : n_prims;
@@ -1925,23 +2982,50 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
     push_root(entry.mesh_prim);
     push_root(entry.shading_rate); // B4: per-primitive VRS rate from the mesh
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -1951,33 +3035,61 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     {
         const int k = output_order[index];
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("  [[vk::location("); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(")]] ");
         s.append(hlsl_interp(entry.out[k].interp)); s.append(htype(g.node(nid).type)); s.append(" o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location));
         s.append(" : TEXCOORD"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
     }
     s.append("  float4 clip : SV_Position;\n};\n");
-    if (entry.shading_rate >= 0) { s.append("struct MPrim { uint sr : SV_ShadingRate; };\n"); } // B4: per-primitive VRS output
+    if (entry.shading_rate >= 0) // B4: per-primitive VRS output
+    {
+        s.append("struct MPrim { uint sr : SV_ShadingRate; };\n");
+    }
     for (int i = 0; i < n; ++i) // uniform blocks → cbuffer (same as raster)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("cbuffer U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" : register(b"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(") {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(htype(g.struct_field(sid, f))); s.append(" u"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append("_f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(htype(g.struct_field(sid, f)));
+            s.append(" u");
+            app_uint(s, static_cast<crd::u32>(nd.dset));
+            s.append("_");
+            app_uint(s, static_cast<crd::u32>(nd.iidx));
+            s.append("_f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("};\n");
     }
     for (int i = 0; i < n; ++i) // B2: texture + sampler bindings (same as raster)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::Texture)
         {
             s.append("[[vk::binding("); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(")]] ");
             s.append(hlsl_tex_dim(nd.type)); s.append("<"); s.append(nd.type.tex_shadow() ? "float" : hlsl_tex_elem(nd.type.scalar)); s.append("> tex_");
             app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); }
+            if (nd.type.count > 1U)
+            {
+                s.append("[");
+                app_uint(s, static_cast<crd::u32>(nd.type.count));
+                s.append("]");
+            }
             s.append(" : register(t"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", space"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(");\n");
         }
         else if (nd.op == KOp::Sampler)
@@ -2011,38 +3123,79 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             break;
         }
     }
-    if (reads_payload) { s.append("struct MeshPayload { uint v0; uint v1; uint v2; uint v3; };\n"); } // FIXED 4-field (matches the task)
+    if (reads_payload) // FIXED 4-field (matches the task)
+    {
+        s.append("struct MeshPayload { uint v0; uint v1; uint v2; uint v3; };\n");
+    }
     s.append("[outputtopology(\"triangle\")]\n[numthreads("); app_uint(s, local_size); s.append(", 1, 1)]\n");
     s.append("void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n");
-    if (reads_payload) { s.append("          in payload MeshPayload mp,\n"); } // B4: the amplification payload input
+    if (reads_payload) // B4: the amplification payload input
+    {
+        s.append("          in payload MeshPayload mp,\n");
+    }
     s.append("          out vertices VOut verts["); app_uint(s, n_verts); s.append("],\n");
-    if (entry.shading_rate >= 0) { s.append("          out primitives MPrim prims["); app_uint(s, n_prims); s.append("],\n"); } // B4: per-primitive VRS
+    if (entry.shading_rate >= 0) // B4: per-primitive VRS
+    {
+        s.append("          out primitives MPrim prims[");
+        app_uint(s, n_prims);
+        s.append("],\n");
+    }
     s.append("          out indices uint3 tris["); app_uint(s, n_prims); s.append("]) {\n");
     s.append("  SetMeshOutputCounts("); app_uint(s, n_verts); s.append("u, "); app_uint(s, n_prims); s.append("u);\n");
 
     const auto mesh_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; }
-        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; }
+        if (lnd.op == KOp::UniformBlock)
+        {
+            return true;
+        }
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler)
+        {
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
             emit_stmt_prefix_hlsl(gg, li, ss);
-            if (bi == KBuiltin::LocalInvocationIndex) { ss.append("tid"); }
-            else if (bi == KBuiltin::WorkgroupIndex) { ss.append("gid.x"); }
-            else if (bi == KBuiltin::TaskPayload) { ss.append("mp.v0"); } // B4: the task→mesh payload (in payload MeshPayload mp)
-            else if (bi == KBuiltin::TaskPayload1) { ss.append("mp.v1"); }
-            else if (bi == KBuiltin::TaskPayload2) { ss.append("mp.v2"); }
-            else if (bi == KBuiltin::TaskPayload3) { ss.append("mp.v3"); }
-            else { return false; }
+            if (bi == KBuiltin::LocalInvocationIndex)
+            {
+                ss.append("tid");
+            }
+            else if (bi == KBuiltin::WorkgroupIndex)
+            {
+                ss.append("gid.x");
+            }
+            else if (bi == KBuiltin::TaskPayload) // B4: the task→mesh payload (in payload MeshPayload mp)
+            {
+                ss.append("mp.v0");
+            }
+            else if (bi == KBuiltin::TaskPayload1)
+            {
+                ss.append("mp.v1");
+            }
+            else if (bi == KBuiltin::TaskPayload2)
+            {
+                ss.append("mp.v2");
+            }
+            else if (bi == KBuiltin::TaskPayload3)
+            {
+                ss.append("mp.v3");
+            }
+            else
+            {
+                return false;
+            }
             ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix_hlsl(gg, li, ss); ss.append("u"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append("_f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -2052,18 +3205,44 @@ inline bool emit_mesh_hlsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     // value statements (no For-scoping needed for the projected-grid math, but keep the pattern general via the shared emitter).
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; } // (mesh geometry graphs have no runtime loops yet)
-        if (!emit_value_stmt_hlsl(g, i, s, mesh_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For) // (mesh geometry graphs have no runtime loops yet)
+        {
+            return false;
+        }
+        if (!emit_value_stmt_hlsl(g, i, s, mesh_leaf))
+        {
+            return false;
+        }
     }
 
     s.append("  if (tid < "); app_uint(s, n_verts); s.append("u) {\n");
     s.append("    verts[tid].clip = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
-    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("    verts[tid].o"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0)
+        {
+            continue;
+        }
+        s.append("    verts[tid].o");
+        app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+        s.append(" = t");
+        app_uint(s, static_cast<crd::u32>(nid));
+        s.append(";\n");
+    }
     s.append("  }\n");
     s.append("  if (tid < "); app_uint(s, n_prims); s.append("u) {\n");
     s.append("    tris[tid] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
-    if (entry.shading_rate >= 0) { s.append("    prims[tid].sr = (uint)t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B4: per-primitive VRS
+    if (entry.shading_rate >= 0) // B4: per-primitive VRS
+    {
+        s.append("    prims[tid].sr = (uint)t");
+        app_uint(s, static_cast<crd::u32>(entry.shading_rate));
+        s.append(";\n");
+    }
     s.append("  }\n}\n");
     return true;
 }
@@ -2080,29 +3259,70 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_vec_fusable(nd.op)) { return false; }
-        if (nd.op == KOp::MatInverse && nd.type.rows == 4) { return false; } // mat4 inverse deferred on HLSL (huge cofactor formula); 2x2/3x3 have helpers
-        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); } // B0-4 variadic operands
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
+        if (!is_vec_fusable(nd.op))
+        {
+            return false;
+        }
+        // mat4 inverse deferred on HLSL (huge cofactor formula); 2x2/3x3 have helpers
+        if (nd.op == KOp::MatInverse && nd.type.rows == 4)
+        {
+            return false;
+        }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) // B0-4 variadic operands
+        {
+            stk.push_back(g.ext_operand(nd, k));
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
     out.n_inputs = 0;
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::Input) { binding_of[static_cast<crd::usize>(i)] = out.n_inputs; out.input_iidx[out.n_inputs] = g.node(i).iidx; out.in_comps[out.n_inputs] = g.node(i).comps(); ++out.n_inputs; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::Input)
+        {
+            binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
+            out.input_iidx[out.n_inputs] = g.node(i).iidx;
+            out.in_comps[out.n_inputs] = g.node(i).comps();
+            ++out.n_inputs;
+        }
     }
     out.out_comps              = g.node(output).comps();
     crd::containers::String& s = out.source;
     s.clear();
-    for (int b = 0; b < out.n_inputs; ++b) { s.append("RWStructuredBuffer<float> in"); app_uint(s, static_cast<crd::u32>(b)); s.append(" : register(u"); app_uint(s, static_cast<crd::u32>(b)); s.append(");\n"); }
+    for (int b = 0; b < out.n_inputs; ++b)
+    {
+        s.append("RWStructuredBuffer<float> in");
+        app_uint(s, static_cast<crd::u32>(b));
+        s.append(" : register(u");
+        app_uint(s, static_cast<crd::u32>(b));
+        s.append(");\n");
+    }
     s.append("RWStructuredBuffer<float> outb : register(u"); app_uint(s, static_cast<crd::u32>(out.n_inputs)); s.append(");\n");
     s.append("cbuffer PC : register(b0) { uint n; };\n");
     { // quaternion/slerp + matrix helpers (no HLSL builtins for these)
@@ -2114,36 +3334,173 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         bool qt = false;
         bool iv = false;
         bool iv2 = false;
-        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::Slerp: sl = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::MatInverse: if (g.node(i).type.rows == 2) { iv2 = true; } else { iv = true; } break; default: break; } }
-        if (qm) { s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n"); }
-        if (sl) { s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
-        if (qt) { s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n"); } // row-major R[row][col]
-        if (iv2) { s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n"); }
-        if (iv) { s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::MatInverse:
+                    if (g.node(i).type.rows == 2)
+                    {
+                        iv2 = true;
+                    }
+                    else
+                    {
+                        iv = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("float4 crd_qmul(float4 a,float4 b){return float4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("float4 crd_qconj(float4 q){return float4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("float3 crd_qrot(float4 q,float3 v){float3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("float4 crd_qaa(float3 ax,float an){float h=an*0.5;return float4(ax*sin(h),cos(h));}\n");
+        }
+        if (sl)
+        {
+            s.append("float4 crd_slerp(float4 a,float4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(lerp(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
+        if (qt) // row-major R[row][col]
+        {
+            s.append("float3x3 crd_qmat(float4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return float3x3(1.0-2.0*(y*y+z*z),2.0*(x*y-w*z),2.0*(x*z+w*y),2.0*(x*y+w*z),1.0-2.0*(x*x+z*z),2.0*(y*z-w*x),2.0*(x*z-w*y),2.0*(y*z+w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (iv2)
+        {
+            s.append("float2x2 crd_inv2(float2x2 m){float a=m._m00,b=m._m01,c=m._m10,d=m._m11;float iv=1.0/(a*d-b*c);return float2x2(d*iv,-b*iv,-c*iv,a*iv);}\n");
+        }
+        if (iv)
+        {
+            s.append("float3x3 crd_inv3(float3x3 m){float a=m._m00,b=m._m01,c=m._m02,d=m._m10,e=m._m11,f=m._m12,g=m._m20,h=m._m21,i=m._m22;float A=e*i-f*h,B=d*i-f*g,C=d*h-e*g;float iv=1.0/(a*A-b*B+c*C);return float3x3(A*iv,(c*h-b*i)*iv,(b*f-c*e)*iv,(f*g-d*i)*iv,(a*i-c*g)*iv,(c*d-a*f)*iv,(d*h-e*g)*iv,(b*g-a*h)*iv,(a*e-b*d)*iv);}\n");
+        }
     }
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= n) return;\n");
     // A4 tier-2: body-scoping — mark loop-varying nodes (LoopIndex/LoopAcc + consumers; For = barrier) + their owning For.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& v = g.node(i);
+        if (v.op == KOp::For)
+        {
+            continue;
+        }
+        const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc;
+        const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]);
+        if (loop_leaf || from_operand)
+        {
+            varying[static_cast<crd::usize>(i)] = 1;
+        }
+    }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
-    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+    for (int fi = 0; fi < n; ++fi)
+    {
+        if (g.node(fi).op != KOp::For)
+        {
+            continue;
+        }
+        rstk.push_back(g.node(fi).c);
+        while (rstk.size() > 0)
+        {
+            const int bid = rstk[rstk.size() - 1];
+            rstk.resize(rstk.size() - 1);
+            if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1)
+            {
+                continue;
+            }
+            body_of[static_cast<crd::usize>(bid)] = fi;
+            const KNode& bn = g.node(bid);
+            rstk.push_back(bn.a);
+            rstk.push_back(bn.b);
+            rstk.push_back(bn.c);
+            rstk.push_back(bn.d);
+        }
+    }
 
     const auto compute_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op != KOp::Input) { return false; } // compute leaf: only `Input` reads a storage buffer
+        if (lnd.op != KOp::Input) // compute leaf: only `Input` reads a storage buffer
+        {
+            return false;
+        }
         const int  lc     = lnd.comps();
         const int  bd     = binding_of[static_cast<crd::usize>(li)];
         const bool is_mat = lnd.type.kind == TKind::Mat;
         emit_stmt_prefix_hlsl(gg, li, ss);
-        if (lc == 1) { ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid]"); }
-        else { if (is_mat) { ss.append("transpose("); ss.append(hmat(lnd.type.cols, lnd.type.rows)); } else { ss.append(htype(lnd.type)); } ss.append("("); for (int k = 0; k < lc; ++k) { if (k) { ss.append(", "); } ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid*"); app_uint(ss, static_cast<crd::u32>(lc)); ss.append("+"); app_uint(ss, static_cast<crd::u32>(k)); ss.append("]"); } ss.append(")"); if (is_mat) { ss.append(")"); } }
+        if (lc == 1)
+        {
+            ss.append("in");
+            app_uint(ss, static_cast<crd::u32>(bd));
+            ss.append("[gid]");
+        }
+        else
+        {
+            if (is_mat)
+            {
+                ss.append("transpose(");
+                ss.append(hmat(lnd.type.cols, lnd.type.rows));
+            }
+            else
+            {
+                ss.append(htype(lnd.type));
+            }
+            ss.append("(");
+            for (int k = 0; k < lc; ++k)
+            {
+                if (k)
+                {
+                    ss.append(", ");
+                }
+                ss.append("in");
+                app_uint(ss, static_cast<crd::u32>(bd));
+                ss.append("[gid*");
+                app_uint(ss, static_cast<crd::u32>(lc));
+                ss.append("+");
+                app_uint(ss, static_cast<crd::u32>(k));
+                ss.append("]");
+            }
+            ss.append(")");
+            if (is_mat)
+            {
+                ss.append(")");
+            }
+        }
         ss.append(";\n");
         return true;
     };
@@ -2151,7 +3508,10 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For) // A4 tier-2: native per-thread `for`; body-scoped nodes (loop-varying) emit INSIDE the loop
         {
@@ -2159,15 +3519,40 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
-                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                if (body_of[static_cast<crd::usize>(bid)] != i)
+                {
+                    continue;
+                }
                 const KNode& bn = g.node(bid);
-                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(htype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
-                else if (!emit_expr(bid)) { return false; }
+                if (bn.op == KOp::LoopIndex)
+                {
+                    s.append("  precise float t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = float(li_");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(");\n");
+                }
+                else if (bn.op == KOp::LoopAcc)
+                {
+                    s.append("  precise ");
+                    s.append(htype(bn.type));
+                    s.append(" t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = t");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(";\n");
+                }
+                else if (!emit_expr(bid))
+                {
+                    return false;
+                }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
-        else if (!emit_expr(i)) { return false; }
+        else if (!emit_expr(i))
+        {
+            return false;
+        }
     }
     // Write back column-major (flat[col*R + row]). HLSL indexes `t[row][col]`, the transpose of GLSL's `t[col][row]`.
     // Matrix-ness is the TYPE's: a comps==4 output is a float4 or a float2x2, and `oc` alone cannot tell them apart.
@@ -2175,13 +3560,39 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
     const KType& oty = g.node(output).type;
     if (oty.kind == TKind::Mat)
     {
-        for (int col = 0; col < oty.cols; ++col) { for (int row = 0; row < oty.rows; ++row) { s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, col * oty.rows + row); s.append("] = t"); app_uint(s, output); s.append("["); app_uint(s, row); s.append("]["); app_uint(s, col); s.append("];\n"); } }
+        for (int col = 0; col < oty.cols; ++col)
+        {
+            for (int row = 0; row < oty.rows; ++row)
+            {
+                s.append("  outb[gid*");
+                app_uint(s, oc);
+                s.append("+");
+                app_uint(s, col * oty.rows + row);
+                s.append("] = t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, row);
+                s.append("][");
+                app_uint(s, col);
+                s.append("];\n");
+            }
+        }
     }
     // bool / bool-vector results convert to float 0.0/1.0 on write (the buffer is RWStructuredBuffer<float>).
     else if (oc == 1)
     {
         s.append("  outb[gid] = ");
-        if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); } else { s.append("t"); app_uint(s, output); }
+        if (oty.scalar == DType::Bool)
+        {
+            s.append("float(t");
+            app_uint(s, output);
+            s.append(")");
+        }
+        else
+        {
+            s.append("t");
+            app_uint(s, output);
+        }
         s.append(";\n");
     }
     else
@@ -2189,8 +3600,22 @@ inline bool emit_vec_hlsl(const KGraph& g, int output, crd::memory::IAllocator* 
         for (int k = 0; k < oc; ++k)
         {
             s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); s.append("] = ");
-            if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("])"); }
-            else { s.append("t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("]"); }
+            if (oty.scalar == DType::Bool)
+            {
+                s.append("float(t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, k);
+                s.append("])");
+            }
+            else
+            {
+                s.append("t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, k);
+                s.append("]");
+            }
             s.append(";\n");
         }
     }
@@ -2210,13 +3635,19 @@ inline bool emit_contract_hlsl(const KGraph& g, int output, GlslKernel& out)
         if (r.op == KOp::Max)
         {
             const KNode& zb = g.node(r.b);
-            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0) { return false; }
+            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0)
+            {
+                return false;
+            }
             croot = r.a;
             relu  = true;
         }
     }
     const KNode& c = g.node(croot);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2238,7 +3669,10 @@ inline bool emit_contract_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_contract_fast_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2257,7 +3691,17 @@ inline bool emit_contract_fast_hlsl(const KGraph& g, int output, GlslKernel& out
     for (int i = 0; i < 4; ++i)
     {
         s.append("  float ");
-        for (int j = 0; j < 4; ++j) { s.append("a"); s.append(d[i]); s.append(d[j]); s.append(" = 0.0"); if (j < 3) { s.append(", "); } }
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("a");
+            s.append(d[i]);
+            s.append(d[j]);
+            s.append(" = 0.0");
+            if (j < 3)
+            {
+                s.append(", ");
+            }
+        }
         s.append(";\n");
     }
     s.append("  for (uint k0 = 0u; k0 < K; k0 += 8u) {\n");
@@ -2292,15 +3736,40 @@ inline bool emit_contract_fast_hlsl(const KGraph& g, int output, GlslKernel& out
 inline bool emit_reduce_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (!is_reduce(rn.op)) { return false; }
-    if (g.node(rn.a).op != KOp::Input) { return false; }
+    if (!is_reduce(rn.op))
+    {
+        return false;
+    }
+    if (g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0;
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; }
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2308,12 +3777,30 @@ inline bool emit_reduce_hlsl(const KGraph& g, int output, GlslKernel& out)
     s.append("RWStructuredBuffer<float> A : register(u0);\nRWStructuredBuffer<float> O : register(u1);\n");
     s.append("cbuffer PC : register(b0) { uint nout; uint redsize; };\n");
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint o = dtid.x;\n  if (o >= nout) return;\n  uint base = o * redsize;\n");
-    if (rn.op == KOp::ReduceSum) { s.append("  precise float acc = 0.0;\n  for (uint r = 0; r < redsize; ++r) { acc = acc + A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceProd) { s.append("  precise float acc = 1.0;\n  for (uint r = 0; r < redsize; ++r) { acc = acc * A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceMax) { s.append("  precise float acc = A[base];\n  for (uint r = 1; r < redsize; ++r) { acc = max(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ReduceMin) { s.append("  precise float acc = A[base];\n  for (uint r = 1; r < redsize; ++r) { acc = min(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ArgMax) { s.append("  float bv = A[base]; uint bi = 0;\n  for (uint r = 1; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = (float)bi;\n"); }
-    else { s.append("  float bv = A[base]; uint bi = 0;\n  for (uint r = 1; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = (float)bi;\n"); }
+    if (rn.op == KOp::ReduceSum)
+    {
+        s.append("  precise float acc = 0.0;\n  for (uint r = 0; r < redsize; ++r) { acc = acc + A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceProd)
+    {
+        s.append("  precise float acc = 1.0;\n  for (uint r = 0; r < redsize; ++r) { acc = acc * A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceMax)
+    {
+        s.append("  precise float acc = A[base];\n  for (uint r = 1; r < redsize; ++r) { acc = max(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ReduceMin)
+    {
+        s.append("  precise float acc = A[base];\n  for (uint r = 1; r < redsize; ++r) { acc = min(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ArgMax)
+    {
+        s.append("  float bv = A[base]; uint bi = 0;\n  for (uint r = 1; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = (float)bi;\n");
+    }
+    else
+    {
+        s.append("  float bv = A[base]; uint bi = 0;\n  for (uint r = 1; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = (float)bi;\n");
+    }
     s.append("  O[o] = acc;\n}\n");
     return true;
 }
@@ -2322,14 +3809,36 @@ inline bool emit_reduce_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_reduce_fast_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input) { return false; }
+    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0;
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; }
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2354,7 +3863,10 @@ inline bool emit_reduce_fast_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_gather_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& gn = g.node(output);
-    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input) { return false; }
+    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(gn.a).iidx; // data
     out.input_iidx[1] = g.node(gn.b).iidx; // idx
@@ -2377,7 +3889,10 @@ inline bool emit_broadcast_nd_hlsl(const KGraph& g, int output, GlslKernel& out)
     Shape    osh;
     crd::u32 coef[kMaxRank];
     int      rank = 0;
-    if (!broadcast_coef(g, output, osh, coef, rank)) { return false; }
+    if (!broadcast_coef(g, output, osh, coef, rank))
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(g.node(output).a).iidx;
     crd::containers::String& s = out.source;
@@ -2396,7 +3911,10 @@ inline bool emit_permute_hlsl(const KGraph& g, int output, GlslKernel& out)
     Shape    osh;
     crd::u32 coef[kMaxRank];
     int      rank = 0;
-    if (!permute_coef(g, output, osh, coef, rank)) { return false; }
+    if (!permute_coef(g, output, osh, coef, rank))
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(g.node(output).a).iidx;
     crd::containers::String& s = out.source;
@@ -2412,7 +3930,10 @@ inline bool emit_permute_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scatter_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input) { return false; }
+    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 3;
     out.input_iidx[0] = g.node(sn.a).iidx; // base
     out.input_iidx[1] = g.node(sn.b).iidx; // idx
@@ -2435,7 +3956,10 @@ inline bool emit_scatter_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scatteradd_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScatterAdd || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScatterAdd || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(sn.a).iidx; // idx
     out.input_iidx[1] = g.node(sn.b).iidx; // updates
@@ -2453,7 +3977,10 @@ inline bool emit_scatteradd_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2470,7 +3997,10 @@ inline bool emit_scan_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_fast_hlsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2494,22 +4024,40 @@ inline bool emit_scan_fast_hlsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_contract_fused_hlsl(const KGraph& g, int output, int contract, const FuseInfo& fi, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     const KNode& c = g.node(contract);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2 + fi.n_bias;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
-    for (int j = 0; j < fi.n_bias; ++j) { out.input_iidx[2 + j] = fi.bias_iidx[j]; }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        out.input_iidx[2 + j] = fi.bias_iidx[j];
+    }
     crd::containers::String& s = out.source;
     s.clear();
     s.append("RWStructuredBuffer<float> A : register(u0);\nRWStructuredBuffer<float> Bm : register(u1);\n");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append("RWStructuredBuffer<float> bias"); glsl_detail::app_uint(s, j); s.append(" : register(u"); glsl_detail::app_uint(s, 2 + j); s.append(");\n"); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append("RWStructuredBuffer<float> bias");
+        glsl_detail::app_uint(s, j);
+        s.append(" : register(u");
+        glsl_detail::app_uint(s, 2 + j);
+        s.append(");\n");
+    }
     s.append("RWStructuredBuffer<float> C : register(u"); glsl_detail::app_uint(s, 2 + fi.n_bias); s.append(");\n");
     s.append("cbuffer PC : register(b0) { uint M; uint N; uint K; };\n");
     emit_epi_clike(g, output, fi, scratch, s);
     s.append("[numthreads(256,1,1)]\nvoid cs_main(uint3 dtid : SV_DispatchThreadID) {\n  uint gid = dtid.x;\n  if (gid >= M * N) { return; }\n");
     s.append("  uint m = gid / N; uint nn = gid % N;\n  precise float acc = 0.0;\n  for (uint k = 0; k < K; ++k) { precise float prod = A[m * K + k] * Bm[k * N + nn]; acc = acc + prod; }\n");
     s.append("  C[m * N + nn] = epi(acc");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append(", bias"); glsl_detail::app_uint(s, j); s.append("[nn]"); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append(", bias");
+        glsl_detail::app_uint(s, j);
+        s.append("[nn]");
+    }
     s.append(");\n}\n");
     return true;
 }

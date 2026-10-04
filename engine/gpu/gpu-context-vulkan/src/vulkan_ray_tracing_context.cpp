@@ -31,7 +31,10 @@ struct DevBuffer
     vkGetPhysicalDeviceMemoryProperties(phys, &mp);
     for (crd::u32 i = 0; i < mp.memoryTypeCount; ++i)
     {
-        if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props) { return i; }
+        if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props)
+        {
+            return i;
+        }
     }
     return UINT32_MAX;
 }
@@ -90,7 +93,10 @@ struct VulkanRayTracingContext::Impl
         bci.size        = bytes;
         bci.usage       = usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(device, &bci, nullptr, &out.buffer) != VK_SUCCESS) { return false; }
+        if (vkCreateBuffer(device, &bci, nullptr, &out.buffer) != VK_SUCCESS)
+        {
+            return false;
+        }
         VkMemoryRequirements mr{};
         vkGetBufferMemoryRequirements(device, out.buffer, &mr);
         VkMemoryAllocateFlagsInfo flags{};
@@ -112,7 +118,10 @@ struct VulkanRayTracingContext::Impl
         }
         vkBindBufferMemory(device, out.buffer, out.memory, 0);
         out.bytes = bytes;
-        if (host_visible) { vkMapMemory(device, out.memory, 0, bytes, 0, &out.mapped); }
+        if (host_visible)
+        {
+            vkMapMemory(device, out.memory, 0, bytes, 0, &out.mapped);
+        }
         VkBufferDeviceAddressInfo bdai{};
         bdai.sType   = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         bdai.buffer  = out.buffer;
@@ -133,7 +142,10 @@ struct VulkanRayTracingContext::Impl
         cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cbai.commandBufferCount = 1;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(device, &cbai, &cmd) != VK_SUCCESS) { return; }
+        if (vkAllocateCommandBuffers(device, &cbai, &cmd) != VK_SUCCESS)
+        {
+            return;
+        }
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -168,16 +180,25 @@ struct VulkanRayTracingContext::Impl
         sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
         get_build_sizes(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bgi, &prim_count, &sizes);
         DevBuffer backing{};
-        if (!make_buffer(sizes.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, backing)) { return false; }
+        if (!make_buffer(sizes.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, backing))
+        {
+            return false;
+        }
         VkAccelerationStructureCreateInfoKHR aci{};
         aci.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
         aci.buffer = backing.buffer;
         aci.size   = sizes.accelerationStructureSize;
         aci.type   = type;
-        if (create_as(device, &aci, nullptr, &as_out) != VK_SUCCESS) { return false; }
+        if (create_as(device, &aci, nullptr, &as_out) != VK_SUCCESS)
+        {
+            return false;
+        }
         owned_as.push_back(as_out); // tracked for destruction in the context dtor
         DevBuffer scratch{};
-        if (!make_buffer(sizes.buildScratchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, scratch)) { return false; }
+        if (!make_buffer(sizes.buildScratchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, scratch))
+        {
+            return false;
+        }
         bgi.dstAccelerationStructure  = as_out;
         bgi.scratchData.deviceAddress = scratch.address;
         VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -222,7 +243,10 @@ VulkanRayTracingContext::VulkanRayTracingContext(VulkanGpuContext& ctx)
     impl.device   = ctx.vk_device();
     impl.queue    = ctx.compute_queue();
     impl.family   = ctx.compute_family();
-    if (!ctx.ray_query() || impl.device == VK_NULL_HANDLE) { return; } // adapter without RT ⇒ invalid (tests skip)
+    if (!ctx.ray_query() || impl.device == VK_NULL_HANDLE) // adapter without RT ⇒ invalid (tests skip)
+    {
+        return;
+    }
 
     const auto load = [&](const char* name) { return vkGetDeviceProcAddr(impl.device, name); };
     // buffer-device-address is CORE in Vulkan 1.2+ (we enabled the FEATURE, not the VK_KHR alias extension) ⇒ the core name.
@@ -275,9 +299,18 @@ VulkanRayTracingContext::VulkanRayTracingContext(VulkanGpuContext& ctx)
         p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         p2.pNext = &cp;
         vkGetPhysicalDeviceProperties2(impl.physical, &p2);
-        if (cp.clusterScratchByteAlignment != 0U) { impl.clas_scratch_align = cp.clusterScratchByteAlignment; }
-        if (cp.clusterByteAlignment != 0U) { impl.clas_byte_align = cp.clusterByteAlignment; }
-        if (cp.clusterBottomLevelByteAlignment != 0U) { impl.clas_bl_align = cp.clusterBottomLevelByteAlignment; }
+        if (cp.clusterScratchByteAlignment != 0U)
+        {
+            impl.clas_scratch_align = cp.clusterScratchByteAlignment;
+        }
+        if (cp.clusterByteAlignment != 0U)
+        {
+            impl.clas_byte_align = cp.clusterByteAlignment;
+        }
+        if (cp.clusterBottomLevelByteAlignment != 0U)
+        {
+            impl.clas_bl_align = cp.clusterBottomLevelByteAlignment;
+        }
         impl.has_cluster = impl.get_cluster_sizes != nullptr && impl.cmd_build_cluster != nullptr;
     }
     // B18-f: the NATIVE linear-swept-sphere curve primitive. Reported only when the adapter actually enabled it; on
@@ -289,31 +322,55 @@ VulkanRayTracingContext::VulkanRayTracingContext(VulkanGpuContext& ctx)
     cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cpci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpci.queueFamilyIndex = impl.family;
-    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS) { return; }
+    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS)
+    {
+        return;
+    }
     impl.ok = true;
 }
 
 VulkanRayTracingContext::~VulkanRayTracingContext()
 {
     auto& impl = *m_impl;
-    if (impl.device == VK_NULL_HANDLE) { return; }
+    if (impl.device == VK_NULL_HANDLE)
+    {
+        return;
+    }
     vkDeviceWaitIdle(impl.device);
     if (impl.destroy_as != nullptr)
     {
-        for (crd::usize i = 0; i < impl.owned_as.size(); ++i) { impl.destroy_as(impl.device, impl.owned_as[i], nullptr); }
+        for (crd::usize i = 0; i < impl.owned_as.size(); ++i)
+        {
+            impl.destroy_as(impl.device, impl.owned_as[i], nullptr);
+        }
     }
     if (impl.destroy_mm != nullptr) // FA-1
     {
-        for (crd::usize i = 0; i < impl.owned_mm.size(); ++i) { impl.destroy_mm(impl.device, impl.owned_mm[i], nullptr); }
+        for (crd::usize i = 0; i < impl.owned_mm.size(); ++i)
+        {
+            impl.destroy_mm(impl.device, impl.owned_mm[i], nullptr);
+        }
     }
     for (crd::usize i = 0; i < impl.owned.size(); ++i)
     {
         const DevBuffer& b = impl.owned[i];
-        if (b.mapped != nullptr) { vkUnmapMemory(impl.device, b.memory); }
-        if (b.buffer != VK_NULL_HANDLE) { vkDestroyBuffer(impl.device, b.buffer, nullptr); }
-        if (b.memory != VK_NULL_HANDLE) { vkFreeMemory(impl.device, b.memory, nullptr); }
+        if (b.mapped != nullptr)
+        {
+            vkUnmapMemory(impl.device, b.memory);
+        }
+        if (b.buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(impl.device, b.buffer, nullptr);
+        }
+        if (b.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(impl.device, b.memory, nullptr);
+        }
     }
-    if (impl.cmd_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(impl.device, impl.cmd_pool, nullptr); }
+    if (impl.cmd_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyCommandPool(impl.device, impl.cmd_pool, nullptr);
+    }
 }
 
 bool VulkanRayTracingContext::valid() const noexcept { return m_impl->ok; }
@@ -341,7 +398,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
                                                                         const float* transforms, crd::u32 ninst, bool opaque)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || ntris == 0 || ninst == 0) { return nullptr; }
+    if (!impl.ok || ntris == 0 || ninst == 0)
+    {
+        return nullptr;
+    }
     const crd::u32 nverts = ntris * 3U;
 
     // ── vertex buffer (host-visible, AS-build input) ──
@@ -371,7 +431,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
     tri_geom.geometry.triangles.vertexStride            = 3U * sizeof(float);
     tri_geom.geometry.triangles.maxVertex               = nverts - 1U;
     tri_geom.geometry.triangles.indexType               = VK_INDEX_TYPE_NONE_KHR; // indexless: 3 verts per triangle in order
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, tri_geom, ntris, scene->blas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, tri_geom, ntris, scene->blas))
+    {
+        return nullptr;
+    }
     VkAccelerationStructureDeviceAddressInfoKHR bai{};
     bai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
     bai.accelerationStructure = scene->blas;
@@ -379,14 +442,20 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
 
     // ── instance buffer: `ninst` instances of the BLAS, each with its row-major 3×4 world transform ──
     DevBuffer ibuf{};
-    if (!impl.make_buffer(static_cast<crd::u64>(ninst) * sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, ibuf)) { return nullptr; }
+    if (!impl.make_buffer(static_cast<crd::u64>(ninst) * sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, ibuf))
+    {
+        return nullptr;
+    }
     auto* insts = static_cast<VkAccelerationStructureInstanceKHR*>(ibuf.mapped);
     for (crd::u32 n = 0; n < ninst; ++n)
     {
         VkAccelerationStructureInstanceKHR inst{};
         for (int r = 0; r < 3; ++r)
         {
-            for (int c = 0; c < 4; ++c) { inst.transform.matrix[r][c] = transforms[static_cast<crd::usize>(n) * 12U + static_cast<crd::usize>(r) * 4U + static_cast<crd::usize>(c)]; }
+            for (int c = 0; c < 4; ++c)
+            {
+                inst.transform.matrix[r][c] = transforms[static_cast<crd::usize>(n) * 12U + static_cast<crd::usize>(r) * 4U + static_cast<crd::usize>(c)];
+            }
         }
         inst.mask                           = 0xFFU;
         inst.instanceCustomIndex = n & 0xFFFFFFU; // 24-bit field — surfaces as gl_InstanceCustomIndexEXT / InstanceID() for per-instance data
@@ -402,7 +471,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
     inst_geom.geometry.instances.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, ninst, scene->tlas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, ninst, scene->tlas))
+    {
+        return nullptr;
+    }
     stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
@@ -410,26 +482,38 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_instanced(const fl
 std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* vertices, crd::u32 ntris, const crd::u8* omm_bits, crd::u32 subdiv)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || !impl.has_omm || ntris == 0) { return nullptr; }
+    if (!impl.ok || !impl.has_omm || ntris == 0)
+    {
+        return nullptr;
+    }
     const crd::u32 nverts = ntris * 3U;
     const crd::u32 nmicro = 1U << (2U * subdiv);      // 4^subdiv micro-triangles
     const crd::u32 nbytes = (nmicro + 7U) / 8U;       // 2-state ⇒ 1 bit each
 
     // ── vertex buffer ──
     DevBuffer vbuf{};
-    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * 3U * sizeof(float), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, vbuf)) { return nullptr; }
+    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * 3U * sizeof(float), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, vbuf))
+    {
+        return nullptr;
+    }
     std::memcpy(vbuf.mapped, vertices, static_cast<crd::usize>(nverts) * 3U * sizeof(float));
 
     // ── the OPACITY MICROMAP for triangle 0 (upload the packed 2-state bits + a 1-entry triangle array) ──
     DevBuffer omm_data{};
-    if (!impl.make_buffer(nbytes, VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT, true, omm_data)) { return nullptr; }
+    if (!impl.make_buffer(nbytes, VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT, true, omm_data))
+    {
+        return nullptr;
+    }
     std::memcpy(omm_data.mapped, omm_bits, nbytes);
     VkMicromapTriangleEXT mtri{};
     mtri.dataOffset       = 0;
     mtri.subdivisionLevel = static_cast<crd::u16>(subdiv);
     mtri.format           = VK_OPACITY_MICROMAP_FORMAT_2_STATE_EXT;
     DevBuffer tri_arr{};
-    if (!impl.make_buffer(sizeof(VkMicromapTriangleEXT), VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT, true, tri_arr)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkMicromapTriangleEXT), VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT, true, tri_arr))
+    {
+        return nullptr;
+    }
     std::memcpy(tri_arr.mapped, &mtri, sizeof(mtri));
 
     VkMicromapUsageEXT usage{};
@@ -449,27 +533,42 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* v
     msz.sType = VK_STRUCTURE_TYPE_MICROMAP_BUILD_SIZES_INFO_EXT;
     impl.get_mm_sizes(impl.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &mbi, &msz);
     DevBuffer mm_back{};
-    if (!impl.make_buffer(msz.micromapSize, VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT, false, mm_back)) { return nullptr; }
+    if (!impl.make_buffer(msz.micromapSize, VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT, false, mm_back))
+    {
+        return nullptr;
+    }
     VkMicromapCreateInfoEXT mci{};
     mci.sType  = VK_STRUCTURE_TYPE_MICROMAP_CREATE_INFO_EXT;
     mci.buffer = mm_back.buffer;
     mci.size   = msz.micromapSize;
     mci.type   = VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT;
     VkMicromapEXT micromap = VK_NULL_HANDLE;
-    if (impl.create_mm(impl.device, &mci, nullptr, &micromap) != VK_SUCCESS) { return nullptr; }
+    if (impl.create_mm(impl.device, &mci, nullptr, &micromap) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
     impl.owned_mm.push_back(micromap);
     DevBuffer mm_scratch{};
-    if (!impl.make_buffer(msz.buildScratchSize > 0 ? msz.buildScratchSize : 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, mm_scratch)) { return nullptr; }
+    if (!impl.make_buffer(msz.buildScratchSize > 0 ? msz.buildScratchSize : 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, mm_scratch))
+    {
+        return nullptr;
+    }
     mbi.dstMicromap               = micromap;
     mbi.scratchData.deviceAddress = mm_scratch.address;
     impl.submit_oneshot([&](VkCommandBuffer cmd) { impl.cmd_build_mm(cmd, 1, &mbi); });
 
     // ── per-triangle OMM index: triangle 0 → OMM index 0, the rest → FULLY_OPAQUE ──
     DevBuffer idx_buf{};
-    if (!impl.make_buffer(static_cast<crd::u64>(ntris) * sizeof(crd::i32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, idx_buf)) { return nullptr; }
+    if (!impl.make_buffer(static_cast<crd::u64>(ntris) * sizeof(crd::i32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, idx_buf))
+    {
+        return nullptr;
+    }
     auto* idx = static_cast<crd::i32*>(idx_buf.mapped);
     idx[0] = 0;
-    for (crd::u32 t = 1; t < ntris; ++t) { idx[t] = VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE_EXT; }
+    for (crd::u32 t = 1; t < ntris; ++t)
+    {
+        idx[t] = VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE_EXT;
+    }
 
     // ── BLAS: triangle geometry with the OMM attached (NOT opaque ⇒ the OMM is consulted during traversal) ──
     auto scene = std::make_unique<RtSceneImpl>();
@@ -491,14 +590,20 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* v
     tri_geom.geometry.triangles.maxVertex                = nverts - 1U;
     tri_geom.geometry.triangles.indexType                = VK_INDEX_TYPE_NONE_KHR;
 
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, tri_geom, ntris, scene->blas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, tri_geom, ntris, scene->blas))
+    {
+        return nullptr;
+    }
     VkAccelerationStructureDeviceAddressInfoKHR bai{};
     bai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
     bai.accelerationStructure = scene->blas;
     const VkDeviceAddress blas_addr = impl.get_as_addr(impl.device, &bai);
 
     DevBuffer ibuf{};
-    if (!impl.make_buffer(sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, ibuf)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, ibuf))
+    {
+        return nullptr;
+    }
     VkAccelerationStructureInstanceKHR inst{};
     inst.transform.matrix[0][0] = 1.0F; inst.transform.matrix[1][1] = 1.0F; inst.transform.matrix[2][2] = 1.0F;
     inst.mask                           = 0xFFU;
@@ -511,7 +616,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* v
     inst_geom.geometry.instances.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas))
+    {
+        return nullptr;
+    }
     stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
@@ -521,7 +629,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_omm(const float* v
 std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_curves(const float* segments, crd::u32 nseg)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || nseg == 0 || segments == nullptr) { return nullptr; }
+    if (!impl.ok || nseg == 0 || segments == nullptr)
+    {
+        return nullptr;
+    }
 
     // ── AABB buffer: the CONSERVATIVE bound of each swept segment ──
     // Conservative or nothing: traversal only offers the shader primitives whose box the ray actually entered, so a box
@@ -568,7 +679,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_curves(const float
     aabb_geom.geometry.aabbs.sType               = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
     aabb_geom.geometry.aabbs.data.deviceAddress  = abuf.address;
     aabb_geom.geometry.aabbs.stride              = sizeof(VkAabbPositionsKHR);
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, aabb_geom, nseg, scene->blas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, aabb_geom, nseg, scene->blas))
+    {
+        return nullptr;
+    }
 
     VkAccelerationStructureDeviceAddressInfoKHR bai{};
     bai.sType                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
@@ -598,7 +712,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_curves(const float
     inst_geom.geometry.instances.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     inst_geom.geometry.instances.arrayOfPointers    = VK_FALSE;
     inst_geom.geometry.instances.data.deviceAddress = ibuf.address;
-    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas)) { return nullptr; }
+    if (!impl.build_as(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, inst_geom, 1U, scene->tlas))
+    {
+        return nullptr;
+    }
     stamp_scene_identity(impl.device, *scene); // DIAG.7a(d2b-vk): one Resource identity per scene (TLAS+BLAS)
     return scene;
 }
@@ -606,18 +723,30 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_curves(const float
 std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const float* vertices, crd::u32 ntris)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || !impl.has_cluster || ntris == 0) { return nullptr; }
+    if (!impl.ok || !impl.has_cluster || ntris == 0)
+    {
+        return nullptr;
+    }
     const crd::u32 nverts = ntris * 3U;
     const auto align_up = [](crd::u64 v, crd::u64 a) { return a == 0U ? v : ((v + a - 1U) & ~(a - 1U)); };
 
     // vertices + indices (indexless soup ⇒ indices 0,1,2,...) in device-address buffers.
     DevBuffer vbuf{};
     DevBuffer ibuf{};
-    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * 3U * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, vbuf)) { return nullptr; }
+    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * 3U * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, vbuf))
+    {
+        return nullptr;
+    }
     std::memcpy(vbuf.mapped, vertices, static_cast<crd::usize>(nverts) * 3U * sizeof(float));
-    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * sizeof(crd::u32), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, ibuf)) { return nullptr; }
+    if (!impl.make_buffer(static_cast<crd::u64>(nverts) * sizeof(crd::u32), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, ibuf))
+    {
+        return nullptr;
+    }
     auto* idx = static_cast<crd::u32*>(ibuf.mapped);
-    for (crd::u32 i = 0; i < nverts; ++i) { idx[i] = i; }
+    for (crd::u32 i = 0; i < nverts; ++i)
+    {
+        idx[i] = i;
+    }
 
     // ── PASS 1: build ONE triangle cluster (CLAS), implicit destinations ──
     VkClusterAccelerationStructureTriangleClusterInputNV tri_in{};
@@ -647,7 +776,10 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     DevBuffer cl_dst{};
     DevBuffer cl_scratch{};
     DevBuffer cl_data{};
-    if (!impl.make_buffer(sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_info)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_info))
+    {
+        return nullptr;
+    }
     auto* ci = static_cast<VkClusterAccelerationStructureBuildTriangleClusterInfoNV*>(cl_info.mapped);
     *ci = VkClusterAccelerationStructureBuildTriangleClusterInfoNV{};
     ci->clusterID                = 0;
@@ -660,12 +792,24 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     ci->vertexBufferStride       = 3U * sizeof(float);
     ci->indexBuffer              = ibuf.address;
     ci->vertexBuffer             = vbuf.address;
-    if (!impl.make_buffer(sizeof(crd::u32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_count)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(crd::u32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_count))
+    {
+        return nullptr;
+    }
     *static_cast<crd::u32*>(cl_count.mapped) = 1U;
     // CLAS address out — also read as the clusterReferences input of pass 2 (both usages).
-    if (!impl.make_buffer(sizeof(VkDeviceAddress), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_dst)) { return nullptr; }
-    if (!impl.make_buffer(align_up(sz1.buildScratchSize, impl.clas_scratch_align) + impl.clas_scratch_align, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, cl_scratch)) { return nullptr; }
-    if (!impl.make_buffer(sz1.accelerationStructureSize > 0 ? sz1.accelerationStructureSize : 4U, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, cl_data)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkDeviceAddress), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, cl_dst))
+    {
+        return nullptr;
+    }
+    if (!impl.make_buffer(align_up(sz1.buildScratchSize, impl.clas_scratch_align) + impl.clas_scratch_align, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, cl_scratch))
+    {
+        return nullptr;
+    }
+    if (!impl.make_buffer(sz1.accelerationStructureSize > 0 ? sz1.accelerationStructureSize : 4U, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, cl_data))
+    {
+        return nullptr;
+    }
 
     VkClusterAccelerationStructureCommandsInfoNV cmd1{};
     cmd1.sType                        = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV;
@@ -696,16 +840,32 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     DevBuffer bl_dst{};
     DevBuffer bl_scratch{};
     DevBuffer bl_data{};
-    if (!impl.make_buffer(sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, bl_info)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, bl_info))
+    {
+        return nullptr;
+    }
     auto* bl = static_cast<VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV*>(bl_info.mapped);
     bl->clusterReferencesCount  = 1;
     bl->clusterReferencesStride = sizeof(VkDeviceAddress);
     bl->clusterReferences       = cl_dst.address; // GPU-side chain: the CLAS address pass 1 wrote here
-    if (!impl.make_buffer(sizeof(crd::u32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, bl_count)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(crd::u32), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, bl_count))
+    {
+        return nullptr;
+    }
     *static_cast<crd::u32*>(bl_count.mapped) = 1U;
-    if (!impl.make_buffer(sizeof(VkDeviceAddress), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, true, bl_dst)) { return nullptr; } // BLAS address out (host-visible)
-    if (!impl.make_buffer(align_up(sz2.buildScratchSize, impl.clas_scratch_align) + impl.clas_scratch_align, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, bl_scratch)) { return nullptr; }
-    if (!impl.make_buffer(sz2.accelerationStructureSize > 0 ? sz2.accelerationStructureSize : 4U, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, bl_data)) { return nullptr; }
+    // BLAS address out (host-visible)
+    if (!impl.make_buffer(sizeof(VkDeviceAddress), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, true, bl_dst))
+    {
+        return nullptr;
+    }
+    if (!impl.make_buffer(align_up(sz2.buildScratchSize, impl.clas_scratch_align) + impl.clas_scratch_align, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, bl_scratch))
+    {
+        return nullptr;
+    }
+    if (!impl.make_buffer(sz2.accelerationStructureSize > 0 ? sz2.accelerationStructureSize : 4U, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, bl_data))
+    {
+        return nullptr;
+    }
     VkClusterAccelerationStructureCommandsInfoNV cmd2{};
     cmd2.sType                        = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV;
     cmd2.input                        = in2;
@@ -726,13 +886,19 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
         impl.cmd_build_cluster(cmd, &cmd2);
     });
     const VkDeviceAddress cluster_blas_addr = *static_cast<VkDeviceAddress*>(bl_dst.mapped);
-    if (cluster_blas_addr == 0) { return nullptr; }
+    if (cluster_blas_addr == 0)
+    {
+        return nullptr;
+    }
 
     // ── TLAS over the cluster BLAS (referenced by its device address) ──
     auto scene = std::make_unique<RtSceneImpl>();
     scene->blas = VK_NULL_HANDLE; // the cluster BLAS is address-referenced, not a VkAccelerationStructureKHR handle
     DevBuffer tinst{};
-    if (!impl.make_buffer(sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, tinst)) { return nullptr; }
+    if (!impl.make_buffer(sizeof(VkAccelerationStructureInstanceKHR), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true, tinst))
+    {
+        return nullptr;
+    }
     VkAccelerationStructureInstanceKHR inst{};
     inst.transform.matrix[0][0] = 1.0F; inst.transform.matrix[1][1] = 1.0F; inst.transform.matrix[2][2] = 1.0F;
     inst.mask                           = 0xFFU;
@@ -754,11 +920,20 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_clusters(const flo
     impl.get_build_sizes(impl.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bgi, &one, &tsz);
     DevBuffer tback{};
     DevBuffer tscratch{};
-    if (!impl.make_buffer(tsz.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, tback)) { return nullptr; }
+    if (!impl.make_buffer(tsz.accelerationStructureSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, tback))
+    {
+        return nullptr;
+    }
     VkAccelerationStructureCreateInfoKHR aci{}; aci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR; aci.buffer = tback.buffer; aci.size = tsz.accelerationStructureSize; aci.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    if (impl.create_as(impl.device, &aci, nullptr, &scene->tlas) != VK_SUCCESS) { return nullptr; }
+    if (impl.create_as(impl.device, &aci, nullptr, &scene->tlas) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
     impl.owned_as.push_back(scene->tlas);
-    if (!impl.make_buffer(tsz.buildScratchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, tscratch)) { return nullptr; }
+    if (!impl.make_buffer(tsz.buildScratchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, tscratch))
+    {
+        return nullptr;
+    }
     bgi.dstAccelerationStructure = scene->tlas; bgi.scratchData.deviceAddress = tscratch.address;
     VkAccelerationStructureBuildRangeInfoKHR rng{}; rng.primitiveCount = 1;
     const VkAccelerationStructureBuildRangeInfoKHR* prng = &rng;
@@ -771,11 +946,17 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_alpha(const float*
 {
     if (m_impl->has_omm) // hardware opacity micromap resolves alpha in traversal (fast path)
     {
-        if (fell_back != nullptr) { *fell_back = false; }
+        if (fell_back != nullptr)
+        {
+            *fell_back = false;
+        }
         return build_scene_omm(vertices, ntris, omm_bits, subdiv);
     }
     // fallback: non-opaque geometry the caller pairs with the CKIR any-hit alpha shader (correct, slower).
-    if (fell_back != nullptr) { *fell_back = true; }
+    if (fell_back != nullptr)
+    {
+        *fell_back = true;
+    }
     const float identity[12] = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F};
     return build_scene_instanced(vertices, ntris, identity, 1U, /*opaque=*/false);
 }
@@ -783,8 +964,14 @@ std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_alpha(const float*
 std::unique_ptr<RtScene> VulkanRayTracingContext::build_scene_scalable(const float* vertices, crd::u32 ntris, bool prefer_clusters, bool* fell_back)
 {
     const bool use_clusters = prefer_clusters && m_impl->has_cluster;
-    if (fell_back != nullptr) { *fell_back = prefer_clusters && !use_clusters; } // requested clusters but the adapter lacks them
-    if (use_clusters) { return build_scene_clusters(vertices, ntris); }
+    if (fell_back != nullptr) // requested clusters but the adapter lacks them
+    {
+        *fell_back = prefer_clusters && !use_clusters;
+    }
+    if (use_clusters)
+    {
+        return build_scene_clusters(vertices, ntris);
+    }
     return build_scene(vertices, ntris); // standard BLAS — identical result (cluster topology is a memory-layout optimisation)
 }
 
@@ -794,30 +981,54 @@ bool VulkanRayTracingContext::trace_dispatch(const RtScene& scene_base, crd::con
     auto&              impl  = *m_impl;
     const RtSceneImpl& scene = static_cast<const RtSceneImpl&>(scene_base);
     const crd::usize   nbuf  = bindings.size();
-    if (!impl.ok || scene.tlas == VK_NULL_HANDLE || nbuf == 0 || nbuf > 15) { return false; }
+    if (!impl.ok || scene.tlas == VK_NULL_HANDLE || nbuf == 0 || nbuf > 15)
+    {
+        return false;
+    }
 
     // ── one host-visible storage buffer per Binding; upload inputs ──
     DevBuffer bufs[16]{};
     crd::u32  max_slot = 0;
     for (crd::usize i = 0; i < nbuf; ++i)
     {
-        if (!impl.make_buffer(bindings[i].bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, bufs[i])) { return false; }
-        if (bindings[i].upload != nullptr) { std::memcpy(bufs[i].mapped, bindings[i].upload, static_cast<crd::usize>(bindings[i].bytes)); }
-        else { std::memset(bufs[i].mapped, 0, static_cast<crd::usize>(bindings[i].bytes)); }
-        if (bindings[i].binding > max_slot) { max_slot = bindings[i].binding; }
+        if (!impl.make_buffer(bindings[i].bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, bufs[i]))
+        {
+            return false;
+        }
+        if (bindings[i].upload != nullptr)
+        {
+            std::memcpy(bufs[i].mapped, bindings[i].upload, static_cast<crd::usize>(bindings[i].bytes));
+        }
+        else
+        {
+            std::memset(bufs[i].mapped, 0, static_cast<crd::usize>(bindings[i].bytes));
+        }
+        if (bindings[i].binding > max_slot)
+        {
+            max_slot = bindings[i].binding;
+        }
     }
 
     // ── descriptor set layout: binding 0 = TLAS · each Binding's slot = SSBO ──
     const crd::u32               nslots = max_slot + 1U;
     VkDescriptorSetLayoutBinding lb[16]{};
-    for (crd::u32 s = 0; s < nslots; ++s) { lb[s].binding = s; lb[s].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; lb[s].descriptorCount = 1; lb[s].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; }
+    for (crd::u32 s = 0; s < nslots; ++s)
+    {
+        lb[s].binding = s;
+        lb[s].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        lb[s].descriptorCount = 1;
+        lb[s].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     lb[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; // binding 0 is the TLAS
     VkDescriptorSetLayoutCreateInfo dlci{};
     dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     dlci.bindingCount = nslots;
     dlci.pBindings    = lb;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(impl.device, &dlci, nullptr, &set_layout) != VK_SUCCESS) { return false; }
+    if (vkCreateDescriptorSetLayout(impl.device, &dlci, nullptr, &set_layout) != VK_SUCCESS)
+    {
+        return false;
+    }
 
     // ── shader module + compute pipeline ──
     VkShaderModuleCreateInfo smci{};
@@ -825,7 +1036,11 @@ bool VulkanRayTracingContext::trace_dispatch(const RtScene& scene_base, crd::con
     smci.codeSize = spirv.size();
     smci.pCode    = reinterpret_cast<const crd::u32*>(spirv.data());
     VkShaderModule module = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(impl.device, &smci, nullptr, &module) != VK_SUCCESS) { vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr); return false; }
+    if (vkCreateShaderModule(impl.device, &smci, nullptr, &module) != VK_SUCCESS)
+    {
+        vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr);
+        return false;
+    }
     VkPipelineLayoutCreateInfo plci{};
     plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.setLayoutCount = 1;
@@ -842,7 +1057,12 @@ bool VulkanRayTracingContext::trace_dispatch(const RtScene& scene_base, crd::con
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult pr = vkCreateComputePipelines(impl.device, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline);
     vkDestroyShaderModule(impl.device, module, nullptr);
-    if (pr != VK_SUCCESS) { vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr); vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr); return false; }
+    if (pr != VK_SUCCESS)
+    {
+        vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr);
+        vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr);
+        return false;
+    }
 
     // ── descriptor pool + set ──
     VkDescriptorPoolSize psizes[2]{};
@@ -885,7 +1105,10 @@ bool VulkanRayTracingContext::trace_dispatch(const RtScene& scene_base, crd::con
     });
     for (crd::usize i = 0; i < nbuf; ++i) // read back outputs
     {
-        if (bindings[i].readback != nullptr) { std::memcpy(bindings[i].readback, bufs[i].mapped, static_cast<crd::usize>(bindings[i].bytes)); }
+        if (bindings[i].readback != nullptr)
+        {
+            std::memcpy(bindings[i].readback, bufs[i].mapped, static_cast<crd::usize>(bindings[i].bytes));
+        }
     }
 
     vkDestroyDescriptorPool(impl.device, desc_pool, nullptr);
@@ -903,7 +1126,10 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     auto&              impl  = *m_impl;
     const RtSceneImpl& scene = static_cast<const RtSceneImpl&>(scene_base);
     const crd::usize   nbuf  = bindings.size();
-    if (!impl.has_rtpipe || scene.tlas == VK_NULL_HANDLE || nbuf == 0 || nbuf > 15) { return false; }
+    if (!impl.has_rtpipe || scene.tlas == VK_NULL_HANDLE || nbuf == 0 || nbuf > 15)
+    {
+        return false;
+    }
     const bool have_ah = rahit.size() > 0;
 
     const auto mod = [&](crd::containers::ConstSpan<crd::u8> spv) {
@@ -915,28 +1141,52 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     VkShaderModule mms = mod(rmiss);
     VkShaderModule mch = mod(rchit);
     VkShaderModule mah = have_ah ? mod(rahit) : VK_NULL_HANDLE;
-    if (mrg == VK_NULL_HANDLE || mms == VK_NULL_HANDLE || mch == VK_NULL_HANDLE || (have_ah && mah == VK_NULL_HANDLE)) { return false; }
+    if (mrg == VK_NULL_HANDLE || mms == VK_NULL_HANDLE || mch == VK_NULL_HANDLE || (have_ah && mah == VK_NULL_HANDLE))
+    {
+        return false;
+    }
 
     // ── device buffers per binding (upload inputs) ──
     DevBuffer bufs[16]{};
     crd::u32  max_slot = 0;
     for (crd::usize i = 0; i < nbuf; ++i)
     {
-        if (!impl.make_buffer(bindings[i].bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, bufs[i])) { return false; }
-        if (bindings[i].upload != nullptr) { std::memcpy(bufs[i].mapped, bindings[i].upload, static_cast<crd::usize>(bindings[i].bytes)); }
-        else { std::memset(bufs[i].mapped, 0, static_cast<crd::usize>(bindings[i].bytes)); }
-        if (bindings[i].binding > max_slot) { max_slot = bindings[i].binding; }
+        if (!impl.make_buffer(bindings[i].bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, bufs[i]))
+        {
+            return false;
+        }
+        if (bindings[i].upload != nullptr)
+        {
+            std::memcpy(bufs[i].mapped, bindings[i].upload, static_cast<crd::usize>(bindings[i].bytes));
+        }
+        else
+        {
+            std::memset(bufs[i].mapped, 0, static_cast<crd::usize>(bindings[i].bytes));
+        }
+        if (bindings[i].binding > max_slot)
+        {
+            max_slot = bindings[i].binding;
+        }
     }
     // ── descriptor set layout (b0 = TLAS, rest = SSBO), visible to all RT stages ──
     const crd::u32               nslots = max_slot + 1U;
     const VkShaderStageFlags     rt_stages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
     VkDescriptorSetLayoutBinding lb[16]{};
-    for (crd::u32 s = 0; s < nslots; ++s) { lb[s].binding = s; lb[s].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; lb[s].descriptorCount = 1; lb[s].stageFlags = rt_stages; }
+    for (crd::u32 s = 0; s < nslots; ++s)
+    {
+        lb[s].binding = s;
+        lb[s].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        lb[s].descriptorCount = 1;
+        lb[s].stageFlags = rt_stages;
+    }
     lb[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     VkDescriptorSetLayoutCreateInfo dlci{};
     dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; dlci.bindingCount = nslots; dlci.pBindings = lb;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(impl.device, &dlci, nullptr, &set_layout) != VK_SUCCESS) { return false; }
+    if (vkCreateDescriptorSetLayout(impl.device, &dlci, nullptr, &set_layout) != VK_SUCCESS)
+    {
+        return false;
+    }
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; plci.setLayoutCount = 1; plci.pSetLayouts = &set_layout;
     VkPipelineLayout pipe_layout = VK_NULL_HANDLE;
@@ -948,13 +1198,30 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     stages[1].sType = stages[0].sType;                                     stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;        stages[1].module = mms; stages[1].pName = "main";
     stages[2].sType = stages[0].sType;                                     stages[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR; stages[2].module = mch; stages[2].pName = "main";
     crd::u32 nstage = 3;
-    if (have_ah) { stages[3].sType = stages[0].sType; stages[3].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR; stages[3].module = mah; stages[3].pName = "main"; nstage = 4; }
+    if (have_ah)
+    {
+        stages[3].sType = stages[0].sType;
+        stages[3].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+        stages[3].module = mah;
+        stages[3].pName = "main";
+        nstage = 4;
+    }
     VkRayTracingShaderGroupCreateInfoKHR groups[3]{};
-    for (int i = 0; i < 3; ++i) { groups[i].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR; groups[i].generalShader = VK_SHADER_UNUSED_KHR; groups[i].closestHitShader = VK_SHADER_UNUSED_KHR; groups[i].anyHitShader = VK_SHADER_UNUSED_KHR; groups[i].intersectionShader = VK_SHADER_UNUSED_KHR; }
+    for (int i = 0; i < 3; ++i)
+    {
+        groups[i].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+        groups[i].generalShader = VK_SHADER_UNUSED_KHR;
+        groups[i].closestHitShader = VK_SHADER_UNUSED_KHR;
+        groups[i].anyHitShader = VK_SHADER_UNUSED_KHR;
+        groups[i].intersectionShader = VK_SHADER_UNUSED_KHR;
+    }
     groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;              groups[0].generalShader = 0; // raygen
     groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;              groups[1].generalShader = 1; // miss
     groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;  groups[2].closestHitShader = 2; // hit
-    if (have_ah) { groups[2].anyHitShader = 3; } // P4: the hit group gains the alpha-test any-hit shader
+    if (have_ah) // P4: the hit group gains the alpha-test any-hit shader
+    {
+        groups[2].anyHitShader = 3;
+    }
     VkRayTracingPipelineCreateInfoKHR rtci{};
     rtci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
     rtci.stageCount = nstage; rtci.pStages = stages; rtci.groupCount = 3; rtci.pGroups = groups;
@@ -962,8 +1229,16 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult pr = impl.create_rt_pipe(impl.device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &rtci, nullptr, &pipeline);
     vkDestroyShaderModule(impl.device, mrg, nullptr); vkDestroyShaderModule(impl.device, mms, nullptr); vkDestroyShaderModule(impl.device, mch, nullptr);
-    if (mah != VK_NULL_HANDLE) { vkDestroyShaderModule(impl.device, mah, nullptr); }
-    if (pr != VK_SUCCESS) { vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr); vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr); return false; }
+    if (mah != VK_NULL_HANDLE)
+    {
+        vkDestroyShaderModule(impl.device, mah, nullptr);
+    }
+    if (pr != VK_SUCCESS)
+    {
+        vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr);
+        vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr);
+        return false;
+    }
 
     // ── shader binding table: 3 base-aligned regions (raygen / miss / hit), each holding its group handle ──
     const auto align_up = [](crd::u64 v, crd::u64 a) { return (v + a - 1U) & ~(a - 1U); };
@@ -972,10 +1247,19 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
     handles.resize(static_cast<crd::usize>(impl.sbt_handle_size) * 3U, 0U);
     impl.get_group_handles(impl.device, pipeline, 0, 3, handles.size(), handles.data());
     DevBuffer sbt{};
-    if (!impl.make_buffer(region * 3U, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true, sbt)) { vkDestroyPipeline(impl.device, pipeline, nullptr); vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr); vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr); return false; }
+    if (!impl.make_buffer(region * 3U, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true, sbt))
+    {
+        vkDestroyPipeline(impl.device, pipeline, nullptr);
+        vkDestroyPipelineLayout(impl.device, pipe_layout, nullptr);
+        vkDestroyDescriptorSetLayout(impl.device, set_layout, nullptr);
+        return false;
+    }
     auto* sbt_bytes = static_cast<crd::u8*>(sbt.mapped);
     std::memset(sbt_bytes, 0, static_cast<crd::usize>(region) * 3U);
-    for (int gexp = 0; gexp < 3; ++gexp) { std::memcpy(sbt_bytes + static_cast<crd::usize>(region) * gexp, handles.data() + static_cast<crd::usize>(impl.sbt_handle_size) * gexp, impl.sbt_handle_size); }
+    for (int gexp = 0; gexp < 3; ++gexp)
+    {
+        std::memcpy(sbt_bytes + static_cast<crd::usize>(region) * gexp, handles.data() + static_cast<crd::usize>(impl.sbt_handle_size) * gexp, impl.sbt_handle_size);
+    }
     VkStridedDeviceAddressRegionKHR rgen_r{};
     VkStridedDeviceAddressRegionKHR miss_r{};
     VkStridedDeviceAddressRegionKHR hit_r{};
@@ -1014,7 +1298,13 @@ bool VulkanRayTracingContext::trace_rays_pipeline(const RtScene& scene_base, crd
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipe_layout, 0, 1, &set, 0, nullptr);
         impl.cmd_trace_rays(cmd, &rgen_r, &miss_r, &hit_r, &call_r, width > 0 ? width : 1, height > 0 ? height : 1, 1);
     });
-    for (crd::usize i = 0; i < nbuf; ++i) { if (bindings[i].readback != nullptr) { std::memcpy(bindings[i].readback, bufs[i].mapped, static_cast<crd::usize>(bindings[i].bytes)); } }
+    for (crd::usize i = 0; i < nbuf; ++i)
+    {
+        if (bindings[i].readback != nullptr)
+        {
+            std::memcpy(bindings[i].readback, bufs[i].mapped, static_cast<crd::usize>(bindings[i].bytes));
+        }
+    }
 
     vkDestroyDescriptorPool(impl.device, desc_pool, nullptr);
     vkDestroyPipeline(impl.device, pipeline, nullptr);

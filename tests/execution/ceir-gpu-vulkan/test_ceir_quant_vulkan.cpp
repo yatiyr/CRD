@@ -60,25 +60,38 @@ TEST_CASE("ceir 23b-1: quant_dequantize_q8 runs on a Vulkan device (u32-pack + s
 
     // ── the reference: int8 values (mix of sign), packed 4/u32; out = (int8 - zp)*scale. ──
     crd::i32 b[kN];
-    for (int i = 0; i < kN; ++i) { b[i] = ((i * 37 + 11) % 256) - 128; }
+    for (int i = 0; i < kN; ++i)
+    {
+        b[i] = ((i * 37 + 11) % 256) - 128;
+    }
     float packed[kN / 4];
     for (int w = 0; w < kN / 4; ++w)
     {
         crd::u32 word = 0;
-        for (int j = 0; j < 4; ++j) { word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j)); }
+        for (int j = 0; j < 4; ++j)
+        {
+            word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j));
+        }
         packed[w] = bits_as_float(word);
     }
     float scale[1] = {0.5F};
     float zp[1]    = {3.0F};
     float out[kN];
-    for (int i = 0; i < kN; ++i) { out[i] = -999.0F; }
+    for (int i = 0; i < kN; ++i)
+    {
+        out[i] = -999.0F;
+    }
 
     // ── DEVICE (soft-skip with no adapter) ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-23b-1 dequant gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-23b-1 dequant gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 

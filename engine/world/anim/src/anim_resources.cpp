@@ -17,7 +17,10 @@ namespace
 void push_bytes(crd::containers::Array<crd::u8>& out, const void* p, crd::usize n)
 {
     const auto* b = static_cast<const crd::u8*>(p);
-    for (crd::usize i = 0; i < n; ++i) { out.push_back(b[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        out.push_back(b[i]);
+    }
 }
 
 } // namespace
@@ -37,7 +40,10 @@ crd::containers::Array<crd::u8> skeleton_build(const SkeletonResource& skeleton,
     }
     for (crd::u32 i = 0; i < n; ++i) // the topological contract IS the format — refuse violations at build
     {
-        if (skeleton.parents[i] >= static_cast<crd::i32>(i)) { return empty; }
+        if (skeleton.parents[i] >= static_cast<crd::i32>(i))
+        {
+            return empty;
+        }
     }
 
     crd::containers::Array<crd::u8> joints(alloc);
@@ -60,12 +66,21 @@ crd::containers::Array<crd::u8> anim_clip_build(const AnimClipResource& clip, co
                                                 crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> empty(alloc);
-    if (clip.tracks.size() == 0U) { return empty; }
+    if (clip.tracks.size() == 0U)
+    {
+        return empty;
+    }
     for (const AnimTrack& t : clip.tracks) // offsets must stay inside the blob — refuse at build, never at load
     {
         const crd::usize span = static_cast<crd::usize>(t.interp == 2 ? 3U : 1U) * t.components;
-        if (t.key_count == 0U || t.components == 0U) { return empty; }
-        if (static_cast<crd::usize>(t.times_off) + t.key_count > clip.data.size()) { return empty; }
+        if (t.key_count == 0U || t.components == 0U)
+        {
+            return empty;
+        }
+        if (static_cast<crd::usize>(t.times_off) + t.key_count > clip.data.size())
+        {
+            return empty;
+        }
         if (static_cast<crd::usize>(t.values_off) + static_cast<crd::usize>(t.key_count) * span > clip.data.size())
         {
             return empty;
@@ -91,10 +106,16 @@ crd::containers::Array<crd::u8> anim_clip_build(const AnimClipResource& clip, co
 void* SkeletonLoader::load(const crd::resources::LoadContext& ctx)
 {
     crd::resources::CrdrFile file(&m_owned);
-    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok) { return nullptr; }
+    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok)
+    {
+        return nullptr;
+    }
     const crd::resources::CrdrChunk* jc = crd::resources::crdr_find_chunk(file, kFourCC_SklJ);
     const crd::resources::CrdrChunk* nc = crd::resources::crdr_find_chunk(file, kFourCC_SklN);
-    if (jc == nullptr || nc == nullptr || jc->payload.size() < 4U) { return nullptr; }
+    if (jc == nullptr || nc == nullptr || jc->payload.size() < 4U)
+    {
+        return nullptr;
+    }
 
     crd::u32 n = 0;
     std::memcpy(&n, jc->payload.data(), 4U);
@@ -105,7 +126,10 @@ void* SkeletonLoader::load(const crd::resources::LoadContext& ctx)
     }
 
     void* raw = m_payload->try_allocate(sizeof(SkeletonResource), alignof(SkeletonResource));
-    if (raw == nullptr) { return nullptr; }
+    if (raw == nullptr)
+    {
+        return nullptr;
+    }
     auto* skel = new (raw) SkeletonResource(m_payload);
 
     const crd::u8* p = jc->payload.data() + 4U;
@@ -139,14 +163,20 @@ void* SkeletonLoader::load(const crd::resources::LoadContext& ctx)
     }
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (skel->name_offsets[i] >= skel->name_pool.size()) { skel->name_offsets[i] = static_cast<crd::u32>(skel->name_pool.size() - 1U); }
+        if (skel->name_offsets[i] >= skel->name_pool.size())
+        {
+            skel->name_offsets[i] = static_cast<crd::u32>(skel->name_pool.size() - 1U);
+        }
     }
     return skel;
 }
 
 void SkeletonLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto* skel = static_cast<SkeletonResource*>(payload);
     skel->~SkeletonResource();
     m_payload->deallocate(skel);
@@ -155,7 +185,10 @@ void SkeletonLoader::unload(void* payload) noexcept
 void* AnimClipLoader::load(const crd::resources::LoadContext& ctx)
 {
     crd::resources::CrdrFile file(&m_owned);
-    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok) { return nullptr; }
+    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok)
+    {
+        return nullptr;
+    }
     const crd::resources::CrdrChunk* tc = crd::resources::crdr_find_chunk(file, kFourCC_AnmT);
     const crd::resources::CrdrChunk* dc = crd::resources::crdr_find_chunk(file, kFourCC_AnmD);
     if (tc == nullptr || dc == nullptr || tc->payload.size() < 8U || (dc->payload.size() % 4U) != 0U)
@@ -167,10 +200,16 @@ void* AnimClipLoader::load(const crd::resources::LoadContext& ctx)
     crd::u32 n        = 0;
     std::memcpy(&duration, tc->payload.data(), 4U);
     std::memcpy(&n, tc->payload.data() + 4U, 4U);
-    if (n == 0U || tc->payload.size() < 8U + static_cast<crd::usize>(n) * sizeof(AnimTrack)) { return nullptr; }
+    if (n == 0U || tc->payload.size() < 8U + static_cast<crd::usize>(n) * sizeof(AnimTrack))
+    {
+        return nullptr;
+    }
 
     void* raw = m_payload->try_allocate(sizeof(AnimClipResource), alignof(AnimClipResource));
-    if (raw == nullptr) { return nullptr; }
+    if (raw == nullptr)
+    {
+        return nullptr;
+    }
     auto* clip     = new (raw) AnimClipResource(m_payload);
     clip->duration = duration;
     clip->tracks.resize(n);
@@ -197,7 +236,10 @@ void* AnimClipLoader::load(const crd::resources::LoadContext& ctx)
 
 void AnimClipLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto* clip = static_cast<AnimClipResource*>(payload);
     clip->~AnimClipResource();
     m_payload->deallocate(clip);

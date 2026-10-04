@@ -102,7 +102,10 @@ TEST_CASE("REN-40-I2: every meshlet belongs to exactly one group",
 
     crd::containers::Array<crd::u32> seen(&alloc);
     seen.resize(mc);
-    for (crd::u32 i = 0; i < mc; ++i) seen[i] = 0U;
+    for (crd::u32 i = 0; i < mc; ++i)
+    {
+        seen[i] = 0U;
+    }
 
     crd::u32 total = 0U;
     for (crd::u32 g = 0; g < report.group_count; ++g)
@@ -141,7 +144,9 @@ TEST_CASE("REN-40-I2: group sizes respect target",
 
     REQUIRE(report.status == mp::ClusterGroupStatus::Ok);
     for (crd::u32 g = 0; g < report.group_count; ++g)
+    {
         REQUIRE(gresult.groups[g].count <= gopts.target_group_size);
+    }
 }
 
 TEST_CASE("REN-40-I2: boundary vertices are correct",
@@ -173,26 +178,39 @@ TEST_CASE("REN-40-I2: boundary vertices are correct",
     {
         const auto& grp = gresult.groups[g];
         for (crd::u32 gi = 0; gi < grp.count; ++gi)
+        {
             m_to_g[gresult.group_meshlets[grp.first + gi]] = g;
+        }
     }
 
     // Build vertex → meshlet list
     crd::containers::Array<crd::u32> vtm_count(&alloc);
     vtm_count.resize(vc);
-    for (crd::u32 i = 0; i < vc; ++i) vtm_count[i] = 0U;
+    for (crd::u32 i = 0; i < vc; ++i)
+    {
+        vtm_count[i] = 0U;
+    }
     for (crd::u32 m = 0; m < mc; ++m)
     {
         const auto& ml = mresult.meshlets[m];
         for (crd::u32 vi = 0; vi < ml.vertex_count; ++vi)
+        {
             vtm_count[mresult.meshlet_vertices[ml.vertex_offset + vi]]++;
+        }
     }
     crd::containers::Array<crd::u32> vtm_off(&alloc);
     vtm_off.resize(vc + 1U);
     vtm_off[0] = 0U;
-    for (crd::u32 i = 0; i < vc; ++i) vtm_off[i + 1U] = vtm_off[i] + vtm_count[i];
+    for (crd::u32 i = 0; i < vc; ++i)
+    {
+        vtm_off[i + 1U] = vtm_off[i] + vtm_count[i];
+    }
     crd::containers::Array<crd::u32> vtm_data(&alloc);
     vtm_data.resize(vtm_off[vc]);
-    for (crd::u32 i = 0; i < vc; ++i) vtm_count[i] = 0U;
+    for (crd::u32 i = 0; i < vc; ++i)
+    {
+        vtm_count[i] = 0U;
+    }
     for (crd::u32 m = 0; m < mc; ++m)
     {
         const auto& ml = mresult.meshlets[m];
@@ -217,9 +235,13 @@ TEST_CASE("REN-40-I2: boundary vertices are correct",
             for (crd::u32 vi = vtm_off[gv]; vi < vtm_off[gv + 1U]; ++vi)
             {
                 if (m_to_g[vtm_data[vi]] == g)
+                {
                     in_group = true;
+                }
                 else
+                {
                     out_of_group = true;
+                }
             }
             REQUIRE(in_group);
             REQUIRE(out_of_group);
@@ -299,9 +321,13 @@ TEST_CASE("REN-40-I2: determinism",
         REQUIRE(r1.groups[g].count == r2.groups[g].count);
     }
     for (crd::u32 i = 0; i < static_cast<crd::u32>(r1.group_meshlets.size()); ++i)
+    {
         REQUIRE(r1.group_meshlets[i] == r2.group_meshlets[i]);
+    }
     for (crd::u32 i = 0; i < static_cast<crd::u32>(r1.boundary_vertices.size()); ++i)
+    {
         REQUIRE(r1.boundary_vertices[i] == r2.boundary_vertices[i]);
+    }
 }
 
 TEST_CASE("REN-40-I2: single meshlet produces one group",

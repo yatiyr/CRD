@@ -49,60 +49,108 @@ constexpr crd::u32 kMaxMaterializeInserts = 1U << 20;
     const StringView nm = ctx.op_name(op->kind());
     if (nm == StringView("dist.shard"))
     {
-        if (op->num_operands() < 1U) { return conflict(); }
-        if (sm.of(op->operand(0U)).kind != ShardingKind::Replicated) { return conflict(); } // reshard is ledgered
+        if (op->num_operands() < 1U)
+        {
+            return conflict();
+        }
+        if (sm.of(op->operand(0U)).kind != ShardingKind::Replicated) // reshard is ledgered
+        {
+            return conflict();
+        }
         const Operation* const mesh = resolve_mesh(ctx, meshes, symbol_name(ctx, op->attr("mesh")));
-        if (mesh == nullptr) { return conflict(); }
+        if (mesh == nullptr)
+        {
+            return conflict();
+        }
         const crd::i32 maxis = int_attr(ctx, op, "mesh_axis");
-        if (mesh_extent(ctx, mesh, maxis) == 1) { return replicated(); } // 1-device IDENTITY: a size-1 mesh axis ⇒ Replicated
+        if (mesh_extent(ctx, mesh, maxis) == 1) // 1-device IDENTITY: a size-1 mesh axis ⇒ Replicated
+        {
+            return replicated();
+        }
         return Sharding{ShardingKind::Sharded, mesh, int_attr(ctx, op, "axis"), maxis, {}};
     }
     if (nm == StringView("dist.all_reduce"))
     {
-        if (op->num_operands() < 1U) { return conflict(); }
+        if (op->num_operands() < 1U)
+        {
+            return conflict();
+        }
         const Sharding         in   = sm.of(op->operand(0U));
         const Operation* const mesh = resolve_mesh(ctx, meshes, symbol_name(ctx, op->attr("mesh")));
-        if (mesh == nullptr) { return conflict(); }
+        if (mesh == nullptr)
+        {
+            return conflict();
+        }
         // 1-device IDENTITY: an all_reduce over a single-device (1-D) mesh is a no-op — pass the input's sharding through, so an
         // authored shard→reduce→all_reduce on mesh "1" stays Replicated, NOT a Conflict (a rank>1 mesh needs a mesh_axis on the
         // collective — 30a-1 named it forward; checking axis 0 covers the 1-D case, the only one with a real consumer today).
-        if (mesh_extent(ctx, mesh, 0) == 1) { return in; }
+        if (mesh_extent(ctx, mesh, 0) == 1)
+        {
+            return in;
+        }
         const StringView fn = string_attr(ctx, op, "fn");
         // else: completes a matching Partial to Replicated; a Sharded input (an all_gather) / Replicated / fn-mismatch is a Conflict.
-        if (in.kind == ShardingKind::Partial && in.mesh == mesh && in.fn == fn) { return replicated(); }
+        if (in.kind == ShardingKind::Partial && in.mesh == mesh && in.fn == fn)
+        {
+            return replicated();
+        }
         return conflict();
     }
     if (nm == StringView("tensor.elementwise"))
     {
-        if (op->num_operands() < 2U) { return conflict(); }
+        if (op->num_operands() < 2U)
+        {
+            return conflict();
+        }
         return meet_sharding(sm.of(op->operand(0U)), sm.of(op->operand(1U)));
     }
     if (nm == StringView("tensor.reduce"))
     {
-        if (op->num_operands() < 1U) { return conflict(); }
+        if (op->num_operands() < 1U)
+        {
+            return conflict();
+        }
         const Sharding    in   = sm.of(op->operand(0U));
         const crd::i32    axis = int_attr(ctx, op, "axis");
         const StringView  fn   = string_attr(ctx, op, "fn");
-        if (in.kind == ShardingKind::Replicated) { return replicated(); }
-        if (in.kind == ShardingKind::Conflict) { return conflict(); }
+        if (in.kind == ShardingKind::Replicated)
+        {
+            return replicated();
+        }
+        if (in.kind == ShardingKind::Conflict)
+        {
+            return conflict();
+        }
         if (in.kind == ShardingKind::Sharded)
         {
-            if (in.axis == axis) { return Sharding{ShardingKind::Partial, in.mesh, axis, in.mesh_axis, fn}; } // over the SPLIT axis
+            if (in.axis == axis) // over the SPLIT axis
+            {
+                return Sharding{ShardingKind::Partial, in.mesh, axis, in.mesh_axis, fn};
+            }
             const crd::i32 reindexed = in.axis > axis ? in.axis - 1 : in.axis; // the dropped axis shifts later axes down
             return Sharding{ShardingKind::Sharded, in.mesh, reindexed, in.mesh_axis, {}};
         }
         // in.kind == Partial: a further reduce keeps it Partial iff the fn matches (else two combine ops disagree).
-        if (in.fn == fn) { return Sharding{ShardingKind::Partial, in.mesh, axis, in.mesh_axis, fn}; }
+        if (in.fn == fn)
+        {
+            return Sharding{ShardingKind::Partial, in.mesh, axis, in.mesh_axis, fn};
+        }
         return conflict();
     }
-    if (nm == StringView("resource.declare") || nm == StringView("resource.import")) { return replicated(); } // a fresh seed
+    if (nm == StringView("resource.declare") || nm == StringView("resource.import")) // a fresh seed
+    {
+        return replicated();
+    }
     return conflict(); // any OTHER tensor-producing op (matmul/gemm/transpose/reshape/broadcast/fft): unknown ⇒ Conflict (sec-70)
 }
 
 void walk(const Context& ctx, const Region* r, ShardingMap& sm, // NOLINT(misc-no-recursion)
           const containers::Array<const Operation*>& meshes)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -110,9 +158,15 @@ void walk(const Context& ctx, const Region* r, ShardingMap& sm, // NOLINT(misc-n
             if (op->num_results() >= 1U && is_tensor_type(ctx, op->result(0U)->type()))
             {
                 const Sharding s = op_result_sharding(ctx, op, sm, meshes);
-                if (s.kind != ShardingKind::Replicated) { sm.map.insert(op->result(0U), s); } // Replicated = absent (the default)
+                if (s.kind != ShardingKind::Replicated) // Replicated = absent (the default)
+                {
+                    sm.map.insert(op->result(0U), s);
+                }
             }
-            for (u32 i = 0; i < op->num_regions(); ++i) { walk(ctx, op->region(i), sm, meshes); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                walk(ctx, op->region(i), sm, meshes);
+            }
         }
     }
 }
@@ -145,7 +199,10 @@ struct EscapeTarget
 // past it) — accumulated across the whole walk when no Partial is found (the terminating iteration).
 bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTarget& out, bool& had_conflict) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return false; }
+    if (r == nullptr)
+    {
+        return false;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -153,7 +210,10 @@ bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTar
             if (op->num_results() >= 1U && is_tensor_type(ctx, op->result(0U)->type()))
             {
                 const Sharding s = sm.of(op->result(0U));
-                if (s.kind == ShardingKind::Conflict) { had_conflict = true; }
+                if (s.kind == ShardingKind::Conflict)
+                {
+                    had_conflict = true;
+                }
                 else if (s.kind == ShardingKind::Partial && has_escaping_use(ctx, op->result(0U)))
                 {
                     out = EscapeTarget{op->result(0U), op, b, s};
@@ -162,7 +222,10 @@ bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTar
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (find_escape(ctx, op->region(i), sm, out, had_conflict)) { return true; }
+                if (find_escape(ctx, op->region(i), sm, out, had_conflict))
+                {
+                    return true;
+                }
             }
         }
     }
@@ -173,7 +236,10 @@ bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTar
 // any tensor-result value in the module whose sharding is Conflict (the pass refuses to lower past one — checked BEFORE mutation).
 [[nodiscard]] bool region_has_conflict(const Context& ctx, const Region* r, const ShardingMap& sm) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return false; }
+    if (r == nullptr)
+    {
+        return false;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -185,7 +251,10 @@ bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTar
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (region_has_conflict(ctx, op->region(i), sm)) { return true; }
+                if (region_has_conflict(ctx, op->region(i), sm))
+                {
+                    return true;
+                }
             }
         }
     }
@@ -194,16 +263,25 @@ bool find_escape(const Context& ctx, Region* r, const ShardingMap& sm, EscapeTar
 // the FIRST op named `name` (pre-order), or null — a NON-const finder (the lowering mutates the op it returns).
 Operation* first_op_named(const Context& ctx, Region* r, StringView name) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == name) { return op; }
+            if (ctx.op_name(op->kind()) == name)
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 Operation* const f = first_op_named(ctx, op->region(i), name);
-                if (f != nullptr) { return f; }
+                if (f != nullptr)
+                {
+                    return f;
+                }
             }
         }
     }
@@ -214,7 +292,10 @@ Operation* first_op_named(const Context& ctx, Region* r, StringView name) // NOL
 Operation* first_degenerate_dist_op(const Context& ctx, Region* r, // NOLINT(misc-no-recursion)
                                     const containers::Array<const Operation*>& meshes)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -224,12 +305,18 @@ Operation* first_degenerate_dist_op(const Context& ctx, Region* r, // NOLINT(mis
             {
                 const Operation* const mesh = resolve_mesh(ctx, meshes, symbol_name(ctx, op->attr("mesh")));
                 const crd::i32         maxis = nm == StringView("dist.shard") ? int_attr(ctx, op, "mesh_axis") : 0;
-                if (mesh != nullptr && mesh_extent(ctx, mesh, maxis) == 1) { return op; }
+                if (mesh != nullptr && mesh_extent(ctx, mesh, maxis) == 1)
+                {
+                    return op;
+                }
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 Operation* const f = first_degenerate_dist_op(ctx, op->region(i), meshes);
-                if (f != nullptr) { return f; }
+                if (f != nullptr)
+                {
+                    return f;
+                }
             }
         }
     }
@@ -249,10 +336,22 @@ void strip_dead_meshes(const Context& ctx, Module& m)
 // combine op (unreachable past find_dist_misuse's {sum,prod,max,min}, but the lowering refuses rather than guess add).
 [[nodiscard]] StringView combine_op_for(StringView fn) noexcept
 {
-    if (fn == StringView("sum")) { return StringView("add"); }
-    if (fn == StringView("prod")) { return StringView("mul"); }
-    if (fn == StringView("max")) { return StringView("max"); }
-    if (fn == StringView("min")) { return StringView("min"); }
+    if (fn == StringView("sum"))
+    {
+        return StringView("add");
+    }
+    if (fn == StringView("prod"))
+    {
+        return StringView("mul");
+    }
+    if (fn == StringView("max"))
+    {
+        return StringView("max");
+    }
+    if (fn == StringView("min"))
+    {
+        return StringView("min");
+    }
     return StringView();
 }
 // the per-rank SHARD tensor type: `full` with dim[axis] divided by E (a static split along a size-E mesh axis). Invalid TypeId if
@@ -260,11 +359,17 @@ void strip_dead_meshes(const Context& ctx, Module& m)
 [[nodiscard]] TypeId shard_tensor_type(Context& ctx, TypeId full, crd::i32 axis, crd::i32 E, memory::IAllocator* alloc)
 {
     const Type tt = ctx.type_of(full);
-    if (tt.kind != TypeKind::Tensor || tt.members.size() < 2U) { return TypeId{}; }
+    if (tt.kind != TypeKind::Tensor || tt.members.size() < 2U)
+    {
+        return TypeId{};
+    }
     const TypeId elem = tt.members[0];
     const Type   st   = ctx.type_of(tt.members[1]);
     const usize  rank = st.members.size();
-    if (axis < 0 || static_cast<usize>(axis) >= rank) { return TypeId{}; }
+    if (axis < 0 || static_cast<usize>(axis) >= rank)
+    {
+        return TypeId{};
+    }
     containers::Array<TypeId> dims(alloc);
     for (usize i = 0; i < rank; ++i)
     {
@@ -277,7 +382,10 @@ void strip_dead_meshes(const Context& ctx, Module& m)
             }
             dims.push_back(ctx.type_dim_static(d.count / static_cast<u32>(E)));
         }
-        else { dims.push_back(st.members[i]); }
+        else
+        {
+            dims.push_back(st.members[i]);
+        }
     }
     return ctx.type_tensor(elem, ctx.type_shape(containers::ConstSpan<TypeId>(dims.data(), dims.size())));
 }
@@ -286,22 +394,37 @@ void strip_dead_meshes(const Context& ctx, Module& m)
 // ── mesh-query helpers (public since CEIR-30c — the placement loader reuses them; they call the anon symbol_name above) ──
 void gather_meshes(const Context& ctx, const Region* r, containers::Array<const Operation*>& out) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == StringView("dist.mesh")) { out.push_back(op); }
-            for (u32 i = 0; i < op->num_regions(); ++i) { gather_meshes(ctx, op->region(i), out); }
+            if (ctx.op_name(op->kind()) == StringView("dist.mesh"))
+            {
+                out.push_back(op);
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                gather_meshes(ctx, op->region(i), out);
+            }
         }
     }
 }
 const Operation* resolve_mesh(const Context& ctx, const containers::Array<const Operation*>& meshes, StringView name) noexcept
 {
-    if (name.size() == 0U) { return nullptr; }
+    if (name.size() == 0U)
+    {
+        return nullptr;
+    }
     for (usize i = 0; i < meshes.size(); ++i)
     {
-        if (symbol_name(ctx, meshes[i]->attr("name")) == name) { return meshes[i]; }
+        if (symbol_name(ctx, meshes[i]->attr("name")) == name)
+        {
+            return meshes[i];
+        }
     }
     return nullptr;
 }
@@ -309,9 +432,15 @@ const Operation* resolve_mesh(const Context& ctx, const containers::Array<const 
 // `mesh_axis` is out of range. A 1 means a DEGENERATE (single-device) mesh axis — the 1-device IDENTITY (a shard over it is Replicated).
 crd::i32 mesh_extent(const Context& ctx, const Operation* mesh_op, crd::i32 mesh_axis) noexcept
 {
-    if (mesh_op == nullptr || mesh_axis < 0) { return 0; }
+    if (mesh_op == nullptr || mesh_axis < 0)
+    {
+        return 0;
+    }
     const AttrValue shp = ctx.attr_value(mesh_op->attr("shape"));
-    if (shp.kind != AttrKind::String) { return 0; }
+    if (shp.kind != AttrKind::String)
+    {
+        return 0;
+    }
     const StringView s     = shp.s;
     crd::i32         idx   = 0;
     usize            start = 0;
@@ -326,8 +455,14 @@ crd::i32 mesh_extent(const Context& ctx, const Operation* mesh_op, crd::i32 mesh
                 for (usize j = start; j < i && ok; ++j)
                 {
                     const char c = s[j];
-                    if (c < '0' || c > '9') { ok = false; }
-                    else { v = v * 10 + (c - '0'); }
+                    if (c < '0' || c > '9')
+                    {
+                        ok = false;
+                    }
+                    else
+                    {
+                        v = v * 10 + (c - '0');
+                    }
                 }
                 return ok ? v : 0;
             }
@@ -340,16 +475,31 @@ crd::i32 mesh_extent(const Context& ctx, const Operation* mesh_op, crd::i32 mesh
 
 bool operator==(const Sharding& a, const Sharding& b) noexcept
 {
-    if (a.kind != b.kind) { return false; }
-    if (a.kind == ShardingKind::Replicated || a.kind == ShardingKind::Conflict) { return true; } // other fields are defaults
+    if (a.kind != b.kind)
+    {
+        return false;
+    }
+    if (a.kind == ShardingKind::Replicated || a.kind == ShardingKind::Conflict) // other fields are defaults
+    {
+        return true;
+    }
     return a.mesh == b.mesh && a.axis == b.axis && a.mesh_axis == b.mesh_axis && a.fn == b.fn;
 }
 
 Sharding meet_sharding(const Sharding& a, const Sharding& b) noexcept
 {
-    if (a.kind == ShardingKind::Replicated) { return b; } // Replicated is bottom — the other operand's layout wins
-    if (b.kind == ShardingKind::Replicated) { return a; }
-    if (a == b) { return a; } // two equal Sharded / two equal Partial
+    if (a.kind == ShardingKind::Replicated) // Replicated is bottom — the other operand's layout wins
+    {
+        return b;
+    }
+    if (b.kind == ShardingKind::Replicated)
+    {
+        return a;
+    }
+    if (a == b) // two equal Sharded / two equal Partial
+    {
+        return a;
+    }
     return conflict();        // different mesh/axis, Sharded vs Partial, or either already Conflict
 }
 
@@ -381,15 +531,27 @@ MaterializeResult materialize_sharding(Context& ctx, Module& m, memory::IAllocat
     {
         const ShardingMap sm = propagate_sharding(ctx, m, alloc); // ⛔ RE-RUN — each insert invalidates the map's pointer keys
         EscapeTarget      t;
-        if (!find_escape(ctx, m.body(), sm, t, res.had_conflict)) { break; } // no escaping Partial left (or only Conflicts)
-        if (res.inserted >= kMaxMaterializeInserts) { break; }              // bounded fixpoint (never a silent hang)
+        if (!find_escape(ctx, m.body(), sm, t, res.had_conflict)) // no escaping Partial left (or only Conflicts)
+        {
+            break;
+        }
+        if (res.inserted >= kMaxMaterializeInserts) // bounded fixpoint (never a silent hang)
+        {
+            break;
+        }
         // insert dist.all_reduce(V) {mesh = V's mesh, fn = V's Partial fn}, type-preserving, at V's DEF (dominating every use).
         const StringView mesh_name = symbol_name(ctx, t.sh.mesh->attr("name"));
         Operation* const ar =
             dist::build_all_reduce(ctx, t.value, ctx.attr_symbol(mesh_name), ctx.attr_string(t.sh.fn), t.value->type());
         Operation* const next = t.def->next_in_block();
-        if (next != nullptr) { t.block->insert_before(ar, next); }
-        else { t.block->append(ar); }
+        if (next != nullptr)
+        {
+            t.block->insert_before(ar, next);
+        }
+        else
+        {
+            t.block->append(ar);
+        }
         t.value->replace_all_uses_with(ar->result(0U)); // repoints ALL uses (incl. ar's own operand → a transient self-cycle)
         ar->set_operand(0U, t.value);                   // ...restored: ar reads V, every prior consumer reads ar's result
         ++res.inserted;
@@ -403,20 +565,35 @@ LowerResult lower_sharded_reduction(Context& ctx, Module& m, memory::IAllocator*
     // (1) CONFLICT SCAN first — refuse before ANY mutation (a refuse leaves the module byte-identical; a partial rewrite corrupts).
     {
         const ShardingMap sm = propagate_sharding(ctx, m, alloc);
-        if (region_has_conflict(ctx, m.body(), sm)) { return LowerResult{0U, true}; }
+        if (region_has_conflict(ctx, m.body(), sm))
+        {
+            return LowerResult{0U, true};
+        }
     }
     // (2) find the sec-140 shard chain (one per module this slice). No shard ⇒ nothing to lower.
     Operation* const ts = first_op_named(ctx, m.body(), StringView("dist.shard"));
-    if (ts == nullptr) { return LowerResult{0U, false}; }
-    if (ts->num_operands() < 1U) { return LowerResult{0U, true}; }
+    if (ts == nullptr)
+    {
+        return LowerResult{0U, false};
+    }
+    if (ts->num_operands() < 1U)
+    {
+        return LowerResult{0U, true};
+    }
     containers::Array<const Operation*> meshes(alloc);
     gather_meshes(ctx, m.body(), meshes);
     const Operation* const mesh = resolve_mesh(ctx, meshes, symbol_name(ctx, ts->attr("mesh")));
-    if (mesh == nullptr) { return LowerResult{0U, true}; }
+    if (mesh == nullptr)
+    {
+        return LowerResult{0U, true};
+    }
     const crd::i32 axis  = int_attr(ctx, ts, "axis");
     const crd::i32 maxis = int_attr(ctx, ts, "mesh_axis");
     const crd::i32 extent = mesh_extent(ctx, mesh, maxis);
-    if (extent <= 0) { return LowerResult{0U, true}; }
+    if (extent <= 0)
+    {
+        return LowerResult{0U, true};
+    }
 
     // (3a) 1-DEVICE IDENTITY: a size-1 mesh axis is degenerate — strip every degenerate dist op (shard + any all_reduce), leaving
     // the unsharded reduce. ranks==1, rank_lineage empty (a 1-device mesh has no rank to place).
@@ -452,11 +629,20 @@ LowerResult lower_sharded_reduction(Context& ctx, Module& m, memory::IAllocator*
     const crd::i32   reduce_axis = int_attr(ctx, r, "axis"); // == the sharded axis (else propagate would not give Partial)
     const StringView fn          = string_attr(ctx, r, "fn");
     const StringView combine_nm  = combine_op_for(fn);
-    if (combine_nm.size() == 0U) { return LowerResult{0U, true}; }
+    if (combine_nm.size() == 0U)
+    {
+        return LowerResult{0U, true};
+    }
     Operation* const t = ts->operand(0U)->defining_op();
-    if (t == nullptr) { return LowerResult{0U, true}; }
+    if (t == nullptr)
+    {
+        return LowerResult{0U, true};
+    }
     const TypeId shard_ty = shard_tensor_type(ctx, ts->operand(0U)->type(), axis, extent, alloc);
-    if (!shard_ty.valid()) { return LowerResult{0U, true}; }
+    if (!shard_ty.valid())
+    {
+        return LowerResult{0U, true};
+    }
     const TypeId reduce_ty = r->result(0U)->type(); // reducing the sharded axis eliminates it ⇒ same shape as the full reduce
 
     // Build the `extent` per-rank shard declares + `extent` tagged reduces + the (extent-1)-op combine tree, inserted before `t`
@@ -489,7 +675,10 @@ LowerResult lower_sharded_reduction(Context& ctx, Module& m, memory::IAllocator*
     ar->erase();
     r->erase();
     ts->erase();
-    if (!t->result(0U)->has_uses()) { t->erase(); }
+    if (!t->result(0U)->has_uses())
+    {
+        t->erase();
+    }
     strip_dead_meshes(ctx, m); // ⛔ NO dist ops survive — plan_tensor_pipeline_partitioned consumes only tensor/resource ops
     return LowerResult{static_cast<crd::u32>(extent), false};
 }

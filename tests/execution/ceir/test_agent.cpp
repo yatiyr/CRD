@@ -42,15 +42,24 @@ namespace
     for (usize i = 0; i < schemas.size(); ++i)
     {
         const OpSchema& s = schemas[i];
-        if (s.operands.size() != nops || s.results.size() != nres) { continue; }
+        if (s.operands.size() != nops || s.results.size() != nres)
+        {
+            continue;
+        }
         if (pure_only)
         {
             bool has_required = false;
             for (usize k = 0; k < s.attributes.size(); ++k)
             {
-                if (s.attributes[k].required) { has_required = true; }
+                if (s.attributes[k].required)
+                {
+                    has_required = true;
+                }
             }
-            if (has_required) { continue; }
+            if (has_required)
+            {
+                continue;
+            }
         }
         return &s;
     }
@@ -169,7 +178,10 @@ TEST_CASE("ceir 9g: the agent module-wide sweep catches a defect and rolls back 
     bool swept = false;
     for (usize i = 0; i < diag.count(); ++i)
     {
-        if (diag.at(i).code == sweep_defect_code()) { swept = true; }
+        if (diag.at(i).code == sweep_defect_code())
+        {
+            swept = true;
+        }
     }
     CHECK(swept);
     CHECK(blob_eq(before, serialize(ctx, *m, &root)));
@@ -203,7 +215,10 @@ TEST_CASE("ceir 9g: the op-local commit-verify backstop catches a lazy agent tha
     bool verify_failed = false;
     for (usize i = 0; i < diag.count(); ++i)
     {
-        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed")) { verify_failed = true; }
+        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed"))
+        {
+            verify_failed = true;
+        }
     }
     CHECK(verify_failed); // the agent reads the op-local backstop's diagnostic by CODE
     CHECK(blob_eq(before, serialize(ctx, *m, &root)));

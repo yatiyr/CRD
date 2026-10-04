@@ -43,11 +43,17 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h, c
 {
     std::FILE* f = nullptr;
 #ifdef _MSC_VER
-    if (fopen_s(&f, path, "wb") != 0) { f = nullptr; }
+    if (fopen_s(&f, path, "wb") != 0)
+    {
+        f = nullptr;
+    }
 #else
     f = std::fopen(path, "wb");
 #endif
-    if (f == nullptr) { return; }
+    if (f == nullptr)
+    {
+        return;
+    }
     const int     rowsz  = ((w * 3 + 3) / 4) * 4;
     const int     filesz = 54 + rowsz * h;
     unsigned char hdr[54] = {};
@@ -69,8 +75,14 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h, c
             for (int c = 0; c < 3; ++c)
             {
                 double v = rgb[uz((y * w + x) * 3 + c)];
-                if (v < 0.0) { v = 0.0; }
-                if (v > 1.0) { v = 1.0; }
+                if (v < 0.0)
+                {
+                    v = 0.0;
+                }
+                if (v > 1.0)
+                {
+                    v = 1.0;
+                }
                 row[uz(x * 3 + (2 - c))] = static_cast<unsigned char>(crd::math::lround(v * 255.0));
             }
         }
@@ -87,7 +99,11 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -161,14 +177,21 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     // ── depth SORT (host, nearest-first) — B19-a2 replaces with the GPU radix sort ──
     crd::containers::Array<crd::u32> order(&alloc);
     order.resize(uz(ng), 0U);
-    for (int i = 0; i < ng; ++i) { order[uz(i)] = static_cast<crd::u32>(i); }
+    for (int i = 0; i < ng; ++i)
+    {
+        order[uz(i)] = static_cast<crd::u32>(i);
+    }
     // simple insertion-ish sort by depth (slot 2); ng is a few thousand — fine for the showcase
     for (int i = 1; i < ng; ++i)
     {
         const crd::u32 key = order[uz(i)];
         const float    kd  = proj[uz(static_cast<int>(key)) * 12U + 2U];
         int            j   = i - 1;
-        while (j >= 0 && proj[uz(static_cast<int>(order[uz(j)])) * 12U + 2U] > kd) { order[uz(j + 1)] = order[uz(j)]; --j; }
+        while (j >= 0 && proj[uz(static_cast<int>(order[uz(j)])) * 12U + 2U] > kd)
+        {
+            order[uz(j + 1)] = order[uz(j)];
+            --j;
+        }
         order[uz(j + 1)] = key;
     }
     crd::containers::Array<float> sorted(&alloc);
@@ -176,7 +199,10 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     for (int i = 0; i < ng; ++i)
     {
         const int src = static_cast<int>(order[uz(i)]);
-        for (int k = 0; k < 12; ++k) { sorted[uz(i) * 12U + uz(k)] = proj[uz(src) * 12U + uz(k)]; }
+        for (int k = 0; k < 12; ++k)
+        {
+            sorted[uz(i) * 12U + uz(k)] = proj[uz(src) * 12U + uz(k)];
+        }
     }
 
     // ── RENDER on the GPU ──
@@ -211,7 +237,10 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     double centre_lum = 0.0;
     for (int p = 0; p < imw * imh; ++p)
     {
-        for (int c = 0; c < 3; ++c) { img[uz(p) * 3U + uz(c)] = static_cast<double>(imgf[uz(p) * 4U + uz(c)]); }
+        for (int c = 0; c < 3; ++c)
+        {
+            img[uz(p) * 3U + uz(c)] = static_cast<double>(imgf[uz(p) * 4U + uz(c)]);
+        }
     }
     // the sphere fills the centre — a block there must be brighter than the background corner
     for (int y = imh / 2 - 20; y < imh / 2 + 20; ++y)
@@ -245,21 +274,44 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
         const double mny   = sorted[uz(i) * 12U + 1U];
         const double srad  = sorted[uz(i) * 12U + 6U];
         const double valid = sorted[uz(i) * 12U + 11U];
-        if (valid < 0.5) { continue; }
+        if (valid < 0.5)
+        {
+            continue;
+        }
         int tx0 = static_cast<int>(crd::math::floor((mnx - srad) / tile_px));
         int tx1 = static_cast<int>(crd::math::floor((mnx + srad) / tile_px));
         int ty0 = static_cast<int>(crd::math::floor((mny - srad) / tile_px));
         int ty1 = static_cast<int>(crd::math::floor((mny + srad) / tile_px));
-        if (tx0 < 0) { tx0 = 0; }  if (ty0 < 0) { ty0 = 0; }
-        if (tx1 > tiles_x - 1) { tx1 = tiles_x - 1; }  if (ty1 > tiles_x - 1) { ty1 = tiles_x - 1; }
+        if (tx0 < 0)
+        {
+            tx0 = 0;
+        }
+        if (ty0 < 0)
+        {
+            ty0 = 0;
+        }
+        if (tx1 > tiles_x - 1)
+        {
+            tx1 = tiles_x - 1;
+        }
+        if (ty1 > tiles_x - 1)
+        {
+            ty1 = tiles_x - 1;
+        }
         for (int ty = ty0; ty <= ty1; ++ty)
         {
             for (int tx = tx0; tx <= tx1; ++tx)
             {
                 const int t = ty * tiles_x + tx;
                 const int c = static_cast<int>(counts[uz(t)]);
-                if (c >= cap) { continue; }
-                for (int k = 0; k < 12; ++k) { buckets[(uz(t) * cap + uz(c)) * 12U + uz(k)] = sorted[uz(i) * 12U + uz(k)]; }
+                if (c >= cap)
+                {
+                    continue;
+                }
+                for (int k = 0; k < 12; ++k)
+                {
+                    buckets[(uz(t) * cap + uz(c)) * 12U + uz(k)] = sorted[uz(i) * 12U + uz(k)];
+                }
                 counts[uz(t)] = static_cast<float>(c + 1);
             }
         }
@@ -291,7 +343,10 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     double worst = 0.0;
     for (int p = 0; p < imw * imh; ++p)
     {
-        for (int c = 0; c < 3; ++c) { worst = crd::math::abs(static_cast<double>(timgf[uz(p) * 4U + uz(c)] - imgf[uz(p) * 4U + uz(c)])) > worst ? crd::math::abs(static_cast<double>(timgf[uz(p) * 4U + uz(c)] - imgf[uz(p) * 4U + uz(c)])) : worst; }
+        for (int c = 0; c < 3; ++c)
+        {
+            worst = crd::math::abs(static_cast<double>(timgf[uz(p) * 4U + uz(c)] - imgf[uz(p) * 4U + uz(c)])) > worst ? crd::math::abs(static_cast<double>(timgf[uz(p) * 4U + uz(c)] - imgf[uz(p) * 4U + uz(c)])) : worst;
+        }
     }
     std::printf("[B19-a2] tiled render on GPU: %d tiles (%dx%d px), worst |tiled - brute| = %.2e\n", n_tiles, tile_px, tile_px, worst);
     CHECK(worst < 1.0e-3); // same image, GPU-emitted both ways (f32)
@@ -309,7 +364,11 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -322,7 +381,10 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     // REN-38 llvmpipe campaign: the KV-sort shape is DEVICE-DERIVED (subgroup width + shared budget) â€” see
     // pick_sort_config. llvmpipe is 8-wide/32 KB, where the warp-32 8-bit shape is wrong AND unbuildable.
     const crd::u32 sg_lanes = compute.subgroup_size();
-    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable subgroup width reported"); }
+    if (sg_lanes == 0U || sg_lanes > 32U)
+    {
+        SKIP("no u32-maskable subgroup width reported");
+    }
     const kir::SortConfig scfg    = kir::pick_sort_config(sg_lanes, compute.shared_memory_bytes(), epb, true);
     const int             threads = scfg.threads;
     const int             radix_bits = scfg.radix_bits;
@@ -361,7 +423,10 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -379,7 +444,11 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     std::unique_ptr<cg::ComputePipeline> ps_s[8];
     crd::containers::Array<kir::KGraph> ghg(&alloc);
     crd::containers::Array<kir::KGraph> gsg(&alloc);
-    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
+    {
+        ghg.emplace_back(&alloc);
+        gsg.emplace_back(&alloc);
+    }
     for (int p = 0; p < npasses; ++p)
     {
         const crd::usize up = static_cast<crd::usize>(p);
@@ -409,7 +478,10 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     const auto upload = [&](cg::ComputeBuffer& dev, const float* src, int len) {
         auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<float*>(stg->map());
-        for (int i = 0; i < len; ++i) { p[i] = src[i]; }
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = src[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U);
@@ -476,13 +548,20 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
     // host reference: stable insertion sort of the indices by depth (slot 2) over the SAME GPU-projected buffer.
     crd::containers::Array<crd::u32> ho(&alloc);
     ho.resize(uz(n), 0U);
-    for (int i = 0; i < n; ++i) { ho[uz(i)] = static_cast<crd::u32>(i); }
+    for (int i = 0; i < n; ++i)
+    {
+        ho[uz(i)] = static_cast<crd::u32>(i);
+    }
     for (int i = 1; i < n; ++i)
     {
         const crd::u32 key = ho[uz(i)];
         const float    kd  = gproj[uz(static_cast<int>(key)) * 12U + 2U];
         int            j   = i - 1;
-        while (j >= 0 && gproj[uz(static_cast<int>(ho[uz(j)])) * 12U + 2U] > kd) { ho[uz(j + 1)] = ho[uz(j)]; --j; }
+        while (j >= 0 && gproj[uz(static_cast<int>(ho[uz(j)])) * 12U + 2U] > kd)
+        {
+            ho[uz(j + 1)] = ho[uz(j)];
+            --j;
+        }
         ho[uz(j + 1)] = key;
     }
 
@@ -492,9 +571,15 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
         const int src = static_cast<int>(ho[uz(i)]);
         for (int k = 0; k < 12; ++k)
         {
-            if (gsort[uz(i) * 12U + uz(k)] != gproj[uz(src) * 12U + uz(k)]) { ++mism; }
+            if (gsort[uz(i) * 12U + uz(k)] != gproj[uz(src) * 12U + uz(k)])
+            {
+                ++mism;
+            }
         }
-        if (i > 0 && gsort[uz(i) * 12U + 2U] < gsort[uz(i - 1) * 12U + 2U]) { ++bad_asc; }
+        if (i > 0 && gsort[uz(i) * 12U + 2U] < gsort[uz(i - 1) * 12U + 2U])
+        {
+            ++bad_asc;
+        }
         xperm ^= gord[i] ^ static_cast<crd::u32>(i); // order is a permutation => XOR(order) == XOR(0..n-1)
     }
     rb_sorted->unmap(); rb_proj->unmap(); rb_ord->unmap();
@@ -518,7 +603,11 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -537,7 +626,10 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     constexpr int n_pad       = 2048;
     constexpr int epb = 1024;
     const crd::u32 sg_lanes = compute.subgroup_size(); // REN-38: device-derived KV-sort shape (see pick_sort_config)
-    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable subgroup width reported"); }
+    if (sg_lanes == 0U || sg_lanes > 32U)
+    {
+        SKIP("no u32-maskable subgroup width reported");
+    }
     const kir::SortConfig scfg    = kir::pick_sort_config(sg_lanes, compute.shared_memory_bytes(), epb, true);
     const int             threads = scfg.threads;
     const int             radix_bits = scfg.radix_bits;
@@ -586,20 +678,30 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     }
     crd::containers::Array<int> ord(&alloc);
     ord.resize(uz(n), 0);
-    for (int i = 0; i < n; ++i) { ord[uz(i)] = i; }
+    for (int i = 0; i < n; ++i)
+    {
+        ord[uz(i)] = i;
+    }
     for (int i = 1; i < n; ++i)
     {
         const int    key = ord[uz(i)];
         const double kd  = proj[uz(key) * 12U + 2U];
         int          j   = i - 1;
-        while (j >= 0 && proj[uz(ord[uz(j)]) * 12U + 2U] > kd) { ord[uz(j + 1)] = ord[uz(j)]; --j; }
+        while (j >= 0 && proj[uz(ord[uz(j)]) * 12U + 2U] > kd)
+        {
+            ord[uz(j + 1)] = ord[uz(j)];
+            --j;
+        }
         ord[uz(j + 1)] = key;
     }
     crd::containers::Array<float> sorted(&alloc);
     sorted.resize(uz(n) * 12U, 0.0F);
     for (int i = 0; i < n; ++i)
     {
-        for (int k = 0; k < 12; ++k) { sorted[uz(i) * 12U + uz(k)] = static_cast<float>(proj[uz(ord[uz(i)]) * 12U + uz(k)]); }
+        for (int k = 0; k < 12; ++k)
+        {
+            sorted[uz(i) * 12U + uz(k)] = static_cast<float>(proj[uz(ord[uz(i)]) * 12U + uz(k)]);
+        }
     }
 
     kir::gsplat::GsplatBinConfig   bcfg;
@@ -615,7 +717,10 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -646,7 +751,11 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     po2_s = mk(gof2, kir::build_sort_gbase(gof2, radix_bits), 2, "gs_gbase");
     crd::containers::Array<kir::KGraph> ghg(&alloc);
     crd::containers::Array<kir::KGraph> gsg(&alloc);
-    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
+    {
+        ghg.emplace_back(&alloc);
+        gsg.emplace_back(&alloc);
+    }
     for (int p = 0; p < npasses; ++p)
     {
         const crd::usize up = static_cast<crd::usize>(p);
@@ -677,7 +786,10 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     const auto upload_f = [&](cg::ComputeBuffer& dev, const float* src, int len) {
         auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<float*>(stg->map());
-        for (int i = 0; i < len; ++i) { p[i] = src[i]; }
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = src[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U);
@@ -686,7 +798,10 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
     const auto upload_u = [&](cg::ComputeBuffer& dev, crd::u32 fill, int len) {
         auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < len; ++i) { p[i] = fill; }
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = fill;
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U);
@@ -797,7 +912,10 @@ TEST_CASE("B19-a4: full GPU tile binning + block render on Vulkan == brute rende
         for (int c = 0; c < 3; ++c)
         {
             const float d = bi[uz(q) * 4U + uz(c)] > br[uz(q) * 4U + uz(c)] ? bi[uz(q) * 4U + uz(c)] - br[uz(q) * 4U + uz(c)] : br[uz(q) * 4U + uz(c)] - bi[uz(q) * 4U + uz(c)];
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
             lum += bi[uz(q) * 4U + uz(c)];
         }
     }
@@ -819,7 +937,11 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -861,7 +983,10 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -884,8 +1009,14 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     crd::containers::Array<double> surfd(&alloc);
     crd::containers::Array<double> camd(&alloc);
     surfd.resize(uz(ns) * 13U, 0.0); camd.resize(20U, 0.0);
-    for (int i = 0; i < ns * 13; ++i) { surfd[uz(i)] = surf[uz(i)]; }
-    for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    for (int i = 0; i < ns * 13; ++i)
+    {
+        surfd[uz(i)] = surf[uz(i)];
+    }
+    for (int i = 0; i < 20; ++i)
+    {
+        camd[uz(i)] = cam[uz(i)];
+    }
     kir::KGraph       pg2(&alloc);
     const kir::KEntry pe2 = kir::gsplat::build_gsplat2d_project_kernel(pg2, pcfg);
     crd::containers::Array<double> prep_ref(&alloc);
@@ -897,14 +1028,20 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     for (int i = 0; i < ns * 19; ++i)
     {
         const float d = crd::math::abs(prep[uz(i)] - static_cast<float>(prep_ref[uz(i)]));
-        if (d > worst_prep) { worst_prep = d; }
+        if (d > worst_prep)
+        {
+            worst_prep = d;
+        }
     }
     CHECK(worst_prep < 1.0e-3F); // GPU project == oracle project
 
     // host depth sort the GPU-projected surfels (slot 12), nearest-first
     crd::containers::Array<int> ord(&alloc);
     ord.resize(uz(ns), 0);
-    for (int i = 0; i < ns; ++i) { ord[uz(i)] = i; }
+    for (int i = 0; i < ns; ++i)
+    {
+        ord[uz(i)] = i;
+    }
     for (int i = 1; i < ns; ++i)
     {
         const int   key = ord[uz(i)];
@@ -952,7 +1089,11 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     kir::KGraph       rg2(&alloc);
     const kir::KEntry re2 = kir::gsplat::build_gsplat2d_render_kernel(rg2, rcfg);
     crd::containers::Array<double> pard(&alloc);
-    pard.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { pard[uz(i)] = par[uz(i)]; }
+    pard.resize(5U, 0.0);
+    for (int i = 0; i < 5; ++i)
+    {
+        pard[uz(i)] = par[uz(i)];
+    }
     crd::containers::Array<double> img_ref(&alloc);
     img_ref.resize(uz(imw * imh) * 8U, 0.0);
     kir::KernelBuffer rbb[4] = {{sortedd.data(), ns * 19, 0, 0}, {camd.data(), 20, 0, 1}, {pard.data(), 5, 0, 2}, {img_ref.data(), imw * imh * 8, 0, 3}};
@@ -963,9 +1104,15 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     for (int q = 0; q < imw * imh * 8; ++q)
     {
         const float d = crd::math::abs(img[uz(q)] - static_cast<float>(img_ref[uz(q)]));
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
-    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 8U + 0U] + img[uz(p) * 8U + 1U] + img[uz(p) * 8U + 2U]; }
+    for (int p = 0; p < imw * imh; ++p)
+    {
+        lum += img[uz(p) * 8U + 0U] + img[uz(p) * 8U + 1U] + img[uz(p) * 8U + 2U];
+    }
     std::printf("[B19-c GPU] 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU render - oracle| = %.3e (prep %.3e)\n",
                 ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst), static_cast<double>(worst_prep));
     CHECK(lum > 0.0F);
@@ -982,7 +1129,11 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -995,7 +1146,10 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
 
     crd::containers::Array<float> depth(&alloc);
     depth.resize(uz(imw * imh), 0.0F);
-    for (int i = 0; i < imw * imh; ++i) { depth[uz(i)] = 5.0F; } // a plane at view-z 5
+    for (int i = 0; i < imw * imh; ++i) // a plane at view-z 5
+    {
+        depth[uz(i)] = 5.0F;
+    }
     crd::containers::Array<float> cam(&alloc);
     cam.resize(20U, 0.0F);
     cam[0] = 1.0F; cam[4] = 1.0F; cam[8] = 1.0F;
@@ -1032,9 +1186,21 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
     crd::containers::Array<double> gpd(&alloc);
     crd::containers::Array<double> tsr(&alloc);
     crd::containers::Array<double> wsr(&alloc);
-    depthd.resize(uz(imw * imh), 0.0); for (int i = 0; i < imw * imh; ++i) { depthd[uz(i)] = 5.0; }
-    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
-    gpd.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { gpd[uz(i)] = gp[uz(i)]; }
+    depthd.resize(uz(imw * imh), 0.0);
+    for (int i = 0; i < imw * imh; ++i)
+    {
+        depthd[uz(i)] = 5.0;
+    }
+    camd.resize(20U, 0.0);
+    for (int i = 0; i < 20; ++i)
+    {
+        camd[uz(i)] = cam[uz(i)];
+    }
+    gpd.resize(5U, 0.0);
+    for (int i = 0; i < 5; ++i)
+    {
+        gpd[uz(i)] = gp[uz(i)];
+    }
     tsr.resize(uz(nvox), 0.0); wsr.resize(uz(nvox), 0.0);
     kir::KGraph       tg2(&alloc);
     const kir::KEntry te2 = kir::mesh::build_tsdf_integrate_kernel(tg2, cfg);
@@ -1047,9 +1213,18 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
     {
         const float dt = crd::math::abs(tsum[uz(i)] - static_cast<float>(tsr[uz(i)]));
         const float dw = crd::math::abs(wsum[uz(i)] - static_cast<float>(wsr[uz(i)]));
-        if (dt > worst) { worst = dt; }
-        if (dw > worst) { worst = dw; }
-        if (wsum[uz(i)] > 0.5F) { ++observed; }
+        if (dt > worst)
+        {
+            worst = dt;
+        }
+        if (dw > worst)
+        {
+            worst = dw;
+        }
+        if (wsum[uz(i)] > 0.5F)
+        {
+            ++observed;
+        }
     }
     std::printf("[B19-c2 GPU] TSDF %dx%dx%d: %d observed voxels; worst |GPU - oracle| = %.3e\n", nx, ny, nz, observed, static_cast<double>(worst));
     CHECK(observed > 0);       // the grid saw the surface
@@ -1067,7 +1242,11 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -1109,13 +1288,28 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
 
     // ── CPU ORACLE mesh (count -> scan -> emit) ──
     crd::containers::Array<double> fieldd(&alloc);
-    fieldd.resize(uz(nvox), 0.0); for (int i = 0; i < nvox; ++i) { fieldd[uz(i)] = field[uz(i)]; }
+    fieldd.resize(uz(nvox), 0.0);
+    for (int i = 0; i < nvox; ++i)
+    {
+        fieldd[uz(i)] = field[uz(i)];
+    }
     crd::containers::Array<double> trid(&alloc); trid.resize(256U * 16U, 0.0);
-    for (int i = 0; i < 256 * 16; ++i) { trid[uz(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]); }
+    for (int i = 0; i < 256 * 16; ++i)
+    {
+        trid[uz(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]);
+    }
     crd::containers::Array<double> econd(&alloc); crd::containers::Array<double> cofd(&alloc);
     econd.resize(24U, 0.0); cofd.resize(24U, 0.0);
-    for (int i = 0; i < 24; ++i) { econd[uz(i)] = static_cast<double>(kir::mesh::kMcEdgeConn[i]); cofd[uz(i)] = static_cast<double>(kir::mesh::kMcCornerOff[i]); }
-    crd::containers::Array<double> gpmd(&alloc); gpmd.resize(4U, 0.0); for (int i = 0; i < 4; ++i) { gpmd[uz(i)] = gpm[uz(i)]; }
+    for (int i = 0; i < 24; ++i)
+    {
+        econd[uz(i)] = static_cast<double>(kir::mesh::kMcEdgeConn[i]);
+        cofd[uz(i)] = static_cast<double>(kir::mesh::kMcCornerOff[i]);
+    }
+    crd::containers::Array<double> gpmd(&alloc); gpmd.resize(4U, 0.0);
+    for (int i = 0; i < 4; ++i)
+    {
+        gpmd[uz(i)] = gpm[uz(i)];
+    }
     crd::containers::Array<double> countd(&alloc); countd.resize(uz(ncells), 0.0);
     kir::KGraph cgo(&alloc);
     const kir::KEntry ceo = kir::mesh::build_mc_count_kernel(cgo, cfg);
@@ -1142,7 +1336,10 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1166,12 +1363,22 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
 
     const auto up_f = [&](cg::ComputeBuffer& dev, const float* src, int len) {
         auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-        auto* p = static_cast<float*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+        auto* p = static_cast<float*>(stg->map());
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = src[i];
+        }
+        stg->unmap();
         auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
     };
     const auto up_i = [&](cg::ComputeBuffer& dev, const int* src, int len) {
         auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-        auto* p = static_cast<crd::i32*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+        auto* p = static_cast<crd::i32*>(stg->map());
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = src[i];
+        }
+        stg->unmap();
         auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
     };
     up_f(*d_field, field.data(), nvox);
@@ -1206,7 +1413,10 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
     for (int i = 0; i < total * 18; ++i)
     {
         const float d = crd::math::abs(g[uz(i)] - static_cast<float>(outd[uz(i)]));
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     rb->unmap();
     std::printf("[B19-c2b GPU] marching cubes: %d triangles; worst |GPU mesh - oracle| = %.3e\n", total, static_cast<double>(worst));
@@ -1222,7 +1432,11 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1258,7 +1472,10 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1275,16 +1492,31 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     }
     // host depth sort
     crd::containers::Array<int> ord(&alloc); ord.resize(uz(ns), 0);
-    for (int i = 0; i < ns; ++i) { ord[uz(i)] = i; }
+    for (int i = 0; i < ns; ++i)
+    {
+        ord[uz(i)] = i;
+    }
     for (int i = 1; i < ns; ++i)
     {
         const int key = ord[uz(i)]; const float kd = prep[uz(key) * 19U + 12U]; int j = i - 1;
-        while (j >= 0 && prep[uz(ord[uz(j)]) * 19U + 12U] > kd) { const int jp1 = j + 1; ord[uz(jp1)] = ord[uz(j)]; --j; }
+        while (j >= 0 && prep[uz(ord[uz(j)]) * 19U + 12U] > kd)
+        {
+            const int jp1 = j + 1;
+            ord[uz(jp1)] = ord[uz(j)];
+            --j;
+        }
         const int jp1 = j + 1; ord[uz(jp1)] = key;
     }
     crd::containers::Array<float>  sorted(&alloc); crd::containers::Array<double> sortedd(&alloc);
     sorted.resize(uz(ns) * 19U, 0.0F); sortedd.resize(uz(ns) * 19U, 0.0);
-    for (int i = 0; i < ns; ++i) { for (int k = 0; k < 19; ++k) { sorted[uz(i) * 19U + uz(k)] = prep[uz(ord[uz(i)]) * 19U + uz(k)]; sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)]; } }
+    for (int i = 0; i < ns; ++i)
+    {
+        for (int k = 0; k < 19; ++k)
+        {
+            sorted[uz(i) * 19U + uz(k)] = prep[uz(ord[uz(i)]) * 19U + uz(k)];
+            sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)];
+        }
+    }
 
     kir::gsplat::Gsplat2dRelightConfig rcfg;
     rcfg.width = imw; rcfg.height = imh; rcfg.max_splats = ns;
@@ -1298,8 +1530,16 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     }
     // CPU oracle
     crd::containers::Array<double> camd(&alloc); crd::containers::Array<double> pard(&alloc);
-    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
-    pard.resize(13U, 0.0); for (int i = 0; i < 13; ++i) { pard[uz(i)] = par[uz(i)]; }
+    camd.resize(20U, 0.0);
+    for (int i = 0; i < 20; ++i)
+    {
+        camd[uz(i)] = cam[uz(i)];
+    }
+    pard.resize(13U, 0.0);
+    for (int i = 0; i < 13; ++i)
+    {
+        pard[uz(i)] = par[uz(i)];
+    }
     kir::KGraph rg2(&alloc);
     const kir::KEntry re2 = kir::gsplat::build_gsplat2d_relight_render_kernel(rg2, rcfg);
     crd::containers::Array<double> imgref(&alloc); imgref.resize(uz(imw * imh) * 4U, 0.0);
@@ -1307,8 +1547,18 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     kir::eval_cpu_kernel(rg2, re2, rbb, 4, re2.local_size[0], &alloc, static_cast<crd::u32>(imw * imh / 64));
 
     float worst = 0.0F; float lum = 0.0F;
-    for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
-    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
+    for (int q = 0; q < imw * imh * 4; ++q)
+    {
+        const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)]));
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
+    for (int p = 0; p < imw * imh; ++p)
+    {
+        lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U];
+    }
     std::printf("[B19-e GPU] relightable 2DGS %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst));
     CHECK(lum > 0.0F);
     CHECK(worst < 2.0e-3F); // GPU PBR relight == oracle
@@ -1323,7 +1573,11 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1356,7 +1610,10 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1372,7 +1629,10 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
         crd::kir_test::dispatch_kernel_1wg(compute, *p_proj, hb, ln, 3, static_cast<crd::u32>((ns + 63) / 64));
     }
     crd::containers::Array<double> prepd(&alloc); prepd.resize(uz(ns) * 19U, 0.0);
-    for (int i = 0; i < ns * 19; ++i) { prepd[uz(i)] = prep[uz(i)]; }
+    for (int i = 0; i < ns * 19; ++i)
+    {
+        prepd[uz(i)] = prep[uz(i)];
+    }
 
     kir::gsplat::Gsplat2dResortConfig rrc;
     rrc.width = imw; rrc.height = imh; rrc.max_splats = ns;
@@ -1389,7 +1649,11 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     }
     // CPU oracle
     crd::containers::Array<double> camd(&alloc); crd::containers::Array<double> pard(&alloc);
-    camd.resize(20U, 0.0); for (int i = 0; i < 20; ++i) { camd[uz(i)] = cam[uz(i)]; }
+    camd.resize(20U, 0.0);
+    for (int i = 0; i < 20; ++i)
+    {
+        camd[uz(i)] = cam[uz(i)];
+    }
     pard.resize(5U, 0.0); pard[0] = static_cast<double>(ns); pard[4] = 1.0 / 255.0;
     kir::KGraph rg2(&alloc);
     const kir::KEntry re2 = kir::gsplat::build_gsplat2d_resort_render_kernel(rg2, rrc);
@@ -1399,8 +1663,18 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     kir::eval_cpu_kernel(rg2, re2, rbb, 5, re2.local_size[0], &alloc, static_cast<crd::u32>(imw * imh / 64));
 
     float worst = 0.0F; float lum = 0.0F;
-    for (int q = 0; q < imw * imh * 4; ++q) { const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)])); if (d > worst) { worst = d; } }
-    for (int p = 0; p < imw * imh; ++p) { lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U]; }
+    for (int q = 0; q < imw * imh * 4; ++q)
+    {
+        const float d = crd::math::abs(img[uz(q)] - static_cast<float>(imgref[uz(q)]));
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
+    for (int p = 0; p < imw * imh; ++p)
+    {
+        lum += img[uz(p) * 4U + 0U] + img[uz(p) * 4U + 1U] + img[uz(p) * 4U + 2U];
+    }
     std::printf("[B19 StopThePop GPU] resort %d surfels %dx%d: mean lum %.4f; worst |GPU - oracle| = %.3e\n", ns, imw, imh, static_cast<double>(lum / static_cast<float>(imw * imh * 3)), static_cast<double>(worst));
     CHECK(lum > 0.0F);
     CHECK(worst < 2.0e-3F); // GPU per-pixel resort == oracle
@@ -1415,7 +1689,11 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1427,13 +1705,27 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
     gs.resize(uz(n) * natt, 0.0F);
     crd::u32 st = 0xC0FFEEU;
     const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
-    for (int i = 0; i < n * natt; ++i) { gs[uz(i)] = static_cast<float>((rnd() * 2.0 - 1.0) * 2.0); }
+    for (int i = 0; i < n * natt; ++i)
+    {
+        gs[uz(i)] = static_cast<float>((rnd() * 2.0 - 1.0) * 2.0);
+    }
     crd::containers::Array<float> rng(&alloc);
     rng.resize(uz(natt) * 2U, 0.0F);
     for (int k = 0; k < natt; ++k)
     {
         float lo = 1.0e30F; float hi = -1.0e30F;
-        for (int i = 0; i < n; ++i) { const float v = gs[uz(i * natt + k)]; if (v < lo) { lo = v; } if (v > hi) { hi = v; } }
+        for (int i = 0; i < n; ++i)
+        {
+            const float v = gs[uz(i * natt + k)];
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
+        }
         rng[uz(k) * 2U] = lo; rng[uz(k) * 2U + 1U] = hi;
     }
 
@@ -1441,7 +1733,10 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1468,8 +1763,14 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
     // CPU oracle
     crd::containers::Array<double> gsd(&alloc); crd::containers::Array<double> rngd(&alloc);
     gsd.resize(uz(n) * natt, 0.0); rngd.resize(uz(natt) * 2U, 0.0);
-    for (int i = 0; i < n * natt; ++i) { gsd[uz(i)] = gs[uz(i)]; }
-    for (int i = 0; i < natt * 2; ++i) { rngd[uz(i)] = rng[uz(i)]; }
+    for (int i = 0; i < n * natt; ++i)
+    {
+        gsd[uz(i)] = gs[uz(i)];
+    }
+    for (int i = 0; i < natt * 2; ++i)
+    {
+        rngd[uz(i)] = rng[uz(i)];
+    }
     crd::containers::Array<double> cref(&alloc); crd::containers::Array<double> rref(&alloc);
     cref.resize(uz(n) * natt, 0.0); rref.resize(uz(n) * natt, 0.0);
     kir::KGraph qg2(&alloc); const kir::KEntry qe2 = kir::gsplat::build_gsplat_quantize_kernel(qg2, qc);
@@ -1480,7 +1781,14 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
     kir::eval_cpu_kernel(dg2, de2, db, 3, de2.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
 
     float worst = 0.0F;
-    for (int i = 0; i < n * natt; ++i) { const float d = crd::math::abs(recon[uz(i)] - static_cast<float>(rref[uz(i)])); if (d > worst) { worst = d; } }
+    for (int i = 0; i < n * natt; ++i)
+    {
+        const float d = crd::math::abs(recon[uz(i)] - static_cast<float>(rref[uz(i)]));
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
     std::printf("[B19-d GPU] %d-bit codec on Vulkan: worst |GPU - oracle| = %.3e\n", bits, static_cast<double>(worst));
     CHECK(worst < 1.0e-4F); // GPU codec == oracle
 }
@@ -1494,7 +1802,11 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1511,7 +1823,10 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1530,8 +1845,16 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
 
     // CPU oracle
     crd::containers::Array<double> pd(&alloc); crd::containers::Array<double> td(&alloc);
-    pd.resize(5U, 0.0); for (int i = 0; i < 5; ++i) { pd[uz(i)] = params[uz(i)]; }
-    td.resize(uz(np), 0.0); for (int i = 0; i < np; ++i) { td[uz(i)] = target[uz(i)]; }
+    pd.resize(5U, 0.0);
+    for (int i = 0; i < 5; ++i)
+    {
+        pd[uz(i)] = params[uz(i)];
+    }
+    td.resize(uz(np), 0.0);
+    for (int i = 0; i < np; ++i)
+    {
+        td[uz(i)] = target[uz(i)];
+    }
     crd::containers::Array<double> imgref(&alloc); crd::containers::Array<double> gref(&alloc);
     imgref.resize(uz(np), 0.0); gref.resize(5U, 0.0);
     kir::KGraph fg2(&alloc); const kir::KEntry fe2 = kir::gsplat::build_gsplat_diff_forward_kernel(fg2, cfg);
@@ -1542,8 +1865,23 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
     kir::eval_cpu_kernel(bg2, be2, bb, 3, be2.local_size[0], &alloc, 1U);
 
     float wf = 0.0F; float wg = 0.0F;
-    for (int i = 0; i < np; ++i) { const float d = crd::math::abs(img[uz(i)] - static_cast<float>(imgref[uz(i)])); if (d > wf) { wf = d; } }
-    for (int k = 0; k < 5; ++k) { const float d = crd::math::abs(grad[uz(k)] - static_cast<float>(gref[uz(k)])); const float rel = d / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F); if (rel > wg) { wg = rel; } }
+    for (int i = 0; i < np; ++i)
+    {
+        const float d = crd::math::abs(img[uz(i)] - static_cast<float>(imgref[uz(i)]));
+        if (d > wf)
+        {
+            wf = d;
+        }
+    }
+    for (int k = 0; k < 5; ++k)
+    {
+        const float d = crd::math::abs(grad[uz(k)] - static_cast<float>(gref[uz(k)]));
+        const float rel = d / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F);
+        if (rel > wg)
+        {
+            wg = rel;
+        }
+    }
     std::printf("[B19-f GPU] diff forward+backward on Vulkan: worst |fwd - oracle| = %.3e, worst grad rel = %.3e\n", static_cast<double>(wf), static_cast<double>(wg));
     CHECK(wf < 1.0e-4F);   // GPU forward == oracle
     CHECK(wg < 1.0e-3F);   // GPU gradient == oracle
@@ -1560,7 +1898,11 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -1580,7 +1922,10 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -1630,9 +1975,19 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
         auto d_proj  = dbuf(uz(n) * 12U * 4U);
         {
             auto stg = compute.create_buffer(uz(n) * 14U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-            auto* p = static_cast<float*>(stg->map()); for (int i = 0; i < n * 14; ++i) { p[i] = gauss[uz(i)]; } stg->unmap();
+            auto* p = static_cast<float*>(stg->map());
+            for (int i = 0; i < n * 14; ++i)
+            {
+                p[i] = gauss[uz(i)];
+            }
+            stg->unmap();
             auto stc = compute.create_buffer(20U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-            auto* pc = static_cast<float*>(stc->map()); for (int i = 0; i < 20; ++i) { pc[i] = cam[uz(i)]; } stc->unmap();
+            auto* pc = static_cast<float*>(stc->map());
+            for (int i = 0; i < 20; ++i)
+            {
+                pc[i] = cam[uz(i)];
+            }
+            stc->unmap();
             auto& rc = compute.begin();
             rc.copy(*stg, *d_gauss, 0U, 0U, uz(n) * 14U * 4U); rc.copy(*stc, *d_cam, 0U, 0U, 20U * 4U);
             compute.submit_and_wait();
@@ -1649,27 +2004,54 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
         {
             auto rb = compute.create_buffer(uz(n) * 12U * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
             auto& rec = compute.begin(); rec.copy(*d_proj, *rb, 0U, 0U, uz(n) * 12U * 4U); compute.submit_and_wait();
-            const auto* r = static_cast<const float*>(rb->map()); for (int i = 0; i < n * 12; ++i) { proj[uz(i)] = r[i]; } rb->unmap();
+            const auto* r = static_cast<const float*>(rb->map());
+            for (int i = 0; i < n * 12; ++i)
+            {
+                proj[uz(i)] = r[i];
+            }
+            rb->unmap();
         }
         // ── host bin: counting sort by centre tile → order[] + ranges[] (UNTIMED setup) ──
         crd::containers::Array<crd::u32> cnt(&alloc); cnt.resize(uz(n_tiles), 0U);
         crd::containers::Array<int> tof(&alloc); tof.resize(uz(n), -1);
         for (int i = 0; i < n; ++i)
         {
-            if (proj[uz(i) * 12U + 11U] <= 0.5F) { continue; }
+            if (proj[uz(i) * 12U + 11U] <= 0.5F)
+            {
+                continue;
+            }
             const int tx = static_cast<int>(proj[uz(i) * 12U + 0U]) / tile_px;
             const int ty = static_cast<int>(proj[uz(i) * 12U + 1U]) / tile_px;
-            if (tx < 0 || tx >= tiles_x || ty < 0 || ty >= tiles_y) { continue; }
+            if (tx < 0 || tx >= tiles_x || ty < 0 || ty >= tiles_y)
+            {
+                continue;
+            }
             const int t = ty * tiles_x + tx; tof[uz(i)] = t; ++cnt[uz(t)];
         }
         crd::containers::Array<crd::u32> ranges(&alloc); ranges.resize(uz(n_tiles) * 2U, 0U);
         crd::u32 acc = 0U;
-        for (int t = 0; t < n_tiles; ++t) { ranges[uz(t) * 2U] = acc; acc += cnt[uz(t)]; ranges[uz(t) * 2U + 1U] = acc; }
+        for (int t = 0; t < n_tiles; ++t)
+        {
+            ranges[uz(t) * 2U] = acc;
+            acc += cnt[uz(t)];
+            ranges[uz(t) * 2U + 1U] = acc;
+        }
         const int total = static_cast<int>(acc);
         crd::containers::Array<crd::u32> wptr(&alloc); wptr.resize(uz(n_tiles), 0U);
-        for (int t = 0; t < n_tiles; ++t) { wptr[uz(t)] = ranges[uz(t) * 2U]; }
+        for (int t = 0; t < n_tiles; ++t)
+        {
+            wptr[uz(t)] = ranges[uz(t) * 2U];
+        }
         crd::containers::Array<crd::u32> order(&alloc); order.resize(uz(total > 0 ? total : 1), 0U);
-        for (int i = 0; i < n; ++i) { const int t = tof[uz(i)]; if (t >= 0) { order[static_cast<crd::usize>(wptr[uz(t)])] = static_cast<crd::u32>(i); ++wptr[uz(t)]; } }
+        for (int i = 0; i < n; ++i)
+        {
+            const int t = tof[uz(i)];
+            if (t >= 0)
+            {
+                order[static_cast<crd::usize>(wptr[uz(t)])] = static_cast<crd::u32>(i);
+                ++wptr[uz(t)];
+            }
+        }
 
         // upload sorted(=proj), order, ranges, params
         auto d_ord = dbuf(uz(total > 0 ? total : 1) * 4U);
@@ -1680,14 +2062,24 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
         {
             const auto upu = [&](cg::ComputeBuffer& dev, const crd::u32* src, int len) {
                 auto stg = compute.create_buffer(static_cast<crd::u64>(len) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-                auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < len; ++i) { p[i] = src[i]; } stg->unmap();
+                auto* p = static_cast<crd::u32*>(stg->map());
+                for (int i = 0; i < len; ++i)
+                {
+                    p[i] = src[i];
+                }
+                stg->unmap();
                 auto& rc = compute.begin(); rc.copy(*stg, dev, 0U, 0U, static_cast<crd::u64>(len) * 4U); compute.submit_and_wait();
             };
             upu(*d_ord, order.data(), total > 0 ? total : 1);
             upu(*d_rng, ranges.data(), n_tiles * 2);
             crd::containers::Array<float> par(&alloc); par.resize(4U, 0.0F); par[0] = 0.02F; par[1] = 0.02F; par[2] = 0.03F; par[3] = 1.0F / 255.0F;
             auto stp = compute.create_buffer(4U * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-            auto* pp = static_cast<float*>(stp->map()); for (int i = 0; i < 4; ++i) { pp[i] = par[uz(i)]; } stp->unmap();
+            auto* pp = static_cast<float*>(stp->map());
+            for (int i = 0; i < 4; ++i)
+            {
+                pp[i] = par[uz(i)];
+            }
+            stp->unmap();
             auto& rc = compute.begin(); rc.copy(*stp, *d_par, 0U, 0U, 4U * 4U); compute.submit_and_wait();
         }
 
@@ -1700,7 +2092,15 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
             };
             rec1(); rec1(); // warm
             double best = 1.0e30;
-            for (int r = 0; r < 6; ++r) { rec1(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+            for (int r = 0; r < 6; ++r)
+            {
+                rec1();
+                const double ms = compute.last_gpu_ms();
+                if (ms > 0.0 && ms < best)
+                {
+                    best = ms;
+                }
+            }
             return best;
         };
         auto d_oe  = dbuf(uz(padded_w * padded_h) * 4U * 4U); // smem + early-out out
@@ -1724,8 +2124,16 @@ TEST_CASE("B19 perf: shared-mem 3DGS rasteriser at 1080p, millions of splats -- 
             const auto* c = static_cast<const float*>(rbe->map());
             for (int i = 0; i < padded_w * padded_h * 4; i += 977)
             {
-                const double d = crd::math::abs(static_cast<double>(a[i] - b[i])); if (d > worst) { worst = d; }
-                const double e = crd::math::abs(static_cast<double>(a[i] - c[i])); if (e > worst_et) { worst_et = e; }
+                const double d = crd::math::abs(static_cast<double>(a[i] - b[i]));
+                if (d > worst)
+                {
+                    worst = d;
+                }
+                const double e = crd::math::abs(static_cast<double>(a[i] - c[i]));
+                if (e > worst_et)
+                {
+                    worst_et = e;
+                }
             }
             rbd->unmap(); rbs->unmap(); rbe->unmap();
         }

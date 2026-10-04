@@ -130,7 +130,10 @@ TEST_CASE("ceir structure: capture into a non-isolated region is legal; through 
     {
         Block* const rb = ctx.create_block(0U);
         ifop->region(ri)->append(rb);
-        if (ri == 0U) { (void)use2(ctx, o.addi, v, v, rb); } // the THEN captures %v -- legal (no isolation)
+        if (ri == 0U) // the THEN captures %v -- legal (no isolation)
+        {
+            (void)use2(ctx, o.addi, v, v, rb);
+        }
         rb->append(ctx.create_operation(o.yield, {}, 0U));
     }
     CHECK(ctx.find_structure_error(*m).kind == StructureErrorKind::None);

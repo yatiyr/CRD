@@ -45,22 +45,34 @@ TEST_CASE("v16-h: graph AD forward == direct f64, grad == tape == FD; optimize r
     // ---- trace the functor into a graph, symbolically reverse-AD, then optimise ----
     ga::Graph g(&alloc);
     ga::GExpr gx[n];
-    for (int i = 0; i < n; ++i) { gx[i] = ga::gexpr_input(g); }
+    for (int i = 0; i < n; ++i)
+    {
+        gx[i] = ga::gexpr_input(g);
+    }
     const ga::GExpr gy  = Fn{}(gx, n);
     int             out = gy.id;
     int             input_nodes[n];
     int             grad_nodes[n];
-    for (int i = 0; i < n; ++i) { input_nodes[i] = gx[i].id; }
+    for (int i = 0; i < n; ++i)
+    {
+        input_nodes[i] = gx[i].id;
+    }
     g.reverse_ad(out, input_nodes, n, grad_nodes);
 
     int roots[n + 1];
     roots[0] = out;
-    for (int i = 0; i < n; ++i) { roots[i + 1] = grad_nodes[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        roots[i + 1] = grad_nodes[i];
+    }
     const int before = g.size();
     g.optimize(roots, n + 1);
     const int after = g.size();
     out = roots[0];
-    for (int i = 0; i < n; ++i) { grad_nodes[i] = roots[i + 1]; }
+    for (int i = 0; i < n; ++i)
+    {
+        grad_nodes[i] = roots[i + 1];
+    }
     CHECK(after < before); // CSE + DCE strictly shrank the graph
 
     // ---- interpret the optimised graph ----
@@ -69,7 +81,10 @@ TEST_CASE("v16-h: graph AD forward == direct f64, grad == tape == FD; optimize r
     g.eval(x, vals.data());
     const f64 gval = vals[static_cast<crd::usize>(out)];
     f64       ggrad[n];
-    for (int i = 0; i < n; ++i) { ggrad[i] = vals[static_cast<crd::usize>(grad_nodes[i])]; }
+    for (int i = 0; i < n; ++i)
+    {
+        ggrad[i] = vals[static_cast<crd::usize>(grad_nodes[i])];
+    }
 
     // (1) forward BIT-IDENTICAL to a direct f64 evaluation
     CHECK(gval == Fn{}(x, n));
@@ -77,11 +92,17 @@ TEST_CASE("v16-h: graph AD forward == direct f64, grad == tape == FD; optimize r
     // (2) gradient == the reverse tape
     rev::Tape tape(&alloc);
     rev::Var  vx[n];
-    for (int i = 0; i < n; ++i) { vx[i] = rev::make_leaf(tape, x[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        vx[i] = rev::make_leaf(tape, x[i]);
+    }
     const rev::Var vy = Fn{}(vx, n);
     tape.seed(vy.node, 1.0);
     tape.backward();
-    for (int i = 0; i < n; ++i) { CHECK_THAT(ggrad[i], WithinAbs(tape.grad(vx[i].node), 1e-11)); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK_THAT(ggrad[i], WithinAbs(tape.grad(vx[i].node), 1e-11));
+    }
 
     // (2b) gradient == central FD
     const f64 hh = 1e-6;
@@ -117,7 +138,13 @@ TEST_CASE("v16-h: optimize is semantics-preserving + const-folds a constant subg
 
     // the folded graph has NO Mul node left (2*3 became a Const)
     bool has_mul = false;
-    for (int i = 0; i < g.size(); ++i) { if (g.node(i).op == ga::GOp::Mul) { has_mul = true; } }
+    for (int i = 0; i < g.size(); ++i)
+    {
+        if (g.node(i).op == ga::GOp::Mul)
+        {
+            has_mul = true;
+        }
+    }
     CHECK(!has_mul);
 
     crd::containers::Array<f64> vals(&alloc);

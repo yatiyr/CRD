@@ -106,7 +106,10 @@ inline void draw_tangent_frame(crd::draw::RenderBuffer&    buf,
                                 crd::f32                    lifetime_s = 0.0F)
 {
     using T = typename Curve::scalar_t;
-    if (n_samples == 0U) { return; }
+    if (n_samples == 0U)
+    {
+        return;
+    }
 
     const bool closed = curve.closed;
     const auto count  = closed ? n_samples : (n_samples + 1U);

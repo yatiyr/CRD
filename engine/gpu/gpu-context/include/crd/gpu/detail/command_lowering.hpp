@@ -132,7 +132,10 @@ public:
         // (an empty world, a frustum that culled everything, a shadow cascade with no casters) would otherwise emit
         // NOTHING and leave the attachment UNDEFINED — an empty viewport rendering garbage. `m_first` still set ⇒ no
         // draw consumed the clear; issue it now as a bare clear-only scope (clear_scope replays begin/end, no geometry).
-        if (m_in_scope && m_first && wants_clear(m_rendering)) { m_ctx.clear_scope(m_rendering); }
+        if (m_in_scope && m_first && wants_clear(m_rendering))
+        {
+            m_ctx.clear_scope(m_rendering);
+        }
         m_in_scope = false;
     }
 
@@ -494,13 +497,25 @@ public:
                 }
                 else if (buf != nullptr)
                 {
-                    if (clears) { m_ctx.draw_mesh_storage(*color0, prog, clear, *buf, g.group_count_x); }
-                    else        { m_ctx.draw_mesh_storage_load(*color0, prog, *buf, g.group_count_x); }
+                    if (clears)
+                    {
+                        m_ctx.draw_mesh_storage(*color0, prog, clear, *buf, g.group_count_x);
+                    }
+                    else
+                    {
+                        m_ctx.draw_mesh_storage_load(*color0, prog, *buf, g.group_count_x);
+                    }
                 }
                 else
                 {
-                    if (clears) { m_ctx.draw_mesh(*color0, prog, clear, g.group_count_x); }
-                    else        { m_ctx.draw_mesh_load(*color0, prog, g.group_count_x); }
+                    if (clears)
+                    {
+                        m_ctx.draw_mesh(*color0, prog, clear, g.group_count_x);
+                    }
+                    else
+                    {
+                        m_ctx.draw_mesh_load(*color0, prog, g.group_count_x);
+                    }
                 }
             }
             break;
@@ -526,13 +541,25 @@ public:
                 // patch grid (draw_tess). FIRST clears, later ones LOAD (a per-draw clear renders only the last patch).
                 if (buf != nullptr)
                 {
-                    if (clears) { m_ctx.draw_tess_storage(*color0, prog, clear, *buf, g.patch_count); }
-                    else        { m_ctx.draw_tess_storage_load(*color0, prog, *buf, g.patch_count); }
+                    if (clears)
+                    {
+                        m_ctx.draw_tess_storage(*color0, prog, clear, *buf, g.patch_count);
+                    }
+                    else
+                    {
+                        m_ctx.draw_tess_storage_load(*color0, prog, *buf, g.patch_count);
+                    }
                 }
                 else
                 {
-                    if (clears) { m_ctx.draw_tess(*color0, prog, clear, g.patch_count); }
-                    else        { m_ctx.draw_tess_load(*color0, prog, g.patch_count); }
+                    if (clears)
+                    {
+                        m_ctx.draw_tess(*color0, prog, clear, g.patch_count);
+                    }
+                    else
+                    {
+                        m_ctx.draw_tess_load(*color0, prog, g.patch_count);
+                    }
                 }
             }
             break;

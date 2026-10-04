@@ -41,7 +41,11 @@ struct Ops
 Block* body(Context& ctx, Module& m)
 {
     Block* b = m.body()->first_block();
-    if (b == nullptr) { b = ctx.create_block(0U); m.body()->append(b); }
+    if (b == nullptr)
+    {
+        b = ctx.create_block(0U);
+        m.body()->append(b);
+    }
     return b;
 }
 Operation* konst(Context& ctx, const Ops& o, Block* b, i64 v)

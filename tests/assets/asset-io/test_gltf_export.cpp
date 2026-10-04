@@ -25,7 +25,10 @@ void push_vertex(crd::containers::Array<crd::u8>& out, const float pos[3], const
         {
             crd::u8 b[4];
             std::memcpy(b, &f[i], 4U);
-            for (crd::u32 k = 0; k < 4U; ++k) { out.push_back(b[k]); }
+            for (crd::u32 k = 0; k < 4U; ++k)
+            {
+                out.push_back(b[k]);
+            }
         }
     };
     put(pos, 3U);
@@ -38,7 +41,10 @@ void push_index(crd::containers::Array<crd::u8>& out, crd::u32 v)
 {
     crd::u8 b[4];
     std::memcpy(b, &v, 4U);
-    for (crd::u32 k = 0; k < 4U; ++k) { out.push_back(b[k]); }
+    for (crd::u32 k = 0; k < 4U; ++k)
+    {
+        out.push_back(b[k]);
+    }
 }
 
 } // namespace
@@ -263,5 +269,8 @@ TEST_CASE("GEO-4 pt 2: an embedded PNG texture round-trips -- encode with OUR en
     REQUIRE(decoded.width == 2U);
     REQUIRE(decoded.height == 2U);
     REQUIRE(decoded.pixels.size() == 16U);
-    for (crd::u32 i = 0; i < 16U; ++i) { CHECK(decoded.pixels[i] == texels[i]); }
+    for (crd::u32 i = 0; i < 16U; ++i)
+    {
+        CHECK(decoded.pixels[i] == texels[i]);
+    }
 }

@@ -219,7 +219,10 @@ oracle_sort_pairs(crd::containers::ConstSpan<KeyT> codes,
     crd::containers::sort(out.data(), out.data() + out.size(),
         [](const MortonPair<KeyT>& a, const MortonPair<KeyT>& b)
         {
-            if (a.code != b.code) return a.code < b.code;
+            if (a.code != b.code)
+            {
+                return a.code < b.code;
+            }
             return a.index < b.index;
         });
     return out;
@@ -240,7 +243,10 @@ TEST_CASE("sort_morton_pairs u32 random 10000: byte-identical to oracle",
     // Mix of unique-ish codes and forced ties (mod a small number) to
     // exercise both pure-LSD-radix correctness and stability under ties.
     std::uniform_int_distribution<crd::u32> dist(0U, 4095U);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = dist(rng); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = dist(rng);
+    }
 
     const auto codes_span = view_of(in);
     const auto got      = sort_morton_pairs<crd::u32>(codes_span, &alloc);
@@ -265,7 +271,10 @@ TEST_CASE("sort_morton_pairs u32 determinism: byte-identical across runs",
     crd::containers::Array<crd::u32> in(&alloc);
     in.resize(n);
     std::mt19937 rng(0xD37E12CEU);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = static_cast<crd::u32>(rng());
+    }
 
     const auto a = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
@@ -286,7 +295,10 @@ TEST_CASE("sort_morton_pairs u32 pair integrity: indices form a permutation",
     crd::containers::Array<crd::u32> in(&alloc);
     in.resize(n);
     std::mt19937 rng(0xA5A5A5A5U);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = static_cast<crd::u32>(rng());
+    }
 
     const auto out = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     REQUIRE(out.size() == n);
@@ -429,7 +441,10 @@ TEST_CASE("sort_morton_pairs u64 determinism", "[sort][cpu][determinism][u64]")
     crd::containers::Array<std::uint64_t> in(&alloc);
     in.resize(n);
     std::mt19937_64 rng(0xBEEFBEEFBEEFBEEFULL);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = rng();
+    }
 
     const auto a = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
@@ -445,7 +460,10 @@ TEST_CASE("sort_morton_pairs u64 pair integrity", "[sort][cpu][integrity][u64]")
     crd::containers::Array<std::uint64_t> in(&alloc);
     in.resize(n);
     std::mt19937_64 rng(0xAA55AA55AA55AA55ULL);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = rng();
+    }
 
     const auto out = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     REQUIRE(out.size() == n);
@@ -484,7 +502,10 @@ TEST_CASE("sort_morton_pairs u32 perf budget: 1M elements within tiered budget",
     crd::containers::Array<crd::u32> in(&alloc);
     in.resize(n);
     std::mt19937 rng(0x12345678U);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = static_cast<crd::u32>(rng()); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = static_cast<crd::u32>(rng());
+    }
     const auto codes_span = view_of(in);
 
     #ifdef NDEBUG
@@ -507,7 +528,10 @@ TEST_CASE("sort_morton_pairs u64 perf budget: 1M elements within tiered budget",
     crd::containers::Array<std::uint64_t> in(&alloc);
     in.resize(n);
     std::mt19937_64 rng(0x87654321DEADBEEFULL);
-    for (crd::usize i = 0; i < n; ++i) { in[i] = rng(); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        in[i] = rng();
+    }
     const auto codes_span = view_of(in);
 
     #ifdef NDEBUG
@@ -539,7 +563,9 @@ TEST_CASE("sort_morton_pairs integrates with compute_morton_codes_cpu",
     // 8 corner AABBs in the unit cube -- same shape as the morton calibration.
     crd::containers::Array<AABB3<crd::f32>> aabbs(&alloc);
     for (int iz = 0; iz < 2; ++iz)
+    {
         for (int iy = 0; iy < 2; ++iy)
+        {
             for (int ix = 0; ix < 2; ++ix)
             {
                 Vec3<crd::f32> c{
@@ -549,6 +575,8 @@ TEST_CASE("sort_morton_pairs integrates with compute_morton_codes_cpu",
                 };
                 aabbs.push_back({c, c});
             }
+        }
+    }
 
     const auto codes = compute_morton_codes_cpu(
         crd::containers::ConstSpan<AABB3<crd::f32>>(aabbs.data(), aabbs.size()),
@@ -572,5 +600,8 @@ TEST_CASE("sort_morton_pairs integrates with compute_morton_codes_cpu",
         REQUIRE(p.index < 8U);
         seen[p.index] = 1U;
     }
-    for (int i = 0; i < 8; ++i) { CHECK(seen[i] == 1U); }
+    for (int i = 0; i < 8; ++i)
+    {
+        CHECK(seen[i] == 1U);
+    }
 }

@@ -166,7 +166,9 @@ TEST_CASE("rt sentinel: jobs::wait inside an RtScope is reported as Blocking", "
     // wait() below hits its fast path (counter already 0) -- it still reports Blocking at entry, and does not
     // pump a job onto the main thread inside the scope.
     while (!g_child_done.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
 
     {
         crd::RtScope rt;

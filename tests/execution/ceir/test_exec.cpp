@@ -383,7 +383,10 @@ TEST_CASE("ceir exec: open-world -- a hand-registered dialect op evaluates via a
     CHECK(in.invoke(*m, "main", {}).error == exec::ExecError::NoSemantics); // hw.dbl not installed
     in.install(dbl, [](exec::Interpreter& it, const Operation& op) -> exec::ExecError {
         i64 x = 0;
-        if (!it.value_of(op.operand(0U), x)) { return it.fail(exec::ExecError::UndefinedValue, &op); }
+        if (!it.value_of(op.operand(0U), x))
+        {
+            return it.fail(exec::ExecError::UndefinedValue, &op);
+        }
         it.set_value(op.result(0U), x * 2);
         return exec::ExecError::None;
     });

@@ -78,7 +78,10 @@ TEST_CASE("REN-40-I7: unpack all leaves recovers original triangle count",
         const crd::u32* w = fx.cook.packed_clusters.data()
                           + static_cast<crd::usize>(ci) * mp::kClusterGpuWords;
         const crd::u32 level = (w[2] >> 16U) & 0xFFFFU;
-        if (level == 0U) leaves.push_back(ci);
+        if (level == 0U)
+        {
+            leaves.push_back(ci);
+        }
     }
     REQUIRE(leaves.size() > 0U);
 
@@ -230,7 +233,9 @@ TEST_CASE("REN-40-I7: determinism",
     REQUIRE(r1.vertex_count == r2.vertex_count);
     REQUIRE(r1.triangle_count == r2.triangle_count);
     for (crd::usize i = 0; i < r1.triangles.size(); ++i)
+    {
         REQUIRE(r1.triangles[i] == r2.triangles[i]);
+    }
 }
 
 TEST_CASE("REN-40-I7: full round-trip cook-select-unpack at close range",

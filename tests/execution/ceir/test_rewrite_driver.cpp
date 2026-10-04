@@ -52,11 +52,20 @@ constexpr OpId kPick{fnv1a_ct("ct.pick")};
 // (1)/(2) DEAD-op removal: a ct.prod/ct.cons whose every result is unused. Monotone (erase strictly reduces op count).
 bool match_dead(const Context&, const Operation& op) noexcept
 {
-    if (op.kind() != kProd && op.kind() != kCons) { return false; }
-    if (op.num_results() == 0U) { return false; }
+    if (op.kind() != kProd && op.kind() != kCons)
+    {
+        return false;
+    }
+    if (op.num_results() == 0U)
+    {
+        return false;
+    }
     for (u32 i = 0; i < op.num_results(); ++i)
     {
-        if (op.result(i)->has_uses()) { return false; }
+        if (op.result(i)->has_uses())
+        {
+            return false;
+        }
     }
     return true; // has a result, all unused -> dead
 }
@@ -81,7 +90,10 @@ void rewrite_erase_counted(Context&, Operation& op)
 // tombstone. Monotone: once the consumer is gone the producer's result has no uses, so this pattern no longer matches it.
 bool match_prod_with_cons(const Context&, const Operation& op) noexcept
 {
-    if (op.kind() != kProd || op.num_results() == 0U || !op.result(0)->has_uses()) { return false; }
+    if (op.kind() != kProd || op.num_results() == 0U || !op.result(0)->has_uses())
+    {
+        return false;
+    }
     return op.result(0)->first_use()->owner->kind() == kCons;
 }
 void rewrite_kill_cons(Context&, Operation& op) { op.result(0)->first_use()->owner->erase(); }
@@ -91,7 +103,10 @@ void rewrite_kill_cons(Context&, Operation& op) { op.result(0)->first_use()->own
 // NOT erase the now-dead reshapes (DCE reclaims them). `result HAS uses` in the match is the "don't re-fold a dead op" guard.
 bool match_reshape_of_reshape(const Context&, const Operation& op) noexcept
 {
-    if (op.kind() != kReshape || op.num_results() == 0U || !op.result(0)->has_uses()) { return false; }
+    if (op.kind() != kReshape || op.num_results() == 0U || !op.result(0)->has_uses())
+    {
+        return false;
+    }
     const Value* const in = op.operand(0);
     const Operation* const def = (in != nullptr) ? in->defining_op() : nullptr;
     return def != nullptr && def->kind() == kReshape;
@@ -111,13 +126,19 @@ Value* result_of_kind(Block* blk, OpId k) noexcept
 {
     for (Operation* o = blk->first_op(); o != nullptr; o = o->next_in_block())
     {
-        if (o->kind() == k && o->num_results() > 0U) { return o->result(0); }
+        if (o->kind() == k && o->num_results() > 0U)
+        {
+            return o->result(0);
+        }
     }
     return nullptr;
 }
 bool match_pick_on(const Operation& op, OpId operand_kind) noexcept
 {
-    if (op.kind() != kPick || op.num_operands() == 0U) { return false; }
+    if (op.kind() != kPick || op.num_operands() == 0U)
+    {
+        return false;
+    }
     const Value* const in = op.operand(0);
     const Operation* const def = (in != nullptr) ? in->defining_op() : nullptr;
     return def != nullptr && def->kind() == operand_kind;
@@ -172,8 +193,14 @@ Module* mk_chain_mod(Context& ctx, ChainOut out)
     const TypeId dout[2] = {ctx.type_dim_static(4U), ctx.type_dim_static(16U)};
     const TypeId t_rank  = ctx.type_tensor(f32t, ctx.type_shape(ConstSpan<TypeId>(dout, 2U)));
     TypeId       t_out   = t_rank; // ChainOut::RankBridge
-    if (out == ChainOut::NetIdentity) { t_out = t_in; }
-    else if (out == ChainOut::OuterIdentity) { t_out = t_mid; }
+    if (out == ChainOut::NetIdentity)
+    {
+        t_out = t_in;
+    }
+    else if (out == ChainOut::OuterIdentity)
+    {
+        t_out = t_mid;
+    }
     Module* const m   = ctx.create_module();
     Block* const  blk = ctx.create_block();
     m->body()->append(blk);
@@ -408,7 +435,10 @@ TEST_CASE("ceir 27c: an AUTHORED ceir.rewrite rule reproduces canonicalize's ide
         {
             for (const Operation* o = bb->first_op(); o != nullptr; o = o->next_in_block())
             {
-                if (o->kind() == reshape_k) { return o->num_results() > 0U && !o->result(0)->has_uses(); }
+                if (o->kind() == reshape_k)
+                {
+                    return o->num_results() > 0U && !o->result(0)->has_uses();
+                }
             }
         }
         return false;
@@ -511,7 +541,10 @@ TEST_CASE("ceir 27d: an AUTHORED reshape_of_reshape rule BUILDS the folded op; t
         {
             for (const Operation* o = bb->first_op(); o != nullptr; o = o->next_in_block())
             {
-                if (o->kind() == reshape_k) { ++c; }
+                if (o->kind() == reshape_k)
+                {
+                    ++c;
+                }
             }
         }
         return c;
@@ -553,8 +586,14 @@ TEST_CASE("ceir 27d: an AUTHORED reshape_of_reshape rule BUILDS the folded op; t
         {
             for (const Operation* o = bb->first_op(); o != nullptr; o = o->next_in_block())
             {
-                if (o->kind() == decl_k) { decl = o; }
-                if (o->kind() == exp_k && o->num_operands() > 0U) { return decl != nullptr && o->operand(0)->defining_op() == decl; }
+                if (o->kind() == decl_k)
+                {
+                    decl = o;
+                }
+                if (o->kind() == exp_k && o->num_operands() > 0U)
+                {
+                    return decl != nullptr && o->operand(0)->defining_op() == decl;
+                }
             }
         }
         return false;

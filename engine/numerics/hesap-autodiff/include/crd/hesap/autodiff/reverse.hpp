@@ -26,11 +26,17 @@ inline void gradient(const F& f, ConstSpan<crd::f64> x, Span<crd::f64> g, Tape& 
 {
     tape.reset();
     const int n = static_cast<int>(x.size());
-    for (int i = 0; i < n; ++i) { scratch[i] = make_leaf(tape, x[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        scratch[i] = make_leaf(tape, x[i]);
+    }
     const Var y = f(scratch.data(), n);
     tape.seed(y.node, 1.0);
     tape.backward();
-    for (int i = 0; i < n; ++i) { g[i] = tape.grad(scratch[i].node); }
+    for (int i = 0; i < n; ++i)
+    {
+        g[i] = tape.grad(scratch[i].node);
+    }
 }
 
 // Jacobian of f: Rⁿ→Rᵐ into row-major jac[m*n]: build the graph ONCE, then ONE backward per output row (m passes —
@@ -41,14 +47,20 @@ inline void jacobian(const F& f, ConstSpan<crd::f64> x, int m, Span<crd::f64> ja
 {
     tape.reset();
     const int n = static_cast<int>(x.size());
-    for (int i = 0; i < n; ++i) { xscratch[i] = make_leaf(tape, x[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        xscratch[i] = make_leaf(tape, x[i]);
+    }
     f(xscratch.data(), n, yscratch.data(), m);
     for (int j = 0; j < m; ++j)
     {
         tape.zero_adjoints();
         tape.seed(yscratch[j].node, 1.0);
         tape.backward();
-        for (int i = 0; i < n; ++i) { jac[j * n + i] = tape.grad(xscratch[i].node); }
+        for (int i = 0; i < n; ++i)
+        {
+            jac[j * n + i] = tape.grad(xscratch[i].node);
+        }
     }
 }
 
@@ -85,7 +97,10 @@ inline void batch_gradient(const LossFn& loss, ConstSpan<crd::f64> theta, int S,
                 {
                     tp.reset();
                     Var th[32];
-                    for (int i = 0; i < pc->n; ++i) { th[i] = make_leaf(tp, pc->theta[i]); }
+                    for (int i = 0; i < pc->n; ++i)
+                    {
+                        th[i] = make_leaf(tp, pc->theta[i]);
+                    }
                     const Var y = (*pc->loss)(th, pc->n, static_cast<int>(s));
                     tp.seed(y.node, 1.0);
                     tp.backward();
@@ -99,10 +114,16 @@ inline void batch_gradient(const LossFn& loss, ConstSpan<crd::f64> theta, int S,
     crd::jobs::wait(c);
 
     // FIXED-ORDER fold (ascending sample, ascending component) — the deterministic, worker-count-independent sum.
-    for (int i = 0; i < n; ++i) { grad[i] = 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        grad[i] = 0.0;
+    }
     for (int s = 0; s < S; ++s)
     {
-        for (int i = 0; i < n; ++i) { grad[i] += gbuf[static_cast<crd::usize>(s) * n + i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            grad[i] += gbuf[static_cast<crd::usize>(s) * n + i];
+        }
     }
 }
 

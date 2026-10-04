@@ -143,7 +143,10 @@ inline void oit_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pipe, con
 
     out.resize(static_cast<crd::usize>(wh) * 3U, 0.0F);
     const auto* r = static_cast<const float*>(out_rb->map());
-    for (crd::u32 i = 0; i < wh * 3U; ++i) { out[static_cast<crd::usize>(i)] = r[i]; }
+    for (crd::u32 i = 0; i < wh * 3U; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = r[i];
+    }
     out_rb->unmap();
 }
 
@@ -251,7 +254,10 @@ inline void stochastic_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pi
 
     out.resize(static_cast<crd::usize>(wh) * 3U, 0.0F);
     const auto* r = static_cast<const float*>(out_rb->map());
-    for (crd::u32 i = 0; i < wh * 3U; ++i) { out[static_cast<crd::usize>(i)] = r[i]; }
+    for (crd::u32 i = 0; i < wh * 3U; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = r[i];
+    }
     out_rb->unmap();
 }
 
@@ -305,7 +311,10 @@ inline void abuffer_atomic_dispatch(crd::gpu::IComputeContext& ctx, MakePipe mak
     *static_cast<crd::u32*>(cnt_up->map()) = 0U;
     cnt_up->unmap();
     auto* hp = static_cast<crd::u32*>(hd_up->map());
-    for (crd::u32 i = 0; i < wh; ++i) { hp[i] = crd::kir::oit::kAbufferEmpty; } // empty lists
+    for (crd::u32 i = 0; i < wh; ++i) // empty lists
+    {
+        hp[i] = crd::kir::oit::kAbufferEmpty;
+    }
     hd_up->unmap();
 
     auto& rec = ctx.begin();
@@ -330,7 +339,10 @@ inline void abuffer_atomic_dispatch(crd::gpu::IComputeContext& ctx, MakePipe mak
 
     out.resize(static_cast<crd::usize>(wh) * 3U, 0.0F);
     const auto* r = static_cast<const float*>(out_rb->map());
-    for (crd::u32 i = 0; i < wh * 3U; ++i) { out[static_cast<crd::usize>(i)] = r[i]; }
+    for (crd::u32 i = 0; i < wh * 3U; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = r[i];
+    }
     out_rb->unmap();
 }
 

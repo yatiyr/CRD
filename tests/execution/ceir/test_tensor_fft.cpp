@@ -39,7 +39,11 @@ struct TensorKit
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -156,7 +160,11 @@ TEST_CASE("ceir 22a: fft + gemm round-trip byte-clean through text AND binary (t
     const OpId     decl = ctx.intern_op("resource", "declare");
     Module* const  m    = ctx.create_module();
     Block*         top  = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const b  = func::func_body_block(f);

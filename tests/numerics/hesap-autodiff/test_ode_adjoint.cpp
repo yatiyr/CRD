@@ -55,10 +55,29 @@ TEST_CASE("v16-f: revolve schedule is valid + GW-optimal", "[autodiff][reverse][
         bool valid = true;
         rev::revolve(
             plan, nt, snaps,
-            [&](int from, int to) { if (pos != from) { valid = false; } recompute += (to - from); pos = to; },
-            [&](int slot) { slot_step[slot] = pos; if (slot > maxslot) { maxslot = slot; } },
+            [&](int from, int to)
+            {
+                if (pos != from)
+                {
+                    valid = false;
+                }
+                recompute += (to - from); pos = to; },
+            [&](int slot)
+            {
+                slot_step[slot] = pos;
+                if (slot > maxslot)
+                {
+                    maxslot = slot;
+                }
+            },
             [&](int slot) { pos = slot_step[slot]; },
-            [&](int step) { if (step != expect_rev || pos != step) { valid = false; } --expect_rev; });
+            [&](int step)
+            {
+                if (step != expect_rev || pos != step)
+                {
+                    valid = false;
+                }
+                --expect_rev; });
         CHECK(valid);                                        // reverse order T−1..0, state at each step, advances from pos
         CHECK(expect_rev == -1);                             // every step reversed exactly once
         CHECK(maxslot < snaps);                              // ≤ snaps checkpoints
@@ -100,10 +119,23 @@ TEST_CASE("v16-f: DTO gradient (AD through RK4) == central FD; revolve == store-
         f64 x[d];
         f64 sc[5 * d];
         f64 xn[d];
-        for (int i = 0; i < d; ++i) { x[i] = xx0[i]; }
-        for (int k = 0; k < nsteps; ++k) { rev::rk4_step<f64>(OdeF{}, x, th, k * h, h, xn, d, np, sc); for (int i = 0; i < d; ++i) { x[i] = xn[i]; } }
+        for (int i = 0; i < d; ++i)
+        {
+            x[i] = xx0[i];
+        }
+        for (int k = 0; k < nsteps; ++k)
+        {
+            rev::rk4_step<f64>(OdeF{}, x, th, k * h, h, xn, d, np, sc);
+            for (int i = 0; i < d; ++i)
+            {
+                x[i] = xn[i];
+            }
+        }
         f64 loss = 0.0;
-        for (int i = 0; i < d; ++i) { loss += loss_grad[i] * x[i]; }
+        for (int i = 0; i < d; ++i)
+        {
+            loss += loss_grad[i] * x[i];
+        }
         return loss;
     };
     const f64 hh = 1e-6;
@@ -142,8 +174,14 @@ TEST_CASE("v16-f: DTO gradient (AD through RK4) == central FD; revolve == store-
         f64 rev_tbar[np];
         rev::dto_gradient_revolve(OdeF{}, x0, theta, d, np, nsteps, h, loss_grad, rev_xbar0, rev_tbar, snaps, plan, ckpt,
                                   work, xnext, rxbar, rxbar_next, rfscr, tape, vscr);
-        for (int i = 0; i < d; ++i) { CHECK(rev_xbar0[i] == dto_xbar0[i]); }
-        for (int j = 0; j < np; ++j) { CHECK(rev_tbar[j] == dto_tbar[j]); }
+        for (int i = 0; i < d; ++i)
+        {
+            CHECK(rev_xbar0[i] == dto_xbar0[i]);
+        }
+        for (int j = 0; j < np; ++j)
+        {
+            CHECK(rev_tbar[j] == dto_tbar[j]);
+        }
     }
 }
 
@@ -186,10 +224,23 @@ TEST_CASE("v16-f: CTO continuous adjoint is a valid approximation; DTO is the EX
         f64 x[d];
         f64 sc[5 * d];
         f64 xn[d];
-        for (int i = 0; i < d; ++i) { x[i] = x0[i]; }
-        for (int k = 0; k < nsteps; ++k) { rev::rk4_step<f64>(OdeF{}, x, th, k * h, h, xn, d, np, sc); for (int i = 0; i < d; ++i) { x[i] = xn[i]; } }
+        for (int i = 0; i < d; ++i)
+        {
+            x[i] = x0[i];
+        }
+        for (int k = 0; k < nsteps; ++k)
+        {
+            rev::rk4_step<f64>(OdeF{}, x, th, k * h, h, xn, d, np, sc);
+            for (int i = 0; i < d; ++i)
+            {
+                x[i] = xn[i];
+            }
+        }
         f64 loss = 0.0;
-        for (int i = 0; i < d; ++i) { loss += loss_grad[i] * x[i]; }
+        for (int i = 0; i < d; ++i)
+        {
+            loss += loss_grad[i] * x[i];
+        }
         return loss;
     };
     const f64 hh = 1e-6;
@@ -204,5 +255,8 @@ TEST_CASE("v16-f: CTO continuous adjoint is a valid approximation; DTO is the EX
         CHECK_THAT(dto_tbar[j], WithinAbs(fd, 1e-6)); // DTO is EXACT (consistent with the discrete forward)
         CHECK_THAT(cto_tbar[j], WithinAbs(fd, 5e-3)); // CTO is only APPROXIMATE (a valid continuous adjoint)
     }
-    for (int i = 0; i < d; ++i) { CHECK_THAT(cto_xbar0[i], WithinAbs(dto_xbar0[i], 5e-3)); }
+    for (int i = 0; i < d; ++i)
+    {
+        CHECK_THAT(cto_xbar0[i], WithinAbs(dto_xbar0[i], 5e-3));
+    }
 }

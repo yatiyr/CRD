@@ -120,22 +120,40 @@ LbvhGpuPipeline::LbvhGpuPipeline(gpu::IComputeContext&        ctx,
 
     // Build kernel: in_pairs(0) + out_nodes(1) + out_leaf_parents(2).
     impl.build = ctx.create_pipeline(shader_dir, sv("lbvh_fat_build"), 3, sizeof(BuildPushConstants));
-    if (impl.build == nullptr) { return; }
+    if (impl.build == nullptr)
+    {
+        return;
+    }
     // Upsweep kernel: nodes(0) + leaf_parents(1) + done(2) + pairs(3) + leaf_aabbs(4).
     impl.upsweep = ctx.create_pipeline(shader_dir, sv("lbvh_fat_upsweep"), 5, sizeof(UpsweepPushConstants));
-    if (impl.upsweep == nullptr) { return; }
+    if (impl.upsweep == nullptr)
+    {
+        return;
+    }
     // init_leaves uses the same 5-binding layout as upsweep.
     impl.init_leaves = ctx.create_pipeline(shader_dir, sv("lbvh_fat_init_leaves"), 5, sizeof(UpsweepPushConstants));
-    if (impl.init_leaves == nullptr) { return; }
+    if (impl.init_leaves == nullptr)
+    {
+        return;
+    }
     // merge_level: just nodes(0) + done(1).
     impl.merge_level = ctx.create_pipeline(shader_dir, sv("lbvh_fat_merge_level"), 2, sizeof(MergeLevelPushConstants));
-    if (impl.merge_level == nullptr) { return; }
+    if (impl.merge_level == nullptr)
+    {
+        return;
+    }
     // extract_prim_indices: in_pairs(0) + out_prim_indices(1).
     impl.extract_prim_indices = ctx.create_pipeline(shader_dir, sv("lbvh_fat_extract_prim_indices"), 2, sizeof(UpsweepPushConstants));
-    if (impl.extract_prim_indices == nullptr) { return; }
+    if (impl.extract_prim_indices == nullptr)
+    {
+        return;
+    }
     // upsweep_persistent: 6 storage-buffer bindings (same 5 as regular upsweep + work_queue at binding 5).
     impl.upsweep_persistent = ctx.create_pipeline(shader_dir, sv("lbvh_fat_upsweep_persistent"), 6, sizeof(UpsweepPushConstants));
-    if (impl.upsweep_persistent == nullptr) { return; }
+    if (impl.upsweep_persistent == nullptr)
+    {
+        return;
+    }
 
     // ---- Pre-allocate all working-set buffers at kRadixMaxItems capacity --
     constexpr crd::u64 max_n           = static_cast<crd::u64>(kRadixMaxItems);
@@ -260,7 +278,10 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
         std::memcpy(dst, sorted_pairs.data(), pairs_bytes);
         pairs_staging.unmap();
     }
-    else { return false; }
+    else
+    {
+        return false;
+    }
 
     // Upload leaf AABBs in ORIGINAL prim-index order (NOT sorted order). The upsweep kernel reads
     // `in_leaf_aabbs.aabbs[prim_idx * 6]` where prim_idx comes from `in_sorted_pairs.pairs[2*k + 1]`.
@@ -275,7 +296,10 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
         }
         leaf_aabbs_staging.unmap();
     }
-    else { return false; }
+    else
+    {
+        return false;
+    }
 
     // done_staging is pre-zeroed in the ctor (kept zero across calls); no per-call CPU memcpy needed.
 
@@ -284,10 +308,16 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
     {
         if (auto* dst = static_cast<crd::u32*>(prim_indices_staging.map()))
         {
-            for (crd::u32 k = 0U; k < n; ++k) { dst[k] = sorted_pairs[k].index; }
+            for (crd::u32 k = 0U; k < n; ++k)
+            {
+                dst[k] = sorted_pairs[k].index;
+            }
             prim_indices_staging.unmap();
         }
-        else { return false; }
+        else
+        {
+            return false;
+        }
     }
 
     // Upsweep strategy: carry-register single-dispatch always on this hardware. Tested level-by-level (init_leaves +
@@ -333,7 +363,10 @@ run_build_upsweep(LbvhGpuPipeline::Impl& impl,
         // Level-by-level upsweep (v9a-c-perf-tune 2026-05-18). Step A: init_leaves (N threads, scatter + atomicAdd done).
         // Step B: merge_level dispatched K times, each advancing one level toward the root, with a barrier between.
         crd::u32 log2_n = 0U;
-        for (crd::u32 v = n; v > 1U; v >>= 1U) { ++log2_n; }
+        for (crd::u32 v = n; v > 1U; v >>= 1U)
+        {
+            ++log2_n;
+        }
         const crd::u32 max_iters = std::min<crd::u32>(32U, log2_n + 8U);
 
         // Step A — init_leaves.
@@ -393,10 +426,16 @@ LbvhGpuPipeline::dispatch_build_lbvh(
     crd::memory::IAllocator*                           alloc) noexcept
 {
     LbvhTree tree(alloc);
-    if (!is_valid()) { return tree; }
+    if (!is_valid())
+    {
+        return tree;
+    }
 
     const crd::usize n_usize = sorted_pairs.size();
-    if (n_usize == 0U) { return tree; }
+    if (n_usize == 0U)
+    {
+        return tree;
+    }
 
     const crd::u32 n = static_cast<crd::u32>(n_usize);
 
@@ -446,10 +485,16 @@ LbvhGpuPipeline::dispatch_build_lbvh_gpu_resident(
     crd::containers::ConstSpan<AABB3<crd::f32>>        leaf_aabbs) noexcept
 {
     GpuResidentTree out{};
-    if (!is_valid()) { return out; }
+    if (!is_valid())
+    {
+        return out;
+    }
 
     const crd::usize n_usize = sorted_pairs.size();
-    if (n_usize == 0U) { return out; }
+    if (n_usize == 0U)
+    {
+        return out;
+    }
 
     const crd::u32 n = static_cast<crd::u32>(n_usize);
     auto& impl = *m_impl;
@@ -498,9 +543,18 @@ LbvhGpuPipeline::GpuResidentTree
 LbvhGpuPipeline::dispatch_build_lbvh_from_gpu(const GpuInputView& inputs) noexcept
 {
     GpuResidentTree out{};
-    if (!is_valid()) { return out; }
-    if (inputs.sorted_pairs == nullptr || inputs.leaf_aabbs == nullptr) { return out; }
-    if (inputs.n == 0U) { return out; }
+    if (!is_valid())
+    {
+        return out;
+    }
+    if (inputs.sorted_pairs == nullptr || inputs.leaf_aabbs == nullptr)
+    {
+        return out;
+    }
+    if (inputs.n == 0U)
+    {
+        return out;
+    }
 
     const crd::u32 n = inputs.n;
     auto& impl = *m_impl;
@@ -598,9 +652,18 @@ LbvhGpuPipeline::GpuResidentTree
 LbvhGpuPipeline::dispatch_refit_lbvh(const RefitInputs& inputs) noexcept
 {
     GpuResidentTree out{};
-    if (!is_valid()) { return out; }
-    if (inputs.sorted_pairs == nullptr || inputs.leaf_aabbs == nullptr) { return out; }
-    if (inputs.n == 0U) { return out; }
+    if (!is_valid())
+    {
+        return out;
+    }
+    if (inputs.sorted_pairs == nullptr || inputs.leaf_aabbs == nullptr)
+    {
+        return out;
+    }
+    if (inputs.n == 0U)
+    {
+        return out;
+    }
 
     const crd::u32 n = inputs.n;
     auto& impl = *m_impl;

@@ -37,7 +37,10 @@ TEST_CASE("ckir tsdf fusion: a plane depth map integrates to a signed ramp cross
     // depth map: the whole image observes the plane at depth 5.
     crd::containers::Array<double> depth(&alloc);
     depth.resize((static_cast<crd::usize>(imw) * static_cast<crd::usize>(imh)), 0.0);
-    for (int i = 0; i < imw * imh; ++i) { depth[static_cast<crd::usize>(i)] = dd; }
+    for (int i = 0; i < imw * imh; ++i)
+    {
+        depth[static_cast<crd::usize>(i)] = dd;
+    }
 
     // camera: R = identity, t = 0 ⇒ view-z == world z. Wide FOV so the grid projects in-bounds.
     crd::containers::Array<double> cam(&alloc);
@@ -73,7 +76,15 @@ TEST_CASE("ckir tsdf fusion: a plane depth map integrates to a signed ramp cross
     for (int k = 3; k <= 11; ++k)
     {
         const double sdf = dd - zof(k); // the exact signed distance
-        double sdf_t = sdf; if (sdf_t > 1.0) { sdf_t = 1.0; } if (sdf_t < -1.0) { sdf_t = -1.0; } // truncated to [-1,1]
+        double sdf_t = sdf;
+        if (sdf_t > 1.0)
+        {
+            sdf_t = 1.0;
+        }
+        if (sdf_t < -1.0) // truncated to [-1,1]
+        {
+            sdf_t = -1.0;
+        }
         CHECK(wsum[vox(k)] > 0.5);                    // observed by this view
         CHECK(crd::math::abs(tsdf(k) - sdf_t) < 1.0e-4); // matches the closed-form truncated SDF
     }
@@ -220,10 +231,19 @@ int host_cell_tris(const crd::containers::Array<double>& field, int ci, int cj, 
         const int oy = kir::mesh::kMcCornerOff[c * 3 + 1];
         const int oz = kir::mesh::kMcCornerOff[c * 3 + 2];
         const crd::usize v = static_cast<crd::usize>(ck + oz) * static_cast<crd::usize>(nxy) + static_cast<crd::usize>(cj + oy) * static_cast<crd::usize>(nx) + static_cast<crd::usize>(ci + ox);
-        if (field[v] < 0.0) { idx |= (1 << c); }
+        if (field[v] < 0.0)
+        {
+            idx |= (1 << c);
+        }
     }
     int n = 0;
-    for (int t = 0; t < 5; ++t) { if (kir::mesh::kMcTriTable[idx * 16 + t * 3] >= 0) { ++n; } }
+    for (int t = 0; t < 5; ++t)
+    {
+        if (kir::mesh::kMcTriTable[idx * 16 + t * 3] >= 0)
+        {
+            ++n;
+        }
+    }
     return n;
 }
 } // namespace
@@ -245,7 +265,10 @@ TEST_CASE("ckir marching cubes: per-cell triangle count matches the host referen
 
     crd::containers::Array<double> tri(&alloc);
     tri.resize(256U * 16U, 0.0);
-    for (int i = 0; i < 256 * 16; ++i) { tri[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]); }
+    for (int i = 0; i < 256 * 16; ++i)
+    {
+        tri[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]);
+    }
 
     crd::containers::Array<double> count(&alloc);
     count.resize(static_cast<crd::usize>(ncells), 0.0);
@@ -268,7 +291,10 @@ TEST_CASE("ckir marching cubes: per-cell triangle count matches the host referen
         const int ck = c / (cnx * cny);
         const int exp = host_cell_tris(field, ci, cj, ck, nx, nx * ny);
         const int got = static_cast<int>(count[static_cast<crd::usize>(c)]);
-        if (exp != got) { ++mism; }
+        if (exp != got)
+        {
+            ++mism;
+        }
         total += got;
     }
     INFO("count mismatches = " << mism << ", total triangles = " << total);
@@ -319,11 +345,18 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
 
     crd::containers::Array<double> tri(&alloc);
     tri.resize(256U * 16U, 0.0);
-    for (int i = 0; i < 256 * 16; ++i) { tri[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]); }
+    for (int i = 0; i < 256 * 16; ++i)
+    {
+        tri[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcTriTable[i]);
+    }
     crd::containers::Array<double> econ(&alloc);
     crd::containers::Array<double> coff(&alloc);
     econ.resize(24U, 0.0); coff.resize(24U, 0.0);
-    for (int i = 0; i < 24; ++i) { econ[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcEdgeConn[i]); coff[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcCornerOff[i]); }
+    for (int i = 0; i < 24; ++i)
+    {
+        econ[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcEdgeConn[i]);
+        coff[static_cast<crd::usize>(i)] = static_cast<double>(kir::mesh::kMcCornerOff[i]);
+    }
 
     kir::mesh::McConfig cfg;
     cfg.nx = nx; cfg.ny = ny; cfg.nz = nz;
@@ -370,11 +403,20 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
     {
         const crd::usize b = static_cast<crd::usize>(tt) * 18U;
         double vv[3][3];
-        for (int k = 0; k < 3; ++k) { for (int c = 0; c < 3; ++c) { vv[k][c] = out[b + static_cast<crd::usize>(k * 6 + c)]; } }
+        for (int k = 0; k < 3; ++k)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                vv[k][c] = out[b + static_cast<crd::usize>(k * 6 + c)];
+            }
+        }
         for (int k = 0; k < 3; ++k)
         {
             const double r = crd::math::sqrt(vv[k][0] * vv[k][0] + vv[k][1] * vv[k][1] + vv[k][2] * vv[k][2]);
-            if (crd::math::abs(r - rr) > worst_r) { worst_r = crd::math::abs(r - rr); }
+            if (crd::math::abs(r - rr) > worst_r)
+            {
+                worst_r = crd::math::abs(r - rr);
+            }
         }
         const double ax = vv[1][0] - vv[0][0]; const double ay = vv[1][1] - vv[0][1]; const double az = vv[1][2] - vv[0][2];
         const double bx = vv[2][0] - vv[0][0]; const double by = vv[2][1] - vv[0][1]; const double bz = vv[2][2] - vv[0][2];
@@ -385,7 +427,10 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
         const double my = (vv[0][1] + vv[1][1] + vv[2][1]) / 3.0;
         const double mz = (vv[0][2] + vv[1][2] + vv[2][2]) / 3.0;
         const double nx0 = out[b + 3U]; const double ny0 = out[b + 4U]; const double nz0 = out[b + 5U];
-        if (mx * nx0 + my * ny0 + mz * nz0 <= 0.0) { ++bad_n; } // normal must point away from the centre
+        if (mx * nx0 + my * ny0 + mz * nz0 <= 0.0) // normal must point away from the centre
+        {
+            ++bad_n;
+        }
     }
     const double sphere_area = 4.0 * 3.14159265358979 * rr * rr;
     std::printf("[MC sphere] tris=%d, worst |r-R|=%.4f, area=%.4f (ideal %.4f), outward normals ok=%d/%d\n",
@@ -398,7 +443,11 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
     crd::containers::Array<int> hoff(&alloc);
     hoff.resize(static_cast<crd::usize>(ncells), 0);
     int acc = 0;
-    for (int c = 0; c < ncells; ++c) { hoff[static_cast<crd::usize>(c)] = acc; acc += host_cell_tris(field, c % cnx, (c / cnx) % cny, c / (cnx * cny), nx, nx * ny); }
+    for (int c = 0; c < ncells; ++c)
+    {
+        hoff[static_cast<crd::usize>(c)] = acc;
+        acc += host_cell_tris(field, c % cnx, (c / cnx) % cny, c / (cnx * cny), nx, nx * ny);
+    }
     int mismatch = 0;
     for (int c = 0; c < ncells; ++c)
     {
@@ -407,12 +456,18 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
         for (int cc = 0; cc < 8; ++cc)
         {
             const int oxx = kir::mesh::kMcCornerOff[cc * 3 + 0]; const int oyy = kir::mesh::kMcCornerOff[cc * 3 + 1]; const int ozz = kir::mesh::kMcCornerOff[cc * 3 + 2];
-            if (field[static_cast<crd::usize>(ck + ozz) * static_cast<crd::usize>(nx * ny) + static_cast<crd::usize>(cj + oyy) * static_cast<crd::usize>(nx) + static_cast<crd::usize>(ci + oxx)] < 0.0) { idx |= (1 << cc); }
+            if (field[static_cast<crd::usize>(ck + ozz) * static_cast<crd::usize>(nx * ny) + static_cast<crd::usize>(cj + oyy) * static_cast<crd::usize>(nx) + static_cast<crd::usize>(ci + oxx)] < 0.0)
+            {
+                idx |= (1 << cc);
+            }
         }
         for (int t = 0; t < 5; ++t)
         {
             const int ea = kir::mesh::kMcTriTable[idx * 16 + t * 3 + 0];
-            if (ea < 0) { break; }
+            if (ea < 0)
+            {
+                break;
+            }
             const int ebb = kir::mesh::kMcTriTable[idx * 16 + t * 3 + 1];
             const int ecc = kir::mesh::kMcTriTable[idx * 16 + t * 3 + 2];
             // host emits the same REVERSED winding as the kernel: (v0, v2, v1).
@@ -426,7 +481,10 @@ TEST_CASE("ckir marching cubes: extract a sphere mesh (vertices on-surface, area
                 for (int cx2 = 0; cx2 < 3; ++cx2)
                 {
                     if (crd::math::abs(static_cast<double>(out[ob + static_cast<crd::usize>(k * 6 + cx2)]) -
-                                       static_cast<double>(hv[k][cx2])) > 1.0e-4) { ++mismatch; }
+                                       static_cast<double>(hv[k][cx2])) > 1.0e-4)
+                    {
+                        ++mismatch;
+                    }
                 }
             }
         }

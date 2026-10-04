@@ -198,18 +198,33 @@ mesh_raycast_simd(const TriangleMeshViewf& view,
                     const crd::f32 d   = r.det.lane(lane);
                     if (cull_back)
                     {
-                        if (d <= kMtDetEps) { continue; }
+                        if (d <= kMtDetEps)
+                        {
+                            continue;
+                        }
                     }
                     else
                     {
-                        if (d > -kMtDetEps && d < kMtDetEps) { continue; }
+                        if (d > -kMtDetEps && d < kMtDetEps)
+                        {
+                            continue;
+                        }
                     }
                     const crd::f32 u_l = r.u.lane(lane);
-                    if (u_l < 0.0F || u_l > 1.0F) { continue; }
+                    if (u_l < 0.0F || u_l > 1.0F)
+                    {
+                        continue;
+                    }
                     const crd::f32 v_l = r.v.lane(lane);
-                    if (v_l < 0.0F || (u_l + v_l) > 1.0F) { continue; }
+                    if (v_l < 0.0F || (u_l + v_l) > 1.0F)
+                    {
+                        continue;
+                    }
                     const crd::f32 t   = r.t.lane(lane);
-                    if (t < 0.0F || t > best_t) { continue; }
+                    if (t < 0.0F || t > best_t)
+                    {
+                        continue;
+                    }
 
                     const crd::u32 ti = prim_idx[chunk_start + lane];
                     if (t < best_t)
@@ -251,8 +266,14 @@ mesh_raycast_simd(const TriangleMeshViewf& view,
                 stack[sp++] = Frame{right, ltr};
             }
         }
-        else if (lhit) { stack[sp++] = Frame{left,  ltl}; }
-        else if (rhit) { stack[sp++] = Frame{right, ltr}; }
+        else if (lhit)
+        {
+            stack[sp++] = Frame{left,  ltl};
+        }
+        else if (rhit)
+        {
+            stack[sp++] = Frame{right, ltr};
+        }
     }
 
     if (best_tri == 0xFFFFFFFFU)

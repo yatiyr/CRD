@@ -51,7 +51,10 @@ public:
     // 0 when empty; 1..Lane otherwise. Lane for full final chunk.
     [[nodiscard]] CRD_FORCEINLINE usize last_chunk_active_lanes() const noexcept
     {
-        if (m_logical_size == 0) return 0;
+        if (m_logical_size == 0)
+        {
+            return 0;
+        }
         return ((m_logical_size - 1) % Lane) + 1;
     }
 
@@ -124,7 +127,10 @@ template <typename TChunk, usize Lane, typename Fn>
 CRD_FORCEINLINE void soa_for_each_chunk(Soa<TChunk, Lane>& soa, Fn&& fn)
 {
     const usize n = soa.chunk_count();
-    if (n == 0) return;
+    if (n == 0)
+    {
+        return;
+    }
     for (usize i = 0; i + 1 < n; ++i)
     {
         fn(soa.chunk(i), Lane);
@@ -136,7 +142,10 @@ template <typename TChunk, usize Lane, typename Fn>
 CRD_FORCEINLINE void soa_for_each_chunk(const Soa<TChunk, Lane>& soa, Fn&& fn)
 {
     const usize n = soa.chunk_count();
-    if (n == 0) return;
+    if (n == 0)
+    {
+        return;
+    }
     for (usize i = 0; i + 1 < n; ++i)
     {
         fn(soa.chunk(i), Lane);

@@ -147,9 +147,13 @@ TEST_CASE("Iterator yields alive entities only", "[scene][slot_map]")
     for (EntityId e : seen)
     {
         if (e == a)
+        {
             saw_a = true;
+        }
         if (e == c)
+        {
             saw_c = true;
+        }
         CHECK_FALSE(e == b);
     }
     CHECK(saw_a);

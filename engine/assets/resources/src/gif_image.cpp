@@ -46,7 +46,10 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
     const auto read_code = [&](crd::u32 width) -> crd::i64 {
         while (bitcnt < width)
         {
-            if (byte_pos >= data.size()) { return -1; } // EOF — no more code bits
+            if (byte_pos >= data.size()) // EOF — no more code bits
+            {
+                return -1;
+            }
             bitbuf |= static_cast<crd::u32>(data[byte_pos++]) << bitcnt;
             bitcnt += 8U;
         }
@@ -59,7 +62,10 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
     for (;;)
     {
         const crd::i64 c = read_code(code_size);
-        if (c < 0) { break; } // ran out of bits — the size check below catches any shortfall
+        if (c < 0) // ran out of bits — the size check below catches any shortfall
+        {
+            break;
+        }
         const crd::u32 code = static_cast<crd::u32>(c);
 
         if (code == clear_code)
@@ -69,11 +75,17 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
             prev      = -1;
             continue;
         }
-        if (code == end_code) { break; }
+        if (code == end_code)
+        {
+            break;
+        }
 
         if (prev < 0)
         {
-            if (code >= clear_code) { return LdrError::BadData; } // first symbol must be a literal root
+            if (code >= clear_code) // first symbol must be a literal root
+            {
+                return LdrError::BadData;
+            }
             first = static_cast<crd::u8>(code);
             out.push_back(first);
             prev = static_cast<crd::i64>(code);
@@ -84,24 +96,36 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
         crd::u32 sp   = 0;
         if (code >= next_code)
         {
-            if (code > next_code) { return LdrError::BadData; } // code beyond the next assignable entry
+            if (code > next_code) // code beyond the next assignable entry
+            {
+                return LdrError::BadData;
+            }
             stack[sp++] = first;                               // KwKwK: string(prev) + first-char(prev)
             walk        = static_cast<crd::u32>(prev);
         }
         while (walk >= clear_code)
         {
-            if (sp >= 4096U) { return LdrError::BadData; } // corrupt chain
+            if (sp >= 4096U) // corrupt chain
+            {
+                return LdrError::BadData;
+            }
             stack[sp++] = suffix[walk];
             walk        = prefix[walk];
         }
         first = static_cast<crd::u8>(walk);
-        if (sp >= 4096U) { return LdrError::BadData; }
+        if (sp >= 4096U)
+        {
+            return LdrError::BadData;
+        }
         stack[sp++] = first;
 
         while (sp > 0U)
         {
             out.push_back(stack[--sp]);
-            if (out.size() > expected) { return LdrError::BadData; } // more pixels than the frame holds
+            if (out.size() > expected) // more pixels than the frame holds
+            {
+                return LdrError::BadData;
+            }
         }
 
         if (next_code < 4096U)
@@ -109,7 +133,10 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
             prefix[next_code] = static_cast<crd::u16>(prev);
             suffix[next_code] = first;
             ++next_code;
-            if (next_code == (1U << code_size) && code_size < 12U) { ++code_size; }
+            if (next_code == (1U << code_size) && code_size < 12U)
+            {
+                ++code_size;
+            }
         }
         prev = static_cast<crd::i64>(code);
     }
@@ -120,7 +147,10 @@ constexpr crd::u32 kMaxDim = 16384U; // family-wide sane cap (matches the other 
 
 bool gif_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept
 {
-    if (bytes.size() < 6U) { return false; }
+    if (bytes.size() < 6U)
+    {
+        return false;
+    }
     const crd::u8* p = bytes.data();
     return p[0] == 'G' && p[1] == 'I' && p[2] == 'F' && p[3] == '8' && (p[4] == '7' || p[4] == '9') && p[5] == 'a';
 }
@@ -131,10 +161,16 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
     out.height = 0;
     out.pixels.clear();
 
-    if (!gif_sniff(bytes)) { return LdrError::BadMagic; }
+    if (!gif_sniff(bytes))
+    {
+        return LdrError::BadMagic;
+    }
     const crd::u8* p   = bytes.data();
     const crd::u8* end = p + bytes.size();
-    if (bytes.size() < 13U) { return LdrError::Truncated; } // signature(6) + logical screen descriptor(7)
+    if (bytes.size() < 13U) // signature(6) + logical screen descriptor(7)
+    {
+        return LdrError::Truncated;
+    }
     p += 6U;
 
     // Logical Screen Descriptor.
@@ -145,7 +181,10 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
     const crd::u8* gct      = nullptr;
     if (gct_flag)
     {
-        if (static_cast<crd::usize>(end - p) < static_cast<crd::usize>(gct_size) * 3U) { return LdrError::Truncated; }
+        if (static_cast<crd::usize>(end - p) < static_cast<crd::usize>(gct_size) * 3U)
+        {
+            return LdrError::Truncated;
+        }
         gct = p;
         p += static_cast<crd::usize>(gct_size) * 3U;
     }
@@ -154,33 +193,63 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
 
     for (;;)
     {
-        if (p >= end) { return LdrError::Truncated; }
+        if (p >= end)
+        {
+            return LdrError::Truncated;
+        }
         const crd::u8 block = *p++;
 
-        if (block == 0x3BU) { return LdrError::BadData; } // trailer before any image frame
+        if (block == 0x3BU) // trailer before any image frame
+        {
+            return LdrError::BadData;
+        }
 
         if (block == 0x21U) // extension
         {
-            if (p >= end) { return LdrError::Truncated; }
+            if (p >= end)
+            {
+                return LdrError::Truncated;
+            }
             const crd::u8 label = *p++;
             if (label == 0xF9U) // Graphic Control Extension
             {
-                if (p >= end) { return LdrError::Truncated; }
+                if (p >= end)
+                {
+                    return LdrError::Truncated;
+                }
                 const crd::u8 sz = *p++;
-                if (sz != 4U || static_cast<crd::usize>(end - p) < 5U) { return LdrError::BadData; }
+                if (sz != 4U || static_cast<crd::usize>(end - p) < 5U)
+                {
+                    return LdrError::BadData;
+                }
                 const crd::u8 gce_packed = p[0];
-                if ((gce_packed & 0x01U) != 0U) { transparent_index = p[3]; }
+                if ((gce_packed & 0x01U) != 0U)
+                {
+                    transparent_index = p[3];
+                }
                 p += 4U;
-                if (*p++ != 0x00U) { return LdrError::BadData; } // block terminator
+                if (*p++ != 0x00U) // block terminator
+                {
+                    return LdrError::BadData;
+                }
             }
             else // comment / application / plain-text — skip the sub-block chain
             {
                 for (;;)
                 {
-                    if (p >= end) { return LdrError::Truncated; }
+                    if (p >= end)
+                    {
+                        return LdrError::Truncated;
+                    }
                     const crd::u8 sz = *p++;
-                    if (sz == 0U) { break; }
-                    if (static_cast<crd::usize>(end - p) < sz) { return LdrError::Truncated; }
+                    if (sz == 0U)
+                    {
+                        break;
+                    }
+                    if (static_cast<crd::usize>(end - p) < sz)
+                    {
+                        return LdrError::Truncated;
+                    }
                     p += sz;
                 }
             }
@@ -189,13 +258,22 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
 
         if (block == 0x2CU) // image descriptor — the first frame
         {
-            if (static_cast<crd::usize>(end - p) < 9U) { return LdrError::Truncated; }
+            if (static_cast<crd::usize>(end - p) < 9U)
+            {
+                return LdrError::Truncated;
+            }
             const crd::u32 img_w      = rd16le(p + 4);
             const crd::u32 img_h      = rd16le(p + 6);
             const crd::u8  img_packed = p[8];
             p += 9U;
-            if (img_w == 0U || img_h == 0U) { return LdrError::BadHeader; }
-            if (img_w > kMaxDim || img_h > kMaxDim) { return LdrError::TooLarge; }
+            if (img_w == 0U || img_h == 0U)
+            {
+                return LdrError::BadHeader;
+            }
+            if (img_w > kMaxDim || img_h > kMaxDim)
+            {
+                return LdrError::TooLarge;
+            }
 
             const bool     lct_flag  = (img_packed & 0x80U) != 0U;
             const bool     interlace = (img_packed & 0x40U) != 0U;
@@ -212,21 +290,42 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
             }
             const crd::u8* ct       = (lct != nullptr) ? lct : gct;
             const crd::u32 ct_count = (lct != nullptr) ? lct_size : gct_size;
-            if (ct == nullptr || ct_count == 0U) { return LdrError::BadHeader; } // no palette to map through
+            if (ct == nullptr || ct_count == 0U) // no palette to map through
+            {
+                return LdrError::BadHeader;
+            }
 
-            if (p >= end) { return LdrError::Truncated; }
+            if (p >= end)
+            {
+                return LdrError::Truncated;
+            }
             const crd::u8 min_code_size = *p++;
-            if (min_code_size < 2U || min_code_size > 8U) { return LdrError::BadData; }
+            if (min_code_size < 2U || min_code_size > 8U)
+            {
+                return LdrError::BadData;
+            }
 
             // Gather the LZW data sub-blocks into one contiguous buffer.
             crd::containers::Array<crd::u8> lzw(a);
             for (;;)
             {
-                if (p >= end) { return LdrError::Truncated; }
+                if (p >= end)
+                {
+                    return LdrError::Truncated;
+                }
                 const crd::u8 sz = *p++;
-                if (sz == 0U) { break; }
-                if (static_cast<crd::usize>(end - p) < sz) { return LdrError::Truncated; }
-                for (crd::u8 i = 0; i < sz; ++i) { lzw.push_back(p[i]); }
+                if (sz == 0U)
+                {
+                    break;
+                }
+                if (static_cast<crd::usize>(end - p) < sz)
+                {
+                    return LdrError::Truncated;
+                }
+                for (crd::u8 i = 0; i < sz; ++i)
+                {
+                    lzw.push_back(p[i]);
+                }
                 p += sz;
             }
 
@@ -234,13 +333,22 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
             crd::containers::Array<crd::u8> indices(a);
             indices.reserve(pixel_count);
             const GifError e = lzw_decode(lzw, min_code_size, pixel_count, indices);
-            if (e != LdrError::Ok) { return e; }
-            if (indices.size() != pixel_count) { return LdrError::BadData; } // wrong pixel count
+            if (e != LdrError::Ok)
+            {
+                return e;
+            }
+            if (indices.size() != pixel_count) // wrong pixel count
+            {
+                return LdrError::BadData;
+            }
 
             // Validate every index against the active table BEFORE writing (no partial output on failure).
             for (crd::usize i = 0; i < pixel_count; ++i)
             {
-                if (indices[i] >= ct_count) { return LdrError::BadData; }
+                if (indices[i] >= ct_count)
+                {
+                    return LdrError::BadData;
+                }
             }
 
             out.width            = img_w;
@@ -269,12 +377,18 @@ GifError gif_decode(crd::containers::ConstSpan<crd::u8> bytes, GifImage& out, cr
                 constexpr crd::u32 steps[4]  = {8U, 8U, 4U, 2U};
                 for (int pass = 0; pass < 4; ++pass)
                 {
-                    for (crd::u32 y = starts[pass]; y < img_h; y += steps[pass]) { emit_row(y); }
+                    for (crd::u32 y = starts[pass]; y < img_h; y += steps[pass])
+                    {
+                        emit_row(y);
+                    }
                 }
             }
             else
             {
-                for (crd::u32 y = 0; y < img_h; ++y) { emit_row(y); }
+                for (crd::u32 y = 0; y < img_h; ++y)
+                {
+                    emit_row(y);
+                }
             }
             return LdrError::Ok; // MED-1 first increment: the first frame only
         }

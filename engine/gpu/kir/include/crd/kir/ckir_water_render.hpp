@@ -230,7 +230,10 @@ inline int analytic_sky(KGraph& g, int dir, int ldir, int sunc, int hazeh, int z
     const int glow = g.unary(kir::KOp::Exp, mul(sub(mu, k(1.0)), k(60.0)));
     const int suns = b3(kir::KOp::Mul, sunc, add(mul(disk, k(18.0)), mul(glow, k(0.40))));
     const int skyc = add(add(grad, mie), suns);
-    if (!with_clouds) { return skyc; }
+    if (!with_clouds)
+    {
+        return skyc;
+    }
 
     const int cy    = add(g.swizzle(dir, 1), k(0.42));
     const int cu    = mul(g.binary(kir::KOp::Div, g.swizzle(dir, 0), cy), k(0.85));

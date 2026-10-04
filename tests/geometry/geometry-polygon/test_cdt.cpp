@@ -109,7 +109,10 @@ TEST_CASE("constrained_delaunay: every triangle is CCW",
     crd::containers::Array<Vec2<f32>> pts(&f.alloc);
     std::mt19937 rng(42U);
     std::uniform_real_distribution<f32> u(-1.F, 1.F);
-    for (u32 i = 0; i < 32U; ++i) { pts.push_back(Vec2<f32>{u(rng), u(rng)}); }
+    for (u32 i = 0; i < 32U; ++i)
+    {
+        pts.push_back(Vec2<f32>{u(rng), u(rng)});
+    }
 
     auto result = constrained_delaunay<f32>(
         crd::containers::ConstSpan<Vec2<f32>>{pts.data(), pts.size()},
@@ -133,7 +136,10 @@ TEST_CASE("constrained_delaunay: Delaunay empty-circumcircle property",
     std::mt19937 rng(123U);
     std::uniform_real_distribution<f32> u(-1.F, 1.F);
     const u32 n = 16U;
-    for (u32 i = 0; i < n; ++i) { pts.push_back(Vec2<f32>{u(rng), u(rng)}); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        pts.push_back(Vec2<f32>{u(rng), u(rng)});
+    }
 
     auto result = constrained_delaunay<f32>(
         crd::containers::ConstSpan<Vec2<f32>>{pts.data(), pts.size()},
@@ -149,7 +155,10 @@ TEST_CASE("constrained_delaunay: Delaunay empty-circumcircle property",
         const u32 i2 = result.triangle_indices[3U * t + 2U];
         for (u32 p = 0; p < n; ++p)
         {
-            if (p == i0 || p == i1 || p == i2) { continue; }
+            if (p == i0 || p == i1 || p == i2)
+            {
+                continue;
+            }
             const f32 v = crd::geometry::primitives::incircle(pts[i0], pts[i1], pts[i2], pts[p]);
             CHECK(v <= 0.F); // not strictly inside (cocircular allowed)
         }
@@ -457,7 +466,12 @@ TEST_CASE("constrained_delaunay: insertion-order determinism (shuffled vs sorted
                 const auto pb = pts[vb];
                 std::pair<f32, f32> p0{pa.x, pa.y};
                 std::pair<f32, f32> p1{pb.x, pb.y};
-                if (p1 < p0) { auto tmp = p0; p0 = p1; p1 = tmp; }
+                if (p1 < p0)
+                {
+                    auto tmp = p0;
+                    p0 = p1;
+                    p1 = tmp;
+                }
                 // Encode the two position keys into a single hashable u64 key.
                 const f32 kx = p0.first + p1.first * 7.13F;
                 const f32 ky = p0.second + p1.second * 3.17F;
@@ -473,7 +487,11 @@ TEST_CASE("constrained_delaunay: insertion-order determinism (shuffled vs sorted
     bool sets_equal = ea.size() == eb.size();
     for (const auto& e : ea)
     {
-        if (!eb.contains(e)) { sets_equal = false; break; }
+        if (!eb.contains(e))
+        {
+            sets_equal = false;
+            break;
+        }
     }
     CHECK(sets_equal);
 }

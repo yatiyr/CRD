@@ -48,6 +48,7 @@ template <typename T> SparseMatrix<T, SparseFormat::Csr> laplace2d(crd::memory::
         return i * g + j;
     };
     for (crd::u32 i = 0; i < g; ++i)
+    {
         for (crd::u32 j = 0; j < g; ++j)
         {
             const crd::u32 r = idx(i, j);
@@ -69,6 +70,7 @@ template <typename T> SparseMatrix<T, SparseFormat::Csr> laplace2d(crd::memory::
                 b.add(r, idx(i + 1, j), T(static_cast<crd::f64>(-1.0)));
             }
         }
+    }
     return b.compress();
 }
 
@@ -87,6 +89,7 @@ SparseMatrix<T, SparseFormat::Csr> cd2d(crd::memory::IAllocator* a, crd::u32 g, 
         return i * g + j;
     };
     for (crd::u32 i = 0; i < g; ++i)
+    {
         for (crd::u32 j = 0; j < g; ++j)
         {
             const crd::u32 r = idx(i, j);
@@ -109,6 +112,7 @@ SparseMatrix<T, SparseFormat::Csr> cd2d(crd::memory::IAllocator* a, crd::u32 g, 
             } // north
             b.add(r, r, T(static_cast<crd::f64>(diag)));
         }
+    }
     return b.compress();
 }
 } // namespace

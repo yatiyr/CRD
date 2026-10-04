@@ -73,13 +73,19 @@ public:
         {
             auto* const arr = static_cast<containers::StringView*>(
                 m_arena.allocate(notes.size() * sizeof(containers::StringView), alignof(containers::StringView)));
-            for (usize i = 0; i < notes.size(); ++i) { arr[i] = copy_str(notes[i]); }
+            for (usize i = 0; i < notes.size(); ++i)
+            {
+                arr[i] = copy_str(notes[i]);
+            }
             d.notes = containers::ConstSpan<containers::StringView>(arr, notes.size());
         }
         if (fixits.size() > 0U)
         {
             auto* const arr = static_cast<FixIt*>(m_arena.allocate(fixits.size() * sizeof(FixIt), alignof(FixIt)));
-            for (usize i = 0; i < fixits.size(); ++i) { arr[i] = FixIt{fixits[i].loc, copy_str(fixits[i].replacement)}; }
+            for (usize i = 0; i < fixits.size(); ++i)
+            {
+                arr[i] = FixIt{fixits[i].loc, copy_str(fixits[i].replacement)};
+            }
             d.fixits = containers::ConstSpan<FixIt>(arr, fixits.size());
         }
         m_diags.push_back(d);
@@ -91,7 +97,10 @@ public:
     {
         for (usize i = 0; i < m_diags.size(); ++i)
         {
-            if (m_diags[i].severity == Severity::Error || m_diags[i].severity == Severity::Fatal) { return true; }
+            if (m_diags[i].severity == Severity::Error || m_diags[i].severity == Severity::Fatal)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -100,7 +109,10 @@ public:
     {
         for (usize i = 0; i < m_diags.size(); ++i)
         {
-            if (m_diags[i].severity == Severity::Fatal) { return true; }
+            if (m_diags[i].severity == Severity::Fatal)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -135,9 +147,15 @@ private:
 
     [[nodiscard]] containers::StringView copy_str(containers::StringView v)
     {
-        if (v.empty()) { return {}; }
+        if (v.empty())
+        {
+            return {};
+        }
         char* const p = static_cast<char*>(m_arena.allocate(v.size(), 1U));
-        for (usize i = 0; i < v.size(); ++i) { p[i] = v[i]; }
+        for (usize i = 0; i < v.size(); ++i)
+        {
+            p[i] = v[i];
+        }
         return containers::StringView(p, v.size());
     }
     static void append_sv(containers::String& s, containers::StringView v) { s.append(v.data(), v.size()); }
@@ -149,7 +167,10 @@ private:
             buf[k++] = static_cast<char>('0' + (n % 10U));
             n /= 10U;
         } while (n != 0U);
-        while (k > 0U) { s.push_back(buf[--k]); }
+        while (k > 0U)
+        {
+            s.push_back(buf[--k]);
+        }
     }
     [[nodiscard]] static containers::StringView severity_name(Severity sev) noexcept
     {

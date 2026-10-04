@@ -46,7 +46,10 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
 [[nodiscard]] bool parse_int_list(containers::StringView s, i64* out, u32 max, u32& count) noexcept
 {
     count = 0U;
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     usize start = 0U;
     for (usize i = 0; i <= s.size(); ++i)
     {
@@ -56,11 +59,17 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
             bool any = false;
             for (usize j = start; j < i; ++j)
             {
-                if (s[j] < '0' || s[j] > '9') { return false; }
+                if (s[j] < '0' || s[j] > '9')
+                {
+                    return false;
+                }
                 v   = v * 10 + static_cast<i64>(s[j] - '0');
                 any = true;
             }
-            if (!any || count >= max) { return false; }
+            if (!any || count >= max)
+            {
+                return false;
+            }
             out[count++] = v;
             start = i + 1U;
         }
@@ -70,12 +79,21 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
 // Is `perm` (a parsed int list of `count` entries) a TRUE permutation of [0, rank)?
 [[nodiscard]] bool is_permutation(const i64* perm, u32 count, usize rank) noexcept
 {
-    if (count != rank || rank > kMaxRank) { return false; }
+    if (count != rank || rank > kMaxRank)
+    {
+        return false;
+    }
     bool seen[kMaxRank] = {};
     for (u32 i = 0; i < count; ++i)
     {
-        if (perm[i] < 0 || perm[i] >= static_cast<i64>(rank)) { return false; }
-        if (seen[perm[i]]) { return false; } // duplicate
+        if (perm[i] < 0 || perm[i] >= static_cast<i64>(rank))
+        {
+            return false;
+        }
+        if (seen[perm[i]]) // duplicate
+        {
+            return false;
+        }
         seen[perm[i]] = true;
     }
     return true;
@@ -84,9 +102,15 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
 [[nodiscard]] TypeId permute_shape(Context& ctx, TypeId src, const i64* perm, u32 count)
 {
     const Type st = ctx.type_of(src);
-    if (st.members.size() != count || count > kMaxRank) { return {}; }
+    if (st.members.size() != count || count > kMaxRank)
+    {
+        return {};
+    }
     TypeId dims[kMaxRank];
-    for (u32 i = 0; i < count; ++i) { dims[i] = st.members[static_cast<usize>(perm[i])]; }
+    for (u32 i = 0; i < count; ++i)
+    {
+        dims[i] = st.members[static_cast<usize>(perm[i])];
+    }
     return ctx.type_shape(containers::ConstSpan<TypeId>(dims, count));
 }
 // Build the Shape with member `axis` removed (rank-1 reduction).
@@ -94,12 +118,18 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
 {
     const Type st = ctx.type_of(src);
     const usize r = st.members.size();
-    if (axis >= r || r == 0U || r > kMaxRank) { return {}; }
+    if (axis >= r || r == 0U || r > kMaxRank)
+    {
+        return {};
+    }
     TypeId dims[kMaxRank];
     usize  n = 0U;
     for (usize i = 0; i < r; ++i)
     {
-        if (i != axis) { dims[n++] = st.members[i]; }
+        if (i != axis)
+        {
+            dims[n++] = st.members[i];
+        }
     }
     return ctx.type_shape(containers::ConstSpan<TypeId>(dims, n));
 }
@@ -109,9 +139,15 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
     const Type ls = ctx.type_of(lhs_shape);
     const Type rs = ctx.type_of(rhs_shape);
     const usize r = ls.members.size();
-    if (r < 2U || rs.members.size() < 2U || r > kMaxRank) { return {}; }
+    if (r < 2U || rs.members.size() < 2U || r > kMaxRank)
+    {
+        return {};
+    }
     TypeId dims[kMaxRank];
-    for (usize i = 0; i < r; ++i) { dims[i] = ls.members[i]; } // batch.. + M (0..r-2) + K at r-1
+    for (usize i = 0; i < r; ++i) // batch.. + M (0..r-2) + K at r-1
+    {
+        dims[i] = ls.members[i];
+    }
     dims[r - 1U] = rs.members[rs.members.size() - 1U];         // replace K with N (rhs's last)
     return ctx.type_shape(containers::ConstSpan<TypeId>(dims, r));
 }
@@ -120,7 +156,10 @@ constexpr usize kMaxRank = 16U; // the shape-computer buffers; no real tensor ex
 // operand/result/attr access arity-guarded). ⛔ Context& NON-const: the shape-computers + shapes_broadcast_result intern.
 TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -138,7 +177,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                 // (1) operands + result Tensor-kinded (KIND — the generated verify_* owns arity).
                 for (u32 i = 0; i < op->num_operands(); ++i)
                 {
-                    if (!is_tensor(ctx, op->operand(i))) { return {op->operand(i), op, TensorMisuseKind::OperandNotTensor, -1}; }
+                    if (!is_tensor(ctx, op->operand(i)))
+                    {
+                        return {op->operand(i), op, TensorMisuseKind::OperandNotTensor, -1};
+                    }
                 }
                 if (op->num_results() >= 1U && ctx.type_of(op->result(0U)->type()).kind != TypeKind::Tensor)
                 {
@@ -148,7 +190,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                 //    buildable via create_operation — must FOLD to the generated verify_*'s arity check, never trip an in-walk assert).
                 const u32 min_ops = (is_ew || is_mm || is_fft) ? 2U : 1U;
                 const u32 min_res = is_fft ? 2U : 1U; // fft is the first 2-result op (re_out, im_out)
-                if (op->num_operands() < min_ops || op->num_results() < min_res) { continue; }
+                if (op->num_operands() < min_ops || op->num_results() < min_res)
+                {
+                    continue;
+                }
                 const TypeId res = op->result(0U)->type();
                 const TypeId e0  = elem_of(ctx, op->operand(0U)->type());
                 // (2) element consistency: every operand + the result share the element type (members[0]).
@@ -159,7 +204,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                         return {op->operand(i), op, TensorMisuseKind::TensorElementMismatch, -1};
                     }
                 }
-                if (elem_of(ctx, res) != e0) { return {op->result(0U), op, TensorMisuseKind::TensorElementMismatch, -1}; }
+                if (elem_of(ctx, res) != e0)
+                {
+                    return {op->result(0U), op, TensorMisuseKind::TensorElementMismatch, -1};
+                }
 
                 const TypeId s0  = shape_of(ctx, op->operand(0U)->type());
                 const TypeId sr  = shape_of(ctx, res);
@@ -181,7 +229,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                     if (br.compat == ShapeCompat::Compatible)
                     {
                         const TypeId exp = ctx.shapes_broadcast_result(s0, s1);
-                        if (exp.valid() && sr != exp) { return {op->result(0U), op, TensorMisuseKind::BroadcastResultMismatch, -1}; }
+                        if (exp.valid() && sr != exp)
+                        {
+                            return {op->result(0U), op, TensorMisuseKind::BroadcastResultMismatch, -1};
+                        }
                     }
                 }
                 else if (is_bc)
@@ -195,7 +246,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                     if (br.compat == ShapeCompat::Compatible)
                     {
                         const TypeId exp = ctx.shapes_broadcast_result(s0, sr);
-                        if (exp.valid() && exp != sr) { return {op->result(0U), op, TensorMisuseKind::BroadcastResultMismatch, -1}; }
+                        if (exp.valid() && exp != sr)
+                        {
+                            return {op->result(0U), op, TensorMisuseKind::BroadcastResultMismatch, -1};
+                        }
                     }
                 }
                 else if (is_rs)
@@ -216,28 +270,40 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                         return {nullptr, op, TensorMisuseKind::PermInvalid, -1};
                     }
                     const TypeId exp = permute_shape(ctx, s0, perm, pc);
-                    if (exp.valid() && sr != exp) { return {op->result(0U), op, TensorMisuseKind::TransposeResultMismatch, -1}; }
+                    if (exp.valid() && sr != exp)
+                    {
+                        return {op->result(0U), op, TensorMisuseKind::TransposeResultMismatch, -1};
+                    }
                 }
                 else if (is_rd)
                 {
                     const usize     rank = shape_rank(ctx, s0);
                     const AttrValue ax   = ctx.attr_value(op->attr(containers::StringView("axis")));
                     const i64       axis = (ax.kind == AttrKind::Int) ? ax.i : -1;
-                    if (axis < 0 || axis >= static_cast<i64>(rank)) { return {nullptr, op, TensorMisuseKind::AxisInvalid, -1}; }
+                    if (axis < 0 || axis >= static_cast<i64>(rank))
+                    {
+                        return {nullptr, op, TensorMisuseKind::AxisInvalid, -1};
+                    }
                     const AttrValue fn = ctx.attr_value(op->attr(containers::StringView("fn")));
                     if (fn.kind != AttrKind::String || !fn_in(fn.s, /*reduce=*/true))
                     {
                         return {nullptr, op, TensorMisuseKind::FnInvalid, -1};
                     }
                     const TypeId exp = drop_axis_shape(ctx, s0, static_cast<usize>(axis));
-                    if (exp.valid() && sr != exp) { return {op->result(0U), op, TensorMisuseKind::ReduceResultMismatch, -1}; }
+                    if (exp.valid() && sr != exp)
+                    {
+                        return {op->result(0U), op, TensorMisuseKind::ReduceResultMismatch, -1};
+                    }
                 }
                 else if (is_mm)
                 {
                     const TypeId s1 = shape_of(ctx, op->operand(1U)->type());
                     const usize  rl = shape_rank(ctx, s0);
                     const usize  rr = shape_rank(ctx, s1);
-                    if (rl < 2U || rr < 2U) { return {nullptr, op, TensorMisuseKind::MatmulRankInvalid, -1}; }
+                    if (rl < 2U || rr < 2U)
+                    {
+                        return {nullptr, op, TensorMisuseKind::MatmulRankInvalid, -1};
+                    }
                     // contraction: lhs's last axis (K) == rhs's second-to-last axis (K). Static-differ ⇒ mismatch; a dynamic/
                     // symbolic-differ pair is Unknown ⇒ ACCEPT (deferred). TypeId equality covers static-equal + same-symbolic.
                     const TypeId kl = ctx.type_of(s0).members[rl - 1U];
@@ -248,7 +314,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                         const Type dr = ctx.type_of(kr);
                         const bool both_static = static_cast<DimKind>(dl.cols) == DimKind::Static
                                                  && static_cast<DimKind>(dr.cols) == DimKind::Static;
-                        if (both_static) { return {op->operand(1U), op, TensorMisuseKind::ContractionMismatch, -1}; }
+                        if (both_static)
+                        {
+                            return {op->operand(1U), op, TensorMisuseKind::ContractionMismatch, -1};
+                        }
                     }
                     // BATCH dims (the leading rank-2 axes) must AGREE right-aligned — matmul_shape copies LHS's batch, so an
                     // UNCHECKED rhs batch would false-green a mismatch (advisor). Static-differ ⇒ misuse; else defer (the K rule).
@@ -267,7 +336,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                         }
                     }
                     const TypeId exp = matmul_shape(ctx, s0, s1);
-                    if (exp.valid() && sr != exp) { return {op->result(0U), op, TensorMisuseKind::MatmulResultMismatch, -1}; }
+                    if (exp.valid() && sr != exp)
+                    {
+                        return {op->result(0U), op, TensorMisuseKind::MatmulResultMismatch, -1};
+                    }
                 }
                 else if (is_fft)
                 {
@@ -281,18 +353,33 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
                     {
                         return {im_out, op, TensorMisuseKind::ResultNotTensor, -1};
                     }
-                    if (elem_of(ctx, im_out->type()) != e0) { return {im_out, op, TensorMisuseKind::TensorElementMismatch, -1}; }
+                    if (elem_of(ctx, im_out->type()) != e0)
+                    {
+                        return {im_out, op, TensorMisuseKind::TensorElementMismatch, -1};
+                    }
                     // split-complex: re_in.shape == im_in.shape.
                     const TypeId s1 = shape_of(ctx, op->operand(1U)->type());
-                    if (s0 != s1) { return {op->operand(1U), op, TensorMisuseKind::FftInputShapeMismatch, -1}; }
+                    if (s0 != s1)
+                    {
+                        return {op->operand(1U), op, TensorMisuseKind::FftInputShapeMismatch, -1};
+                    }
                     // a c2c FFT PRESERVES shape: re_out.shape == im_out.shape == re_in.shape.
-                    if (sr != s0) { return {op->result(0U), op, TensorMisuseKind::FftResultShapeMismatch, -1}; }
-                    if (shape_of(ctx, im_out->type()) != s0) { return {im_out, op, TensorMisuseKind::FftResultShapeMismatch, -1}; }
+                    if (sr != s0)
+                    {
+                        return {op->result(0U), op, TensorMisuseKind::FftResultShapeMismatch, -1};
+                    }
+                    if (shape_of(ctx, im_out->type()) != s0)
+                    {
+                        return {im_out, op, TensorMisuseKind::FftResultShapeMismatch, -1};
+                    }
                     // axis in [0, rank).
                     const usize     rank = shape_rank(ctx, s0);
                     const AttrValue ax   = ctx.attr_value(op->attr(containers::StringView("axis")));
                     const i64       axis = (ax.kind == AttrKind::Int) ? ax.i : -1;
-                    if (axis < 0 || axis >= static_cast<i64>(rank)) { return {nullptr, op, TensorMisuseKind::AxisInvalid, -1}; }
+                    if (axis < 0 || axis >= static_cast<i64>(rank))
+                    {
+                        return {nullptr, op, TensorMisuseKind::AxisInvalid, -1};
+                    }
                     // direction closed vocab {forward, inverse}.
                     const AttrValue dir = ctx.attr_value(op->attr(containers::StringView("direction")));
                     if (dir.kind != AttrKind::String
@@ -305,7 +392,10 @@ TensorMisuse scan_tensor_region(Context& ctx, const Region* r) // NOLINT(misc-no
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const TensorMisuse e = scan_tensor_region(ctx, op->region(i));
-                if (e.kind != TensorMisuseKind::None) { return e; }
+                if (e.kind != TensorMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

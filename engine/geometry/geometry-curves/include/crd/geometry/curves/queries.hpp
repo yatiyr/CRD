@@ -176,7 +176,10 @@ template <typename Curve>
 
         // Defensive: if f'(t) is near zero, we're at a stationary point or
         // a saddle. Stop — best_t from subdivision is the best we have.
-        if (crd::math::abs(fp) <= tolerance) { break; }
+        if (crd::math::abs(fp) <= tolerance)
+        {
+            break;
+        }
 
         T t_new = t - f / fp;
         if (curve.closed)
@@ -272,7 +275,10 @@ template <crd::math::MathScalar T>
     }
     // Clamp segment param to [0, 1]; ray param to [0, +inf).
     u = crd::math::clamp(u, static_cast<T>(0), static_cast<T>(1));
-    if (s < static_cast<T>(0)) { s = static_cast<T>(0); }
+    if (s < static_cast<T>(0))
+    {
+        s = static_cast<T>(0);
+    }
     // Recompute distance at the clamped (s, u).
     const auto on_ray  = origin + d1 * s;
     const auto on_seg  = a + d2 * u;
@@ -293,7 +299,10 @@ template <typename Curve>
     CRD_ASSERT(tolerance > static_cast<T>(0));
 
     const auto polyline = sample_adaptive(curve, tolerance, alloc);
-    if (polyline.points.size() < 2U) { return std::nullopt; }
+    if (polyline.points.size() < 2U)
+    {
+        return std::nullopt;
+    }
 
     const T tol_sq = tolerance * tolerance;
     const auto n_pts = static_cast<crd::u32>(polyline.points.size());
@@ -305,8 +314,14 @@ template <typename Curve>
         const auto& a = polyline.points[i];
         const auto& b = polyline.points[(i + 1U) % n_pts];
         const auto  cap = detail::ray_segment_closest(ray.origin, ray.direction, a, b);
-        if (cap.min_dist_sq > tol_sq) { continue; }
-        if (cap.ray_param < static_cast<T>(0)) { continue; }
+        if (cap.min_dist_sq > tol_sq)
+        {
+            continue;
+        }
+        if (cap.ray_param < static_cast<T>(0))
+        {
+            continue;
+        }
         // Reconstruct t_curve: linear-interp the segment's t-fraction by
         // its position in the polyline. For an open polyline of N+1
         // samples there are N segments; segment i covers t in

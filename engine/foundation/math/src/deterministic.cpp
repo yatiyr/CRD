@@ -89,13 +89,19 @@ f32 round(f32 x) noexcept
 {
     // Round-to-nearest-ties-away-from-zero, matching std::roundf semantics.
     // Implemented via floor/ceil to dodge any libc variation in tie-breaking.
-    if (x >= 0.0F) return floor(x + 0.5F);
+    if (x >= 0.0F)
+    {
+        return floor(x + 0.5F);
+    }
     return ceil(x - 0.5F);
 }
 
 f32 fmod(f32 x, f32 y) noexcept
 {
-    if (y == 0.0F) return std::numeric_limits<f32>::quiet_NaN();
+    if (y == 0.0F)
+    {
+        return std::numeric_limits<f32>::quiet_NaN();
+    }
     const f32 q = trunc(x / y);
     return x - q * y;
 }
@@ -262,7 +268,10 @@ f32 tan(f32 xx) noexcept
     if ((jq & 2U) != 0U)
     {
         // Cotangent path: tan -> -1/tan
-        if (y == 0.0F) return with_sign(std::numeric_limits<f32>::infinity(), sign);
+        if (y == 0.0F)
+        {
+            return with_sign(std::numeric_limits<f32>::infinity(), sign);
+        }
         y = -1.0F / y;
     }
 
@@ -321,29 +330,53 @@ f32 atan2(f32 y, f32 x) noexcept
 {
     if (x == 0.0F)
     {
-        if (y > 0.0F) return  kHalfPi;
-        if (y < 0.0F) return -kHalfPi;
+        if (y > 0.0F)
+        {
+            return  kHalfPi;
+        }
+        if (y < 0.0F)
+        {
+            return -kHalfPi;
+        }
         return 0.0F;  // (0, 0): convention 0
     }
 
     const f32 base = atan(y / x);
-    if (x > 0.0F) return base;
-    if (y >= 0.0F) return base + kPi;
+    if (x > 0.0F)
+    {
+        return base;
+    }
+    if (y >= 0.0F)
+    {
+        return base + kPi;
+    }
     return base - kPi;
 }
 
 f32 asin(f32 x) noexcept
 {
-    if (x >  1.0F) x =  1.0F;
-    if (x < -1.0F) x = -1.0F;
+    if (x >  1.0F)
+    {
+        x =  1.0F;
+    }
+    if (x < -1.0F)
+    {
+        x = -1.0F;
+    }
     // asin(x) = atan2(x, sqrt(1 - x*x))
     return atan2(x, std::sqrt((1.0F - x) * (1.0F + x)));
 }
 
 f32 acos(f32 x) noexcept
 {
-    if (x >  1.0F) x =  1.0F;
-    if (x < -1.0F) x = -1.0F;
+    if (x >  1.0F)
+    {
+        x =  1.0F;
+    }
+    if (x < -1.0F)
+    {
+        x = -1.0F;
+    }
     // acos(x) = atan2(sqrt(1 - x*x), x)
     return atan2(std::sqrt((1.0F - x) * (1.0F + x)), x);
 }
@@ -376,8 +409,14 @@ inline constexpr f32 kExpMin = -87.336544F;   // input below → +0
 {
     // mantissa * 2^exp via integer-exponent injection. Avoids std::ldexp
     // because Microsoft's ldexpf has subtly different denormal handling.
-    if (exp_int > 127)  return mantissa * std::numeric_limits<f32>::infinity();
-    if (exp_int < -126) return 0.0F;
+    if (exp_int > 127)
+    {
+        return mantissa * std::numeric_limits<f32>::infinity();
+    }
+    if (exp_int < -126)
+    {
+        return 0.0F;
+    }
     const crd::u32 bits = static_cast<crd::u32>(exp_int + 127) << 23;
     return mantissa * from_bits(bits);
 }
@@ -385,9 +424,18 @@ inline constexpr f32 kExpMin = -87.336544F;   // input below → +0
 
 f32 exp(f32 x) noexcept
 {
-    if (is_nan(x))  return x;
-    if (x > kExpMax) return std::numeric_limits<f32>::infinity();
-    if (x < kExpMin) return 0.0F;
+    if (is_nan(x))
+    {
+        return x;
+    }
+    if (x > kExpMax)
+    {
+        return std::numeric_limits<f32>::infinity();
+    }
+    if (x < kExpMin)
+    {
+        return 0.0F;
+    }
 
     // k = round(x * log2(e)); r = x - k*ln(2) (using high-precision split)
     const f32 fk = round(x * kLog2E);
@@ -443,10 +491,22 @@ inline constexpr f32 kLogQ2 =  0.693359375F;
 
 f32 log(f32 x) noexcept
 {
-    if (is_nan(x))            return x;
-    if (x <  0.0F)            return std::numeric_limits<f32>::quiet_NaN();
-    if (x == 0.0F)            return -std::numeric_limits<f32>::infinity();
-    if (!is_finite(x))        return x;  // +inf
+    if (is_nan(x))
+    {
+        return x;
+    }
+    if (x <  0.0F)
+    {
+        return std::numeric_limits<f32>::quiet_NaN();
+    }
+    if (x == 0.0F)
+    {
+        return -std::numeric_limits<f32>::infinity();
+    }
+    if (!is_finite(x)) // +inf
+    {
+        return x;
+    }
 
     crd::i32 exp_int = 0;
     f32 m = frexp_extract(x, exp_int);
@@ -491,19 +551,31 @@ f32 log10(f32 x) noexcept
 
 f32 pow(f32 base, f32 exponent) noexcept
 {
-    if (exponent == 0.0F) return 1.0F;
+    if (exponent == 0.0F)
+    {
+        return 1.0F;
+    }
     if (base == 0.0F)
     {
-        if (exponent > 0.0F) return 0.0F;
+        if (exponent > 0.0F)
+        {
+            return 0.0F;
+        }
         return std::numeric_limits<f32>::infinity();
     }
-    if (base == 1.0F) return 1.0F;
+    if (base == 1.0F)
+    {
+        return 1.0F;
+    }
 
     if (base < 0.0F)
     {
         // Negative base + integer exponent → real result; otherwise NaN.
         const f32 r = round(exponent);
-        if (r != exponent) return std::numeric_limits<f32>::quiet_NaN();
+        if (r != exponent)
+        {
+            return std::numeric_limits<f32>::quiet_NaN();
+        }
         const f32 result = exp(exponent * log(-base));
         // Sign: negative if exponent is odd integer.
         const crd::i32 ei = static_cast<crd::i32>(r);
@@ -586,7 +658,10 @@ f32 sinh(f32 x) noexcept
 f32 cosh(f32 x) noexcept
 {
     const f32 ax = fast_abs(x);
-    if (ax > 88.7F) return std::numeric_limits<f32>::infinity();
+    if (ax > 88.7F)
+    {
+        return std::numeric_limits<f32>::infinity();
+    }
     // (e^x + e^-x)/2 — no cancellation; both terms positive everywhere.
     const f32 ex = exp(ax);
     return 0.5F * (ex + 1.0F / ex);
@@ -686,7 +761,10 @@ template <crd::usize N>
 [[nodiscard]] inline f64 polevl(f64 x, const f64 (&coefs)[N]) noexcept
 {
     f64 ans = coefs[0];
-    for (crd::usize i = 1; i < N; ++i) ans = ans * x + coefs[i];
+    for (crd::usize i = 1; i < N; ++i)
+    {
+        ans = ans * x + coefs[i];
+    }
     return ans;
 }
 
@@ -695,7 +773,10 @@ template <crd::usize N>
 [[nodiscard]] inline f64 p1evl(f64 x, const f64 (&coefs)[N]) noexcept
 {
     f64 ans = x + coefs[0];
-    for (crd::usize i = 1; i < N; ++i) ans = ans * x + coefs[i];
+    for (crd::usize i = 1; i < N; ++i)
+    {
+        ans = ans * x + coefs[i];
+    }
     return ans;
 }
 }  // namespace
@@ -708,13 +789,19 @@ f64 trunc(f64 x) noexcept { return std::trunc(x); }
 
 f64 round(f64 x) noexcept
 {
-    if (x >= 0.0) return floor(x + 0.5);
+    if (x >= 0.0)
+    {
+        return floor(x + 0.5);
+    }
     return ceil(x - 0.5);
 }
 
 f64 fmod(f64 x, f64 y) noexcept
 {
-    if (y == 0.0) return std::numeric_limits<f64>::quiet_NaN();
+    if (y == 0.0)
+    {
+        return std::numeric_limits<f64>::quiet_NaN();
+    }
     return x - trunc(x / y) * y;
 }
 
@@ -882,7 +969,10 @@ f64 tan(f64 xx) noexcept
 
     if ((jq & 2ULL) != 0ULL)
     {
-        if (y == 0.0) return with_sign64(std::numeric_limits<f64>::infinity(), sign_in);
+        if (y == 0.0)
+        {
+            return with_sign64(std::numeric_limits<f64>::infinity(), sign_in);
+        }
         y = -1.0 / y;
     }
 
@@ -957,28 +1047,52 @@ f64 atan2(f64 y, f64 x) noexcept
 {
     if (x == 0.0)
     {
-        if (y > 0.0) return  kHalfPiF64;
-        if (y < 0.0) return -kHalfPiF64;
+        if (y > 0.0)
+        {
+            return  kHalfPiF64;
+        }
+        if (y < 0.0)
+        {
+            return -kHalfPiF64;
+        }
         return 0.0;
     }
 
     const f64 base = atan(y / x);
-    if (x > 0.0) return base;
-    if (y >= 0.0) return base + kPiF64;
+    if (x > 0.0)
+    {
+        return base;
+    }
+    if (y >= 0.0)
+    {
+        return base + kPiF64;
+    }
     return base - kPiF64;
 }
 
 f64 asin(f64 x) noexcept
 {
-    if (x >  1.0) x =  1.0;
-    if (x < -1.0) x = -1.0;
+    if (x >  1.0)
+    {
+        x =  1.0;
+    }
+    if (x < -1.0)
+    {
+        x = -1.0;
+    }
     return atan2(x, std::sqrt((1.0 - x) * (1.0 + x)));
 }
 
 f64 acos(f64 x) noexcept
 {
-    if (x >  1.0) x =  1.0;
-    if (x < -1.0) x = -1.0;
+    if (x >  1.0)
+    {
+        x =  1.0;
+    }
+    if (x < -1.0)
+    {
+        x = -1.0;
+    }
     return atan2(std::sqrt((1.0 - x) * (1.0 + x)), x);
 }
 
@@ -1009,8 +1123,14 @@ inline constexpr f64 k64ExpMin = -708.396418532264106224;
 
 [[nodiscard]] inline f64 ldexp_int_pow2_64(f64 mantissa, crd::i32 exp_int) noexcept
 {
-    if (exp_int > 1023)  return mantissa * std::numeric_limits<f64>::infinity();
-    if (exp_int < -1022) return 0.0;
+    if (exp_int > 1023)
+    {
+        return mantissa * std::numeric_limits<f64>::infinity();
+    }
+    if (exp_int < -1022)
+    {
+        return 0.0;
+    }
     const crd::u64 bits = static_cast<crd::u64>(exp_int + 1023) << 52;
     return mantissa * from_bits64(bits);
 }
@@ -1018,9 +1138,18 @@ inline constexpr f64 k64ExpMin = -708.396418532264106224;
 
 f64 exp(f64 x) noexcept
 {
-    if (is_nan64(x)) return x;
-    if (x > k64ExpMax) return std::numeric_limits<f64>::infinity();
-    if (x < k64ExpMin) return 0.0;
+    if (is_nan64(x))
+    {
+        return x;
+    }
+    if (x > k64ExpMax)
+    {
+        return std::numeric_limits<f64>::infinity();
+    }
+    if (x < k64ExpMin)
+    {
+        return 0.0;
+    }
 
     const f64       fk = round(x * k64Log2E);
     const crd::i32  k  = static_cast<crd::i32>(fk);
@@ -1075,10 +1204,22 @@ inline constexpr f64 k64LogQ2 =  0.693359375;
 
 f64 log(f64 x) noexcept
 {
-    if (is_nan64(x))      return x;
-    if (x <  0.0)         return std::numeric_limits<f64>::quiet_NaN();
-    if (x == 0.0)         return -std::numeric_limits<f64>::infinity();
-    if (x == std::numeric_limits<f64>::infinity()) return x;
+    if (is_nan64(x))
+    {
+        return x;
+    }
+    if (x <  0.0)
+    {
+        return std::numeric_limits<f64>::quiet_NaN();
+    }
+    if (x == 0.0)
+    {
+        return -std::numeric_limits<f64>::infinity();
+    }
+    if (x == std::numeric_limits<f64>::infinity())
+    {
+        return x;
+    }
 
     crd::i32 exp_int = 0;
     f64 m = frexp_extract64(x, exp_int);
@@ -1114,18 +1255,30 @@ f64 log10(f64 x) noexcept { return log(x) * kInvLn10F64; }
 
 f64 pow(f64 base, f64 exponent) noexcept
 {
-    if (exponent == 0.0) return 1.0;
+    if (exponent == 0.0)
+    {
+        return 1.0;
+    }
     if (base == 0.0)
     {
-        if (exponent > 0.0) return 0.0;
+        if (exponent > 0.0)
+        {
+            return 0.0;
+        }
         return std::numeric_limits<f64>::infinity();
     }
-    if (base == 1.0) return 1.0;
+    if (base == 1.0)
+    {
+        return 1.0;
+    }
 
     if (base < 0.0)
     {
         const f64 r = round(exponent);
-        if (r != exponent) return std::numeric_limits<f64>::quiet_NaN();
+        if (r != exponent)
+        {
+            return std::numeric_limits<f64>::quiet_NaN();
+        }
         const f64 result = exp(exponent * log(-base));
         const crd::i64 ei = static_cast<crd::i64>(r);
         return (ei & 1) != 0 ? -result : result;
@@ -1199,7 +1352,10 @@ f64 sinh(f64 x) noexcept
 f64 cosh(f64 x) noexcept
 {
     const f64 ax = fast_abs64(x);
-    if (ax > 709.0) return std::numeric_limits<f64>::infinity();
+    if (ax > 709.0)
+    {
+        return std::numeric_limits<f64>::infinity();
+    }
     const f64 ex = exp(ax);
     return 0.5 * (ex + 1.0 / ex);
 }
@@ -1208,7 +1364,10 @@ f64 tanh(f64 x) noexcept
 {
     const crd::u64 sign = sign_bit64(x);
     const f64 ax = fast_abs64(x);
-    if (ax > 20.0) return apply_sign64(1.0, sign);
+    if (ax > 20.0)
+    {
+        return apply_sign64(1.0, sign);
+    }
     if (ax < 0.5)
     {
         // Taylor degree 9.
@@ -1301,11 +1460,17 @@ inline constexpr f64 k64GammaQ[8] = {
     }
     while (x < 2.0)
     {
-        if (x < 1.0e-9) return z / x;
+        if (x < 1.0e-9)
+        {
+            return z / x;
+        }
         z /= x;
         x += 1.0;
     }
-    if (x == 2.0) return z;  // Cephes shortcut
+    if (x == 2.0) // Cephes shortcut
+    {
+        return z;
+    }
 
     // x in [2, 3]: shift to [0, 1] and evaluate rational.
     const f64 t = x - 2.0;
@@ -1320,7 +1485,10 @@ f64 erfc(f64 x) noexcept;  // forward decl � referenced by erf(x) for tail-sym
 f64 erf(f64 a) noexcept
 {
     const f64 ax = fast_abs64(a);
-    if (ax > 1.0) return 1.0 - erfc(a);
+    if (ax > 1.0)
+    {
+        return 1.0 - erfc(a);
+    }
     const f64 z = a * a;
     return a * polevl(z, k64ErfT) / p1evl(z, k64ErfU);
 }
@@ -1328,7 +1496,10 @@ f64 erf(f64 a) noexcept
 f64 erfc(f64 a) noexcept
 {
     const f64 ax = fast_abs64(a);
-    if (ax < 1.0) return 1.0 - erf(a);
+    if (ax < 1.0)
+    {
+        return 1.0 - erf(a);
+    }
 
     const f64 zm = -a * a;
     if (zm < -708.0)
@@ -1341,7 +1512,10 @@ f64 erfc(f64 a) noexcept
     const f64 den = p1evl(ax, k64ErfcQ);
     f64 y = ez * num / den;
 
-    if (y == 0.0) return a < 0.0 ? 2.0 : 0.0;
+    if (y == 0.0)
+    {
+        return a < 0.0 ? 2.0 : 0.0;
+    }
     return a < 0.0 ? 2.0 - y : y;
 }
 
@@ -1349,12 +1523,18 @@ f64 gamma(f64 x) noexcept
 {
     if (x >= 0.0)
     {
-        if (x > 171.0) return std::numeric_limits<f64>::infinity();
+        if (x > 171.0)
+        {
+            return std::numeric_limits<f64>::infinity();
+        }
         return gamma_reduced(x);
     }
     const f64 ax = fast_abs64(x);
     const f64 fl = floor(ax);
-    if (ax == fl) return std::numeric_limits<f64>::quiet_NaN();
+    if (ax == fl)
+    {
+        return std::numeric_limits<f64>::quiet_NaN();
+    }
     const f64 fr = ax - fl;
     const f64 frac = fr > 0.5 ? 1.0 - fr : fr;
     const f64 z = ax * sin(kPiF64 * frac);

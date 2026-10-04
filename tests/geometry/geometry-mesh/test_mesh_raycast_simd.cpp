@@ -51,7 +51,10 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
         1, 3, 5,  3, 7, 5   // +X
     };
     m.indices.reserve(36);
-    for (crd::u32 j = 0U; j < 36U; ++j) { m.indices.push_back(idx[j]); }
+    for (crd::u32 j = 0U; j < 36U; ++j)
+    {
+        m.indices.push_back(idx[j]);
+    }
     return m;
 }
 
@@ -143,35 +146,38 @@ TEST_CASE("v4d sphere mesh: 36 rays cross-validate against v4b",
     int matched_miss = 0;
     int divergent    = 0;
     for (crd::u32 i = 0U; i < 6U; ++i)
-    for (crd::u32 j = 0U; j < 6U; ++j)
     {
-        const crd::f32 theta = pi * static_cast<crd::f32>(i) / 6.0F;
-        const crd::f32 phi   = 2.0F * pi * static_cast<crd::f32>(j) / 6.0F;
-        const Vec3f origin{
-            5.0F * std::sin(theta) * std::cos(phi),
-            5.0F * std::cos(theta),
-            5.0F * std::sin(theta) * std::sin(phi)};
-        const Vec3f to_origin{-origin.x, -origin.y, -origin.z};
-        const crd::f32 inv_len = 1.0F / std::sqrt(to_origin.x * to_origin.x + to_origin.y * to_origin.y + to_origin.z * to_origin.z);
-        const Vec3f dir{to_origin.x * inv_len, to_origin.y * inv_len, to_origin.z * inv_len};
+        for (crd::u32 j = 0U; j < 6U; ++j)
+        {
+            const crd::f32 theta = pi * static_cast<crd::f32>(i) / 6.0F;
+            const crd::f32 phi   = 2.0F * pi * static_cast<crd::f32>(j) / 6.0F;
+            const Vec3f origin{
+                5.0F * std::sin(theta) * std::cos(phi),
+                5.0F * std::cos(theta),
+                5.0F * std::sin(theta) * std::sin(phi)};
+            const Vec3f to_origin{-origin.x, -origin.y, -origin.z};
+            const crd::f32 inv_len =
+                1.0F / std::sqrt(to_origin.x * to_origin.x + to_origin.y * to_origin.y + to_origin.z * to_origin.z);
+            const Vec3f dir{to_origin.x * inv_len, to_origin.y * inv_len, to_origin.z * inv_len};
 
-        const Ray3<crd::f32> ray{origin, dir};
-        const auto woop = mesh_raycast(view, bvh, ray);
-        const auto simd = mesh_raycast_simd(view, bvh, ray);
+            const Ray3<crd::f32> ray{origin, dir};
+            const auto woop = mesh_raycast(view, bvh, ray);
+            const auto simd = mesh_raycast_simd(view, bvh, ray);
 
-        if (woop.has_value() && simd.has_value())
-        {
-            ++matched_hit;  // both saw a hit — sufficient for this corpus
-        }
-        else if (!woop.has_value() && !simd.has_value())
-        {
-            ++matched_miss;
-        }
-        else
-        {
-            // One algo hit, the other missed — MT vs Woop edge divergence
-            // on the tessellated sphere.
-            ++divergent;
+            if (woop.has_value() && simd.has_value())
+            {
+                ++matched_hit;  // both saw a hit — sufficient for this corpus
+            }
+            else if (!woop.has_value() && !simd.has_value())
+            {
+                ++matched_miss;
+            }
+            else
+            {
+                // One algo hit, the other missed — MT vs Woop edge divergence
+                // on the tessellated sphere.
+                ++divergent;
+            }
         }
     }
     REQUIRE(matched_hit + matched_miss >= 30);  // most should agree on hit/miss

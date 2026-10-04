@@ -343,7 +343,10 @@ TEST_CASE("v9a-c CPU degenerate adjacent equal codes: stable-sort property load-
 
     crd::containers::Array<MortonPair<crd::u32>> pairs(&alloc);
     const crd::u32 codes[] = {10U, 20U, 20U, 30U, 40U, 40U, 50U, 50U, 50U};
-    for (crd::u32 i = 0U; i < 9U; ++i) { pairs.push_back({codes[i], i}); }
+    for (crd::u32 i = 0U; i < 9U; ++i)
+    {
+        pairs.push_back({codes[i], i});
+    }
 
     const auto tree = build_lbvh_cpu<crd::u32>(
         crd::containers::ConstSpan<MortonPair<crd::u32>>(pairs.data(), pairs.size()),
@@ -373,7 +376,10 @@ TEST_CASE("v9a-c CPU 8-corner cube: 8 leaves with full coverage",
     }
 
     crd::containers::Array<MortonPair<crd::u32>> pairs(&alloc);
-    for (crd::u32 i = 0U; i < 8U; ++i) { pairs.push_back({i, i}); }
+    for (crd::u32 i = 0U; i < 8U; ++i)
+    {
+        pairs.push_back({i, i});
+    }
 
     const auto tree = build_lbvh_cpu<crd::u32>(
         crd::containers::ConstSpan<MortonPair<crd::u32>>(pairs.data(), pairs.size()),
@@ -494,7 +500,11 @@ void require_trees_match(const LbvhTree& cpu, const LbvhTree& gpu, crd::f32 ulp_
 TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
           "[lbvh][gpu][calibration]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -531,7 +541,11 @@ TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
 TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds within 1 ULP",
           "[lbvh][gpu][oracle]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -575,7 +589,11 @@ TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds
 TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CPU pipeline",
           "[lbvh][gpu][integration]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -621,7 +639,11 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
 TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
           "[lbvh][gpu][determinism]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -684,7 +706,11 @@ TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
 TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
           "[lbvh][gpu][gpu-resident]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -830,7 +856,11 @@ upload_gpu_inputs(crd::gpu::VulkanComputeContext& compute,
 TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node tree",
           "[lbvh][gpu][gpu-inputs]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -917,7 +947,11 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
 TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
           "[lbvh][gpu][refit]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -1024,7 +1058,11 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
 TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
           "[lbvh][gpu][refit][perf]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(512U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});
@@ -1100,7 +1138,11 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
 TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
           "[lbvh][gpu][perf]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(512U * 1024U * 1024U);
 
     auto ctx = crd::gpu::create_vulkan_gpu_context({});

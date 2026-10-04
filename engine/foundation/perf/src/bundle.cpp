@@ -47,7 +47,9 @@ constexpr Crc32Table make_crc32_table() noexcept
     {
         crd::u32 c = i;
         for (int k = 0; k < 8; ++k)
+        {
             c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+        }
         t.v[i] = c;
     }
     return t;
@@ -59,14 +61,18 @@ crd::u32 crc32_bytes(const crd::u8* p, crd::usize n) noexcept
 {
     crd::u32 c = 0xFFFFFFFFU;
     for (crd::usize i = 0; i < n; ++i)
+    {
         c = kCrc32.v[(c ^ p[i]) & 0xFFU] ^ (c >> 8);
+    }
     return c ^ 0xFFFFFFFFU;
 }
 
 void append_bytes(cont::Array<crd::u8>& a, const void* src, crd::usize n) noexcept
 {
     if (n == 0)
+    {
         return;
+    }
     const crd::usize old = a.size();
     a.resize_uninitialized(old + n);
     std::memcpy(a.data() + old, src, n);
@@ -75,21 +81,31 @@ void append_bytes(cont::Array<crd::u8>& a, const void* src, crd::usize n) noexce
 bool str_starts_with(const char* s, const char* pfx) noexcept
 {
     if (pfx == nullptr)
+    {
         return true;
+    }
     for (; *pfx != '\0'; ++s, ++pfx)
+    {
         if (*s != *pfx)
+        {
             return false;
+        }
+    }
     return true;
 }
 
 bool str_ends_with(const char* s, const char* sfx) noexcept
 {
     if (sfx == nullptr || *sfx == '\0')
+    {
         return true;
+    }
     const crd::usize ls = std::strlen(s);
     const crd::usize lf = std::strlen(sfx);
     if (lf > ls)
+    {
         return false;
+    }
     return std::memcmp(s + (ls - lf), sfx, lf) == 0;
 }
 } // namespace
@@ -122,15 +138,21 @@ void BundleWriter::emit(BundleSectionTag tag, crd::u32 flags, cont::ConstSpan<cr
 BundleWriter::AddStatus BundleWriter::add_section(BundleSectionTag tag, cont::ConstSpan<crd::u8> bytes) noexcept
 {
     if (m_finished)
+    {
         return AddStatus::RejectedNoRoom;
+    }
     if (m_section_count >= m_limits.max_sections)
+    {
         return AddStatus::RejectedTooMany;
+    }
 
     // Room accounting first: every section (an empty one included) costs at least its header
     // against the total cap, so the empty branch must not bypass this check.
     if (m_total >= m_limits.max_total_bytes ||
         (m_limits.max_total_bytes - m_total) < sizeof(BundleSectionHeader))
+    {
         return AddStatus::RejectedNoRoom;
+    }
 
     if (bytes.empty())
     {
@@ -141,7 +163,9 @@ BundleWriter::AddStatus BundleWriter::add_section(BundleSectionTag tag, cont::Co
     const crd::u64 room_after_header = (m_limits.max_total_bytes - m_total) - sizeof(BundleSectionHeader);
     crd::u64       cap               = m_limits.max_section_bytes;
     if (room_after_header < cap)
+    {
         cap = room_after_header;
+    }
 
     const crd::u64 original = bytes.size();
     crd::u64       stored   = original;
@@ -159,12 +183,18 @@ BundleWriter::AddStatus BundleWriter::add_section(BundleSectionTag tag, cont::Co
 BundleWriter::AddStatus BundleWriter::add_absent(BundleSectionTag tag) noexcept
 {
     if (m_finished)
+    {
         return AddStatus::RejectedNoRoom;
+    }
     if (m_section_count >= m_limits.max_sections)
+    {
         return AddStatus::RejectedTooMany;
+    }
     if (m_total >= m_limits.max_total_bytes ||
         (m_limits.max_total_bytes - m_total) < sizeof(BundleSectionHeader))
+    {
         return AddStatus::RejectedNoRoom;
+    }
     emit(tag, kSectionFlagAbsent, {}, 0U);
     return AddStatus::StoredAbsent;
 }
@@ -178,7 +208,9 @@ cont::Array<crd::u8> BundleWriter::finish(crd::u64 created_at_ns) noexcept
 {
     cont::Array<crd::u8> out(m_alloc);
     if (m_finished)
+    {
         return out;
+    }
     m_finished = true;
 
     BundleHeader hdr{};
@@ -194,7 +226,9 @@ cont::Array<crd::u8> BundleWriter::finish(crd::u64 created_at_ns) noexcept
     out.resize_uninitialized(sizeof(BundleHeader) + m_sections.size());
     std::memcpy(out.data(), &hdr, sizeof(BundleHeader));
     if (!m_sections.empty())
+    {
         std::memcpy(out.data() + sizeof(BundleHeader), m_sections.data(), m_sections.size());
+    }
     return out;
 }
 
@@ -300,7 +334,9 @@ BundleReadResult read_bundle(cont::ConstSpan<crd::u8> buf, crd::memory::IAllocat
 bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noexcept
 {
     if (path == nullptr)
+    {
         return false;
+    }
 
     cont::String tmp{path};
     tmp.append(".tmp");
@@ -308,16 +344,22 @@ bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noex
     std::FILE* f = nullptr;
 #if defined(_MSC_VER)
     if (fopen_s(&f, tmp.c_str(), "wb") != 0)
+    {
         f = nullptr;
+    }
 #else
     f = std::fopen(tmp.c_str(), "wb");
 #endif
     if (f == nullptr)
+    {
         return false;
+    }
 
     bool ok = bundle.empty() || std::fwrite(bundle.data(), 1, bundle.size(), f) == bundle.size();
     if (ok)
+    {
         ok = std::fflush(f) == 0;
+    }
     if (ok)
     {
         // Flush to stable storage BEFORE the rename, so the published file is durable.
@@ -328,12 +370,16 @@ bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noex
             // _get_osfhandle returns the OS handle as an intptr_t by contract (same as console_sink.cpp).
             HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd)); // NOLINT(performance-no-int-to-ptr)
             if (h != INVALID_HANDLE_VALUE)
+            {
                 ok = FlushFileBuffers(h) != 0;
+            }
         }
 #else
         const int fd = fileno(f);
         if (fd >= 0)
+        {
             ok = fsync(fd) == 0;
+        }
 #endif
     }
     std::fclose(f); // must close before renaming over the destination on Windows
@@ -348,7 +394,9 @@ bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noex
     }
 
     if (!ok)
+    {
         std::remove(tmp.c_str()); // best-effort: never leave a stale .tmp on failure
+    }
     return ok;
 }
 
@@ -358,7 +406,9 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
                                   crd::u32 max_bundles) noexcept
 {
     if (dir == nullptr)
+    {
         return -1;
+    }
 
     struct Entry
     {
@@ -373,13 +423,19 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
     WIN32_FIND_DATAA fd{};
     HANDLE           h = FindFirstFileA(pattern.c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE)
+    {
         return -1;
+    }
     do
     {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
             continue;
+        }
         if (!str_starts_with(fd.cFileName, prefix) || !str_ends_with(fd.cFileName, suffix))
+        {
             continue;
+        }
         const crd::u64 mt = (static_cast<crd::u64>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
                             static_cast<crd::u64>(fd.ftLastWriteTime.dwLowDateTime);
         entries.push_back(Entry{cont::String{fd.cFileName}, mt});
@@ -389,19 +445,27 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
 #else
     DIR* d = ::opendir(dir);
     if (d == nullptr)
+    {
         return -1;
+    }
     for (struct dirent* e = ::readdir(d); e != nullptr; e = ::readdir(d))
     {
         if (!str_starts_with(e->d_name, prefix) || !str_ends_with(e->d_name, suffix))
+        {
             continue;
+        }
         cont::String full{dir};
         full.append("/");
         full.append(e->d_name);
         struct stat st{};
         if (::stat(full.c_str(), &st) != 0)
+        {
             continue;
+        }
         if (S_ISDIR(st.st_mode))
+        {
             continue;
+        }
         const crd::u64 mt = static_cast<crd::u64>(st.st_mtim.tv_sec) * 1000000000ULL +
                             static_cast<crd::u64>(st.st_mtim.tv_nsec);
         entries.push_back(Entry{cont::String{e->d_name}, mt});
@@ -411,13 +475,17 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
 #endif
 
     if (entries.size() <= static_cast<crd::usize>(max_bundles))
+    {
         return 0;
+    }
 
     // Oldest first (ascending mtime); ties broken by name so eviction is deterministic even
     // when a filesystem's mtime granularity coalesces same-second writes.
     std::sort(entries.data(), entries.data() + entries.size(), [](const Entry& a, const Entry& b) noexcept {
         if (a.mtime != b.mtime)
+        {
             return a.mtime < b.mtime;
+        }
         return std::strcmp(a.name.c_str(), b.name.c_str()) < 0;
     });
 
@@ -429,7 +497,9 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
         full.push_back(sep);
         full.append(entries[i].name.c_str());
         if (std::remove(full.c_str()) == 0)
+        {
             ++deleted;
+        }
     }
     return deleted;
 }

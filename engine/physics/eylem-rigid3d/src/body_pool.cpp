@@ -85,7 +85,10 @@ BodyId BodyPool::insert(const RigidBody& body)
     // live==1 sees the new generation + new payload (single-threaded
     // World contract per ADR-0050; no atomics needed).
     crd::u32 next_gen = static_cast<crd::u32>(tile.generation[lane]) + 1U;
-    if (next_gen > 0xFFU) next_gen = 1U; // wrap to 1; 0 stays reserved as "never allocated"
+    if (next_gen > 0xFFU) // wrap to 1; 0 stays reserved as "never allocated"
+    {
+        next_gen = 1U;
+    }
     tile.generation[lane] = static_cast<crd::u8>(next_gen);
 
     store_lane(idx, body);
@@ -98,7 +101,10 @@ BodyId BodyPool::insert(const RigidBody& body)
 
 void BodyPool::remove(BodyId id) noexcept
 {
-    if (!contains(id)) return;
+    if (!contains(id))
+    {
+        return;
+    }
 
     const crd::u32 idx  = id.index();
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
@@ -122,32 +128,50 @@ void BodyPool::remove(BodyId id) noexcept
 
 bool BodyPool::contains(BodyId id) const noexcept
 {
-    if (id.is_null()) return false;
+    if (id.is_null())
+    {
+        return false;
+    }
     const crd::u32 idx = id.index();
-    if (idx == 0 || idx >= m_high_water) return false;
+    if (idx == 0 || idx >= m_high_water)
+    {
+        return false;
+    }
     const BodyChunk& tile = m_storage.chunk(chunk_of(idx));
     const crd::u32   lane = lane_of(idx);
-    if (tile.live[lane] == 0) return false;
+    if (tile.live[lane] == 0)
+    {
+        return false;
+    }
     return static_cast<crd::u32>(tile.generation[lane]) == id.generation();
 }
 
 RigidBody BodyPool::read(BodyId id) const noexcept
 {
     RigidBody out{}; // default = effectively-static (inv_mass=0)
-    if (!contains(id)) return out;
+    if (!contains(id))
+    {
+        return out;
+    }
     load_lane(id.index(), out);
     return out;
 }
 
 void BodyPool::write(BodyId id, const RigidBody& state) noexcept
 {
-    if (!contains(id)) return;
+    if (!contains(id))
+    {
+        return;
+    }
     store_lane(id.index(), state);
 }
 
 void BodyPool::write_curr_only(BodyId id, const RigidBody& state) noexcept
 {
-    if (!contains(id)) return;
+    if (!contains(id))
+    {
+        return;
+    }
     store_curr_only_lane(id.index(), state);
 }
 
@@ -155,7 +179,10 @@ BodyPool::PrevState BodyPool::read_prev(BodyId id) const noexcept
 {
     PrevState out{};
     out.rotation = crd::math::Quatf{0.0F, 0.0F, 0.0F, 1.0F};
-    if (!contains(id)) return out;
+    if (!contains(id))
+    {
+        return out;
+    }
 
     const BodyChunk& tile = m_storage.chunk(chunk_of(id.index()));
     const crd::u32   lane = lane_of(id.index());
@@ -195,7 +222,10 @@ void BodyPool::snapshot_state_to_prev() noexcept
 
 BodyPool::Slot BodyPool::resolve(BodyId id) const noexcept
 {
-    if (!contains(id)) return Slot{0U, 0U};
+    if (!contains(id))
+    {
+        return Slot{0U, 0U};
+    }
     return Slot{chunk_of(id.index()), lane_of(id.index())};
 }
 

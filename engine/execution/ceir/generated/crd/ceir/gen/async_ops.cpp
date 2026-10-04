@@ -17,42 +17,90 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_await(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_cancel(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_join(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_launch(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_race(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_scope(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 } // namespace

@@ -146,7 +146,10 @@ TEST_CASE("ceir 8z: the composed blob preserves through an unregistered Context 
     bool has_external = false;
     for (usize i = 0; i < prog.size(); ++i)
     {
-        if (prog[i] == unreg.intern_capability("external.process")) { has_external = true; }
+        if (prog[i] == unreg.intern_capability("external.process"))
+        {
+            has_external = true;
+        }
     }
     CHECK(has_external);
 }
@@ -197,7 +200,10 @@ TEST_CASE("ceir 8z: a transaction edits preserved plugin content in an unregiste
         bool touched = false;
         for (usize i = 0; i < tx.touched().size(); ++i)
         {
-            if (tx.touched()[i] == note->stable_id()) { touched = true; }
+            if (tx.touched()[i] == note->stable_id())
+            {
+                touched = true;
+            }
         }
         CHECK(touched);
     }
@@ -234,7 +240,10 @@ TEST_CASE("ceir 8z: single-byte corruption of the composed foundation blob never
     for (usize i = 0; i < b1.size(); ++i)
     {
         ByteArray b(&root);
-        for (usize k = 0; k < b1.size(); ++k) { b.push_back(b1[k]); }
+        for (usize k = 0; k < b1.size(); ++k)
+        {
+            b.push_back(b1[k]);
+        }
         b[i] = static_cast<u8>(b[i] ^ 0xFFU);
         Context c(&root);
         (void)register_gate(c);

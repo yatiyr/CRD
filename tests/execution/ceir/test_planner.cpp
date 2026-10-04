@@ -50,8 +50,14 @@ Block* mkmain(Context& ctx, Module& m)
 Operation* decl_res(Context& ctx, const Kit& k, Block* b, const char* lifetime, i64 size_class, TypeId ty)
 {
     Operation* const d = ctx.create_operation(k.decl, {}, 1U, ty);
-    if (lifetime != nullptr) { ctx.set_attr(d, "lifetime", ctx.attr_string(containers::StringView(lifetime))); }
-    if (size_class != 0) { ctx.set_attr(d, "size_class", ctx.attr_int(size_class)); }
+    if (lifetime != nullptr)
+    {
+        ctx.set_attr(d, "lifetime", ctx.attr_string(containers::StringView(lifetime)));
+    }
+    if (size_class != 0)
+    {
+        ctx.set_attr(d, "size_class", ctx.attr_int(size_class));
+    }
     b->append(d);
     return d;
 }
@@ -65,7 +71,10 @@ const SlotAssignment* assign_of(const MemoryPlan& p, const Operation* d)
 {
     for (usize i = 0; i < p.assignments.size(); ++i)
     {
-        if (p.assignments[i].resource == d->result(0U)) { return &p.assignments[i]; }
+        if (p.assignments[i].resource == d->result(0U))
+        {
+            return &p.assignments[i];
+        }
     }
     return nullptr;
 }
@@ -140,13 +149,22 @@ TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent wit
     {
         for (usize j = i + 1; j < plan.assignments.size(); ++j)
         {
-            if (plan.assignments[i].slot != plan.assignments[j].slot) { continue; }
+            if (plan.assignments[i].slot != plan.assignments[j].slot)
+            {
+                continue;
+            }
             const ResourceLifetime* li = nullptr;
             const ResourceLifetime* lj = nullptr;
             for (usize t = 0; t < lts.size(); ++t)
             {
-                if (lts[t].resource == plan.assignments[i].resource) { li = &lts[t]; }
-                if (lts[t].resource == plan.assignments[j].resource) { lj = &lts[t]; }
+                if (lts[t].resource == plan.assignments[i].resource)
+                {
+                    li = &lts[t];
+                }
+                if (lts[t].resource == plan.assignments[j].resource)
+                {
+                    lj = &lts[t];
+                }
             }
             REQUIRE(li != nullptr);
             REQUIRE(lj != nullptr);
@@ -191,8 +209,14 @@ TEST_CASE("ceir 15d-3b: a declared-early first-used-late transient pools with an
     const ResourceLifetime* le = nullptr;
     for (usize t = 0; t < lts.size(); ++t)
     {
-        if (lts[t].resource == late->result(0U)) { ll = &lts[t]; }
-        if (lts[t].resource == early->result(0U)) { le = &lts[t]; }
+        if (lts[t].resource == late->result(0U))
+        {
+            ll = &lts[t];
+        }
+        if (lts[t].resource == early->result(0U))
+        {
+            le = &lts[t];
+        }
     }
     REQUIRE(ll != nullptr);
     REQUIRE(le != nullptr);

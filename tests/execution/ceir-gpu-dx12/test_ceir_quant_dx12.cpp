@@ -59,21 +59,34 @@ TEST_CASE("ceir 23b-1: quant_dequantize_q8 runs on a DX12 device (u32-pack + sig
     REQUIRE(kir::emit_compute_kernel_hlsl(kg, ke, &root, kern));
 
     crd::i32 b[kN];
-    for (int i = 0; i < kN; ++i) { b[i] = ((i * 37 + 11) % 256) - 128; }
+    for (int i = 0; i < kN; ++i)
+    {
+        b[i] = ((i * 37 + 11) % 256) - 128;
+    }
     float packed[kN / 4];
     for (int w = 0; w < kN / 4; ++w)
     {
         crd::u32 word = 0;
-        for (int j = 0; j < 4; ++j) { word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j)); }
+        for (int j = 0; j < 4; ++j)
+        {
+            word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j));
+        }
         packed[w] = bits_as_float(word);
     }
     float scale[1] = {0.5F};
     float zp[1]    = {3.0F};
     float out[kN];
-    for (int i = 0; i < kN; ++i) { out[i] = -999.0F; }
+    for (int i = 0; i < kN; ++i)
+    {
+        out[i] = -999.0F;
+    }
 
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-23b-1 dequant gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-23b-1 dequant gate");
+        return;
+    }
     auto pipe = compute.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), 4, 0U);
     REQUIRE(pipe != nullptr);
 

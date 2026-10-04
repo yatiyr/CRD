@@ -66,12 +66,21 @@ bool verify_delaunay_3d(const crd::containers::Array<Vec3<T>>& pts,
         const u32 c = tets[4U * t + 2U];
         const u32 d = tets[4U * t + 3U];
         const T o = crd::geometry::primitives::orient3d(pts[a], pts[b], pts[c], pts[d]);
-        if (o <= static_cast<T>(0)) { return false; }
+        if (o <= static_cast<T>(0))
+        {
+            return false;
+        }
         for (u32 p = 0; p < pts.size(); ++p)
         {
-            if (p == a || p == b || p == c || p == d) { continue; }
+            if (p == a || p == b || p == c || p == d)
+            {
+                continue;
+            }
             const T s = crd::geometry::primitives::insphere(pts[a], pts[b], pts[c], pts[d], pts[p]);
-            if (s > static_cast<T>(0)) { return false; }
+            if (s > static_cast<T>(0))
+            {
+                return false;
+            }
         }
     }
     return true;
@@ -276,8 +285,14 @@ TEST_CASE("delaunay_3d: insertion-order determinism (shuffled input)",
         crd::containers::FixedArray<Vec3<f32>, 4> tp = {pts[idx[4U * t + 0]], pts[idx[4U * t + 1]],
                                         pts[idx[4U * t + 2]], pts[idx[4U * t + 3]]};
         std::sort(tp.begin(), tp.end(), [](const Vec3<f32>& l, const Vec3<f32>& r) {
-            if (l.x != r.x) return l.x < r.x;
-            if (l.y != r.y) return l.y < r.y;
+            if (l.x != r.x)
+            {
+                return l.x < r.x;
+            }
+            if (l.y != r.y)
+            {
+                return l.y < r.y;
+            }
             return l.z < r.z;
         });
         return tp;
@@ -297,7 +312,10 @@ TEST_CASE("delaunay_3d: insertion-order determinism (shuffled input)",
                     match = false;
                 }
             }
-            if (match) { found = true; }
+            if (match)
+            {
+                found = true;
+            }
         }
         CHECK(found);
     }

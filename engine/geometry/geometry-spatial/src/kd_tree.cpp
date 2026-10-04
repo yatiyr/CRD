@@ -61,12 +61,30 @@ AABB3<T> compute_slice_bounds(crd::containers::ConstSpan<Vec3<T>> points,
     for (u32 i = 0; i < count; ++i)
     {
         const Vec3<T>& p = points[idx[first + i]];
-        if (p.x < b.min.x) b.min.x = p.x;
-        if (p.y < b.min.y) b.min.y = p.y;
-        if (p.z < b.min.z) b.min.z = p.z;
-        if (p.x > b.max.x) b.max.x = p.x;
-        if (p.y > b.max.y) b.max.y = p.y;
-        if (p.z > b.max.z) b.max.z = p.z;
+        if (p.x < b.min.x)
+        {
+            b.min.x = p.x;
+        }
+        if (p.y < b.min.y)
+        {
+            b.min.y = p.y;
+        }
+        if (p.z < b.min.z)
+        {
+            b.min.z = p.z;
+        }
+        if (p.x > b.max.x)
+        {
+            b.max.x = p.x;
+        }
+        if (p.y > b.max.y)
+        {
+            b.max.y = p.y;
+        }
+        if (p.z > b.max.z)
+        {
+            b.max.z = p.z;
+        }
     }
     return b;
 }
@@ -78,8 +96,14 @@ u8 pick_split_axis(const AABB3<T>& bounds) noexcept
     const T ex = bounds.max.x - bounds.min.x;
     const T ey = bounds.max.y - bounds.min.y;
     const T ez = bounds.max.z - bounds.min.z;
-    if (ex >= ey && ex >= ez) return 0;
-    if (ey >= ez)              return 1;
+    if (ex >= ey && ex >= ez)
+    {
+        return 0;
+    }
+    if (ey >= ez)
+    {
+        return 1;
+    }
     return 2;
 }
 
@@ -94,8 +118,14 @@ struct LexCompare
     {
         const T lv = points[lhs][axis];
         const T rv = points[rhs][axis];
-        if (lv < rv) return true;
-        if (lv > rv) return false;
+        if (lv < rv)
+        {
+            return true;
+        }
+        if (lv > rv)
+        {
+            return false;
+        }
         return lhs < rhs;
     }
 };
@@ -129,7 +159,10 @@ KdTree<T> build_impl(crd::containers::ConstSpan<Vec3<T>> points,
 
     auto& point_idx = tree.point_indices_mut();
     point_idx.resize(n);
-    for (u32 i = 0; i < n; ++i) { point_idx[i] = i; }
+    for (u32 i = 0; i < n; ++i)
+    {
+        point_idx[i] = i;
+    }
 
     // Pessimistic node-count reserve: at leaf=L the tree has at most
     // 2*ceil(N/L)-1 nodes. Reserve generously so the inner loop never

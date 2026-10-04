@@ -286,13 +286,19 @@ inline constexpr crd::u32 kU32Max = 0xffffffffU;
     if (metric == 2) // Manhattan: sum |comp|
     {
         int acc = g.unary(KOp::Abs, g.swizzle(diff, 0));
-        for (int k = 1; k < ncomp_; ++k) { acc = g.binary(KOp::Add, acc, g.unary(KOp::Abs, g.swizzle(diff, k))); }
+        for (int k = 1; k < ncomp_; ++k)
+        {
+            acc = g.binary(KOp::Add, acc, g.unary(KOp::Abs, g.swizzle(diff, k)));
+        }
         return acc;
     }
     if (metric == 3) // Chebyshev: max |comp|
     {
         int acc = g.unary(KOp::Abs, g.swizzle(diff, 0));
-        for (int k = 1; k < ncomp_; ++k) { acc = g.binary(KOp::Max, acc, g.unary(KOp::Abs, g.swizzle(diff, k))); }
+        for (int k = 1; k < ncomp_; ++k)
+        {
+            acc = g.binary(KOp::Max, acc, g.unary(KOp::Abs, g.swizzle(diff, k)));
+        }
         return acc;
     }
     return g.dot(diff, diff); // Euclidean(0) / distance²(1) — sqrt applied by the caller for metric 0
@@ -319,7 +325,11 @@ inline constexpr crd::u32 kU32Max = 0xffffffffU;
             const int cond = g.binary(KOp::CmpLt, dist, best);
             best           = g.select(cond, dist, best);
             g.stmt_materialize(best); // flatten the running-min chain (see worley3) — un-nests the ternary for the compute emitter
-            if (style == 1) { minpos = g.select(cond, diff, minpos); g.stmt_materialize(minpos); }
+            if (style == 1)
+            {
+                minpos = g.select(cond, diff, minpos);
+                g.stmt_materialize(minpos);
+            }
         }
     }
     if (style == 1)
@@ -385,7 +395,11 @@ inline void cell_vec3_from3(KGraph& g, int ix, int iy, int iz, int like, int out
                 // kernel with a few worley3 was un-compilable). Inert in the fragment path (it ignores kernel statements), so B6
                 // material noise + its byte-exact golden emission are untouched; also collapses the CPU-oracle re-walk.
                 g.stmt_materialize(best);
-                if (style == 1) { minpos = g.select(cond, diff, minpos); g.stmt_materialize(minpos); }
+                if (style == 1)
+                {
+                    minpos = g.select(cond, diff, minpos);
+                    g.stmt_materialize(minpos);
+                }
             }
         }
     }

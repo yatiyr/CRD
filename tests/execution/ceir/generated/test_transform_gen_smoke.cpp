@@ -31,7 +31,10 @@ TEST_CASE("ceir transform gen smoke: the dialect self-registers and reflects a c
     crd::containers::StringView prev;
     for (const OpSchema& s : schemas)
     {
-        if (!prev.empty()) { CHECK(prev < s.name); } // reflection is emitted sorted by name
+        if (!prev.empty()) // reflection is emitted sorted by name
+        {
+            CHECK(prev < s.name);
+        }
         prev = s.name;
         const OpId reflected = ctx.intern_op(s.dialect, s.name);
         CHECK(ctx.intern_op(s.dialect, s.name) == reflected); // interning is idempotent

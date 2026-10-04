@@ -612,7 +612,10 @@ Transform = { translation = [1.0, 0.0, 1.5] }
     {
         for (crd::usize j = 0; j < inst.entities.size(); ++j)
         {
-            if (i == j) continue;
+            if (i == j)
+            {
+                continue;
+            }
             if (target.get_relation_target<ChildOf>(inst.entities[i]) == inst.entities[j])
             {
                 nested_parented = true;

@@ -100,7 +100,10 @@ void UniformGrid<T>::aabb_cell_range(const AABB3<T>& a,
         // Clip to grid extent on this axis.
         const T lo = std::max(amin, bmin);
         const T hi = std::min(amax, bmax);
-        if (lo > hi) { return false; } // wholly outside
+        if (lo > hi) // wholly outside
+        {
+            return false;
+        }
 
         // Cell index of lo / hi relative to grid origin.
         const T rel_lo = lo - bmin;
@@ -109,10 +112,22 @@ void UniformGrid<T>::aabb_cell_range(const AABB3<T>& a,
         i32 i_hi = static_cast<i32>(floor_t<T>(rel_hi * m_inv_cell_size));
         // Clamp to [0, n-1] — handles boundary case where hi == grid max
         // (cell index would be n; collapse to n-1).
-        if (i_lo < 0) { i_lo = 0; }
-        if (i_hi < 0) { i_hi = 0; }
-        if (i_lo >= static_cast<i32>(n)) { i_lo = static_cast<i32>(n) - 1; }
-        if (i_hi >= static_cast<i32>(n)) { i_hi = static_cast<i32>(n) - 1; }
+        if (i_lo < 0)
+        {
+            i_lo = 0;
+        }
+        if (i_hi < 0)
+        {
+            i_hi = 0;
+        }
+        if (i_lo >= static_cast<i32>(n))
+        {
+            i_lo = static_cast<i32>(n) - 1;
+        }
+        if (i_hi >= static_cast<i32>(n))
+        {
+            i_hi = static_cast<i32>(n) - 1;
+        }
         out_min = static_cast<u32>(i_lo);
         out_max = static_cast<u32>(i_hi);
         return true;
@@ -205,13 +220,20 @@ void UniformGrid<T>::insert_into_cells(u32 obj_idx, const AABB3<T>& aabb)
     u32 max_z;
     bool empty_range = false;
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z, empty_range);
-    if (empty_range) { return; }
+    if (empty_range)
+    {
+        return;
+    }
 
     for (u32 iz = min_z; iz <= max_z; ++iz)
-    for (u32 iy = min_y; iy <= max_y; ++iy)
-    for (u32 ix = min_x; ix <= max_x; ++ix)
     {
-        m_cells[cell_index(ix, iy, iz)].push_back(obj_idx);
+        for (u32 iy = min_y; iy <= max_y; ++iy)
+        {
+            for (u32 ix = min_x; ix <= max_x; ++ix)
+            {
+                m_cells[cell_index(ix, iy, iz)].push_back(obj_idx);
+            }
+        }
     }
 }
 
@@ -226,21 +248,28 @@ void UniformGrid<T>::remove_from_cells(u32 obj_idx, const AABB3<T>& aabb)
     u32 max_z;
     bool empty_range = false;
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z, empty_range);
-    if (empty_range) { return; }
+    if (empty_range)
+    {
+        return;
+    }
 
     for (u32 iz = min_z; iz <= max_z; ++iz)
-    for (u32 iy = min_y; iy <= max_y; ++iy)
-    for (u32 ix = min_x; ix <= max_x; ++ix)
     {
-        auto& cell = m_cells[cell_index(ix, iy, iz)];
-        // Swap-with-last removal — bounded by per-cell occupancy.
-        for (usize i = 0; i < cell.size(); ++i)
+        for (u32 iy = min_y; iy <= max_y; ++iy)
         {
-            if (cell[i] == obj_idx)
+            for (u32 ix = min_x; ix <= max_x; ++ix)
             {
-                cell[i] = cell[cell.size() - 1];
-                cell.resize(cell.size() - 1);
-                break;
+                auto& cell = m_cells[cell_index(ix, iy, iz)];
+                // Swap-with-last removal — bounded by per-cell occupancy.
+                for (usize i = 0; i < cell.size(); ++i)
+                {
+                    if (cell[i] == obj_idx)
+                    {
+                        cell[i] = cell[cell.size() - 1];
+                        cell.resize(cell.size() - 1);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -322,7 +351,10 @@ usize UniformGrid<T>::max_cell_size() const noexcept
     usize m = 0;
     for (usize i = 0; i < m_cells.size(); ++i)
     {
-        if (m_cells[i].size() > m) { m = m_cells[i].size(); }
+        if (m_cells[i].size() > m)
+        {
+            m = m_cells[i].size();
+        }
     }
     return m;
 }
@@ -330,9 +362,15 @@ usize UniformGrid<T>::max_cell_size() const noexcept
 template <MathScalar T>
 f32 UniformGrid<T>::load_factor() const noexcept
 {
-    if (m_cells.size() == 0) { return 0.0F; }
+    if (m_cells.size() == 0)
+    {
+        return 0.0F;
+    }
     usize total = 0;
-    for (usize i = 0; i < m_cells.size(); ++i) { total += m_cells[i].size(); }
+    for (usize i = 0; i < m_cells.size(); ++i)
+    {
+        total += m_cells[i].size();
+    }
     return static_cast<f32>(total) / static_cast<f32>(m_cells.size());
 }
 
@@ -399,8 +437,14 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 UniformGrid<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 {
-    if (m_object_count == 0) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_object_count == 0)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     if (!crd::geometry::primitives::is_finite(ray.origin)
         || !crd::geometry::primitives::is_finite(ray.direction))
     {
@@ -424,8 +468,14 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 UniformGrid<T>::raycast(const Ray3<T>& ray, UniformGridScratch& scratch, T tmax) const noexcept
 {
-    if (m_object_count == 0) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_object_count == 0)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     if (!crd::geometry::primitives::is_finite(ray.origin)
         || !crd::geometry::primitives::is_finite(ray.direction))
     {
@@ -465,20 +515,40 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         const T hi = m_bounds.max[static_cast<usize>(ax)];
         if (std::abs(d) < std::numeric_limits<T>::epsilon())
         {
-            if (o < lo || o > hi) { return std::nullopt; }
+            if (o < lo || o > hi)
+            {
+                return std::nullopt;
+            }
         }
         else
         {
             const T inv = T{1} / d;
             T t1 = (lo - o) * inv;
             T t2 = (hi - o) * inv;
-            if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-            if (t1 > t_entry_grid) { t_entry_grid = t1; }
-            if (t2 < t_exit_grid)  { t_exit_grid = t2; }
-            if (t_entry_grid > t_exit_grid) { return std::nullopt; }
+            if (t1 > t2)
+            {
+                const T tmp = t1;
+                t1 = t2;
+                t2 = tmp;
+            }
+            if (t1 > t_entry_grid)
+            {
+                t_entry_grid = t1;
+            }
+            if (t2 < t_exit_grid)
+            {
+                t_exit_grid = t2;
+            }
+            if (t_entry_grid > t_exit_grid)
+            {
+                return std::nullopt;
+            }
         }
     }
-    if (t_entry_grid >= tmax || t_exit_grid <= T{0}) { return std::nullopt; }
+    if (t_entry_grid >= tmax || t_exit_grid <= T{0})
+    {
+        return std::nullopt;
+    }
     // Clamp entry to non-negative (rays starting inside the grid have t_entry < 0
     // from the slab math; we want to start scanning at the origin's cell).
     const T t_entry = std::max(T{0}, t_entry_grid);
@@ -493,8 +563,14 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     // would yield cell n; pull back to n-1 (we still scan that cell on entry).
     auto clamp_cell = [&](T v, u32 n) -> i32 {
         i32 c = static_cast<i32>(floor_t<T>(v * m_inv_cell_size));
-        if (c < 0) { c = 0; }
-        if (c >= static_cast<i32>(n)) { c = static_cast<i32>(n) - 1; }
+        if (c < 0)
+        {
+            c = 0;
+        }
+        if (c >= static_cast<i32>(n))
+        {
+            c = static_cast<i32>(n) - 1;
+        }
         return c;
     };
     i32 ix = clamp_cell(entry.x, m_nx);
@@ -503,8 +579,14 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
 
     // Step direction per axis.
     auto sign_step = [](T d) noexcept -> i32 {
-        if (d > T{0}) { return 1; }
-        if (d < T{0}) { return -1; }
+        if (d > T{0})
+        {
+            return 1;
+        }
+        if (d < T{0})
+        {
+            return -1;
+        }
         return 0;
     };
     const i32 step_x = sign_step(ray.direction.x);
@@ -521,7 +603,10 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     // boundary at bounds.min.x + (ix+1) * cell_size; for step_x < 0:
     // bounds.min.x + ix * cell_size.
     auto initial_tmax = [&](T origin_a, T dir_a, T bmin_a, i32 ia, i32 step_a) -> T {
-        if (step_a == 0) { return inf; }
+        if (step_a == 0)
+        {
+            return inf;
+        }
         const T boundary = (step_a > 0) ? bmin_a + static_cast<T>(ia + 1) * m_cell_size
                                           : bmin_a + static_cast<T>(ia) * m_cell_size;
         return (boundary - origin_a) / dir_a;
@@ -546,20 +631,40 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
             const T hi = a.max[static_cast<usize>(ax)];
             if (std::abs(d) < std::numeric_limits<T>::epsilon())
             {
-                if (o < lo || o > hi) { return false; }
+                if (o < lo || o > hi)
+                {
+                    return false;
+                }
             }
             else
             {
                 const T inv = T{1} / d;
                 T t1 = (lo - o) * inv;
                 T t2 = (hi - o) * inv;
-                if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                if (t1 > tmin_loc) { tmin_loc = t1; }
-                if (t2 < tcur_max) { tcur_max = t2; }
-                if (tmin_loc > tcur_max) { return false; }
+                if (t1 > t2)
+                {
+                    const T tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+                if (t1 > tmin_loc)
+                {
+                    tmin_loc = t1;
+                }
+                if (t2 < tcur_max)
+                {
+                    tcur_max = t2;
+                }
+                if (tmin_loc > tcur_max)
+                {
+                    return false;
+                }
             }
         }
-        if (tmin_loc < T{0}) { return false; }
+        if (tmin_loc < T{0})
+        {
+            return false;
+        }
         out_t = tmin_loc;
         return true;
     };
@@ -569,11 +674,17 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         for (usize i = 0; i < cell.size(); ++i)
         {
             const u32 obj_idx = cell[i];
-            if (was_visited(obj_idx)) { continue; }
+            if (was_visited(obj_idx))
+            {
+                continue;
+            }
             mark_visited(obj_idx);
             const ObjectEntry& obj = m_objects[obj_idx];
             T t = T{0};
-            if (!ray_aabb(obj.aabb, t)) { continue; }
+            if (!ray_aabb(obj.aabb, t))
+            {
+                continue;
+            }
             if (t < best_t)
             {
                 best_t = t;
@@ -596,22 +707,52 @@ UniformGrid<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         scan_cell();
 
         const T t_next = std::min(std::min(tmax_x, tmax_y), tmax_z);
-        if (t_next > best_t) { break; }
-        if (t_next > tmax)   { break; }
+        if (t_next > best_t)
+        {
+            break;
+        }
+        if (t_next > tmax)
+        {
+            break;
+        }
 
         // Advance ALL axes whose tMax ties for minimum (corner-grazing safe).
         const T t_min = t_next;
-        if (tmax_x == t_min) { ix += step_x; tmax_x += tdelta_x; }
-        if (tmax_y == t_min) { iy += step_y; tmax_y += tdelta_y; }
-        if (tmax_z == t_min) { iz += step_z; tmax_z += tdelta_z; }
+        if (tmax_x == t_min)
+        {
+            ix += step_x;
+            tmax_x += tdelta_x;
+        }
+        if (tmax_y == t_min)
+        {
+            iy += step_y;
+            tmax_y += tdelta_y;
+        }
+        if (tmax_z == t_min)
+        {
+            iz += step_z;
+            tmax_z += tdelta_z;
+        }
 
         // Exited grid bounds on any axis ⇒ stop.
-        if (ix < 0 || ix >= static_cast<i32>(m_nx)) { break; }
-        if (iy < 0 || iy >= static_cast<i32>(m_ny)) { break; }
-        if (iz < 0 || iz >= static_cast<i32>(m_nz)) { break; }
+        if (ix < 0 || ix >= static_cast<i32>(m_nx))
+        {
+            break;
+        }
+        if (iy < 0 || iy >= static_cast<i32>(m_ny))
+        {
+            break;
+        }
+        if (iz < 0 || iz >= static_cast<i32>(m_nz))
+        {
+            break;
+        }
     }
 
-    if (!any) { return std::nullopt; }
+    if (!any)
+    {
+        return std::nullopt;
+    }
     return crd::geometry::RayHit<u32>{static_cast<f32>(best_t), best_payload};
 }
 
@@ -623,7 +764,10 @@ template <MathScalar T>
 void UniformGrid<T>::find_overlapping_pairs(crd::containers::Array<UniformGridPair>& out) const
 {
     out.clear();
-    if (m_object_count < 2) { return; }
+    if (m_object_count < 2)
+    {
+        return;
+    }
 
     auto aabb_isect = [](const AABB3<T>& a, const AABB3<T>& b) noexcept {
         return a.min.x <= b.max.x && a.max.x >= b.min.x
@@ -635,7 +779,10 @@ void UniformGrid<T>::find_overlapping_pairs(crd::containers::Array<UniformGridPa
     {
         const auto& cell = m_cells[ci];
         const usize n = cell.size();
-        if (n < 2) { continue; }
+        if (n < 2)
+        {
+            continue;
+        }
         for (usize i = 0; i < n; ++i)
         {
             const u32 ai = cell[i];
@@ -644,7 +791,10 @@ void UniformGrid<T>::find_overlapping_pairs(crd::containers::Array<UniformGridPa
             {
                 const u32 bj = cell[j];
                 const ObjectEntry& b = m_objects[bj];
-                if (!aabb_isect(a.aabb, b.aabb)) { continue; }
+                if (!aabb_isect(a.aabb, b.aabb))
+                {
+                    continue;
+                }
                 const u32 lo = a.payload < b.payload ? a.payload : b.payload;
                 const u32 hi = a.payload < b.payload ? b.payload : a.payload;
                 out.push_back(UniformGridPair{lo, hi});
@@ -661,7 +811,10 @@ void UniformGrid<T>::find_overlapping_pairs(crd::containers::Array<UniformGridPa
         {
             if (!(out[r] == out[r - 1U]))
             {
-                if (w != r) { out[w] = out[r]; }
+                if (w != r)
+                {
+                    out[w] = out[r];
+                }
                 ++w;
             }
         }

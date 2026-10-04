@@ -86,7 +86,10 @@ struct HairScatterLutConfig
     g.stmt_materialize(cos_fixed);
 
     const int base = g.binary(KOp::Mul, tid, cu(static_cast<crd::u32>(kLutStride)));
-    for (int k = 0; k < kLutStride; ++k) { g.stmt_buffer_store(out_b, g.binary(KOp::Add, base, cu(static_cast<crd::u32>(k))), ks(0.0)); }
+    for (int k = 0; k < kLutStride; ++k)
+    {
+        g.stmt_buffer_store(out_b, g.binary(KOp::Add, base, cu(static_cast<crd::u32>(k))), ks(0.0));
+    }
 
     // ONE flattened loop over (h, θo, φo) — CKIR For carries no loop register, and a flat index avoids nesting entirely.
     const int    nt    = cfg.n_theta_o;
@@ -372,7 +375,10 @@ struct DomConfig
     // ⛔ freeze z0 BEFORE the accumulation loop — buffer loads are inline and would otherwise re-read a slot we go on to touch
     const int z0 = g.buffer_load(out_b, oidx(0));
     g.stmt_materialize(z0);
-    for (int k = 0; k < layer_count; ++k) { g.stmt_buffer_store(out_b, oidx(1 + k), ks(0.0)); }
+    for (int k = 0; k < layer_count; ++k)
+    {
+        g.stmt_buffer_store(out_b, oidx(1 + k), ks(0.0));
+    }
 
     // ── opacity: each fragment adds to its own layer and all layers BEHIND it ⇒ slot k is cumulative through layer k ──
     const int l2 = g.stmt_for_begin(cu(static_cast<crd::u32>(nf)));
@@ -449,7 +455,10 @@ struct DomConfig
         const int    seg = g.binary(KOp::BitAnd, g.binary(KOp::CmpGe, t, ks(prev_b)), g.binary(KOp::CmpLt, t, ks(bnd)));
         const int    fr  = dv(g, sub(g, t, ks(prev_b)), ks(dz));
         op               = g.select(seg, add(g, prev_o, mul(g, sub(g, ok, prev_o), fr)), op);
-        if (k == layer_count - 1) { op = g.select(g.binary(KOp::CmpGe, t, ks(bnd)), ok, op); } // past the last layer ⇒ clamp onto it
+        if (k == layer_count - 1) // past the last layer ⇒ clamp onto it
+        {
+            op = g.select(g.binary(KOp::CmpGe, t, ks(bnd)), ok, op);
+        }
         prev_o = ok;
         prev_b = bnd;
     }
@@ -595,7 +604,10 @@ struct VolumeMsConfig
 
     const int  ob   = g.binary(KOp::Mul, tid, cu(4));
     const auto oidx = [&](int k) { return g.binary(KOp::Add, ob, cu(static_cast<crd::u32>(k))); };
-    for (int k = 0; k < 4; ++k) { g.stmt_buffer_store(out_b, oidx(k), ks(0.0)); }
+    for (int k = 0; k < 4; ++k)
+    {
+        g.stmt_buffer_store(out_b, oidx(k), ks(0.0));
+    }
 
     const int l  = g.stmt_for_begin(cu(static_cast<crd::u32>(nseg)));
     const int sv = g.kernel_loop_var(l);

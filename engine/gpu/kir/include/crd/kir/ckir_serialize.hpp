@@ -67,11 +67,17 @@ inline void put_u16(ByteArray& b, crd::u16 v)
 }
 inline void put_u32(ByteArray& b, crd::u32 v)
 {
-    for (crd::u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 inline void put_u64(ByteArray& b, crd::u64 v)
 {
-    for (crd::u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 64U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 inline void put_i16(ByteArray& b, crd::i16 v) { put_u16(b, static_cast<crd::u16>(v)); }
 inline void put_i32(ByteArray& b, crd::i32 v) { put_u32(b, static_cast<crd::u32>(v)); }
@@ -94,30 +100,48 @@ struct Cursor
 
     [[nodiscard]] bool have(crd::u64 n) noexcept
     {
-        if (!ok || pos + n > in.size()) { ok = false; }
+        if (!ok || pos + n > in.size())
+        {
+            ok = false;
+        }
         return ok;
     }
     [[nodiscard]] crd::u8 u8v() noexcept { return have(1U) ? in[pos++] : static_cast<crd::u8>(0); }
     [[nodiscard]] crd::u16 u16v() noexcept
     {
-        if (!have(2U)) { return 0U; }
+        if (!have(2U))
+        {
+            return 0U;
+        }
         const auto v = static_cast<crd::u16>(static_cast<crd::u16>(in[pos]) | static_cast<crd::u16>(static_cast<crd::u16>(in[pos + 1U]) << 8U));
         pos += 2U;
         return v;
     }
     [[nodiscard]] crd::u32 u32v() noexcept
     {
-        if (!have(4U)) { return 0U; }
+        if (!have(4U))
+        {
+            return 0U;
+        }
         crd::u32 v = 0;
-        for (crd::u32 i = 0; i < 4U; ++i) { v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U);
+        }
         pos += 4U;
         return v;
     }
     [[nodiscard]] crd::u64 u64v() noexcept
     {
-        if (!have(8U)) { return 0U; }
+        if (!have(8U))
+        {
+            return 0U;
+        }
         crd::u64 v = 0;
-        for (crd::u32 i = 0; i < 8U; ++i) { v |= static_cast<crd::u64>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 8U; ++i)
+        {
+            v |= static_cast<crd::u64>(in[pos + i]) << (i * 8U);
+        }
         pos += 8U;
         return v;
     }
@@ -159,13 +183,19 @@ inline KType read_type(Cursor& c)
 
 inline void write_shape(ByteArray& b, const Shape& s)
 {
-    for (int i = 0; i < kMaxRank; ++i) { put_i64(b, s.dims[i]); }
+    for (int i = 0; i < kMaxRank; ++i)
+    {
+        put_i64(b, s.dims[i]);
+    }
     put_i32(b, s.rank);
 }
 inline Shape read_shape(Cursor& c)
 {
     Shape s;
-    for (int i = 0; i < kMaxRank; ++i) { s.dims[i] = c.i64v(); }
+    for (int i = 0; i < kMaxRank; ++i)
+    {
+        s.dims[i] = c.i64v();
+    }
     s.rank = c.i32v();
     return s;
 }
@@ -190,23 +220,62 @@ inline bool refs_valid(const crd::containers::Array<KNode>& nodes, const crd::co
     const auto bodywin_ok = [&](crd::i32 begin, crd::i32 cnt) noexcept {
         return begin == -1 ? true : (begin >= 0 && cnt >= 0 && static_cast<crd::i64>(begin) + static_cast<crd::i64>(cnt) <= n_stmts);
     };
-    if (static_cast<crd::i64>(nin) > n_nodes) { return false; }
+    if (static_cast<crd::i64>(nin) > n_nodes)
+    {
+        return false;
+    }
     for (crd::usize i = 0; i < nodes.size(); ++i)
     {
         const KNode& n = nodes[i];
-        if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d)) { return false; }
-        if (!extwin_ok(n.ext, n.n_ext)) { return false; }
-        if (!sid_ok(n.type.struct_id)) { return false; }
+        if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d))
+        {
+            return false;
+        }
+        if (!extwin_ok(n.ext, n.n_ext))
+        {
+            return false;
+        }
+        if (!sid_ok(n.type.struct_id))
+        {
+            return false;
+        }
     }
-    for (crd::usize i = 0; i < ext.size(); ++i) { if (!nref_ok(ext[i])) { return false; } }
-    for (crd::usize i = 0; i < sfields.size(); ++i) { if (!sid_ok(sfields[i].struct_id)) { return false; } }
-    for (crd::usize i = 0; i < sbegin.size(); ++i) { if (static_cast<crd::i64>(sbegin[i]) > n_sflds) { return false; } }
+    for (crd::usize i = 0; i < ext.size(); ++i)
+    {
+        if (!nref_ok(ext[i]))
+        {
+            return false;
+        }
+    }
+    for (crd::usize i = 0; i < sfields.size(); ++i)
+    {
+        if (!sid_ok(sfields[i].struct_id))
+        {
+            return false;
+        }
+    }
+    for (crd::usize i = 0; i < sbegin.size(); ++i)
+    {
+        if (static_cast<crd::i64>(sbegin[i]) > n_sflds)
+        {
+            return false;
+        }
+    }
     for (crd::usize i = 0; i < stmts.size(); ++i)
     {
         const KStmt& st = stmts[i];
-        if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result)) { return false; }
-        if (!bodywin_ok(st.body_begin, st.body_count)) { return false; }
-        if (!extwin_ok(st.ext, st.n_ext)) { return false; }
+        if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result))
+        {
+            return false;
+        }
+        if (!bodywin_ok(st.body_begin, st.body_count))
+        {
+            return false;
+        }
+        if (!extwin_ok(st.ext, st.n_ext))
+        {
+            return false;
+        }
     }
     if (!nref_ok(e.position) || !nref_ok(e.frag_depth) || !nref_ok(e.discard_cond) || !nref_ok(e.shading_rate)
         || !nref_ok(e.storage_write_index) || !nref_ok(e.storage_write_value) || !nref_ok(e.mesh_prim)
@@ -214,10 +283,28 @@ inline bool refs_valid(const crd::containers::Array<KNode>& nodes, const crd::co
     {
         return false;
     }
-    for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (!nref_ok(e.task_payload[k])) { return false; } }
-    if (!bodywin_ok(e.kernel_body_begin, e.kernel_body_count)) { return false; }
-    if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return false; }
-    for (int k = 0; k < e.n_out; ++k) { if (e.out[k].node < 0 || !nref_ok(e.out[k].node)) { return false; } } // an output names a node (REPO.DEV.11)
+    for (int k = 0; k < KEntry::kMaxTaskPayload; ++k)
+    {
+        if (!nref_ok(e.task_payload[k]))
+        {
+            return false;
+        }
+    }
+    if (!bodywin_ok(e.kernel_body_begin, e.kernel_body_count))
+    {
+        return false;
+    }
+    if (e.n_out < 0 || e.n_out > kMaxStageOutputs)
+    {
+        return false;
+    }
+    for (int k = 0; k < e.n_out; ++k) // an output names a node (REPO.DEV.11)
+    {
+        if (e.out[k].node < 0 || !nref_ok(e.out[k].node))
+        {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -233,7 +320,10 @@ inline void write_node(ByteArray& b, const KNode& n)
     put_f64(b, n.cval);
     put_i32(b, n.iidx);
     put_u32(b, n.axes);
-    for (int i = 0; i < kMaxRank; ++i) { put_u8(b, n.perm[i]); }
+    for (int i = 0; i < kMaxRank; ++i)
+    {
+        put_u8(b, n.perm[i]);
+    }
     put_u8(b, static_cast<crd::u8>(n.tier));
     put_i32(b, n.ext);
     put_u16(b, n.n_ext);
@@ -252,7 +342,10 @@ inline KNode read_node(Cursor& c)
     n.cval  = c.f64v();
     n.iidx  = c.i32v();
     n.axes  = c.u32v();
-    for (int i = 0; i < kMaxRank; ++i) { n.perm[i] = c.u8v(); }
+    for (int i = 0; i < kMaxRank; ++i)
+    {
+        n.perm[i] = c.u8v();
+    }
     n.tier  = static_cast<DetTier>(c.u8v());
     n.ext   = c.i32v();
     n.n_ext = c.u16v();
@@ -309,14 +402,20 @@ inline void write_entry(ByteArray& b, const KEntry& e)
         put_i32(b, e.out[i].location);
         put_u8(b, static_cast<crd::u8>(e.out[i].interp));
     }
-    for (int i = 0; i < 3; ++i) { put_u32(b, e.local_size[i]); }  // 12
+    for (int i = 0; i < 3; ++i) // 12
+    {
+        put_u32(b, e.local_size[i]);
+    }
     put_i32(b, e.kernel_body_begin);                              // 4
     put_i32(b, e.kernel_body_count);                              // 4
     put_u32(b, e.mesh_vertices);                                  // 4
     put_u32(b, e.mesh_primitives);                                // 4
     put_i32(b, e.mesh_prim);                                      // 4
     put_i32(b, e.task_emit);                                      // 4
-    for (int i = 0; i < KEntry::kMaxTaskPayload; ++i) { put_i32(b, e.task_payload[i]); } // 16
+    for (int i = 0; i < KEntry::kMaxTaskPayload; ++i) // 16
+    {
+        put_i32(b, e.task_payload[i]);
+    }
     put_u32(b, e.n_task_payload);                                 // 4
     put_u32(b, e.tess_patch_size);                                // 4
     put_i32(b, e.tess_inner);                                     // 4
@@ -344,14 +443,20 @@ inline KEntry read_entry(Cursor& c)
         e.out[i].location = c.i32v();
         e.out[i].interp   = static_cast<Interp>(c.u8v());
     }
-    for (int i = 0; i < 3; ++i) { e.local_size[i] = c.u32v(); }
+    for (int i = 0; i < 3; ++i)
+    {
+        e.local_size[i] = c.u32v();
+    }
     e.kernel_body_begin = c.i32v();
     e.kernel_body_count = c.i32v();
     e.mesh_vertices     = c.u32v();
     e.mesh_primitives   = c.u32v();
     e.mesh_prim         = c.i32v();
     e.task_emit         = c.i32v();
-    for (int i = 0; i < KEntry::kMaxTaskPayload; ++i) { e.task_payload[i] = c.i32v(); }
+    for (int i = 0; i < KEntry::kMaxTaskPayload; ++i)
+    {
+        e.task_payload[i] = c.i32v();
+    }
     e.n_task_payload = c.u32v();
     e.tess_patch_size = c.u32v();
     e.tess_inner      = c.i32v();
@@ -380,19 +485,34 @@ inline KEntry read_entry(Cursor& c)
 
     const auto& nodes = g.serial_nodes();
     sd::put_u32(out, static_cast<crd::u32>(nodes.size()));
-    for (crd::usize i = 0; i < nodes.size(); ++i) { sd::write_node(out, nodes[i]); }
+    for (crd::usize i = 0; i < nodes.size(); ++i)
+    {
+        sd::write_node(out, nodes[i]);
+    }
     const auto& ext = g.serial_ext();
     sd::put_u32(out, static_cast<crd::u32>(ext.size()));
-    for (crd::usize i = 0; i < ext.size(); ++i) { sd::put_i32(out, ext[i]); }
+    for (crd::usize i = 0; i < ext.size(); ++i)
+    {
+        sd::put_i32(out, ext[i]);
+    }
     const auto& sfields = g.serial_sfields();
     sd::put_u32(out, static_cast<crd::u32>(sfields.size()));
-    for (crd::usize i = 0; i < sfields.size(); ++i) { sd::write_type(out, sfields[i]); }
+    for (crd::usize i = 0; i < sfields.size(); ++i)
+    {
+        sd::write_type(out, sfields[i]);
+    }
     const auto& sbegin = g.serial_sbegin();
     sd::put_u32(out, static_cast<crd::u32>(sbegin.size()));
-    for (crd::usize i = 0; i < sbegin.size(); ++i) { sd::put_u32(out, sbegin[i]); }
+    for (crd::usize i = 0; i < sbegin.size(); ++i)
+    {
+        sd::put_u32(out, sbegin[i]);
+    }
     const auto& stmts = g.serial_stmts();
     sd::put_u32(out, static_cast<crd::u32>(stmts.size()));
-    for (crd::usize i = 0; i < stmts.size(); ++i) { sd::write_stmt(out, stmts[i]); }
+    for (crd::usize i = 0; i < stmts.size(); ++i)
+    {
+        sd::write_stmt(out, stmts[i]);
+    }
 
     sd::write_entry(out, e);
     return out;
@@ -404,14 +524,35 @@ inline KEntry read_entry(Cursor& c)
 {
     namespace sd = serial_detail;
     sd::Cursor c{in, 0, true};
-    if (c.u32v() != kShaderGraphFourCC || !c.ok) { return false; }
-    if (c.u32v() != kShaderGraphVersion) { return false; }
-    if (c.u32v() != sd::kNodeRec) { return false; }
-    if (c.u32v() != sd::kStmtRec) { return false; }
-    if (c.u32v() != sd::kTypeRec) { return false; }
-    if (c.u32v() != sd::kEntryRec) { return false; }
+    if (c.u32v() != kShaderGraphFourCC || !c.ok)
+    {
+        return false;
+    }
+    if (c.u32v() != kShaderGraphVersion)
+    {
+        return false;
+    }
+    if (c.u32v() != sd::kNodeRec)
+    {
+        return false;
+    }
+    if (c.u32v() != sd::kStmtRec)
+    {
+        return false;
+    }
+    if (c.u32v() != sd::kTypeRec)
+    {
+        return false;
+    }
+    if (c.u32v() != sd::kEntryRec)
+    {
+        return false;
+    }
     const crd::u32 nin = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
 
     auto*                            al = g.serial_nodes().allocator();
     crd::containers::Array<KNode>    nodes(al);
@@ -424,38 +565,78 @@ inline KEntry read_entry(Cursor& c)
     // a truncated/corrupt blob must not drive a huge allocation.
     const auto pool_count = [&](crd::u32 rec) -> crd::u32 {
         const crd::u32 n = c.u32v();
-        if (!c.ok || (static_cast<crd::u64>(n) * rec) > (in.size() - c.pos)) { c.ok = false; return 0U; }
+        if (!c.ok || (static_cast<crd::u64>(n) * rec) > (in.size() - c.pos))
+        {
+            c.ok = false;
+            return 0U;
+        }
         return n;
     };
     const crd::u32 n_nodes = pool_count(sd::kNodeRec);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     nodes.reserve(n_nodes);
-    for (crd::u32 i = 0; i < n_nodes; ++i) { nodes.push_back(sd::read_node(c)); }
+    for (crd::u32 i = 0; i < n_nodes; ++i)
+    {
+        nodes.push_back(sd::read_node(c));
+    }
     const crd::u32 n_ext = pool_count(4U);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     ext.reserve(n_ext);
-    for (crd::u32 i = 0; i < n_ext; ++i) { ext.push_back(c.i32v()); }
+    for (crd::u32 i = 0; i < n_ext; ++i)
+    {
+        ext.push_back(c.i32v());
+    }
     const crd::u32 n_sfields = pool_count(sd::kTypeRec);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     sfields.reserve(n_sfields);
-    for (crd::u32 i = 0; i < n_sfields; ++i) { sfields.push_back(sd::read_type(c)); }
+    for (crd::u32 i = 0; i < n_sfields; ++i)
+    {
+        sfields.push_back(sd::read_type(c));
+    }
     const crd::u32 n_sbegin = pool_count(4U);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     sbegin.reserve(n_sbegin);
-    for (crd::u32 i = 0; i < n_sbegin; ++i) { sbegin.push_back(c.u32v()); }
+    for (crd::u32 i = 0; i < n_sbegin; ++i)
+    {
+        sbegin.push_back(c.u32v());
+    }
     const crd::u32 n_stmts = pool_count(sd::kStmtRec);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     stmts.reserve(n_stmts);
-    for (crd::u32 i = 0; i < n_stmts; ++i) { stmts.push_back(sd::read_stmt(c)); }
+    for (crd::u32 i = 0; i < n_stmts; ++i)
+    {
+        stmts.push_back(sd::read_stmt(c));
+    }
 
     const KEntry decoded = sd::read_entry(c);
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     e = decoded;
 
     // REPO.DEV.9 fuzz findings: a blob is validated against its FINAL sizes before anything iterates it, the same
     // bounds the .ckir text reader applies (node refs >= -1 and < n, ext windows, struct ids, field offsets, stmt
     // body ranges, the entry refs and its stage outputs, the input count as a prefix of the node array).
-    if (!sd::refs_valid(nodes, ext, sfields, sbegin, stmts, e, nin)) { return false; }
+    if (!sd::refs_valid(nodes, ext, sfields, sbegin, stmts, e, nin))
+    {
+        return false;
+    }
     g.serial_restore(nodes.data(), nodes.size(), ext.data(), ext.size(), sfields.data(), sfields.size(), sbegin.data(), sbegin.size(),
                      stmts.data(), stmts.size(), static_cast<int>(nin));
     return true;
@@ -527,34 +708,56 @@ struct ShaderReflection
     crd::u8       reach[cap];
     if (scoped)
     {
-        for (int i = 0; i < n; ++i) { reach[i] = 0U; }
+        for (int i = 0; i < n; ++i)
+        {
+            reach[i] = 0U;
+        }
         int        stk[cap];
         int        sp   = 0;
         const auto push = [&](int id) {
-            if (id >= 0 && id < n && reach[static_cast<crd::usize>(id)] == 0U) { reach[static_cast<crd::usize>(id)] = 1U; stk[sp++] = id; }
+            if (id >= 0 && id < n && reach[static_cast<crd::usize>(id)] == 0U)
+            {
+                reach[static_cast<crd::usize>(id)] = 1U;
+                stk[sp++] = id;
+            }
         };
         push(e.position); push(e.frag_depth); push(e.discard_cond); push(e.shading_rate);
         push(e.storage_write_index); push(e.storage_write_value);
-        for (int k = 0; k < e.n_out; ++k) { push(e.out[k].node); }
+        for (int k = 0; k < e.n_out; ++k)
+        {
+            push(e.out[k].node);
+        }
         if (e.is_kernel())
         {
             for (int s = e.kernel_body_begin; s < e.kernel_body_begin + e.kernel_body_count; ++s)
             {
                 const KStmt& st = g.stmt(s);
                 push(st.target); push(st.index); push(st.value); push(st.result);
-                for (int k = 0; k < static_cast<int>(st.n_ext); ++k) { push(g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < static_cast<int>(st.n_ext); ++k)
+                {
+                    push(g.stmt_ext_operand(st, k));
+                }
             }
         }
         while (sp > 0)
         {
             const KNode& nd = g.node(stk[--sp]);
             push(nd.a); push(nd.b); push(nd.c); push(nd.d);
-            for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { push(g.ext_operand(nd, k)); }
+            for (int k = 0; k < static_cast<int>(nd.n_ext); ++k)
+            {
+                push(g.ext_operand(nd, k));
+            }
         }
     }
 
     const auto add_bind = [&](crd::u32 set, crd::u32 binding, BindKind kind, bool writable) {
-        for (int i = 0; i < r.n_bindings; ++i) { if (r.bindings[i].set == set && r.bindings[i].binding == binding && r.bindings[i].kind == kind) { return; } } // dedup
+        for (int i = 0; i < r.n_bindings; ++i) // dedup
+        {
+            if (r.bindings[i].set == set && r.bindings[i].binding == binding && r.bindings[i].kind == kind)
+            {
+                return;
+            }
+        }
         if (r.n_bindings < kMaxReflBindings)
         {
             ShaderBinding& b = r.bindings[r.n_bindings];
@@ -567,7 +770,10 @@ struct ShaderReflection
     };
     for (int i = 0; i < n; ++i)
     {
-        if (scoped && reach[static_cast<crd::usize>(i)] == 0U) { continue; } // only this entry's decls
+        if (scoped && reach[static_cast<crd::usize>(i)] == 0U) // only this entry's decls
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         switch (nd.op)
         {

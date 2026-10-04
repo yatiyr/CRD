@@ -21,7 +21,11 @@ int main(){
   // firdes_kaiser (windowed-sinc FIR design)
   { float* h=malloc(N*sizeof(float)); liquid_firdes_kaiser(N,0.3f,60.0f,0.0f,h);
     double t0=now_ms(); double chk=0;
-    for(int r=0;r<reps;++r){ liquid_firdes_kaiser(N,0.3f,60.0f,0.0f,h); chk+=h[N/2]; }
+    for(int r=0;r<reps;++r)
+    {
+        liquid_firdes_kaiser(N,0.3f,60.0f,0.0f,h);
+        chk+=h[N/2];
+    }
     printf("%-16s %7.3f ms/call  (chk=%.4f)\n","firdes_kaiser",(now_ms()-t0)/reps,chk); free(h); }
   free(w); return 0;
 }

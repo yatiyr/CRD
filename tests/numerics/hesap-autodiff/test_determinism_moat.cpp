@@ -26,7 +26,10 @@ struct RegLoss
     rev::Var   operator()(const rev::Var* theta, int, int s) const
     {
         rev::Var acc = theta[0] * x[s * d + 0];
-        for (int j = 1; j < d; ++j) { acc = acc + theta[j] * x[s * d + j]; }
+        for (int j = 1; j < d; ++j)
+        {
+            acc = acc + theta[j] * x[s * d + j];
+        }
         const rev::Var r = acc - y[s];
         return r * r;
     }
@@ -44,7 +47,10 @@ TEST_CASE("v16-i: batch_gradient {1..16}-worker BIT-IDENTICAL + a training run r
         f64           yv[ssamp];
         for (int s = 0; s < ssamp; ++s)
         {
-            for (int j = 0; j < d; ++j) { x[s * d + j] = std::sin(0.3 + s + 2.0 * j); }
+            for (int j = 0; j < d; ++j)
+            {
+                x[s * d + j] = std::sin(0.3 + s + 2.0 * j);
+            }
             yv[s] = 0.4 + 0.2 * std::cos(0.7 + s);
         }
         const RegLoss loss{x, yv, d};
@@ -94,7 +100,10 @@ TEST_CASE("v16-i: batch_gradient {1..16}-worker BIT-IDENTICAL + a training run r
         {
             f64 g[d];
             rev::batch_gradient(loss, {theta0, d}, ssamp, {g, d}, {tapes, static_cast<crd::usize>(nj)}, {gbuf, ssamp * d}, nj);
-            for (int i = 0; i < d; ++i) { CHECK(g[i] == gref[i]); } // exact bit-identity
+            for (int i = 0; i < d; ++i) // exact bit-identity
+            {
+                CHECK(g[i] == gref[i]);
+            }
         }
 
         // (2) a full SGD training run replays bit-for-bit -- run-to-run AND worker-count-invariant
@@ -106,9 +115,15 @@ TEST_CASE("v16-i: batch_gradient {1..16}-worker BIT-IDENTICAL + a training run r
             {
                 rev::batch_gradient(loss, {theta, d}, ssamp, {g, d}, {tapes, static_cast<crd::usize>(nj)}, {gbuf, ssamp * d},
                                     nj);
-                for (int i = 0; i < d; ++i) { theta[i] -= 0.02 * g[i] / static_cast<f64>(ssamp); }
+                for (int i = 0; i < d; ++i)
+                {
+                    theta[i] -= 0.02 * g[i] / static_cast<f64>(ssamp);
+                }
             }
-            for (int i = 0; i < d; ++i) { theta_out[i] = theta[i]; }
+            for (int i = 0; i < d; ++i)
+            {
+                theta_out[i] = theta[i];
+            }
         };
         f64 w_run_a[d];
         f64 w_run_b[d];

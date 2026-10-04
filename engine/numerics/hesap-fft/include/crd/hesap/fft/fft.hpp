@@ -150,11 +150,17 @@ public:
         // f32 256K (2^18): enable the four-step (1024×256 split below) — the P2 256-axis then uses the default 16×16
         // hier codelet + gather/scatter fusion, fixing the small-N Stockham trough (0.33→~0.85× MKL, 3.6× CRD). f64
         // 256K stays direct (there is no f64 256-pt hier codelet). Larger sizes keep the square split.
-        if (n == (crd::usize{1} << 18) && std::is_same_v<T, crd::f32>) { m_use_four_step = true; }
+        if (n == (crd::usize{1} << 18) && std::is_same_v<T, crd::f32>)
+        {
+            m_use_four_step = true;
+        }
         // FFT-CRUSH 2026-07-03 session 6: f32 128K measured 0.17x MKL as direct Stockham (the sh band tops at
         // 64K) — opt into the four-step 1024x128 like f64: P1 = the gather-fused 1024 hier (bw==128), P2 = the
         // generated f32 codelet128_batched via the batched-leaf gate.
-        if (n == (crd::usize{1} << 17) && std::is_same_v<T, crd::f32>) { m_use_four_step = true; }
+        if (n == (crd::usize{1} << 17) && std::is_same_v<T, crd::f32>)
+        {
+            m_use_four_step = true;
+        }
         // FFT-CRUSH 2026-07-03: the f64 mid-band trough (64K-256K measured 0.40-0.49x MKL as DIRECT Stockham —
         // the June "parity regime" rows were unbenched). Opt the four-step in for f64 too: P1 = batched 1024-hier
         // (exists, f64 default-on), P2 = batched small-N (codelet64_batched exists f64; 128/256 run batched
@@ -174,16 +180,31 @@ public:
         // unchanged, accuracy preserved (~1e-15). Found by the black-box MKL-archaeology factorization sweep
         // (2026-06-16): the old floor(log2/2) put the SMALLER factor first for odd log2, underusing pass-1.
         m_n1 = crd::usize{1} << ((m_log2 + 1) / 2);
-        if (m_use_four_step && n == (crd::usize{1} << 18)) { m_n1 = 1024; } // 256K = 1024×256 (n2=256 → 16×16 hier P2)
+        if (m_use_four_step && n == (crd::usize{1} << 18)) // 256K = 1024×256 (n2=256 → 16×16 hier P2)
+        {
+            m_n1 = 1024;
+        }
         if constexpr (std::is_same_v<T, crd::f64>) // FFT-CRUSH: ALL-HIER splits for the f64 mid-band
         {
-            if (m_use_four_step && n == (crd::usize{1} << 17)) { m_n1 = 1024; } // 128K = 1024×128 (P2 = codelet128)
-            if (m_use_four_step && n == (crd::usize{1} << 18)) { m_n1 = 1024; } // 256K = 1024×256 (P2 radix-8 until codelet256)
+            if (m_use_four_step && n == (crd::usize{1} << 17)) // 128K = 1024×128 (P2 = codelet128)
+            {
+                m_n1 = 1024;
+            }
+            if (m_use_four_step && n == (crd::usize{1} << 18)) // 256K = 1024×256 (P2 radix-8 until codelet256)
+            {
+                m_n1 = 1024;
+            }
         }
         if constexpr (std::is_same_v<T, crd::f32>) // FFT-CRUSH: f32 512K trough (measured 0.55x) — all-hier split
         {
-            if (m_use_four_step && n == (crd::usize{1} << 19)) { m_n1 = 2048; } // 512K = 2048×256: P2 = 16×16 hier
-            if (m_use_four_step && n == (crd::usize{1} << 17)) { m_n1 = 1024; } // 128K = 1024×128 (P2 = codelet128)
+            if (m_use_four_step && n == (crd::usize{1} << 19)) // 512K = 2048×256: P2 = 16×16 hier
+            {
+                m_n1 = 2048;
+            }
+            if (m_use_four_step && n == (crd::usize{1} << 17)) // 128K = 1024×128 (P2 = codelet128)
+            {
+                m_n1 = 1024;
+            }
         }
         // Full table W_n^k, k = 0 .. n-1 (radix-4 indexes up to 3·j·r < n). Precomputed ONCE, shared — the
         // determinism contract. Computed in f64 then narrowed (accuracy for the f32 plan).
@@ -218,9 +239,17 @@ public:
             crd::usize h_n2 = (n == 4096) ? 64U : ((n == 2048) ? 32U : 0U); // N2 = inner count
             crd::usize h_n1 = 64U;                                          // N1 = stage-1 leaf = twiddle stride
             crd::usize h_bb = block_width(n);                               // BB (T-aware: f32 = 2× f64)
-            if (n == 1024) { h_n2 = 32U; h_n1 = 32U; } // 1024 = 32×32 — 1M/2M sub-FFT
+            if (n == 1024) // 1024 = 32×32 — 1M/2M sub-FFT
+            {
+                h_n2 = 32U;
+                h_n1 = 32U;
+            }
             // 256 = 16×16 hier sub-FFT for the 256K four-step P2 (f32 only — the codelet16 stage-1 is Vec8f).
-            if (n == 256 && std::is_same_v<T, crd::f32>) { h_n2 = 16U; h_n1 = 16U; }
+            if (n == 256 && std::is_same_v<T, crd::f32>)
+            {
+                h_n2 = 16U;
+                h_n1 = 16U;
+            }
 
             if (h_n2 != 0)
             {
@@ -2897,71 +2926,73 @@ private:
             else // the single-block final combine pass, per half
             {
                 for (crd::usize hh = 0; hh < (ipodd ? 2U : 1U); ++hh)
-                for (crd::usize kc = 0; kc < q; kc += 256)
                 {
-                    const crd::usize ke = (q - kc < 256) ? q - kc : 256;
-                    const T* const t1r = twr + kc, *const t1i = twi + kc;
-                    const crd::usize hb = hh * nh;
-                    const Complex<T>* const p0 = tb + ps(hb + kc);
-                    const Complex<T>* const p1 = tb + ps(hb + q + kc);
-                    const Complex<T>* const p2 = tb + ps(hb + 2 * q + kc);
-                    const Complex<T>* const p3 = tb + ps(hb + 3 * q + kc);
-                    const bool topad = (dstbase != io); // tb stores go through the slot map
-                    Complex<T>* const o0 = topad ? tb + ps(hb + kc) : io + hb + kc;
-                    Complex<T>* const o1 = topad ? tb + ps(hb + q + kc) : io + hb + q + kc;
-                    Complex<T>* const o2 = topad ? tb + ps(hb + 2 * q + kc) : io + hb + 2 * q + kc;
-                    Complex<T>* const o3 = topad ? tb + ps(hb + 3 * q + kc) : io + hb + 3 * q + kc;
-                    for (crd::usize k = 0; k < ke; k += 2 * C)
+                    for (crd::usize kc = 0; kc < q; kc += 256)
                     {
-                        V a0 = V::load(reinterpret_cast<const T*>(p0 + k));
-                        V b0 = V::load(reinterpret_cast<const T*>(p1 + k));
-                        V c0 = V::load(reinterpret_cast<const T*>(p2 + k));
-                        V d0 = V::load(reinterpret_cast<const T*>(p3 + k));
-                        V a1 = V::load(reinterpret_cast<const T*>(p0 + k + C));
-                        V b1 = V::load(reinterpret_cast<const T*>(p1 + k + C));
-                        V c1 = V::load(reinterpret_cast<const T*>(p2 + k + C));
-                        V d1 = V::load(reinterpret_cast<const T*>(p3 + k + C));
-                        V w1r = simd::load_dup_pairs(t1r + k), w1i = simd::load_dup_pairs(t1i + k);
-                        V u1r = simd::load_dup_pairs(t1r + k + C), u1i = simd::load_dup_pairs(t1i + k + C);
-                        if constexpr (INV)
+                        const crd::usize ke = (q - kc < 256) ? q - kc : 256;
+                        const T* const t1r = twr + kc, *const t1i = twi + kc;
+                        const crd::usize hb = hh * nh;
+                        const Complex<T>* const p0 = tb + ps(hb + kc);
+                        const Complex<T>* const p1 = tb + ps(hb + q + kc);
+                        const Complex<T>* const p2 = tb + ps(hb + 2 * q + kc);
+                        const Complex<T>* const p3 = tb + ps(hb + 3 * q + kc);
+                        const bool topad = (dstbase != io); // tb stores go through the slot map
+                        Complex<T>* const o0 = topad ? tb + ps(hb + kc) : io + hb + kc;
+                        Complex<T>* const o1 = topad ? tb + ps(hb + q + kc) : io + hb + q + kc;
+                        Complex<T>* const o2 = topad ? tb + ps(hb + 2 * q + kc) : io + hb + 2 * q + kc;
+                        Complex<T>* const o3 = topad ? tb + ps(hb + 3 * q + kc) : io + hb + 3 * q + kc;
+                        for (crd::usize k = 0; k < ke; k += 2 * C)
                         {
-                            w1i = V::zero() - w1i;
-                            u1i = V::zero() - u1i;
-                        }
-                        V w2r, w2i, w3r, w3i, u2r, u2i, u3r, u3i;
-                        if (tab3)
-                        {
-                            w2r = simd::load_dup_pairs(t1r + q + k);
-                            w2i = simd::load_dup_pairs(t1i + q + k);
-                            w3r = simd::load_dup_pairs(t1r + 2 * q + k);
-                            w3i = simd::load_dup_pairs(t1i + 2 * q + k);
-                            u2r = simd::load_dup_pairs(t1r + q + k + C);
-                            u2i = simd::load_dup_pairs(t1i + q + k + C);
-                            u3r = simd::load_dup_pairs(t1r + 2 * q + k + C);
-                            u3i = simd::load_dup_pairs(t1i + 2 * q + k + C);
+                            V a0 = V::load(reinterpret_cast<const T*>(p0 + k));
+                            V b0 = V::load(reinterpret_cast<const T*>(p1 + k));
+                            V c0 = V::load(reinterpret_cast<const T*>(p2 + k));
+                            V d0 = V::load(reinterpret_cast<const T*>(p3 + k));
+                            V a1 = V::load(reinterpret_cast<const T*>(p0 + k + C));
+                            V b1 = V::load(reinterpret_cast<const T*>(p1 + k + C));
+                            V c1 = V::load(reinterpret_cast<const T*>(p2 + k + C));
+                            V d1 = V::load(reinterpret_cast<const T*>(p3 + k + C));
+                            V w1r = simd::load_dup_pairs(t1r + k), w1i = simd::load_dup_pairs(t1i + k);
+                            V u1r = simd::load_dup_pairs(t1r + k + C), u1i = simd::load_dup_pairs(t1i + k + C);
                             if constexpr (INV)
                             {
-                                w2i = V::zero() - w2i;
-                                w3i = V::zero() - w3i;
-                                u2i = V::zero() - u2i;
-                                u3i = V::zero() - u3i;
+                                w1i = V::zero() - w1i;
+                                u1i = V::zero() - u1i;
                             }
+                            V w2r, w2i, w3r, w3i, u2r, u2i, u3r, u3i;
+                            if (tab3)
+                            {
+                                w2r = simd::load_dup_pairs(t1r + q + k);
+                                w2i = simd::load_dup_pairs(t1i + q + k);
+                                w3r = simd::load_dup_pairs(t1r + 2 * q + k);
+                                w3i = simd::load_dup_pairs(t1i + 2 * q + k);
+                                u2r = simd::load_dup_pairs(t1r + q + k + C);
+                                u2i = simd::load_dup_pairs(t1i + q + k + C);
+                                u3r = simd::load_dup_pairs(t1r + 2 * q + k + C);
+                                u3i = simd::load_dup_pairs(t1i + 2 * q + k + C);
+                                if constexpr (INV)
+                                {
+                                    w2i = V::zero() - w2i;
+                                    w3i = V::zero() - w3i;
+                                    u2i = V::zero() - u2i;
+                                    u3i = V::zero() - u3i;
+                                }
+                            }
+                            else
+                            {
+                                twpow(w1r, w1i, w2r, w2i, w3r, w3i);
+                                twpow(u1r, u1i, u2r, u2i, u3r, u3i);
+                            }
+                            bf4(a0, b0, c0, d0, w1r, w1i, w2r, w2i, w3r, w3i);
+                            bf4(a1, b1, c1, d1, u1r, u1i, u2r, u2i, u3r, u3i);
+                            a0.store(reinterpret_cast<T*>(o0 + k));
+                            b0.store(reinterpret_cast<T*>(o1 + k));
+                            c0.store(reinterpret_cast<T*>(o2 + k));
+                            d0.store(reinterpret_cast<T*>(o3 + k));
+                            a1.store(reinterpret_cast<T*>(o0 + k + C));
+                            b1.store(reinterpret_cast<T*>(o1 + k + C));
+                            c1.store(reinterpret_cast<T*>(o2 + k + C));
+                            d1.store(reinterpret_cast<T*>(o3 + k + C));
                         }
-                        else
-                        {
-                            twpow(w1r, w1i, w2r, w2i, w3r, w3i);
-                            twpow(u1r, u1i, u2r, u2i, u3r, u3i);
-                        }
-                        bf4(a0, b0, c0, d0, w1r, w1i, w2r, w2i, w3r, w3i);
-                        bf4(a1, b1, c1, d1, u1r, u1i, u2r, u2i, u3r, u3i);
-                        a0.store(reinterpret_cast<T*>(o0 + k));
-                        b0.store(reinterpret_cast<T*>(o1 + k));
-                        c0.store(reinterpret_cast<T*>(o2 + k));
-                        d0.store(reinterpret_cast<T*>(o3 + k));
-                        a1.store(reinterpret_cast<T*>(o0 + k + C));
-                        b1.store(reinterpret_cast<T*>(o1 + k + C));
-                        c1.store(reinterpret_cast<T*>(o2 + k + C));
-                        d1.store(reinterpret_cast<T*>(o3 + k + C));
                     }
                 }
             }
@@ -3183,21 +3214,23 @@ private:
                     }
                 }
                 else
-                for (crd::usize ch = 0; ch < n2 / 8; ++ch)
                 {
+                    for (crd::usize ch = 0; ch < n2 / 8; ++ch)
+                    {
 #ifdef CRD_FFT_PROFILE
-                    const unsigned long long mg0 = prof::rdtsc();
+                        const unsigned long long mg0 = prof::rdtsc();
 #endif
-                    gen::codelet32_stage1_fused_32x32_gather_bb8(din + ch * 8, m_p1->m_hier_bbuf, n2, m_p1->m_hier_twr,
-                                                                 m_p1->m_hier_twi);
+                        gen::codelet32_stage1_fused_32x32_gather_bb8(din + ch * 8, m_p1->m_hier_bbuf, n2,
+                                                                     m_p1->m_hier_twr, m_p1->m_hier_twi);
 #ifdef CRD_FFT_PROFILE
-                    const unsigned long long mg1 = prof::rdtsc();
-                    prof::g_p1_gather += mg1 - mg0; // M16-B: gather_bb8
+                        const unsigned long long mg1 = prof::rdtsc();
+                        prof::g_p1_gather += mg1 - mg0; // M16-B: gather_bb8
 #endif
-                    gen::codelet32_batched_tiled(m_p1->m_hier_bbuf, tbuf + ch * 8192);
+                        gen::codelet32_batched_tiled(m_p1->m_hier_bbuf, tbuf + ch * 8192);
 #ifdef CRD_FFT_PROFILE
-                    prof::g_p1_sub += prof::rdtsc() - mg1; // M16-B: tiled producer (stage2 + transpose + store)
+                        prof::g_p1_sub += prof::rdtsc() - mg1; // M16-B: tiled producer (stage2 + transpose + store)
 #endif
+                    }
                 }
                 m16b_active = true;
             }
@@ -3366,7 +3399,10 @@ private:
                         alignas(32) crd::f32 orr[8], oii[8];
                         _mm256_store_ps(orr, outr);
                         _mm256_store_ps(oii, outi);
-                        for (int l = 0; l < 8; ++l) { (tbuf + (i2 + g + (crd::usize)l) * n1)[k1] = Complex<T>{orr[l], oii[l]}; }
+                        for (int l = 0; l < 8; ++l)
+                        {
+                            (tbuf + (i2 + g + (crd::usize)l) * n1)[k1] = Complex<T>{orr[l], oii[l]};
+                        }
                         if ((k1 & (kRe - 1)) != kRe - 1) // advance recurrence: w *= W_n^col
                         {
                             const __m256 nr = _mm256_sub_ps(_mm256_mul_ps(wr, wsrv), _mm256_mul_ps(wi, wsiv));
@@ -3431,7 +3467,10 @@ private:
                         alignas(32) double orr[4], oii[4];
                         _mm256_store_pd(orr, outr);
                         _mm256_store_pd(oii, outi);
-                        for (int l = 0; l < 4; ++l) { _mm_stream_pd(reinterpret_cast<double*>((tbuf + (i2 + g + (crd::usize)l) * n1) + k1), _mm_set_pd(oii[l], orr[l])); }
+                        for (int l = 0; l < 4; ++l)
+                        {
+                            _mm_stream_pd(reinterpret_cast<double*>((tbuf + (i2 + g + (crd::usize)l) * n1) + k1), _mm_set_pd(oii[l], orr[l]));
+                        }
                         if ((k1 & (kRe - 1)) != kRe - 1)
                         {
                             const __m256d nr = _mm256_sub_pd(_mm256_mul_pd(wr, wsrv), _mm256_mul_pd(wi, wsiv));
@@ -3482,6 +3521,7 @@ private:
               }
               else
 #endif
+              {
                 for (crd::usize bb = 0; bb < bw; ++bb)
                 {
                     const crd::usize col = i2 + bb;
@@ -3500,6 +3540,7 @@ private:
                         store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
                     }
                 }
+              }
             } // close Lane A1 block
 #ifdef CRD_FFT_PROFILE
             prof::g_p1_tw += prof::rdtsc() - pt0;
@@ -3575,7 +3616,9 @@ private:
                     }
                     else
 #endif
-                    gen::codelet32_batched(m_p2->m_hier_bbuf, scratch, 32 * bw);
+                    {
+                        gen::codelet32_batched(m_p2->m_hier_bbuf, scratch, 32 * bw);
+                    }
 #ifdef CRD_FFT_PROFILE
                     prof::g_p2_sub += prof::rdtsc() - ml1; // M16-B: P2 stage2 (+ M17 fused final store)
                     qg2 = prof::rdtsc(); // M18 fix: reset the scatter-timer base on the fused path (was misattributing)

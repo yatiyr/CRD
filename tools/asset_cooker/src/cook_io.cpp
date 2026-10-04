@@ -21,11 +21,20 @@ constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
 // pass here — the ESCAPE check happens on the lexically normalized resolved path against the root boundary.
 [[nodiscard]] bool aux_path_form_ok(crd::containers::StringView p) noexcept
 {
-    if (p.empty()) { return false; }
-    if (p.front() == '/' || p.front() == '\\') { return false; }
+    if (p.empty())
+    {
+        return false;
+    }
+    if (p.front() == '/' || p.front() == '\\')
+    {
+        return false;
+    }
     for (crd::usize i = 0; i < p.size(); ++i)
     {
-        if (p[i] == ':') { return false; } // drive letters / uri schemes
+        if (p[i] == ':') // drive letters / uri schemes
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -43,10 +52,16 @@ constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
         {
             const crd::containers::StringView seg = in.substr(seg_start, i - seg_start);
             seg_start                             = i + 1U;
-            if (seg.empty() || seg == ".") { continue; }
+            if (seg.empty() || seg == ".")
+            {
+                continue;
+            }
             if (seg == "..")
             {
-                if (parts.size() == 0U) { return false; } // escapes the base
+                if (parts.size() == 0U) // escapes the base
+                {
+                    return false;
+                }
                 parts.pop_back();
                 continue;
             }
@@ -56,7 +71,10 @@ constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
     out.clear();
     for (crd::usize i = 0; i < parts.size(); ++i)
     {
-        if (i > 0U) { out.push_back('/'); }
+        if (i > 0U)
+        {
+            out.push_back('/');
+        }
         out.append(parts[i].data(), parts[i].size());
     }
     return true;
@@ -83,14 +101,20 @@ CookIO::CookIO(crd::containers::StringView source_path, crd::containers::StringV
     , m_inputs(alloc)
     , m_alloc(alloc)
 {
-    if (!root.empty()) { m_root.append(root.data(), root.size()); }
+    if (!root.empty())
+    {
+        m_root.append(root.data(), root.size());
+    }
     else
     {
         // no root given: the boundary is the source's own directory
         crd::usize dir_end = 0;
         for (crd::usize i = 0; i < source_path.size(); ++i)
         {
-            if (source_path[i] == '/' || source_path[i] == '\\') { dir_end = i; }
+            if (source_path[i] == '/' || source_path[i] == '\\')
+            {
+                dir_end = i;
+            }
         }
         m_root.append(source_path.data(), dir_end);
     }
@@ -103,7 +127,10 @@ void CookIO::record(crd::containers::StringView path, crd::containers::ConstSpan
     for (crd::usize i = 0; i < m_inputs.size(); ++i)
     {
         const crd::containers::String& seen = m_inputs[i].path;
-        if (crd::containers::StringView(seen.data(), seen.size()) == path) { return; }
+        if (crd::containers::StringView(seen.data(), seen.size()) == path)
+        {
+            return;
+        }
     }
     CookInput edge(m_alloc);
     edge.path         = crd::containers::String(path.data(), path.size(), m_alloc);
@@ -126,7 +153,10 @@ bool CookIO::read_source(crd::containers::Array<crd::u8>& out)
     if (m_source_ok)
     {
         out.reserve(m_source_cache.size());
-        for (crd::usize i = 0; i < m_source_cache.size(); ++i) { out.push_back(m_source_cache[i]); }
+        for (crd::usize i = 0; i < m_source_cache.size(); ++i)
+        {
+            out.push_back(m_source_cache[i]);
+        }
     }
     return m_source_ok;
 }
@@ -134,7 +164,10 @@ bool CookIO::read_source(crd::containers::Array<crd::u8>& out)
 bool CookIO::read_meta(crd::containers::String& out)
 {
     out.clear();
-    if (m_meta_path.size() == 0U) { return false; }
+    if (m_meta_path.size() == 0U)
+    {
+        return false;
+    }
     if (!m_meta_read)
     {
         m_meta_read = true;
@@ -145,21 +178,30 @@ bool CookIO::read_meta(crd::containers::String& out)
                                                    m_meta_cache.size()),
                m_meta_ok);
     }
-    if (m_meta_ok) { out.append(m_meta_cache.data(), m_meta_cache.size()); }
+    if (m_meta_ok)
+    {
+        out.append(m_meta_cache.data(), m_meta_cache.size());
+    }
     return m_meta_ok;
 }
 
 bool CookIO::read_input(crd::containers::StringView rel_path, crd::containers::Array<crd::u8>& out)
 {
     out.clear();
-    if (!aux_path_form_ok(rel_path)) { return false; } // refused paths are NOT dependencies — they never resolve
+    if (!aux_path_form_ok(rel_path)) // refused paths are NOT dependencies — they never resolve
+    {
+        return false;
+    }
 
     // resolve against the source's directory, then normalize and hold the ROOT boundary: express the resolved
     // path as root + "/" + tail, normalize the tail — a ".." run that pops past the tail's start escapes root
     crd::usize dir_end = 0;
     for (crd::usize i = 0; i < m_source_path.size(); ++i)
     {
-        if (m_source_path.data()[i] == '/' || m_source_path.data()[i] == '\\') { dir_end = i + 1U; }
+        if (m_source_path.data()[i] == '/' || m_source_path.data()[i] == '\\')
+        {
+            dir_end = i + 1U;
+        }
     }
     crd::containers::String tail(m_alloc); // the source-dir path RELATIVE to root, then the aux path
     {
@@ -168,7 +210,10 @@ bool CookIO::read_input(crd::containers::StringView rel_path, crd::containers::A
         if (m_root.size() > 0U && src_dir.starts_with(crd::containers::StringView(m_root.data(), m_root.size())))
         {
             rel_dir = src_dir.substr(m_root.size());
-            if (!rel_dir.empty() && rel_dir.front() == '/') { rel_dir = rel_dir.substr(1U); }
+            if (!rel_dir.empty() && rel_dir.front() == '/')
+            {
+                rel_dir = rel_dir.substr(1U);
+            }
         }
         tail.append(rel_dir.data(), rel_dir.size());
         tail.append(rel_path.data(), rel_path.size());

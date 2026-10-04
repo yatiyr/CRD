@@ -33,7 +33,10 @@ namespace crd::ceir::test
     for (u32 i = 0; i < op.num_attrs(); ++i)
     {
         const containers::StringView nm = op.attr_name(i);
-        for (usize k = 0; k < nm.size(); ++k) { h = fnv_mix(h, static_cast<u64>(static_cast<unsigned char>(nm[k]))); }
+        for (usize k = 0; k < nm.size(); ++k)
+        {
+            h = fnv_mix(h, static_cast<u64>(static_cast<unsigned char>(nm[k])));
+        }
         h = fnv_mix(h, static_cast<u64>(ctx.attr_value(op.attr_id_at(i)).i));
     }
     return h | 1ULL;
@@ -43,21 +46,33 @@ namespace crd::ceir::test
 {
     u64       h    = 0xcbf29ce484222325ULL;
     const u64 bits = static_cast<u64>(v);
-    for (int b = 0; b < 8; ++b) { h = fnv_mix(h, (bits >> (b * 8)) & 0xFFULL); }
+    for (int b = 0; b < 8; ++b)
+    {
+        h = fnv_mix(h, (bits >> (b * 8)) & 0xFFULL);
+    }
     return h | 1ULL;
 }
 // Exact-set equality (size AND membership) — a SUPERSET must NOT pass silently (the tag-set contract).
 [[nodiscard]] inline bool set_eq(const containers::Array<u64>& a, const u64* expected, usize n) noexcept
 {
-    if (a.size() != n) { return false; }
+    if (a.size() != n)
+    {
+        return false;
+    }
     for (usize i = 0; i < n; ++i)
     {
         bool found = false;
         for (usize j = 0; j < a.size(); ++j)
         {
-            if (a[j] == expected[i]) { found = true; }
+            if (a[j] == expected[i])
+            {
+                found = true;
+            }
         }
-        if (!found) { return false; }
+        if (!found)
+        {
+            return false;
+        }
     }
     return true;
 }

@@ -20,14 +20,24 @@ namespace kir = crd::kir;
 namespace
 {
 constexpr int kN = 1024;
-void fill(float* v, int n, float base) { for (int i = 0; i < n; ++i) { v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7); } }
+void fill(float* v, int n, float base)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7);
+    }
+}
 } // namespace
 
 TEST_CASE("v17-c: CUDA elementwise (incl. division) bit-matches the CPU oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     kir::KGraph      g(&alloc);
@@ -61,7 +71,11 @@ TEST_CASE("v17-b: CUDA WarpTiled Contract schedule (256^3) matches the oracle (f
 {
     crd::memory::TlsfAllocator alloc(256 << 20);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 256;
@@ -96,21 +110,31 @@ TEST_CASE("v17-b: CUDA WarpTiled Contract schedule (256^3) matches the oracle (f
     {
         const float d = (gpu_out[i] - cpu_out[i]) / (1.0F + (cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i]));
         const float ad = d < 0.0F ? -d : d;
-        if (ad > maxrel) { maxrel = ad; }
+        if (ad > maxrel)
+        {
+            maxrel = ad;
+        }
     }
     CHECK(maxrel < 1e-3F);
     // determinism: the tiled kernel replays bit-identical run-to-run
     crd::containers::Array<float> d2(&alloc);
     d2.resize(static_cast<crd::usize>(mm) * nn);
     REQUIRE(cu.run(g, c, inputs, 2, d2.data()));
-    for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == d2[i]); }
+    for (int i = 0; i < mm * nn; ++i)
+    {
+        CHECK(gpu_out[i] == d2[i]);
+    }
 }
 
 TEST_CASE("v17-g: CUDA FUSES GEMM+bias+SiLU into one kernel, correct vs the oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(256 << 20);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 256;
@@ -153,7 +177,10 @@ TEST_CASE("v17-g: CUDA FUSES GEMM+bias+SiLU into one kernel, correct vs the orac
     {
         const float d  = (gpu[i] - cpuo[i]) / (1.0F + (cpuo[i] < 0.0F ? -cpuo[i] : cpuo[i]));
         const float ad = d < 0.0F ? -d : d;
-        if (ad > maxrel) { maxrel = ad; }
+        if (ad > maxrel)
+        {
+            maxrel = ad;
+        }
     }
     CHECK(maxrel < 2e-3F);
 }
@@ -162,7 +189,11 @@ TEST_CASE("v17-c: CUDA matmul + reduce bit-match the CPU oracle", "[kir][cuda][g
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     SECTION("matmul 32x48 @ 48x24")
@@ -183,7 +214,10 @@ TEST_CASE("v17-c: CUDA matmul + reduce bit-match the CPU oracle", "[kir][cuda][g
         float        cpu_out[mm * nn];
         REQUIRE(cu.run(g, c, inputs, 2, gpu_out));
         REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
-        for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < mm * nn; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
     SECTION("reduce-sum over rows")
     {
@@ -199,7 +233,10 @@ TEST_CASE("v17-c: CUDA matmul + reduce bit-match the CPU oracle", "[kir][cuda][g
         float        cpu_out[rows];
         REQUIRE(cu.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < rows; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
     SECTION("reduce-min + reduce-prod over rows (bit-exact vs oracle)")
     {
@@ -212,13 +249,19 @@ TEST_CASE("v17-c: CUDA matmul + reduce bit-match the CPU oracle", "[kir][cuda][g
             const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
             const int   red = g.reduce(ops[oi], a, 0x2U);
             float       xv[rows * cols];
-            for (int i = 0; i < rows * cols; ++i) { xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51); } // near 1.0: prod finite, min distinct
+            for (int i = 0; i < rows * cols; ++i) // near 1.0: prod finite, min distinct
+            {
+                xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51);
+            }
             const float* inputs[] = {xv};
             float        gpu_out[rows];
             float        cpu_out[rows];
             REQUIRE(cu.run(g, red, inputs, 1, gpu_out));
             REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-            for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+            for (int i = 0; i < rows; ++i)
+            {
+                CHECK(gpu_out[i] == cpu_out[i]);
+            }
         }
     }
 }
@@ -227,7 +270,11 @@ TEST_CASE("v17-breadth: CUDA floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     kir::KGraph      g(&alloc);
@@ -255,14 +302,21 @@ TEST_CASE("v17-breadth: CUDA floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
     float        cpu_out[kN];
     REQUIRE(cu.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < kN; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // floor/ceil/sign/cmp are all exact ⇒ BIT-EXACT
+    for (int i = 0; i < kN; ++i) // floor/ceil/sign/cmp are all exact ⇒ BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: CUDA gather row index-select bit-matches the CPU oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 50; // data rows
@@ -273,22 +327,35 @@ TEST_CASE("v17-breadth: CUDA gather row index-select bit-matches the CPU oracle"
     const int     idx  = g.input(kir::make_shape({mm}), kir::DType::F32);
     const int     out  = g.gather(data, idx);
     float dv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { dv[i] = 0.1F * static_cast<float>(i) - 3.0F; }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        dv[i] = 0.1F * static_cast<float>(i) - 3.0F;
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 7 + 3) % rr); }
+    for (int i = 0; i < mm; ++i)
+    {
+        iv[i] = static_cast<float>((i * 7 + 3) % rr);
+    }
     const float* inputs[] = {dv, iv};
     float        gpu_out[mm * cc];
     float        cpu_out[mm * cc];
     REQUIRE(be.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < mm * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // gather = pure copy => BIT-EXACT
+    for (int i = 0; i < mm * cc; ++i) // gather = pure copy => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: CUDA argmax/argmin index bit-matches the CPU oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 40;
@@ -300,13 +367,19 @@ TEST_CASE("v17-breadth: CUDA argmax/argmin index bit-matches the CPU oracle", "[
         const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   red = g.reduce(ops[oi], a, 0x2U);
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i * 37) % 91) * 0.1F; } // varied; first-match ties
+        for (int i = 0; i < rows * cols; ++i) // varied; first-match ties
+        {
+            xv[i] = static_cast<float>((i * 37) % 91) * 0.1F;
+        }
         const float* inputs[] = {xv};
         float        gpu_out[rows];
         float        cpu_out[rows];
         REQUIRE(be.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // the extremum INDEX, exact => BIT-EXACT
+        for (int i = 0; i < rows; ++i) // the extremum INDEX, exact => BIT-EXACT
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
 }
 
@@ -314,7 +387,11 @@ TEST_CASE("v17-breadth: CUDA round ties-to-even bit-matches the CPU oracle", "[k
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    nn = 256;
@@ -323,20 +400,30 @@ TEST_CASE("v17-breadth: CUDA round ties-to-even bit-matches the CPU oracle", "[k
     const int        x   = g.input(sh, kir::DType::F32);
     const int        out = g.unary(kir::KOp::Round, x);
     float            xv[nn];
-    for (int i = 0; i < nn; ++i) { xv[i] = -8.0F + 0.5F * static_cast<float>(i); } // every value is .0 or .5 => exercises ties-to-even
+    for (int i = 0; i < nn; ++i) // every value is .0 or .5 => exercises ties-to-even
+    {
+        xv[i] = -8.0F + 0.5F * static_cast<float>(i);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[nn];
     float        cpu_out[nn];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // ties-even == nearbyint => BIT-EXACT
+    for (int i = 0; i < nn; ++i) // ties-even == nearbyint => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: CUDA scatter last-wins bit-matches the CPU oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 30; // base rows
@@ -348,24 +435,40 @@ TEST_CASE("v17-breadth: CUDA scatter last-wins bit-matches the CPU oracle", "[ki
     const int     upd  = g.input(kir::make_shape({mm, cc}), kir::DType::F32);
     const int     out  = g.scatter(base, idx, upd);
     float bv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { bv[i] = -1.0F - 0.1F * static_cast<float>(i); }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        bv[i] = -1.0F - 0.1F * static_cast<float>(i);
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 3) % rr); } // i=0 and i=10 both hit row 0
+    for (int i = 0; i < mm; ++i) // i=0 and i=10 both hit row 0
+    {
+        iv[i] = static_cast<float>((i * 3) % rr);
+    }
     float uv[mm * cc];
-    for (int i = 0; i < mm * cc; ++i) { uv[i] = 5.0F + 0.25F * static_cast<float>(i); }
+    for (int i = 0; i < mm * cc; ++i)
+    {
+        uv[i] = 5.0F + 0.25F * static_cast<float>(i);
+    }
     const float* inputs[] = {bv, iv, uv};
     float        gpu_out[rr * cc];
     float        cpu_out[rr * cc];
     REQUIRE(be.run(g, out, inputs, 3, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 3, cpu_out));
-    for (int i = 0; i < rr * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // last-wins, fixed order => BIT-EXACT
+    for (int i = 0; i < rr * cc; ++i) // last-wins, fixed order => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: CUDA scan prefix-sum bit-matches the CPU oracle", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 32;
@@ -374,20 +477,30 @@ TEST_CASE("v17-breadth: CUDA scan prefix-sum bit-matches the CPU oracle", "[kir]
     const int     a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
     const int     out = g.scan(a); // inclusive prefix-sum along cols
     float         xv[rows * cols];
-    for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i % 7) + 1); } // small ints => exact cumulative sums everywhere
+    for (int i = 0; i < rows * cols; ++i) // small ints => exact cumulative sums everywhere
+    {
+        xv[i] = static_cast<float>((i % 7) + 1);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[rows * cols];
     float        cpu_out[rows * cols];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < rows * cols; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // exact integer prefix sums => BIT-EXACT
+    for (int i = 0; i < rows * cols; ++i) // exact integer prefix sums => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-perf: CUDA T2 fast reduce sum/prod/max/min matches T1 oracle + deterministic", "[kir][cuda][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 16;
@@ -399,7 +512,10 @@ TEST_CASE("v17-perf: CUDA T2 fast reduce sum/prod/max/min matches T1 oracle + de
         const int   a  = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   r2 = g.reduce(ops[oi], a, 0x2U, kir::DetTier::Fast); // T2 parallel tree-reduce
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = (i % 3 == 0) ? 2.0F : 1.0F; } // {1,2}: sum/prod/max/min all reassociation-exact
+        for (int i = 0; i < rows * cols; ++i) // {1,2}: sum/prod/max/min all reassociation-exact
+        {
+            xv[i] = (i % 3 == 0) ? 2.0F : 1.0F;
+        }
         const float* inputs[] = {xv};
         float        g1[rows];
         float        g2[rows];
@@ -407,7 +523,11 @@ TEST_CASE("v17-perf: CUDA T2 fast reduce sum/prod/max/min matches T1 oracle + de
         REQUIRE(be.run(g, r2, inputs, 1, g1));
         REQUIRE(cpu.run(g, r2, inputs, 1, co)); // T1 fixed-order oracle == exact for these inputs
         REQUIRE(be.run(g, r2, inputs, 1, g2));
-        for (int i = 0; i < rows; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+        for (int i = 0; i < rows; ++i) // T2 correct + run-to-run deterministic
+        {
+            CHECK(g1[i] == co[i]);
+            CHECK(g1[i] == g2[i]);
+        }
     }
 }
 
@@ -415,7 +535,11 @@ TEST_CASE("v17-perf: CUDA T2 fast parallel scan matches T1 oracle + deterministi
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 4;
@@ -425,7 +549,10 @@ TEST_CASE("v17-perf: CUDA T2 fast parallel scan matches T1 oracle + deterministi
     const int     s2 = g.scan(a, kir::DetTier::Fast); // T2 parallel prefix-sum
     crd::containers::Array<float> xv(&alloc);
     xv.resize(static_cast<crd::usize>(rows) * nlen);
-    for (int i = 0; i < rows * nlen; ++i) { xv[i] = static_cast<float>((i % 4) + 1); } // small ints => order-invariant exact prefix sums
+    for (int i = 0; i < rows * nlen; ++i) // small ints => order-invariant exact prefix sums
+    {
+        xv[i] = static_cast<float>((i % 4) + 1);
+    }
     const float* inputs[] = {xv.data()};
     crd::containers::Array<float> g1(&alloc);
     crd::containers::Array<float> g2(&alloc);
@@ -436,7 +563,11 @@ TEST_CASE("v17-perf: CUDA T2 fast parallel scan matches T1 oracle + deterministi
     REQUIRE(be.run(g, s2, inputs, 1, g1.data()));
     REQUIRE(cpu.run(g, s2, inputs, 1, co.data())); // T1 fixed-order oracle == exact for integer inputs
     REQUIRE(be.run(g, s2, inputs, 1, g2.data()));
-    for (int i = 0; i < rows * nlen; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+    for (int i = 0; i < rows * nlen; ++i) // T2 correct + run-to-run deterministic
+    {
+        CHECK(g1[i] == co[i]);
+        CHECK(g1[i] == g2[i]);
+    }
 }
 
 // ── B0 fan-out (2026-07-10): the type layer on CUDA, by SCALARIZATION ────────────────────────────────────────────────
@@ -454,7 +585,11 @@ TEST_CASE("v17 B0 fan-out: CUDA vec3/mat3 value layer is BIT-EXACT vs the CPU or
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    vn = 128;
@@ -480,7 +615,10 @@ TEST_CASE("v17 B0 fan-out: CUDA vec3/mat3 value layer is BIT-EXACT vs the CPU or
         REQUIRE(be.run(g, o, inputs, 2, gpu));
         REQUIRE(cpu.run(g, o, inputs, 2, ref));
         // cross + add + normalize: sums of products, a sqrt and a divide — every one now rounded per step by the oracle
-        for (int i = 0; i < vn * 3; ++i) { CHECK(gpu[i] == ref[i]); }
+        for (int i = 0; i < vn * 3; ++i)
+        {
+            CHECK(gpu[i] == ref[i]);
+        }
     }
 
     { // mat3 from columns + mat*vec: an accumulating op, and now bit-exact (oracle rounds each multiply-add)
@@ -508,7 +646,10 @@ TEST_CASE("v17 B0 fan-out: CUDA vec3/mat3 value layer is BIT-EXACT vs the CPU or
         float        ref[vn * 3];
         REQUIRE(be.run(g, mv, inputs, 4, gpu));
         REQUIRE(cpu.run(g, mv, inputs, 4, ref));
-        for (int i = 0; i < vn * 3; ++i) { CHECK(gpu[i] == ref[i]); } // ascending-order accumulation, rounded per step
+        for (int i = 0; i < vn * 3; ++i) // ascending-order accumulation, rounded per step
+        {
+            CHECK(gpu[i] == ref[i]);
+        }
     }
 
     { // (M * inverse(M)) * v ~= v  -- the emitted cofactor inverse mirrors ckir_eval's minor/sign ordering
@@ -536,7 +677,16 @@ TEST_CASE("v17 B0 fan-out: CUDA vec3/mat3 value layer is BIT-EXACT vs the CPU or
         float        gpu[vn * 3];
         REQUIRE(be.run(g, pv, inputs, 4, gpu));
         int bad = 0;
-        for (int i = 0; i < vn * 3; ++i) { const float d = gpu[i] - vd[i]; const float ad = d < 0.0F ? -d : d; const float av = vd[i] < 0.0F ? -vd[i] : vd[i]; if (ad > 1e-3F * av + 1e-3F) { ++bad; } }
+        for (int i = 0; i < vn * 3; ++i)
+        {
+            const float d = gpu[i] - vd[i];
+            const float ad = d < 0.0F ? -d : d;
+            const float av = vd[i] < 0.0F ? -vd[i] : vd[i];
+            if (ad > 1e-3F * av + 1e-3F)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -547,7 +697,11 @@ TEST_CASE("v17 B0 fan-out: CUDA bvec3 (any/all) + Light-struct SROA vs the CPU o
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::KirBackendCuda        be(&alloc);
-    if (!be.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    bn = 128;
@@ -579,7 +733,11 @@ TEST_CASE("v17 B0 fan-out: CUDA bvec3 (any/all) + Light-struct SROA vs the CPU o
         REQUIRE(be.run(g, al, inputs, 2, gal));
         REQUIRE(cpu.run(g, an, inputs, 2, ran));
         REQUIRE(cpu.run(g, al, inputs, 2, ral));
-        for (int i = 0; i < bn; ++i) { CHECK(gan[i] == ran[i]); CHECK(gal[i] == ral[i]); } // bool read-back is exact
+        for (int i = 0; i < bn; ++i) // bool read-back is exact
+        {
+            CHECK(gan[i] == ran[i]);
+            CHECK(gal[i] == ral[i]);
+        }
     }
 
     { // struct Light { vec3 pos; float radius; vec3 color; } -> destructure -> color*radius + pos
@@ -609,7 +767,10 @@ TEST_CASE("v17 B0 fan-out: CUDA bvec3 (any/all) + Light-struct SROA vs the CPU o
         float        rout[bn * 3];
         REQUIRE(be.run(g, out, inputs, 3, gout));
         REQUIRE(cpu.run(g, out, inputs, 3, rout));
-        for (int i = 0; i < bn * 3; ++i) { CHECK(gout[i] == rout[i]); } // bit-exact
+        for (int i = 0; i < bn * 3; ++i) // bit-exact
+        {
+            CHECK(gout[i] == rout[i]);
+        }
     }
 }
 
@@ -621,7 +782,11 @@ TEST_CASE("AS-4: CUDA FLASH attention == the naive oracle (fast tier, ULP-tolera
 {
     crd::memory::TlsfAllocator alloc(256U << 20U);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int dim   = 64;
@@ -660,7 +825,10 @@ TEST_CASE("AS-4: CUDA FLASH attention == the naive oracle (fast tier, ULP-tolera
         REQUIRE(cpu.run(g, y, inputs, 3, oracle.data())); // the naive f32 oracle
 
         float maxerr = 0.0F;
-        for (int i = 0; i < slen * dim; ++i) { maxerr = fmaxf(maxerr, fabsf(gpu[static_cast<crd::usize>(i)] - oracle[static_cast<crd::usize>(i)])); }
+        for (int i = 0; i < slen * dim; ++i)
+        {
+            maxerr = fmaxf(maxerr, fabsf(gpu[static_cast<crd::usize>(i)] - oracle[static_cast<crd::usize>(i)]));
+        }
         CHECK(maxerr < 2.0e-3F); // FAST tier: online softmax reassociates ⇒ ULP-tolerant, not bit-exact
         std::printf("[cuda][attention] flash S=%d D=%d vs naive oracle: max abs err %.2e (fast tier)\n", slen, dim, static_cast<double>(maxerr));
     }

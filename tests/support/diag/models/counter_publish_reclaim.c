@@ -121,7 +121,9 @@ static void* dec_to_zero(void* unused)
     (void)unused;
     const int old = atomic_fetch_sub_explicit(&g_value, 1, memory_order_acq_rel); /* :181 */
     if (old - 1 != 0)
+    {
         return NULL;
+    }
 
     /* Drain the waiters list: exchange acq_rel (:193). */
     Waiter* list = atomic_exchange_explicit(&g_waiters, NULL, memory_order_acq_rel);
@@ -185,7 +187,9 @@ int main(void)
     /* counter_wait's pre-switch prep (counter.cpp:266-276): fill the Waiter, value already 1. */
     Waiter* const w = (Waiter*)malloc(sizeof(Waiter));
     if (w == NULL)
+    {
         abort();
+    }
     atomic_init(&w->next, NULL);
     atomic_init(&w->claim, CLAIM_PENDING);
     atomic_init(&w->park_finalized, 0);
@@ -201,13 +205,21 @@ int main(void)
     pthread_t t_waiter;
     pthread_t t_reacq;
     if (pthread_create(&t_sched, NULL, sched_finish_park, NULL))
+    {
         abort();
+    }
     if (pthread_create(&t_dec, NULL, dec_to_zero, NULL))
+    {
         abort();
+    }
     if (pthread_create(&t_waiter, NULL, waiter_unwind, NULL))
+    {
         abort();
+    }
     if (pthread_create(&t_reacq, NULL, reacquire_slot, NULL))
+    {
         abort();
+    }
 
     pthread_join(t_sched, NULL);
     pthread_join(t_dec, NULL);

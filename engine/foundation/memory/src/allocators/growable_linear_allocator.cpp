@@ -33,7 +33,10 @@ GrowableLinearAllocator::~GrowableLinearAllocator()
 bool GrowableLinearAllocator::grow(usize need)
 {
     usize cap = m_chunk_bytes;
-    if (need + m_header_size > cap) { cap = need + m_header_size; } // an oversized alloc gets its own right-sized chunk
+    if (need + m_header_size > cap) // an oversized alloc gets its own right-sized chunk
+    {
+        cap = need + m_header_size;
+    }
     void* const base = m_parent->allocate(cap, kDefaultAlignment);
     if (base == nullptr)
     {
@@ -45,8 +48,14 @@ bool GrowableLinearAllocator::grow(usize need)
     c->cap         = cap;
     c->off         = m_header_size;
     c->next        = nullptr;
-    if (m_last != nullptr) { m_last->next = c; }
-    else { m_first = c; }
+    if (m_last != nullptr)
+    {
+        m_last->next = c;
+    }
+    else
+    {
+        m_first = c;
+    }
     m_last    = c;
     m_current = c;
     return true;
@@ -79,7 +88,10 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
                 continue;
             }
         }
-        if (!grow(size + alignment)) { return nullptr; }
+        if (!grow(size + alignment))
+        {
+            return nullptr;
+        }
     }
 }
 
@@ -94,14 +106,20 @@ bool GrowableLinearAllocator::owns(const void* p) const noexcept
     for (const Chunk* c = m_first; c != nullptr; c = c->next)
     {
         const auto* base = static_cast<const u8*>(c->base);
-        if (bytes >= base && bytes < base + c->cap) { return true; }
+        if (bytes >= base && bytes < base + c->cap)
+        {
+            return true;
+        }
     }
     return false;
 }
 
 void* GrowableLinearAllocator::reallocate(void* p, usize old_size, usize new_size, usize alignment)
 {
-    if (new_size == 0U) { return nullptr; }
+    if (new_size == 0U)
+    {
+        return nullptr;
+    }
     void* const np = allocate(new_size, alignment);
     if (np != nullptr && p != nullptr && old_size > 0U)
     {
@@ -118,28 +136,40 @@ void GrowableLinearAllocator::reset() noexcept
         freed += c->off - m_header_size;
         c->off = m_header_size;
     }
-    if (freed > 0U) { m_stats.on_deallocate(freed); }
+    if (freed > 0U)
+    {
+        m_stats.on_deallocate(freed);
+    }
     m_current = m_first;
 }
 
 usize GrowableLinearAllocator::num_chunks() const noexcept
 {
     usize n = 0;
-    for (const Chunk* c = m_first; c != nullptr; c = c->next) { ++n; }
+    for (const Chunk* c = m_first; c != nullptr; c = c->next)
+    {
+        ++n;
+    }
     return n;
 }
 
 usize GrowableLinearAllocator::bytes_reserved() const noexcept
 {
     usize s = 0;
-    for (const Chunk* c = m_first; c != nullptr; c = c->next) { s += c->cap; }
+    for (const Chunk* c = m_first; c != nullptr; c = c->next)
+    {
+        s += c->cap;
+    }
     return s;
 }
 
 usize GrowableLinearAllocator::bytes_used() const noexcept
 {
     usize s = 0;
-    for (const Chunk* c = m_first; c != nullptr; c = c->next) { s += c->off - m_header_size; }
+    for (const Chunk* c = m_first; c != nullptr; c = c->next)
+    {
+        s += c->off - m_header_size;
+    }
     return s;
 }
 } // namespace crd::memory

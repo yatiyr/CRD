@@ -32,7 +32,10 @@ CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) no
 [[nodiscard]] CRD_FORCEINLINE crd::u32 next_generation(crd::u8 prev) noexcept
 {
     crd::u32 next = static_cast<crd::u32>(prev) + 1U;
-    if (next > 0xFFU) next = 1U;
+    if (next > 0xFFU)
+    {
+        next = 1U;
+    }
     return next;
 }
 
@@ -100,7 +103,10 @@ ColliderPool::ColliderPool(crd::memory::IAllocator* persistent_alloc, crd::u32 m
 
 ColliderId ColliderPool::insert(BodyId body, const Collider& collider)
 {
-    if (body.is_null()) return ColliderId::null();
+    if (body.is_null())
+    {
+        return ColliderId::null();
+    }
 
     crd::u32 per_kind_idx = 0;
     crd::u32 generation   = 0;
@@ -111,7 +117,10 @@ ColliderId ColliderPool::insert(BodyId body, const Collider& collider)
         case ColliderShape::Sphere:
         {
             per_kind_idx = insert_sphere(body, collider);
-            if (per_kind_idx == 0) return ColliderId::null();
+            if (per_kind_idx == 0)
+            {
+                return ColliderId::null();
+            }
             const crd::u32 ch   = chunk_of(per_kind_idx, static_cast<crd::u32>(kLane));
             const crd::u32 lane = lane_of (per_kind_idx, static_cast<crd::u32>(kLane));
             generation = static_cast<crd::u32>(m_spheres.storage.chunk(ch).generation[lane]);
@@ -120,7 +129,10 @@ ColliderId ColliderPool::insert(BodyId body, const Collider& collider)
         case ColliderShape::Box:
         {
             per_kind_idx = insert_box(body, collider);
-            if (per_kind_idx == 0) return ColliderId::null();
+            if (per_kind_idx == 0)
+            {
+                return ColliderId::null();
+            }
             const crd::u32 ch   = chunk_of(per_kind_idx, static_cast<crd::u32>(kLane));
             const crd::u32 lane = lane_of (per_kind_idx, static_cast<crd::u32>(kLane));
             generation = static_cast<crd::u32>(m_boxes.storage.chunk(ch).generation[lane]);
@@ -129,7 +141,10 @@ ColliderId ColliderPool::insert(BodyId body, const Collider& collider)
         case ColliderShape::Capsule:
         {
             per_kind_idx = insert_capsule(body, collider);
-            if (per_kind_idx == 0) return ColliderId::null();
+            if (per_kind_idx == 0)
+            {
+                return ColliderId::null();
+            }
             const crd::u32 ch   = chunk_of(per_kind_idx, static_cast<crd::u32>(kLane));
             const crd::u32 lane = lane_of (per_kind_idx, static_cast<crd::u32>(kLane));
             generation = static_cast<crd::u32>(m_capsules.storage.chunk(ch).generation[lane]);
@@ -161,7 +176,10 @@ ColliderId ColliderPool::insert(BodyId body, const Collider& collider)
 
 void ColliderPool::remove(ColliderId id) noexcept
 {
-    if (!contains(id)) return;
+    if (!contains(id))
+    {
+        return;
+    }
     const crd::u32      idx          = id.index();
     const ColliderShape kind         = decode_collider_kind(idx);
     const crd::u32      per_kind_idx = decode_collider_per_kind_idx(idx);
@@ -186,17 +204,29 @@ void ColliderPool::remove(ColliderId id) noexcept
 
 bool ColliderPool::contains(ColliderId id) const noexcept
 {
-    if (id.is_null()) return false;
+    if (id.is_null())
+    {
+        return false;
+    }
     const crd::u32      idx          = id.index();
     const ColliderShape kind         = decode_collider_kind(idx);
     const crd::u32      per_kind_idx = decode_collider_per_kind_idx(idx);
-    if (per_kind_idx == 0 || per_kind_idx > m_capacity_per_kind) return false;
+    if (per_kind_idx == 0 || per_kind_idx > m_capacity_per_kind)
+    {
+        return false;
+    }
     const crd::u32 ch   = chunk_of(per_kind_idx, static_cast<crd::u32>(kLane));
     const crd::u32 lane = lane_of (per_kind_idx, static_cast<crd::u32>(kLane));
 
     auto check = [&](const auto& pk, const auto& tile) -> bool {
-        if (per_kind_idx >= pk.high_water) return false;
-        if (tile.live[lane] == 0)          return false;
+        if (per_kind_idx >= pk.high_water)
+        {
+            return false;
+        }
+        if (tile.live[lane] == 0)
+        {
+            return false;
+        }
         return static_cast<crd::u32>(tile.generation[lane]) == id.generation();
     };
 
@@ -212,7 +242,10 @@ bool ColliderPool::contains(ColliderId id) const noexcept
 Collider ColliderPool::read(ColliderId id) const noexcept
 {
     Collider out{};
-    if (!contains(id)) return out;
+    if (!contains(id))
+    {
+        return out;
+    }
     const crd::u32      idx          = id.index();
     const ColliderShape kind         = decode_collider_kind(idx);
     const crd::u32      per_kind_idx = decode_collider_per_kind_idx(idx);
@@ -259,7 +292,10 @@ Collider ColliderPool::read(ColliderId id) const noexcept
 
 BodyId ColliderPool::body_of(ColliderId id) const noexcept
 {
-    if (!contains(id)) return BodyId::null();
+    if (!contains(id))
+    {
+        return BodyId::null();
+    }
     const crd::u32      idx          = id.index();
     const ColliderShape kind         = decode_collider_kind(idx);
     const crd::u32      per_kind_idx = decode_collider_per_kind_idx(idx);
@@ -295,7 +331,10 @@ crd::usize ColliderPool::size_of(ColliderShape kind) const noexcept
 crd::u32 ColliderPool::insert_sphere(BodyId body, const Collider& c)
 {
     const crd::u32 idx = acquire_slot(m_spheres, m_capacity_per_kind);
-    if (idx == 0) return 0;
+    if (idx == 0)
+    {
+        return 0;
+    }
 
     const crd::u32 ch   = chunk_of(idx, static_cast<crd::u32>(kLane));
     const crd::u32 lane = lane_of (idx, static_cast<crd::u32>(kLane));
@@ -322,7 +361,10 @@ crd::u32 ColliderPool::insert_sphere(BodyId body, const Collider& c)
 crd::u32 ColliderPool::insert_box(BodyId body, const Collider& c)
 {
     const crd::u32 idx = acquire_slot(m_boxes, m_capacity_per_kind);
-    if (idx == 0) return 0;
+    if (idx == 0)
+    {
+        return 0;
+    }
 
     const crd::u32 ch   = chunk_of(idx, static_cast<crd::u32>(kLane));
     const crd::u32 lane = lane_of (idx, static_cast<crd::u32>(kLane));
@@ -351,7 +393,10 @@ crd::u32 ColliderPool::insert_box(BodyId body, const Collider& c)
 crd::u32 ColliderPool::insert_capsule(BodyId body, const Collider& c)
 {
     const crd::u32 idx = acquire_slot(m_capsules, m_capacity_per_kind);
-    if (idx == 0) return 0;
+    if (idx == 0)
+    {
+        return 0;
+    }
 
     const crd::u32 ch   = chunk_of(idx, static_cast<crd::u32>(kLane));
     const crd::u32 lane = lane_of (idx, static_cast<crd::u32>(kLane));

@@ -50,9 +50,15 @@ using nodes::detail::bin; // broadcasting binary (vec/scalar mixed)
     int base   = x;
     while (n > 0)
     {
-        if ((n & 1) != 0) { result = mul(g, result, base); }
+        if ((n & 1) != 0)
+        {
+            result = mul(g, result, base);
+        }
         n >>= 1;
-        if (n > 0) { base = mul(g, base, base); }
+        if (n > 0)
+        {
+            base = mul(g, base, base);
+        }
     }
     return result;
 }
@@ -72,7 +78,10 @@ using nodes::detail::bin; // broadcasting binary (vec/scalar mixed)
                                  1.0 / 34519618525593600.0};
     const int x2  = sq(g, x);
     int       acc = kf(g, x, c[9]);
-    for (int i = 8; i >= 0; --i) { acc = add(g, mul(g, acc, x2), kf(g, x, c[i])); } // Horner in x²
+    for (int i = 8; i >= 0; --i) // Horner in x²
+    {
+        acc = add(g, mul(g, acc, x2), kf(g, x, c[i]));
+    }
     return acc;
 }
 // LogI0(x): log of I0 — a large-x asymptotic branch (x>12) avoids overflow; else log(I0). Branchless select.
@@ -272,9 +281,21 @@ using nodes::detail::bin; // broadcasting binary (vec/scalar mixed)
     {
         int sin_top;
         int cos_top;
-        if (p == 0) { sin_top = sub(g, mul(g, sin_to, c2a[1]), mul(g, cos_to, s2a[1])); cos_top = add(g, mul(g, cos_to, c2a[1]), mul(g, sin_to, s2a[1])); }
-        else if (p == 1) { sin_top = add(g, mul(g, sin_to, c2a[0]), mul(g, cos_to, s2a[0])); cos_top = sub(g, mul(g, cos_to, c2a[0]), mul(g, sin_to, s2a[0])); }
-        else { sin_top = add(g, mul(g, sin_to, c2a[2]), mul(g, cos_to, s2a[2])); cos_top = sub(g, mul(g, cos_to, c2a[2]), mul(g, sin_to, s2a[2])); }
+        if (p == 0)
+        {
+            sin_top = sub(g, mul(g, sin_to, c2a[1]), mul(g, cos_to, s2a[1]));
+            cos_top = add(g, mul(g, cos_to, c2a[1]), mul(g, sin_to, s2a[1]));
+        }
+        else if (p == 1)
+        {
+            sin_top = add(g, mul(g, sin_to, c2a[0]), mul(g, cos_to, s2a[0]));
+            cos_top = sub(g, mul(g, cos_to, c2a[0]), mul(g, sin_to, s2a[0]));
+        }
+        else
+        {
+            sin_top = add(g, mul(g, sin_to, c2a[2]), mul(g, cos_to, s2a[2]));
+            cos_top = sub(g, mul(g, cos_to, c2a[2]), mul(g, sin_to, s2a[2]));
+        }
         cos_top       = g.unary(KOp::Abs, cos_top);
         const int mp  = hair_mp(g, cos_ti, cos_top, sin_ti, sin_top, vp[p]);
         const int np  = hair_np(g, phi, p, s_scale, gamma_o, gamma_t);
@@ -674,8 +695,14 @@ inline void huang_emit_tt_trt(KGraph& g, int out_b, int tid, int sin_to, int cos
     f_trt = g.select(g.binary(KOp::BitAnd, g.binary(KOp::CmpGt, cwim1, ks(0.0)),
                               g.binary(KOp::CmpGt, v3dot(g, wo, m3), ks(0.0))), f_trt, ks(0.0));
 
-    if (!cfg.include_tt) { f_tt = ks(0.0); }
-    if (!cfg.include_trt) { f_trt = ks(0.0); }
+    if (!cfg.include_tt)
+    {
+        f_tt = ks(0.0);
+    }
+    if (!cfg.include_trt)
+    {
+        f_trt = ks(0.0);
+    }
     g.stmt_buffer_store(out_b, tid, add(g, g.buffer_load(out_b, tid), mul(g, wgt, add(g, f_tt, f_trt))));
     g.stmt_for_end(floop);
 

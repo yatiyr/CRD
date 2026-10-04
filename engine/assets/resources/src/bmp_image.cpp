@@ -32,12 +32,18 @@ struct Mask
             max = 0;
             return;
         }
-        while (((m >> shift) & 1U) == 0U) { ++shift; }
+        while (((m >> shift) & 1U) == 0U)
+        {
+            ++shift;
+        }
         max = m >> shift;
     }
     [[nodiscard]] crd::u8 extract(crd::u32 v, crd::u8 def) const noexcept
     {
-        if (max == 0U) { return def; }
+        if (max == 0U)
+        {
+            return def;
+        }
         return static_cast<crd::u8>(((v & mask) >> shift) * 255U / max);
     }
 };
@@ -54,14 +60,29 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     out.width  = 0;
     out.height = 0;
     out.pixels.clear();
-    if (!bmp_sniff(bytes)) { return LdrError::BadMagic; }
-    if (bytes.size() < 54U) { return LdrError::Truncated; }
+    if (!bmp_sniff(bytes))
+    {
+        return LdrError::BadMagic;
+    }
+    if (bytes.size() < 54U)
+    {
+        return LdrError::Truncated;
+    }
     const crd::u8* p          = bytes.data();
     const crd::u32 pixel_off  = le32(p + 10);
     const crd::u32 hdr_size   = le32(p + 14);
-    if (hdr_size == 12U) { return LdrError::Unsupported; } // OS/2 core header — named, never mis-decoded
-    if (hdr_size != 40U && hdr_size != 108U && hdr_size != 124U) { return LdrError::BadHeader; }
-    if (bytes.size() < 14U + hdr_size) { return LdrError::Truncated; }
+    if (hdr_size == 12U) // OS/2 core header — named, never mis-decoded
+    {
+        return LdrError::Unsupported;
+    }
+    if (hdr_size != 40U && hdr_size != 108U && hdr_size != 124U)
+    {
+        return LdrError::BadHeader;
+    }
+    if (bytes.size() < 14U + hdr_size)
+    {
+        return LdrError::Truncated;
+    }
 
     const crd::i32 w_raw   = static_cast<crd::i32>(le32(p + 18));
     const crd::i32 h_raw   = static_cast<crd::i32>(le32(p + 22));
@@ -72,17 +93,38 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     const bool     topdown = h_raw < 0;
     const crd::u32 w       = static_cast<crd::u32>(w_raw);
     const crd::u32 h       = static_cast<crd::u32>(topdown ? -h_raw : h_raw);
-    if (planes != 1U || w_raw <= 0 || h_raw == 0) { return LdrError::BadHeader; }
-    if (w > kMaxDim || h > kMaxDim) { return LdrError::TooLarge; }
+    if (planes != 1U || w_raw <= 0 || h_raw == 0)
+    {
+        return LdrError::BadHeader;
+    }
+    if (w > kMaxDim || h > kMaxDim)
+    {
+        return LdrError::TooLarge;
+    }
 
     const bool is_pal = bpp == 1U || bpp == 4U || bpp == 8U;
     const bool is_rgb = bpp == 16U || bpp == 24U || bpp == 32U;
-    if (!is_pal && !is_rgb) { return LdrError::BadHeader; }
+    if (!is_pal && !is_rgb)
+    {
+        return LdrError::BadHeader;
+    }
     // compression: 0 = RGB, 1 = RLE8 (bpp 8), 2 = RLE4 (bpp 4), 3 = BITFIELDS (bpp 16/32)
-    if (comp > 3U) { return LdrError::Unsupported; }
-    if (comp == 1U && bpp != 8U) { return LdrError::BadHeader; }
-    if (comp == 2U && bpp != 4U) { return LdrError::BadHeader; }
-    if (comp == 3U && bpp != 16U && bpp != 32U) { return LdrError::BadHeader; }
+    if (comp > 3U)
+    {
+        return LdrError::Unsupported;
+    }
+    if (comp == 1U && bpp != 8U)
+    {
+        return LdrError::BadHeader;
+    }
+    if (comp == 2U && bpp != 4U)
+    {
+        return LdrError::BadHeader;
+    }
+    if (comp == 3U && bpp != 16U && bpp != 32U)
+    {
+        return LdrError::BadHeader;
+    }
 
     // channel masks: explicit for BITFIELDS (right after the 40-byte header, or in-header for V4/V5); defaults otherwise
     Mask mr;
@@ -92,7 +134,10 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     if (comp == 3U)
     {
         const crd::u8* mp = p + 54; // the RGB masks sit at offset 54 both ways: appended (40-byte header) or in-header (V4/V5)
-        if (bytes.size() < 54U + 12U) { return LdrError::Truncated; }
+        if (bytes.size() < 54U + 12U)
+        {
+            return LdrError::Truncated;
+        }
         mr.init(le32(mp));
         mg.init(le32(mp + 4));
         mb.init(le32(mp + 8));
@@ -100,11 +145,20 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
         // would consume pixel data); absent ⇒ opaque
         if (hdr_size >= 108U)
         {
-            if (bytes.size() < 54U + 16U) { return LdrError::Truncated; }
+            if (bytes.size() < 54U + 16U)
+            {
+                return LdrError::Truncated;
+            }
             ma.init(le32(mp + 12));
         }
-        else { ma.init(0U); }
-        if (mr.max == 0U || mg.max == 0U || mb.max == 0U) { return LdrError::BadHeader; }
+        else
+        {
+            ma.init(0U);
+        }
+        if (mr.max == 0U || mg.max == 0U || mb.max == 0U)
+        {
+            return LdrError::BadHeader;
+        }
     }
     else if (bpp == 16U) // legacy default: X1R5G5B5
     {
@@ -118,11 +172,23 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     crd::u8 palette[256][4] = {};
     if (is_pal)
     {
-        if (pal_n == 0U) { pal_n = 1U << bpp; }
-        if (pal_n > 256U) { return LdrError::BadHeader; }
+        if (pal_n == 0U)
+        {
+            pal_n = 1U << bpp;
+        }
+        if (pal_n > 256U)
+        {
+            return LdrError::BadHeader;
+        }
         crd::usize pal_off = 14U + hdr_size;
-        if (comp == 3U && hdr_size == 40U) { pal_off += 12U; }
-        if (bytes.size() < pal_off + static_cast<crd::usize>(pal_n) * 4U) { return LdrError::Truncated; }
+        if (comp == 3U && hdr_size == 40U)
+        {
+            pal_off += 12U;
+        }
+        if (bytes.size() < pal_off + static_cast<crd::usize>(pal_n) * 4U)
+        {
+            return LdrError::Truncated;
+        }
         for (crd::u32 i = 0; i < pal_n; ++i)
         {
             const crd::u8* e  = p + pal_off + static_cast<crd::usize>(i) * 4U;
@@ -133,15 +199,36 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
         }
     }
 
-    if (pixel_off >= bytes.size()) { return LdrError::Truncated; }
+    if (pixel_off >= bytes.size())
+    {
+        return LdrError::Truncated;
+    }
     out.width            = w;
     out.height           = h;
-    if (is_pal) { out.source_channels = 1; }
-    else if (bpp == 32U) { out.source_channels = 4; }
-    else { out.source_channels = 3; }
-    if (bpp == 16U) { out.source_bit_depth = 5; }
-    else if (is_pal) { out.source_bit_depth = static_cast<crd::u8>(bpp); }
-    else { out.source_bit_depth = 8; }
+    if (is_pal)
+    {
+        out.source_channels = 1;
+    }
+    else if (bpp == 32U)
+    {
+        out.source_channels = 4;
+    }
+    else
+    {
+        out.source_channels = 3;
+    }
+    if (bpp == 16U)
+    {
+        out.source_bit_depth = 5;
+    }
+    else if (is_pal)
+    {
+        out.source_bit_depth = static_cast<crd::u8>(bpp);
+    }
+    else
+    {
+        out.source_bit_depth = 8;
+    }
     out.pixels.resize(static_cast<crd::usize>(w) * h * 4U, 0);
 
     const auto dst_row = [&](crd::u32 src_y) noexcept -> crd::u8* {
@@ -166,10 +253,22 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
                 for (crd::u8 k = 0; k < n && x < w; ++k, ++x)
                 {
                     crd::u32 idx = 0;
-                    if (comp == 1U) { idx = v; }
-                    else { idx = ((k & 1U) == 0U) ? (v >> 4U) : (v & 15U); }
-                    if (idx >= pal_n) { return LdrError::BadData; }
-                    if (y >= h) { return LdrError::BadData; }
+                    if (comp == 1U)
+                    {
+                        idx = v;
+                    }
+                    else
+                    {
+                        idx = ((k & 1U) == 0U) ? (v >> 4U) : (v & 15U);
+                    }
+                    if (idx >= pal_n)
+                    {
+                        return LdrError::BadData;
+                    }
+                    if (y >= h)
+                    {
+                        return LdrError::BadData;
+                    }
                     crd::u8* d = dst_row(y) + static_cast<crd::usize>(x) * 4U;
                     d[0]       = palette[idx][0];
                     d[1]       = palette[idx][1];
@@ -184,10 +283,16 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
                 ++y;
                 continue;
             }
-            if (v == 1U) { return LdrError::Ok; } // end of bitmap
+            if (v == 1U) // end of bitmap
+            {
+                return LdrError::Ok;
+            }
             if (v == 2U)                          // delta
             {
-                if (px + 2 > end) { return LdrError::Truncated; }
+                if (px + 2 > end)
+                {
+                    return LdrError::Truncated;
+                }
                 x += px[0];
                 y += px[1];
                 px += 2;
@@ -197,14 +302,29 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
             const crd::u32   lit       = v;
             const crd::usize lit_bytes = comp == 1U ? lit : (lit + 1U) / 2U;
             const crd::usize padded    = (lit_bytes + 1U) & ~static_cast<crd::usize>(1U);
-            if (px + padded > end) { return LdrError::Truncated; }
+            if (px + padded > end)
+            {
+                return LdrError::Truncated;
+            }
             for (crd::u32 k = 0; k < lit && x < w; ++k, ++x)
             {
                 crd::u32 idx = 0;
-                if (comp == 1U) { idx = px[k]; }
-                else { idx = ((k & 1U) == 0U) ? (px[k / 2U] >> 4U) : (px[k / 2U] & 15U); }
-                if (idx >= pal_n) { return LdrError::BadData; }
-                if (y >= h) { return LdrError::BadData; }
+                if (comp == 1U)
+                {
+                    idx = px[k];
+                }
+                else
+                {
+                    idx = ((k & 1U) == 0U) ? (px[k / 2U] >> 4U) : (px[k / 2U] & 15U);
+                }
+                if (idx >= pal_n)
+                {
+                    return LdrError::BadData;
+                }
+                if (y >= h)
+                {
+                    return LdrError::BadData;
+                }
                 crd::u8* d = dst_row(y) + static_cast<crd::usize>(x) * 4U;
                 d[0]       = palette[idx][0];
                 d[1]       = palette[idx][1];
@@ -218,7 +338,10 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
 
     // ── uncompressed / bitfields: 4-byte-padded rows ───────────────────────────────────────────────────────────────────
     const crd::usize row_bytes = ((static_cast<crd::usize>(w) * bpp + 31U) / 32U) * 4U;
-    if (static_cast<crd::usize>(end - px) < row_bytes * h) { return LdrError::Truncated; }
+    if (static_cast<crd::usize>(end - px) < row_bytes * h)
+    {
+        return LdrError::Truncated;
+    }
     for (crd::u32 sy = 0; sy < h; ++sy)
     {
         const crd::u8* row = px + static_cast<crd::usize>(sy) * row_bytes;
@@ -229,10 +352,22 @@ LdrError bmp_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
             if (is_pal)
             {
                 crd::u32 idx = 0;
-                if (bpp == 8U) { idx = row[x]; }
-                else if (bpp == 4U) { idx = ((x & 1U) == 0U) ? (row[x / 2U] >> 4U) : (row[x / 2U] & 15U); }
-                else { idx = (row[x / 8U] >> (7U - (x & 7U))) & 1U; }
-                if (idx >= pal_n) { return LdrError::BadData; }
+                if (bpp == 8U)
+                {
+                    idx = row[x];
+                }
+                else if (bpp == 4U)
+                {
+                    idx = ((x & 1U) == 0U) ? (row[x / 2U] >> 4U) : (row[x / 2U] & 15U);
+                }
+                else
+                {
+                    idx = (row[x / 8U] >> (7U - (x & 7U))) & 1U;
+                }
+                if (idx >= pal_n)
+                {
+                    return LdrError::BadData;
+                }
                 d[0] = palette[idx][0];
                 d[1] = palette[idx][1];
                 d[2] = palette[idx][2];

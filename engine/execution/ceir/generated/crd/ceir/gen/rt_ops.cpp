@@ -17,54 +17,133 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_blas_build(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_instance_populate(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 2U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("instance_count");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_operands() != 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("instance_count");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_ray_query(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 4U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("kernel");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 4U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("kernel");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_sbt_build(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("raygen");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("raygen");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_tlas_build(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_trace(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 5U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 5U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

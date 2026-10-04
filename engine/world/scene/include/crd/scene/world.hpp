@@ -171,7 +171,10 @@ public:
     // caller has already done.
     [[nodiscard]] bool has_component_id(EntityId e, ComponentId id) const noexcept
     {
-        if (id.is_null() || !is_alive(e)) { return false; }
+        if (id.is_null() || !is_alive(e))
+        {
+            return false;
+        }
         return backend_for_const(id).has(e, id);
     }
 
@@ -193,34 +196,71 @@ public:
     [[nodiscard]] static bool decorated_names(crd::containers::StringView decorated,
                                               crd::containers::StringView want) noexcept
     {
-        if (want.size() == 0U || decorated.size() < want.size()) { return false; }
+        if (want.size() == 0U || decorated.size() < want.size())
+        {
+            return false;
+        }
         // ── MSVC / plain: the decorated name ENDS with `want`, on an identifier boundary. ──
         {
             const crd::usize off = decorated.size() - want.size();
             bool             eq  = true;
-            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = decorated[off + k] == want[k]; }
-            if (eq && (off == 0U || !name_char_is_ident(decorated[off - 1U]))) { return true; }
+            for (crd::usize k = 0; k < want.size() && eq; ++k)
+            {
+                eq = decorated[off + k] == want[k];
+            }
+            if (eq && (off == 0U || !name_char_is_ident(decorated[off - 1U])))
+            {
+                return true;
+            }
         }
         // ── Itanium: the component appears as "<decimal length><name>", e.g. "12MeshRenderer". Matching the
         //    LENGTH PREFIX is exact — it cannot collide with a longer name that merely ends the same way. ──
         char       digits[8]{};
         crd::u32   ndig = 0U;
         crd::usize n    = want.size();
-        while (n > 0U && ndig < 8U) { digits[ndig++] = static_cast<char>('0' + (n % 10U)); n /= 10U; }
-        if (ndig == 0U || n != 0U) { return false; } // unrepresentable length ⇒ no Itanium form to look for
+        while (n > 0U && ndig < 8U)
+        {
+            digits[ndig++] = static_cast<char>('0' + (n % 10U));
+            n /= 10U;
+        }
+        if (ndig == 0U || n != 0U) // unrepresentable length ⇒ no Itanium form to look for
+        {
+            return false;
+        }
         for (crd::usize i = 0; i + ndig + want.size() <= decorated.size(); ++i)
         {
             bool eq = true;
-            for (crd::u32 d = 0; d < ndig && eq; ++d) { eq = decorated[i + d] == digits[ndig - 1U - d]; } // MSB first
-            if (!eq) { continue; }
-            if (i > 0U && decorated[i - 1U] >= '0' && decorated[i - 1U] <= '9') { continue; } // mid-number, not a prefix
-            for (crd::usize k = 0; k < want.size() && eq; ++k) { eq = decorated[i + ndig + k] == want[k]; }
-            if (!eq) { continue; }
+            for (crd::u32 d = 0; d < ndig && eq; ++d) // MSB first
+            {
+                eq = decorated[i + d] == digits[ndig - 1U - d];
+            }
+            if (!eq)
+            {
+                continue;
+            }
+            if (i > 0U && decorated[i - 1U] >= '0' && decorated[i - 1U] <= '9') // mid-number, not a prefix
+            {
+                continue;
+            }
+            for (crd::usize k = 0; k < want.size() && eq; ++k)
+            {
+                eq = decorated[i + ndig + k] == want[k];
+            }
+            if (!eq)
+            {
+                continue;
+            }
             // the component must END here: next is the mangling's terminator/another length, never more identifier
             const crd::usize after = i + ndig + want.size();
-            if (after == decorated.size()) { return true; }
+            if (after == decorated.size())
+            {
+                return true;
+            }
             const char c = decorated[after];
-            if (c == 'E' || (c >= '0' && c <= '9') || !name_char_is_ident(c)) { return true; }
+            if (c == 'E' || (c >= '0' && c <= '9') || !name_char_is_ident(c))
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -229,8 +269,14 @@ public:
         for (crd::u16 i = 0; i < m_components.size(); ++i)
         {
             const ComponentInfo* info = m_components.info(ComponentId{i});
-            if (info == nullptr) { continue; }
-            if (decorated_names(info->name, want)) { return info->id; }
+            if (info == nullptr)
+            {
+                continue;
+            }
+            if (decorated_names(info->name, want))
+            {
+                return info->id;
+            }
         }
         return ComponentId{};
     }
@@ -738,7 +784,10 @@ public:
             return 0.0;
         }
         const crd::f64 a = m_fixed_accumulator / fixed_dt;
-        if (a < 0.0) { return 0.0; }
+        if (a < 0.0)
+        {
+            return 0.0;
+        }
         return a > 1.0 ? 1.0 : a;
     }
 

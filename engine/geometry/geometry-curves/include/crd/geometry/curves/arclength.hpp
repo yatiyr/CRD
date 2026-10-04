@@ -163,8 +163,14 @@ template <crd::math::MathScalar T>
     const T q_floor = static_cast<T>(i_quot);
     T       result  = value - q_floor * modulus;
     // Defensive: clamp to [0, modulus) in case of edge-case rounding.
-    if (result < static_cast<T>(0)) { result += modulus; }
-    if (result >= modulus) { result -= modulus; }
+    if (result < static_cast<T>(0))
+    {
+        result += modulus;
+    }
+    if (result >= modulus)
+    {
+        result -= modulus;
+    }
     return result;
 }
 
@@ -181,7 +187,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] T t_at_distance(const ArclengthTable<T>& table, T distance) noexcept
 {
     CRD_ASSERT(table.samples.size() >= 2U);
-    if (table.total_length <= static_cast<T>(0)) { return static_cast<T>(0); }
+    if (table.total_length <= static_cast<T>(0))
+    {
+        return static_cast<T>(0);
+    }
 
     T d = distance;
     if (table.closed)
@@ -190,8 +199,14 @@ template <crd::math::MathScalar T>
     }
     else
     {
-        if (d <= static_cast<T>(0)) { return table.samples[0].t; }
-        if (d >= table.total_length) { return table.samples[table.samples.size() - 1U].t; }
+        if (d <= static_cast<T>(0))
+        {
+            return table.samples[0].t;
+        }
+        if (d >= table.total_length)
+        {
+            return table.samples[table.samples.size() - 1U].t;
+        }
     }
 
     // Binary search: find segment i where samples[i].distance <= d < samples[i+1].distance.
@@ -200,14 +215,23 @@ template <crd::math::MathScalar T>
     while (lo + 1U < hi)
     {
         const crd::usize mid = lo + (hi - lo) / 2U;
-        if (d < table.samples[mid].distance) { hi = mid; }
-        else { lo = mid; }
+        if (d < table.samples[mid].distance)
+        {
+            hi = mid;
+        }
+        else
+        {
+            lo = mid;
+        }
     }
 
     const auto& a = table.samples[lo];
     const auto& b = table.samples[lo + 1U];
     const T     span = b.distance - a.distance;
-    if (span <= static_cast<T>(0)) { return a.t; }
+    if (span <= static_cast<T>(0))
+    {
+        return a.t;
+    }
     const T u = (d - a.distance) / span;
     return a.t + (b.t - a.t) * u;
 }
@@ -231,8 +255,14 @@ template <crd::math::MathScalar T>
     }
     else
     {
-        if (t_eff <= static_cast<T>(0)) { return table.samples[0].distance; }
-        if (t_eff >= static_cast<T>(1)) { return table.samples[table.samples.size() - 1U].distance; }
+        if (t_eff <= static_cast<T>(0))
+        {
+            return table.samples[0].distance;
+        }
+        if (t_eff >= static_cast<T>(1))
+        {
+            return table.samples[table.samples.size() - 1U].distance;
+        }
     }
 
     // Binary search: find segment i where samples[i].t <= t_eff < samples[i+1].t.
@@ -241,14 +271,23 @@ template <crd::math::MathScalar T>
     while (lo + 1U < hi)
     {
         const crd::usize mid = lo + (hi - lo) / 2U;
-        if (t_eff < table.samples[mid].t) { hi = mid; }
-        else { lo = mid; }
+        if (t_eff < table.samples[mid].t)
+        {
+            hi = mid;
+        }
+        else
+        {
+            lo = mid;
+        }
     }
 
     const auto& a = table.samples[lo];
     const auto& b = table.samples[lo + 1U];
     const T     span = b.t - a.t;
-    if (span <= static_cast<T>(0)) { return a.distance; }
+    if (span <= static_cast<T>(0))
+    {
+        return a.distance;
+    }
     const T u = (t_eff - a.t) / span;
     return a.distance + (b.distance - a.distance) * u;
 }

@@ -197,7 +197,10 @@ void check_equal(const assetio::ImportedTimeline& a, const assetio::ImportedTime
 {
     CHECK(std::strcmp(a.name.c_str(), b.name.c_str()) == 0);
     CHECK(a.has_global_start == b.has_global_start);
-    if (a.has_global_start) { CHECK(time::compare(a.global_start, b.global_start) == 0); }
+    if (a.has_global_start)
+    {
+        CHECK(time::compare(a.global_start, b.global_start) == 0);
+    }
 
     REQUIRE(a.tracks.size() == b.tracks.size());
     REQUIRE(a.items.size() == b.items.size());

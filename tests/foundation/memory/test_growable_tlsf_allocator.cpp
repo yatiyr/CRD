@@ -45,7 +45,10 @@ TEST_CASE("GrowableTlsfAllocator grows new chunks when one fills", "[memory][gro
         ptrs.push_back(p);
     }
     REQUIRE(a.num_chunks() > 1); // genuinely grew
-    for (void* p : ptrs) { a.deallocate(p); }
+    for (void* p : ptrs)
+    {
+        a.deallocate(p);
+    }
 }
 
 TEST_CASE("GrowableTlsfAllocator serves an allocation larger than the nominal chunk", "[memory][growable-tlsf]")
@@ -67,13 +70,19 @@ TEST_CASE("GrowableTlsfAllocator reallocate preserves contents (incl. cross-chun
     GrowableTlsfAllocator a(chunk);
     const crd::usize      n0 = 4096;
     auto*                 p  = static_cast<unsigned char*>(a.allocate(n0, 16));
-    for (crd::usize i = 0; i < n0; ++i) { p[i] = static_cast<unsigned char>(i & 0xFF); }
+    for (crd::usize i = 0; i < n0; ++i)
+    {
+        p[i] = static_cast<unsigned char>(i & 0xFF);
+    }
     // Grow well past the nominal chunk so the realloc must move to a fresh chunk.
     const crd::usize n1 = 2U * 1024U * 1024U;
     auto*            q  = static_cast<unsigned char*>(a.reallocate(p, n0, n1, 16));
     REQUIRE(q != nullptr);
     REQUIRE(a.owns(q));
-    for (crd::usize i = 0; i < n0; ++i) { REQUIRE(q[i] == static_cast<unsigned char>(i & 0xFF)); } // preserved
+    for (crd::usize i = 0; i < n0; ++i) // preserved
+    {
+        REQUIRE(q[i] == static_cast<unsigned char>(i & 0xFF));
+    }
     a.deallocate(q);
 }
 
@@ -111,7 +120,10 @@ TEST_CASE("GrowableTlsfAllocator over a VirtualMemoryAllocator parent is malloc-
     // Free everything, then reuse — the freed blocks return to their TLSF pools
     // (the VM arena itself is grow-mostly: it does not reclaim chunk address space,
     // which is fine for this long-lived-heap role).
-    for (void* p : ptrs) { a.deallocate(p); }
+    for (void* p : ptrs)
+    {
+        a.deallocate(p);
+    }
     void* reused = a.allocate(16U * 1024U, 16);
     REQUIRE(reused != nullptr);
     REQUIRE(vm.owns(reused));
@@ -144,7 +156,10 @@ TEST_CASE("GrowableTlsfAllocator try_allocate is graceful when a VM parent is ex
     }
     REQUIRE(hit_null); // reached graceful nullptr without aborting
     REQUIRE(ptrs.size() > 0); // but some allocations did succeed first
-    for (void* p : ptrs) { a.deallocate(p); }
+    for (void* p : ptrs)
+    {
+        a.deallocate(p);
+    }
 }
 
 TEST_CASE("GrowableTlsfAllocator deallocate dispatches to the owning chunk", "[memory][growable-tlsf]")

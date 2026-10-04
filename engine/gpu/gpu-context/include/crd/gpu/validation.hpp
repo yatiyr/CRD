@@ -121,9 +121,18 @@ struct ValidationActivation
     {
         for (crd::usize i = 0; i < kValidationModeCount; ++i)
         {
-            if (active[i] && !requested[i]) { return false; }
-            if (active[i] && reason[i] != ValidationUnsupportedReason::None) { return false; }
-            if (!requested[i] && reason[i] != ValidationUnsupportedReason::NotRequested) { return false; }
+            if (active[i] && !requested[i])
+            {
+                return false;
+            }
+            if (active[i] && reason[i] != ValidationUnsupportedReason::None)
+            {
+                return false;
+            }
+            if (!requested[i] && reason[i] != ValidationUnsupportedReason::NotRequested)
+            {
+                return false;
+            }
         }
         return true;
     }

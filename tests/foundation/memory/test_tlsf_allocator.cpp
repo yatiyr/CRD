@@ -434,9 +434,15 @@ TEST_CASE("TLSF exact-fit-to-tail alloc/free does not corrupt the free list (ini
     for (int guard = 0; guard < 100000; ++guard)
     {
         const crd::usize sz = largest_serviceable();
-        if (sz == 0U) { break; } // pool exhausted
+        if (sz == 0U) // pool exhausted
+        {
+            break;
+        }
         void* p = a.try_allocate(sz);
-        if (p == nullptr) { break; }
+        if (p == nullptr)
+        {
+            break;
+        }
         CHECK(a.owns(p));
         std::memset(p, 0xAB, sz); // touch every byte ⇒ ASan catches a write over the buffer edge
         live.push_back(p);

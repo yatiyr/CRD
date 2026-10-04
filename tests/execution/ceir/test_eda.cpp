@@ -52,7 +52,10 @@ bool verify_board(const Context& ctx, const Operation& op) noexcept
 {
     for (usize i = 0; i < s.size(); ++i)
     {
-        if (s[i] == c) { return true; }
+        if (s[i] == c)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -61,7 +64,10 @@ bool verify_board(const Context& ctx, const Operation& op) noexcept
     const ConstSpan<EffectRecord> e = ctx.op_effects(k);
     for (usize i = 0; i < e.size(); ++i)
     {
-        if (e[i].family == f) { return true; }
+        if (e[i].family == f)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -124,8 +130,14 @@ Module* build_pipeline(Context& ctx, const EdaOps& o, Operation** board_out, Ope
     ctx.set_attr(gerber, "tool", ctx.attr_string("gerber_writer"));
     ctx.set_attr(gerber, "path", ctx.attr_string("board.gbr"));
     top->append(gerber);
-    if (board_out != nullptr) { *board_out = board; }
-    if (route_out != nullptr) { *route_out = route; }
+    if (board_out != nullptr)
+    {
+        *board_out = board;
+    }
+    if (route_out != nullptr)
+    {
+        *route_out = route;
+    }
     return m;
 }
 } // namespace
@@ -209,7 +221,10 @@ TEST_CASE("ceir 9e: a design-rule violation is rejected by the board verifier at
         bool verify_failed = false;
         for (usize i = 0; i < diag.count(); ++i)
         {
-            if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed")) { verify_failed = true; }
+            if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed"))
+            {
+                verify_failed = true;
+            }
         }
         CHECK(verify_failed);
     }
@@ -245,13 +260,31 @@ TEST_CASE("ceir 9e: a complete EDA pipeline uses zero render-flavored vocabulary
         for (usize i = 0; i < effects.size(); ++i)
         {
             const EffectFamily f = effects[i].family;
-            if (f == EffectFamily::DocumentRead || f == EffectFamily::DocumentWrite) { has_document = true; }
-            if (f == EffectFamily::ConstraintRead || f == EffectFamily::ConstraintWrite) { has_constraint = true; }
-            if (f == EffectFamily::ExternalCall) { has_external = true; }
-            if (f == EffectFamily::FileIO) { has_fileio = true; }
-            if (f == EffectFamily::GPUCommand) { has_gpu_effect = true; }
+            if (f == EffectFamily::DocumentRead || f == EffectFamily::DocumentWrite)
+            {
+                has_document = true;
+            }
+            if (f == EffectFamily::ConstraintRead || f == EffectFamily::ConstraintWrite)
+            {
+                has_constraint = true;
+            }
+            if (f == EffectFamily::ExternalCall)
+            {
+                has_external = true;
+            }
+            if (f == EffectFamily::FileIO)
+            {
+                has_fileio = true;
+            }
+            if (f == EffectFamily::GPUCommand)
+            {
+                has_gpu_effect = true;
+            }
         }
-        if (ctx.op_domain(op->kind()) == EvalDomain::DeviceTime) { has_device_domain = true; }
+        if (ctx.op_domain(op->kind()) == EvalDomain::DeviceTime)
+        {
+            has_device_domain = true;
+        }
     }
     // the pipeline NEEDED document / constraint / external-call / file-IO vocabulary -- all of which already existed...
     CHECK(has_document);

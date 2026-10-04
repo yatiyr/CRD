@@ -150,11 +150,17 @@ public:
         {
             const crd::usize old = m_per_object_gen.size();
             m_per_object_gen.resize(object_capacity);
-            for (crd::usize i = old; i < object_capacity; ++i) { m_per_object_gen[i] = 0; }
+            for (crd::usize i = old; i < object_capacity; ++i)
+            {
+                m_per_object_gen[i] = 0;
+            }
         }
         if (m_current_gen == std::numeric_limits<crd::u64>::max())
         {
-            for (crd::usize i = 0; i < m_per_object_gen.size(); ++i) { m_per_object_gen[i] = 0; }
+            for (crd::usize i = 0; i < m_per_object_gen.size(); ++i)
+            {
+                m_per_object_gen[i] = 0;
+            }
             m_current_gen = 0;
         }
         ++m_current_gen;
@@ -330,9 +336,18 @@ template <MathScalar T>
 template <typename Fn>
 void UniformGrid<T>::overlap(const AABB3<T>& query, Fn&& on_hit) const
 {
-    if (m_object_count == 0) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
-    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z) { return; }
+    if (m_object_count == 0)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
+    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z)
+    {
+        return;
+    }
     const crd::u64 gen = next_query_generation();
     auto was_visited = [this, gen](crd::u32 obj_idx) noexcept -> bool {
         return m_objects[obj_idx].last_query_gen == gen;
@@ -347,9 +362,18 @@ template <MathScalar T>
 template <typename Fn>
 void UniformGrid<T>::overlap(const AABB3<T>& query, UniformGridScratch& scratch, Fn&& on_hit) const
 {
-    if (m_object_count == 0) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
-    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z) { return; }
+    if (m_object_count == 0)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
+    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z)
+    {
+        return;
+    }
     const crd::u64 gen = scratch.prepare_for_query(m_objects.size());
     auto was_visited = [&scratch, gen](crd::u32 obj_idx) noexcept -> bool {
         return scratch.was_visited(obj_idx, gen);
@@ -364,8 +388,14 @@ template <MathScalar T>
 template <typename Fn>
 void UniformGrid<T>::radius(const Vec3<T>& point, T r, Fn&& on_hit) const
 {
-    if (m_object_count == 0 || r < T{0}) { return; }
-    if (!crd::geometry::primitives::is_finite(point)) { return; }
+    if (m_object_count == 0 || r < T{0})
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(point))
+    {
+        return;
+    }
     const crd::u64 gen = next_query_generation();
     auto was_visited = [this, gen](crd::u32 obj_idx) noexcept -> bool {
         return m_objects[obj_idx].last_query_gen == gen;
@@ -380,8 +410,14 @@ template <MathScalar T>
 template <typename Fn>
 void UniformGrid<T>::radius(const Vec3<T>& point, T r, UniformGridScratch& scratch, Fn&& on_hit) const
 {
-    if (m_object_count == 0 || r < T{0}) { return; }
-    if (!crd::geometry::primitives::is_finite(point)) { return; }
+    if (m_object_count == 0 || r < T{0})
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(point))
+    {
+        return;
+    }
     const crd::u64 gen = scratch.prepare_for_query(m_objects.size());
     auto was_visited = [&scratch, gen](crd::u32 obj_idx) noexcept -> bool {
         return scratch.was_visited(obj_idx, gen);
@@ -404,7 +440,10 @@ void UniformGrid<T>::overlap_traverse_(const AABB3<T>& query,
     crd::u32 min_x, min_y, min_z, max_x, max_y, max_z;
     bool empty_range = false;
     aabb_cell_range(query, min_x, min_y, min_z, max_x, max_y, max_z, empty_range);
-    if (empty_range) { return; }
+    if (empty_range)
+    {
+        return;
+    }
 
     auto aabb_isect = [](const AABB3<T>& a, const AABB3<T>& b) noexcept {
         return a.min.x <= b.max.x && a.max.x >= b.min.x
@@ -413,19 +452,26 @@ void UniformGrid<T>::overlap_traverse_(const AABB3<T>& query,
     };
 
     for (crd::u32 iz = min_z; iz <= max_z; ++iz)
-    for (crd::u32 iy = min_y; iy <= max_y; ++iy)
-    for (crd::u32 ix = min_x; ix <= max_x; ++ix)
     {
-        const auto& cell = m_cells[cell_index(ix, iy, iz)];
-        for (crd::usize i = 0; i < cell.size(); ++i)
+        for (crd::u32 iy = min_y; iy <= max_y; ++iy)
         {
-            const crd::u32 obj_idx = cell[i];
-            if (was_visited(obj_idx)) { continue; }
-            mark_visited(obj_idx);
-            const ObjectEntry& obj = m_objects[obj_idx];
-            if (aabb_isect(obj.aabb, query))
+            for (crd::u32 ix = min_x; ix <= max_x; ++ix)
             {
-                on_hit(obj.payload);
+                const auto& cell = m_cells[cell_index(ix, iy, iz)];
+                for (crd::usize i = 0; i < cell.size(); ++i)
+                {
+                    const crd::u32 obj_idx = cell[i];
+                    if (was_visited(obj_idx))
+                    {
+                        continue;
+                    }
+                    mark_visited(obj_idx);
+                    const ObjectEntry& obj = m_objects[obj_idx];
+                    if (aabb_isect(obj.aabb, query))
+                    {
+                        on_hit(obj.payload);
+                    }
+                }
             }
         }
     }
@@ -446,7 +492,10 @@ void UniformGrid<T>::radius_traverse_(const Vec3<T>& point, T r,
     crd::u32 min_x, min_y, min_z, max_x, max_y, max_z;
     bool empty_range = false;
     aabb_cell_range(sphere_bbox, min_x, min_y, min_z, max_x, max_y, max_z, empty_range);
-    if (empty_range) { return; }
+    if (empty_range)
+    {
+        return;
+    }
 
     auto pt_aabb_d2 = [](const Vec3<T>& p, const AABB3<T>& a) noexcept -> T {
         T d2 = T{0};
@@ -455,26 +504,41 @@ void UniformGrid<T>::radius_traverse_(const Vec3<T>& point, T r,
             const T v = p[static_cast<crd::usize>(i)];
             const T lo = a.min[static_cast<crd::usize>(i)];
             const T hi = a.max[static_cast<crd::usize>(i)];
-            if (v < lo)      { const T d = lo - v; d2 += d * d; }
-            else if (v > hi) { const T d = v - hi; d2 += d * d; }
+            if (v < lo)
+            {
+                const T d = lo - v;
+                d2 += d * d;
+            }
+            else if (v > hi)
+            {
+                const T d = v - hi;
+                d2 += d * d;
+            }
         }
         return d2;
     };
 
     for (crd::u32 iz = min_z; iz <= max_z; ++iz)
-    for (crd::u32 iy = min_y; iy <= max_y; ++iy)
-    for (crd::u32 ix = min_x; ix <= max_x; ++ix)
     {
-        const auto& cell = m_cells[cell_index(ix, iy, iz)];
-        for (crd::usize i = 0; i < cell.size(); ++i)
+        for (crd::u32 iy = min_y; iy <= max_y; ++iy)
         {
-            const crd::u32 obj_idx = cell[i];
-            if (was_visited(obj_idx)) { continue; }
-            mark_visited(obj_idx);
-            const ObjectEntry& obj = m_objects[obj_idx];
-            if (pt_aabb_d2(point, obj.aabb) <= r2)
+            for (crd::u32 ix = min_x; ix <= max_x; ++ix)
             {
-                on_hit(obj.payload);
+                const auto& cell = m_cells[cell_index(ix, iy, iz)];
+                for (crd::usize i = 0; i < cell.size(); ++i)
+                {
+                    const crd::u32 obj_idx = cell[i];
+                    if (was_visited(obj_idx))
+                    {
+                        continue;
+                    }
+                    mark_visited(obj_idx);
+                    const ObjectEntry& obj = m_objects[obj_idx];
+                    if (pt_aabb_d2(point, obj.aabb) <= r2)
+                    {
+                        on_hit(obj.payload);
+                    }
+                }
             }
         }
     }

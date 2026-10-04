@@ -17,76 +17,201 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_biquad(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("filter");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("cutoff");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("q");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("filter");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("cutoff");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("q");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_compressor(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("threshold_db");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("ratio");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("attack_ms");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("release_ms");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("threshold_db");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("ratio");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("attack_ms");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("release_ms");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_delay(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("delay_frames");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("delay_frames");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_gain(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("gain_db");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("gain_db");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_mix(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_send(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("gain_db");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("gain_db");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_source(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("name");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("start_frame");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("loop");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("name");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("start_frame");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("loop");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

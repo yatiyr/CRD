@@ -70,8 +70,14 @@ namespace detail
     // Map signed-magnitude → two's-complement ordering so subtraction
     // gives a valid lane-step distance across zero.
     constexpr crd::u32 kSignBit = 0x80000000U;
-    if ((ai & kSignBit) != 0U) { ai = kSignBit - ai; }
-    if ((bi & kSignBit) != 0U) { bi = kSignBit - bi; }
+    if ((ai & kSignBit) != 0U)
+    {
+        ai = kSignBit - ai;
+    }
+    if ((bi & kSignBit) != 0U)
+    {
+        bi = kSignBit - bi;
+    }
     return ai > bi ? (ai - bi) : (bi - ai);
 }
 

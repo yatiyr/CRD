@@ -24,21 +24,33 @@ constexpr crd::usize kHeadChunkBytes = 16U;
 
 [[nodiscard]] crd::f32 srgb_to_linear(crd::f32 c) noexcept
 {
-    if (c <= 0.04045F) { return c / 12.92F; }
+    if (c <= 0.04045F)
+    {
+        return c / 12.92F;
+    }
     return std::pow((c + 0.055F) / 1.055F, 2.4F);
 }
 
 [[nodiscard]] crd::f32 linear_to_srgb(crd::f32 c) noexcept
 {
-    if (c <= 0.0031308F) { return c * 12.92F; }
+    if (c <= 0.0031308F)
+    {
+        return c * 12.92F;
+    }
     return 1.055F * std::pow(c, 1.0F / 2.4F) - 0.055F;
 }
 
 [[nodiscard]] crd::u8 to_byte(crd::f32 v) noexcept
 {
     crd::f32 clamped = v;
-    if (clamped < 0.0F) { clamped = 0.0F; }
-    if (clamped > 1.0F) { clamped = 1.0F; }
+    if (clamped < 0.0F)
+    {
+        clamped = 0.0F;
+    }
+    if (clamped > 1.0F)
+    {
+        clamped = 1.0F;
+    }
     return static_cast<crd::u8>(std::lround(clamped * 255.0F));
 }
 
@@ -141,9 +153,15 @@ void renormalize_normals(crd::f32* px, crd::usize px_count) noexcept
     for (crd::usize i = 0; i < n;)
     {
         crd::usize end = i;
-        while (end < n && p[end] != '\n') { ++end; }
+        while (end < n && p[end] != '\n')
+        {
+            ++end;
+        }
         crd::usize b = i;
-        while (b < end && (p[b] == ' ' || p[b] == '\t')) { ++b; }
+        while (b < end && (p[b] == ' ' || p[b] == '\t'))
+        {
+            ++b;
+        }
         if (b < end && p[b] == '[')
         {
             in_cook = (end - b >= 6U) && std::strncmp(p + b, "[cook]", 6) == 0;
@@ -151,9 +169,18 @@ void renormalize_normals(crd::f32* px, crd::usize px_count) noexcept
         else if (in_cook && end - b > klen && std::strncmp(p + b, key, klen) == 0)
         {
             crd::usize v = b + klen;
-            while (v < end && (p[v] == ' ' || p[v] == '\t' || p[v] == '=')) { ++v; }
-            if (end - v >= 4U && std::strncmp(p + v, "true", 4) == 0) { return true; }
-            if (end - v >= 5U && std::strncmp(p + v, "false", 5) == 0) { return false; }
+            while (v < end && (p[v] == ' ' || p[v] == '\t' || p[v] == '='))
+            {
+                ++v;
+            }
+            if (end - v >= 4U && std::strncmp(p + v, "true", 4) == 0)
+            {
+                return true;
+            }
+            if (end - v >= 5U && std::strncmp(p + v, "false", 5) == 0)
+            {
+                return false;
+            }
         }
         i = end + 1U;
     }
@@ -167,7 +194,10 @@ TextureCookOptions parse_texture_cook_options(crd::containers::StringView meta_t
     TextureCookOptions o;
     o.srgb       = line_bool(meta_text, "srgb", true);
     o.normal_map = line_bool(meta_text, "normal_map", false);
-    if (o.normal_map) { o.srgb = false; } // a normal map is DATA by definition — normal_map wins over a stray srgb=true
+    if (o.normal_map) // a normal map is DATA by definition — normal_map wins over a stray srgb=true
+    {
+        o.srgb = false;
+    }
     return o;
 }
 
@@ -176,7 +206,10 @@ crd::containers::Array<crd::u8> cook_texture_rgba(const crd::resources::LdrImage
                                                   crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> empty(alloc);
-    if (!image.valid()) { return empty; }
+    if (!image.valid())
+    {
+        return empty;
+    }
 
     const crd::u32 base_w    = image.width;
     const crd::u32 base_h    = image.height;
@@ -217,7 +250,10 @@ crd::containers::Array<crd::u8> cook_texture_rgba(const crd::resources::LdrImage
 
             work1.resize(cur_px * 4U);
             downsample_box_f32(work0.data(), prev_w, prev_h, work1.data(), cur_w, cur_h);
-            if (options.normal_map) { renormalize_normals(work1.data(), cur_px); }
+            if (options.normal_map)
+            {
+                renormalize_normals(work1.data(), cur_px);
+            }
 
             stored.resize(cur_px * 4U);
             encode_from_working(work1.data(), cur_px, srgb, stored.data());

@@ -88,7 +88,10 @@ bool has_family(Context& ctx, const Operation& op, const SymbolTable& table, Eff
     ctx.effective_effects(op, table, eff);
     for (u32 i = 0; i < static_cast<u32>(eff.size()); ++i)
     {
-        if (eff[i].family == f) { return true; }
+        if (eff[i].family == f)
+        {
+            return true;
+        }
     }
     return false;
 }

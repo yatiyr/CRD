@@ -86,7 +86,10 @@ Plugin register_plugin(Context& ctx)
 // if genuinely dead (x may flow elsewhere through B). ──
 bool match_ab(const Context& ctx, const Operation& op) noexcept
 {
-    if (ctx.op_name(op.kind()) != StringView("plugin.a") || op.num_operands() < 1U) { return false; }
+    if (ctx.op_name(op.kind()) != StringView("plugin.a") || op.num_operands() < 1U)
+    {
+        return false;
+    }
     const Operation* const inner = op.operand(0)->defining_op();
     return inner != nullptr && ctx.op_name(inner->kind()) == StringView("plugin.b");
 }
@@ -99,7 +102,10 @@ void rewrite_ab_to_c(Context& ctx, Operation& op)
     op.parent_block()->insert_before(c, &op);
     op.result(0)->replace_all_uses_with(c->result(0)); // A's former consumers now consume C
     op.erase();                                          // A (result now use-free)
-    if (!inner->result(0)->has_uses()) { inner->erase(); } // B, only if now dead
+    if (!inner->result(0)->has_uses()) // B, only if now dead
+    {
+        inner->erase();
+    }
 }
 
 // ── the provider STUB (contract, not execution): advertises the plugin ops; execute is NoSemantics (named-forward) ──
@@ -199,7 +205,10 @@ TEST_CASE("ceir 9h: the plugin custom type and attr preserve through an unregist
     for (usize i = 0; i < b1.size(); ++i)
     {
         ByteArray b(&root);
-        for (usize k = 0; k < b1.size(); ++k) { b.push_back(b1[k]); }
+        for (usize k = 0; k < b1.size(); ++k)
+        {
+            b.push_back(b1[k]);
+        }
         b[i] = static_cast<u8>(b[i] ^ 0xFFU);
         Context c(&root);
         (void)plugin_ext::register_plugin(c);
@@ -277,7 +286,10 @@ TEST_CASE("ceir 9h: the 9g agent path discovers and authors a plugin op over a h
     const OpSchema* discovered = nullptr;
     for (usize i = 0; i < 1U; ++i)
     {
-        if (plugin_schemas[i].operands.size() == 1U && plugin_schemas[i].results.size() == 1U) { discovered = &plugin_schemas[i]; }
+        if (plugin_schemas[i].operands.size() == 1U && plugin_schemas[i].results.size() == 1U)
+        {
+            discovered = &plugin_schemas[i];
+        }
     }
     REQUIRE(discovered != nullptr);
     const OpId kind = ctx.intern_op(discovered->dialect, discovered->name);

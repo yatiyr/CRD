@@ -17,12 +17,17 @@ int main()
     const int reps = 10;
     cont::Array<double> x(&a), h(&a);
     x.resize(N); h.resize(N);
-    for (crd::usize i = 0; i < N; ++i) { x[i] = std::sin(0.01 * i); h[i] = std::cos(0.02 * i) * std::exp(-1e-6 * i); }
+    for (crd::usize i = 0; i < N; ++i)
+    {
+        x[i] = std::sin(0.01 * i);
+        h[i] = std::cos(0.02 * i) * std::exp(-1e-6 * i);
+    }
     dsp::FftConvolver<double> conv(&a, N, N); // FFT plan built ONCE (amortized like scipy/MATLAB caches)
     auto w = conv.convolve(cont::ConstSpan<double>(x.data(), N), cont::ConstSpan<double>(h.data(), N));
     auto t0 = std::chrono::high_resolution_clock::now();
     double chk = 0;
-    for (int r = 0; r < reps; ++r) {
+    for (int r = 0; r < reps; ++r)
+    {
         auto c = conv.convolve(cont::ConstSpan<double>(x.data(), N), cont::ConstSpan<double>(h.data(), N));
         chk += c[N];
     }

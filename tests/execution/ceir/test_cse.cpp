@@ -58,7 +58,10 @@ Operation* mk(Context& ctx, Block* block, OpId kind, Value* in, TypeId t, const 
 {
     Value* const     ops[1] = {in};
     Operation* const op     = ctx.create_operation(kind, ConstSpan<Value*>(ops, 1U), 1U, t);
-    if (attr_name != nullptr) { ctx.set_attr(op, StringView(attr_name), ctx.attr_int(v)); }
+    if (attr_name != nullptr)
+    {
+        ctx.set_attr(op, StringView(attr_name), ctx.attr_int(v));
+    }
     block->append(op);
     return op;
 }

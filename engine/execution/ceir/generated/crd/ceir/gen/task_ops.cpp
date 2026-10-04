@@ -17,64 +17,154 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_continuation(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_fiber_wait(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_group(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_main_thread(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_map_reduce(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 4U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 2U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
-    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 2U) { return false; }
+    if (op.num_operands() != 4U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 2U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U)
+    {
+        return false;
+    }
+    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 2U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_parallel_for(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 3U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
+    if (op.num_operands() != 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_spawn(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_worker(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 } // namespace

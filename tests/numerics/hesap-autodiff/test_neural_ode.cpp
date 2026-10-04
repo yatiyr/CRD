@@ -36,13 +36,19 @@ struct NnRhs
         for (int j = 0; j < kHid; ++j)
         {
             T s = b1[j];
-            for (int i = 0; i < d; ++i) { s = s + w1[j * d + i] * x[i]; }
+            for (int i = 0; i < d; ++i)
+            {
+                s = s + w1[j * d + i] * x[i];
+            }
             hid[j] = tanh(s);
         }
         for (int i = 0; i < d; ++i)
         {
             T s = b2[i];
-            for (int j = 0; j < kHid; ++j) { s = s + w2[i * kHid + j] * hid[j]; }
+            for (int j = 0; j < kHid; ++j)
+            {
+                s = s + w2[i * kHid + j] * hid[j];
+            }
             dx[i] = s;
         }
     }
@@ -77,7 +83,12 @@ TEST_CASE("v16-k: neural ODE trains via the DTO adjoint, reduces loss, replays b
         x0[k * kDim + 1] = x[1];
         f64 sc[5 * kDim];
         f64 xn[kDim];
-        for (int s = 0; s < nt; ++s) { rev::rk4_step<f64>(TrueRhs{}, x, static_cast<const f64*>(nullptr), s * h, h, xn, kDim, 0, sc); x[0] = xn[0]; x[1] = xn[1]; }
+        for (int s = 0; s < nt; ++s)
+        {
+            rev::rk4_step<f64>(TrueRhs{}, x, static_cast<const f64*>(nullptr), s * h, h, xn, kDim, 0, sc);
+            x[0] = xn[0];
+            x[1] = xn[1];
+        }
         xt[k * kDim + 0] = x[0];
         xt[k * kDim + 1] = x[1];
     }
@@ -87,7 +98,10 @@ TEST_CASE("v16-k: neural ODE trains via the DTO adjoint, reduces loss, replays b
     const auto run = [&](f64* theta_out, f64* loss_first, f64* loss_last)
     {
         f64 theta[kNp];
-        for (int i = 0; i < kNp; ++i) { theta[i] = 0.2 * std::sin(0.3 + i); } // deterministic init
+        for (int i = 0; i < kNp; ++i) // deterministic init
+        {
+            theta[i] = 0.2 * std::sin(0.3 + i);
+        }
         for (int epoch = 0; epoch < 150; ++epoch)
         {
             f64 grad[kNp] = {};
@@ -97,9 +111,19 @@ TEST_CASE("v16-k: neural ODE trains via the DTO adjoint, reduces loss, replays b
                 f64 xpred[kDim] = {x0[k * kDim + 0], x0[k * kDim + 1]};
                 f64 sc[5 * kDim];
                 f64 xn[kDim];
-                for (int s = 0; s < nt; ++s) { rev::rk4_step<f64>(NnRhs{}, xpred, theta, s * h, h, xn, kDim, kNp, sc); xpred[0] = xn[0]; xpred[1] = xn[1]; }
+                for (int s = 0; s < nt; ++s)
+                {
+                    rev::rk4_step<f64>(NnRhs{}, xpred, theta, s * h, h, xn, kDim, kNp, sc);
+                    xpred[0] = xn[0];
+                    xpred[1] = xn[1];
+                }
                 f64 lg[kDim];
-                for (int i = 0; i < kDim; ++i) { const f64 e = xpred[i] - xt[k * kDim + i]; lg[i] = 2.0 * e; loss += e * e; }
+                for (int i = 0; i < kDim; ++i)
+                {
+                    const f64 e = xpred[i] - xt[k * kDim + i];
+                    lg[i] = 2.0 * e;
+                    loss += e * e;
+                }
                 f64 xall[(nt + 1) * kDim];
                 f64 fscr[5 * kDim];
                 f64 xb[kDim];
@@ -107,13 +131,25 @@ TEST_CASE("v16-k: neural ODE trains via the DTO adjoint, reduces loss, replays b
                 f64 xbar0[kDim];
                 f64 tbar[kNp];
                 rev::dto_gradient(NnRhs{}, x0 + k * kDim, theta, kDim, kNp, nt, h, lg, xbar0, tbar, xall, fscr, xb, xbn, tape, vscr);
-                for (int i = 0; i < kNp; ++i) { grad[i] += tbar[i]; }
+                for (int i = 0; i < kNp; ++i)
+                {
+                    grad[i] += tbar[i];
+                }
             }
-            if (epoch == 0) { *loss_first = loss; }
+            if (epoch == 0)
+            {
+                *loss_first = loss;
+            }
             *loss_last = loss;
-            for (int i = 0; i < kNp; ++i) { theta[i] -= 0.05 * grad[i] / static_cast<f64>(nb); }
+            for (int i = 0; i < kNp; ++i)
+            {
+                theta[i] -= 0.05 * grad[i] / static_cast<f64>(nb);
+            }
         }
-        for (int i = 0; i < kNp; ++i) { theta_out[i] = theta[i]; }
+        for (int i = 0; i < kNp; ++i)
+        {
+            theta_out[i] = theta[i];
+        }
     };
 
     f64 w1[kNp];
@@ -126,7 +162,10 @@ TEST_CASE("v16-k: neural ODE trains via the DTO adjoint, reduces loss, replays b
     run(w2, &lf2, &ll2);
     CHECK(ll1 < 0.5 * lf1);                       // training more than halved the fit loss
     CHECK(ll1 < lf1);                             // (and it strictly decreased)
-    for (int i = 0; i < kNp; ++i) { CHECK(w1[i] == w2[i]); } // BIT-identical replay (the moat)
+    for (int i = 0; i < kNp; ++i) // BIT-identical replay (the moat)
+    {
+        CHECK(w1[i] == w2[i]);
+    }
     CHECK(lf1 == lf2);
     CHECK(ll1 == ll2);
 }

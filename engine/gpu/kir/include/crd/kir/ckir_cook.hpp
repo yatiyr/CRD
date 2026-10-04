@@ -98,8 +98,14 @@ inline void build_fs_for_pass(const MaterialTemplate& t, PassType pass, const Va
         break;
     }
     }
-    if (opts.alpha_mode == material::AlphaMode::Masked) { material::set_masked(g, e, surface, opts.alpha_cutoff); }
-    if (do_lower) { lower::lower_entry(g, e); }
+    if (opts.alpha_mode == material::AlphaMode::Masked)
+    {
+        material::set_masked(g, e, surface, opts.alpha_cutoff);
+    }
+    if (do_lower)
+    {
+        lower::lower_entry(g, e);
+    }
 }
 
 // specialize_variant — bake a `ShaderOption` selector node to a compile-time `value` (B7 `specialize`): the static branch it
@@ -110,17 +116,44 @@ inline void specialize_variant(KGraph& g, KEntry& e, int option, crd::f64 value)
 {
     int* slots[kMaxStageOutputs + 6];
     int  n = 0;
-    if (e.position >= 0) { slots[n++] = &e.position; }
-    if (e.frag_depth >= 0) { slots[n++] = &e.frag_depth; }
-    if (e.discard_cond >= 0) { slots[n++] = &e.discard_cond; }
-    if (e.shading_rate >= 0) { slots[n++] = &e.shading_rate; }
-    if (e.storage_write_index >= 0) { slots[n++] = &e.storage_write_index; }
-    if (e.storage_write_value >= 0) { slots[n++] = &e.storage_write_value; }
-    for (int k = 0; k < e.n_out; ++k) { slots[n++] = &e.out[k].node; }
+    if (e.position >= 0)
+    {
+        slots[n++] = &e.position;
+    }
+    if (e.frag_depth >= 0)
+    {
+        slots[n++] = &e.frag_depth;
+    }
+    if (e.discard_cond >= 0)
+    {
+        slots[n++] = &e.discard_cond;
+    }
+    if (e.shading_rate >= 0)
+    {
+        slots[n++] = &e.shading_rate;
+    }
+    if (e.storage_write_index >= 0)
+    {
+        slots[n++] = &e.storage_write_index;
+    }
+    if (e.storage_write_value >= 0)
+    {
+        slots[n++] = &e.storage_write_value;
+    }
+    for (int k = 0; k < e.n_out; ++k)
+    {
+        slots[n++] = &e.out[k].node;
+    }
     int roots[kMaxStageOutputs + 6];
-    for (int i = 0; i < n; ++i) { roots[i] = *slots[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        roots[i] = *slots[i];
+    }
     lower::specialize(g, option, value, roots, n);
-    for (int i = 0; i < n; ++i) { *slots[i] = roots[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        *slots[i] = roots[i];
+    }
 }
 
 } // namespace crd::kir::cook

@@ -507,7 +507,9 @@ bool WorkerPool::init(const WorkerConfig& cfg)
         ? static_cast<crd::u32>(std::thread::hardware_concurrency())
         : cfg.num_threads;
     if (m_num_threads == 0U)
+    {
         m_num_threads = 1U; // hardware_concurrency() returned 0 on this platform
+    }
 
     m_pcore_routing = cfg.pcore_routing;
 
@@ -518,7 +520,9 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     sched_cfg.targeted_wake      = cfg.pcore_routing; // ADR-0094 opt-in; default false ⇒ shared-semaphore path
 
     if (!m_scheduler.init(sched_cfg))
+    {
         return false;
+    }
 
     FiberPoolConfig fiber_cfg;
     fiber_cfg.small_count  = cfg.small_fiber_count;
@@ -560,7 +564,9 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     const crd::u32 worker_count = m_num_threads > 1U ? m_num_threads - 1U : 0U;
     m_threads.reserve(worker_count);
     for (crd::u32 i = 1U; i < m_num_threads; ++i)
+    {
         m_threads.emplace_back(&WorkerPool::worker_loop, this, i);
+    }
 
     if (m_pcore_routing)
     {
@@ -574,16 +580,25 @@ bool WorkerPool::init(const WorkerConfig& cfg)
 void WorkerPool::shutdown() noexcept
 {
     if (!m_initialized)
+    {
         return;
+    }
 
     m_stopping.store(true, std::memory_order_release);
 
     // Wake all sleeping workers so they can observe m_stopping and exit cleanly.
     if (!m_threads.empty())
+    {
         m_scheduler.wake_all(static_cast<crd::u32>(m_threads.size()));
+    }
 
     for (auto& t : m_threads)
-        if (t.joinable()) t.join();
+    {
+        if (t.joinable())
+        {
+            t.join();
+        }
+    }
     m_threads.clear();
 
     m_counter_pool.shutdown();
@@ -613,7 +628,9 @@ void WorkerPool::shutdown() noexcept
 void WorkerPool::reset_all_frame_arenas() noexcept
 {
     for (crd::u32 i = 0U; i < m_frame_arena_count; ++i)
+    {
         m_frame_arenas[i].reset();
+    }
 }
 
 void WorkerPool::progress_counts(crd::u64& completions_out, crd::u32& executing_out) const noexcept
@@ -624,7 +641,9 @@ void WorkerPool::progress_counts(crd::u64& completions_out, crd::u32& executing_
     {
         completions += m_progress[i].completions.load(std::memory_order_relaxed);
         if (m_progress[i].executing.load(std::memory_order_relaxed) != 0U)
+        {
             ++executing;
+        }
     }
     completions_out = completions;
     executing_out   = executing;
@@ -654,7 +673,9 @@ bool WorkerPool::pump()
 
     std::optional<crd::jobs::JobDecl> job = m_scheduler.try_pop(tl_idx);
     if (!job)
+    {
         return false;
+    }
     m_progress[tl_idx].current_task_id.store(task_id_of(*job), std::memory_order_relaxed);
     m_progress[tl_idx].executing.store(1U, std::memory_order_relaxed); // hang-watchdog: main thread busy
     run_job_in_fiber(*job);

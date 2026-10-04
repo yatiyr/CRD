@@ -101,7 +101,10 @@ TEST_CASE("v17-i: CKIR expresses 3D Morton (bit-interleave), bit-exact vs the re
     int mism = 0;
     for (int i = 0; i < kN; ++i)
     {
-        if (static_cast<crd::u32>(out[i]) != morton_ref(qx[i], qy[i], qz[i])) { ++mism; }
+        if (static_cast<crd::u32>(out[i]) != morton_ref(qx[i], qy[i], qz[i]))
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -123,7 +126,10 @@ TEST_CASE("v17-i: CKIR scatter-add builds a radix histogram, bit-exact vs the re
 
     crd::f64 kv[hn];
     crd::u32 ref[hm];
-    for (int i = 0; i < hm; ++i) { ref[i] = 0; }
+    for (int i = 0; i < hm; ++i)
+    {
+        ref[i] = 0;
+    }
     for (int i = 0; i < hn; ++i)
     {
         const crd::u32 k = static_cast<crd::u32>((i * 7 + 13) % 4096);
@@ -137,7 +143,10 @@ TEST_CASE("v17-i: CKIR scatter-add builds a radix histogram, bit-exact vs the re
     int mism = 0;
     for (int i = 0; i < hm; ++i)
     {
-        if (static_cast<crd::u32>(out[i]) != ref[i]) { ++mism; }
+        if (static_cast<crd::u32>(out[i]) != ref[i])
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -152,10 +161,16 @@ TEST_CASE("v17-i rung 2b: CKIR ops COMPOSE into a correct radix sort (scan-based
     constexpr int              rn   = 512;
     constexpr int              bits = 20;
     crd::u32                   orig[rn];
-    for (int i = 0; i < rn; ++i) { orig[i] = static_cast<crd::u32>((i * 2654435761U) & 0xFFFFFU); } // 20-bit keys
+    for (int i = 0; i < rn; ++i) // 20-bit keys
+    {
+        orig[i] = static_cast<crd::u32>((i * 2654435761U) & 0xFFFFFU);
+    }
 
     crd::f64 cur[rn];
-    for (int i = 0; i < rn; ++i) { cur[i] = static_cast<crd::f64>(orig[i]); }
+    for (int i = 0; i < rn; ++i)
+    {
+        cur[i] = static_cast<crd::f64>(orig[i]);
+    }
 
     for (int bit = 0; bit < bits; ++bit)
     {
@@ -176,15 +191,27 @@ TEST_CASE("v17-i rung 2b: CKIR ops COMPOSE into a correct radix sort (scan-based
         const crd::f64* inputs[] = {cur};
         crd::f64        out[rn];
         kir::eval_cpu(g, inputs, &alloc, sorted, out);
-        for (int i = 0; i < rn; ++i) { cur[i] = out[i]; }
+        for (int i = 0; i < rn; ++i)
+        {
+            cur[i] = out[i];
+        }
     }
 
     crd::u32 ref[rn];
-    for (int i = 0; i < rn; ++i) { ref[i] = orig[i]; }
+    for (int i = 0; i < rn; ++i)
+    {
+        ref[i] = orig[i];
+    }
     std::sort(ref, ref + rn); // sorted VALUES oracle (value equality ⇒ stability irrelevant for the key-only sort)
 
     int mism = 0;
-    for (int i = 0; i < rn; ++i) { if (static_cast<crd::u32>(cur[i]) != ref[i]) { ++mism; } }
+    for (int i = 0; i < rn; ++i)
+    {
+        if (static_cast<crd::u32>(cur[i]) != ref[i])
+        {
+            ++mism;
+        }
+    }
     CHECK(mism == 0);
 }
 
@@ -223,7 +250,13 @@ TEST_CASE("v17 Phase A: CKIR shader intrinsics (fract/step/clamp/mix) match the 
     kir::eval_cpu(g, inputs, &alloc, cl, out);
 
     int mism = 0;
-    for (int i = 0; i < in; ++i) { if (out[i] != ref[i]) { ++mism; } }
+    for (int i = 0; i < in; ++i)
+    {
+        if (out[i] != ref[i])
+        {
+            ++mism;
+        }
+    }
     CHECK(mism == 0);
 }
 
@@ -252,30 +285,93 @@ TEST_CASE("v17 Phase A3: CKIR vec3 value type + ops (construct/dot/cross/normali
     crd::f64 yv[vn];
     crd::f64 zv[vn];
     crd::f64 wv[vn];
-    for (int i = 0; i < vn; ++i) { xv[i] = (0.5 * i) - 3.0; yv[i] = (0.2 * i) + 1.0; zv[i] = (-0.3 * i) + 2.0; wv[i] = (0.7 * i) - 1.0; }
+    for (int i = 0; i < vn; ++i)
+    {
+        xv[i] = (0.5 * i) - 3.0;
+        yv[i] = (0.2 * i) + 1.0;
+        zv[i] = (-0.3 * i) + 2.0;
+        wv[i] = (0.7 * i) - 1.0;
+    }
     const crd::f64* inp[] = {xv, yv, zv, wv};
 
     int bad = 0;
     { crd::f64 o[vn]; kir::eval_cpu(g, inp, &alloc, d, o);
-      for (int i = 0; i < vn; ++i) { const crd::f64 r = (xv[i] * zv[i]) + (yv[i] * xv[i]) + (zv[i] * yv[i]); if (o[i] != r) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          const crd::f64 r = (xv[i] * zv[i]) + (yv[i] * xv[i]) + (zv[i] * yv[i]);
+          if (o[i] != r)
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 3]; kir::eval_cpu(g, inp, &alloc, sm, o);
-      for (int i = 0; i < vn; ++i) { if (o[i * 3] != xv[i] + zv[i] || o[i * 3 + 1] != yv[i] + xv[i] || o[i * 3 + 2] != zv[i] + yv[i]) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          if (o[i * 3] != xv[i] + zv[i] || o[i * 3 + 1] != yv[i] + xv[i] || o[i * 3 + 2] != zv[i] + yv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 3]; kir::eval_cpu(g, inp, &alloc, cr, o);
-      for (int i = 0; i < vn; ++i) {
+      for (int i = 0; i < vn; ++i)
+      {
           const crd::f64 ax = xv[i]; const crd::f64 ay = yv[i]; const crd::f64 az = zv[i];
           const crd::f64 bx = zv[i]; const crd::f64 by = xv[i]; const crd::f64 bz = yv[i];
-          if (o[i * 3] != (ay * bz - az * by) || o[i * 3 + 1] != (az * bx - ax * bz) || o[i * 3 + 2] != (ax * by - ay * bx)) { ++bad; } } }
+          if (o[i * 3] != (ay * bz - az * by) || o[i * 3 + 1] != (az * bx - ax * bz) || o[i * 3 + 2] != (ax * by - ay * bx))
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn]; kir::eval_cpu(g, inp, &alloc, ln, o);
-      for (int i = 0; i < vn; ++i) { const crd::f64 r = crd::math::sqrt((xv[i] * xv[i]) + (yv[i] * yv[i]) + (zv[i] * zv[i])); if (o[i] != r) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          const crd::f64 r = crd::math::sqrt((xv[i] * xv[i]) + (yv[i] * yv[i]) + (zv[i] * zv[i]));
+          if (o[i] != r)
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 3]; kir::eval_cpu(g, inp, &alloc, nr, o);
-      for (int i = 0; i < vn; ++i) { const crd::f64 l = crd::math::sqrt((xv[i] * xv[i]) + (yv[i] * yv[i]) + (zv[i] * zv[i]));
-          if (o[i * 3] != xv[i] / l || o[i * 3 + 1] != yv[i] / l || o[i * 3 + 2] != zv[i] / l) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          const crd::f64 l = crd::math::sqrt((xv[i] * xv[i]) + (yv[i] * yv[i]) + (zv[i] * zv[i]));
+          if (o[i * 3] != xv[i] / l || o[i * 3 + 1] != yv[i] / l || o[i * 3 + 2] != zv[i] / l)
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 4]; kir::eval_cpu(g, inp, &alloc, v4, o); // vec4(x,y,z,w)
-      for (int i = 0; i < vn; ++i) { if (o[i * 4] != xv[i] || o[i * 4 + 1] != yv[i] || o[i * 4 + 2] != zv[i] || o[i * 4 + 3] != wv[i]) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          if (o[i * 4] != xv[i] || o[i * 4 + 1] != yv[i] || o[i * 4 + 2] != zv[i] || o[i * 4 + 3] != wv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 3]; kir::eval_cpu(g, inp, &alloc, sw, o); // v.yzx
-      for (int i = 0; i < vn; ++i) { if (o[i * 3] != yv[i] || o[i * 3 + 1] != zv[i] || o[i * 3 + 2] != xv[i]) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          if (o[i * 3] != yv[i] || o[i * 3 + 1] != zv[i] || o[i * 3 + 2] != xv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[vn * 2]; kir::eval_cpu(g, inp, &alloc, s2, o); // v.xy
-      for (int i = 0; i < vn; ++i) { if (o[i * 2] != xv[i] || o[i * 2 + 1] != yv[i]) { ++bad; } } }
+      for (int i = 0; i < vn; ++i)
+      {
+          if (o[i * 2] != xv[i] || o[i * 2 + 1] != yv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -300,16 +396,67 @@ TEST_CASE("v17 Phase A3: CKIR mat3 (column-major) -- mat*vec, mat*mat, transpose
     const int                  m2  = g.mat_mul(mat, mat);     // mat3
 
     crd::f64 vv[3][mn];
-    for (int i = 0; i < mn; ++i) { vv[0][i] = (0.3 * i) - 2.0; vv[1][i] = (-0.2 * i) + 1.0; vv[2][i] = (0.1 * i) + 0.5; }
+    for (int i = 0; i < mn; ++i)
+    {
+        vv[0][i] = (0.3 * i) - 2.0;
+        vv[1][i] = (-0.2 * i) + 1.0;
+        vv[2][i] = (0.1 * i) + 0.5;
+    }
     const crd::f64* inp[] = {vv[0], vv[1], vv[2]};
 
     int bad = 0;
     { crd::f64 o[mn * 3]; kir::eval_cpu(g, inp, &alloc, mv, o);
-      for (int i = 0; i < mn; ++i) { for (int r = 0; r < 3; ++r) { crd::f64 s = 0.0; for (int col = 0; col < 3; ++col) { s += mm[col * 3 + r] * vv[col][i]; } if (o[i * 3 + r] != s) { ++bad; } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int r = 0; r < 3; ++r)
+          {
+              crd::f64 s = 0.0;
+              for (int col = 0; col < 3; ++col)
+              {
+                  s += mm[col * 3 + r] * vv[col][i];
+              }
+              if (o[i * 3 + r] != s)
+              {
+                  ++bad;
+              }
+          }
+      }
+    }
     { crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, mt, o);
-      for (int i = 0; i < mn; ++i) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { if (o[i * 9 + col * 3 + r] != mm[r * 3 + col]) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int col = 0; col < 3; ++col)
+          {
+              for (int r = 0; r < 3; ++r)
+              {
+                  if (o[i * 9 + col * 3 + r] != mm[r * 3 + col])
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     { crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, m2, o);
-      for (int i = 0; i < mn; ++i) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { crd::f64 s = 0.0; for (int kk = 0; kk < 3; ++kk) { s += mm[kk * 3 + r] * mm[col * 3 + kk]; } if (o[i * 9 + col * 3 + r] != s) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int col = 0; col < 3; ++col)
+          {
+              for (int r = 0; r < 3; ++r)
+              {
+                  crd::f64 s = 0.0;
+                  for (int kk = 0; kk < 3; ++kk)
+                  {
+                      s += mm[kk * 3 + r] * mm[col * 3 + kk];
+                  }
+                  if (o[i * 9 + col * 3 + r] != s)
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -334,18 +481,122 @@ TEST_CASE("v17 gap-fill: CKIR comparisons (gt/ge/ne) + bit ops (not/count/lsb/ms
     crd::f64 av[bn];
     crd::f64 bv[bn];
     crd::f64 kv[bn];
-    for (int i = 0; i < bn; ++i) { av[i] = (0.5 * i) - 10.0; bv[i] = (static_cast<crd::f64>(i % 3) * 3.0) - 5.0; kv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 2654435761U) & 0x3FFFFFFFU); }
+    for (int i = 0; i < bn; ++i)
+    {
+        av[i] = (0.5 * i) - 10.0;
+        bv[i] = (static_cast<crd::f64>(i % 3) * 3.0) - 5.0;
+        kv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 2654435761U) & 0x3FFFFFFFU);
+    }
     const crd::f64* inp[] = {av, bv, kv};
 
     int bad = 0;
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, gt, o); for (int i = 0; i < bn; ++i) { if (o[i] != (av[i] > bv[i] ? 1.0 : 0.0)) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, ge, o); for (int i = 0; i < bn; ++i) { if (o[i] != (av[i] >= bv[i] ? 1.0 : 0.0)) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, nq, o); for (int i = 0; i < bn; ++i) { if (o[i] != (av[i] != bv[i] ? 1.0 : 0.0)) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bnot, o); for (int i = 0; i < bn; ++i) { if (o[i] != static_cast<crd::f64>(~static_cast<crd::i64>(kv[i]))) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bcnt, o); for (int i = 0; i < bn; ++i) { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i])); int c = 0; while (v != 0U) { c += static_cast<int>(v & 1U); v >>= 1U; } if (o[i] != static_cast<crd::f64>(c)) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, blsb, o); for (int i = 0; i < bn; ++i) { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i])); crd::f64 r = -1.0; if (v != 0U) { int j = 0; while ((v & 1U) == 0U) { ++j; v >>= 1U; } r = static_cast<crd::f64>(j); } if (o[i] != r) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bmsb, o); for (int i = 0; i < bn; ++i) { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i])); int j = -1; while (v != 0U) { ++j; v >>= 1U; } if (o[i] != static_cast<crd::f64>(j)) { ++bad; } } }
-    { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bext, o); for (int i = 0; i < bn; ++i) { const crd::i64 iv = static_cast<crd::i64>(kv[i]); if (o[i] != static_cast<crd::f64>((iv >> 2) & ((static_cast<crd::i64>(1) << 4) - 1))) { ++bad; } } }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, gt, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            if (o[i] != (av[i] > bv[i] ? 1.0 : 0.0))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, ge, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            if (o[i] != (av[i] >= bv[i] ? 1.0 : 0.0))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, nq, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            if (o[i] != (av[i] != bv[i] ? 1.0 : 0.0))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bnot, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            if (o[i] != static_cast<crd::f64>(~static_cast<crd::i64>(kv[i])))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bcnt, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i]));
+            int c = 0;
+            while (v != 0U)
+            {
+                c += static_cast<int>(v & 1U);
+                v >>= 1U;
+            }
+            if (o[i] != static_cast<crd::f64>(c))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, blsb, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i]));
+            crd::f64 r = -1.0;
+            if (v != 0U)
+            {
+                int j = 0;
+                while ((v & 1U) == 0U)
+                {
+                    ++j;
+                    v >>= 1U;
+                }
+                r = static_cast<crd::f64>(j);
+            }
+            if (o[i] != r)
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bmsb, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i]));
+            int j = -1;
+            while (v != 0U)
+            {
+                ++j;
+                v >>= 1U;
+            }
+            if (o[i] != static_cast<crd::f64>(j))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, bext, o);
+        for (int i = 0; i < bn; ++i)
+        {
+            const crd::i64 iv = static_cast<crd::i64>(kv[i]);
+            if (o[i] != static_cast<crd::f64>((iv >> 2) & ((static_cast<crd::i64>(1) << 4) - 1)))
+            {
+                ++bad;
+            }
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -375,7 +626,16 @@ TEST_CASE("v17 gap-fill: CKIR geometric (reflect/refract/faceforward/distance) +
     crd::f64 iv[3][gn];
     crd::f64 nv[3][gn];
     crd::f64 ev[gn];
-    for (int i = 0; i < gn; ++i) { iv[0][i] = (0.4 * i) - 5.0; iv[1][i] = (-0.3 * i) + 2.0; iv[2][i] = (0.2 * i) - 1.0; nv[0][i] = 0.5 + (0.1 * (i % 4)); nv[1][i] = 1.0 - (0.05 * (i % 5)); nv[2][i] = 0.3 + (0.07 * (i % 3)); ev[i] = 0.9; }
+    for (int i = 0; i < gn; ++i)
+    {
+        iv[0][i] = (0.4 * i) - 5.0;
+        iv[1][i] = (-0.3 * i) + 2.0;
+        iv[2][i] = (0.2 * i) - 1.0;
+        nv[0][i] = 0.5 + (0.1 * (i % 4));
+        nv[1][i] = 1.0 - (0.05 * (i % 5));
+        nv[2][i] = 0.3 + (0.07 * (i % 3));
+        ev[i] = 0.9;
+    }
     const crd::f64* inp[] = {iv[0], iv[1], iv[2], nv[0], nv[1], nv[2], ev};
 
     int bad = 0;
@@ -385,21 +645,101 @@ TEST_CASE("v17 gap-fill: CKIR geometric (reflect/refract/faceforward/distance) +
         const crd::f64 nn[3] = {nv[0][i] / len, nv[1][i] / len, nv[2][i] / len};
         const crd::f64 iu[3] = {iv[0][i], iv[1][i], iv[2][i]};
         crd::f64       dp = 0.0;
-        for (int k = 0; k < 3; ++k) { dp += nn[k] * iu[k]; }
+        for (int k = 0; k < 3; ++k)
+        {
+            dp += nn[k] * iu[k];
+        }
 
         crd::f64 o[gn * 3];
         kir::eval_cpu(g, inp, &alloc, rfl, o);
-        for (int k = 0; k < 3; ++k) { if (o[i * 3 + k] != iu[k] - 2.0 * dp * nn[k]) { ++bad; } }
+        for (int k = 0; k < 3; ++k)
+        {
+            if (o[i * 3 + k] != iu[k] - 2.0 * dp * nn[k])
+            {
+                ++bad;
+            }
+        }
         kir::eval_cpu(g, inp, &alloc, rfr, o);
-        { const crd::f64 kk = 1.0 - ev[i] * ev[i] * (1.0 - dp * dp); if (kk < 0.0) { for (int k = 0; k < 3; ++k) { if (o[i * 3 + k] != 0.0) { ++bad; } } } else { const crd::f64 cf = ev[i] * dp + crd::math::sqrt(kk); for (int k = 0; k < 3; ++k) { if (o[i * 3 + k] != ev[i] * iu[k] - cf * nn[k]) { ++bad; } } } }
+        {
+            const crd::f64 kk = 1.0 - ev[i] * ev[i] * (1.0 - dp * dp);
+            if (kk < 0.0)
+            {
+                for (int k = 0; k < 3; ++k)
+                {
+                    if (o[i * 3 + k] != 0.0)
+                    {
+                        ++bad;
+                    }
+                }
+            }
+            else
+            {
+                const crd::f64 cf = ev[i] * dp + crd::math::sqrt(kk);
+                for (int k = 0; k < 3; ++k)
+                {
+                    if (o[i * 3 + k] != ev[i] * iu[k] - cf * nn[k])
+                    {
+                        ++bad;
+                    }
+                }
+            }
+        }
         kir::eval_cpu(g, inp, &alloc, ff, o);
-        { const crd::f64 s = dp < 0.0 ? 1.0 : -1.0; for (int k = 0; k < 3; ++k) { if (o[i * 3 + k] != s * nn[k]) { ++bad; } } }
+        {
+            const crd::f64 s = dp < 0.0 ? 1.0 : -1.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                if (o[i * 3 + k] != s * nn[k])
+                {
+                    ++bad;
+                }
+            }
+        }
         kir::eval_cpu(g, inp, &alloc, sp, o);
-        for (int k = 0; k < 3; ++k) { if (o[i * 3 + k] != ev[i]) { ++bad; } }
+        for (int k = 0; k < 3; ++k)
+        {
+            if (o[i * 3 + k] != ev[i])
+            {
+                ++bad;
+            }
+        }
     }
-    { crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, dd, o); for (int i = 0; i < gn; ++i) { const crd::f64 len = crd::math::sqrt((nv[0][i] * nv[0][i]) + (nv[1][i] * nv[1][i]) + (nv[2][i] * nv[2][i])); const crd::f64 dx = iv[0][i] - nv[0][i] / len; const crd::f64 dy = iv[1][i] - nv[1][i] / len; const crd::f64 dz = iv[2][i] - nv[2][i] / len; if (o[i] != crd::math::sqrt(dx * dx + dy * dy + dz * dz)) { ++bad; } } }
-    { crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, an, o); for (int i = 0; i < gn; ++i) { const bool any = iv[0][i] != 0.0 || iv[1][i] != 0.0 || iv[2][i] != 0.0; if (o[i] != (any ? 1.0 : 0.0)) { ++bad; } } }
-    { crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, al, o); for (int i = 0; i < gn; ++i) { const bool all = iv[0][i] != 0.0 && iv[1][i] != 0.0 && iv[2][i] != 0.0; if (o[i] != (all ? 1.0 : 0.0)) { ++bad; } } }
+    {
+        crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, dd, o);
+        for (int i = 0; i < gn; ++i)
+        {
+            const crd::f64 len = crd::math::sqrt((nv[0][i] * nv[0][i]) + (nv[1][i] * nv[1][i]) + (nv[2][i] * nv[2][i]));
+            const crd::f64 dx = iv[0][i] - nv[0][i] / len;
+            const crd::f64 dy = iv[1][i] - nv[1][i] / len;
+            const crd::f64 dz = iv[2][i] - nv[2][i] / len;
+            if (o[i] != crd::math::sqrt(dx * dx + dy * dy + dz * dz))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, an, o);
+        for (int i = 0; i < gn; ++i)
+        {
+            const bool any = iv[0][i] != 0.0 || iv[1][i] != 0.0 || iv[2][i] != 0.0;
+            if (o[i] != (any ? 1.0 : 0.0))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[gn]; kir::eval_cpu(g, inp, &alloc, al, o);
+        for (int i = 0; i < gn; ++i)
+        {
+            const bool all = iv[0][i] != 0.0 && iv[1][i] != 0.0 && iv[2][i] != 0.0;
+            if (o[i] != (all ? 1.0 : 0.0))
+            {
+                ++bad;
+            }
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -421,9 +761,49 @@ TEST_CASE("v17 gap-fill: CKIR matrix determinant/inverse/outerProduct vs the CPU
 
     const crd::f64* inp[1] = {nullptr}; // no Input nodes (all const)
     int             bad    = 0;
-    { crd::f64 o[mn]; kir::eval_cpu(g, inp, &alloc, det, o); for (int i = 0; i < mn; ++i) { if (o[i] != 25.0) { ++bad; } } }
-    { crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, prod, o); for (int i = 0; i < mn; ++i) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { const crd::f64 ex = (col == r) ? 1.0 : 0.0; if (std::fabs(o[i * 9 + col * 3 + r] - ex) > 1e-12) { ++bad; } } } } }
-    { crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, op, o); for (int i = 0; i < mn; ++i) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { if (o[i * 9 + col * 3 + r] != av[r] * bv[col]) { ++bad; } } } } }
+    {
+        crd::f64 o[mn]; kir::eval_cpu(g, inp, &alloc, det, o);
+        for (int i = 0; i < mn; ++i)
+        {
+            if (o[i] != 25.0)
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, prod, o);
+        for (int i = 0; i < mn; ++i)
+        {
+            for (int col = 0; col < 3; ++col)
+            {
+                for (int r = 0; r < 3; ++r)
+                {
+                    const crd::f64 ex = (col == r) ? 1.0 : 0.0;
+                    if (std::fabs(o[i * 9 + col * 3 + r] - ex) > 1e-12)
+                    {
+                        ++bad;
+                    }
+                }
+            }
+        }
+    }
+    {
+        crd::f64 o[mn * 9]; kir::eval_cpu(g, inp, &alloc, op, o);
+        for (int i = 0; i < mn; ++i)
+        {
+            for (int col = 0; col < 3; ++col)
+            {
+                for (int r = 0; r < 3; ++r)
+                {
+                    if (o[i * 9 + col * 3 + r] != av[r] * bv[col])
+                    {
+                        ++bad;
+                    }
+                }
+            }
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -457,17 +837,68 @@ TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/mat*mat/transpose/det/inverse)
     CHECK(g.node(mv).comps() == 2);
 
     crd::f64 vv[2][mn];
-    for (int i = 0; i < mn; ++i) { vv[0][i] = (0.25 * i) - 1.0; vv[1][i] = (-0.5 * i) + 2.0; }
+    for (int i = 0; i < mn; ++i)
+    {
+        vv[0][i] = (0.25 * i) - 1.0;
+        vv[1][i] = (-0.5 * i) + 2.0;
+    }
     const crd::f64* inp[] = {vv[0], vv[1]};
 
     int bad = 0;
     { crd::f64 o[mn * 2]; kir::eval_cpu(g, inp, &alloc, mv, o);
-      for (int i = 0; i < mn; ++i) { for (int r = 0; r < 2; ++r) { const crd::f64 s = mm[r] * vv[0][i] + mm[2 + r] * vv[1][i]; if (o[i * 2 + r] != s) { ++bad; } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int r = 0; r < 2; ++r)
+          {
+              const crd::f64 s = mm[r] * vv[0][i] + mm[2 + r] * vv[1][i];
+              if (o[i * 2 + r] != s)
+              {
+                  ++bad;
+              }
+          }
+      }
+    }
     { crd::f64 o[mn * 4]; kir::eval_cpu(g, inp, &alloc, mt, o);
-      for (int i = 0; i < mn; ++i) { for (int col = 0; col < 2; ++col) { for (int r = 0; r < 2; ++r) { if (o[i * 4 + col * 2 + r] != mm[r * 2 + col]) { ++bad; } } } } }
-    { crd::f64 o[mn]; kir::eval_cpu(g, inp, &alloc, det, o); for (int i = 0; i < mn; ++i) { if (o[i] != -2.0) { ++bad; } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int col = 0; col < 2; ++col)
+          {
+              for (int r = 0; r < 2; ++r)
+              {
+                  if (o[i * 4 + col * 2 + r] != mm[r * 2 + col])
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
+    {
+        crd::f64 o[mn]; kir::eval_cpu(g, inp, &alloc, det, o);
+        for (int i = 0; i < mn; ++i)
+        {
+            if (o[i] != -2.0)
+            {
+                ++bad;
+            }
+        }
+    }
     { crd::f64 o[mn * 4]; kir::eval_cpu(g, inp, &alloc, idm, o);
-      for (int i = 0; i < mn; ++i) { for (int col = 0; col < 2; ++col) { for (int r = 0; r < 2; ++r) { const crd::f64 ex = (col == r) ? 1.0 : 0.0; if (std::fabs(o[i * 4 + col * 2 + r] - ex) > 1e-12) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int col = 0; col < 2; ++col)
+          {
+              for (int r = 0; r < 2; ++r)
+              {
+                  const crd::f64 ex = (col == r) ? 1.0 : 0.0;
+                  if (std::fabs(o[i * 4 + col * 2 + r] - ex) > 1e-12)
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -492,15 +923,57 @@ TEST_CASE("v17 B0-2: CKIR NON-SQUARE matrices (2x3 outer, 3x2 transpose, 2x3 * 3
     int             bad    = 0;
     // mat(r,c) = a[r]*b[c], column-major flat[c*2 + r]
     { crd::f64 o[mn * 6]; kir::eval_cpu(g, inp, &alloc, mat, o);
-      for (int i = 0; i < mn; ++i) { for (int c = 0; c < 3; ++c) { for (int r = 0; r < 2; ++r) { if (o[i * 6 + c * 2 + r] != av[r] * bv[c]) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int c = 0; c < 3; ++c)
+          {
+              for (int r = 0; r < 2; ++r)
+              {
+                  if (o[i * 6 + c * 2 + r] != av[r] * bv[c])
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     // trn(r,c) = mat(c,r) = a[c]*b[r], flat[c*3 + r]
     { crd::f64 o[mn * 6]; kir::eval_cpu(g, inp, &alloc, trn, o);
-      for (int i = 0; i < mn; ++i) { for (int c = 0; c < 2; ++c) { for (int r = 0; r < 3; ++r) { if (o[i * 6 + c * 3 + r] != av[c] * bv[r]) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int c = 0; c < 2; ++c)
+          {
+              for (int r = 0; r < 3; ++r)
+              {
+                  if (o[i * 6 + c * 3 + r] != av[c] * bv[r])
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     // prd(r,c) = sum_k a[r]b[k] * a[c]b[k] = a[r]*a[c]*sum(b^2)
     crd::f64 b2 = 0.0;
-    for (const crd::f64 bk : bv) { b2 += bk * bk; }
+    for (const crd::f64 bk : bv)
+    {
+        b2 += bk * bk;
+    }
     { crd::f64 o[mn * 4]; kir::eval_cpu(g, inp, &alloc, prd, o);
-      for (int i = 0; i < mn; ++i) { for (int c = 0; c < 2; ++c) { for (int r = 0; r < 2; ++r) { if (std::fabs(o[i * 4 + c * 2 + r] - (av[r] * av[c] * b2)) > 1e-12) { ++bad; } } } } }
+      for (int i = 0; i < mn; ++i)
+      {
+          for (int c = 0; c < 2; ++c)
+          {
+              for (int r = 0; r < 2; ++r)
+              {
+                  if (std::fabs(o[i * 4 + c * 2 + r] - (av[r] * av[c] * b2)) > 1e-12)
+                  {
+                      ++bad;
+                  }
+              }
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -560,13 +1033,47 @@ TEST_CASE("v17 B0-3: comparisons yield bool / bvecN; any+all consume a bvec; cas
 
     int bad = 0;
     { crd::f64 o[bn * 3]; kir::eval_cpu(g, inp, &alloc, lt, o);
-      for (int i = 0; i < bn; ++i) { for (int k = 0; k < 3; ++k) { const crd::f64 ex = avd[k][i] < bvd[k][i] ? 1.0 : 0.0; if (o[i * 3 + k] != ex) { ++bad; } } } }
+      for (int i = 0; i < bn; ++i)
+      {
+          for (int k = 0; k < 3; ++k)
+          {
+              const crd::f64 ex = avd[k][i] < bvd[k][i] ? 1.0 : 0.0;
+              if (o[i * 3 + k] != ex)
+              {
+                  ++bad;
+              }
+          }
+      }
+    }
     { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, an, o);
-      for (int i = 0; i < bn; ++i) { const bool ea = (avd[0][i] < bvd[0][i]) || (avd[1][i] < bvd[1][i]) || (avd[2][i] < bvd[2][i]); if (o[i] != (ea ? 1.0 : 0.0)) { ++bad; } } }
+      for (int i = 0; i < bn; ++i)
+      {
+          const bool ea = (avd[0][i] < bvd[0][i]) || (avd[1][i] < bvd[1][i]) || (avd[2][i] < bvd[2][i]);
+          if (o[i] != (ea ? 1.0 : 0.0))
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, al, o);
-      for (int i = 0; i < bn; ++i) { const bool eall = (avd[0][i] < bvd[0][i]) && (avd[1][i] < bvd[1][i]) && (avd[2][i] < bvd[2][i]); if (o[i] != (eall ? 1.0 : 0.0)) { ++bad; } } }
+      for (int i = 0; i < bn; ++i)
+      {
+          const bool eall = (avd[0][i] < bvd[0][i]) && (avd[1][i] < bvd[1][i]) && (avd[2][i] < bvd[2][i]);
+          if (o[i] != (eall ? 1.0 : 0.0))
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[bn]; kir::eval_cpu(g, inp, &alloc, sc, o);
-      for (int i = 0; i < bn; ++i) { if (o[i] != (avd[0][i] > bvd[0][i] ? 1.0 : 0.0)) { ++bad; } } }
+      for (int i = 0; i < bn; ++i)
+      {
+          if (o[i] != (avd[0][i] > bvd[0][i] ? 1.0 : 0.0))
+          {
+              ++bad;
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -640,15 +1147,50 @@ TEST_CASE("v17 B0-4: struct + array value types round-trip through the CPU oracl
 
     int bad = 0;
     { crd::f64 o[an * 3]; kir::eval_cpu(g, inp, &alloc, f_pos, o);
-      for (int i = 0; i < an; ++i) { if (o[i * 3] != pxv[i] || o[i * 3 + 1] != pyv[i] || o[i * 3 + 2] != pzv[i]) { ++bad; } } }
+      for (int i = 0; i < an; ++i)
+      {
+          if (o[i * 3] != pxv[i] || o[i * 3 + 1] != pyv[i] || o[i * 3 + 2] != pzv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[an]; kir::eval_cpu(g, inp, &alloc, f_rad, o);
-      for (int i = 0; i < an; ++i) { if (o[i] != rrv[i]) { ++bad; } } }
+      for (int i = 0; i < an; ++i)
+      {
+          if (o[i] != rrv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[an * 3]; kir::eval_cpu(g, inp, &alloc, f_col, o);
-      for (int i = 0; i < an; ++i) { if (o[i * 3] != rrv[i] || o[i * 3 + 1] != pxv[i] || o[i * 3 + 2] != pyv[i]) { ++bad; } } }
+      for (int i = 0; i < an; ++i)
+      {
+          if (o[i * 3] != rrv[i] || o[i * 3 + 1] != pxv[i] || o[i * 3 + 2] != pyv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[an]; kir::eval_cpu(g, inp, &alloc, a1, o);
-      for (int i = 0; i < an; ++i) { if (o[i] != pyv[i]) { ++bad; } } }
+      for (int i = 0; i < an; ++i)
+      {
+          if (o[i] != pyv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     { crd::f64 o[an * 3]; kir::eval_cpu(g, inp, &alloc, v1, o);
-      for (int i = 0; i < an; ++i) { if (o[i * 3] != rrv[i] || o[i * 3 + 1] != pxv[i] || o[i * 3 + 2] != pyv[i]) { ++bad; } } }
+      for (int i = 0; i < an; ++i)
+      {
+          if (o[i * 3] != rrv[i] || o[i * 3 + 1] != pxv[i] || o[i * 3 + 2] != pyv[i])
+          {
+              ++bad;
+          }
+      }
+    }
     CHECK(bad == 0);
 }
 
@@ -679,7 +1221,10 @@ TEST_CASE("v17 B0-4: optimize renumbers VARIADIC operands (struct fields) under 
     const crd::f64* const inputs[] = {xin};
     crd::f64              before[4];
     kir::eval_cpu(g, inputs, &alloc, got, before);
-    for (int i = 0; i < 4; ++i) { CHECK(before[i] == -xin[i]); }
+    for (int i = 0; i < 4; ++i)
+    {
+        CHECK(before[i] == -xin[i]);
+    }
 
     int roots[1] = {got};
     g.optimize(roots, 1);
@@ -687,7 +1232,10 @@ TEST_CASE("v17 B0-4: optimize renumbers VARIADIC operands (struct fields) under 
 
     crd::f64 after[4];
     kir::eval_cpu(g, inputs, &alloc, roots[0], after);
-    for (int i = 0; i < 4; ++i) { CHECK(after[i] == before[i]); } // the passes never change the result
+    for (int i = 0; i < 4; ++i) // the passes never change the result
+    {
+        CHECK(after[i] == before[i]);
+    }
 }
 
 // ── D-007 B3-core: the STAGE model in the IR. CKIR was compute-only; a stage is now explicit, because `dFdx`/`discard`
@@ -745,7 +1293,13 @@ TEST_CASE("v17 B3: stage leaves -- StageIn / Builtin / UniformBlock typing + fre
     REQUIRE(g.operands_valid());
 
     bool saw_builtin = false;
-    for (int i = 0; i < g.size(); ++i) { if (g.node(i).op == kir::KOp::Builtin) { saw_builtin = true; } }
+    for (int i = 0; i < g.size(); ++i)
+    {
+        if (g.node(i).op == kir::KOp::Builtin)
+        {
+            saw_builtin = true;
+        }
+    }
     CHECK(saw_builtin); // a folded gl_VertexIndex would silently become a constant — every vertex would be vertex 0
 
     // and CSE must not merge the two sets into one node
@@ -758,7 +1312,13 @@ TEST_CASE("v17 B3: stage leaves -- StageIn / Builtin / UniformBlock typing + fre
     g2.optimize(r2, 1);
     REQUIRE(g2.operands_valid());
     int n_ubo = 0;
-    for (int i = 0; i < g2.size(); ++i) { if (g2.node(i).op == kir::KOp::UniformBlock) { ++n_ubo; } }
+    for (int i = 0; i < g2.size(); ++i)
+    {
+        if (g2.node(i).op == kir::KOp::UniformBlock)
+        {
+            ++n_ubo;
+        }
+    }
     CHECK(n_ubo == 2); // set 0 and set 1 are different resources; hash-consing them together would be a real bug
 }
 
@@ -969,13 +1529,49 @@ TEST_CASE("v17 gap-fill: CKIR quaternions (axis-angle/mul/conj/rotate/to-mat3) +
     crd::f64 axv[3][qn];
     crd::f64 angv[qn];
     crd::f64 vv[3][qn];
-    for (int i = 0; i < qn; ++i) { axv[0][i] = 0.3 + 0.1 * i; axv[1][i] = 1.0 - 0.05 * i; axv[2][i] = 0.2 + 0.07 * i; angv[i] = 0.2 + 0.3 * i; vv[0][i] = (0.5 * i) - 2.0; vv[1][i] = 1.0 + 0.2 * i; vv[2][i] = (-0.3 * i) + 1.0; }
+    for (int i = 0; i < qn; ++i)
+    {
+        axv[0][i] = 0.3 + 0.1 * i;
+        axv[1][i] = 1.0 - 0.05 * i;
+        axv[2][i] = 0.2 + 0.07 * i;
+        angv[i] = 0.2 + 0.3 * i;
+        vv[0][i] = (0.5 * i) - 2.0;
+        vv[1][i] = 1.0 + 0.2 * i;
+        vv[2][i] = (-0.3 * i) + 1.0;
+    }
     const crd::f64* inp[] = {axv[0], axv[1], axv[2], angv, vv[0], vv[1], vv[2]};
 
     int bad = 0;
-    { crd::f64 a[qn * 3]; crd::f64 b[qn * 3]; kir::eval_cpu(g, inp, &alloc, qr, a); kir::eval_cpu(g, inp, &alloc, mv, b); for (int i = 0; i < qn * 3; ++i) { if (std::fabs(a[i] - b[i]) > 1e-12) { ++bad; } } }        // rotate ≡ mat·v
-    { crd::f64 o[qn * 4]; kir::eval_cpu(g, inp, &alloc, qqc, o); for (int i = 0; i < qn; ++i) { if (std::fabs(o[i * 4]) > 1e-12 || std::fabs(o[i * 4 + 1]) > 1e-12 || std::fabs(o[i * 4 + 2]) > 1e-12 || std::fabs(o[i * 4 + 3] - 1.0) > 1e-12) { ++bad; } } } // q·conj ≡ identity
-    { crd::f64 a[qn * 4]; crd::f64 b[qn * 4]; kir::eval_cpu(g, inp, &alloc, sl, a); kir::eval_cpu(g, inp, &alloc, q, b); for (int i = 0; i < qn * 4; ++i) { if (std::fabs(a[i] - b[i]) > 1e-12) { ++bad; } } }          // slerp(q,q) ≡ q
+    {
+        crd::f64 a[qn * 3]; crd::f64 b[qn * 3]; kir::eval_cpu(g, inp, &alloc, qr, a); kir::eval_cpu(g, inp, &alloc, mv, b);
+        for (int i = 0; i < qn * 3; ++i)
+        {
+            if (std::fabs(a[i] - b[i]) > 1e-12)
+            {
+                ++bad;
+            }
+        }
+    }        // rotate ≡ mat·v
+    {
+        crd::f64 o[qn * 4]; kir::eval_cpu(g, inp, &alloc, qqc, o);
+        for (int i = 0; i < qn; ++i)
+        {
+            if (std::fabs(o[i * 4]) > 1e-12 || std::fabs(o[i * 4 + 1]) > 1e-12 || std::fabs(o[i * 4 + 2]) > 1e-12 || std::fabs(o[i * 4 + 3] - 1.0) > 1e-12)
+            {
+                ++bad;
+            }
+        }
+    } // q·conj ≡ identity
+    {
+        crd::f64 a[qn * 4]; crd::f64 b[qn * 4]; kir::eval_cpu(g, inp, &alloc, sl, a); kir::eval_cpu(g, inp, &alloc, q, b);
+        for (int i = 0; i < qn * 4; ++i)
+        {
+            if (std::fabs(a[i] - b[i]) > 1e-12)
+            {
+                ++bad;
+            }
+        }
+    }          // slerp(q,q) ≡ q
     CHECK(bad == 0);
 }
 
@@ -997,15 +1593,76 @@ TEST_CASE("v17 gap-fill: CKIR bitfieldInsert/reverse + ldexp + float<->int bits 
     crd::f64 kv[n];
     crd::f64 iv[n];
     crd::f64 fv[n];
-    for (int i = 0; i < n; ++i) { kv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 2654435761U) & 0x3FFFFFFFU); iv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 40503U) & 0xFFU); fv[i] = static_cast<crd::f64>(static_cast<float>((0.5 * i) - 5.0)); }
+    for (int i = 0; i < n; ++i)
+    {
+        kv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 2654435761U) & 0x3FFFFFFFU);
+        iv[i] = static_cast<crd::f64>((static_cast<crd::u32>(i) * 40503U) & 0xFFU);
+        fv[i] = static_cast<crd::f64>(static_cast<float>((0.5 * i) - 5.0));
+    }
     const crd::f64* inp[] = {kv, iv, fv};
 
     int bad = 0;
-    { crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, rev, o); for (int i = 0; i < n; ++i) { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i])); crd::u32 r = 0U; for (int b = 0; b < 32; ++b) { r = (r << 1U) | (v & 1U); v >>= 1U; } if (o[i] != static_cast<crd::f64>(r)) { ++bad; } } }
-    { crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, bi, o); for (int i = 0; i < n; ++i) { const crd::i64 base = static_cast<crd::i64>(kv[i]); const crd::i64 insv = static_cast<crd::i64>(iv[i]); const crd::i64 mask = ((static_cast<crd::i64>(1) << 8) - 1) << 4; if (o[i] != static_cast<crd::f64>((base & ~mask) | ((insv << 4) & mask))) { ++bad; } } }
-    { crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, rt, o); for (int i = 0; i < n; ++i) { if (o[i] != fv[i]) { ++bad; } } }
-    { crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, lx, o); for (int i = 0; i < n; ++i) { if (o[i] != fv[i] * 8.0) { ++bad; } } }
-    { crd::f64 o[n * 2]; kir::eval_cpu(g, inp, &alloc, md, o); for (int i = 0; i < n; ++i) { const crd::f64 ip = crd::math::trunc(fv[i]); if (o[i * 2] != ip || o[i * 2 + 1] != fv[i] - ip) { ++bad; } } }
+    {
+        crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, rev, o);
+        for (int i = 0; i < n; ++i)
+        {
+            crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(kv[i]));
+            crd::u32 r = 0U;
+            for (int b = 0; b < 32; ++b)
+            {
+                r = (r << 1U) | (v & 1U);
+                v >>= 1U;
+            }
+            if (o[i] != static_cast<crd::f64>(r))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, bi, o);
+        for (int i = 0; i < n; ++i)
+        {
+            const crd::i64 base = static_cast<crd::i64>(kv[i]);
+            const crd::i64 insv = static_cast<crd::i64>(iv[i]);
+            const crd::i64 mask = ((static_cast<crd::i64>(1) << 8) - 1) << 4;
+            if (o[i] != static_cast<crd::f64>((base & ~mask) | ((insv << 4) & mask)))
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, rt, o);
+        for (int i = 0; i < n; ++i)
+        {
+            if (o[i] != fv[i])
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[n]; kir::eval_cpu(g, inp, &alloc, lx, o);
+        for (int i = 0; i < n; ++i)
+        {
+            if (o[i] != fv[i] * 8.0)
+            {
+                ++bad;
+            }
+        }
+    }
+    {
+        crd::f64 o[n * 2]; kir::eval_cpu(g, inp, &alloc, md, o);
+        for (int i = 0; i < n; ++i)
+        {
+            const crd::f64 ip = crd::math::trunc(fv[i]);
+            if (o[i * 2] != ip || o[i * 2 + 1] != fv[i] - ip)
+            {
+                ++bad;
+            }
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -1022,7 +1679,11 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) accumulates correctly on t
 
     crd::f64 xv[cn];
     crd::f64 yv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.3 * i) - 2.0; yv[i] = 0.1 + (0.02 * i); }
+    for (int i = 0; i < cn; ++i)
+    {
+        xv[i] = (0.3 * i) - 2.0;
+        yv[i] = 0.1 + (0.02 * i);
+    }
     const crd::f64* inp[] = {xv, yv};
     crd::f64        out[cn];
     kir::eval_cpu(g, inp, &alloc, r, out);
@@ -1031,8 +1692,14 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) accumulates correctly on t
     for (int i = 0; i < cn; ++i)
     {
         crd::f64 acc = xv[i];
-        for (int it = 0; it < 8; ++it) { acc = acc + (static_cast<crd::f64>(it) * yv[i]); }
-        if (out[i] != acc) { ++mism; }
+        for (int it = 0; it < 8; ++it)
+        {
+            acc = acc + (static_cast<crd::f64>(it) * yv[i]);
+        }
+        if (out[i] != acc)
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -1052,7 +1719,12 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (divergent per-element count) on
     crd::f64 xv[cn];
     crd::f64 yv[cn];
     crd::f64 cv[cn];
-    for (int i = 0; i < cn; ++i) { xv[i] = (0.3 * i) - 2.0; yv[i] = 0.1 + (0.02 * i); cv[i] = static_cast<crd::f64>(i % 9); }
+    for (int i = 0; i < cn; ++i)
+    {
+        xv[i] = (0.3 * i) - 2.0;
+        yv[i] = 0.1 + (0.02 * i);
+        cv[i] = static_cast<crd::f64>(i % 9);
+    }
     const crd::f64* inp[] = {xv, yv, cv};
     crd::f64        out[cn];
     kir::eval_cpu(g, inp, &alloc, r, out);
@@ -1062,8 +1734,14 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (divergent per-element count) on
     {
         crd::f64  acc = xv[i];
         const int c   = static_cast<int>(cv[i]);
-        for (int it = 0; it < c; ++it) { acc = acc + yv[i]; }
-        if (out[i] != acc) { ++mism; }
+        for (int it = 0; it < c; ++it)
+        {
+            acc = acc + yv[i];
+        }
+        if (out[i] != acc)
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -1083,11 +1761,29 @@ TEST_CASE("v17 A4 tier-2: CKIR bounded while_loop + switch_case (compositions) o
         const int   r    = g.while_loop(100, zero, [&](int acc) { return g.binary(kir::KOp::CmpGt, thr, acc); }, [&](int /*idx*/, int acc) { return g.binary(kir::KOp::Add, acc, step); });
         crd::f64    tv[cn];
         crd::f64    sv[cn];
-        for (int i = 0; i < cn; ++i) { tv[i] = 5.0 + (0.1 * i); sv[i] = 0.7 + (0.01 * i); }
+        for (int i = 0; i < cn; ++i)
+        {
+            tv[i] = 5.0 + (0.1 * i);
+            sv[i] = 0.7 + (0.01 * i);
+        }
         const crd::f64* inp[] = {tv, sv};
         crd::f64        out[cn];
         kir::eval_cpu(g, inp, &alloc, r, out);
-        for (int i = 0; i < cn; ++i) { crd::f64 acc = 0.0; for (int it = 0; it < 100; ++it) { if (acc < tv[i]) { acc = acc + sv[i]; } } if (out[i] != acc) { ++bad; } }
+        for (int i = 0; i < cn; ++i)
+        {
+            crd::f64 acc = 0.0;
+            for (int it = 0; it < 100; ++it)
+            {
+                if (acc < tv[i])
+                {
+                    acc = acc + sv[i];
+                }
+            }
+            if (out[i] != acc)
+            {
+                ++bad;
+            }
+        }
     }
     { // switch: sel==0 ? a : sel==1 ? b : c
         kir::KGraph g(&alloc);
@@ -1100,11 +1796,32 @@ TEST_CASE("v17 A4 tier-2: CKIR bounded while_loop + switch_case (compositions) o
         crd::f64    av[cn];
         crd::f64    bv[cn];
         crd::f64    cv[cn];
-        for (int i = 0; i < cn; ++i) { se[i] = static_cast<crd::f64>(i % 3); av[i] = 1.0 + i; bv[i] = 100.0 + i; cv[i] = -50.0 - i; }
+        for (int i = 0; i < cn; ++i)
+        {
+            se[i] = static_cast<crd::f64>(i % 3);
+            av[i] = 1.0 + i;
+            bv[i] = 100.0 + i;
+            cv[i] = -50.0 - i;
+        }
         const crd::f64* inp[] = {se, av, bv, cv};
         crd::f64        out[cn];
         kir::eval_cpu(g, inp, &alloc, r, out);
-        for (int i = 0; i < cn; ++i) { crd::f64 ref = cv[i]; if (se[i] == 1.0) { ref = bv[i]; } if (se[i] == 0.0) { ref = av[i]; } if (out[i] != ref) { ++bad; } }
+        for (int i = 0; i < cn; ++i)
+        {
+            crd::f64 ref = cv[i];
+            if (se[i] == 1.0)
+            {
+                ref = bv[i];
+            }
+            if (se[i] == 0.0)
+            {
+                ref = av[i];
+            }
+            if (out[i] != ref)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -1120,7 +1837,31 @@ TEST_CASE("v17 gap-fill: CKIR translate/scale transforms compose correctly (CPU 
     const int                  sc = g.scale(k(5.0), k(6.0), k(7.0));
     const crd::f64* inp[1] = {nullptr};
     int             bad    = 0;
-    { crd::f64 o[n * 16]; kir::eval_cpu(g, inp, &alloc, tr, o); const crd::f64 ex[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 3, 4, 1}; for (int i = 0; i < n; ++i) { for (int j = 0; j < 16; ++j) { if (o[i * 16 + j] != ex[j]) { ++bad; } } } }
-    { crd::f64 o[n * 16]; kir::eval_cpu(g, inp, &alloc, sc, o); const crd::f64 ex[16] = {5, 0, 0, 0, 0, 6, 0, 0, 0, 0, 7, 0, 0, 0, 0, 1}; for (int i = 0; i < n; ++i) { for (int j = 0; j < 16; ++j) { if (o[i * 16 + j] != ex[j]) { ++bad; } } } }
+    {
+        crd::f64 o[n * 16]; kir::eval_cpu(g, inp, &alloc, tr, o); const crd::f64 ex[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 3, 4, 1};
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j < 16; ++j)
+            {
+                if (o[i * 16 + j] != ex[j])
+                {
+                    ++bad;
+                }
+            }
+        }
+    }
+    {
+        crd::f64 o[n * 16]; kir::eval_cpu(g, inp, &alloc, sc, o); const crd::f64 ex[16] = {5, 0, 0, 0, 0, 6, 0, 0, 0, 0, 7, 0, 0, 0, 0, 1};
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j < 16; ++j)
+            {
+                if (o[i * 16 + j] != ex[j])
+                {
+                    ++bad;
+                }
+            }
+        }
+    }
     CHECK(bad == 0);
 }

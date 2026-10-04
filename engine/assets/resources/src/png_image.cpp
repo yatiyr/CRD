@@ -24,7 +24,10 @@ struct CrcTable
         for (crd::u32 n = 0; n < 256U; ++n)
         {
             crd::u32 c = n;
-            for (int k = 0; k < 8; ++k) { c = ((c & 1U) != 0U) ? 0xEDB88320U ^ (c >> 1U) : c >> 1U; }
+            for (int k = 0; k < 8; ++k)
+            {
+                c = ((c & 1U) != 0U) ? 0xEDB88320U ^ (c >> 1U) : c >> 1U;
+            }
             t[n] = c;
         }
     }
@@ -74,8 +77,14 @@ struct CrcTable
     const int pa = p > a ? p - a : a - p;
     const int pb = p > b ? p - b : b - p;
     const int pc = p > c ? p - c : c - p;
-    if (pa <= pb && pa <= pc) { return a; }
-    if (pb <= pc) { return b; }
+    if (pa <= pb && pa <= pc)
+    {
+        return a;
+    }
+    if (pb <= pc)
+    {
+        return b;
+    }
     return c;
 }
 
@@ -83,7 +92,10 @@ struct CrcTable
 [[nodiscard]] bool defilter(const crd::u8* src, crd::usize src_len, crd::u8* dst, crd::u32 h, crd::usize row_bytes,
                             crd::u32 bpp) noexcept
 {
-    if (src_len < static_cast<crd::usize>(h) * (row_bytes + 1U)) { return false; }
+    if (src_len < static_cast<crd::usize>(h) * (row_bytes + 1U))
+    {
+        return false;
+    }
     for (crd::u32 y = 0; y < h; ++y)
     {
         const crd::u8  filter = src[y * (row_bytes + 1U)];
@@ -224,10 +236,16 @@ struct PngState
     // palette-index bounds check over a defiltered row (color type 3 only)
     [[nodiscard]] bool palette_ok(const crd::u8* row, crd::u32 w) const noexcept
     {
-        if (color_type != 3) { return true; }
+        if (color_type != 3)
+        {
+            return true;
+        }
         for (crd::u32 x = 0; x < w; ++x)
         {
-            if (sample_at(row, x, 0, 1, depth) >= pal_count) { return false; }
+            if (sample_at(row, x, 0, 1, depth) >= pal_count)
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -255,7 +273,10 @@ crd::u32 png_crc32(crd::containers::ConstSpan<crd::u8> data) noexcept
 {
     static const CrcTable kTable; // computed once
     crd::u32              c = 0xFFFFFFFFU;
-    for (crd::usize i = 0; i < data.size(); ++i) { c = kTable.t[(c ^ data[i]) & 0xFFU] ^ (c >> 8U); }
+    for (crd::usize i = 0; i < data.size(); ++i)
+    {
+        c = kTable.t[(c ^ data[i]) & 0xFFU] ^ (c >> 8U);
+    }
     return c ^ 0xFFFFFFFFU;
 }
 
@@ -270,7 +291,10 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     out.width  = 0;
     out.height = 0;
     out.pixels.clear();
-    if (!png_sniff(bytes)) { return PngError::BadMagic; }
+    if (!png_sniff(bytes))
+    {
+        return PngError::BadMagic;
+    }
 
     // ── chunk walk: IHDR must lead; IDAT concatenates; every chunk CRC-verified ────────────────────────────────────────
     PngState                        st;
@@ -286,31 +310,58 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     while (p + 8 <= end)
     {
         const crd::u32 len = be32(p);
-        if (static_cast<crd::usize>(end - p) < 12U + static_cast<crd::usize>(len)) { return PngError::Truncated; }
+        if (static_cast<crd::usize>(end - p) < 12U + static_cast<crd::usize>(len))
+        {
+            return PngError::Truncated;
+        }
         const crd::u8* type = p + 4;
         const crd::u8* data = p + 8;
         const crd::u32 crc  = be32(data + len);
-        if (png_crc32(crd::containers::ConstSpan<crd::u8>(type, 4U + len)) != crc) { return PngError::BadChunkCrc; }
+        if (png_crc32(crd::containers::ConstSpan<crd::u8>(type, 4U + len)) != crc)
+        {
+            return PngError::BadChunkCrc;
+        }
 
         if (std::memcmp(type, "IHDR", 4) == 0)
         {
-            if (len != 13U || have_ihdr) { return PngError::BadHeader; }
+            if (len != 13U || have_ihdr)
+            {
+                return PngError::BadHeader;
+            }
             w             = be32(data);
             h             = be32(data + 4);
             st.depth      = data[8];
             st.color_type = data[9];
-            if (w == 0U || h == 0U) { return PngError::BadHeader; }
-            if (w > kMaxDim || h > kMaxDim) { return PngError::TooLarge; }
+            if (w == 0U || h == 0U)
+            {
+                return PngError::BadHeader;
+            }
+            if (w > kMaxDim || h > kMaxDim)
+            {
+                return PngError::TooLarge;
+            }
             st.channels = channels_of(st.color_type);
-            if (st.channels == 0U || !depth_legal(st.color_type, st.depth)) { return PngError::BadHeader; }
-            if (data[10] != 0U || data[11] != 0U) { return PngError::BadHeader; } // compression/filter methods
+            if (st.channels == 0U || !depth_legal(st.color_type, st.depth))
+            {
+                return PngError::BadHeader;
+            }
+            if (data[10] != 0U || data[11] != 0U) // compression/filter methods
+            {
+                return PngError::BadHeader;
+            }
             interlace = data[12];
-            if (interlace > 1U) { return PngError::BadHeader; }
+            if (interlace > 1U)
+            {
+                return PngError::BadHeader;
+            }
             have_ihdr = true;
         }
         else if (std::memcmp(type, "PLTE", 4) == 0)
         {
-            if (!have_ihdr || len == 0U || (len % 3U) != 0U || len > 256U * 3U) { return PngError::BadHeader; }
+            if (!have_ihdr || len == 0U || (len % 3U) != 0U || len > 256U * 3U)
+            {
+                return PngError::BadHeader;
+            }
             st.pal_count = len / 3U;
             for (crd::u32 i = 0; i < st.pal_count; ++i)
             {
@@ -322,35 +373,68 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         }
         else if (std::memcmp(type, "tRNS", 4) == 0)
         {
-            if (!have_ihdr) { return PngError::BadHeader; }
+            if (!have_ihdr)
+            {
+                return PngError::BadHeader;
+            }
             st.has_trns = true;
             if (st.color_type == 3)
             {
-                if (len > st.pal_count) { return PngError::BadHeader; }
-                for (crd::u32 i = 0; i < len; ++i) { st.pal_alpha[i] = data[i]; }
+                if (len > st.pal_count)
+                {
+                    return PngError::BadHeader;
+                }
+                for (crd::u32 i = 0; i < len; ++i)
+                {
+                    st.pal_alpha[i] = data[i];
+                }
             }
             else if (st.color_type == 0)
             {
-                if (len != 2U) { return PngError::BadHeader; }
+                if (len != 2U)
+                {
+                    return PngError::BadHeader;
+                }
                 st.key[0] = (static_cast<crd::u32>(data[0]) << 8U) | data[1];
-                if (st.depth < 16U) { st.key[0] &= (1U << st.depth) - 1U; }
-                else { st.key[0] >>= 8U; } // compare at the reduced depth
+                if (st.depth < 16U)
+                {
+                    st.key[0] &= (1U << st.depth) - 1U;
+                }
+                else // compare at the reduced depth
+                {
+                    st.key[0] >>= 8U;
+                }
             }
             else if (st.color_type == 2)
             {
-                if (len != 6U) { return PngError::BadHeader; }
+                if (len != 6U)
+                {
+                    return PngError::BadHeader;
+                }
                 for (int k = 0; k < 3; ++k)
                 {
                     st.key[k] = (static_cast<crd::u32>(data[k * 2]) << 8U) | data[k * 2 + 1];
-                    if (st.depth == 16U) { st.key[k] >>= 8U; }
+                    if (st.depth == 16U)
+                    {
+                        st.key[k] >>= 8U;
+                    }
                 }
             }
-            else { return PngError::BadHeader; } // tRNS is illegal with explicit-alpha types
+            else // tRNS is illegal with explicit-alpha types
+            {
+                return PngError::BadHeader;
+            }
         }
         else if (std::memcmp(type, "IDAT", 4) == 0)
         {
-            if (!have_ihdr) { return PngError::BadHeader; }
-            for (crd::u32 i = 0; i < len; ++i) { idat.push_back(data[i]); }
+            if (!have_ihdr)
+            {
+                return PngError::BadHeader;
+            }
+            for (crd::u32 i = 0; i < len; ++i)
+            {
+                idat.push_back(data[i]);
+            }
         }
         else if (std::memcmp(type, "IEND", 4) == 0)
         {
@@ -360,12 +444,21 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         // ancillary chunks (gAMA, sRGB, tEXt, pHYs, …) skip — color management is the pipeline's concern, not the codec's
         p = data + len + 4;
     }
-    if (!have_iend || !have_ihdr || idat.size() == 0U) { return PngError::Truncated; } // a stream without IEND ended early
-    if (st.color_type == 3 && st.pal_count == 0U) { return PngError::BadHeader; }
+    if (!have_iend || !have_ihdr || idat.size() == 0U) // a stream without IEND ended early
+    {
+        return PngError::Truncated;
+    }
+    if (st.color_type == 3 && st.pal_count == 0U)
+    {
+        return PngError::BadHeader;
+    }
 
     // ── inflate the pixel stream (OUR zlib) ────────────────────────────────────────────────────────────────────────────
     crd::containers::Array<crd::u8> raw(a);
-    if (!zlib_inflate(crd::containers::as_const_span(idat), raw)) { return PngError::BadData; }
+    if (!zlib_inflate(crd::containers::as_const_span(idat), raw))
+    {
+        return PngError::BadData;
+    }
 
     out.width            = w;
     out.height           = h;
@@ -379,12 +472,21 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     {
         const crd::usize rb = st.row_bytes(w);
         rows.resize(static_cast<crd::usize>(h) * rb, 0);
-        if (!defilter(raw.data(), raw.size(), rows.data(), h, rb, st.filter_bpp())) { return PngError::BadData; }
-        if (raw.size() != static_cast<crd::usize>(h) * (rb + 1U)) { return PngError::BadData; } // exact-size contract
+        if (!defilter(raw.data(), raw.size(), rows.data(), h, rb, st.filter_bpp()))
+        {
+            return PngError::BadData;
+        }
+        if (raw.size() != static_cast<crd::usize>(h) * (rb + 1U)) // exact-size contract
+        {
+            return PngError::BadData;
+        }
         for (crd::u32 y = 0; y < h; ++y)
         {
             const crd::u8* row = rows.data() + static_cast<crd::usize>(y) * rb;
-            if (!st.palette_ok(row, w)) { return PngError::BadData; }
+            if (!st.palette_ok(row, w))
+            {
+                return PngError::BadData;
+            }
             for (crd::u32 x = 0; x < w; ++x)
             {
                 st.emit(row, x, out.pixels.data() + (static_cast<crd::usize>(y) * w + x) * 4U);
@@ -399,11 +501,17 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     {
         const crd::u32 pw = w > kA7x0[pass] ? (w - kA7x0[pass] + kA7dx[pass] - 1U) / kA7dx[pass] : 0U;
         const crd::u32 ph = h > kA7y0[pass] ? (h - kA7y0[pass] + kA7dy[pass] - 1U) / kA7dy[pass] : 0U;
-        if (pw == 0U || ph == 0U) { continue; }
+        if (pw == 0U || ph == 0U)
+        {
+            continue;
+        }
         const crd::usize rb = st.row_bytes(pw);
         rows.clear();
         rows.resize(static_cast<crd::usize>(ph) * rb, 0);
-        if (off + static_cast<crd::usize>(ph) * (rb + 1U) > raw.size()) { return PngError::BadData; }
+        if (off + static_cast<crd::usize>(ph) * (rb + 1U) > raw.size())
+        {
+            return PngError::BadData;
+        }
         if (!defilter(raw.data() + off, static_cast<crd::usize>(ph) * (rb + 1U), rows.data(), ph, rb, st.filter_bpp()))
         {
             return PngError::BadData;
@@ -412,7 +520,10 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         for (crd::u32 sy = 0; sy < ph; ++sy)
         {
             const crd::u8* row = rows.data() + static_cast<crd::usize>(sy) * rb;
-            if (!st.palette_ok(row, pw)) { return PngError::BadData; }
+            if (!st.palette_ok(row, pw))
+            {
+                return PngError::BadData;
+            }
             const crd::u32 y = kA7y0[pass] + sy * kA7dy[pass];
             for (crd::u32 sx = 0; sx < pw; ++sx)
             {
@@ -421,7 +532,10 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
             }
         }
     }
-    if (off != raw.size()) { return PngError::BadData; } // exact-size contract across all passes
+    if (off != raw.size()) // exact-size contract across all passes
+    {
+        return PngError::BadData;
+    }
     return PngError::Ok;
 }
 

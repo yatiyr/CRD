@@ -39,9 +39,13 @@ Csr tridiag(crd::memory::IAllocator* a, crd::u32 n)
     {
         tb.add(i, i, 2.0);
         if (i > 0)
+        {
             tb.add(i, i - 1, -1.0);
+        }
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, -1.0);
+        }
     }
     return tb.compress();
 }
@@ -61,13 +65,21 @@ Csr grid2d(crd::memory::IAllocator* a, crd::u32 w, crd::u32 h)
             const crd::u32 v = idx(r, c);
             tb.add(v, v, 4.0);
             if (r > 0)
+            {
                 tb.add(v, idx(r - 1, c), -1.0);
+            }
             if (r + 1 < h)
+            {
                 tb.add(v, idx(r + 1, c), -1.0);
+            }
             if (c > 0)
+            {
                 tb.add(v, idx(r, c - 1), -1.0);
+            }
             if (c + 1 < w)
+            {
                 tb.add(v, idx(r, c + 1), -1.0);
+            }
         }
     }
     return tb.compress();
@@ -95,17 +107,29 @@ Csr grid3d(crd::memory::IAllocator* a, crd::u32 s)
                 const crd::u32 v = idx(x, y, z);
                 tb.add(v, v, 6.0);
                 if (x > 0)
+                {
                     tb.add(v, idx(x - 1, y, z), -1.0);
+                }
                 if (x + 1 < s)
+                {
                     tb.add(v, idx(x + 1, y, z), -1.0);
+                }
                 if (y > 0)
+                {
                     tb.add(v, idx(x, y - 1, z), -1.0);
+                }
                 if (y + 1 < s)
+                {
                     tb.add(v, idx(x, y + 1, z), -1.0);
+                }
                 if (z > 0)
+                {
                     tb.add(v, idx(x, y, z - 1), -1.0);
+                }
                 if (z + 1 < s)
+                {
                     tb.add(v, idx(x, y, z + 1), -1.0);
+                }
             }
         }
     }
@@ -391,13 +415,21 @@ TEST_CASE("supernodal Cholesky: refactorize (reuse symbolic) == fresh factorize,
                 const crd::u32 v = idx(r, c);
                 tb.add(v, v, diag);
                 if (r > 0)
+                {
                     tb.add(v, idx(r - 1, c), off);
+                }
                 if (r + 1 < h)
+                {
                     tb.add(v, idx(r + 1, c), off);
+                }
                 if (c > 0)
+                {
                     tb.add(v, idx(r, c - 1), off);
+                }
                 if (c + 1 < w)
+                {
                     tb.add(v, idx(r, c + 1), off);
+                }
             }
         }
         return tb.compress();

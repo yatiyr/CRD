@@ -28,7 +28,10 @@ struct GradF
     {
         using crd::math::exp;
         T acc = exp(x[0]);
-        for (int i = 1; i < n; ++i) { acc = acc + x[i - 1] * x[i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            acc = acc + x[i - 1] * x[i];
+        }
         return acc;
     }
 };
@@ -49,7 +52,10 @@ struct LossF
     rev::Var operator()(const rev::Var* theta, int n, int s) const
     {
         rev::Var pred = theta[0] * a[static_cast<crd::usize>(s) * n + 0];
-        for (int i = 1; i < n; ++i) { pred = pred + theta[i] * a[static_cast<crd::usize>(s) * n + i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            pred = pred + theta[i] * a[static_cast<crd::usize>(s) * n + i];
+        }
         rev::Var r = pred - b[s];
         return r * r;
     }
@@ -69,9 +75,15 @@ TEST_CASE("reverse gradient == analytic == FD in one backward pass", "[autodiff]
     // analytic: ∂/∂x0 = e^{x0}+x1 ; interior ∂/∂xi = x_{i-1}+x_{i+1} ; ∂/∂x_{n-1} = x_{n-2}
     f64 an[n];
     an[0] = std::exp(x[0]) + x[1];
-    for (int i = 1; i < n - 1; ++i) { an[i] = x[i - 1] + x[i + 1]; }
+    for (int i = 1; i < n - 1; ++i)
+    {
+        an[i] = x[i - 1] + x[i + 1];
+    }
     an[n - 1] = x[n - 2];
-    for (int i = 0; i < n; ++i) { CHECK_THAT(g[i], WithinRel(an[i], 1e-12)); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK_THAT(g[i], WithinRel(an[i], 1e-12));
+    }
 
     // central FD oracle
     const f64 h = 1e-6;
@@ -79,7 +91,11 @@ TEST_CASE("reverse gradient == analytic == FD in one backward pass", "[autodiff]
     {
         f64 xp[n];
         f64 xm[n];
-        for (int k = 0; k < n; ++k) { xp[k] = x[k]; xm[k] = x[k]; }
+        for (int k = 0; k < n; ++k)
+        {
+            xp[k] = x[k];
+            xm[k] = x[k];
+        }
         xp[i] += h;
         xm[i] -= h;
         const f64 fd = (GradF{}(xp, n) - GradF{}(xm, n)) / (2 * h);
@@ -119,7 +135,10 @@ TEST_CASE("reverse backward is bit-deterministic run-to-run", "[autodiff][revers
     rev::Var                   scr[n] = {};
     rev::gradient(GradF{}, {x, n}, {g1, n}, tape, {scr, n});
     rev::gradient(GradF{}, {x, n}, {g2, n}, tape, {scr, n});
-    for (int i = 0; i < n; ++i) { CHECK(g1[i] == g2[i]); } // exact bit-identity
+    for (int i = 0; i < n; ++i) // exact bit-identity
+    {
+        CHECK(g1[i] == g2[i]);
+    }
 }
 
 TEST_CASE("MOAT: batched gradient is BIT-IDENTICAL across {1,2,4} workers", "[autodiff][reverse][moat]")
@@ -142,7 +161,10 @@ TEST_CASE("MOAT: batched gradient is BIT-IDENTICAL across {1,2,4} workers", "[au
         f64           b[nsamp];
         for (int s = 0; s < nsamp; ++s)
         {
-            for (int i = 0; i < n; ++i) { amat[s * n + i] = 0.2 + 0.1 * std::sin(1.0 + s + 2.0 * i); }
+            for (int i = 0; i < n; ++i)
+            {
+                amat[s * n + i] = 0.2 + 0.1 * std::sin(1.0 + s + 2.0 * i);
+            }
             b[s] = 0.5 + 0.05 * s;
         }
         const LossF  loss{amat, b};
@@ -167,11 +189,20 @@ TEST_CASE("MOAT: batched gradient is BIT-IDENTICAL across {1,2,4} workers", "[au
         for (int s = 0; s < nsamp; ++s)
         {
             f64 pred = 0.0;
-            for (int i = 0; i < n; ++i) { pred += theta[i] * amat[s * n + i]; }
+            for (int i = 0; i < n; ++i)
+            {
+                pred += theta[i] * amat[s * n + i];
+            }
             const f64 r = pred - b[s];
-            for (int i = 0; i < n; ++i) { an[i] += 2.0 * r * amat[s * n + i]; }
+            for (int i = 0; i < n; ++i)
+            {
+                an[i] += 2.0 * r * amat[s * n + i];
+            }
         }
-        for (int i = 0; i < n; ++i) { CHECK_THAT(g1[i], WithinRel(an[i], 1e-10)); }
+        for (int i = 0; i < n; ++i)
+        {
+            CHECK_THAT(g1[i], WithinRel(an[i], 1e-10));
+        }
     }
     crd::jobs::shutdown();
 }

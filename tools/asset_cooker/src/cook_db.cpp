@@ -25,19 +25,34 @@ namespace
 void append_hex64(crd::containers::String& out, crd::u64 v)
 {
     static constexpr char kHex[] = "0123456789abcdef";
-    for (int shift = 60; shift >= 0; shift -= 4) { out.push_back(kHex[(v >> static_cast<crd::u32>(shift)) & 0xFU]); }
+    for (int shift = 60; shift >= 0; shift -= 4)
+    {
+        out.push_back(kHex[(v >> static_cast<crd::u32>(shift)) & 0xFU]);
+    }
 }
 
 [[nodiscard]] bool parse_hex64(std::string_view sv, crd::u64& out) noexcept
 {
-    if (sv.size() != 16U) { return false; }
+    if (sv.size() != 16U)
+    {
+        return false;
+    }
     crd::u64 v = 0;
     for (char c : sv)
     {
         crd::u32 nib = 0;
-        if (c >= '0' && c <= '9') { nib = static_cast<crd::u32>(c - '0'); }
-        else if (c >= 'a' && c <= 'f') { nib = static_cast<crd::u32>(10 + c - 'a'); }
-        else { return false; }
+        if (c >= '0' && c <= '9')
+        {
+            nib = static_cast<crd::u32>(c - '0');
+        }
+        else if (c >= 'a' && c <= 'f')
+        {
+            nib = static_cast<crd::u32>(10 + c - 'a');
+        }
+        else
+        {
+            return false;
+        }
         v = (v << 4U) | nib;
     }
     out = v;
@@ -51,7 +66,10 @@ void append_toml_string(crd::containers::String& out, crd::containers::StringVie
     for (crd::usize i = 0; i < sv.size(); ++i)
     {
         const char c = sv[i];
-        if (c == '"' || c == '\\') { out.push_back('\\'); }
+        if (c == '"' || c == '\\')
+        {
+            out.push_back('\\');
+        }
         out.push_back(c);
     }
     out.push_back('"');
@@ -69,7 +87,10 @@ void append_toml_string(crd::containers::String& out, crd::containers::StringVie
 #else
     std::FILE* f = std::fopen(path_z.c_str(), "ab");
 #endif
-    if (f == nullptr) { return false; }
+    if (f == nullptr)
+    {
+        return false;
+    }
     bool ok = std::fwrite(verb, 1U, std::strlen(verb), f) == std::strlen(verb);
     ok      = ok && std::fwrite(" ", 1U, 1U, f) == 1U;
     ok      = ok && std::fwrite(source.data(), 1U, source.size(), f) == source.size();
@@ -100,13 +121,19 @@ void CookDb::load(const fs::Path& root)
                 for (const auto& jn : *jobs)
                 {
                     const auto* jt = jn.as_table();
-                    if (jt == nullptr) { continue; }
+                    if (jt == nullptr)
+                    {
+                        continue;
+                    }
                     DbJob job(m_alloc);
                     if (const auto sv = (*jt)["source"].value<std::string_view>())
                     {
                         job.source = crd::containers::String(sv->data(), sv->size(), m_alloc);
                     }
-                    else { continue; }
+                    else
+                    {
+                        continue;
+                    }
                     job.handler_version =
                         static_cast<crd::u32>((*jt)["handler_version"].value<crd::i64>().value_or(0));
 
@@ -115,7 +142,10 @@ void CookDb::load(const fs::Path& root)
                         for (const auto& in_node : *ins)
                         {
                             const auto* it = in_node.as_table();
-                            if (it == nullptr) { continue; }
+                            if (it == nullptr)
+                            {
+                                continue;
+                            }
                             DbInput input(m_alloc);
                             if (const auto p = (*it)["path"].value<std::string_view>())
                             {
@@ -134,7 +164,10 @@ void CookDb::load(const fs::Path& root)
                         for (const auto& pn : *prods)
                         {
                             const auto* pt = pn.as_table();
-                            if (pt == nullptr) { continue; }
+                            if (pt == nullptr)
+                            {
+                                continue;
+                            }
                             DbProduct prod(m_alloc);
                             if (const auto u = (*pt)["uuid"].value<std::string_view>())
                             {
@@ -160,7 +193,10 @@ void CookDb::load(const fs::Path& root)
                             if (const auto u = dn.value<std::string_view>())
                             {
                                 const auto id = crd::resources::ResourceId::parse(*u);
-                                if (!id.is_null()) { job.runtime_deps.push_back(id); }
+                                if (!id.is_null())
+                                {
+                                    job.runtime_deps.push_back(id);
+                                }
                             }
                         }
                     }
@@ -179,7 +215,10 @@ void CookDb::load(const fs::Path& root)
         while (line_start < jsv.size())
         {
             auto line_end = jsv.find('\n', line_start);
-            if (line_end == std::string_view::npos) { line_end = jsv.size(); }
+            if (line_end == std::string_view::npos)
+            {
+                line_end = jsv.size();
+            }
             const std::string_view line = jsv.substr(line_start, line_end - line_start);
             line_start                  = line_end + 1U;
 
@@ -195,7 +234,10 @@ void CookDb::load(const fs::Path& root)
                         break;
                     }
                 }
-                if (!present) { m_distrusted.push_back(crd::containers::String(src.data(), src.size(), m_alloc)); }
+                if (!present)
+                {
+                    m_distrusted.push_back(crd::containers::String(src.data(), src.size(), m_alloc));
+                }
             }
             else if (line.starts_with("commit "))
             {
@@ -237,7 +279,10 @@ bool CookDb::save(const fs::Path& root)
             for (crd::usize d = 0; d < job.runtime_deps.size(); ++d)
             {
                 const auto id_str = job.runtime_deps[d].to_string(m_alloc);
-                if (d > 0U) { out.append(", "); }
+                if (d > 0U)
+                {
+                    out.append(", ");
+                }
                 append_toml_string(out, crd::containers::StringView(id_str.c_str()));
             }
             out.append("]\n");
@@ -278,7 +323,10 @@ bool CookDb::save(const fs::Path& root)
     {
         return false;
     }
-    if (!fs::rename_file(db_tmp_path(root), db_path(root))) { return false; }
+    if (!fs::rename_file(db_tmp_path(root), db_path(root)))
+    {
+        return false;
+    }
 
     // the run is fully recorded — the journal's history is obsolete
     (void)fs::remove_file(journal_path(root));
@@ -299,7 +347,10 @@ bool CookDb::is_distrusted(crd::containers::StringView source) const noexcept
 {
     for (crd::usize i = 0; i < m_distrusted.size(); ++i)
     {
-        if (crd::containers::StringView(m_distrusted[i].data(), m_distrusted[i].size()) == source) { return true; }
+        if (crd::containers::StringView(m_distrusted[i].data(), m_distrusted[i].size()) == source)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -345,7 +396,10 @@ crd::usize CookDb::prune_missing(const crd::containers::Array<crd::containers::S
                 break;
             }
         }
-        if (live) { ++i; }
+        if (live)
+        {
+            ++i;
+        }
         else
         {
             m_jobs[i] = static_cast<DbJob&&>(m_jobs.back());
@@ -379,7 +433,10 @@ const DbJob* CookDb::find_producer(const crd::resources::ResourceId& id) const n
     {
         for (crd::usize p = 0; p < m_jobs[j].products.size(); ++p)
         {
-            if (m_jobs[j].products[p].id == id) { return &m_jobs[j]; }
+            if (m_jobs[j].products[p].id == id)
+            {
+                return &m_jobs[j];
+            }
         }
     }
     return nullptr;

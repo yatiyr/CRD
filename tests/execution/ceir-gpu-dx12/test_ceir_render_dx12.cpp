@@ -31,7 +31,11 @@ TEST_CASE("ceir 14z-3: the CEIR triangle renders RED on a DX12 raster encoder (b
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -44,7 +48,11 @@ TEST_CASE("ceir 14z-3: the CEIR triangle renders RED on a DX12 raster encoder (b
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve); // KIR -> HLSL -> DXIL, behind the seam
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -81,10 +89,18 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the DX12 FRAME GRA
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -94,7 +110,11 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the DX12 FRAME GRA
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -128,10 +148,18 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -141,7 +169,11 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -185,10 +217,18 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -198,7 +238,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
     crd::kir::KEntry fe;
     crd::gputest::build_gbuffer_two_output_fs(fg, fe); // RED@0 / GREEN@1
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -254,10 +298,18 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -267,7 +319,11 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
     crd::kir::KEntry fe;
     crd::gputest::build_visbuffer_two_output_fs(fg, fe); // id 7 @0 / id 9 @1
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -315,10 +371,18 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -328,7 +392,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
     crd::kir::KEntry fe;
     crd::gputest::build_gbuffer_uint_float_fs(fg, fe); // uint id 7 @0 / GREEN @1
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -382,10 +450,18 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     // scope-0 program: the storage-pull triangle VS + a DEPTH-ONLY FS (n_out = 0, frag_depth = 0.5).
@@ -396,7 +472,11 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
     crd::kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (dvs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto dfs = gctx->create_program(dfg, dfe);
     REQUIRE(dfs != nullptr);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
@@ -460,10 +540,18 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -473,7 +561,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -504,7 +596,10 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     crd::u32       args_words[12] = {0U};
     for (crd::u32 i = 0; i < 2U; ++i)
     {
-        if (argw != 0U) { args_words[i * stride_w] = i; } // DX12: the per-command DrawIndex root constant
+        if (argw != 0U) // DX12: the per-command DrawIndex root constant
+        {
+            args_words[i * stride_w] = i;
+        }
         args_words[i * stride_w + argw + 0U] = 3U;        // index_count
         args_words[i * stride_w + argw + 1U] = 1U;        // instance_count
         args_words[i * stride_w + argw + 2U] = 0U;        // first_index (IDENTICAL — the DrawIndex split is in the VS)
@@ -541,11 +636,23 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
-    if (!raster->indirect_count_supported()) { WARN("no indirect-count support; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
+    if (!raster->indirect_count_supported())
+    {
+        WARN("no indirect-count support; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -555,7 +662,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -583,7 +694,10 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     crd::u32       args_words[12] = {0U};
     for (crd::u32 i = 0; i < 2U; ++i)
     {
-        if (argw != 0U) { args_words[i * stride_w] = i; } // DX12: leading DrawIndex root constant
+        if (argw != 0U) // DX12: leading DrawIndex root constant
+        {
+            args_words[i * stride_w] = i;
+        }
         args_words[i * stride_w + argw + 0U] = 3U;
         args_words[i * stride_w + argw + 1U] = 1U;
         args_words[i * stride_w + argw + 2U] = 0U;
@@ -634,10 +748,18 @@ TEST_CASE("ceir 14z-7: a CEIR mesh dispatch renders the shared triangle through 
           "[ceir][ceir-gpu][render][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           mg(&alloc);
@@ -647,12 +769,20 @@ TEST_CASE("ceir 14z-7: a CEIR mesh dispatch renders the shared triangle through 
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto mesh = gctx->create_program(mg, me);
-    if (mesh == nullptr) { WARN("dxc/DXIL unavailable; skipping the device draw"); return; }
+    if (mesh == nullptr)
+    {
+        WARN("dxc/DXIL unavailable; skipping the device draw");
+        return;
+    }
     REQUIRE(mesh->stage() == g::ShaderStage::Mesh);
     auto fs = gctx->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_mesh_program(*mesh, *fs);
-    if (program == nullptr) { WARN("no D3D12 mesh-shader tier (OPTIONS7 MeshShaderTier); skipping the mesh draw"); return; }
+    if (program == nullptr)
+    {
+        WARN("no D3D12 mesh-shader tier (OPTIONS7 MeshShaderTier); skipping the mesh draw");
+        return;
+    }
     REQUIRE(program->valid());
 
     constexpr crd::u32 dim    = 32U;

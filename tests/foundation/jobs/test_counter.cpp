@@ -103,7 +103,9 @@ TEST_CASE("counter_pool: all pool_indices distinct", "[jobs][counter]")
     }
 
     for (crd::u32 i = 0U; i < kCap; ++i)
+    {
         pool.release(ptrs[i]); // NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
+    }
 
     pool.shutdown();
 }
@@ -324,8 +326,14 @@ TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs]
     bool saw_w2 = false;
     for (Waiter* cur = woken; cur != nullptr; cur = cur->next.load())
     {
-        if (cur == &w1) saw_w1 = true;
-        if (cur == &w2) saw_w2 = true;
+        if (cur == &w1)
+        {
+            saw_w1 = true;
+        }
+        if (cur == &w2)
+        {
+            saw_w2 = true;
+        }
         ++count;
     }
     CHECK(count   == 2);
@@ -579,11 +587,15 @@ TEST_CASE("counter_decrement: concurrent decrements, exactly one caller reaches 
         {
             Waiter* w = counter_decrement(c, 1U);
             if (w != nullptr)
+            {
                 zero_count.fetch_add(1, std::memory_order_relaxed);
+            }
         });
     }
     for (auto& t : threads)
+    {
         t.join();
+    }
 
     CHECK(c->value.load() == 0U);
     // No waiters were registered, so woken lists should all be nullptr.
@@ -622,7 +634,10 @@ TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][st
                 if (c == nullptr || c->value.load() != 42U)
                 {
                     errors.fetch_add(1, std::memory_order_relaxed);
-                    if (c) pool.release(c);
+                    if (c)
+                    {
+                        pool.release(c);
+                    }
                     continue;
                 }
                 pool.release(c);
@@ -630,7 +645,9 @@ TEST_CASE("counter_pool: concurrent acquire/release stress", "[jobs][counter][st
         });
     }
     for (auto& t : threads)
+    {
         t.join();
+    }
 
     CHECK(errors.load() == 0);
     CHECK(pool.available() == kPoolSize);
@@ -664,7 +681,9 @@ TEST_CASE("counter_pool: DG05 exhaustion/reclamation stress preserves uniqueness
 
     std::atomic<bool> in_use[kPoolSize]{};
     for (auto& b : in_use)
+    {
         b.store(false, std::memory_order_relaxed);
+    }
 
     std::atomic<bool> corruption{false};
     std::atomic<int>  value_error{0};
@@ -685,16 +704,24 @@ TEST_CASE("counter_pool: DG05 exhaustion/reclamation stress preserves uniqueness
                 {
                     Counter* c = pool.acquire(seed + b);
                     if (c == nullptr)
+                    {
                         break; // drained — expected under oversubscription
+                    }
                     if (c->value.load(std::memory_order_relaxed) != seed + b)
+                    {
                         value_error.fetch_add(1, std::memory_order_relaxed);
+                    }
                     if (in_use[c->pool_index].exchange(true, std::memory_order_acq_rel))
+                    {
                         corruption.store(true, std::memory_order_relaxed);
+                    }
                     held[got++] = c;
                 }
 
                 if ((iter & 1) == 0)
+                {
                     std::this_thread::yield();
+                }
 
                 for (crd::u32 b = 0; b < got; ++b)
                 {
@@ -707,13 +734,17 @@ TEST_CASE("counter_pool: DG05 exhaustion/reclamation stress preserves uniqueness
     }
 
     for (auto& th : threads)
+    {
         th.join();
+    }
 
     CHECK_FALSE(corruption.load());
     CHECK(value_error.load() == 0);
     CHECK(pool.available() == kPoolSize);
     for (auto& b : in_use)
+    {
         CHECK_FALSE(b.load(std::memory_order_relaxed));
+    }
 
     // Free list still fully functional: drain dry once and confirm exact exhaustion.
     crd::u32 drained = 0U;
@@ -722,13 +753,19 @@ TEST_CASE("counter_pool: DG05 exhaustion/reclamation stress preserves uniqueness
     {
         all[i] = pool.acquire(1U);
         if (all[i])
+        {
             ++drained;
+        }
     }
     CHECK(drained == kPoolSize);
     CHECK(pool.acquire(1U) == nullptr);
     for (crd::u32 i = 0; i < kPoolSize; ++i)
+    {
         if (all[i])
+        {
             pool.release(all[i]);
+        }
+    }
     CHECK(pool.available() == kPoolSize);
 
 #if CRD_ENABLE_ASSERTS

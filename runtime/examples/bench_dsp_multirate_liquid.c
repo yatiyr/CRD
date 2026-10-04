@@ -10,20 +10,26 @@ static void run(unsigned int n, unsigned int P, unsigned int Q, int reps)
 {
     float* x = malloc(n * sizeof(float));
     for (unsigned int i = 0; i < n; ++i)
+    {
         x[i] = sinf(2 * 3.14159265f * 0.05f * (float)i) + 0.5f * sinf(2 * 3.14159265f * 0.13f * (float)i);
+    }
     unsigned int nblocks = n / Q;
     float* y = malloc((nblocks * P + P) * sizeof(float));
     rresamp_rrrf q = rresamp_rrrf_create_default(P, Q);
     /* warm */
     for (unsigned int b = 0; b < nblocks; ++b)
+    {
         rresamp_rrrf_execute(q, x + b * Q, y + b * P);
+    }
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     double chk = 0;
     for (int r = 0; r < reps; ++r)
     {
         for (unsigned int b = 0; b < nblocks; ++b)
+        {
             rresamp_rrrf_execute(q, x + b * Q, y + b * P);
+        }
         chk += y[(nblocks * P) / 2];
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);

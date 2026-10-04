@@ -34,8 +34,17 @@ struct MinHeap
         while (i > 0)
         {
             const crd::usize p = (i - 1) / 2;
-            if (less_entry(h[i], h[p])) { const HeapEntry t = h[i]; h[i] = h[p]; h[p] = t; i = p; }
-            else { break; }
+            if (less_entry(h[i], h[p]))
+            {
+                const HeapEntry t = h[i];
+                h[i] = h[p];
+                h[p] = t;
+                i = p;
+            }
+            else
+            {
+                break;
+            }
         }
     }
     HeapEntry pop()
@@ -50,9 +59,18 @@ struct MinHeap
             const crd::usize l = 2 * i + 1;
             const crd::usize r = 2 * i + 2;
             crd::usize       s = i;
-            if (l < n && less_entry(h[l], h[s])) { s = l; }
-            if (r < n && less_entry(h[r], h[s])) { s = r; }
-            if (s == i) { break; }
+            if (l < n && less_entry(h[l], h[s]))
+            {
+                s = l;
+            }
+            if (r < n && less_entry(h[r], h[s]))
+            {
+                s = r;
+            }
+            if (s == i)
+            {
+                break;
+            }
             const HeapEntry t = h[i]; h[i] = h[s]; h[s] = t; i = s;
         }
         return top;
@@ -68,7 +86,10 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     res.colperm.resize(n);
     res.dr.resize(n);
     res.dc.resize(n);
-    if (n == 0) { return res; }
+    if (n == 0)
+    {
+        return res;
+    }
 
     const auto*    outer = pat.outer_ptr.data();
     const auto*    inner = pat.inner_idx.data();
@@ -80,7 +101,13 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     for (crd::u32 i = 0; i < n; ++i)
     {
         crd::f64 mx = 0.0;
-        for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k) { if (mag[k] > mx) { mx = mag[k]; } }
+        for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
+        {
+            if (mag[k] > mx)
+            {
+                mx = mag[k];
+            }
+        }
         logrm[i] = mx > 0.0 ? crd::math::log(mx) : -inf;
     }
     // Precompute log|a_ij| per stored entry ONCE. The shortest-augmenting-path Dijkstra below revisits the
@@ -88,14 +115,23 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     // cost on dense matrices). This is bit-identical (same log values) ⇒ matching/scaling unchanged.
     crd::containers::Array<crd::f64> logmag(alloc);
     logmag.resize(mag.size());
-    for (crd::usize k = 0; k < mag.size(); ++k) { logmag[k] = mag[k] > 0.0 ? crd::math::log(mag[k]) : -inf; }
+    for (crd::usize k = 0; k < mag.size(); ++k)
+    {
+        logmag[k] = mag[k] > 0.0 ? crd::math::log(mag[k]) : -inf;
+    }
 
     crd::containers::Array<crd::f64> u(alloc); // row dual potentials
     crd::containers::Array<crd::f64> v(alloc); // col dual potentials
     crd::containers::Array<crd::i32> mrow(alloc);
     crd::containers::Array<crd::i32> mcol(alloc);
     u.resize(n); v.resize(n); mrow.resize(n); mcol.resize(n);
-    for (crd::u32 i = 0; i < n; ++i) { u[i] = 0.0; v[i] = 0.0; mrow[i] = -1; mcol[i] = -1; }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        u[i] = 0.0;
+        v[i] = 0.0;
+        mrow[i] = -1;
+        mcol[i] = -1;
+    }
 
     // edge cost c(i, k-th nonzero) = logrm[i] − log(mag[k]) ≥ 0; +inf for a stored zero.
     auto edge_cost = [&](crd::u32 i, crd::u32 k) -> crd::f64 {
@@ -109,16 +145,28 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     // matrix (3D Navier-Stokes: ns3Da) explores ~half the columns ⇒ 6.3 ms/augmentation, 2.3 s total. The
     // assignment converges to the SAME optimum (the duals are unique up to a per-component shift that cancels
     // in D_r·A·D_c), so the matching/scaling/accuracy are preserved; only the search cost drops. Deterministic.
-    for (crd::u32 j = 0; j < n; ++j) { v[j] = inf; }
+    for (crd::u32 j = 0; j < n; ++j)
+    {
+        v[j] = inf;
+    }
     for (crd::u32 i = 0; i < n; ++i)
     {
         for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
         {
             const crd::f64 c = edge_cost(i, k); // u[i] == 0 ⇒ reduced cost is c
-            if (c < v[inner[k]]) { v[inner[k]] = c; }
+            if (c < v[inner[k]])
+            {
+                v[inner[k]] = c;
+            }
         }
     }
-    for (crd::u32 j = 0; j < n; ++j) { if (!std::isfinite(v[j])) { v[j] = 0.0; } } // empty/all-zero column
+    for (crd::u32 j = 0; j < n; ++j) // empty/all-zero column
+    {
+        if (!std::isfinite(v[j]))
+        {
+            v[j] = 0.0;
+        }
+    }
 
     // ---- greedy initial matching (ascending row; each row to its smallest-reduced-cost free col) ----
     for (crd::u32 i = 0; i < n; ++i)
@@ -128,14 +176,22 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
         for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
         {
             const crd::u32 j = inner[k];
-            if (mcol[j] >= 0) { continue; }
+            if (mcol[j] >= 0)
+            {
+                continue;
+            }
             const crd::f64 c = edge_cost(i, k) - v[j];
             if (c < best || (c == best && (bj < 0 || j < static_cast<crd::u32>(bj))))
             {
                 best = c; bj = static_cast<crd::i32>(j);
             }
         }
-        if (bj >= 0) { mrow[i] = bj; mcol[bj] = static_cast<crd::i32>(i); u[i] = best; }
+        if (bj >= 0)
+        {
+            mrow[i] = bj;
+            mcol[bj] = static_cast<crd::i32>(i);
+            u[i] = best;
+        }
     }
 
     // ---- shortest-augmenting-path for each still-free row ----
@@ -144,12 +200,20 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     crd::containers::Array<crd::u8>  done(alloc);
     crd::containers::Array<crd::u32> scanned(alloc); // cols settled this augmentation (to reset + dual update)
     dist.resize(n); predrow.resize(n); done.resize(n);
-    for (crd::u32 i = 0; i < n; ++i) { dist[i] = inf; predrow[i] = -1; done[i] = 0; }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        dist[i] = inf;
+        predrow[i] = -1;
+        done[i] = 0;
+    }
     MinHeap heap(alloc);
 
     for (crd::u32 fr = 0; fr < n; ++fr)
     {
-        if (mrow[fr] >= 0) { continue; }
+        if (mrow[fr] >= 0)
+        {
+            continue;
+        }
         scanned.clear();
         heap.clear();
         crd::i32 cur = static_cast<crd::i32>(fr);
@@ -162,29 +226,56 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
             for (crd::u32 k = outer[r]; k < outer[r + 1]; ++k)
             {
                 const crd::u32 j = inner[k];
-                if (done[j]) { continue; }
+                if (done[j])
+                {
+                    continue;
+                }
                 const crd::f64 c = edge_cost(r, k);
-                if (c == inf) { continue; }
+                if (c == inf)
+                {
+                    continue;
+                }
                 crd::f64 rc = c - u[r] - v[j]; // reduced cost ≥ 0
-                if (rc < 0.0) { rc = 0.0; }    // guard fp drift
+                if (rc < 0.0) // guard fp drift
+                {
+                    rc = 0.0;
+                }
                 const crd::f64 nd = delta + rc;
-                if (nd < dist[j]) { dist[j] = nd; predrow[j] = cur; heap.push(nd, j); }
+                if (nd < dist[j])
+                {
+                    dist[j] = nd;
+                    predrow[j] = cur;
+                    heap.push(nd, j);
+                }
             }
             crd::i32 jm = -1;
             while (!heap.empty())
             {
                 const HeapEntry e = heap.pop();
-                if (done[e.col]) { continue; }
-                if (e.dist > dist[e.col]) { continue; } // stale
+                if (done[e.col])
+                {
+                    continue;
+                }
+                if (e.dist > dist[e.col]) // stale
+                {
+                    continue;
+                }
                 jm = static_cast<crd::i32>(e.col);
                 break;
             }
-            if (jm < 0) { break; } // no augmenting path from fr
+            if (jm < 0) // no augmenting path from fr
+            {
+                break;
+            }
             const crd::u32 jc = static_cast<crd::u32>(jm);
             delta   = dist[jc];
             done[jc] = 1;
             scanned.push_back(jc);
-            if (mcol[jc] < 0) { sink = jm; break; } // free column ⇒ augmenting path found
+            if (mcol[jc] < 0) // free column ⇒ augmenting path found
+            {
+                sink = jm;
+                break;
+            }
             cur = mcol[jc];
         }
 
@@ -198,7 +289,10 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
                 const crd::u32 j = scanned[s];
                 const crd::f64 shift = delta - dist[j]; // ≥ 0
                 v[j] -= shift;
-                if (mcol[j] >= 0) { u[static_cast<crd::u32>(mcol[j])] += shift; }
+                if (mcol[j] >= 0)
+                {
+                    u[static_cast<crd::u32>(mcol[j])] += shift;
+                }
             }
             // Augment along the alternating path.
             crd::i32 j = sink;
@@ -216,31 +310,59 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
         // were pushed by clearing dist for settled + we conservatively reset via a scan of scanned
         // plus the heap is cleared. Reset dist for cols we set: track via scanned + relaxed. To stay
         // simple + correct, reset the full dist/done/pred for the cols we touched this round.).
-        for (crd::usize s = 0; s < scanned.size(); ++s) { done[scanned[s]] = 0; }
+        for (crd::usize s = 0; s < scanned.size(); ++s)
+        {
+            done[scanned[s]] = 0;
+        }
         // dist/predrow may be set for non-settled relaxed cols too; reset by full clear (O(n) per
         // free row). Acceptable for correctness; a touched-list would trim it.
-        for (crd::u32 i = 0; i < n; ++i) { dist[i] = inf; predrow[i] = -1; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            dist[i] = inf;
+            predrow[i] = -1;
+        }
     }
 
     // ---- assemble: colperm (matched col per row; free rows → any remaining free col) + scaling ----
     crd::containers::Array<crd::u8> col_used(alloc);
     col_used.resize(n);
-    for (crd::u32 j = 0; j < n; ++j) { col_used[j] = 0; }
+    for (crd::u32 j = 0; j < n; ++j)
+    {
+        col_used[j] = 0;
+    }
     res.full_rank = true;
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (mrow[i] >= 0) { res.colperm[i] = static_cast<crd::u32>(mrow[i]); col_used[mrow[i]] = 1; }
-        else { res.full_rank = false; res.colperm[i] = n; /* placeholder; fixed below */ }
+        if (mrow[i] >= 0)
+        {
+            res.colperm[i] = static_cast<crd::u32>(mrow[i]);
+            col_used[mrow[i]] = 1;
+        }
+        else
+        {
+            res.full_rank = false;
+            res.colperm[i] = n;
+            /* placeholder; fixed below */
+        }
     }
     if (!res.full_rank) // structurally singular: assign free rows to leftover columns (ascending)
     {
         crd::u32 nextcol = 0;
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if (res.colperm[i] != n) { continue; }
-            while (nextcol < n && col_used[nextcol]) { ++nextcol; }
+            if (res.colperm[i] != n)
+            {
+                continue;
+            }
+            while (nextcol < n && col_used[nextcol])
+            {
+                ++nextcol;
+            }
             res.colperm[i] = nextcol < n ? nextcol : 0;
-            if (nextcol < n) { col_used[nextcol] = 1; }
+            if (nextcol < n)
+            {
+                col_used[nextcol] = 1;
+            }
         }
     }
     // Scaling from the duals: D_r[i] = exp(u[i])/rowmax[i], D_c[j] = exp(v[j]). Matched entry → 1.
@@ -248,12 +370,18 @@ Mc64Scaling mc64_match_and_scale(const sparse::SparsePattern& pat, crd::containe
     {
         const crd::f64 rm = crd::math::exp(logrm[i]); // = rowmax (or 0 for an empty row)
         res.dr[i] = (logrm[i] > -inf && std::isfinite(u[i])) ? crd::math::exp(u[i]) / rm : 1.0;
-        if (!(res.dr[i] > 0.0) || !std::isfinite(res.dr[i])) { res.dr[i] = 1.0; }
+        if (!(res.dr[i] > 0.0) || !std::isfinite(res.dr[i]))
+        {
+            res.dr[i] = 1.0;
+        }
     }
     for (crd::u32 j = 0; j < n; ++j)
     {
         res.dc[j] = std::isfinite(v[j]) ? crd::math::exp(v[j]) : 1.0;
-        if (!(res.dc[j] > 0.0) || !std::isfinite(res.dc[j])) { res.dc[j] = 1.0; }
+        if (!(res.dc[j] > 0.0) || !std::isfinite(res.dc[j]))
+        {
+            res.dc[j] = 1.0;
+        }
     }
     return res;
 }

@@ -19,7 +19,10 @@ namespace
 // every graph-tier synth (one output node), which the caller relies on for the trailing-output write-back.
 [[nodiscard]] int synth_stage_host(const Context& ctx, const PlanStage& st, kir::KGraph& g)
 {
-    if (st.op == nullptr) { return -1; } // a partition-metadata stage carries no op — standalone-robust like synth_gemm's guard
+    if (st.op == nullptr) // a partition-metadata stage carries no op — standalone-robust like synth_gemm's guard
+    {
+        return -1;
+    }
     switch (st.kind)
     {
     case StageKind::Gemm: { const GraphSynth s = synth_gemm(ctx, *st.op, g, GemmEpilogue::None); return s.reject == SynthReject::None ? s.output : -1; }
@@ -41,7 +44,10 @@ namespace
 [[nodiscard]] crd::u32 const_grid_dim(const Context& ctx, const Value* v)
 {
     const Operation* const d = v->defining_op();
-    if (d == nullptr) { return 1U; }
+    if (d == nullptr)
+    {
+        return 1U;
+    }
     const AttrValue av = ctx.attr_value(d->attr(containers::StringView("value")));
     return av.i > 0 ? static_cast<crd::u32>(av.i) : 1U;
 }
@@ -54,24 +60,39 @@ namespace
                                                containers::ConstSpan<crd::f32*> buffers, memory::IAllocator* alloc,
                                                const HostRunOptions& opts)
 {
-    if (opts.kernel == nullptr || st.op == nullptr) { return ExecuteError::UnresolvedKernel; }
+    if (opts.kernel == nullptr || st.op == nullptr)
+    {
+        return ExecuteError::UnresolvedKernel;
+    }
     kir::KGraph g(alloc);
     kir::KEntry entry;
     const AttrValue kv = ctx.attr_value(st.op->attr(containers::StringView("kernel")));
-    if (!opts.kernel(kv.s, g, entry, opts.user)) { return ExecuteError::UnresolvedKernel; } // unknown symbol / bad .ckir read
+    if (!opts.kernel(kv.s, g, entry, opts.user)) // unknown symbol / bad .ckir read
+    {
+        return ExecuteError::UnresolvedKernel;
+    }
 
     // bind the sentinel local_size from the WRITE operand's numel (== the trailing output buffer's f32 count). KernelBuffer.len
     // is i32 — reject an over-i32 numel rather than silently truncate.
     const usize    out_bi   = static_cast<usize>(st.bind[st.nbind - 1U]);
     const crd::u64 out_elem = plan.buffers[out_bi].bytes / sizeof(crd::f32);
-    if (out_elem > 0x7fffffffULL) { return ExecuteError::UnresolvedKernel; }
+    if (out_elem > 0x7fffffffULL)
+    {
+        return ExecuteError::UnresolvedKernel;
+    }
     const KernelShapeError kse = bind_authored_local_size(entry.local_size[0], out_elem, kMaxAuthoredLocalSize);
-    if (kse != KernelShapeError::None) { return ExecuteError::UnresolvedKernel; } // unbound / over the single-workgroup cap
+    if (kse != KernelShapeError::None) // unbound / over the single-workgroup cap
+    {
+        return ExecuteError::UnresolvedKernel;
+    }
 
     // f64 ALL binds into one contiguous scratch; KernelBuffer{data, len, set=0, binding=i} (the authored kernels' slot-order
     // decls — relu in@0/out@1). eval_cpu_kernel reads+writes in place, so EVERY bind is materialized f64.
     crd::u64 total = 0;
-    for (crd::u32 i = 0; i < st.nbind; ++i) { total += plan.buffers[static_cast<usize>(st.bind[i])].bytes / sizeof(crd::f32); }
+    for (crd::u32 i = 0; i < st.nbind; ++i)
+    {
+        total += plan.buffers[static_cast<usize>(st.bind[i])].bytes / sizeof(crd::f32);
+    }
     containers::Array<crd::f64> f64buf(alloc);
     f64buf.resize(static_cast<usize>(total), 0.0);
     kir::KernelBuffer kb[8];
@@ -82,7 +103,10 @@ namespace
         const crd::u64  ne  = plan.buffers[bi].bytes / sizeof(crd::f32);
         crd::f64* const dst = f64buf.data() + cursor;
         const crd::f32* src = buffers[bi];
-        for (crd::u64 e = 0; e < ne; ++e) { dst[e] = static_cast<crd::f64>(src[e]); }
+        for (crd::u64 e = 0; e < ne; ++e)
+        {
+            dst[e] = static_cast<crd::f64>(src[e]);
+        }
         kb[i].data    = dst;
         kb[i].len     = static_cast<crd::i32>(ne);
         kb[i].set     = 0U;
@@ -104,7 +128,10 @@ namespace
         {
             const crd::f64* srcd = f64buf.data() + cursor;
             crd::f32* const outp = buffers[bi];
-            for (crd::u64 e = 0; e < ne; ++e) { outp[e] = static_cast<crd::f32>(srcd[e]); }
+            for (crd::u64 e = 0; e < ne; ++e)
+            {
+                outp[e] = static_cast<crd::f32>(srcd[e]);
+            }
         }
         cursor += ne;
     }
@@ -124,8 +151,14 @@ void push_stage_profile(TensorPipelineProfile& profile, const TensorPipelinePlan
     for (crd::u32 i = 0; i < st.nbind; ++i)
     {
         const crd::u64 b = plan.buffers[static_cast<usize>(st.bind[i])].bytes;
-        if (i < n_in) { sp.bytes_in += b; }
-        else { sp.bytes_out += b; }
+        if (i < n_in)
+        {
+            sp.bytes_in += b;
+        }
+        else
+        {
+            sp.bytes_out += b;
+        }
     }
     profile.stages.push_back(sp);
 }
@@ -136,10 +169,16 @@ ExecuteError validate_tensor_pipeline(const TensorPipelinePlan& plan, crd::u32 n
     for (usize s = 0; s < plan.stages.size(); ++s)
     {
         const PlanStage& st = plan.stages[s];
-        if (st.nbind > 8U) { return ExecuteError::BindingArity; }
+        if (st.nbind > 8U)
+        {
+            return ExecuteError::BindingArity;
+        }
         for (crd::u32 i = 0; i < st.nbind; ++i)
         {
-            if (st.bind[i] < 0 || static_cast<crd::u32>(st.bind[i]) >= n_buffers) { return ExecuteError::UnmappedBinding; }
+            if (st.bind[i] < 0 || static_cast<crd::u32>(st.bind[i]) >= n_buffers)
+            {
+                return ExecuteError::UnmappedBinding;
+            }
         }
     }
     return ExecuteError::None;
@@ -150,17 +189,26 @@ ExecuteError execute_tensor_pipeline(const TensorPipelinePlan& plan, crd::gpu::C
                                      TensorPipelineProfile* profile)
 {
     const ExecuteError v = validate_tensor_pipeline(plan, static_cast<crd::u32>(buffers.size()));
-    if (v != ExecuteError::None) { return v; }
+    if (v != ExecuteError::None)
+    {
+        return v;
+    }
 
     for (usize s = 0; s < plan.stages.size(); ++s)
     {
         const PlanStage&    st = plan.stages[s];
         const ResolvedStage rs = resolve(st, user);
-        if (rs.pipeline == nullptr) { return ExecuteError::UnresolvedKernel; }
+        if (rs.pipeline == nullptr)
+        {
+            return ExecuteError::UnresolvedKernel;
+        }
 
         // assemble the ordered ComputeBuffer* bindings (the 13a positional-slot order the emitters + eval_cpu_kernel share).
         crd::gpu::ComputeBuffer* binds[8] = {};
-        for (crd::u32 i = 0; i < st.nbind; ++i) { binds[i] = buffers[static_cast<usize>(st.bind[i])]; }
+        for (crd::u32 i = 0; i < st.nbind; ++i)
+        {
+            binds[i] = buffers[static_cast<usize>(st.bind[i])];
+        }
         rec.dispatch(*rs.pipeline, containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, st.nbind), rs.push, rs.push_size,
                      rs.gx, rs.gy, rs.gz);
 
@@ -178,8 +226,14 @@ ExecuteError execute_tensor_pipeline(const TensorPipelinePlan& plan, crd::gpu::C
             for (crd::u32 i = 0; i < st.nbind; ++i)
             {
                 const crd::u64 b = plan.buffers[static_cast<usize>(st.bind[i])].bytes;
-                if (i < n_in) { sp.bytes_in += b; }
-                else { sp.bytes_out += b; }
+                if (i < n_in)
+                {
+                    sp.bytes_in += b;
+                }
+                else
+                {
+                    sp.bytes_out += b;
+                }
             }
             profile->stages.push_back(sp);
         }
@@ -205,7 +259,10 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
                                           TensorPipelineProfile* profile, HostRunOptions opts)
 {
     const ExecuteError v = validate_tensor_pipeline(plan, static_cast<crd::u32>(buffers.size()));
-    if (v != ExecuteError::None) { return v; }
+    if (v != ExecuteError::None)
+    {
+        return v;
+    }
 
     for (usize s = 0; s < plan.stages.size(); ++s)
     {
@@ -215,10 +272,19 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
         // is a structural fault the write-back relies against — reject BEFORE resolving so a 0-output dispatch is not run blind.
         if (st.kind == StageKind::VizDispatch)
         {
-            if (st.n_out == 0U || st.n_out > st.nbind) { return ExecuteError::BindingArity; }
+            if (st.n_out == 0U || st.n_out > st.nbind)
+            {
+                return ExecuteError::BindingArity;
+            }
             const ExecuteError ee = eval_viz_stage_host(ctx, plan, st, buffers, alloc, opts);
-            if (ee != ExecuteError::None) { return ee; }
-            if (profile != nullptr) { push_stage_profile(*profile, plan, st); }
+            if (ee != ExecuteError::None)
+            {
+                return ee;
+            }
+            if (profile != nullptr)
+            {
+                push_stage_profile(*profile, plan, st);
+            }
             continue;
         }
 
@@ -226,10 +292,16 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
         const int   output_node = synth_stage_host(ctx, st, g);
         // classify FIRST: a reject or a NON-graph-tier kind (e.g. a multi-output Fft) is UnresolvedKernel — the kind, not the
         // arity, is what is wrong. NEVER a silent skip.
-        if (output_node < 0) { return ExecuteError::UnresolvedKernel; }
+        if (output_node < 0)
+        {
+            return ExecuteError::UnresolvedKernel;
+        }
         // a graph-tier synth produced EXACTLY ONE output node; the trailing-output write-back below relies on it — a graph-tier
         // stage claiming any other n_out is a structural fault (it would leave an output bind unwritten), not a partial write.
-        if (st.n_out != 1U || st.nbind < st.n_out) { return ExecuteError::BindingArity; }
+        if (st.n_out != 1U || st.nbind < st.n_out)
+        {
+            return ExecuteError::BindingArity;
+        }
 
         // f32→f64 each INPUT bind (the first nbind−n_out) into one contiguous scratch, then f64 out, all carved by offset (RAII-
         // freed). eval_cpu reads inputs[iidx]; synth builds Input nodes in operand order == the plan's positional bind order.
@@ -237,7 +309,10 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
         const usize    out_bi   = static_cast<usize>(st.bind[st.nbind - 1U]); // the single graph-tier output = the last bind
         const crd::u64 out_elem = plan.buffers[out_bi].bytes / sizeof(crd::f32);
         crd::u64       total    = out_elem;
-        for (crd::u32 i = 0; i < n_in; ++i) { total += plan.buffers[static_cast<usize>(st.bind[i])].bytes / sizeof(crd::f32); }
+        for (crd::u32 i = 0; i < n_in; ++i)
+        {
+            total += plan.buffers[static_cast<usize>(st.bind[i])].bytes / sizeof(crd::f32);
+        }
 
         containers::Array<crd::f64> f64buf(alloc);
         f64buf.resize(static_cast<usize>(total), 0.0);
@@ -249,7 +324,10 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
             const crd::u64  ne  = plan.buffers[bi].bytes / sizeof(crd::f32);
             crd::f64* const dst = f64buf.data() + cursor;
             const crd::f32* src = buffers[bi];
-            for (crd::u64 e = 0; e < ne; ++e) { dst[e] = static_cast<crd::f64>(src[e]); }
+            for (crd::u64 e = 0; e < ne; ++e)
+            {
+                dst[e] = static_cast<crd::f64>(src[e]);
+            }
             ins[i] = dst;
             cursor += ne;
         }
@@ -259,9 +337,15 @@ ExecuteError execute_tensor_pipeline_host(const Context& ctx, const TensorPipeli
         // f64→f32 write-back: an F32 node's value is already exactly F32-representable (eval_cpu rounded every op to F32), so the
         // down-cast is LOSSLESS (the gate asserts the f32 bit pattern round-trips). Written ONLY on success — no partial write.
         crd::f32* const outp = buffers[out_bi];
-        for (crd::u64 e = 0; e < out_elem; ++e) { outp[e] = static_cast<crd::f32>(out64[e]); }
+        for (crd::u64 e = 0; e < out_elem; ++e)
+        {
+            outp[e] = static_cast<crd::f32>(out64[e]);
+        }
 
-        if (profile != nullptr) { push_stage_profile(*profile, plan, st); }
+        if (profile != nullptr)
+        {
+            push_stage_profile(*profile, plan, st);
+        }
     }
     return ExecuteError::None;
 }
@@ -293,7 +377,10 @@ TransferPlan plan_transfers(const TensorPipelinePlan& plan, containers::ConstSpa
     TransferPlan out(alloc);
     const usize  nb = plan.buffers.size();
     const usize  ns = plan.stages.size();
-    if (stage_class.size() != ns) { return out; } // a size mismatch is a caller bug — empty plan, defensive (no error channel)
+    if (stage_class.size() != ns) // a size mismatch is a caller bug — empty plan, defensive (no error channel)
+    {
+        return out;
+    }
 
     // per LANDLORD buffer: the last stage that WROTE it (-1 = an ExternalIn / unwritten) + the class its authoritative contents
     // live on + whether it has contents yet. ExternalIn buffers are Host-BORN (the documented model — the caller holds the f32).
@@ -312,7 +399,10 @@ TransferPlan plan_transfers(const TensorPipelinePlan& plan, containers::ConstSpa
 
     for (usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != BufferRole::ExternalIn) { continue; }
+        if (plan.buffers[i].role != BufferRole::ExternalIn)
+        {
+            continue;
+        }
         const crd::u32 lbl        = landlord_of(plan, static_cast<crd::u32>(i));
         writer_class[lbl]         = ProviderClass::Host; // Host-born
         writer_stage[lbl]         = -1;
@@ -323,17 +413,26 @@ TransferPlan plan_transfers(const TensorPipelinePlan& plan, containers::ConstSpa
     {
         const PlanStage&    st = plan.stages[s];
         const ProviderClass sc = stage_class[s];
-        if (st.n_out > st.nbind) { continue; } // malformed stage — skip (validate_tensor_pipeline owns the hard reject)
+        if (st.n_out > st.nbind) // malformed stage — skip (validate_tensor_pipeline owns the hard reject)
+        {
+            continue;
+        }
         const crd::u32 n_in = st.nbind - st.n_out;
 
         // READS (the first n_in binds) — cross the boundary if the buffer's contents live on a different class.
         for (crd::u32 i = 0; i < n_in; ++i)
         {
             const crd::u32 lbl = landlord_of(plan, static_cast<crd::u32>(st.bind[i]));
-            if (has_contents[lbl] == 0U || writer_class[lbl] == sc) { continue; }
+            if (has_contents[lbl] == 0U || writer_class[lbl] == sc)
+            {
+                continue;
+            }
             const TransferDir dir  = (sc == ProviderClass::Gpu) ? TransferDir::HostToDevice : TransferDir::DeviceToHost;
             crd::i32&         mark = (dir == TransferDir::HostToDevice) ? xfer_h2d[lbl] : xfer_d2h[lbl];
-            if (mark == writer_stage[lbl]) { continue; } // already transferred this writer's contents this direction (dedupe)
+            if (mark == writer_stage[lbl]) // already transferred this writer's contents this direction (dedupe)
+            {
+                continue;
+            }
             Transfer t;
             t.buffer       = lbl;
             t.before_stage = static_cast<crd::u32>(s);
@@ -356,7 +455,10 @@ TransferPlan plan_transfers(const TensorPipelinePlan& plan, containers::ConstSpa
     // the Output MUST end Host-visible: a terminal Gpu writer needs a final readback (before_stage == num_stages).
     for (usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != BufferRole::Output) { continue; }
+        if (plan.buffers[i].role != BufferRole::Output)
+        {
+            continue;
+        }
         const crd::u32 lbl = landlord_of(plan, static_cast<crd::u32>(i));
         if (has_contents[lbl] != 0U && writer_class[lbl] == ProviderClass::Gpu)
         {
@@ -379,8 +481,14 @@ containers::Array<ProviderClass> stage_class_from_partition(const TensorPipeline
     for (usize s = 0; s < plan.stages.size(); ++s)
     {
         const crd::i32 p = plan.stages[s].provider;
-        if (p >= 0 && static_cast<usize>(p) < providers.size()) { out.push_back(providers[static_cast<usize>(p)].provider_class); }
-        else { out.push_back(fallback_class); }
+        if (p >= 0 && static_cast<usize>(p) < providers.size())
+        {
+            out.push_back(providers[static_cast<usize>(p)].provider_class);
+        }
+        else
+        {
+            out.push_back(fallback_class);
+        }
     }
     return out;
 }
@@ -394,8 +502,14 @@ containers::Array<ProviderClass> stage_class_from_placement(const TensorPipeline
     for (usize s = 0; s < plan.stages.size(); ++s)
     {
         const crd::i32 p = plan.stages[s].provider;
-        if (p >= 0 && static_cast<usize>(p) < rank_classes.size()) { out.push_back(rank_classes[static_cast<usize>(p)]); }
-        else { out.push_back(fallback_class); }
+        if (p >= 0 && static_cast<usize>(p) < rank_classes.size())
+        {
+            out.push_back(rank_classes[static_cast<usize>(p)]);
+        }
+        else
+        {
+            out.push_back(fallback_class);
+        }
     }
     return out;
 }
@@ -403,8 +517,14 @@ containers::Array<ProviderClass> stage_class_from_placement(const TensorPipeline
 TensorPipelinePlan slice_plan(const TensorPipelinePlan& plan, crd::usize lo, crd::usize hi, memory::IAllocator* alloc)
 {
     TensorPipelinePlan sub(alloc);
-    for (usize i = 0; i < plan.buffers.size(); ++i) { sub.buffers.push_back(plan.buffers[i]); } // the shared table — indices unchanged
-    for (usize s = lo; s < hi; ++s) { sub.stages.push_back(plan.stages[s]); }
+    for (usize i = 0; i < plan.buffers.size(); ++i) // the shared table — indices unchanged
+    {
+        sub.buffers.push_back(plan.buffers[i]);
+    }
+    for (usize s = lo; s < hi; ++s)
+    {
+        sub.stages.push_back(plan.stages[s]);
+    }
     return sub;
 }
 
@@ -414,10 +534,16 @@ ExecuteError execute_two_class(const Context& ctx, const TensorPipelinePlan& pla
                                HostRunOptions host_opts, TensorPipelineProfile* profile)
 {
     const ExecuteError v = validate_tensor_pipeline(plan, static_cast<crd::u32>(host_bufs.size()));
-    if (v != ExecuteError::None) { return v; }
+    if (v != ExecuteError::None)
+    {
+        return v;
+    }
     // the placement vector's arity MUST match the plan — plan_transfers silently yields an empty plan on a mismatch, and a runner
     // that proceeded would move NOTHING and evaluate a device stage on stale/sentinel memory.
-    if (stage_class.size() != plan.stages.size()) { return ExecuteError::BindingArity; }
+    if (stage_class.size() != plan.stages.size())
+    {
+        return ExecuteError::BindingArity;
+    }
 
     const TransferPlan tp = plan_transfers(plan, stage_class, alloc);
     const usize        ns = plan.stages.size();
@@ -430,10 +556,16 @@ ExecuteError execute_two_class(const Context& ctx, const TensorPipelinePlan& pla
         for (usize t = 0; t < tp.transfers.size(); ++t)
         {
             const Transfer& xf = tp.transfers[t];
-            if (xf.before_stage != static_cast<crd::u32>(s)) { continue; }
+            if (xf.before_stage != static_cast<crd::u32>(s))
+            {
+                continue;
+            }
             const crd::u64     bytes = plan.buffers[static_cast<usize>(xf.buffer)].bytes;
             const ExecuteError ee    = xfer(xf, host_bufs[static_cast<usize>(xf.buffer)], bytes, gpu_user);
-            if (ee != ExecuteError::None) { return ee; }
+            if (ee != ExecuteError::None)
+            {
+                return ee;
+            }
         }
         return ExecuteError::None;
     };
@@ -441,19 +573,31 @@ ExecuteError execute_two_class(const Context& ctx, const TensorPipelinePlan& pla
     for (usize s = 0; s < ns; ++s)
     {
         const ExecuteError te = apply_before(s);
-        if (te != ExecuteError::None) { return te; }
+        if (te != ExecuteError::None)
+        {
+            return te;
+        }
 
         const TensorPipelinePlan slice = slice_plan(plan, s, s + 1U, alloc); // one stage, the shared buffer table (bind[] valid)
         if (stage_class[s] == ProviderClass::Host)
         {
             const ExecuteError ee = execute_tensor_pipeline_host(ctx, slice, host_bufs, alloc, profile, host_opts);
-            if (ee != ExecuteError::None) { return ee; }
+            if (ee != ExecuteError::None)
+            {
+                return ee;
+            }
         }
         else
         {
             const ExecuteError ee = gpu(slice, gpu_user); // the device-class caller records/dispatches/awaits this one stage
-            if (ee != ExecuteError::None) { return ee; }
-            if (profile != nullptr) { push_stage_profile(*profile, plan, plan.stages[s]); } // Host stages profile themselves inside
+            if (ee != ExecuteError::None)
+            {
+                return ee;
+            }
+            if (profile != nullptr) // Host stages profile themselves inside
+            {
+                push_stage_profile(*profile, plan, plan.stages[s]);
+            }
         }
     }
     return apply_before(ns); // the final Output readback(s) — the Output ends Host-visible in host_bufs

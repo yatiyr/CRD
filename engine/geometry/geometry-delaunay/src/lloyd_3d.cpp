@@ -93,7 +93,10 @@ crd::math::Vec3<T> polyhedron_centroid_via_tets(const VoronoiResult3<T>& vor,
     for (const auto& face : cell.faces)
     {
         const crd::u32 nf = static_cast<crd::u32>(face.vertex_indices.size());
-        if (nf < 3U) { continue; }
+        if (nf < 3U)
+        {
+            continue;
+        }
         const auto& v0 = vor.voronoi_vertices[face.vertex_indices[0]];
         for (crd::u32 i = 1U; i + 1U < nf; ++i)
         {
@@ -164,14 +167,26 @@ lloyd_relax_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
     {
         crd::containers::Array<crd::u32> order(alloc);
         order.resize(n, crd::u32{0});
-        for (crd::u32 i = 0; i < n; ++i) { order[i] = i; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            order[i] = i;
+        }
         crd::containers::sort(order.data(), order.data() + order.size(),
                                [&](crd::u32 a, crd::u32 b) noexcept {
                                    const auto& pa = sites[a];
                                    const auto& pb = sites[b];
-                                   if (pa.x != pb.x) { return pa.x < pb.x; }
-                                   if (pa.y != pb.y) { return pa.y < pb.y; }
-                                   if (pa.z != pb.z) { return pa.z < pb.z; }
+                                   if (pa.x != pb.x)
+                                   {
+                                       return pa.x < pb.x;
+                                   }
+                                   if (pa.y != pb.y)
+                                   {
+                                       return pa.y < pb.y;
+                                   }
+                                   if (pa.z != pb.z)
+                                   {
+                                       return pa.z < pb.z;
+                                   }
                                    return a < b;
                                });
         for (crd::u32 i = 1; i < n; ++i)
@@ -207,7 +222,10 @@ lloyd_relax_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
 
     // Initialise relaxed_sites from input.
     result.relaxed_sites.reserve(n);
-    for (crd::u32 i = 0; i < n; ++i) { result.relaxed_sites.push_back(sites[i]); }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        result.relaxed_sites.push_back(sites[i]);
+    }
 
     // Iteration loop.
     crd::containers::Array<crd::math::Vec3<T>> new_sites(alloc);
@@ -240,7 +258,10 @@ lloyd_relax_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
             const T dy = new_pos.y - result.relaxed_sites[s].y;
             const T dz = new_pos.z - result.relaxed_sites[s].z;
             const T d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 > max_disp2) { max_disp2 = d2; }
+            if (d2 > max_disp2)
+            {
+                max_disp2 = d2;
+            }
         }
 
         for (crd::u32 i = 0; i < n; ++i)

@@ -54,12 +54,18 @@ namespace crd::scenerender
         }
         if (!present)
         {
-            if (err != nullptr) { *err = crd::framecook::FrameExecError::SpecConstNotInProgram; }
+            if (err != nullptr)
+            {
+                *err = crd::framecook::FrameExecError::SpecConstNotInProgram;
+            }
             return false;
         }
     }
     // pass 2: apply — each id is proven present, so set_spec_const patches at least one node.
-    for (crd::u32 s = 0U; s < specs.count; ++s) { (void)fg.set_spec_const(specs.items[s].id, specs.items[s].value); }
+    for (crd::u32 s = 0U; s < specs.count; ++s)
+    {
+        (void)fg.set_spec_const(specs.items[s].id, specs.items[s].value);
+    }
     return true;
 }
 
@@ -72,7 +78,10 @@ namespace crd::scenerender
 {
     crd::framecook::SpecConst tmp[crd::framecook::kMaxSpecConsts];
     const crd::u32 n = specs.count <= crd::framecook::kMaxSpecConsts ? specs.count : crd::framecook::kMaxSpecConsts;
-    for (crd::u32 i = 0U; i < n; ++i) { tmp[i] = specs.items[i]; }
+    for (crd::u32 i = 0U; i < n; ++i)
+    {
+        tmp[i] = specs.items[i];
+    }
     for (crd::u32 i = 1U; i < n; ++i) // insertion sort by id (n <= 16)
     {
         const crd::framecook::SpecConst key = tmp[i];
@@ -90,8 +99,14 @@ namespace crd::scenerender
         crd::u64 valbits = 0U;
         std::memcpy(&valbits, &tmp[i].value, sizeof(valbits)); // f64 -> bits (value-sensitive)
         const crd::u64 idbits = tmp[i].id;
-        for (int b = 0; b < 8; ++b) { h = (h ^ ((idbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL; }
-        for (int b = 0; b < 8; ++b) { h = (h ^ ((valbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL; }
+        for (int b = 0; b < 8; ++b)
+        {
+            h = (h ^ ((idbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL;
+        }
+        for (int b = 0; b < 8; ++b)
+        {
+            h = (h ^ ((valbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL;
+        }
     }
     return h;
 }
@@ -101,7 +116,10 @@ namespace crd::scenerender
 // SpecConstDuplicateId — so count-equal + all-present is a bijection). O(n^2), n <= 16.
 [[nodiscard]] inline bool spec_set_equal(crd::framecook::SpecSet a, crd::framecook::SpecSet b) noexcept
 {
-    if (a.count != b.count) { return false; }
+    if (a.count != b.count)
+    {
+        return false;
+    }
     for (crd::u32 i = 0U; i < a.count; ++i)
     {
         bool matched = false;
@@ -109,12 +127,18 @@ namespace crd::scenerender
         {
             if (a.items[i].id == b.items[j].id)
             {
-                if (a.items[i].value != b.items[j].value) { return false; } // same id, different value => distinct set
+                if (a.items[i].value != b.items[j].value) // same id, different value => distinct set
+                {
+                    return false;
+                }
                 matched = true;
                 break;
             }
         }
-        if (!matched) { return false; }
+        if (!matched)
+        {
+            return false;
+        }
     }
     return true;
 }

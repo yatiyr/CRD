@@ -76,10 +76,16 @@ bool compile_dxil(IDxcCompiler3* dxc, const char* src, ComPtr<IDxcBlob>& obj)
     buf.Encoding = DXC_CP_UTF8;
     const wchar_t* args[] = {L"-T", L"cs_6_0", L"-E", L"cs_main"};
     ComPtr<IDxcResult> result;
-    if (FAILED(dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result)))) { return false; }
+    if (FAILED(dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result))))
+    {
+        return false;
+    }
     HRESULT status = S_OK;
     result->GetStatus(&status);
-    if (FAILED(status)) { return false; }
+    if (FAILED(status))
+    {
+        return false;
+    }
     return SUCCEEDED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&obj), nullptr)) && obj != nullptr;
 }
 
@@ -100,26 +106,50 @@ KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::mak
 {
     auto& impl = *m_impl;
     impl.alloc = alloc;
-    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&impl.device)))) { return; }
+    if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&impl.device))))
+    {
+        return;
+    }
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
-    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc)))) { return; }
-    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list)))) { return; }
+    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue))))
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&impl.list))))
+    {
+        return;
+    }
     impl.list->Close();
-    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence)))) { return; }
+    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence))))
+    {
+        return;
+    }
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     const HMODULE dxc_dll = LoadLibraryW(L"dxcompiler.dll");
-    if (dxc_dll == nullptr) { return; }
+    if (dxc_dll == nullptr)
+    {
+        return;
+    }
     // FARPROC -> the real proc type directly; laundering through void* is UB for function pointers, not a workaround.
     auto create = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(dxc_dll, "DxcCreateInstance"));
-    if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc)))) { return; }
+    if (create == nullptr || FAILED(create(CLSID_DxcCompiler, IID_PPV_ARGS(&impl.dxc))))
+    {
+        return;
+    }
     impl.ok = impl.event != nullptr;
 }
 
 KirBackendDx12::~KirBackendDx12()
 {
-    if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
+    if (m_impl->event != nullptr)
+    {
+        CloseHandle(m_impl->event);
+    }
 }
 
 bool KirBackendDx12::valid() const noexcept { return m_impl->ok; }
@@ -127,7 +157,10 @@ bool KirBackendDx12::valid() const noexcept { return m_impl->ok; }
 bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_inputs > kMaxIn) { return false; }
+    if (!impl.ok || n_inputs > kMaxIn)
+    {
+        return false;
+    }
     auto*        dev  = impl.device.Get();
     const KNode& outn = g.node(output);
 
@@ -151,7 +184,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         consts[2]       = static_cast<crd::u32>(an.shape.dims[r - 1]);             // K
         in_bytes[0]     = static_cast<crd::u64>(consts[0]) * consts[2] * sizeof(float);
         in_bytes[1]     = static_cast<crd::u64>(consts[2]) * consts[1] * sizeof(float);
-        for (int j = 0; j < fuse.n_bias; ++j) { in_bytes[2 + j] = static_cast<crd::u64>(consts[1]) * sizeof(float); }
+        for (int j = 0; j < fuse.n_bias; ++j)
+        {
+            in_bytes[2 + j] = static_cast<crd::u64>(consts[1]) * sizeof(float);
+        }
         out_bytes = static_cast<crd::u64>(consts[0]) * consts[1] * sizeof(float);
         groups    = (consts[0] * consts[1] + 255U) / 256U;
         fused     = true;
@@ -167,7 +203,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         consts[1]       = static_cast<crd::u32>(an.shape.dims[r - 1]);
         consts[2]       = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
         consts[3]       = 1U;
-        for (int k = 0; k < r - 2; ++k) { consts[3] *= static_cast<crd::u32>(an.shape.dims[k]); }
+        for (int k = 0; k < r - 2; ++k)
+        {
+            consts[3] *= static_cast<crd::u32>(an.shape.dims[k]);
+        }
         in_bytes[0] = static_cast<crd::u64>(consts[0]) * consts[1] * consts[3] * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(consts[1]) * consts[2] * consts[3] * sizeof(float);
         out_bytes   = static_cast<crd::u64>(consts[0]) * consts[2] * consts[3] * sizeof(float);
@@ -179,15 +218,27 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
         }
         else
         {
-            if (!emit_contract_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+            if (!emit_contract_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
             groups = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
         }
     }
     else if (is_reduce(outn.op))
     {
         const bool fast = (outn.tier == DetTier::Fast && is_fast_reduceable(outn.op)); // T2 parallel group tree-reduce
-        if (fast) { if (!emit_reduce_fast_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_reduce_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_reduce_fast_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_reduce_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
         const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
         consts[0]                = static_cast<crd::u32>(out_numel);
@@ -198,7 +249,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (outn.op == KOp::Gather)
     {
-        if (!emit_gather_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_gather_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   dn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 data_numel = static_cast<crd::u64>(dn.shape.numel());
@@ -212,7 +266,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (outn.op == KOp::Scatter)
     {
-        if (!emit_scatter_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_scatter_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   bn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 base_numel = static_cast<crd::u64>(bn.shape.numel());
@@ -229,7 +286,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (outn.op == KOp::ScatterAdd) // atomic histogram: D3D12 zero-inits committed resources, then InterlockedAdd
     {
-        if (!emit_scatteradd_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_scatteradd_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 nin  = static_cast<crd::u64>(g.node(outn.a).shape.numel()); // N inputs
         const crd::u64 mbin = static_cast<crd::u64>(outn.shape.numel());           // M bins (output)
         consts[0]           = static_cast<crd::u32>(nin);
@@ -241,8 +301,17 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     else if (outn.op == KOp::ScanSum)
     {
         const bool fast = (outn.tier == DetTier::Fast); // T2 parallel group prefix-sum
-        if (fast) { if (!emit_scan_fast_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_scan_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_scan_fast_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_scan_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 numel   = static_cast<crd::u64>(outn.shape.numel());
         const crd::u32 scanlen = static_cast<crd::u32>(outn.shape.dims[outn.shape.rank - 1]);
         consts[0]              = static_cast<crd::u32>(numel / scanlen); // nrows
@@ -253,18 +322,33 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (graph_uses_vec(g, output, impl.alloc)) // A3: vector elementwise cone → comps-aware HLSL emitter (interleaved I/O)
     {
-        if (!emit_vec_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_vec_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         consts[0]         = static_cast<crd::u32>(on);
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float);
+        }
         out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
     else if (outn.op == KOp::Broadcast || outn.op == KOp::Permute) // CEIR-25b-2b: one thread per output element, baked index map
     {
         const bool bcast = (outn.op == KOp::Broadcast);
-        if (bcast) { if (!emit_broadcast_nd_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_permute_hlsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (bcast)
+        {
+            if (!emit_broadcast_nd_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_permute_hlsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
         consts[0]                = static_cast<crd::u32>(out_numel);
@@ -274,16 +358,25 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     else
     {
-        if (!emit_elementwise_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_elementwise_hlsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         consts[0]         = static_cast<crd::u32>(on);
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * sizeof(float);
+        }
         out_bytes = on * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
 
     ComPtr<IDxcBlob> dxil;
-    if (!compile_dxil(impl.dxc.Get(), kern.source.c_str(), dxil)) { return false; }
+    if (!compile_dxil(impl.dxc.Get(), kern.source.c_str(), dxil))
+    {
+        return false;
+    }
 
     // root signature: [0] 32-bit constants (b0, 4 values), [1] UAV descriptor table (u0..u{n_inputs})
     D3D12_DESCRIPTOR_RANGE range{};
@@ -301,23 +394,35 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     rsd.pParameters   = rp;
     ComPtr<ID3DBlob> sig;
     ComPtr<ID3DBlob> serr;
-    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr))) { return false; }
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr)))
+    {
+        return false;
+    }
     ComPtr<ID3D12RootSignature> root;
-    if (FAILED(dev->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root)))) { return false; }
+    if (FAILED(dev->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
+    {
+        return false;
+    }
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature    = root.Get();
     pd.CS.pShaderBytecode = dxil->GetBufferPointer();
     pd.CS.BytecodeLength  = dxil->GetBufferSize();
     ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return false; }
+    if (FAILED(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
+    {
+        return false;
+    }
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = static_cast<UINT>(n_inputs + 1);
     hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> heap;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)))) { return false; }
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap))))
+    {
+        return false;
+    }
     const UINT                  incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE cpu  = heap->GetCPUDescriptorHandleForHeapStart();
 
@@ -327,7 +432,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     {
         in_def[i] = make_buffer(dev, in_bytes[i], D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
         in_up[i]  = make_buffer(dev, in_bytes[i], D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-        if (in_def[i] == nullptr || in_up[i] == nullptr) { return false; }
+        if (in_def[i] == nullptr || in_up[i] == nullptr)
+        {
+            return false;
+        }
         void* p = nullptr;
         in_up[i]->Map(0, nullptr, &p);
         std::memcpy(p, inputs[kern.input_iidx[i]], in_bytes[i]);
@@ -338,7 +446,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
     }
     auto out_def = make_buffer(dev, out_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     auto out_rb  = make_buffer(dev, out_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
-    if (out_def == nullptr || out_rb == nullptr) { return false; }
+    if (out_def == nullptr || out_rb == nullptr)
+    {
+        return false;
+    }
     {
         D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
         h.ptr += static_cast<SIZE_T>(n_inputs) * incr;
@@ -378,7 +489,10 @@ bool KirBackendDx12::run(const KGraph& g, int output, const float* const* inputs
 
     void*             map_ptr = nullptr;
     const D3D12_RANGE rrange{0, static_cast<SIZE_T>(out_bytes)};
-    if (FAILED(out_rb->Map(0, &rrange, &map_ptr))) { return false; }
+    if (FAILED(out_rb->Map(0, &rrange, &map_ptr)))
+    {
+        return false;
+    }
     std::memcpy(out, map_ptr, out_bytes);
     out_rb->Unmap(0, nullptr);
     return true;

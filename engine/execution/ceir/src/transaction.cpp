@@ -16,7 +16,10 @@ constexpr DiagnosticCode kErrVerify    = make_diagnostic_code("ceir.transaction.
 {
     for (usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] == op) { return true; }
+        if (a[i] == op)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -24,7 +27,10 @@ void push_unique_id(containers::Array<StableId>& a, StableId id)
 {
     for (usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] == id) { return; }
+        if (a[i] == id)
+        {
+            return;
+        }
     }
     a.push_back(id);
 }
@@ -32,7 +38,10 @@ void push_unique_id(containers::Array<StableId>& a, StableId id)
 {
     for (usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] == b) { return true; }
+        if (a[i] == b)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -45,7 +54,10 @@ void collect_subtree(Operation* root, containers::Array<Operation*>& ops, contai
         for (Block* b = root->region(i)->first_block(); b != nullptr; b = b->next_in_region())
         {
             blocks.push_back(b);
-            for (Operation* o = b->first_op(); o != nullptr; o = o->next_in_block()) { collect_subtree(o, ops, blocks); }
+            for (Operation* o = b->first_op(); o != nullptr; o = o->next_in_block())
+            {
+                collect_subtree(o, ops, blocks);
+            }
         }
     }
 }
@@ -53,8 +65,14 @@ void collect_subtree(Operation* root, containers::Array<Operation*>& ops, contai
 [[nodiscard]] bool value_inside(const Value* v, const containers::Array<Operation*>& ops,
                                 const containers::Array<Block*>& blocks) noexcept
 {
-    if (v == nullptr) { return true; } // an unset operand crosses nothing
-    if (v->kind() == ValueKind::OpResult) { return contains_op(ops, v->defining_op()); }
+    if (v == nullptr) // an unset operand crosses nothing
+    {
+        return true;
+    }
+    if (v->kind() == ValueKind::OpResult)
+    {
+        return contains_op(ops, v->defining_op());
+    }
     return contains_block(blocks, v->owner_block());
 }
 } // namespace
@@ -72,12 +90,18 @@ Transaction::Transaction(Context& ctx, Module& module, DiagnosticEngine& diag, m
 
 Transaction::~Transaction()
 {
-    if (is_open()) { rollback(); } // no partial edit escapes a dropped-open transaction
+    if (is_open()) // no partial edit escapes a dropped-open transaction
+    {
+        rollback();
+    }
 }
 
 bool Transaction::guard_open()
 {
-    if (m_poisoned) { return false; } // already poisoned — the original diagnostic stands; further edits are no-ops
+    if (m_poisoned) // already poisoned — the original diagnostic stands; further edits are no-ops
+    {
+        return false;
+    }
     if (m_committed || m_rolled_back)
     {
         reject(containers::StringView("edit on a closed transaction"), SourceLoc{});
@@ -97,9 +121,15 @@ bool Transaction::region_in_module(Region* r) const noexcept
     while (r != nullptr)
     {
         Operation* const parent = r->parent_op();
-        if (parent == nullptr) { return r == m_module.body(); } // reached a root region — is it THIS module's body?
+        if (parent == nullptr) // reached a root region — is it THIS module's body?
+        {
+            return r == m_module.body();
+        }
         Block* const pb = parent->parent_block();
-        if (pb == nullptr) { return false; } // a detached parent op (not reachable for a live op)
+        if (pb == nullptr) // a detached parent op (not reachable for a live op)
+        {
+            return false;
+        }
         r = pb->parent_region();
     }
     return false; // a detached region (parent_op chain hit null before the body)
@@ -107,24 +137,36 @@ bool Transaction::region_in_module(Region* r) const noexcept
 
 bool Transaction::belongs(const Operation* op) const noexcept
 {
-    if (op == nullptr || op->is_erased() || op->parent_block() == nullptr) { return false; }
+    if (op == nullptr || op->is_erased() || op->parent_block() == nullptr)
+    {
+        return false;
+    }
     return region_in_module(op->parent_block()->parent_region());
 }
 
 void Transaction::mark_modified(Operation* op)
 {
-    if (op != nullptr && !contains_op(m_modified, op)) { m_modified.push_back(op); }
+    if (op != nullptr && !contains_op(m_modified, op))
+    {
+        m_modified.push_back(op);
+    }
 }
 
 void Transaction::note_symbol_touch(const Operation* op)
 {
-    if (op != nullptr && op->has_attr(containers::StringView("sym_name"))) { m_symbols_dirty = true; }
+    if (op != nullptr && op->has_attr(containers::StringView("sym_name")))
+    {
+        m_symbols_dirty = true;
+    }
 }
 
 Operation* Transaction::insert(OpId kind, containers::ConstSpan<Value*> operands, u32 num_results, Block* block,
                                Operation* before, TypeId result_type, u32 num_regions)
 {
-    if (!guard_open()) { return nullptr; }
+    if (!guard_open())
+    {
+        return nullptr;
+    }
     if (block == nullptr || !region_in_module(block->parent_region()))
     {
         reject(containers::StringView("insert into a block outside this module"), SourceLoc{});
@@ -148,7 +190,10 @@ Operation* Transaction::insert(OpId kind, containers::ConstSpan<Value*> operands
 
 bool Transaction::erase(Operation* op)
 {
-    if (!guard_open()) { return false; }
+    if (!guard_open())
+    {
+        return false;
+    }
     if (!belongs(op))
     {
         reject(containers::StringView("erase of an op outside this module"), op != nullptr ? op->loc() : SourceLoc{});
@@ -174,7 +219,10 @@ bool Transaction::erase(Operation* op)
         for (usize si = 0; si < sub.size(); ++si)
         {
             Operation* const n = sub[si];
-            if (n == op) { continue; } // root's operands are detached by erase(); root's results by the check above
+            if (n == op) // root's operands are detached by erase(); root's results by the check above
+            {
+                continue;
+            }
             for (u32 i = 0; i < n->num_operands(); ++i)
             {
                 if (!value_inside(n->operand(i), sub, blks)) // IN-edge
@@ -204,7 +252,10 @@ bool Transaction::erase(Operation* op)
     if (n > 0U)
     {
         snap = memory::construct_array<Value*>(m_ctx.arena(), n); // Context-arena (read only at rollback, before tx death)
-        for (u32 i = 0; i < n; ++i) { snap[i] = op->operand(i); }
+        for (u32 i = 0; i < n; ++i)
+        {
+            snap[i] = op->operand(i);
+        }
     }
     Record r{};
     r.kind     = MutKind::Erase;
@@ -221,7 +272,10 @@ bool Transaction::erase(Operation* op)
 
 bool Transaction::set_operand(Operation* op, u32 index, Value* value)
 {
-    if (!guard_open()) { return false; }
+    if (!guard_open())
+    {
+        return false;
+    }
     if (!belongs(op))
     {
         reject(containers::StringView("set_operand on an op outside this module"), op != nullptr ? op->loc() : SourceLoc{});
@@ -245,13 +299,19 @@ bool Transaction::set_operand(Operation* op, u32 index, Value* value)
 
 bool Transaction::replace_all_uses_with(Value* from, Value* to)
 {
-    if (!guard_open()) { return false; }
+    if (!guard_open())
+    {
+        return false;
+    }
     if (from == nullptr || to == nullptr)
     {
         reject(containers::StringView("replace_all_uses_with a null value"), SourceLoc{});
         return false;
     }
-    if (from == to) { return true; } // no-op
+    if (from == to) // no-op
+    {
+        return true;
+    }
     containers::Array<Use*> moved(m_alloc);
     m_ctx.rauw_recording(from, to, moved);
     for (usize i = 0; i < moved.size(); ++i)
@@ -268,7 +328,10 @@ bool Transaction::replace_all_uses_with(Value* from, Value* to)
 
 bool Transaction::set_attr(Operation* op, containers::StringView name, AttrId value)
 {
-    if (!guard_open()) { return false; }
+    if (!guard_open())
+    {
+        return false;
+    }
     if (!belongs(op))
     {
         reject(containers::StringView("set_attr on an op outside this module"), op != nullptr ? op->loc() : SourceLoc{});
@@ -282,7 +345,10 @@ bool Transaction::set_attr(Operation* op, containers::StringView name, AttrId va
     if (pc > 0U)
     {
         snap = memory::construct_array<NamedAttr>(m_ctx.arena(), pc);
-        for (u32 i = 0; i < pc; ++i) { snap[i] = NamedAttr{op->attr_name(i), op->attr_id_at(i)}; }
+        for (u32 i = 0; i < pc; ++i)
+        {
+            snap[i] = NamedAttr{op->attr_name(i), op->attr_id_at(i)};
+        }
     }
     Record r{};
     r.kind  = MutKind::SetAttr;
@@ -304,27 +370,42 @@ void Transaction::compute_touched_removed()
     for (usize i = 0; i < m_created.size(); ++i)
     {
         Operation* const op = m_created[i];
-        if (contains_op(m_erased, op)) { continue; } // inserted-then-erased ⇒ net-out (neither set)
+        if (contains_op(m_erased, op)) // inserted-then-erased ⇒ net-out (neither set)
+        {
+            continue;
+        }
         push_unique_id(m_touched, op->stable_id());
     }
     for (usize i = 0; i < m_modified.size(); ++i)
     {
         Operation* const op = m_modified[i];
-        if (contains_op(m_erased, op) || contains_op(m_created, op)) { continue; } // erased ⇒ removed; created ⇒ already touched
+        if (contains_op(m_erased, op) || contains_op(m_created, op)) // erased ⇒ removed; created ⇒ already touched
+        {
+            continue;
+        }
         push_unique_id(m_touched, op->stable_id());
     }
     for (usize i = 0; i < m_erased.size(); ++i)
     {
         Operation* const op = m_erased[i];
-        if (contains_op(m_created, op)) { continue; }     // created-then-erased ⇒ net-out
+        if (contains_op(m_created, op)) // created-then-erased ⇒ net-out
+        {
+            continue;
+        }
         push_unique_id(m_removed, op->stable_id());        // erase() left m_stable_id intact
     }
 }
 
 bool Transaction::commit()
 {
-    if (m_committed) { return true; }
-    if (m_rolled_back) { return false; }
+    if (m_committed)
+    {
+        return true;
+    }
+    if (m_rolled_back)
+    {
+        return false;
+    }
     if (m_poisoned)
     {
         rollback();
@@ -376,7 +457,10 @@ bool Transaction::commit()
 
 void Transaction::rollback()
 {
-    if (m_committed || m_rolled_back) { return; }
+    if (m_committed || m_rolled_back)
+    {
+        return;
+    }
     for (usize k = m_journal.size(); k-- > 0U;) // reverse order — the correctness proof (ADR-0119 §2.1)
     {
         const Record& r = m_journal[k];

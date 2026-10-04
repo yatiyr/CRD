@@ -15,9 +15,13 @@ namespace
 bool name_is_traversal(const ModuleIdentity& m) noexcept
 {
     if (m.id_kind == SymbolIdKind::Rsds)
+    {
         return !is_safe_lookup_name(cont::StringView{m.debug_file.c_str(), m.debug_file.size()});
+    }
     if (m.id_kind == SymbolIdKind::PeImage)
+    {
         return !is_safe_lookup_name(cont::StringView{m.name.c_str(), m.name.size()});
+    }
     return false; // GnuBuildId is hex-only; None has no path
 }
 } // namespace
@@ -92,7 +96,9 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
     }
 
     if (rb.status == BundleReadStatus::UnsupportedFeature)
+    {
         r.compressed_unsupported = true; // a compressed section was refused; the prefix is kept (v1 bomb defence)
+    }
 
     r.total_len_mismatch = (rb.header.total_len != buf.size());
 
@@ -116,13 +122,17 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
 
         bool dup = false;
         for (crd::usize j = 0; j < r.sections.size(); ++j)
+        {
             if (r.sections[j].tag == sv.tag)
             {
                 dup = true;
                 break;
             }
+        }
         if (dup)
+        {
             is.import_flags |= kImportSectionDuplicate;
+        }
 
         if (!dup && (is.import_flags & kImportSectionOversized) == 0U)
         {
@@ -136,8 +146,12 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
                 r.symbols     = read_symbol_index(sv.payload, alloc);
                 r.has_symbols = true;
                 for (crd::usize k = 0; k < r.symbols.size(); ++k)
+                {
                     if (name_is_traversal(r.symbols[k]))
+                    {
                         ++r.unsafe_names;
+                    }
+                }
             }
         }
 
@@ -147,20 +161,26 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
     // Cross-check the manifest's declared-absent tags against the actual sections (report, never reject: the data is
     // still readable; a mismatch is a manifest/section disagreement worth surfacing).
     if (r.has_manifest)
+    {
         for (crd::usize a = 0; a < r.manifest.absent_tags.size(); ++a)
         {
             const crd::u32 tag     = r.manifest.absent_tags[a];
             bool           matched = false;
             for (crd::usize s = 0; s < r.sections.size(); ++s)
+            {
                 if (static_cast<crd::u32>(r.sections[s].tag) == tag &&
                     (r.sections[s].section_flags & kSectionFlagAbsent) != 0U)
                 {
                     matched = true;
                     break;
                 }
+            }
             if (!matched)
+            {
                 ++r.manifest_absent_mismatches;
+            }
         }
+    }
 
     r.status = (rb.status == BundleReadStatus::Ok) ? ImportStatus::Ok : ImportStatus::RecoveredTruncated;
     return r;

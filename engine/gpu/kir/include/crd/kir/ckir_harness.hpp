@@ -37,7 +37,10 @@ namespace crd::kir
         crd::u64 ub = 0;
         std::memcpy(&ua, &a[i], sizeof(ua));
         std::memcpy(&ub, &b[i], sizeof(ub));
-        if (ua != ub) { return false; }
+        if (ua != ub)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -45,7 +48,14 @@ namespace crd::kir
 [[nodiscard]] inline crd::u64 max_ulp(const crd::f64* a, const crd::f64* b, crd::i64 n) noexcept
 {
     crd::u64 m = 0;
-    for (crd::i64 i = 0; i < n; ++i) { const crd::u64 d = ulp_distance(a[i], b[i]); if (d > m) { m = d; } }
+    for (crd::i64 i = 0; i < n; ++i)
+    {
+        const crd::u64 d = ulp_distance(a[i], b[i]);
+        if (d > m)
+        {
+            m = d;
+        }
+    }
     return m;
 }
 
@@ -57,7 +67,14 @@ namespace crd::kir
 [[nodiscard]] inline crd::f64 max_abs_diff(const crd::f64* a, const crd::f64* b, crd::i64 n) noexcept
 {
     crd::f64 m = 0.0;
-    for (crd::i64 i = 0; i < n; ++i) { const crd::f64 d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i]; if (d > m) { m = d; } }
+    for (crd::i64 i = 0; i < n; ++i)
+    {
+        const crd::f64 d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
+        if (d > m)
+        {
+            m = d;
+        }
+    }
     return m;
 }
 
@@ -69,7 +86,10 @@ namespace crd::kir
         const crd::f64 d  = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
         const crd::f64 av = a[i] < 0.0 ? -a[i] : a[i];
         const crd::f64 rd = av > 0.0 ? d / av : d;
-        if (rd > m) { m = rd; }
+        if (rd > m)
+        {
+            m = rd;
+        }
     }
     return m;
 }

@@ -28,8 +28,14 @@ int           gLabels[B];
 
 void init_inputs()
 {
-    for (int i = 0; i < B * D; ++i) { gX_in[i] = 0.4 * std::sin(1.0 + i * 1.3); }
-    for (int i = 0; i < B; ++i) { gLabels[i] = i % C; }
+    for (int i = 0; i < B * D; ++i)
+    {
+        gX_in[i] = 0.4 * std::sin(1.0 + i * 1.3);
+    }
+    for (int i = 0; i < B; ++i)
+    {
+        gLabels[i] = i % C;
+    }
 }
 
 // forward: loss = CE(softmax(relu(X·W1+b1)·W2+b2), labels)
@@ -99,10 +105,22 @@ TEST_CASE("v16-c: MLP parameter gradients (one backward pass) == numerical gradc
     f64 b1[H];
     f64 w2[H * C];
     f64 b2[C];
-    for (int i = 0; i < D * H; ++i) { w1[i] = 0.3 * std::cos(1.0 + i); }
-    for (int i = 0; i < H; ++i) { b1[i] = 0.1 * (i - 2); }
-    for (int i = 0; i < H * C; ++i) { w2[i] = 0.25 * std::sin(0.5 + i); }
-    for (int i = 0; i < C; ++i) { b2[i] = 0.05 * i; }
+    for (int i = 0; i < D * H; ++i)
+    {
+        w1[i] = 0.3 * std::cos(1.0 + i);
+    }
+    for (int i = 0; i < H; ++i)
+    {
+        b1[i] = 0.1 * (i - 2);
+    }
+    for (int i = 0; i < H * C; ++i)
+    {
+        w2[i] = 0.25 * std::sin(0.5 + i);
+    }
+    for (int i = 0; i < C; ++i)
+    {
+        b2[i] = 0.05 * i;
+    }
 
     f64 gw1[D * H];
     f64 gb1[H];
@@ -126,9 +144,18 @@ TEST_CASE("v16-c: matmul VJP == einsum-with-permuted-spec, and is deterministic"
     f64           a[m * k];
     f64           b[k * p];
     f64           gc[m * p];
-    for (int i = 0; i < m * k; ++i) { a[i] = 0.2 + 0.1 * i; }
-    for (int i = 0; i < k * p; ++i) { b[i] = -0.3 + 0.15 * i; }
-    for (int i = 0; i < m * p; ++i) { gc[i] = 0.5 - 0.2 * i; }
+    for (int i = 0; i < m * k; ++i)
+    {
+        a[i] = 0.2 + 0.1 * i;
+    }
+    for (int i = 0; i < k * p; ++i)
+    {
+        b[i] = -0.3 + 0.15 * i;
+    }
+    for (int i = 0; i < m * p; ++i)
+    {
+        gc[i] = 0.5 - 0.2 * i;
+    }
     f64 ga[m * k];
     f64 gb[k * p];
     f64 ga2[m * k];
@@ -141,7 +168,10 @@ TEST_CASE("v16-c: matmul VJP == einsum-with-permuted-spec, and is deterministic"
         for (int t = 0; t < k; ++t)
         {
             f64 s = 0.0;
-            for (int j = 0; j < p; ++j) { s += gc[i * p + j] * b[t * p + j]; }
+            for (int j = 0; j < p; ++j)
+            {
+                s += gc[i * p + j] * b[t * p + j];
+            }
             CHECK_THAT(ga[i * k + t], WithinAbs(s, 1e-12));
             CHECK(ga[i * k + t] == ga2[i * k + t]); // deterministic
         }
@@ -152,7 +182,10 @@ TEST_CASE("v16-c: matmul VJP == einsum-with-permuted-spec, and is deterministic"
         for (int j = 0; j < p; ++j)
         {
             f64 s = 0.0;
-            for (int i = 0; i < m; ++i) { s += a[i * k + t] * gc[i * p + j]; }
+            for (int i = 0; i < m; ++i)
+            {
+                s += a[i * k + t] * gc[i * p + j];
+            }
             CHECK_THAT(gb[t * p + j], WithinAbs(s, 1e-12));
             CHECK(gb[t * p + j] == gb2[t * p + j]);
         }
@@ -197,7 +230,14 @@ TEST_CASE("v16-c: elementwise activation VJPs (gelu/tanh/sigmoid/softmax) == FD"
     {
         f64 gx[n];
         nn::gelu_vjp(x, c, gx, n);
-        auto loss = [&] { f64 y[n]; nn::gelu(x, y, n); f64 s = 0; for (int i = 0; i < n; ++i) { s += c[i] * y[i]; } return s; };
+        auto loss = [&]
+        {
+            f64 y[n]; nn::gelu(x, y, n); f64 s = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                s += c[i] * y[i];
+            }
+            return s; };
         fd_gradcheck(x, n, gx, loss);
     }
     SECTION("tanh")
@@ -206,7 +246,14 @@ TEST_CASE("v16-c: elementwise activation VJPs (gelu/tanh/sigmoid/softmax) == FD"
         f64 gx[n];
         nn::tanh_act(x, y, n);
         nn::tanh_vjp(y, c, gx, n);
-        auto loss = [&] { f64 yy[n]; nn::tanh_act(x, yy, n); f64 s = 0; for (int i = 0; i < n; ++i) { s += c[i] * yy[i]; } return s; };
+        auto loss = [&]
+        {
+            f64 yy[n]; nn::tanh_act(x, yy, n); f64 s = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                s += c[i] * yy[i];
+            }
+            return s; };
         fd_gradcheck(x, n, gx, loss);
     }
     SECTION("sigmoid")
@@ -215,7 +262,14 @@ TEST_CASE("v16-c: elementwise activation VJPs (gelu/tanh/sigmoid/softmax) == FD"
         f64 gx[n];
         nn::sigmoid(x, y, n);
         nn::sigmoid_vjp(y, c, gx, n);
-        auto loss = [&] { f64 yy[n]; nn::sigmoid(x, yy, n); f64 s = 0; for (int i = 0; i < n; ++i) { s += c[i] * yy[i]; } return s; };
+        auto loss = [&]
+        {
+            f64 yy[n]; nn::sigmoid(x, yy, n); f64 s = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                s += c[i] * yy[i];
+            }
+            return s; };
         fd_gradcheck(x, n, gx, loss);
     }
     SECTION("softmax (row-wise)")
@@ -233,7 +287,14 @@ TEST_CASE("v16-c: elementwise activation VJPs (gelu/tanh/sigmoid/softmax) == FD"
         f64 gx[rows * cols];
         nn::softmax(xs, y, rows, cols);
         nn::softmax_vjp(y, cs, gx, rows, cols);
-        auto loss = [&] { f64 yy[rows * cols]; nn::softmax(xs, yy, rows, cols); f64 s = 0; for (int i = 0; i < rows * cols; ++i) { s += cs[i] * yy[i]; } return s; };
+        auto loss = [&]
+        {
+            f64 yy[rows * cols]; nn::softmax(xs, yy, rows, cols); f64 s = 0;
+            for (int i = 0; i < rows * cols; ++i)
+            {
+                s += cs[i] * yy[i];
+            }
+            return s; };
         fd_gradcheck(xs, rows * cols, gx, loss);
     }
 }
@@ -261,7 +322,14 @@ TEST_CASE("v16-c: LayerNorm VJP (x, gamma, beta) == FD", "[autodiff][reverse][nn
     f64 ggamma[d];
     f64 gbeta[d];
     nn::layernorm_vjp(x, gamma, c, eps, gx, ggamma, gbeta, rows, d);
-    auto loss = [&] { f64 y[rows * d]; nn::layernorm(x, gamma, beta, eps, y, rows, d); f64 s = 0; for (int i = 0; i < rows * d; ++i) { s += c[i] * y[i]; } return s; };
+    auto loss = [&]
+    {
+        f64 y[rows * d]; nn::layernorm(x, gamma, beta, eps, y, rows, d); f64 s = 0;
+        for (int i = 0; i < rows * d; ++i)
+        {
+            s += c[i] * y[i];
+        }
+        return s; };
     fd_gradcheck(x, rows * d, gx, loss);
     fd_gradcheck(gamma, d, ggamma, loss);
     fd_gradcheck(beta, d, gbeta, loss);
@@ -278,20 +346,40 @@ TEST_CASE("v16-c: pooling VJPs (max/avg) == FD", "[autodiff][reverse][nn]")
     const int     ow = (w - k) / s + 1;
     f64           x[planes * h * w];
     f64           c[planes * oh * ow];
-    for (int i = 0; i < planes * h * w; ++i) { x[i] = std::sin(0.3 + 0.37 * i); } // distinct → no pooling ties
-    for (int i = 0; i < planes * oh * ow; ++i) { c[i] = 0.4 * std::cos(0.6 + 0.9 * i); }
+    for (int i = 0; i < planes * h * w; ++i) // distinct → no pooling ties
+    {
+        x[i] = std::sin(0.3 + 0.37 * i);
+    }
+    for (int i = 0; i < planes * oh * ow; ++i)
+    {
+        c[i] = 0.4 * std::cos(0.6 + 0.9 * i);
+    }
     SECTION("max_pool")
     {
         f64 gx[planes * h * w];
         nn::max_pool_vjp(x, c, gx, planes, h, w, k, s);
-        auto loss = [&] { f64 y[planes * oh * ow]; nn::max_pool(x, y, planes, h, w, k, s); f64 sm = 0; for (int i = 0; i < planes * oh * ow; ++i) { sm += c[i] * y[i]; } return sm; };
+        auto loss = [&]
+        {
+            f64 y[planes * oh * ow]; nn::max_pool(x, y, planes, h, w, k, s); f64 sm = 0;
+            for (int i = 0; i < planes * oh * ow; ++i)
+            {
+                sm += c[i] * y[i];
+            }
+            return sm; };
         fd_gradcheck(x, planes * h * w, gx, loss);
     }
     SECTION("avg_pool")
     {
         f64 gx[planes * h * w];
         nn::avg_pool_vjp(c, gx, planes, h, w, k, s);
-        auto loss = [&] { f64 y[planes * oh * ow]; nn::avg_pool(x, y, planes, h, w, k, s); f64 sm = 0; for (int i = 0; i < planes * oh * ow; ++i) { sm += c[i] * y[i]; } return sm; };
+        auto loss = [&]
+        {
+            f64 y[planes * oh * ow]; nn::avg_pool(x, y, planes, h, w, k, s); f64 sm = 0;
+            for (int i = 0; i < planes * oh * ow; ++i)
+            {
+                sm += c[i] * y[i];
+            }
+            return sm; };
         fd_gradcheck(x, planes * h * w, gx, loss);
     }
 }
@@ -317,17 +405,36 @@ TEST_CASE("v16-c: conv2d VJP (x, w, bias) == FD", "[autodiff][reverse][nn]")
     f64           w[OC * chans * kh * kw];
     f64           bias[OC];
     f64           c[n * OC * ohw];
-    for (int i = 0; i < n * chans * hin * win; ++i) { x[i] = 0.5 * std::sin(0.2 + 0.6 * i); }
-    for (int i = 0; i < OC * chans * kh * kw; ++i) { w[i] = 0.3 * std::cos(0.5 + 0.4 * i); }
-    for (int i = 0; i < OC; ++i) { bias[i] = 0.05 * (i - 1); }
-    for (int i = 0; i < n * OC * ohw; ++i) { c[i] = 0.25 * std::sin(1.0 + 0.3 * i); }
+    for (int i = 0; i < n * chans * hin * win; ++i)
+    {
+        x[i] = 0.5 * std::sin(0.2 + 0.6 * i);
+    }
+    for (int i = 0; i < OC * chans * kh * kw; ++i)
+    {
+        w[i] = 0.3 * std::cos(0.5 + 0.4 * i);
+    }
+    for (int i = 0; i < OC; ++i)
+    {
+        bias[i] = 0.05 * (i - 1);
+    }
+    for (int i = 0; i < n * OC * ohw; ++i)
+    {
+        c[i] = 0.25 * std::sin(1.0 + 0.3 * i);
+    }
     f64 col[ckk * ohw];
     f64 gcol[ckk * ohw];
     f64 gx[n * chans * hin * win];
     f64 gw[OC * chans * kh * kw];
     f64 gb[OC];
     nn::conv2d_vjp(x, w, c, gx, gw, gb, n, chans, hin, win, OC, kh, kw, pad, stride, col, gcol);
-    auto loss = [&] { f64 y[n * OC * ohw]; f64 col2[ckk * ohw]; nn::conv2d(x, w, bias, y, n, chans, hin, win, OC, kh, kw, pad, stride, col2); f64 sm = 0; for (int i = 0; i < n * OC * ohw; ++i) { sm += c[i] * y[i]; } return sm; };
+    auto loss = [&]
+    {
+        f64 y[n * OC * ohw]; f64 col2[ckk * ohw]; nn::conv2d(x, w, bias, y, n, chans, hin, win, OC, kh, kw, pad, stride, col2); f64 sm = 0;
+        for (int i = 0; i < n * OC * ohw; ++i)
+        {
+            sm += c[i] * y[i];
+        }
+        return sm; };
     fd_gradcheck(x, n * chans * hin * win, gx, loss);
     fd_gradcheck(w, OC * chans * kh * kw, gw, loss);
     fd_gradcheck(bias, OC, gb, loss);
@@ -360,12 +467,30 @@ TEST_CASE("v16-c: full CNN (conv->relu->maxpool->linear->softmax-CE) backprops A
     f64 W2[flat * Cls];
     f64 b2[Cls];
     int labels[N];
-    for (int i = 0; i < N * chans * hin * win; ++i) { X[i] = 0.5 * std::sin(0.4 + 0.7 * i); }
-    for (int i = 0; i < OC * chans * kh * kw; ++i) { convW[i] = 0.3 * std::cos(0.6 + 0.5 * i); }
-    for (int i = 0; i < OC; ++i) { convB[i] = 0.1 * (i - 1); }
-    for (int i = 0; i < flat * Cls; ++i) { W2[i] = 0.2 * std::sin(0.3 + 0.4 * i); }
-    for (int i = 0; i < Cls; ++i) { b2[i] = 0.05 * i; }
-    for (int i = 0; i < N; ++i) { labels[i] = i % Cls; }
+    for (int i = 0; i < N * chans * hin * win; ++i)
+    {
+        X[i] = 0.5 * std::sin(0.4 + 0.7 * i);
+    }
+    for (int i = 0; i < OC * chans * kh * kw; ++i)
+    {
+        convW[i] = 0.3 * std::cos(0.6 + 0.5 * i);
+    }
+    for (int i = 0; i < OC; ++i)
+    {
+        convB[i] = 0.1 * (i - 1);
+    }
+    for (int i = 0; i < flat * Cls; ++i)
+    {
+        W2[i] = 0.2 * std::sin(0.3 + 0.4 * i);
+    }
+    for (int i = 0; i < Cls; ++i)
+    {
+        b2[i] = 0.05 * i;
+    }
+    for (int i = 0; i < N; ++i)
+    {
+        labels[i] = i % Cls;
+    }
 
     // forward → scalar CE loss (recomputed inside FD; all intermediates are call-local stack scratch)
     auto forward = [&]() -> f64

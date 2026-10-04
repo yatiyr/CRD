@@ -13,7 +13,10 @@ namespace
 // CEIR-3d — no interning, so the whole walk stays const.
 [[nodiscard]] bool is_kind(const Context& ctx, const Value* v, TypeKind k) noexcept
 {
-    if (v == nullptr) { return false; }
+    if (v == nullptr)
+    {
+        return false;
+    }
     return ctx.type_of(v->type()).kind == k;
 }
 
@@ -30,7 +33,10 @@ namespace
 // folds into the exact misuse kind rather than reading clean or tripping an assert.
 ShapeMisuse scan_shape_region(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -58,9 +64,15 @@ ShapeMisuse scan_shape_region(const Context& ctx, const Region* r) // NOLINT(mis
                     bool        ok = (rt.members.size() == op->num_operands());
                     for (u32 i = 0; ok && i < op->num_operands(); ++i)
                     {
-                        if (rt.members[i] != op->operand(i)->type()) { ok = false; }
+                        if (rt.members[i] != op->operand(i)->type())
+                        {
+                            ok = false;
+                        }
                     }
-                    if (!ok) { return {op->result(0U), op, ShapeMisuseKind::MakeResultShapeMismatch, -1}; }
+                    if (!ok)
+                    {
+                        return {op->result(0U), op, ShapeMisuseKind::MakeResultShapeMismatch, -1};
+                    }
                 }
             }
             // ⛔ shape.rank: operand(0) Shape-typed, result Index-typed.
@@ -88,12 +100,18 @@ ShapeMisuse scan_shape_region(const Context& ctx, const Region* r) // NOLINT(mis
                 }
                 const AttrValue ax   = ctx.attr_value(op->attr(containers::StringView("axis")));
                 const i64       axis = (ax.kind == AttrKind::Int) ? ax.i : -1; // verify_extent ensures Int; robust here
-                if (axis < 0) { return {nullptr, op, ShapeMisuseKind::ExtentAxisInvalid, -1}; }
+                if (axis < 0)
+                {
+                    return {nullptr, op, ShapeMisuseKind::ExtentAxisInvalid, -1};
+                }
                 if (op->num_operands() >= 1U && is_kind(ctx, op->operand(0U), TypeKind::Shape))
                 {
                     const Type& st   = ctx.type_of(op->operand(0U)->type());
                     const i64   rank = static_cast<i64>(st.members.size());
-                    if (axis >= rank) { return {nullptr, op, ShapeMisuseKind::ExtentAxisInvalid, -1}; }
+                    if (axis >= rank)
+                    {
+                        return {nullptr, op, ShapeMisuseKind::ExtentAxisInvalid, -1};
+                    }
                     // RESULT IDENTITY: the extent is the operand shape's member Dim at `axis` (axis now in [0, rank)).
                     if (op->num_results() >= 1U && op->result(0U)->type() != st.members[static_cast<usize>(axis)])
                     {
@@ -177,7 +195,10 @@ ShapeMisuse scan_shape_region(const Context& ctx, const Region* r) // NOLINT(mis
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const ShapeMisuse e = scan_shape_region(ctx, op->region(i));
-                if (e.kind != ShapeMisuseKind::None) { return e; }
+                if (e.kind != ShapeMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

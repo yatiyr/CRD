@@ -51,12 +51,18 @@ using crd::hesap::tensor::TensorView;
     // operand 0 = ȳ (the forward output subscripts)
     re.term[0].count = expr.out_count;
     re.term[0].mask  = expr.out_mask;
-    for (crd::u32 d = 0; d < expr.out_count; ++d) { re.term[0].idx[d] = expr.out_idx[d]; }
+    for (crd::u32 d = 0; d < expr.out_count; ++d)
+    {
+        re.term[0].idx[d] = expr.out_idx[d];
+    }
     crd::u32 no      = 1;
     crd::u64 covered = expr.out_mask;
     for (crd::u32 j = 0; j < expr.n_ops; ++j)
     {
-        if (j == k) { continue; }
+        if (j == k)
+        {
+            continue;
+        }
         re.term[no] = expr.term[j];
         covered |= expr.term[j].mask;
         ++no;
@@ -85,7 +91,10 @@ using crd::hesap::tensor::TensorView;
     re.n_ops         = no;
     re.out_count     = expr.term[k].count;
     re.out_mask      = expr.term[k].mask;
-    for (crd::u32 d = 0; d < expr.term[k].count; ++d) { re.out_idx[d] = expr.term[k].idx[d]; }
+    for (crd::u32 d = 0; d < expr.term[k].count; ++d)
+    {
+        re.out_idx[d] = expr.term[k].idx[d];
+    }
     re.ellipsis_rank = expr.ellipsis_rank;
     re.has_diagonal  = false;
     return TensorStatus::Ok;
@@ -127,7 +136,10 @@ template <typename T>
     crd::u32 ri  = 1;
     for (crd::u32 j = 0; j < expr.n_ops; ++j)
     {
-        if (j == k) { continue; }
+        if (j == k)
+        {
+            continue;
+        }
         rv[ri++] = operands[j];
     }
     Tensor<T> ones(alloc);
@@ -139,7 +151,10 @@ template <typename T>
             return TensorStatus::AllocFailed;
         }
         T* od = ones.data();
-        for (crd::usize i = 0; i < ones.size(); ++i) { od[i] = T{1}; }
+        for (crd::usize i = 0; i < ones.size(); ++i)
+        {
+            od[i] = T{1};
+        }
         rv[ri++] = TensorView<const T>(ones.view());
     }
     return crd::hesap::tensor::einsum_execute<T>(plan, {rv, ri}, grad_out, alloc);

@@ -46,7 +46,9 @@ crd::containers::Array<const char*> minimize_failure(crd::containers::Array<cons
             for (std::size_t j = 0U; j < script.size(); ++j)
             {
                 if (j != i)
+                {
                     candidate.push_back(script[j]);
+                }
             }
             if (reproduces(candidate))
             {

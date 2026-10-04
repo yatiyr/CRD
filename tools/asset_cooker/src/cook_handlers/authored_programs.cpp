@@ -69,7 +69,10 @@ CookResult frame_graph_handler(const CookContext& ctx)
 {
     CookResult fail(ctx.allocator);
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!read_text(ctx, src)) { return fail; }
+    if (!read_text(ctx, src))
+    {
+        return fail;
+    }
     crd::framecook::FrameGraphDesc desc(ctx.allocator);
     crd::containers::String        where(ctx.allocator);
     const auto err = crd::framecook::parse_frame_toml(view_of(src), desc, &where);
@@ -79,7 +82,10 @@ CookResult frame_graph_handler(const CookContext& ctx)
         return fail;
     }
     const crd::containers::Array<crd::u8> blob = crd::framecook::cook_frame_graph(desc, ctx.allocator);
-    if (blob.size() == 0U) { return fail; }
+    if (blob.size() == 0U)
+    {
+        return fail;
+    }
     return finish_blob(ctx, crd::containers::as_const_span(blob));
 }
 
@@ -87,7 +93,10 @@ CookResult technique_handler(const CookContext& ctx)
 {
     CookResult fail(ctx.allocator);
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!read_text(ctx, src)) { return fail; }
+    if (!read_text(ctx, src))
+    {
+        return fail;
+    }
     crd::techniquecook::TechniqueDesc desc(ctx.allocator);
     crd::containers::String           where(ctx.allocator);
     const auto err = crd::techniquecook::parse_technique_toml(view_of(src), desc, &where);
@@ -97,7 +106,10 @@ CookResult technique_handler(const CookContext& ctx)
         return fail;
     }
     const crd::containers::Array<crd::u8> blob = crd::techniquecook::cook_technique(desc, ctx.allocator);
-    if (blob.size() == 0U) { return fail; }
+    if (blob.size() == 0U)
+    {
+        return fail;
+    }
     return finish_blob(ctx, crd::containers::as_const_span(blob));
 }
 
@@ -105,7 +117,10 @@ CookResult material_handler(const CookContext& ctx)
 {
     CookResult fail(ctx.allocator);
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!read_text(ctx, src)) { return fail; }
+    if (!read_text(ctx, src))
+    {
+        return fail;
+    }
     crd::matcook::MaterialDesc desc(ctx.allocator);
     crd::containers::String    where(ctx.allocator);
     const auto err = crd::matcook::parse_material_toml(view_of(src), desc, &where);
@@ -121,7 +136,10 @@ CookResult vertex_handler(const CookContext& ctx)
 {
     CookResult fail(ctx.allocator);
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!read_text(ctx, src)) { return fail; }
+    if (!read_text(ctx, src))
+    {
+        return fail;
+    }
     crd::vertcook::VertexProgramDesc desc(ctx.allocator);
     crd::containers::String          where(ctx.allocator);
     const auto err = crd::vertcook::parse_vertex_toml(view_of(src), desc, &where);
@@ -137,7 +155,10 @@ CookResult lighting_handler(const CookContext& ctx)
 {
     CookResult fail(ctx.allocator);
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!read_text(ctx, src)) { return fail; }
+    if (!read_text(ctx, src))
+    {
+        return fail;
+    }
     crd::lightcook::LightingDesc desc(ctx.allocator);
     crd::containers::String      where(ctx.allocator);
     const auto err = crd::lightcook::parse_lighting_toml(view_of(src), desc, &where);

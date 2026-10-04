@@ -33,7 +33,10 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
     }
     CRD_ASSERT_MSG(spec.domain <= kLastEvalDomain, "register_op: eval domain out of range");
     const OpId kind = m_ctx->intern_op(m_name, op);
-    if (m_ctx->m_op_infos.contains(kind.value)) { return kind; } // idempotent — keep the first registration
+    if (m_ctx->m_op_infos.contains(kind.value)) // idempotent — keep the first registration
+    {
+        return kind;
+    }
     OpInfo* const info = memory::construct<OpInfo>(m_ctx->m_arena);
     info->kind    = kind;
     info->name    = m_ctx->op_name(kind); // the interned "dialect.op"
@@ -45,7 +48,10 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
     if (const auto n = static_cast<u32>(spec.effects.size()); n > 0U)
     {
         EffectRecord* const owned = memory::construct_array<EffectRecord>(m_ctx->m_arena, n);
-        for (u32 i = 0; i < n; ++i) { owned[i] = spec.effects[i]; }
+        for (u32 i = 0; i < n; ++i)
+        {
+            owned[i] = spec.effects[i];
+        }
         info->effects     = owned;
         info->num_effects = n;
     }
@@ -85,14 +91,20 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
 containers::ConstSpan<CapabilityId> Context::op_capabilities(OpId kind) const noexcept
 {
     const OpInfo* const info = op_info(kind); // ⛔ EMPTY≠UNKNOWN: unregistered ⇒ {} here; program_capabilities adds
-    if (info == nullptr) { return {}; }       // external.process for an unknown kind (an empty span = registered, none)
+    if (info == nullptr) // external.process for an unknown kind (an empty span = registered, none)
+    {
+        return {};
+    }
     return containers::ConstSpan<CapabilityId>(info->required_capabilities, info->num_capabilities);
 }
 
 TypeClassId Dialect::register_type_class(containers::StringView cls, const TypeClassSpec& spec)
 {
     const TypeClassId id = m_ctx->intern_type_class(m_name, cls);
-    if (m_ctx->m_type_classes.contains(id.value)) { return id; } // idempotent — keep the first registration (late-bind ok)
+    if (m_ctx->m_type_classes.contains(id.value)) // idempotent — keep the first registration (late-bind ok)
+    {
+        return id;
+    }
     TypeClassInfo* const info = memory::construct<TypeClassInfo>(m_ctx->m_arena);
     info->id      = id;
     info->name    = m_ctx->type_class_name(id); // the interned "dialect.class"
@@ -106,7 +118,10 @@ TypeClassId Dialect::register_type_class(containers::StringView cls, const TypeC
 AttrClassId Dialect::register_attr_class(containers::StringView cls, const AttrClassSpec& spec)
 {
     const AttrClassId id = m_ctx->intern_attr_class(m_name, cls);
-    if (m_ctx->m_attr_classes.contains(id.value)) { return id; } // idempotent — keep the first registration (late-bind ok)
+    if (m_ctx->m_attr_classes.contains(id.value)) // idempotent — keep the first registration (late-bind ok)
+    {
+        return id;
+    }
     AttrClassInfo* const info = memory::construct<AttrClassInfo>(m_ctx->m_arena);
     info->id      = id;
     info->name    = m_ctx->attr_class_name(id); // the interned "dialect.attr"
@@ -120,7 +135,10 @@ AttrClassId Dialect::register_attr_class(containers::StringView cls, const AttrC
 LocationClassId Dialect::register_location_class(containers::StringView cls, const LocationClassSpec& spec)
 {
     const LocationClassId id = m_ctx->intern_location_class(m_name, cls);
-    if (m_ctx->m_location_classes.contains(id.value)) { return id; } // idempotent — keep the first registration (late-bind)
+    if (m_ctx->m_location_classes.contains(id.value)) // idempotent — keep the first registration (late-bind)
+    {
+        return id;
+    }
     LocationClassInfo* const info = memory::construct<LocationClassInfo>(m_ctx->m_arena);
     info->id             = id;
     info->name           = m_ctx->location_class_name(id); // the interned "dialect.location"
@@ -134,7 +152,10 @@ LocationClassId Dialect::register_location_class(containers::StringView cls, con
 
 Dialect* Context::register_dialect(containers::StringView name)
 {
-    if (Dialect** existing = m_dialects.find(name)) { return *existing; } // idempotent
+    if (Dialect** existing = m_dialects.find(name)) // idempotent
+    {
+        return *existing;
+    }
     const containers::StringView interned = intern_symbol(name);          // arena-stable map key
     Dialect* const d = memory::construct<Dialect>(m_arena, this, interned);
     m_dialects.insert(interned, d);
@@ -170,7 +191,10 @@ bool Context::op_has_trait(const Operation& op, OpTrait t) const noexcept { retu
 containers::ConstSpan<EffectRecord> Context::op_effects(OpId kind) const noexcept
 {
     const OpInfo* const info = op_info(kind); // ⛔ callers: op_info==nullptr (unregistered) is MAXIMALLY effectful, not
-    if (info == nullptr) { return {}; }       // effect-free — an empty span here means "registered + declared no effects"
+    if (info == nullptr) // effect-free — an empty span here means "registered + declared no effects"
+    {
+        return {};
+    }
     return containers::ConstSpan<EffectRecord>(info->effects, info->num_effects);
 }
 
@@ -189,7 +213,10 @@ EvalDomain Context::op_domain(OpId kind) const noexcept
 bool Context::verify(const Operation& op) const
 {
     const OpInfo* const info = op_info(op.kind());
-    if (info == nullptr || info->verify == nullptr) { return true; } // opaque / unknown-dialect ⇒ valid
+    if (info == nullptr || info->verify == nullptr) // opaque / unknown-dialect ⇒ valid
+    {
+        return true;
+    }
     return info->verify(*this, op);
 }
 
@@ -200,7 +227,10 @@ InterfaceId Context::intern_interface(containers::StringView name)
     const u64 h = containers::hash_string(name.data(), name.size());
     for (usize i = 0; i < m_interface_names.size(); ++i)
     {
-        if (m_interface_names[i].hash == h) { return InterfaceId{h}; } // already registered (dedup by hash)
+        if (m_interface_names[i].hash == h) // already registered (dedup by hash)
+        {
+            return InterfaceId{h};
+        }
     }
     m_interface_names.push_back(OpName{h, intern_symbol(name)});
     return InterfaceId{h};
@@ -210,7 +240,10 @@ containers::StringView Context::interface_name(InterfaceId id) const noexcept
 {
     for (usize i = 0; i < m_interface_names.size(); ++i)
     {
-        if (m_interface_names[i].hash == id.value) { return m_interface_names[i].name; }
+        if (m_interface_names[i].hash == id.value)
+        {
+            return m_interface_names[i].name;
+        }
     }
     return containers::StringView{}; // an id whose name was never interned (a compile-time kId used without intern)
 }
@@ -223,7 +256,10 @@ void Context::register_interface(OpId kind, InterfaceId iface, const void* impl)
     // (a mysterious nullptr from get_op_interface far away), so this is LOUD (assert) + release-safe (no-op).
     CRD_ASSERT_MSG(slot != nullptr,
                    "register_interface: register the op-kind (register_op) BEFORE binding an interface to it");
-    if (slot == nullptr) { return; }
+    if (slot == nullptr)
+    {
+        return;
+    }
     OpInfo* const info = *slot;
     for (u32 k = 0; k < info->num_ifaces; ++k)
     {
@@ -235,7 +271,10 @@ void Context::register_interface(OpId kind, InterfaceId iface, const void* impl)
     }
     const u32          n     = info->num_ifaces; // grow by rebuild (old slice leaks into the arena)
     OpInterface* const grown = memory::construct_array<OpInterface>(m_arena, n + 1U);
-    for (u32 k = 0; k < n; ++k) { grown[k] = info->ifaces[k]; }
+    for (u32 k = 0; k < n; ++k)
+    {
+        grown[k] = info->ifaces[k];
+    }
     grown[n]         = OpInterface{iface, impl};
     info->ifaces     = grown;
     info->num_ifaces = n + 1U;
@@ -244,10 +283,16 @@ void Context::register_interface(OpId kind, InterfaceId iface, const void* impl)
 const void* Context::get_interface(OpId kind, InterfaceId iface) const noexcept
 {
     const OpInfo* const info = op_info(kind);
-    if (info == nullptr) { return nullptr; }
+    if (info == nullptr)
+    {
+        return nullptr;
+    }
     for (u32 k = 0; k < info->num_ifaces; ++k)
     {
-        if (info->ifaces[k].id == iface) { return info->ifaces[k].impl; }
+        if (info->ifaces[k].id == iface)
+        {
+            return info->ifaces[k].impl;
+        }
     }
     return nullptr;
 }

@@ -72,7 +72,10 @@ crd::math::Vec2<T> polygon_centroid_2d(const crd::math::Vec2<T>* verts, crd::u32
             cx += verts[i].x;
             cy += verts[i].y;
         }
-        if (n == 0U) { return crd::math::Vec2<T>{}; }
+        if (n == 0U)
+        {
+            return crd::math::Vec2<T>{};
+        }
         const T inv_n = static_cast<T>(1) / static_cast<T>(n);
         return crd::math::Vec2<T>{cx * inv_n, cy * inv_n};
     }
@@ -164,7 +167,10 @@ void clip_polygon_to_bbox(crd::containers::Array<crd::math::Vec2<T>>& poly,
     {
         next_poly.clear();
         const crd::u32 n = static_cast<crd::u32>(poly.size());
-        if (n == 0U) { return; }
+        if (n == 0U)
+        {
+            return;
+        }
         for (crd::u32 i = 0; i < n; ++i)
         {
             const auto& cur  = poly[i];
@@ -201,18 +207,39 @@ crd::u32 bbox_side_of(const crd::math::Vec2<T>& p,
 {
     const T eps = std::max(std::max(xmax - xmin, ymax - ymin) * static_cast<T>(1e-6),
                            static_cast<T>(1e-6));
-    if (std::abs(p.y - ymin) <= eps) { return 0U; }
-    if (std::abs(p.x - xmax) <= eps) { return 1U; }
-    if (std::abs(p.y - ymax) <= eps) { return 2U; }
-    if (std::abs(p.x - xmin) <= eps) { return 3U; }
+    if (std::abs(p.y - ymin) <= eps)
+    {
+        return 0U;
+    }
+    if (std::abs(p.x - xmax) <= eps)
+    {
+        return 1U;
+    }
+    if (std::abs(p.y - ymax) <= eps)
+    {
+        return 2U;
+    }
+    if (std::abs(p.x - xmin) <= eps)
+    {
+        return 3U;
+    }
     // Fallback: nearest side.
     const T db = std::abs(p.y - ymin);
     const T dr = std::abs(p.x - xmax);
     const T dt = std::abs(p.y - ymax);
     const T dl = std::abs(p.x - xmin);
-    if (db <= dr && db <= dt && db <= dl) { return 0U; }
-    if (dr <= dt && dr <= dl)             { return 1U; }
-    if (dt <= dl)                          { return 2U; }
+    if (db <= dr && db <= dt && db <= dl)
+    {
+        return 0U;
+    }
+    if (dr <= dt && dr <= dl)
+    {
+        return 1U;
+    }
+    if (dt <= dl)
+    {
+        return 2U;
+    }
     return 3U;
 }
 
@@ -228,22 +255,34 @@ T ray_bbox_exit_t(const crd::math::Vec2<T>& origin,
     if (dir.x > static_cast<T>(0))
     {
         const T t = (xmax - origin.x) / dir.x;
-        if (t > static_cast<T>(0) && t < t_best) { t_best = t; }
+        if (t > static_cast<T>(0) && t < t_best)
+        {
+            t_best = t;
+        }
     }
     else if (dir.x < static_cast<T>(0))
     {
         const T t = (xmin - origin.x) / dir.x;
-        if (t > static_cast<T>(0) && t < t_best) { t_best = t; }
+        if (t > static_cast<T>(0) && t < t_best)
+        {
+            t_best = t;
+        }
     }
     if (dir.y > static_cast<T>(0))
     {
         const T t = (ymax - origin.y) / dir.y;
-        if (t > static_cast<T>(0) && t < t_best) { t_best = t; }
+        if (t > static_cast<T>(0) && t < t_best)
+        {
+            t_best = t;
+        }
     }
     else if (dir.y < static_cast<T>(0))
     {
         const T t = (ymin - origin.y) / dir.y;
-        if (t > static_cast<T>(0) && t < t_best) { t_best = t; }
+        if (t > static_cast<T>(0) && t < t_best)
+        {
+            t_best = t;
+        }
     }
     return t_best;
 }
@@ -361,13 +400,22 @@ lloyd_relax_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
     {
         crd::containers::Array<crd::u32> order(alloc);
         order.resize(n, crd::u32{0});
-        for (crd::u32 i = 0; i < n; ++i) { order[i] = i; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            order[i] = i;
+        }
         crd::containers::sort(order.data(), order.data() + order.size(),
                                [&](crd::u32 a, crd::u32 b) noexcept {
                                    const auto& pa = sites[a];
                                    const auto& pb = sites[b];
-                                   if (pa.x != pb.x) { return pa.x < pb.x; }
-                                   if (pa.y != pb.y) { return pa.y < pb.y; }
+                                   if (pa.x != pb.x)
+                                   {
+                                       return pa.x < pb.x;
+                                   }
+                                   if (pa.y != pb.y)
+                                   {
+                                       return pa.y < pb.y;
+                                   }
                                    return a < b;
                                });
         for (crd::u32 i = 1; i < n; ++i)
@@ -404,10 +452,22 @@ lloyd_relax_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
             T y1 = sites[0].y;
             for (crd::u32 i = 1; i < n; ++i)
             {
-                if (sites[i].x < x0) { x0 = sites[i].x; }
-                if (sites[i].x > x1) { x1 = sites[i].x; }
-                if (sites[i].y < y0) { y0 = sites[i].y; }
-                if (sites[i].y > y1) { y1 = sites[i].y; }
+                if (sites[i].x < x0)
+                {
+                    x0 = sites[i].x;
+                }
+                if (sites[i].x > x1)
+                {
+                    x1 = sites[i].x;
+                }
+                if (sites[i].y < y0)
+                {
+                    y0 = sites[i].y;
+                }
+                if (sites[i].y > y1)
+                {
+                    y1 = sites[i].y;
+                }
             }
             const T dx = x1 - x0;
             const T dy = y1 - y0;
@@ -427,7 +487,10 @@ lloyd_relax_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
 
     // Initialise relaxed_sites from input.
     result.relaxed_sites.reserve(n);
-    for (crd::u32 i = 0; i < n; ++i) { result.relaxed_sites.push_back(sites[i]); }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        result.relaxed_sites.push_back(sites[i]);
+    }
 
     // Iteration loop.
     crd::containers::Array<crd::math::Vec2<T>> new_sites(alloc);
@@ -492,7 +555,10 @@ lloyd_relax_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
             const T dx = new_pos.x - result.relaxed_sites[s].x;
             const T dy = new_pos.y - result.relaxed_sites[s].y;
             const T d2 = dx * dx + dy * dy;
-            if (d2 > max_disp2) { max_disp2 = d2; }
+            if (d2 > max_disp2)
+            {
+                max_disp2 = d2;
+            }
         }
 
         // Atomic site swap (Jacobi-style).

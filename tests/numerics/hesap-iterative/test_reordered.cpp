@@ -31,6 +31,7 @@ SparseMatrix<T, SparseFormat::Csr> conv_diff2d(crd::memory::IAllocator* a, crd::
     const crd::u32 n = g * g;
     TripletBuilder<T> b(a, n, n);
     for (crd::u32 y = 0; y < g; ++y)
+    {
         for (crd::u32 x = 0; x < g; ++x)
         {
             const crd::u32 i = y * g + x;
@@ -52,6 +53,7 @@ SparseMatrix<T, SparseFormat::Csr> conv_diff2d(crd::memory::IAllocator* a, crd::
                 b.add(i, i - g, T(static_cast<crd::f64>(-1.0 - beta)));
             }
         }
+    }
     return b.compress();
 }
 

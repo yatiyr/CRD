@@ -28,7 +28,10 @@ constexpr containers::StringView kPhaseVocab[] = {containers::StringView("opaque
 // Is `v`'s type the scene Extern class `cls`? (A non-Extern / wrong-class / null value ⇒ false.)
 [[nodiscard]] bool is_scene_class(const Context& ctx, const Value* v, TypeClassId cls) noexcept
 {
-    if (v == nullptr) { return false; }
+    if (v == nullptr)
+    {
+        return false;
+    }
     const Type t = ctx.type_of(v->type());
     return t.kind == TypeKind::Extern && t.type_class == cls;
 }
@@ -39,7 +42,10 @@ constexpr containers::StringView kPhaseVocab[] = {containers::StringView("opaque
 SceneMisuse scan_scene_region(const Context& ctx, const Region* r, TypeClassId draw, TypeClassId mat,
                               TypeClassId tech) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -69,10 +75,17 @@ SceneMisuse scan_scene_region(const Context& ctx, const Region* r, TypeClassId d
                     phase_ok = false;
                     for (const containers::StringView& v : kPhaseVocab)
                     {
-                        if (pv.s == v) { phase_ok = true; break; }
+                        if (pv.s == v)
+                        {
+                            phase_ok = true;
+                            break;
+                        }
                     }
                 }
-                if (!phase_ok) { return {nullptr, op, SceneMisuseKind::PhaseInvalid}; }
+                if (!phase_ok)
+                {
+                    return {nullptr, op, SceneMisuseKind::PhaseInvalid};
+                }
             }
             else if (nm == containers::StringView("scene.resolve_program"))
             {
@@ -88,7 +101,10 @@ SceneMisuse scan_scene_region(const Context& ctx, const Region* r, TypeClassId d
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const SceneMisuse e = scan_scene_region(ctx, op->region(i), draw, mat, tech);
-                if (e.kind != SceneMisuseKind::None) { return e; }
+                if (e.kind != SceneMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

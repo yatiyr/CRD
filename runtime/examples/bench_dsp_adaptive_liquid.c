@@ -10,7 +10,9 @@ int main(void)
     unsigned int n = 1000000, m = 32;
     float* x = malloc(n * sizeof(float));
     for (unsigned int i = 0; i < n; ++i)
+    {
         x[i] = sinf(0.017f * (float)i) + 0.3f * cosf(0.05f * (float)i);
+    }
     int reps = 20;
     double chk = 0;
     struct timespec t0, t1;

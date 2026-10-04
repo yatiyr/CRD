@@ -197,7 +197,11 @@ Permutation camd_order(const AdjacencyGraph& g, crd::containers::ConstSpan<crd::
         {
             for (crd::i32 v = head[d]; v != -1; v = nxt[v])
             {
-                if (cmember[static_cast<crd::u32>(v)] == cur_class) { p = v; break; } // first in head order
+                if (cmember[static_cast<crd::u32>(v)] == cur_class) // first in head order
+                {
+                    p = v;
+                    break;
+                }
             }
         }
         CRD_ASSERT_MSG(p != -1, "camd_order: no principal found in the current class");

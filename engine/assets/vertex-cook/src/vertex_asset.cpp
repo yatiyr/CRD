@@ -35,7 +35,10 @@ void set_str(crd::containers::String& d, std::string_view v)
 }
 void set_where(crd::containers::String* w, std::string_view v)
 {
-    if (w != nullptr) { set_str(*w, v); }
+    if (w != nullptr)
+    {
+        set_str(*w, v);
+    }
 }
 [[nodiscard]] std::string_view sv_of(const crd::containers::String& s) noexcept
 {
@@ -108,9 +111,18 @@ struct Vx
     }
     [[nodiscard]] int vecn(const int* c, crd::u32 n)
     {
-        if (n <= 1U) { return c[0]; }
-        if (n == 2U) { return g.vec2(c[0], c[1]); }
-        if (n == 3U) { return g.vec3(c[0], c[1], c[2]); }
+        if (n <= 1U)
+        {
+            return c[0];
+        }
+        if (n == 2U)
+        {
+            return g.vec2(c[0], c[1]);
+        }
+        if (n == 3U)
+        {
+            return g.vec3(c[0], c[1], c[2]);
+        }
         return g.vec4(c[0], c[1], c[2], c[3]);
     }
 };
@@ -129,7 +141,10 @@ struct AttrVals
 {
     for (crd::usize i = 0; i < a.size(); ++i)
     {
-        if (str_eq(a[i].name, n)) { return static_cast<crd::i32>(i); }
+        if (str_eq(a[i].name, n))
+        {
+            return static_cast<crd::i32>(i);
+        }
     }
     return -1;
 }
@@ -146,7 +161,10 @@ void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
         crd::u32 i = 0;
         for (const auto& e : *arr)
         {
-            if (i < 4U) { v[i++] = e.value_or<double>(0.0); }
+            if (i < 4U)
+            {
+                v[i++] = e.value_or<double>(0.0);
+            }
         }
         comps = i > 0U ? i : 1U;
         return;
@@ -157,8 +175,14 @@ void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
 
 [[nodiscard]] AttrKind attr_kind_of(std::string_view s) noexcept
 {
-    if (s == "position") { return AttrKind::Position; }
-    if (s == "direction") { return AttrKind::Direction; }
+    if (s == "position")
+    {
+        return AttrKind::Position;
+    }
+    if (s == "direction")
+    {
+        return AttrKind::Direction;
+    }
     return AttrKind::Value;
 }
 [[nodiscard]] const char* attr_kind_name(AttrKind k) noexcept
@@ -183,18 +207,54 @@ void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
 }
 [[nodiscard]] StageKind stage_of(std::string_view s) noexcept
 {
-    if (s == "tess_control") { return StageKind::TessControl; }
-    if (s == "tess_eval") { return StageKind::TessEval; }
-    if (s == "task") { return StageKind::Task; }
-    if (s == "mesh") { return StageKind::Mesh; }
-    if (s == "visbuffer") { return StageKind::VisBuffer; }
-    if (s == "cull") { return StageKind::Cull; }
-    if (s == "raygen") { return StageKind::RayGen; }
-    if (s == "closest_hit") { return StageKind::ClosestHit; }
-    if (s == "miss") { return StageKind::Miss; }
-    if (s == "any_hit") { return StageKind::AnyHit; }
-    if (s == "intersection") { return StageKind::Intersection; }
-    if (s == "callable") { return StageKind::CallableStage; }
+    if (s == "tess_control")
+    {
+        return StageKind::TessControl;
+    }
+    if (s == "tess_eval")
+    {
+        return StageKind::TessEval;
+    }
+    if (s == "task")
+    {
+        return StageKind::Task;
+    }
+    if (s == "mesh")
+    {
+        return StageKind::Mesh;
+    }
+    if (s == "visbuffer")
+    {
+        return StageKind::VisBuffer;
+    }
+    if (s == "cull")
+    {
+        return StageKind::Cull;
+    }
+    if (s == "raygen")
+    {
+        return StageKind::RayGen;
+    }
+    if (s == "closest_hit")
+    {
+        return StageKind::ClosestHit;
+    }
+    if (s == "miss")
+    {
+        return StageKind::Miss;
+    }
+    if (s == "any_hit")
+    {
+        return StageKind::AnyHit;
+    }
+    if (s == "intersection")
+    {
+        return StageKind::Intersection;
+    }
+    if (s == "callable")
+    {
+        return StageKind::CallableStage;
+    }
     return StageKind::Vertex;
 }
 [[nodiscard]] const char* stage_name(StageKind k) noexcept
@@ -292,10 +352,16 @@ VertexCookError parse_attr_array(const crd::toml::node& arr, crd::containers::Ar
     for (const auto& e : arr)
     {
         const crd::toml::node* t = e.as_table();
-        if (t == nullptr) { continue; }
+        if (t == nullptr)
+        {
+            continue;
+        }
         VertexAttrDesc a(alloc);
         const auto     nm = (*t)["name"].value<std::string_view>();
-        if (!nm || nm->empty()) { return VertexCookError::MissingName; }
+        if (!nm || nm->empty())
+        {
+            return VertexCookError::MissingName;
+        }
         set_str(a.name, *nm);
         for (crd::usize i = 0; i < out.size(); ++i)
         {
@@ -322,7 +388,10 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
     crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
-    if (!pr) { return VertexCookError::ParseFailed; }
+    if (!pr)
+    {
+        return VertexCookError::ParseFailed;
+    }
     crd::toml::node root = std::move(pr).table();
     auto* alloc = out.attrs.allocator();
 
@@ -355,16 +424,25 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     out.expand = ExpandDesc{};
 
     const auto sch = root["schema"].value<int64_t>();
-    if (!sch || *sch != static_cast<int64_t>(kVertexSchemaVersion)) { return VertexCookError::BadSchema; }
+    if (!sch || *sch != static_cast<int64_t>(kVertexSchemaVersion))
+    {
+        return VertexCookError::BadSchema;
+    }
     out.schema = kVertexSchemaVersion;
     const auto nm = root["name"].value<std::string_view>();
-    if (!nm || nm->empty()) { return VertexCookError::MissingName; }
+    if (!nm || nm->empty())
+    {
+        return VertexCookError::MissingName;
+    }
     set_str(out.name, *nm);
 
     if (const auto* h = root["header"].as_table())
     {
         const auto w = [&](const char* k, crd::u32& dst) {
-            if (const auto v = (*h)[k].value<int64_t>()) { dst = static_cast<crd::u32>(*v); }
+            if (const auto v = (*h)[k].value<int64_t>())
+            {
+                dst = static_cast<crd::u32>(*v);
+            }
         };
         w("index_count", out.header.index_count);
         w("index_off", out.header.index_off);
@@ -390,7 +468,10 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     if (const auto* aa = root["attribute"].as_array())
     {
         const VertexCookError e = parse_attr_array(*aa, out.attrs, alloc, where);
-        if (e != VertexCookError::Ok) { return e; }
+        if (e != VertexCookError::Ok)
+        {
+            return e;
+        }
     }
 
     if (const auto* i = root["instance"].as_table())
@@ -406,15 +487,24 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
     if (const auto* ia = root["instance_attribute"].as_array())
     {
         const VertexCookError e = parse_attr_array(*ia, out.instance.attrs, alloc, where);
-        if (e != VertexCookError::Ok) { return e; }
+        if (e != VertexCookError::Ok)
+        {
+            return e;
+        }
     }
 
     if (const auto* s = root["skin"].as_table())
     {
         const auto scheme = (*s)["scheme"].value_or<std::string_view>("none");
         out.skin.scheme   = SkinScheme::None;
-        if (scheme == "linear_blend") { out.skin.scheme = SkinScheme::LinearBlend; }
-        else if (scheme == "dual_quaternion") { out.skin.scheme = SkinScheme::DualQuaternion; }
+        if (scheme == "linear_blend")
+        {
+            out.skin.scheme = SkinScheme::LinearBlend;
+        }
+        else if (scheme == "dual_quaternion")
+        {
+            out.skin.scheme = SkinScheme::DualQuaternion;
+        }
         out.skin.influences     = static_cast<crd::u32>((*s)["influences"].value_or<int64_t>(4));
         out.skin.stride         = static_cast<crd::u32>((*s)["stride"].value_or<int64_t>(6));
         out.skin.joint_words    = static_cast<crd::u32>((*s)["joint_words"].value_or<int64_t>(2));
@@ -526,7 +616,10 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         // ⭐⭐ REN-40-C2: the LOD selection vocabulary (see CullDesc). Every one of these changes the emitted
         // addresses, so every one joins the identity hash and the canonical writer below.
         out.cull.lod_slots         = static_cast<crd::u32>((*cu)["lod_slots"].value_or<int64_t>(1));
-        if (out.cull.lod_slots < 1U) { out.cull.lod_slots = 1U; }
+        if (out.cull.lod_slots < 1U)
+        {
+            out.cull.lod_slots = 1U;
+        }
         out.cull.lod_count_word    = static_cast<crd::u32>((*cu)["lod_count_word"].value_or<int64_t>(0));
         out.cull.lod_table_word    = static_cast<crd::u32>((*cu)["lod_table_word"].value_or<int64_t>(0));
         out.cull.lod_height_word   = static_cast<crd::u32>((*cu)["lod_height_word"].value_or<int64_t>(0));
@@ -537,17 +630,29 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
 
     const auto tr = root["transform"].value_or<std::string_view>("view_proj");
     out.transform = VertexTransform::ViewProj;
-    if (tr == "light_vp") { out.transform = VertexTransform::LightVp; }
-    else if (tr == "none") { out.transform = VertexTransform::None; }
+    if (tr == "light_vp")
+    {
+        out.transform = VertexTransform::LightVp;
+    }
+    else if (tr == "none")
+    {
+        out.transform = VertexTransform::None;
+    }
     out.cascade = static_cast<crd::u32>(root["cascade"].value_or<int64_t>(0));
     // ⭐⭐ REN-38: `rebase_table = <word>` — the DRAW-TABLE offset. Non-zero makes the pull VS read its region
     // base from `sbuf[rebase_table + DrawIndex]` and rebase every load by it (the scene-buffer consolidation).
     out.rebase_table = static_cast<crd::u32>(root["rebase_table"].value_or<int64_t>(0));
     // ⭐⭐ REN-40-C2: the draw-table ROW STRIDE and the LOD slot count (see VertexProgramDesc).
     out.rebase_stride = static_cast<crd::u32>(root["rebase_stride"].value_or<int64_t>(1));
-    if (out.rebase_stride < 1U) { out.rebase_stride = 1U; }
+    if (out.rebase_stride < 1U)
+    {
+        out.rebase_stride = 1U;
+    }
     out.lod_slots = static_cast<crd::u32>(root["lod_slots"].value_or<int64_t>(1));
-    if (out.lod_slots < 1U) { out.lod_slots = 1U; }
+    if (out.lod_slots < 1U)
+    {
+        out.lod_slots = 1U;
+    }
     // 38-G1: the per-cascade visible-list stride word (see VertexProgramDesc::instance_capacity_word)
     out.instance_capacity_word = static_cast<crd::u32>(root["instance_capacity_word"].value_or<int64_t>(0));
     // ⭐⭐ REN-39-B2: `indexed = true` — the INDEXED pull mode (VertexIndex arrives as the index VALUE; the
@@ -560,11 +665,17 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
         for (const auto& e : *nt)
         {
             const crd::toml::node* t = e.as_table();
-            if (t == nullptr) { continue; }
+            if (t == nullptr)
+            {
+                continue;
+            }
             VertNodeDesc n(alloc);
             const auto   nn = (*t)["name"].value<std::string_view>();
             const auto   op = (*t)["op"].value<std::string_view>();
-            if (!nn || nn->empty() || !op || op->empty()) { return VertexCookError::MissingName; }
+            if (!nn || nn->empty() || !op || op->empty())
+            {
+                return VertexCookError::MissingName;
+            }
             set_str(n.name, *nn);
             set_str(n.op, *op);
             for (crd::usize i = 0; i < out.nodes.size(); ++i)
@@ -597,20 +708,56 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
                             for (crd::usize ci = skip; ci < s->size(); ++ci)
                             {
                                 const char ch = (*s)[ci];
-                                if (ch < '0' || ch > '9') { return ~0U; }
+                                if (ch < '0' || ch > '9')
+                                {
+                                    return ~0U;
+                                }
                                 w = w * 10U + static_cast<crd::u32>(ch - '0');
                             }
                             return w;
                         };
-                        if (*s == "@corner") { in.kind = VertInputKind::Corner; }
-                        else if (*s == "@instance") { in.kind = VertInputKind::Instance; }
-                        else if (*s == "@category") { in.kind = VertInputKind::Category; }
-                        else if (pref("field:")) { in.kind = VertInputKind::Field; in.word = word_of(6U); }
-                        else if (pref("fieldu:")) { in.kind = VertInputKind::FieldU; in.word = word_of(7U); }
-                        else if (pref("fieldc:")) { in.kind = VertInputKind::FieldC; in.word = word_of(7U); }
-                        else if (pref("hdr:")) { in.kind = VertInputKind::Hdr; in.word = word_of(4U); }
-                        else if (pref("hdru:")) { in.kind = VertInputKind::HdrU; in.word = word_of(5U); }
-                        else if (pref("hdrc:")) { in.kind = VertInputKind::HdrC; in.word = word_of(5U); }
+                        if (*s == "@corner")
+                        {
+                            in.kind = VertInputKind::Corner;
+                        }
+                        else if (*s == "@instance")
+                        {
+                            in.kind = VertInputKind::Instance;
+                        }
+                        else if (*s == "@category")
+                        {
+                            in.kind = VertInputKind::Category;
+                        }
+                        else if (pref("field:"))
+                        {
+                            in.kind = VertInputKind::Field;
+                            in.word = word_of(6U);
+                        }
+                        else if (pref("fieldu:"))
+                        {
+                            in.kind = VertInputKind::FieldU;
+                            in.word = word_of(7U);
+                        }
+                        else if (pref("fieldc:"))
+                        {
+                            in.kind = VertInputKind::FieldC;
+                            in.word = word_of(7U);
+                        }
+                        else if (pref("hdr:"))
+                        {
+                            in.kind = VertInputKind::Hdr;
+                            in.word = word_of(4U);
+                        }
+                        else if (pref("hdru:"))
+                        {
+                            in.kind = VertInputKind::HdrU;
+                            in.word = word_of(5U);
+                        }
+                        else if (pref("hdrc:"))
+                        {
+                            in.kind = VertInputKind::HdrC;
+                            in.word = word_of(5U);
+                        }
                         else if (!s->empty() && (*s)[0] == '@')
                         {
                             in.kind = VertInputKind::Attribute;
@@ -639,17 +786,26 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
             out.nodes.push_back(static_cast<VertNodeDesc&&>(n));
         }
     }
-    if (const auto d = root["displace"].value<std::string_view>()) { set_str(out.displace, *d); }
+    if (const auto d = root["displace"].value<std::string_view>())
+    {
+        set_str(out.displace, *d);
+    }
 
     if (const auto* va = root["varying"].as_array())
     {
         for (const auto& e : *va)
         {
             const crd::toml::node* t = e.as_table();
-            if (t == nullptr) { continue; }
+            if (t == nullptr)
+            {
+                continue;
+            }
             VaryingDesc v(alloc);
             const auto  vn = (*t)["name"].value<std::string_view>();
-            if (!vn || vn->empty()) { return VertexCookError::MissingName; }
+            if (!vn || vn->empty())
+            {
+                return VertexCookError::MissingName;
+            }
             set_str(v.name, *vn);
             for (crd::usize i = 0; i < out.varyings.size(); ++i)
             {
@@ -678,8 +834,14 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
                 crd::usize k = 0;
                 for (const auto& ce : *nc)
                 {
-                    while (k < v.source.size() && v.source[k].kind != VaryingSourceKind::Node) { ++k; }
-                    if (k >= v.source.size()) { break; }
+                    while (k < v.source.size() && v.source[k].kind != VaryingSourceKind::Node)
+                    {
+                        ++k;
+                    }
+                    if (k >= v.source.size())
+                    {
+                        break;
+                    }
                     v.source[k].comps = static_cast<crd::u32>(ce.value_or<int64_t>(0));
                     ++k;
                 }
@@ -694,7 +856,10 @@ VertexCookError parse_vertex_toml(crd::containers::StringView toml_text, VertexP
 // ── VALIDATE ──────────────────────────────────────────────────────────────────────────────────────────────
 crd::u32 varying_width(const VertexProgramDesc& desc, crd::u32 varying_index) noexcept
 {
-    if (varying_index >= desc.varyings.size()) { return 0U; }
+    if (varying_index >= desc.varyings.size())
+    {
+        return 0U;
+    }
     const VaryingDesc& v = desc.varyings[varying_index];
     crd::u32           w = 0U;
     for (crd::usize i = 0; i < v.source.size(); ++i)
@@ -726,8 +891,14 @@ crd::u32 varying_width(const VertexProgramDesc& desc, crd::u32 varying_index) no
 
 VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::containers::String* where)
 {
-    if (desc.attrs.size() > kMaxAttributes) { return VertexCookError::TooManyAttributes; }
-    if (desc.varyings.size() > kMaxVaryings) { return VertexCookError::TooManyVaryings; }
+    if (desc.attrs.size() > kMaxAttributes)
+    {
+        return VertexCookError::TooManyAttributes;
+    }
+    if (desc.varyings.size() > kMaxVaryings)
+    {
+        return VertexCookError::TooManyVaryings;
+    }
     // ⭐⭐ REN-39-B2: `indexed` belongs to the VERTEX-RECORD pull only. A procedural stage's vertex ids are
     // EXPANSION indices (vid / verts_per_instance) and an advanced stage decomposes its own — an indexed draw
     // would feed either one mesh-index values it would silently mis-decompose. Checked FIRST so the refusal is
@@ -754,17 +925,26 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
                 set_where(where, sv_of(a[i].name));
                 return VertexCookError::AttrOutOfRecord;
             }
-            if (a[i].kind == AttrKind::Position) { has_position = true; }
+            if (a[i].kind == AttrKind::Position)
+            {
+                has_position = true;
+            }
         }
         return VertexCookError::Ok;
     };
     VertexCookError e = check_attrs(desc.attrs, desc.vertex_stride);
-    if (e != VertexCookError::Ok) { return e; }
+    if (e != VertexCookError::Ok)
+    {
+        return e;
+    }
     {
         const bool saw = has_position;
         e = check_attrs(desc.instance.attrs, desc.instance.stride);
         has_position = saw; // an instance attribute is never the thing being projected
-        if (e != VertexCookError::Ok) { return e; }
+        if (e != VertexCookError::Ok)
+        {
+            return e;
+        }
     }
     // ⛔ The instance TRANSFORM is a mat4 — sixteen words that must fit the record, or the last rows read the
     // next instance's matrix and every object inherits a neighbour's orientation.
@@ -823,7 +1003,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
             bool has_pos = false;
             for (crd::usize i = 0; i < desc.attrs.size(); ++i)
             {
-                if (desc.attrs[i].kind == AttrKind::Position) { has_pos = true; }
+                if (desc.attrs[i].kind == AttrKind::Position)
+                {
+                    has_pos = true;
+                }
             }
             if (desc.vertex_stride == 0U || !has_pos || desc.morph.target_count > 0U
                 || desc.skin.scheme != SkinScheme::None)
@@ -929,7 +1112,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
         const crd::i32      oi = [&] {
             for (crd::u32 k = 0; k < crd::matcook::material_op_count(); ++k)
             {
-                if (str_eq(n.op, crd::matcook::material_op_name(k))) { return static_cast<crd::i32>(k); }
+                if (str_eq(n.op, crd::matcook::material_op_name(k)))
+                {
+                    return static_cast<crd::i32>(k);
+                }
             }
             return -1;
         }();
@@ -987,7 +1173,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
                 crd::i32 src = -1;
                 for (crd::usize s = 0; s < desc.nodes.size(); ++s)
                 {
-                    if (str_eq(desc.nodes[s].name, sv_of(in.name))) { src = static_cast<crd::i32>(s); }
+                    if (str_eq(desc.nodes[s].name, sv_of(in.name)))
+                    {
+                        src = static_cast<crd::i32>(s);
+                    }
                 }
                 if (src < 0)
                 {
@@ -1050,7 +1239,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
         bool pn_found = false;
         for (crd::usize s = 0; s < desc.nodes.size(); ++s)
         {
-            if (str_eq(desc.nodes[s].name, sv_of(desc.position_node))) { pn_found = true; }
+            if (str_eq(desc.nodes[s].name, sv_of(desc.position_node)))
+            {
+                pn_found = true;
+            }
         }
         if (!pn_found)
         {
@@ -1069,7 +1261,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
         bool found = false;
         for (crd::usize s = 0; s < desc.nodes.size(); ++s)
         {
-            if (str_eq(desc.nodes[s].name, sv_of(desc.displace))) { found = true; }
+            if (str_eq(desc.nodes[s].name, sv_of(desc.displace)))
+            {
+                found = true;
+            }
         }
         if (!found)
         {
@@ -1105,9 +1300,15 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
         for (crd::usize k = 0; k < v.source.size(); ++k)
         {
             const VaryingSource& s = v.source[k];
-            if (s.kind == VaryingSourceKind::ClipW) { continue; }
+            if (s.kind == VaryingSourceKind::ClipW)
+            {
+                continue;
+            }
             // REN-41 velocity: prev:clip / clip are cook-derived (no attribute/instance/node to resolve)
-            if (s.kind == VaryingSourceKind::PrevClip || s.kind == VaryingSourceKind::Clip) { continue; }
+            if (s.kind == VaryingSourceKind::PrevClip || s.kind == VaryingSourceKind::Clip)
+            {
+                continue;
+            }
             if (s.kind == VaryingSourceKind::Node)
             {
                 if (s.comps < 1U || s.comps > 4U)
@@ -1118,7 +1319,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
                 bool found = false;
                 for (crd::usize n = 0; n < desc.nodes.size(); ++n)
                 {
-                    if (str_eq(desc.nodes[n].name, sv_of(s.name))) { found = true; }
+                    if (str_eq(desc.nodes[n].name, sv_of(s.name)))
+                    {
+                        found = true;
+                    }
                 }
                 if (!found)
                 {
@@ -1148,7 +1352,10 @@ VertexCookError validate_vertex_program(const VertexProgramDesc& desc, crd::cont
 VertexCookError verify_varying_contract(const VertexProgramDesc& desc, const VaryingRequirement* req, crd::u32 n_req,
                                         crd::containers::String* where)
 {
-    if (req == nullptr && n_req > 0U) { return VertexCookError::ContractMismatch; }
+    if (req == nullptr && n_req > 0U)
+    {
+        return VertexCookError::ContractMismatch;
+    }
     for (crd::u32 r = 0; r < n_req; ++r)
     {
         const VaryingRequirement& want = req[r];
@@ -1166,7 +1373,10 @@ VertexCookError verify_varying_contract(const VertexProgramDesc& desc, const Var
         }
         if (hit < 0)
         {
-            if (want.name != nullptr) { set_where(where, std::string_view(want.name)); }
+            if (want.name != nullptr)
+            {
+                set_where(where, std::string_view(want.name));
+            }
             else if (where != nullptr)
             {
                 char loc[32];
@@ -1194,28 +1404,43 @@ VertexCookError verify_varying_contract(const VertexProgramDesc& desc, const Var
 bool fs_varying_requirements(const crd::kir::KGraph& g, const crd::kir::KEntry& fs, VaryingRequirement* out,
                              crd::u32 cap, crd::u32* n_out, crd::memory::IAllocator* alloc)
 {
-    if (out == nullptr || n_out == nullptr || alloc == nullptr) { return false; }
+    if (out == nullptr || n_out == nullptr || alloc == nullptr)
+    {
+        return false;
+    }
     *n_out = 0U;
 
     crd::containers::Array<crd::u8> seen(alloc);
     seen.resize(static_cast<crd::usize>(g.size()));
-    for (crd::usize i = 0; i < seen.size(); ++i) { seen[i] = 0U; }
+    for (crd::usize i = 0; i < seen.size(); ++i)
+    {
+        seen[i] = 0U;
+    }
     crd::containers::Array<int> stack(alloc);
     const auto push_root = [&](int r) {
-        if (r >= 0 && r < g.size()) { stack.push_back(r); }
+        if (r >= 0 && r < g.size())
+        {
+            stack.push_back(r);
+        }
     };
     push_root(fs.frag_depth);
     push_root(fs.discard_cond);
     push_root(fs.storage_write_index);
     push_root(fs.storage_write_value);
-    for (int i = 0; i < fs.n_out; ++i) { push_root(fs.out[i].node); }
+    for (int i = 0; i < fs.n_out; ++i)
+    {
+        push_root(fs.out[i].node);
+    }
 
     bool consistent = true;
     while (!stack.empty())
     {
         const int id = stack[stack.size() - 1U];
         stack.pop_back();
-        if (seen[static_cast<crd::usize>(id)] != 0U) { continue; }
+        if (seen[static_cast<crd::usize>(id)] != 0U)
+        {
+            continue;
+        }
         seen[static_cast<crd::usize>(id)] = 1U;
         const crd::kir::KNode& n = g.node(id);
         if (n.op == crd::kir::KOp::StageIn)
@@ -1226,25 +1451,41 @@ bool fs_varying_requirements(const crd::kir::KGraph& g, const crd::kir::KEntry& 
             crd::i32   hit   = -1;
             for (crd::u32 r = 0; r < *n_out; ++r)
             {
-                if (out[r].location == loc) { hit = static_cast<crd::i32>(r); break; }
+                if (out[r].location == loc)
+                {
+                    hit = static_cast<crd::i32>(r);
+                    break;
+                }
             }
             if (hit >= 0)
             {
                 // ⛔ One location read at two widths or interpolations is a fragment program that disagrees
                 // with ITSELF — no vertex declaration can satisfy it, so the derivation reports it rather
                 // than letting the contract check blame the `.crdv`.
-                if (out[hit].comps != width || out[hit].flat != flat) { consistent = false; }
+                if (out[hit].comps != width || out[hit].flat != flat)
+                {
+                    consistent = false;
+                }
             }
             else if (*n_out < cap)
             {
                 out[*n_out] = VaryingRequirement{nullptr, loc, width, flat};
                 ++(*n_out);
             }
-            else { consistent = false; } // more read locations than the caller can hold — never truncate silently
+            else // more read locations than the caller can hold — never truncate silently
+            {
+                consistent = false;
+            }
         }
         const int ops[4] = {n.a, n.b, n.c, n.d};
-        for (const int o : ops) { push_root(o); }
-        for (int k = 0; k < static_cast<int>(n.n_ext); ++k) { push_root(g.ext_operand(n, k)); }
+        for (const int o : ops)
+        {
+            push_root(o);
+        }
+        for (int k = 0; k < static_cast<int>(n.n_ext); ++k)
+        {
+            push_root(g.ext_operand(n, k));
+        }
     }
     return consistent;
 }
@@ -1304,7 +1545,10 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     hash_u64(h, desc.skin.palette_stride);
     hash_u64(h, desc.morph.target_count);
     hash_u64(h, desc.morph.stride);
-    for (crd::usize i = 0; i < desc.morph.targets_apply_to.size(); ++i) { hash_str(h, desc.morph.targets_apply_to[i]); }
+    for (crd::usize i = 0; i < desc.morph.targets_apply_to.size(); ++i)
+    {
+        hash_str(h, desc.morph.targets_apply_to[i]);
+    }
     for (crd::usize i = 0; i < desc.nodes.size(); ++i)
     {
         hash_str(h, desc.nodes[i].name);
@@ -1337,7 +1581,10 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
         }
     }
     const crd::u32* hw = &desc.header.index_count;
-    for (crd::u32 i = 0; i < sizeof(VertexHeaderMap) / sizeof(crd::u32); ++i) { hash_u64(h, hw[i]); }
+    for (crd::u32 i = 0; i < sizeof(VertexHeaderMap) / sizeof(crd::u32); ++i)
+    {
+        hash_u64(h, hw[i]);
+    }
     // ⛔⛔ REN-39-B2 identity fixes, found wiring `indexed`: rebase_table and instance_capacity_word change
     // EVERY load address and were NOT hashed — a rebased and an absolute cook of one asset collided to one
     // variant key, the exact dedup COLLISION this function's own comment names. `indexed` joins for the same
@@ -1423,9 +1670,15 @@ void app_f64(crd::containers::String& o, double v)
     bool plain = true;
     for (const char* p = static_cast<const char*>(buf); *p != 0; ++p)
     {
-        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i') { plain = false; }
+        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i')
+        {
+            plain = false;
+        }
     }
-    if (plain) { app(o, ".0"); }
+    if (plain)
+    {
+        app(o, ".0");
+    }
 }
 void emit_attrs(crd::containers::String& o, const crd::containers::Array<VertexAttrDesc>& a, const char* table)
 {
@@ -1537,8 +1790,14 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app_u32(o, desc.mesh.max_primitives);
         app(o, "\nworkgroup      = ");
         app_u32(o, desc.mesh.workgroup);
-        if (desc.mesh.fetch) { app(o, "\nfetch          = true"); }   // REN-38-F6+
-        if (desc.mesh.payload) { app(o, "\npayload        = true"); } // REN-38-F6+: dispatched by a task
+        if (desc.mesh.fetch) // REN-38-F6+
+        {
+            app(o, "\nfetch          = true");
+        }
+        if (desc.mesh.payload) // REN-38-F6+: dispatched by a task
+        {
+            app(o, "\npayload        = true");
+        }
         app(o, "\n");
         break;
     case StageKind::Task:
@@ -1730,7 +1989,10 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app(o, "\napply_to = [");
         for (crd::usize i = 0; i < desc.morph.targets_apply_to.size(); ++i)
         {
-            if (i > 0U) { app(o, ", "); }
+            if (i > 0U)
+            {
+                app(o, ", ");
+            }
             app_quoted(o, desc.morph.targets_apply_to[i]);
         }
         app(o, "]\n");
@@ -1746,9 +2008,15 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         app(o, "\ninputs = [");
         for (crd::usize k = 0; k < n.inputs.size(); ++k)
         {
-            if (k > 0U) { app(o, ", "); }
+            if (k > 0U)
+            {
+                app(o, ", ");
+            }
             const VertInput& in = n.inputs[k];
-            if (in.kind == VertInputKind::Node) { app_quoted(o, in.name); }
+            if (in.kind == VertInputKind::Node)
+            {
+                app_quoted(o, in.name);
+            }
             else if (in.kind == VertInputKind::Attribute)
             {
                 app(o, "\"@");
@@ -1756,31 +2024,61 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
                 app(o, "\"");
             }
             // REN-38-F7: the procedural spellings survive the round trip verbatim
-            else if (in.kind == VertInputKind::Corner) { app(o, "\"@corner\""); }
-            else if (in.kind == VertInputKind::Instance) { app(o, "\"@instance\""); }
-            else if (in.kind == VertInputKind::Category) { app(o, "\"@category\""); }
+            else if (in.kind == VertInputKind::Corner)
+            {
+                app(o, "\"@corner\"");
+            }
+            else if (in.kind == VertInputKind::Instance)
+            {
+                app(o, "\"@instance\"");
+            }
+            else if (in.kind == VertInputKind::Category)
+            {
+                app(o, "\"@category\"");
+            }
             else if (in.kind == VertInputKind::Field || in.kind == VertInputKind::FieldU
                      || in.kind == VertInputKind::FieldC || in.kind == VertInputKind::Hdr
                      || in.kind == VertInputKind::HdrU || in.kind == VertInputKind::HdrC)
             {
                 const char* spelling = "hdrc:";
-                if (in.kind == VertInputKind::Field) { spelling = "field:"; }
-                else if (in.kind == VertInputKind::FieldU) { spelling = "fieldu:"; }
-                else if (in.kind == VertInputKind::FieldC) { spelling = "fieldc:"; }
-                else if (in.kind == VertInputKind::Hdr) { spelling = "hdr:"; }
-                else if (in.kind == VertInputKind::HdrU) { spelling = "hdru:"; }
+                if (in.kind == VertInputKind::Field)
+                {
+                    spelling = "field:";
+                }
+                else if (in.kind == VertInputKind::FieldU)
+                {
+                    spelling = "fieldu:";
+                }
+                else if (in.kind == VertInputKind::FieldC)
+                {
+                    spelling = "fieldc:";
+                }
+                else if (in.kind == VertInputKind::Hdr)
+                {
+                    spelling = "hdr:";
+                }
+                else if (in.kind == VertInputKind::HdrU)
+                {
+                    spelling = "hdru:";
+                }
                 app(o, "\"");
                 app(o, spelling);
                 app_u32(o, in.word);
                 app(o, "\"");
             }
-            else if (in.comps <= 1U) { app_f64(o, in.value[0]); }
+            else if (in.comps <= 1U)
+            {
+                app_f64(o, in.value[0]);
+            }
             else
             {
                 app(o, "[");
                 for (crd::u32 c = 0; c < in.comps && c < 4U; ++c)
                 {
-                    if (c > 0U) { app(o, ", "); }
+                    if (c > 0U)
+                    {
+                        app(o, ", ");
+                    }
                     app_f64(o, in.value[c]);
                 }
                 app(o, "]");
@@ -1802,7 +2100,10 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
         bool any_node = false;
         for (crd::usize k = 0; k < v.source.size(); ++k)
         {
-            if (k > 0U) { app(o, ", "); }
+            if (k > 0U)
+            {
+                app(o, ", ");
+            }
             const VaryingSource& s = v.source[k];
             switch (s.kind)
             {
@@ -1837,8 +2138,14 @@ crd::containers::String emit_vertex_toml(const VertexProgramDesc& desc, crd::mem
             bool first = true;
             for (crd::usize k = 0; k < v.source.size(); ++k)
             {
-                if (v.source[k].kind != VaryingSourceKind::Node) { continue; }
-                if (!first) { app(o, ", "); }
+                if (v.source[k].kind != VaryingSourceKind::Node)
+                {
+                    continue;
+                }
+                if (!first)
+                {
+                    app(o, ", ");
+                }
                 first = false;
                 app_u32(o, v.source[k].comps);
             }
@@ -1923,7 +2230,10 @@ namespace
                 g.stmt_execute_callable(c.ku(0U), cd);
                 g.stmt_buffer_store(out, idx, g.payload_load(cd, 0));
             }
-            else { g.stmt_buffer_store(out, idx, g.payload_load(pl, 0)); }
+            else
+            {
+                g.stmt_buffer_store(out, idx, g.payload_load(pl, 0));
+            }
         }
         ve.stage             = crd::kir::KStage::RayGen;
         ve.kernel_body_begin = mk;
@@ -2039,7 +2349,10 @@ namespace
     {
         int clip[4];
         int vp[16];
-        for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = blf(c.ku(desc.header.view_proj + e)); }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            vp[e] = blf(c.ku(desc.header.view_proj + e));
+        }
         c.mul_mat4(static_cast<const int*>(vp), wx, wy, wz, c.kf(1.0), clip);
         const int w = g.binary(KOp::Max, clip[3], c.kf(1.0e-6));
         // inside = |x| <= w and |y| <= w and 0 <= z <= w — the standard clip-space containment test
@@ -2253,7 +2566,10 @@ namespace
     // with every count matching. See `CullDesc::frustum_off`.
     const crd::u32 vpw = desc.cull.frustum_off != 0U ? desc.cull.frustum_off : desc.header.view_proj;
     int vp[16];
-    for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = blf(c.ku(vpw + e)); }
+    for (crd::u32 e = 0; e < 16U; ++e)
+    {
+        vp[e] = blf(c.ku(vpw + e));
+    }
     int r0[4];
     int r1[4];
     int r2[4];
@@ -2703,7 +3019,10 @@ template <typename InFn, typename OpFn>
         crd::i32            oi = -1;
         for (crd::u32 k = 0; k < crd::matcook::material_op_count(); ++k)
         {
-            if (str_eq(n.op, crd::matcook::material_op_name(k))) { oi = static_cast<crd::i32>(k); }
+            if (str_eq(n.op, crd::matcook::material_op_name(k)))
+            {
+                oi = static_cast<crd::i32>(k);
+            }
         }
         const bool is_custom = oi < 0;
         int in[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
@@ -2721,31 +3040,49 @@ template <typename InFn, typename OpFn>
                 in[k] = -1;
                 for (crd::usize s = 0; s < i; ++s)
                 {
-                    if (str_eq(desc.nodes[s].name, sv_of(vi.name))) { in[k] = built[s]; }
+                    if (str_eq(desc.nodes[s].name, sv_of(vi.name)))
+                    {
+                        in[k] = built[s];
+                    }
                 }
-                if (in[k] < 0) { return false; }
+                if (in[k] < 0)
+                {
+                    return false;
+                }
             }
             else if (vi.kind == VertInputKind::Literal)
             {
                 int comps[4];
-                for (crd::u32 e = 0; e < vi.comps && e < 4U; ++e) { comps[e] = c.kf(vi.value[e]); }
+                for (crd::u32 e = 0; e < vi.comps && e < 4U; ++e)
+                {
+                    comps[e] = c.kf(vi.value[e]);
+                }
                 in[k] = c.vecn(static_cast<const int*>(comps), vi.comps);
             }
             else
             {
                 in[k] = input_of(vi);
-                if (in[k] < 0) { return false; }
+                if (in[k] < 0)
+                {
+                    return false;
+                }
             }
         }
         int r = custom_op(n.op, static_cast<const int*>(in), static_cast<crd::u32>(n.inputs.size()));
         if (r == -2)
         {
-            if (is_custom) { return false; } // neither a registry op nor a vertex-cook one
+            if (is_custom) // neither a registry op nor a vertex-cook one
+            {
+                return false;
+            }
             r = crd::matcook::material_build_op(g, crd::containers::StringView(n.op.c_str(), n.op.size()),
                                                 static_cast<const int*>(in),
                                                 static_cast<crd::u32>(n.inputs.size()));
         }
-        if (r < 0) { return false; }
+        if (r < 0)
+        {
+            return false;
+        }
         built.push_back(r);
     }
     return true;
@@ -2770,24 +3107,42 @@ template <typename InFn, typename OpFn>
             const VaryingSource& s = v.source[k];
             if (s.kind == VaryingSourceKind::ClipW)
             {
-                if (w < 4U) { comps[w++] = clip_w; }
+                if (w < 4U)
+                {
+                    comps[w++] = clip_w;
+                }
                 continue;
             }
-            if (s.kind != VaryingSourceKind::Node) { return false; }
+            if (s.kind != VaryingSourceKind::Node)
+            {
+                return false;
+            }
             int node = -1;
             for (crd::usize n = 0; n < desc.nodes.size(); ++n)
             {
-                if (str_eq(desc.nodes[n].name, sv_of(s.name))) { node = built[n]; }
+                if (str_eq(desc.nodes[n].name, sv_of(s.name)))
+                {
+                    node = built[n];
+                }
             }
-            if (node < 0) { return false; }
+            if (node < 0)
+            {
+                return false;
+            }
             const auto got = static_cast<crd::u32>(g.node(node).comps());
-            if (got != s.comps) { return false; }
+            if (got != s.comps)
+            {
+                return false;
+            }
             for (crd::u32 e = 0; e < got && w < 4U; ++e)
             {
                 comps[w++] = got == 1U ? node : g.swizzle(node, static_cast<int>(e));
             }
         }
-        if (w == 0U || ve.n_out >= crd::kir::kMaxStageOutputs) { return false; }
+        if (w == 0U || ve.n_out >= crd::kir::kMaxStageOutputs)
+        {
+            return false;
+        }
         ve.out[ve.n_out] = {c.vecn(static_cast<const int*>(comps), w), static_cast<int>(v.location),
                             v.flat ? crd::kir::Interp::Flat : crd::kir::Interp::Smooth};
         ++ve.n_out;
@@ -2804,7 +3159,10 @@ template <typename InFn, typename OpFn>
 // NOLINTNEXTLINE(readability-function-size)
 bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd::kir::KEntry& ve)
 {
-    if (validate_vertex_program(desc, nullptr) != VertexCookError::Ok) { return false; }
+    if (validate_vertex_program(desc, nullptr) != VertexCookError::Ok)
+    {
+        return false;
+    }
     // REN-38-F3/F4: the stages that do NOT pull geometry take their own path — requiring a vertex record
     // of a raygen or a culling kernel would refuse a perfectly valid program.
     if (desc.stage == StageKind::RayGen || desc.stage == StageKind::ClosestHit
@@ -2819,7 +3177,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         // command); the flag form stays for the 38-F15 chain that consumes per-instance verdicts.
         // ⭐⭐ REN-40-A: three authored variants of ONE stage — the 38-F15 FLAG form, the COMPACTING
         // producer, and its RESET partner. `reset` wins because a reset kernel culls nothing.
-        if (desc.cull.reset) { return cook_cull_reset(desc, g, ve); }
+        if (desc.cull.reset)
+        {
+            return cook_cull_reset(desc, g, ve);
+        }
         return desc.cull.compact ? cook_cull_compact(desc, g, ve) : cook_cull(desc, g, ve);
     }
     // ⛔⛔ A HULL STAGE DOES NOT PULL. It runs per CONTROL POINT of an already-assembled patch, so
@@ -2871,21 +3232,39 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         // the sbuf seam) — the authored heightfield/ocean path. An author who reads a header word takes on the
         // matching obligation: the pass's draw item must carry a storage buffer (the #25 tess-storage seam).
         const auto input_of = [&](const VertInput& vi) {
-            if (vi.kind == VertInputKind::Hdr) { return tc.hdrf(vi.word); }
-            if (vi.kind == VertInputKind::HdrU) { return tc.hdru(vi.word); }
-            if (vi.kind != VertInputKind::Attribute) { return -1; }
+            if (vi.kind == VertInputKind::Hdr)
+            {
+                return tc.hdrf(vi.word);
+            }
+            if (vi.kind == VertInputKind::HdrU)
+            {
+                return tc.hdru(vi.word);
+            }
+            if (vi.kind != VertInputKind::Attribute)
+            {
+                return -1;
+            }
             const crd::i32 ai = find_attr(desc.attrs, sv_of(vi.name));
             return ai >= 0 && desc.attrs[static_cast<crd::usize>(ai)].kind == AttrKind::Position ? p3 : -1;
         };
-        if (!build_stage_nodes(desc, g, tc, input_of, no_custom_op, built)) { return false; }
+        if (!build_stage_nodes(desc, g, tc, input_of, no_custom_op, built))
+        {
+            return false;
+        }
         if (!desc.displace.empty())
         {
             int disp = -1;
             for (crd::usize s = 0; s < desc.nodes.size(); ++s)
             {
-                if (str_eq(desc.nodes[s].name, sv_of(desc.displace))) { disp = built[s]; }
+                if (str_eq(desc.nodes[s].name, sv_of(desc.displace)))
+                {
+                    disp = built[s];
+                }
             }
-            if (disp < 0 || g.node(disp).comps() != 3) { return false; }
+            if (disp < 0 || g.node(disp).comps() != 3)
+            {
+                return false;
+            }
             p3 = disp;
         }
         ve.stage           = crd::kir::KStage::TessEval;
@@ -2936,38 +3315,75 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             crd::containers::Array<int> built(crd::memory::default_allocator());
             // `hdr:N` / `hdru:N` are legal here too — the buffer is already bound (that is what fetch means)
             const auto input_of = [&](const VertInput& vi) {
-                if (vi.kind == VertInputKind::Hdr) { return mc.hdrf(vi.word); }
-                if (vi.kind == VertInputKind::HdrU) { return mc.hdru(vi.word); }
-                if (vi.kind != VertInputKind::Attribute) { return -1; }
+                if (vi.kind == VertInputKind::Hdr)
+                {
+                    return mc.hdrf(vi.word);
+                }
+                if (vi.kind == VertInputKind::HdrU)
+                {
+                    return mc.hdru(vi.word);
+                }
+                if (vi.kind != VertInputKind::Attribute)
+                {
+                    return -1;
+                }
                 const crd::i32 ai = find_attr(desc.attrs, sv_of(vi.name));
-                if (ai < 0) { return -1; }
+                if (ai < 0)
+                {
+                    return -1;
+                }
                 const AttrVals& av = vals[static_cast<crd::usize>(ai)];
                 return mc.vecn(static_cast<const int*>(av.obj), av.comps);
             };
-            if (!build_stage_nodes(desc, g, mc, input_of, no_custom_op, built)) { return false; }
+            if (!build_stage_nodes(desc, g, mc, input_of, no_custom_op, built))
+            {
+                return false;
+            }
             int posi = -1;
             for (crd::usize i = 0; i < desc.attrs.size(); ++i)
             {
-                if (desc.attrs[i].kind == AttrKind::Position) { posi = static_cast<int>(i); break; }
+                if (desc.attrs[i].kind == AttrKind::Position)
+                {
+                    posi = static_cast<int>(i);
+                    break;
+                }
             }
-            if (posi < 0) { return false; } // validated (BadMesh), but the cook never trusts its caller
+            if (posi < 0) // validated (BadMesh), but the cook never trusts its caller
+            {
+                return false;
+            }
             AttrVals& pa = vals[static_cast<crd::usize>(posi)];
             if (!desc.displace.empty()) // the displacement REPLACES the object position, as everywhere else
             {
                 int disp = -1;
                 for (crd::usize si = 0; si < desc.nodes.size(); ++si)
                 {
-                    if (str_eq(desc.nodes[si].name, sv_of(desc.displace))) { disp = built[si]; }
+                    if (str_eq(desc.nodes[si].name, sv_of(desc.displace)))
+                    {
+                        disp = built[si];
+                    }
                 }
-                if (disp < 0 || g.node(disp).comps() != 3) { return false; }
-                for (crd::u32 e = 0; e < 3U; ++e) { pa.obj[e] = g.swizzle(disp, static_cast<int>(e)); }
+                if (disp < 0 || g.node(disp).comps() != 3)
+                {
+                    return false;
+                }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    pa.obj[e] = g.swizzle(disp, static_cast<int>(e));
+                }
             }
             int m[16];
-            for (crd::u32 e = 0; e < 16U; ++e) { m[e] = mc.loadf(mc.add(ibase, mc.ku(desc.instance.transform + e))); }
+            for (crd::u32 e = 0; e < 16U; ++e)
+            {
+                m[e] = mc.loadf(mc.add(ibase, mc.ku(desc.instance.transform + e)));
+            }
             int wrld[4];
             mc.mul_mat4(static_cast<const int*>(m), pa.obj[0], pa.obj[1], pa.obj[2], mc.kf(1.0), wrld);
             int vp[16];
-            for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = mc.hdrf(desc.header.view_proj + e); }
+            for (crd::u32 e = 0; e < 16U; ++e)
+            {
+                vp[e] = mc.hdrf(desc.header.view_proj + e);
+            }
             int clip[4];
             mc.mul_mat4(static_cast<const int*>(vp), wrld[0], wrld[1], wrld[2], wrld[3], clip);
             ve.stage           = crd::kir::KStage::Mesh;
@@ -2995,19 +3411,31 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         int       p3   = g.vec3(mc.add(xc, ox), oy, mc.kf(0.0));
         crd::containers::Array<int> built(crd::memory::default_allocator());
         const auto input_of = [&](const VertInput& vi) {
-            if (vi.kind != VertInputKind::Attribute) { return -1; }
+            if (vi.kind != VertInputKind::Attribute)
+            {
+                return -1;
+            }
             const crd::i32 ai = find_attr(desc.attrs, sv_of(vi.name));
             return ai >= 0 && desc.attrs[static_cast<crd::usize>(ai)].kind == AttrKind::Position ? p3 : -1;
         };
-        if (!build_stage_nodes(desc, g, mc, input_of, no_custom_op, built)) { return false; }
+        if (!build_stage_nodes(desc, g, mc, input_of, no_custom_op, built))
+        {
+            return false;
+        }
         if (!desc.displace.empty())
         {
             int disp = -1;
             for (crd::usize s = 0; s < desc.nodes.size(); ++s)
             {
-                if (str_eq(desc.nodes[s].name, sv_of(desc.displace))) { disp = built[s]; }
+                if (str_eq(desc.nodes[s].name, sv_of(desc.displace)))
+                {
+                    disp = built[s];
+                }
             }
-            if (disp < 0 || g.node(disp).comps() != 3) { return false; }
+            if (disp < 0 || g.node(disp).comps() != 3)
+            {
+                return false;
+            }
             p3 = disp;
         }
         ve.stage           = crd::kir::KStage::Mesh;
@@ -3077,24 +3505,42 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             }
         };
         const auto custom_op = [&](const crd::containers::String& op, const int* in, crd::u32 n_in) {
-            if (!str_eq(op, std::string_view("view_proj"))) { return -2; }
-            if (n_in != 1U || in[0] < 0 || g.node(in[0]).comps() != 3) { return -1; }
+            if (!str_eq(op, std::string_view("view_proj")))
+            {
+                return -2;
+            }
+            if (n_in != 1U || in[0] < 0 || g.node(in[0]).comps() != 3)
+            {
+                return -1;
+            }
             int vp[16];
-            for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = pc.hdrf(desc.header.view_proj + e); }
+            for (crd::u32 e = 0; e < 16U; ++e)
+            {
+                vp[e] = pc.hdrf(desc.header.view_proj + e);
+            }
             int clip[4];
             pc.mul_mat4(static_cast<const int*>(vp), g.swizzle(in[0], 0), g.swizzle(in[0], 1),
                         g.swizzle(in[0], 2), pc.kf(1.0), clip);
             return g.vec4(clip[0], clip[1], clip[2], clip[3]);
         };
         crd::containers::Array<int> built(crd::memory::default_allocator());
-        if (!build_stage_nodes(desc, g, pc, input_of, custom_op, built)) { return false; }
+        if (!build_stage_nodes(desc, g, pc, input_of, custom_op, built))
+        {
+            return false;
+        }
         int pos = -1;
         for (crd::usize s = 0; s < desc.nodes.size(); ++s)
         {
-            if (str_eq(desc.nodes[s].name, sv_of(desc.position_node))) { pos = built[s]; }
+            if (str_eq(desc.nodes[s].name, sv_of(desc.position_node)))
+            {
+                pos = built[s];
+            }
         }
         // ⛔ the clip position is a vec4 or it is nothing — a narrower node would rasterize garbage w
-        if (pos < 0 || g.node(pos).comps() != 4) { return false; }
+        if (pos < 0 || g.node(pos).comps() != 4)
+        {
+            return false;
+        }
         ve.stage    = crd::kir::KStage::Vertex;
         ve.position = pos;
         return emit_procedural_varyings(desc, g, pc, ve, built, g.swizzle(pos, 3));
@@ -3169,7 +3615,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         else
         {
             int list_index = c.ku(view_i * desc.lod_slots);
-            if (row_slot >= 0) { list_index = c.add(list_index, row_slot); }
+            if (row_slot >= 0)
+            {
+                list_index = c.add(list_index, row_slot);
+            }
             vis_base = c.add(c.hdru(desc.header.visible_off), c.mul(c.hdru(cap_word), list_index));
         }
     }
@@ -3206,7 +3655,11 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     {
         for (crd::usize k = 0; k < desc.varyings[i].source.size(); ++k)
         {
-            if (desc.varyings[i].source[k].kind == VaryingSourceKind::PrevClip) { needs_prev = true; break; }
+            if (desc.varyings[i].source[k].kind == VaryingSourceKind::PrevClip)
+            {
+                needs_prev = true;
+                break;
+            }
         }
     }
 
@@ -3225,7 +3678,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             for (crd::usize a = 0; a < desc.morph.targets_apply_to.size(); ++a)
             {
                 const crd::i32 ai = find_attr(desc.attrs, sv_of(desc.morph.targets_apply_to[a]));
-                if (ai < 0) { continue; }
+                if (ai < 0)
+                {
+                    continue;
+                }
                 AttrVals& av = vals[static_cast<crd::usize>(ai)];
                 for (crd::u32 k = 0; k < av.comps; ++k)
                 {
@@ -3244,7 +3700,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         {
             if (desc.attrs[i].kind == AttrKind::Position)
             {
-                for (crd::u32 e = 0; e < 3U; ++e) { prev_obj[e] = vals[i].obj[e]; }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    prev_obj[e] = vals[i].obj[e];
+                }
                 break;
             }
         }
@@ -3278,18 +3737,27 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             {
                 AttrVals z;
                 z.comps = vals[i].comps;
-                for (crd::u32 k = 0; k < z.comps; ++k) { z.obj[k] = c.kf(0.0); }
+                for (crd::u32 k = 0; k < z.comps; ++k)
+                {
+                    z.obj[k] = c.kf(0.0);
+                }
                 acc.push_back(z);
             }
             for (crd::u32 k = 0; k < desc.skin.influences; ++k)
             {
                 const int mb = c.add(pbase, c.mul(joints[k], c.ku(desc.skin.palette_stride)));
                 int       m[16];
-                for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(mb, c.ku(e))); }
+                for (crd::u32 e = 0; e < 16U; ++e)
+                {
+                    m[e] = c.loadf(c.add(mb, c.ku(e)));
+                }
                 for (crd::usize i = 0; i < vals.size(); ++i)
                 {
                     const VertexAttrDesc& ad = desc.attrs[i];
-                    if (ad.kind == AttrKind::Value) { continue; }
+                    if (ad.kind == AttrKind::Value)
+                    {
+                        continue;
+                    }
                     const AttrVals& src = vals[i];
                     int             out[4];
                     if (ad.kind == AttrKind::Position)
@@ -3309,8 +3777,14 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             }
             for (crd::usize i = 0; i < vals.size(); ++i)
             {
-                if (desc.attrs[i].kind == AttrKind::Value) { continue; }
-                for (crd::u32 e = 0; e < vals[i].comps && e < 3U; ++e) { vals[i].obj[e] = acc[i].obj[e]; }
+                if (desc.attrs[i].kind == AttrKind::Value)
+                {
+                    continue;
+                }
+                for (crd::u32 e = 0; e < vals[i].comps && e < 3U; ++e)
+                {
+                    vals[i].obj[e] = acc[i].obj[e];
+                }
             }
         }
         else
@@ -3342,7 +3816,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 // happens to be stored negated relative to the first would blend toward the LONG way round — the
                 // limb spins through the body between two frames that are visually adjacent.
                 int dot = c.mul(ref0[0], r[0]);
-                for (crd::u32 e = 1; e < 4U; ++e) { dot = c.add(dot, c.mul(ref0[e], r[e])); }
+                for (crd::u32 e = 1; e < 4U; ++e)
+                {
+                    dot = c.add(dot, c.mul(ref0[e], r[e]));
+                }
                 const int sign = g.select(g.binary(KOp::CmpLt, dot, c.kf(0.0)), c.kf(-1.0), c.kf(1.0));
                 const int w    = c.mul(weights[k], sign);
                 for (crd::u32 e = 0; e < 4U; ++e)
@@ -3353,7 +3830,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             }
             // normalize by |q0| (both parts — the dual part scales with the real one)
             int len2 = c.mul(q0[0], q0[0]);
-            for (crd::u32 e = 1; e < 4U; ++e) { len2 = c.add(len2, c.mul(q0[e], q0[e])); }
+            for (crd::u32 e = 1; e < 4U; ++e)
+            {
+                len2 = c.add(len2, c.mul(q0[e], q0[e]));
+            }
             const int inv = c.dvd(c.kf(1.0), g.unary(KOp::Sqrt, g.binary(KOp::Max, len2, c.kf(1e-12))));
             for (crd::u32 e = 0; e < 4U; ++e)
             {
@@ -3367,13 +3847,22 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             // rotate(v) = v + 2·(qv × (qv × v + qw·v))
             const auto rotate = [&](const int v[3], int out[3]) {
                 int t0[3];
-                for (crd::u32 e = 0; e < 3U; ++e) { t0[e] = c.mul(qw, v[e]); }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    t0[e] = c.mul(qw, v[e]);
+                }
                 int cr[3];
                 c.cross(qv, v, cr);
-                for (crd::u32 e = 0; e < 3U; ++e) { cr[e] = c.add(cr[e], t0[e]); }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    cr[e] = c.add(cr[e], t0[e]);
+                }
                 int cr2[3];
                 c.cross(qv, static_cast<const int*>(cr), cr2);
-                for (crd::u32 e = 0; e < 3U; ++e) { out[e] = c.add(v[e], c.mul(c.kf(2.0), cr2[e])); }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    out[e] = c.add(v[e], c.mul(c.kf(2.0), cr2[e]));
+                }
             };
             // translation = 2·(qw·ev − ew·qv + qv × ev)
             int tcross[3];
@@ -3386,7 +3875,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             for (crd::usize i = 0; i < vals.size(); ++i)
             {
                 const VertexAttrDesc& ad = desc.attrs[i];
-                if (ad.kind == AttrKind::Value) { continue; }
+                if (ad.kind == AttrKind::Value)
+                {
+                    continue;
+                }
                 const int v[3] = {vals[i].obj[0], vals[i].obj[1], vals[i].obj[2]};
                 int       r[3];
                 rotate(static_cast<const int*>(v), r);
@@ -3407,9 +3899,15 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         crd::i32            oi = -1;
         for (crd::u32 k = 0; k < crd::matcook::material_op_count(); ++k)
         {
-            if (str_eq(n.op, crd::matcook::material_op_name(k))) { oi = static_cast<crd::i32>(k); }
+            if (str_eq(n.op, crd::matcook::material_op_name(k)))
+            {
+                oi = static_cast<crd::i32>(k);
+            }
         }
-        if (oi < 0) { return false; }
+        if (oi < 0)
+        {
+            return false;
+        }
         int in[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
         for (crd::usize k = 0; k < n.inputs.size() && k < 8U; ++k)
         {
@@ -3422,7 +3920,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             if (vi.kind == VertInputKind::Attribute)
             {
                 const crd::i32 ai = find_attr(desc.attrs, sv_of(vi.name));
-                if (ai < 0) { return false; }
+                if (ai < 0)
+                {
+                    return false;
+                }
                 const AttrVals& av = vals[static_cast<crd::usize>(ai)];
                 in[k] = c.vecn(static_cast<const int*>(av.obj), av.comps);
             }
@@ -3431,21 +3932,33 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 in[k] = -1;
                 for (crd::usize s = 0; s < i; ++s)
                 {
-                    if (str_eq(desc.nodes[s].name, sv_of(vi.name))) { in[k] = built[s]; }
+                    if (str_eq(desc.nodes[s].name, sv_of(vi.name)))
+                    {
+                        in[k] = built[s];
+                    }
                 }
-                if (in[k] < 0) { return false; }
+                if (in[k] < 0)
+                {
+                    return false;
+                }
             }
             else
             {
                 int comps[4];
-                for (crd::u32 e = 0; e < vi.comps && e < 4U; ++e) { comps[e] = c.kf(vi.value[e]); }
+                for (crd::u32 e = 0; e < vi.comps && e < 4U; ++e)
+                {
+                    comps[e] = c.kf(vi.value[e]);
+                }
                 in[k] = c.vecn(static_cast<const int*>(comps), vi.comps);
             }
         }
         const int r = crd::matcook::material_build_op(g, crd::containers::StringView(n.op.c_str(), n.op.size()),
                                                       static_cast<const int*>(in),
                                                       static_cast<crd::u32>(n.inputs.size()));
-        if (r < 0) { return false; }
+        if (r < 0)
+        {
+            return false;
+        }
         built.push_back(r);
     }
     // The displacement node REPLACES the object position, so an author expresses "p + wave" as a node graph that
@@ -3455,28 +3968,49 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         int disp = -1;
         for (crd::usize s = 0; s < desc.nodes.size(); ++s)
         {
-            if (str_eq(desc.nodes[s].name, sv_of(desc.displace))) { disp = built[s]; }
+            if (str_eq(desc.nodes[s].name, sv_of(desc.displace)))
+            {
+                disp = built[s];
+            }
         }
-        if (disp < 0) { return false; }
+        if (disp < 0)
+        {
+            return false;
+        }
         for (crd::usize i = 0; i < desc.attrs.size(); ++i)
         {
-            if (desc.attrs[i].kind != AttrKind::Position) { continue; }
-            for (crd::u32 e = 0; e < vals[i].comps && e < 3U; ++e) { vals[i].obj[e] = g.swizzle(disp, static_cast<int>(e)); }
+            if (desc.attrs[i].kind != AttrKind::Position)
+            {
+                continue;
+            }
+            for (crd::u32 e = 0; e < vals[i].comps && e < 3U; ++e)
+            {
+                vals[i].obj[e] = g.swizzle(disp, static_cast<int>(e));
+            }
             break;
         }
     }
 
     // ── the WORLD transform.
     int m[16];
-    for (crd::u32 e = 0; e < 16U; ++e) { m[e] = c.loadf(c.add(ibase, c.ku(desc.instance.transform + e))); }
+    for (crd::u32 e = 0; e < 16U; ++e)
+    {
+        m[e] = c.loadf(c.add(ibase, c.ku(desc.instance.transform + e)));
+    }
     int nm[16];
     if (desc.instance.has_normal_transform)
     {
-        for (crd::u32 e = 0; e < 16U; ++e) { nm[e] = c.loadf(c.add(ibase, c.ku(desc.instance.normal_transform + e))); }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            nm[e] = c.loadf(c.add(ibase, c.ku(desc.instance.normal_transform + e)));
+        }
     }
     else
     {
-        for (crd::u32 e = 0; e < 16U; ++e) { nm[e] = m[e]; }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            nm[e] = m[e];
+        }
     }
     for (crd::usize i = 0; i < desc.attrs.size(); ++i)
     {
@@ -3485,20 +4019,35 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
         {
             int out[4];
             c.mul_mat4(static_cast<const int*>(m), a.obj[0], a.obj[1], a.obj[2], c.kf(1.0), out);
-            for (crd::u32 e = 0; e < a.comps && e < 3U; ++e) { a.wld[e] = out[e]; }
-            if (a.comps == 4U) { a.wld[3] = out[3]; }
+            for (crd::u32 e = 0; e < a.comps && e < 3U; ++e)
+            {
+                a.wld[e] = out[e];
+            }
+            if (a.comps == 4U)
+            {
+                a.wld[3] = out[3];
+            }
         }
         else if (desc.attrs[i].kind == AttrKind::Direction)
         {
             int out[3];
             c.mul_mat3(static_cast<const int*>(nm), a.obj[0], a.obj[1], a.obj[2], out);
-            for (crd::u32 e = 0; e < a.comps && e < 3U; ++e) { a.wld[e] = out[e]; }
+            for (crd::u32 e = 0; e < a.comps && e < 3U; ++e)
+            {
+                a.wld[e] = out[e];
+            }
             // the handedness sign of a 4-component tangent is not a coordinate — it passes through untouched
-            if (a.comps == 4U) { a.wld[3] = a.obj[3]; }
+            if (a.comps == 4U)
+            {
+                a.wld[3] = a.obj[3];
+            }
         }
         else
         {
-            for (crd::u32 e = 0; e < a.comps; ++e) { a.wld[e] = a.obj[e]; }
+            for (crd::u32 e = 0; e < a.comps; ++e)
+            {
+                a.wld[e] = a.obj[e];
+            }
         }
     }
 
@@ -3507,11 +4056,18 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     crd::i32  pos_attr = -1;
     for (crd::usize i = 0; i < desc.attrs.size(); ++i)
     {
-        if (desc.attrs[i].kind == AttrKind::Position) { pos_attr = static_cast<crd::i32>(i); break; }
+        if (desc.attrs[i].kind == AttrKind::Position)
+        {
+            pos_attr = static_cast<crd::i32>(i);
+            break;
+        }
     }
     if (desc.transform == VertexTransform::None)
     {
-        if (pos_attr < 0) { return false; }
+        if (pos_attr < 0)
+        {
+            return false;
+        }
         const AttrVals& p = vals[static_cast<crd::usize>(pos_attr)];
         clip[0]           = p.wld[0];
         clip[1]           = p.wld[1];
@@ -3520,12 +4076,18 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     }
     else
     {
-        if (pos_attr < 0) { return false; }
+        if (pos_attr < 0)
+        {
+            return false;
+        }
         const crd::u32 base = desc.transform == VertexTransform::LightVp
                                   ? desc.header.light_vp + desc.cascade * 16U
                                   : desc.header.view_proj;
         int            vp[16];
-        for (crd::u32 e = 0; e < 16U; ++e) { vp[e] = c.hdrf(base + e); }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            vp[e] = c.hdrf(base + e);
+        }
         const AttrVals& p = vals[static_cast<crd::usize>(pos_attr)];
         c.mul_mat4(static_cast<const int*>(vp), p.wld[0], p.wld[1], p.wld[2], c.kf(1.0), clip);
     }
@@ -3537,8 +4099,14 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
     int prev_clip[4] = {-1, -1, -1, -1};
     if (needs_prev)
     {
-        if (desc.header.prev_world_off == 0U) { return false; } // a prev:clip varying REQUIRES the section word
-        if (desc.skin.scheme == SkinScheme::DualQuaternion) { return false; } // no consumer; refuse silent-wrong
+        if (desc.header.prev_world_off == 0U) // a prev:clip varying REQUIRES the section word
+        {
+            return false;
+        }
+        if (desc.skin.scheme == SkinScheme::DualQuaternion) // no consumer; refuse silent-wrong
+        {
+            return false;
+        }
         int ppos[3] = {prev_obj[0], prev_obj[1], prev_obj[2]};
         if (desc.skin.scheme == SkinScheme::LinearBlend)
         {
@@ -3555,20 +4123,35 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 const int wgt  = c.loadf(c.add(psbase, c.ku(desc.skin.weight_off + k)));
                 const int mb   = c.add(ppbase, c.mul(j, c.ku(desc.skin.palette_stride)));
                 int       jm[16];
-                for (crd::u32 e = 0; e < 16U; ++e) { jm[e] = c.loadf(c.add(mb, c.ku(e))); }
+                for (crd::u32 e = 0; e < 16U; ++e)
+                {
+                    jm[e] = c.loadf(c.add(mb, c.ku(e)));
+                }
                 int out[4];
                 c.mul_mat4(static_cast<const int*>(jm), prev_obj[0], prev_obj[1], prev_obj[2], c.kf(1.0), out);
-                for (crd::u32 e = 0; e < 3U; ++e) { acc[e] = c.add(acc[e], c.mul(out[e], wgt)); }
+                for (crd::u32 e = 0; e < 3U; ++e)
+                {
+                    acc[e] = c.add(acc[e], c.mul(out[e], wgt));
+                }
             }
-            for (crd::u32 e = 0; e < 3U; ++e) { ppos[e] = acc[e]; }
+            for (crd::u32 e = 0; e < 3U; ++e)
+            {
+                ppos[e] = acc[e];
+            }
         }
         const int pwbase = c.add(c.hdru(desc.header.prev_world_off), c.mul(slot, c.ku(16U)));
         int       pm[16];
-        for (crd::u32 e = 0; e < 16U; ++e) { pm[e] = c.loadf(c.add(pwbase, c.ku(e))); }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            pm[e] = c.loadf(c.add(pwbase, c.ku(e)));
+        }
         int pwld[4];
         c.mul_mat4(static_cast<const int*>(pm), ppos[0], ppos[1], ppos[2], c.kf(1.0), pwld);
         int vp2[16];
-        for (crd::u32 e = 0; e < 16U; ++e) { vp2[e] = c.hdrf(desc.header.view_proj + e); }
+        for (crd::u32 e = 0; e < 16U; ++e)
+        {
+            vp2[e] = c.hdrf(desc.header.view_proj + e);
+        }
         c.mul_mat4(static_cast<const int*>(vp2), pwld[0], pwld[1], pwld[2], pwld[3], prev_clip);
     }
 
@@ -3619,17 +4202,26 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             const VaryingSource& s = v.source[k];
             if (s.kind == VaryingSourceKind::ClipW)
             {
-                if (w < 4U) { comps[w++] = clip[3]; }
+                if (w < 4U)
+                {
+                    comps[w++] = clip[3];
+                }
                 continue;
             }
             if (s.kind == VaryingSourceKind::PrevClip) // REN-41 velocity: the 4-comp previous-frame clip
             {
-                for (crd::u32 e = 0; e < 4U && w < 4U; ++e) { comps[w++] = prev_clip[e]; }
+                for (crd::u32 e = 0; e < 4U && w < 4U; ++e)
+                {
+                    comps[w++] = prev_clip[e];
+                }
                 continue;
             }
             if (s.kind == VaryingSourceKind::Clip) // REN-41 velocity: the 4-comp current clip
             {
-                for (crd::u32 e = 0; e < 4U && w < 4U; ++e) { comps[w++] = clip[e]; }
+                for (crd::u32 e = 0; e < 4U && w < 4U; ++e)
+                {
+                    comps[w++] = clip[e];
+                }
                 continue;
             }
             if (s.kind == VaryingSourceKind::Node)
@@ -3637,14 +4229,23 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 int node = -1;
                 for (crd::usize n = 0; n < desc.nodes.size(); ++n)
                 {
-                    if (str_eq(desc.nodes[n].name, sv_of(s.name))) { node = built[n]; }
+                    if (str_eq(desc.nodes[n].name, sv_of(s.name)))
+                    {
+                        node = built[n];
+                    }
                 }
-                if (node < 0) { return false; }
+                if (node < 0)
+                {
+                    return false;
+                }
                 // ⛔ THE DECLARED WIDTH IS CROSS-CHECKED against what the graph actually built. A declaration
                 // that disagreed would make 38-D4's contract check answer from the asset while the shader emitted
                 // something else — the exact mismatch the contract exists to catch, one layer down.
                 const auto got = static_cast<crd::u32>(g.node(node).comps());
-                if (got != s.comps) { return false; }
+                if (got != s.comps)
+                {
+                    return false;
+                }
                 for (crd::u32 e = 0; e < got && w < 4U; ++e)
                 {
                     comps[w++] = got == 1U ? node : g.swizzle(node, static_cast<int>(e));
@@ -3654,7 +4255,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
             if (s.kind == VaryingSourceKind::Instance)
             {
                 const crd::i32 ai = find_attr(desc.instance.attrs, sv_of(s.name));
-                if (ai < 0) { return false; }
+                if (ai < 0)
+                {
+                    return false;
+                }
                 const VertexAttrDesc& ad = desc.instance.attrs[static_cast<crd::usize>(ai)];
                 for (crd::u32 e = 0; e < ad.comps && w < 4U; ++e)
                 {
@@ -3663,14 +4267,20 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
                 continue;
             }
             const crd::i32 ai = find_attr(desc.attrs, sv_of(s.name));
-            if (ai < 0) { return false; }
+            if (ai < 0)
+            {
+                return false;
+            }
             const AttrVals& av = vals[static_cast<crd::usize>(ai)];
             for (crd::u32 e = 0; e < av.comps && w < 4U; ++e)
             {
                 comps[w++] = s.kind == VaryingSourceKind::World ? av.wld[e] : av.obj[e];
             }
         }
-        if (w == 0U || ve.n_out >= crd::kir::kMaxStageOutputs) { return false; }
+        if (w == 0U || ve.n_out >= crd::kir::kMaxStageOutputs)
+        {
+            return false;
+        }
         ve.out[ve.n_out] = {c.vecn(static_cast<const int*>(comps), w), static_cast<int>(v.location),
                             v.flat ? crd::kir::Interp::Flat : crd::kir::Interp::Smooth};
         ++ve.n_out;
@@ -3698,7 +4308,10 @@ bool cook_vertex_program_unchecked(const VertexProgramDesc& desc, KGraph& g, crd
 bool cook_vertex_program(const VertexProgramDesc& desc, KGraph& g, crd::kir::KEntry& ve,
                          crd::kir::ShapeIssue* shape_issue)
 {
-    if (!cook_vertex_program_unchecked(desc, g, ve)) { return false; }
+    if (!cook_vertex_program_unchecked(desc, g, ve))
+    {
+        return false;
+    }
     // ⛔ THE SHAPE CHECK (REN-38 audit): a mis-built node — mismatched widths, an out-of-range component, the
     // wrong sample op for a comparison sampler — used to leave the cook with a VALID entry and fail in the
     // SHADER COMPILER, far from the asset, with nothing pointing at the cause. Every stage path ends here.

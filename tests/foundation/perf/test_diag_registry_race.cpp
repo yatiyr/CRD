@@ -39,7 +39,9 @@ TEST_CASE("registry: snapshot vs unregister+destroy is free of use-after-free", 
         });
 
     while (!done.load(std::memory_order_acquire))
+    {
         crd::perf::frame_mark(); // the per-frame allocator snapshot reads every live slot's stats()
+    }
 
     worker.join();
 

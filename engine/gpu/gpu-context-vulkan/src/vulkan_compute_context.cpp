@@ -60,12 +60,21 @@ public:
     ~BufferImpl() override
     {
         detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical identity (no-op if invalid)
-        if (m_buffer != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, m_buffer, nullptr); }
-        if (m_memory != VK_NULL_HANDLE) { vkFreeMemory(m_device, m_memory, nullptr); }
+        if (m_buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(m_device, m_buffer, nullptr);
+        }
+        if (m_memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, m_memory, nullptr);
+        }
     }
     [[nodiscard]] void* map() noexcept override
     {
-        if (!m_mappable) { return nullptr; }
+        if (!m_mappable)
+        {
+            return nullptr;
+        }
         void* p = nullptr;
         vkMapMemory(m_device, m_memory, 0, m_bytes, 0, &p);
         return p;
@@ -107,10 +116,22 @@ public:
     ~PipelineImpl() override
     {
         detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the one logical Program identity
-        if (m_pipeline != VK_NULL_HANDLE) { vkDestroyPipeline(m_device, m_pipeline, nullptr); }
-        if (m_pipe_layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(m_device, m_pipe_layout, nullptr); }
-        if (m_set_layout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(m_device, m_set_layout, nullptr); }
-        if (m_shader != VK_NULL_HANDLE) { vkDestroyShaderModule(m_device, m_shader, nullptr); }
+        if (m_pipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(m_device, m_pipeline, nullptr);
+        }
+        if (m_pipe_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(m_device, m_pipe_layout, nullptr);
+        }
+        if (m_set_layout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(m_device, m_set_layout, nullptr);
+        }
+        if (m_shader != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(m_device, m_shader, nullptr);
+        }
     }
     [[nodiscard]] VkDescriptorSetLayout set_layout() const noexcept { return m_set_layout; }
     [[nodiscard]] VkPipelineLayout      pipe_layout() const noexcept { return m_pipe_layout; }
@@ -161,7 +182,10 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         vkGetPhysicalDeviceMemoryProperties(physical, &mp);
         for (crd::u32 i = 0; i < mp.memoryTypeCount; ++i)
         {
-            if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props) { return i; }
+            if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props)
+            {
+                return i;
+            }
         }
         return UINT32_MAX;
     }
@@ -199,7 +223,10 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         }
 
         VkDescriptorSet set = VK_NULL_HANDLE;
-        if (memo_set != VK_NULL_HANDLE && memo_binds == bh) { set = memo_set; }
+        if (memo_set != VK_NULL_HANDLE && memo_binds == bh)
+        {
+            set = memo_set;
+        }
         else
         {
             VkDescriptorSetLayout       sl = p.set_layout();
@@ -208,7 +235,10 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
             dsai.descriptorPool     = desc_pool;
             dsai.descriptorSetCount = 1;
             dsai.pSetLayouts        = &sl;
-            if (vkAllocateDescriptorSets(device, &dsai, &set) != VK_SUCCESS) { return; }
+            if (vkAllocateDescriptorSets(device, &dsai, &set) != VK_SUCCESS)
+            {
+                return;
+            }
 
             VkDescriptorBufferInfo bi[kMaxBindings];
             VkWriteDescriptorSet   wr[kMaxBindings];
@@ -232,9 +262,20 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
             memo_binds = bh;
         }
 
-        if (p.pipeline() != memo_pipeline) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline()); memo_pipeline = p.pipeline(); }
-        if (set != memo_bound) { vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipe_layout(), 0, 1, &set, 0, nullptr); memo_bound = set; }
-        if (push_size > 0 && push != nullptr) { vkCmdPushConstants(cmd, p.pipe_layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push); }
+        if (p.pipeline() != memo_pipeline)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline());
+            memo_pipeline = p.pipeline();
+        }
+        if (set != memo_bound)
+        {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipe_layout(), 0, 1, &set, 0, nullptr);
+            memo_bound = set;
+        }
+        if (push_size > 0 && push != nullptr)
+        {
+            vkCmdPushConstants(cmd, p.pipe_layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push);
+        }
     }
 
     void dispatch(ComputePipeline& pipeline, crd::containers::ConstSpan<ComputeBuffer*> bindings, const void* push,
@@ -275,13 +316,19 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
         impl.sg_size    = sgp.subgroupSize;
         impl.shared_max = p2.properties.limits.maxComputeSharedMemorySize;
     }
-    if (impl.device == VK_NULL_HANDLE || impl.queue == VK_NULL_HANDLE) { return; }
+    if (impl.device == VK_NULL_HANDLE || impl.queue == VK_NULL_HANDLE)
+    {
+        return;
+    }
 
     VkCommandPoolCreateInfo cpci{};
     cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cpci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpci.queueFamilyIndex = impl.family;
-    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS) { return; }
+    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS)
+    {
+        return;
+    }
 
     // One descriptor set is allocated PER recorded dispatch, freed at the next begin(). Size for MANY dispatches in one
     // submit — the 25-dispatch radix job AND the 500-rep tensor benchmark (500 sets × 3 buffers). Undersizing silently
@@ -294,18 +341,27 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     dpci.maxSets       = 2048;
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes    = &ps;
-    if (vkCreateDescriptorPool(impl.device, &dpci, nullptr, &impl.desc_pool) != VK_SUCCESS) { return; }
+    if (vkCreateDescriptorPool(impl.device, &dpci, nullptr, &impl.desc_pool) != VK_SUCCESS)
+    {
+        return;
+    }
 
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.commandPool        = impl.cmd_pool;
     cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(impl.device, &cbai, &impl.cmd) != VK_SUCCESS) { return; }
+    if (vkAllocateCommandBuffers(impl.device, &cbai, &impl.cmd) != VK_SUCCESS)
+    {
+        return;
+    }
 
     VkFenceCreateInfo fci{};
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    if (vkCreateFence(impl.device, &fci, nullptr, &impl.fence) != VK_SUCCESS) { return; }
+    if (vkCreateFence(impl.device, &fci, nullptr, &impl.fence) != VK_SUCCESS)
+    {
+        return;
+    }
 
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(impl.physical, &props);
@@ -326,13 +382,31 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
 VulkanComputeContext::~VulkanComputeContext()
 {
     auto& impl = *m_impl;
-    if (impl.device == VK_NULL_HANDLE) { return; }
+    if (impl.device == VK_NULL_HANDLE)
+    {
+        return;
+    }
     vkDeviceWaitIdle(impl.device);
-    if (impl.pipeline_cache != VK_NULL_HANDLE) { vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr); }
-    if (impl.ts_pool != VK_NULL_HANDLE) { vkDestroyQueryPool(impl.device, impl.ts_pool, nullptr); }
-    if (impl.fence != VK_NULL_HANDLE) { vkDestroyFence(impl.device, impl.fence, nullptr); }
-    if (impl.desc_pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(impl.device, impl.desc_pool, nullptr); }
-    if (impl.cmd_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(impl.device, impl.cmd_pool, nullptr); }
+    if (impl.pipeline_cache != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr);
+    }
+    if (impl.ts_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyQueryPool(impl.device, impl.ts_pool, nullptr);
+    }
+    if (impl.fence != VK_NULL_HANDLE)
+    {
+        vkDestroyFence(impl.device, impl.fence, nullptr);
+    }
+    if (impl.desc_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(impl.device, impl.desc_pool, nullptr);
+    }
+    if (impl.cmd_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyCommandPool(impl.device, impl.cmd_pool, nullptr);
+    }
 }
 
 bool VulkanComputeContext::valid() const noexcept { return m_impl->ok; }
@@ -345,11 +419,20 @@ void VulkanComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& 
 {
     auto& impl = *m_impl;
     out.resize(0);
-    if (impl.pipeline_cache == VK_NULL_HANDLE) { return; }
+    if (impl.pipeline_cache == VK_NULL_HANDLE)
+    {
+        return;
+    }
     crd::usize sz = 0;
-    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, nullptr) != VK_SUCCESS || sz == 0) { return; }
+    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, nullptr) != VK_SUCCESS || sz == 0)
+    {
+        return;
+    }
     out.resize(sz);
-    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, out.data()) != VK_SUCCESS) { out.resize(0); }
+    if (vkGetPipelineCacheData(impl.device, impl.pipeline_cache, &sz, out.data()) != VK_SUCCESS)
+    {
+        out.resize(0);
+    }
 }
 
 // D4: reseed the pipeline cache from a persisted blob — call BEFORE creating pipelines so the driver reuses cached ISA
@@ -357,14 +440,23 @@ void VulkanComputeContext::pipeline_cache_data(crd::containers::Array<crd::u8>& 
 bool VulkanComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u8> blob)
 {
     auto& impl = *m_impl;
-    if (!impl.ok) { return false; }
+    if (!impl.ok)
+    {
+        return false;
+    }
     VkPipelineCacheCreateInfo pcci{};
     pcci.sType           = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
     pcci.initialDataSize = blob.size();
     pcci.pInitialData    = blob.empty() ? nullptr : blob.data();
     VkPipelineCache fresh = VK_NULL_HANDLE;
-    if (vkCreatePipelineCache(impl.device, &pcci, nullptr, &fresh) != VK_SUCCESS) { return false; }
-    if (impl.pipeline_cache != VK_NULL_HANDLE) { vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr); }
+    if (vkCreatePipelineCache(impl.device, &pcci, nullptr, &fresh) != VK_SUCCESS)
+    {
+        return false;
+    }
+    if (impl.pipeline_cache != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr);
+    }
     impl.pipeline_cache = fresh;
     return true;
 }
@@ -372,18 +464,36 @@ bool VulkanComputeContext::warm_pipeline_cache(crd::containers::ConstSpan<crd::u
 std::unique_ptr<ComputeBuffer> VulkanComputeContext::create_buffer(crd::u64 bytes, crd::u32 usage, ComputeMemory memory)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || bytes == 0) { return nullptr; }
+    if (!impl.ok || bytes == 0)
+    {
+        return nullptr;
+    }
     VkBufferUsageFlags uf = 0;
-    if ((usage & compute_usage::storage) != 0U) { uf |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT; }
-    if ((usage & compute_usage::transfer_src) != 0U) { uf |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT; }
-    if ((usage & compute_usage::transfer_dst) != 0U) { uf |= VK_BUFFER_USAGE_TRANSFER_DST_BIT; }
+    if ((usage & compute_usage::storage) != 0U)
+    {
+        uf |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    }
+    if ((usage & compute_usage::transfer_src) != 0U)
+    {
+        uf |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    }
+    if ((usage & compute_usage::transfer_dst) != 0U)
+    {
+        uf |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    }
     const bool indirect = (usage & compute_usage::indirect) != 0U; // B4: also readable by vkCmdDrawMeshTasksIndirectEXT
-    if (indirect) { uf |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
+    if (indirect)
+    {
+        uf |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+    }
     // GpuToCpu readback wants HOST_CACHED — uncached/write-combined reads of a large buffer are ~15× slower on the CPU
     // (a 64 MB LBVH nodes readback: ~200 ms vs ~12 ms). CpuToGpu upload is fine host-coherent (write-combined writes are
     // fast + need no flush). GpuOnly = device-local VRAM.
     VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    if (memory == ComputeMemory::CpuToGpu) { props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT; }
+    if (memory == ComputeMemory::CpuToGpu)
+    {
+        props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    }
     else if (memory == ComputeMemory::GpuToCpu)
     {
         props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
@@ -405,7 +515,10 @@ std::unique_ptr<ComputeBuffer> VulkanComputeContext::create_buffer(crd::u64 byte
         bci.pQueueFamilyIndices   = fams;
     }
     VkBuffer buffer = VK_NULL_HANDLE;
-    if (vkCreateBuffer(impl.device, &bci, nullptr, &buffer) != VK_SUCCESS) { return nullptr; }
+    if (vkCreateBuffer(impl.device, &bci, nullptr, &buffer) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
     VkMemoryRequirements mr{};
     vkGetBufferMemoryRequirements(impl.device, buffer, &mr);
     VkMemoryAllocateInfo mai{};
@@ -434,13 +547,22 @@ std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline(crd::cont
     // Source-agnostic entry point: THIS backend loads its own cooked kernel `<shader_dir>/<name>.comp.spv`.
     char       fname[512];
     crd::usize fn = 0;
-    for (crd::usize i = 0; i < name.size() && fn < 500; ++i) { fname[fn++] = name[i]; }
+    for (crd::usize i = 0; i < name.size() && fn < 500; ++i)
+    {
+        fname[fn++] = name[i];
+    }
     const char* ext = ".comp.spv";
-    for (crd::usize i = 0; ext[i] != '\0' && fn < 511; ++i) { fname[fn++] = ext[i]; }
+    for (crd::usize i = 0; ext[i] != '\0' && fn < 511; ++i)
+    {
+        fname[fn++] = ext[i];
+    }
     crd::platform::fs::Path spv_path{shader_dir};
     spv_path = spv_path / crd::containers::StringView{fname, fn};
     crd::containers::Array<crd::u8> spv;
-    if (!crd::platform::fs::read_file_binary(spv_path, spv)) { return nullptr; }
+    if (!crd::platform::fs::read_file_binary(spv_path, spv))
+    {
+        return nullptr;
+    }
     return create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.data(), spv.size()), n_bindings, push_size);
 }
 
@@ -455,14 +577,20 @@ std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spir
                                                                                  crd::containers::ConstSpan<SpecConstantBinding> specs)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_bindings <= 0 || n_bindings > kMaxBindings) { return nullptr; }
+    if (!impl.ok || n_bindings <= 0 || n_bindings > kMaxBindings)
+    {
+        return nullptr;
+    }
 
     VkShaderModuleCreateInfo smci{};
     smci.sType       = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     smci.codeSize    = spirv.size();
     smci.pCode       = reinterpret_cast<const crd::u32*>(spirv.data());
     VkShaderModule sh = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(impl.device, &smci, nullptr, &sh) != VK_SUCCESS) { return nullptr; }
+    if (vkCreateShaderModule(impl.device, &smci, nullptr, &sh) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
 
     VkDescriptorSetLayoutBinding binds[kMaxBindings];
     for (int i = 0; i < n_bindings; ++i)
@@ -567,7 +695,10 @@ ComputeRecorder& VulkanComputeContext::begin()
 void VulkanComputeContext::submit_and_wait()
 {
     auto& impl = *m_impl;
-    if (impl.ts_pool != VK_NULL_HANDLE) { vkCmdWriteTimestamp(impl.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl.ts_pool, 1); }
+    if (impl.ts_pool != VK_NULL_HANDLE)
+    {
+        vkCmdWriteTimestamp(impl.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, impl.ts_pool, 1);
+    }
     vkEndCommandBuffer(impl.cmd);
     vkResetFences(impl.device, 1, &impl.fence);
     VkSubmitInfo si{};

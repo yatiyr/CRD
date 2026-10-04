@@ -41,9 +41,15 @@ struct BlobResourceLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (!chunk) { return nullptr; }
+        if (!chunk)
+        {
+            return nullptr;
+        }
 
         void* raw = m_alloc.allocate(sizeof(BlobResource), alignof(BlobResource));
         auto* res = new (raw) BlobResource(&m_alloc);
@@ -57,7 +63,10 @@ struct BlobResourceLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (!payload) { return; }
+        if (!payload)
+        {
+            return;
+        }
         auto* res = static_cast<BlobResource*>(payload);
         res->~BlobResource();
         m_alloc.deallocate(res);
@@ -78,7 +87,10 @@ static crd::platform::fs::Path assemble_pack(
 
     crd::containers::Array<crd::u8> pool(&g_alloc);
     const char name[] = "smoke_async_blob";
-    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<crd::u8>(c));
+    }
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);
     ManifestEntry e;

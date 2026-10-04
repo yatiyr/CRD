@@ -54,7 +54,10 @@ int main()
         check(vm::commit(p, tile_bytes), "commit tile");
         // First touch reads as zero, then we fill it with the tile's signature.
         check(p[0] == 0 && p[tile_bytes - 1] == 0, "tile zero-on-commit");
-        for (crd::usize i = 0; i < tile_bytes; i += page) { p[i] = static_cast<unsigned char>(0x40 + t); }
+        for (crd::usize i = 0; i < tile_bytes; i += page)
+        {
+            p[i] = static_cast<unsigned char>(0x40 + t);
+        }
     }
     std::printf("  committed %d x 4 MiB tiles (%.0f MiB resident of 16 GiB reserved)\n", num_tiles,
                 static_cast<double>(static_cast<crd::usize>(num_tiles) * tile_bytes) / static_cast<double>(1 << 20));

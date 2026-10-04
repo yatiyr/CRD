@@ -20,7 +20,10 @@ void run_scan_block(kir::KGraph& g, const kir::KEntry& e, int n, const crd::f64*
 {
     crd::containers::Array<crd::f64> in(alloc);
     in.resize(static_cast<crd::usize>(n));
-    for (int i = 0; i < n; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i])); }
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i]));
+    }
     crd::f64          bsum   = 0.0;
     kir::KernelBuffer kb[3]  = {{in.data(), n, 0, 0}, {out, n, 0, 1}, {&bsum, 1, 0, 2}};
     kir::eval_cpu_kernel(g, e, kb, 3, e.local_size[0], alloc, 1U);
@@ -32,7 +35,10 @@ void run_scan(const kir::ScanPlan& plan, const crd::f64* xin, crd::f64* out, crd
     const int n = plan.n;
     crd::containers::Array<crd::f64> in(alloc);
     in.resize(static_cast<crd::usize>(n));
-    for (int i = 0; i < n; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i])); }
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i]));
+    }
 
     if (plan.single_pass)
     {
@@ -58,7 +64,10 @@ TEST_CASE("B-cmp: CKIR single-workgroup SCAN == sequential prefix sum (exact for
     constexpr int              n = 1024;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     crd::containers::Array<crd::f64> x(&alloc); x.resize(n);
-    for (int i = 0; i < n; ++i) { x[static_cast<crd::usize>(i)] = 1.0; } // unit ⇒ scan is EXACT in f32 (n < 2^24)
+    for (int i = 0; i < n; ++i) // unit ⇒ scan is EXACT in f32 (n < 2^24)
+    {
+        x[static_cast<crd::usize>(i)] = 1.0;
+    }
     crd::f64 out[n];
 
     SECTION("inclusive: out[i] == i+1")
@@ -67,7 +76,13 @@ TEST_CASE("B-cmp: CKIR single-workgroup SCAN == sequential prefix sum (exact for
         const kir::KEntry e = kir::build_scan_block(g, n, 256, true, false);
         run_scan_block(g, e, n, x.data(), out, &alloc);
         int bad = 0;
-        for (int i = 0; i < n; ++i) { if (out[i] != static_cast<crd::f64>(i + 1)) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (out[i] != static_cast<crd::f64>(i + 1))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
     SECTION("exclusive: out[i] == i")
@@ -76,7 +91,13 @@ TEST_CASE("B-cmp: CKIR single-workgroup SCAN == sequential prefix sum (exact for
         const kir::KEntry e = kir::build_scan_block(g, n, 256, false, false);
         run_scan_block(g, e, n, x.data(), out, &alloc);
         int bad = 0;
-        for (int i = 0; i < n; ++i) { if (out[i] != static_cast<crd::f64>(i)) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (out[i] != static_cast<crd::f64>(i))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -86,7 +107,10 @@ TEST_CASE("B-cmp: CKIR 3-pass DEVICE SCAN == sequential prefix sum", "[kir][kern
     constexpr int              n = 65536;
     crd::memory::TlsfAllocator alloc(128U << 20U);
     crd::containers::Array<crd::f64> x(&alloc); x.resize(n);
-    for (int i = 0; i < n; ++i) { x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5); } // small ints ⇒ exact
+    for (int i = 0; i < n; ++i) // small ints ⇒ exact
+    {
+        x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5);
+    }
 
     crd::f64* out = static_cast<crd::f64*>(alloc.allocate(sizeof(crd::f64) * n, alignof(crd::f64)));
 
@@ -97,7 +121,14 @@ TEST_CASE("B-cmp: CKIR 3-pass DEVICE SCAN == sequential prefix sum", "[kir][kern
         REQUIRE_FALSE(plan.single_pass);
         run_scan(plan, x.data(), out, &alloc);
         crd::f64 run = 0.0; int bad = 0;
-        for (int i = 0; i < n; ++i) { run += x[static_cast<crd::usize>(i)]; if (out[i] != run) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            run += x[static_cast<crd::usize>(i)];
+            if (out[i] != run)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
     SECTION("exclusive")
@@ -106,7 +137,14 @@ TEST_CASE("B-cmp: CKIR 3-pass DEVICE SCAN == sequential prefix sum", "[kir][kern
         const kir::ScanPlan plan = kir::build_scan(gs, n, false, 256, 64);
         run_scan(plan, x.data(), out, &alloc);
         crd::f64 run = 0.0; int bad = 0;
-        for (int i = 0; i < n; ++i) { if (out[i] != run) { ++bad; } run += x[static_cast<crd::usize>(i)]; }
+        for (int i = 0; i < n; ++i)
+        {
+            if (out[i] != run)
+            {
+                ++bad;
+            }
+            run += x[static_cast<crd::usize>(i)];
+        }
         CHECK(bad == 0);
     }
 }
@@ -119,7 +157,10 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS chained scan == sequential prefix sum (oracle
     constexpr int epb     = n / nblocks; // elems per block
     crd::memory::TlsfAllocator alloc(128U << 20U);
     crd::containers::Array<crd::f64> x(&alloc); x.resize(n);
-    for (int i = 0; i < n; ++i) { x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5); }
+    for (int i = 0; i < n; ++i)
+    {
+        x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5);
+    }
 
     for (int incl = 0; incl < 2; ++incl)
     {
@@ -127,7 +168,10 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS chained scan == sequential prefix sum (oracle
         const kir::KEntry e = kir::build_scan_single_pass(g, epb, threads, incl != 0);
 
         crd::containers::Array<crd::f64> in(&alloc);  in.resize(n);
-        for (int i = 0; i < n; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)])); }
+        for (int i = 0; i < n; ++i)
+        {
+            in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)]));
+        }
         crd::containers::Array<crd::f64> out(&alloc); out.resize(n, -1.0);
         crd::containers::Array<crd::f64> agg(&alloc); agg.resize(static_cast<crd::usize>(nblocks), 0.0);
         crd::containers::Array<crd::f64> flg(&alloc); flg.resize(static_cast<crd::usize>(nblocks), 0.0);
@@ -137,8 +181,22 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS chained scan == sequential prefix sum (oracle
         crd::f64 run = 0.0; int bad = 0;
         for (int i = 0; i < n; ++i)
         {
-            if (incl != 0) { run += x[static_cast<crd::usize>(i)]; if (out[static_cast<crd::usize>(i)] != run) { ++bad; } }
-            else { if (out[static_cast<crd::usize>(i)] != run) { ++bad; } run += x[static_cast<crd::usize>(i)]; }
+            if (incl != 0)
+            {
+                run += x[static_cast<crd::usize>(i)];
+                if (out[static_cast<crd::usize>(i)] != run)
+                {
+                    ++bad;
+                }
+            }
+            else
+            {
+                if (out[static_cast<crd::usize>(i)] != run)
+                {
+                    ++bad;
+                }
+                run += x[static_cast<crd::usize>(i)];
+            }
         }
         CHECK(bad == 0);
     }

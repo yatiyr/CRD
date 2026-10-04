@@ -74,7 +74,10 @@ OwnedMesh build_axis_aligned_box(crd::memory::IAllocator* alloc, Vec3<crd::f32> 
         0,4,7, 0,7,3,  1,2,6, 1,6,5,
         0,1,5, 0,5,4,  3,7,6, 3,6,2,
     };
-    for (const auto i : tri) { m.indices.push_back(i); }
+    for (const auto i : tri)
+    {
+        m.indices.push_back(i);
+    }
     return m;
 }
 
@@ -83,8 +86,14 @@ OwnedMesh build_axis_aligned_box(crd::memory::IAllocator* alloc, Vec3<crd::f32> 
 void append_mesh(OwnedMesh& dst, const OwnedMesh& src)
 {
     const crd::u32 vbase = static_cast<crd::u32>(dst.vertices.size());
-    for (const auto& v : src.vertices) { dst.vertices.push_back(v); }
-    for (const auto i : src.indices)   { dst.indices.push_back(i + vbase); }
+    for (const auto& v : src.vertices)
+    {
+        dst.vertices.push_back(v);
+    }
+    for (const auto i : src.indices)
+    {
+        dst.indices.push_back(i + vbase);
+    }
 }
 
 OwnedMesh build_unit_cube(crd::memory::IAllocator* alloc, Vec3<crd::f32> lo = {0.0F, 0.0F, 0.0F})
@@ -109,7 +118,10 @@ OwnedMesh build_unit_cube(crd::memory::IAllocator* alloc, Vec3<crd::f32> lo = {0
         0,4,7, 0,7,3,  1,2,6, 1,6,5,
         0,1,5, 0,5,4,  3,7,6, 3,6,2,
     };
-    for (const auto i : tri) { m.indices.push_back(i); }
+    for (const auto i : tri)
+    {
+        m.indices.push_back(i);
+    }
     return m;
 }
 

@@ -152,7 +152,10 @@ void sphere_wire_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius,
     const crd::f32 pi     = 3.14159265358979323846F;
     const crd::u32 nlong  = segments_long;
     const crd::u32 nlat   = segments_lat;
-    if (nlong < 3 || nlat < 2 || radius <= 0.0F) return;
+    if (nlong < 3 || nlat < 2 || radius <= 0.0F)
+    {
+        return;
+    }
 
     const crd::u32 packed = color.packed_rgba();
 
@@ -222,7 +225,10 @@ inline crd::math::Vec3f sphere_uv_vertex(crd::math::Vec3f center, crd::f32 radiu
 void sphere_solid_to(RenderBuffer& buf, crd::math::Vec3f center, crd::f32 radius,
                      Color color, PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (radius <= 0.0F) return;
+    if (radius <= 0.0F)
+    {
+        return;
+    }
     constexpr crd::u32 k_nlong = 16; // matches sphere_wire's `segments_long` default
     constexpr crd::u32 k_nlat  = 8;  // matches sphere_wire's `segments_lat`  default
     const crd::f32 two_pi = 6.28318530717958647692F;
@@ -307,8 +313,14 @@ CapsuleFrame compute_capsule_frame(crd::math::Vec3f a, crd::math::Vec3f b) noexc
         seed.z * f.axis.x - seed.x * f.axis.z,
         seed.x * f.axis.y - seed.y * f.axis.x};
     const crd::f32 r_len = crd::math::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
-    if (r_len > 0.0F) { r = {r.x / r_len, r.y / r_len, r.z / r_len}; }
-    else              { r = {1.0F, 0.0F, 0.0F}; }
+    if (r_len > 0.0F)
+    {
+        r = {r.x / r_len, r.y / r_len, r.z / r_len};
+    }
+    else
+    {
+        r = {1.0F, 0.0F, 0.0F};
+    }
     f.right = r;
     f.forward = {
         f.axis.y * r.z - f.axis.z * r.y,
@@ -322,7 +334,10 @@ void capsule_wire_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
                      crd::f32 radius, Color color, crd::u32 segments,
                      crd::f32 width_px, PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (radius <= 0.0F || segments < 6) return;
+    if (radius <= 0.0F || segments < 6)
+    {
+        return;
+    }
     const auto f = compute_capsule_frame(a, b);
     const crd::u32 packed = color.packed_rgba();
     const crd::f32 two_pi = 6.28318530717958647692F;
@@ -399,7 +414,10 @@ void capsule_solid_to(RenderBuffer& buf, crd::math::Vec3f a, crd::math::Vec3f b,
                       crd::f32 radius, Color color, crd::u32 segments,
                       PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (radius <= 0.0F || segments < 6) return;
+    if (radius <= 0.0F || segments < 6)
+    {
+        return;
+    }
     const auto f = compute_capsule_frame(a, b);
     const crd::u32 packed = color.packed_rgba();
     const crd::f32 two_pi = 6.28318530717958647692F;
@@ -481,8 +499,14 @@ DirFrame frame_from_direction(crd::math::Vec3f dir) noexcept
         seed.z * dir.x - seed.x * dir.z,
         seed.x * dir.y - seed.y * dir.x};
     const crd::f32 r_len = crd::math::sqrt(right.x * right.x + right.y * right.y + right.z * right.z);
-    if (r_len > 0.0F) { right = {right.x / r_len, right.y / r_len, right.z / r_len}; }
-    else              { right = {1.0F, 0.0F, 0.0F}; }
+    if (r_len > 0.0F)
+    {
+        right = {right.x / r_len, right.y / r_len, right.z / r_len};
+    }
+    else
+    {
+        right = {1.0F, 0.0F, 0.0F};
+    }
     const crd::math::Vec3f up{
         dir.y * right.z - dir.z * right.y,
         dir.z * right.x - dir.x * right.z,
@@ -496,9 +520,15 @@ void arrow_to(RenderBuffer& buf, crd::math::Vec3f origin, crd::math::Vec3f dir,
               crd::f32 head_radius_ratio, crd::f32 width_px,
               PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (length <= 0.0F) return;
+    if (length <= 0.0F)
+    {
+        return;
+    }
     const crd::f32 dlen = crd::math::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-    if (dlen <= 0.0F) return;
+    if (dlen <= 0.0F)
+    {
+        return;
+    }
     const crd::math::Vec3f udir{dir.x / dlen, dir.y / dlen, dir.z / dlen};
 
     const crd::f32 head_len    = length * head_size_ratio;
@@ -563,16 +593,25 @@ void arc_to(RenderBuffer& buf, crd::math::Vec3f center, crd::math::Vec3f axis,
             crd::f32 angle_max, Color color, crd::u32 segments,
             crd::f32 width_px, PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (radius <= 0.0F || segments < 1) return;
+    if (radius <= 0.0F || segments < 1)
+    {
+        return;
+    }
     // Normalize axis + zero_dir; compute perpendicular = axis x zero_dir.
     const crd::f32 ax_len = crd::math::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
-    if (ax_len <= 0.0F) return;
+    if (ax_len <= 0.0F)
+    {
+        return;
+    }
     const crd::math::Vec3f a{axis.x / ax_len, axis.y / ax_len, axis.z / ax_len};
     // Project zero_dir onto the plane perpendicular to a, then normalize.
     const crd::f32 zdota = zero_dir.x * a.x + zero_dir.y * a.y + zero_dir.z * a.z;
     crd::math::Vec3f r0{zero_dir.x - a.x * zdota, zero_dir.y - a.y * zdota, zero_dir.z - a.z * zdota};
     const crd::f32 r0_len = crd::math::sqrt(r0.x * r0.x + r0.y * r0.y + r0.z * r0.z);
-    if (r0_len <= 0.0F) return;
+    if (r0_len <= 0.0F)
+    {
+        return;
+    }
     r0 = {r0.x / r0_len, r0.y / r0_len, r0.z / r0_len};
     // perp = a x r0 (right-handed).
     const crd::math::Vec3f r1{a.y * r0.z - a.z * r0.y,
@@ -616,7 +655,10 @@ void grid_to(RenderBuffer& buf, crd::math::Vec3f origin, crd::math::Vec3f right,
              crd::f32 cell_size, Color color, crd::f32 width_px,
              PrimFlags flags, crd::f32 lifetime_s)
 {
-    if (cell_size <= 0.0F || cells_x == 0 || cells_z == 0) return;
+    if (cell_size <= 0.0F || cells_x == 0 || cells_z == 0)
+    {
+        return;
+    }
     const crd::f32 half_x = static_cast<crd::f32>(cells_x) * 0.5F * cell_size;
     const crd::f32 half_z = static_cast<crd::f32>(cells_z) * 0.5F * cell_size;
     const crd::math::Vec3f r_step{right.x * cell_size, right.y * cell_size, right.z * cell_size};

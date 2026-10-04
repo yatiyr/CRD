@@ -83,7 +83,10 @@ TEST_CASE("ckir hair LOD depth fix is zero unculled and monotone in beta", "[cki
     {
         const double want = -crd::math::log(beta_of(b));
         const double got  = delta_of(b);
-        if (crd::math::abs(got - want) > worst) { worst = crd::math::abs(got - want); }
+        if (crd::math::abs(got - want) > worst)
+        {
+            worst = crd::math::abs(got - want);
+        }
     }
     INFO("worst |Delta + log(beta)| = " << worst);
     CHECK(worst < 1.0e-6);
@@ -91,7 +94,10 @@ TEST_CASE("ckir hair LOD depth fix is zero unculled and monotone in beta", "[cki
     // (a) Delta must DECREASE as beta rises (less culling ⇒ less correction), and hit exactly 0 at beta == 1.
     for (int b = 1; b < kBundles; ++b)
     {
-        if (beta_of(b) > beta_of(b - 1)) { CHECK(delta_of(b) <= delta_of(b - 1) + 1.0e-9); }
+        if (beta_of(b) > beta_of(b - 1))
+        {
+            CHECK(delta_of(b) <= delta_of(b - 1) + 1.0e-9);
+        }
     }
     // (f) the last bundle is full-screen ⇒ L saturates at 1 ⇒ nothing culled ⇒ the correction vanishes EXACTLY.
     INFO("full-detail bundle: N_LOD " << n_lod(kBundles - 1) << " beta " << beta_of(kBundles - 1)
@@ -125,7 +131,10 @@ TEST_CASE("ckir hair LOD strand count is clamped and monotone", "[ckir][hair][lo
     {
         CHECK(n_lod(b) >= 1.0);
         CHECK(n_lod(b) <= 128.0);
-        if (b > 0) { CHECK(n_lod(b) >= n_lod(b - 1)); }
+        if (b > 0)
+        {
+            CHECK(n_lod(b) >= n_lod(b - 1));
+        }
     }
     // a vanishingly small footprint must collapse to the floor, not to zero
     CHECK(n_lod(0) == 1.0);
@@ -171,21 +180,36 @@ TEST_CASE("ckir hair LOD stochastic offset removes the popping step", "[ckir][ha
         }
         run_lod(alloc, cfg, ext, delta, out);
         double md = 0.0;
-        for (int b = 0; b < kBundles; ++b) { md += out[static_cast<crd::usize>(b) * 4U + 0U]; }
+        for (int b = 0; b < kBundles; ++b)
+        {
+            md += out[static_cast<crd::usize>(b) * 4U + 0U];
+        }
         md /= static_cast<double>(kBundles);
 
-        for (int b = 0; b < kBundles; ++b) { delta[static_cast<crd::usize>(b)] = 0.0; } // the undithered control
+        for (int b = 0; b < kBundles; ++b) // the undithered control
+        {
+            delta[static_cast<crd::usize>(b)] = 0.0;
+        }
         run_lod(alloc, cfg, ext, delta, out);
         double mp = 0.0;
-        for (int b = 0; b < kBundles; ++b) { mp += out[static_cast<crd::usize>(b) * 4U + 0U]; }
+        for (int b = 0; b < kBundles; ++b)
+        {
+            mp += out[static_cast<crd::usize>(b) * 4U + 0U];
+        }
         mp /= static_cast<double>(kBundles);
 
         if (prev_dither >= 0.0)
         {
             const double jd = crd::math::abs(md - prev_dither);
             const double jp = crd::math::abs(mp - prev_plain);
-            if (jd > worst_dither) { worst_dither = jd; }
-            if (jp > worst_plain) { worst_plain = jp; }
+            if (jd > worst_dither)
+            {
+                worst_dither = jd;
+            }
+            if (jp > worst_plain)
+            {
+                worst_plain = jp;
+            }
         }
         prev_dither = md;
         prev_plain  = mp;

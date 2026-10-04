@@ -188,7 +188,10 @@ TEST_CASE("B16-a-4: water_shade (Fresnel dielectric + Beer + SSS + foam) bit-exa
         const double l_i[3] = {lw[0][i], lw[1][i], lw[2][i]};
         for (int c = 0; c < 3; ++c)
         {
-            if (o[i * 3 + c] != ref_water(n_i, v_i, l_i, dpv[i], wvv[i], fmv[i], rgv[i], c)) { ++bad; }
+            if (o[i * 3 + c] != ref_water(n_i, v_i, l_i, dpv[i], wvv[i], fmv[i], rgv[i], c))
+            {
+                ++bad;
+            }
         }
     }
     CHECK(bad == 0);
@@ -229,7 +232,13 @@ TEST_CASE("B16-a-4: ocean_sun_glitter (slope-variance GGX sun path) bit-exact vs
         const double n_i[3] = {nrm[0][i], nrm[1][i], nrm[2][i]};
         const double v_i[3] = {vw[0][i], vw[1][i], vw[2][i]};
         const double l_i[3] = {lw[0][i], lw[1][i], lw[2][i]};
-        for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref_glitter(n_i, v_i, l_i, var[i], c)) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            if (o[i * 3 + c] != ref_glitter(n_i, v_i, l_i, var[i], c))
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -266,7 +275,13 @@ TEST_CASE("B16-a-4: sky_color (horizon gradient + sun disk) bit-exact vs f64 ref
     {
         const double d_i[3] = {dir[0][i], dir[1][i], dir[2][i]};
         const double s_i[3] = {sdr[0][i], sdr[1][i], sdr[2][i]};
-        for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref_sky(d_i, s_i, c)) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            if (o[i * 3 + c] != ref_sky(d_i, s_i, c))
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }

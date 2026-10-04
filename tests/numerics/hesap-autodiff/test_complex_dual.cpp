@@ -145,7 +145,10 @@ TEST_CASE("DFT is holomorphic: exact input sensitivity", "[autodiff][complex]")
     // seed x_1's tangent, read ∂Y_2/∂x_1 = e^{−2πi·2/n}.
     constexpr int n = 4;
     ad::CDual<double> x[n];
-    for (int j = 0; j < n; ++j) { x[j] = ad::CDual<double>{cd(0.3 * j - 0.5, 0.2 * j), cd(0.0, 0.0)}; }
+    for (int j = 0; j < n; ++j)
+    {
+        x[j] = ad::CDual<double>{cd(0.3 * j - 0.5, 0.2 * j), cd(0.0, 0.0)};
+    }
     x[1].d = cd(1.0, 0.0); // seed ∂/∂x_1
     const double twopi = -6.283185307179586476925286766559;
     for (int k = 0; k < n; ++k)

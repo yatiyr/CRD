@@ -137,7 +137,10 @@ TEST_CASE("CLI ad: reverse gradient matches analytic (sphere/cubes/exp)", "[auto
         const Decoded      d = invoke(args, "hesap.ad.rgradient.f64", store);
         REQUIRE(d.len == 5); // f + 4 grad
         CHECK_THAT(d.v[0], WithinRel(1.0 + 4.0 + 9.0 + 0.25, 1e-12));
-        for (int i = 0; i < 4; ++i) { CHECK_THAT(d.v[1 + i], WithinRel(2.0 * x[i], 1e-12)); }
+        for (int i = 0; i < 4; ++i)
+        {
+            CHECK_THAT(d.v[1 + i], WithinRel(2.0 * x[i], 1e-12));
+        }
     }
     // cubes ∇=3x²
     {
@@ -146,7 +149,10 @@ TEST_CASE("CLI ad: reverse gradient matches analytic (sphere/cubes/exp)", "[auto
         args.set_f64_array("x", {x, 4});
         cli::CommandResult store{&alloc};
         const Decoded      d = invoke(args, "hesap.ad.rgradient.f64", store);
-        for (int i = 0; i < 4; ++i) { CHECK_THAT(d.v[1 + i], WithinRel(3.0 * x[i] * x[i], 1e-12)); }
+        for (int i = 0; i < 4; ++i)
+        {
+            CHECK_THAT(d.v[1 + i], WithinRel(3.0 * x[i] * x[i], 1e-12));
+        }
     }
     // exp-sum ∇=exp(x)
     {
@@ -155,7 +161,10 @@ TEST_CASE("CLI ad: reverse gradient matches analytic (sphere/cubes/exp)", "[auto
         args.set_f64_array("x", {x, 4});
         cli::CommandResult store{&alloc};
         const Decoded      d = invoke(args, "hesap.ad.rgradient.f64", store);
-        for (int i = 0; i < 4; ++i) { CHECK_THAT(d.v[1 + i], WithinRel(std::exp(x[i]), 1e-12)); }
+        for (int i = 0; i < 4; ++i)
+        {
+            CHECK_THAT(d.v[1 + i], WithinRel(std::exp(x[i]), 1e-12));
+        }
     }
 }
 
@@ -174,8 +183,14 @@ TEST_CASE("CLI ad: reverse Jacobian of the coupled map", "[autodiff][cli]")
         for (int i = 0; i < 3; ++i)
         {
             f64 expect = 0.0;
-            if (i == j) { expect += 2.0 * x[j]; }
-            if (i == (j + 1) % 3) { expect += 1.0; }
+            if (i == j)
+            {
+                expect += 2.0 * x[j];
+            }
+            if (i == (j + 1) % 3)
+            {
+                expect += 1.0;
+            }
             CHECK_THAT(d.v[j * 3 + i], WithinAbs(expect, 1e-12));
         }
     }
@@ -194,8 +209,14 @@ TEST_CASE("CLI ad: HVP of sphere is 2v", "[autodiff][cli]")
     cli::CommandResult store{&alloc};
     const Decoded      d = invoke(args, "hesap.ad.hvp.f64", store);
     REQUIRE(d.len == 6); // grad(3) + hv(3)
-    for (int i = 0; i < 3; ++i) { CHECK_THAT(d.v[i], WithinRel(2.0 * x[i], 1e-12)); }
-    for (int i = 0; i < 3; ++i) { CHECK_THAT(d.v[3 + i], WithinRel(2.0 * v[i], 1e-12)); }
+    for (int i = 0; i < 3; ++i)
+    {
+        CHECK_THAT(d.v[i], WithinRel(2.0 * x[i], 1e-12));
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        CHECK_THAT(d.v[3 + i], WithinRel(2.0 * v[i], 1e-12));
+    }
 }
 
 TEST_CASE("CLI ad: implicit-diff root x*=sqrt(theta), grad=1/(2 sqrt theta)", "[autodiff][cli]")
@@ -208,8 +229,14 @@ TEST_CASE("CLI ad: implicit-diff root x*=sqrt(theta), grad=1/(2 sqrt theta)", "[
     cli::CommandResult store{&alloc};
     const Decoded      d = invoke(args, "hesap.ad.implicit.f64", store);
     REQUIRE(d.len == 6); // x*(3) + dL/dtheta(3)
-    for (int i = 0; i < 3; ++i) { CHECK_THAT(d.v[i], WithinRel(std::sqrt(theta[i]), 1e-12)); }
-    for (int i = 0; i < 3; ++i) { CHECK_THAT(d.v[3 + i], WithinRel(1.0 / (2.0 * std::sqrt(theta[i])), 1e-10)); }
+    for (int i = 0; i < 3; ++i)
+    {
+        CHECK_THAT(d.v[i], WithinRel(std::sqrt(theta[i]), 1e-12));
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        CHECK_THAT(d.v[3 + i], WithinRel(1.0 / (2.0 * std::sqrt(theta[i])), 1e-10));
+    }
 }
 
 TEST_CASE("CLI ad: error paths", "[autodiff][cli]")

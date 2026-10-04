@@ -39,7 +39,11 @@ struct Kit
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -76,12 +80,25 @@ Operation* gemm(Context& ctx, const Kit& k, Block* b, Value* a, Value* bb, Value
 bool src_has(const crd::containers::String& s, StringView needle)
 {
     const StringView h = crd::containers::to_view(s);
-    if (needle.size() > h.size()) { return false; }
+    if (needle.size() > h.size())
+    {
+        return false;
+    }
     for (crd::usize i = 0; i + needle.size() <= h.size(); ++i)
     {
         bool m = true;
-        for (crd::usize j = 0; j < needle.size(); ++j) { if (h[i + j] != needle[j]) { m = false; break; } }
-        if (m) { return true; }
+        for (crd::usize j = 0; j < needle.size(); ++j)
+        {
+            if (h[i + j] != needle[j])
+            {
+                m = false;
+                break;
+            }
+        }
+        if (m)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -136,7 +153,10 @@ TEST_CASE("ceir 26e-2a: synth_gemm relu epilogue fuses max(contract 0) bit-exact
         f64 out[4] = {};
         kir::eval_cpu(g2, inputs, &root, s.output, out);
         const f64 expect[4] = {1, 0, 3, 0}; // relu([1,-2,3,-4])
-        for (int i = 0; i < 4; ++i) { CHECK(out[i] == expect[i]); }
+        for (int i = 0; i < 4; ++i)
+        {
+            CHECK(out[i] == expect[i]);
+        }
     }
     // (2) REGRESSION: eval_cpu(synth_gemm(None)) == A·B (the default arg leaves every pre-26e caller intact — negatives survive).
     {
@@ -146,7 +166,10 @@ TEST_CASE("ceir 26e-2a: synth_gemm relu epilogue fuses max(contract 0) bit-exact
         f64 out[4] = {};
         kir::eval_cpu(g2, inputs, &root, s.output, out);
         const f64 expect[4] = {1, -2, 3, -4};
-        for (int i = 0; i < 4; ++i) { CHECK(out[i] == expect[i]); }
+        for (int i = 0; i < 4; ++i)
+        {
+            CHECK(out[i] == expect[i]);
+        }
     }
     // (3) EMIT (both backends): the Relu graph emits `max(acc` at the store; the None graph does NOT (identity, not presence).
     {
@@ -344,7 +367,11 @@ TEST_CASE("ceir 25b-1: synth_transpose maps tensor.transpose to a CKIR permute +
       const f64 ad[6]={1,2,3, 4,5,6}; const f64* inputs[1]={ad}; f64 out[6]={};
       kir::eval_cpu(g,inputs,&root,s.output,out);
       const f64 expect[6]={1,4, 2,5, 3,6}; // Aᵀ row-major [3,2]
-      for (int i=0;i<6;++i) { CHECK(out[i]==expect[i]); } }
+      for (int i=0;i<6;++i)
+      {
+          CHECK(out[i]==expect[i]);
+      }
+    }
     // OpNotSupported: a bare resource.declare.
     { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
       Value* v=tf(ctx,k,b,sh2(ctx,2U,3U)); kir::KGraph g(&root);
@@ -379,7 +406,14 @@ TEST_CASE("ceir 25b-1: synth_broadcast maps tensor.broadcast to a CKIR broadcast
       REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
       const f64 ind[3]={10,20,30}; const f64* inputs[1]={ind}; f64 out[12]={};
       kir::eval_cpu(g,inputs,&root,s.output,out);
-      for (int r=0;r<3;++r) { for (int c=0;c<4;++c) { CHECK(out[r*4+c]==ind[r]); } } }
+      for (int r=0;r<3;++r)
+      {
+          for (int c=0;c<4;++c)
+          {
+              CHECK(out[r*4+c]==ind[r]);
+          }
+      }
+    }
     // ACCEPT + NUMERIC (FIRST axis): broadcast in[1,4] -> [3,4]; each COLUMN repeats in[c] down 3 rows (the axis-0 reduce-grad
     // shape — a DIFFERENT branch of eval_cpu:217's index map than the last-axis case above; nothing else in-tree checks it).
     { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
@@ -392,7 +426,14 @@ TEST_CASE("ceir 25b-1: synth_broadcast maps tensor.broadcast to a CKIR broadcast
       REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
       const f64 ind[4]={100,200,300,400}; const f64* inputs[1]={ind}; f64 out[12]={};
       kir::eval_cpu(g,inputs,&root,s.output,out);
-      for (int r=0;r<3;++r) { for (int c=0;c<4;++c) { CHECK(out[r*4+c]==ind[c]); } } }
+      for (int r=0;r<3;++r)
+      {
+          for (int c=0;c<4;++c)
+          {
+              CHECK(out[r*4+c]==ind[c]);
+          }
+      }
+    }
     // OpNotSupported: a bare resource.declare.
     { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
       Value* v=tf(ctx,k,b,sh2(ctx,3U,1U)); kir::KGraph g(&root);
@@ -430,18 +471,23 @@ TEST_CASE("ceir 25b-1: synth_elementwise maps the full binary vocab to a CKIR bi
       const f64 ad[4]={1,2,3,4}; const f64 bd[4]={10,20,30,40}; const f64* inputs[2]={ad,bd};
       struct Case { const char* fn; f64 e[4]; };
       const Case cases[3]={{"add",{11,22,33,44}},{"sub",{-9,-18,-27,-36}},{"mul",{10,40,90,160}}};
-      for (const Case& cs : cases) {
+      for (const Case& cs : cases)
+      {
           Operation* op=build_ew(ctx,k,b,ef,s22,ef,s22,cs.fn,ef,s22);
           kir::KGraph g(&root);
           const gpu::GraphSynth s=gpu::synth_elementwise(ctx,*op,g);
           REQUIRE(s.reject==RJ::None); REQUIRE(s.output>=0);
           f64 out[4]={}; kir::eval_cpu(g,inputs,&root,s.output,out);
-          for (int i=0;i<4;++i) { CHECK(out[i]==cs.e[i]); }
+          for (int i=0;i<4;++i)
+          {
+              CHECK(out[i]==cs.e[i]);
+          }
       } }
     // VOCAB: the FULL binary vocab {add,sub,mul,div,max,min,pow} all MAP (reject None) — the gold-standard completeness claim.
     { memory::GrowableTlsfAllocator root; Context ctx(&root); const Kit k(ctx); Module* m=ctx.create_module(); Block* b=mkmain(ctx,*m);
       const TypeId ef=ctx.type_f32(); const TypeId s22=sh2(ctx,2U,2U);
-      for (const char* fn : {"add","sub","mul","div","max","min","pow"}) {
+      for (const char* fn : {"add","sub","mul","div","max","min","pow"})
+      {
           Operation* op=build_ew(ctx,k,b,ef,s22,ef,s22,fn,ef,s22);
           kir::KGraph g(&root);
           CHECK(gpu::synth_elementwise(ctx,*op,g).reject==RJ::None);

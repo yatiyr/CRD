@@ -53,13 +53,19 @@ Operation* add_op(Context& ctx, Block* b, const char* dialect, const char* name,
 // Snapshot a block's op order (pointers) for exact-order assertions.
 void block_ops(Block* b, Array<Operation*>& out)
 {
-    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { out.push_back(op); }
+    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        out.push_back(op);
+    }
 }
 [[nodiscard]] bool id_in(ConstSpan<StableId> s, StableId id) noexcept
 {
     for (usize i = 0; i < s.size(); ++i)
     {
-        if (s[i] == id) { return true; }
+        if (s[i] == id)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -129,7 +135,10 @@ TEST_CASE("ceir 8i: a poisoned edit rolls back to a byte-identical module (the A
     bool rejected = false;
     for (usize i = 0; i < diag.count(); ++i)
     {
-        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.rejected")) { rejected = true; }
+        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.rejected"))
+        {
+            rejected = true;
+        }
     }
     CHECK(rejected);
 }
@@ -159,7 +168,10 @@ TEST_CASE("ceir 8i: a duplicate-symbol commit fails and rolls back byte-identica
     bool dup = false;
     for (usize i = 0; i < diag.count(); ++i)
     {
-        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.duplicate_symbol")) { dup = true; }
+        if (diag.at(i).code == make_diagnostic_code("ceir.transaction.duplicate_symbol"))
+        {
+            dup = true;
+        }
     }
     CHECK(dup);
 }

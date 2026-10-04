@@ -112,17 +112,26 @@ inline void dispatch_kernel_1wg(crd::gpu::IComputeContext& ctx, crd::gpu::Comput
         up[b]  = ctx.create_buffer(bytes, transfer_src, g::ComputeMemory::CpuToGpu);
         rb[b]  = ctx.create_buffer(bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
         auto* p = static_cast<float*>(up[b]->map());
-        for (int i = 0; i < lens[b]; ++i) { p[i] = host[b][i]; }
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            p[i] = host[b][i];
+        }
         up[b]->unmap();
         binds[b] = dev[b].get();
     }
 
     auto& rec = ctx.begin();
-    for (int b = 0; b < nbufs; ++b) { rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(lens[b]) * sizeof(float)); }
+    for (int b = 0; b < nbufs; ++b)
+    {
+        rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(lens[b]) * sizeof(float));
+    }
     // the upload copies (TransferDst) MUST be visible to the shader's reads — without this barrier a fast kernel (no shared/
     // barrier, e.g. a scan add-offset map) can start before its inputs land and read zeros. Slower shared-mem kernels only
     // masked the race by luck.
-    for (int b = 0; b < nbufs; ++b) { rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+    for (int b = 0; b < nbufs; ++b)
+    {
+        rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    }
     rec.dispatch(pipe, crd::containers::ConstSpan<g::ComputeBuffer*>(binds, static_cast<crd::usize>(nbufs)), nullptr, 0U, gx,
                  1U, 1U);
     for (int b = 0; b < nbufs; ++b) // every bound buffer is a UAV → ShaderWrite→TransferSrc is a valid transition for all
@@ -135,7 +144,10 @@ inline void dispatch_kernel_1wg(crd::gpu::IComputeContext& ctx, crd::gpu::Comput
     for (int b = 0; b < nbufs; ++b)
     {
         const auto* r = static_cast<const float*>(rb[b]->map());
-        for (int i = 0; i < lens[b]; ++i) { host[b][i] = r[i]; }
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            host[b][i] = r[i];
+        }
         rb[b]->unmap();
     }
 }
@@ -186,26 +198,41 @@ inline void dispatch_fft2d(crd::gpu::IComputeContext& ctx, const crd::kir::Fft2d
         up[b]  = ctx.create_buffer(bytes, transfer_src, g::ComputeMemory::CpuToGpu);
         rb[b]  = ctx.create_buffer(bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
         auto* p = static_cast<float*>(up[b]->map());
-        for (int i = 0; i < len; ++i) { p[i] = host[b][i]; }
+        for (int i = 0; i < len; ++i)
+        {
+            p[i] = host[b][i];
+        }
         up[b]->unmap();
     }
 
     auto& rec = ctx.begin();
-    for (int b = 0; b < nb; ++b) { rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(plan.buffers[b].size) * sizeof(float)); }
+    for (int b = 0; b < nb; ++b)
+    {
+        rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(plan.buffers[b].size) * sizeof(float));
+    }
     // the upload copies (TransferDst) MUST be visible to pass 0's shader reads — without this barrier a large-enough dispatch
     // (grid > device occupancy) races the still-in-flight upload and reads STALE data (flaky, batch-dependent). Same scar as
     // dispatch_kernel_1wg. Latent until B16-a-3's batch=4C (>8 images) exposed it; small-batch multi-pass tests never raced.
-    for (int b = 0; b < nb; ++b) { rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+    for (int b = 0; b < nb; ++b)
+    {
+        rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    }
     for (int pi = 0; pi < plan.npasses; ++pi)
     {
         const crd::kir::Fft2dPass& p          = plan.passes[pi];
         g::ComputeBuffer*          binds[8]   = {};
-        for (int k = 0; k < p.nbind; ++k) { binds[k] = dev[p.bind[k]].get(); }
+        for (int k = 0; k < p.nbind; ++k)
+        {
+            binds[k] = dev[p.bind[k]].get();
+        }
         rec.dispatch(*pipes[pi], crd::containers::ConstSpan<g::ComputeBuffer*>(binds, static_cast<crd::usize>(p.nbind)),
                      nullptr, 0U, p.num_workgroups, 1U, 1U);
         if (pi + 1 < plan.npasses) // this pass's UAV writes must be visible to the next pass's reads
         {
-            for (int b = 0; b < nb; ++b) { rec.barrier(*dev[b], g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead); }
+            for (int b = 0; b < nb; ++b)
+            {
+                rec.barrier(*dev[b], g::ComputeAccess::ShaderWrite, g::ComputeAccess::ShaderRead);
+            }
         }
     }
     for (int b = 0; b < nb; ++b)
@@ -218,7 +245,10 @@ inline void dispatch_fft2d(crd::gpu::IComputeContext& ctx, const crd::kir::Fft2d
     for (int b = 0; b < nb; ++b)
     {
         const auto* r = static_cast<const float*>(rb[b]->map());
-        for (int i = 0; i < plan.buffers[b].size; ++i) { host[b][i] = r[i]; }
+        for (int i = 0; i < plan.buffers[b].size; ++i)
+        {
+            host[b][i] = r[i];
+        }
         rb[b]->unmap();
     }
 }

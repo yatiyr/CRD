@@ -127,7 +127,10 @@ public:
     SkeletonLoader() = default;
     explicit SkeletonLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override { return kFourCC_SKEL; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }
@@ -146,7 +149,10 @@ public:
     AnimClipLoader() = default;
     explicit AnimClipLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override { return kFourCC_ANIM; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }

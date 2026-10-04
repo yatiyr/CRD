@@ -1725,7 +1725,10 @@ inline void build_pcf_shadow_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 // B2-b: fill `dst` (w*h floats) with a uniform depth `value`.
 inline void fill_uniform_depth(float* dst, crd::u32 w, crd::u32 h, float value)
 {
-    for (crd::u32 i = 0; i < w * h; ++i) { dst[i] = value; }
+    for (crd::u32 i = 0; i < w * h; ++i)
+    {
+        dst[i] = value;
+    }
 }
 
 // B2-d BINDLESS FS: a texture ARRAY at set 0 / binding 3 (`texture(...,8)`), sampled at a DYNAMIC per-fragment index
@@ -1749,7 +1752,13 @@ inline void build_bindless_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
 // B2-c: fill `texels` RGBA8 texels with a solid colour (used for cube faces / array layers).
 inline void fill_solid(crd::u8* dst, crd::u32 texels, crd::u8 r, crd::u8 g, crd::u8 b)
 {
-    for (crd::u32 i = 0; i < texels; ++i) { dst[i * 4U] = r; dst[i * 4U + 1U] = g; dst[i * 4U + 2U] = b; dst[i * 4U + 3U] = 255U; }
+    for (crd::u32 i = 0; i < texels; ++i)
+    {
+        dst[i * 4U] = r;
+        dst[i * 4U + 1U] = g;
+        dst[i * 4U + 2U] = b;
+        dst[i * 4U + 3U] = 255U;
+    }
 }
 
 // B2-c FS builders — each reads the UV interpolant, builds the SAMPLE COORDINATE matching the texture dimension, and
@@ -2146,7 +2155,10 @@ namespace lighting_obs
     // a representative sky SH set (9 RGB coefficients).
     const double shr[9][3] = {{0.7, 0.75, 0.9}, {0.15, 0.16, 0.2}, {0.28, 0.3, 0.38}, {-0.08, -0.07, -0.05}, {0.02, 0.02, 0.03}, {-0.03, -0.03, -0.02}, {0.1, 0.11, 0.14}, {0.04, 0.04, 0.03}, {-0.05, -0.05, -0.06}};
     int          shn[9];
-    for (int i = 0; i < 9; ++i) { shn[i] = kc(shr[i][0], shr[i][1], shr[i][2]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        shn[i] = kc(shr[i][0], shr[i][1], shr[i][2]);
+    }
     const int  irr  = lt::sh_irradiance(g, n, shn);
     const int  diff = lt::ibl_diffuse(g, kc(0.7, 0.5, 0.35), irr);
     const int  spec = lt::ibl_specular(g, kc(0.5, 0.6, 0.8), kc(0.04, 0.04, 0.04), perc, nov); // prefiltered env × DFG
@@ -2529,7 +2541,11 @@ namespace lighting_obs
     const auto k   = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
     const auto ax  = [&](double a, double b) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, sweep_node, k(a)), k(b)); };
     int taps[13];
-    for (int j = 0; j < 13; ++j) { const double f = 1.0 + 0.05 * j; taps[j] = g.vec3(ax(0.8 * f, 0.02 * j), ax(0.5 * f, 0.03 * j), ax(0.3 * f, 0.01 * j)); } // HDR taps (into highlights)
+    for (int j = 0; j < 13; ++j) // HDR taps (into highlights)
+    {
+        const double f = 1.0 + 0.05 * j;
+        taps[j] = g.vec3(ax(0.8 * f, 0.02 * j), ax(0.5 * f, 0.03 * j), ax(0.3 * f, 0.01 * j));
+    }
     const int down  = blm::downsample_karis(g, taps);          // firefly-free downsample
     const int glow  = blm::soft_knee(g, down, 0.6, 0.4);       // thresholded glow
     const int scene = g.vec3(ax(0.25, 0.05), ax(0.2, 0.07), ax(0.15, 0.1));
@@ -2577,7 +2593,11 @@ namespace lighting_obs
     const int  vig   = fin::vignette(g, g.vec2(sweep_node, g.binary(kir::KOp::Mul, sweep_node, k(0.7))), g.vec2(k(0.5), k(0.5)), 1.5);
     const int  grain = fin::film_grain(g, color, sweep_node, 0.1);
     int taps[5];
-    for (int t = 0; t < 5; ++t) { const double f = 1.0 + 0.1 * t; taps[t] = g.vec3(ax(0.5 * f, 0.02 * t), ax(0.45 * f, 0.03 * t), ax(0.35 * f, 0.01 * t)); }
+    for (int t = 0; t < 5; ++t)
+    {
+        const double f = 1.0 + 0.1 * t;
+        taps[t] = g.vec3(ax(0.5 * f, 0.02 * t), ax(0.45 * f, 0.03 * t), ax(0.35 * f, 0.01 * t));
+    }
     const int  sharp = fin::cas_sharpen(g, taps[0], taps[1], taps[2], taps[3], taps[4], 0.6);
     const int  aa    = fin::specular_aa(g, sweep_node, g.vec3(k(0.1), k(0.05), k(0.02)), g.vec3(k(0.03), k(0.08), k(0.01)), 0.5, 0.18);
     const int  base  = g.ternary(kir::KOp::Mix, grain, sharp, g.splat(k(0.5), 3));       // blend grained + sharpened
@@ -2609,8 +2629,14 @@ inline int build_lighting_csm_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2637,8 +2663,14 @@ inline int build_lighting_contact_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2665,8 +2697,14 @@ inline int build_lighting_fom_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2693,8 +2731,14 @@ inline int build_lighting_lbsskin_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_dqskin_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -2720,8 +2764,14 @@ inline int build_lighting_dqskin_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2776,8 +2826,14 @@ inline int build_cook_forward_expected(crd::u32 x, int channel)
     crd::f64 out[4] = {0.0, 0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, e.out[0].node, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_cook_gbuffer_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -2823,8 +2879,14 @@ inline int build_lighting_deferred_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_cluster_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -2850,8 +2912,14 @@ inline int build_lighting_cluster_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_decal_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -2877,8 +2945,14 @@ inline int build_lighting_decal_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2929,8 +3003,14 @@ inline int build_master_lit_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2957,8 +3037,14 @@ inline int build_lighting_ssao_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -2985,8 +3071,14 @@ inline int build_lighting_ssr_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3051,8 +3143,14 @@ inline int build_lighting_ssgi_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_volumetric_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -3078,8 +3176,14 @@ inline int build_lighting_volumetric_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_sss_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -3105,8 +3209,14 @@ inline int build_lighting_sss_expected(crd::u32 x, int channel)
     crd::f64 out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3133,8 +3243,14 @@ inline int build_lighting_vsm_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3161,8 +3277,14 @@ inline int build_lighting_ibl_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3189,8 +3311,14 @@ inline int build_lighting_specular_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 inline void build_lighting_aniso_fs(crd::kir::KGraph& g, crd::kir::KEntry& fe)
@@ -3216,8 +3344,14 @@ inline int build_lighting_aniso_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3244,8 +3378,14 @@ inline int build_lighting_disk_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3272,8 +3412,14 @@ inline int build_lighting_tube_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3300,8 +3446,14 @@ inline int build_lighting_area_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3328,8 +3480,14 @@ inline int build_lighting_lights_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3357,8 +3515,14 @@ inline int build_lighting_glass_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3385,8 +3549,14 @@ inline int build_lighting_brdf_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3414,8 +3584,14 @@ inline int build_lighting_layered_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, col, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3498,8 +3674,14 @@ inline int build_npr_gooch_expected(crd::u32 x, int channel)
     crd::f64                   out[3] = {0.0, 0.0, 0.0};
     crd::kir::eval_cpu(g, nullptr, &alloc, res, out);
     int q = static_cast<int>(std::lround(out[channel] * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3536,8 +3718,14 @@ inline int build_uv_place2d_expected(crd::u32 x)
     crd::f64                   out  = 0.0;
     crd::kir::eval_cpu(g, nullptr, &alloc, gray, &out);
     int q = static_cast<int>(std::lround(out * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3557,8 +3745,14 @@ inline int build_noise_perlin_expected(crd::u32 x)
     crd::f64  out  = 0.0;
     crd::kir::eval_cpu(g, nullptr, &alloc, gray, &out);
     int q = static_cast<int>(std::lround(out * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 
@@ -3576,8 +3770,14 @@ inline int build_noise_worley_expected(crd::u32 x)
     crd::f64                   out  = 0.0;
     crd::kir::eval_cpu(g, nullptr, &alloc, gray, &out);
     int q = static_cast<int>(std::lround(out * 255.0));
-    if (q < 0) { q = 0; }
-    if (q > 255) { q = 255; }
+    if (q < 0)
+    {
+        q = 0;
+    }
+    if (q > 255)
+    {
+        q = 255;
+    }
     return q;
 }
 

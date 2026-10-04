@@ -54,19 +54,31 @@ public:
     void* allocate(crd::usize bytes, crd::usize alignment) override
     {
         void* storage = m_backing.allocate(bytes, alignment);
-        if (storage != nullptr) { ++live; }
+        if (storage != nullptr)
+        {
+            ++live;
+        }
         return storage;
     }
     void* try_allocate(crd::usize bytes, crd::usize alignment) override
     {
-        if (reject) { return nullptr; }
+        if (reject)
+        {
+            return nullptr;
+        }
         void* storage = m_backing.try_allocate(bytes, alignment);
-        if (storage != nullptr) { ++live; }
+        if (storage != nullptr)
+        {
+            ++live;
+        }
         return storage;
     }
     void deallocate(void* storage) noexcept override
     {
-        if (storage != nullptr) { --live; }
+        if (storage != nullptr)
+        {
+            --live;
+        }
         m_backing.deallocate(storage);
     }
     [[nodiscard]] bool owns(const void* storage) const noexcept override { return m_backing.owns(storage); }
@@ -436,9 +448,18 @@ TEST_CASE("DX12 resource states restore indexed indirect buffers before compute 
             REQUIRE(counter != nullptr);
             g::IStorageBuffer* args = mode >= 4U ? scene.get() : arguments.get();
             g::IStorageBuffer* count = counter.get();
-            if (mode == 0U) { count = nullptr; }
-            else if (mode == 2U) { count = args; }
-            else if (mode == 3U || mode == 5U) { count = scene.get(); }
+            if (mode == 0U)
+            {
+                count = nullptr;
+            }
+            else if (mode == 2U)
+            {
+                count = args;
+            }
+            else if (mode == 3U || mode == 5U)
+            {
+                count = scene.get();
+            }
             float vertices[36]{};
             vertices[0] = -0.8F; vertices[1] = -0.8F; vertices[2] = 0.5F;
             vertices[12] = 0.8F; vertices[13] = -0.8F; vertices[14] = 0.5F;
@@ -450,7 +471,10 @@ TEST_CASE("DX12 resource states restore indexed indirect buffers before compute 
             REQUIRE(raster->upload_storage(*scene, 0U, vertices, sizeof(vertices)));
             REQUIRE(raster->upload_storage(*scene, 768U, indices, sizeof(indices)));
             REQUIRE(raster->upload_storage(*args, 1024U, command, sizeof(command)));
-            if (count != nullptr) { REQUIRE(raster->upload_storage(*count, 1536U, &count_value, sizeof(count_value))); }
+            if (count != nullptr)
+            {
+                REQUIRE(raster->upload_storage(*count, 1536U, &count_value, sizeof(count_value)));
+            }
             auto target = raster->create_color_target(32U, 32U);
             auto graph = raster->create_frame_graph();
             REQUIRE(target != nullptr);
@@ -491,7 +515,10 @@ TEST_CASE("DX12 resource states restore indexed indirect buffers before compute 
                         }
                         for (auto* storage : draw.buffers)
                         {
-                            if (storage == nullptr) { continue; }
+                            if (storage == nullptr)
+                            {
+                                continue;
+                            }
                             g::IStorageBuffer* bindings[1] = {storage};
                             crd::gputest::enc_dispatch(context.raster(), *draw.kernel, 1U, 1U, 1U, bindings, 1U);
                         }
@@ -513,16 +540,28 @@ TEST_CASE("DX12 resource states restore indexed indirect buffers before compute 
             {
                 CAPTURE(frame);
                 graph->execute();
-                if (capture.report().errors != 0U) { print_messages(capture); }
+                if (capture.report().errors != 0U)
+                {
+                    print_messages(capture);
+                }
                 REQUIRE(capture.report().errors == 0U);
                 REQUIRE(raster->valid());
                 CHECK(graph->last_submit_count() == 1U);
                 CHECK((target->read_pixel(16U, 16U) & 0xffU) >= (depth_only ? 180U : 250U));
                 for (auto* storage : state.buffers)
                 {
-                    if (storage == nullptr) { continue; }
+                    if (storage == nullptr)
+                    {
+                        continue;
+                    }
                     crd::u32 occurrences = 0;
-                    for (auto* other : state.buffers) { if (other == storage) { ++occurrences; } }
+                    for (auto* other : state.buffers)
+                    {
+                        if (other == storage)
+                        {
+                            ++occurrences;
+                        }
+                    }
                     REQUIRE(raster->download_storage(*storage));
                     CHECK(storage->read_u32(448U) == frame * 2U * occurrences);
                 }
@@ -602,13 +641,22 @@ TEST_CASE("DX12 resource states preserve image state while reactivating aliased 
         graph->add_pass("paint-b").reads(x).writes(b).execute(paint, &paints[1]);
         graph->add_pass("preserve-b", g::FgPassKind::Transfer).reads(b).writes(y).execute(copy, &copies[1]);
         REQUIRE(graph->build());
-        if (pinned) { CHECK(graph->transient_memory_bytes() == graph->transient_logical_bytes()); }
-        else { CHECK(graph->transient_memory_bytes() < graph->transient_logical_bytes()); }
+        if (pinned)
+        {
+            CHECK(graph->transient_memory_bytes() == graph->transient_logical_bytes());
+        }
+        else
+        {
+            CHECK(graph->transient_memory_bytes() < graph->transient_logical_bytes());
+        }
         for (crd::u32 frame = 0; frame != 3U; ++frame)
         {
             CAPTURE(frame);
             graph->execute();
-            if (capture.report().errors != 0U) { print_messages(capture); }
+            if (capture.report().errors != 0U)
+            {
+                print_messages(capture);
+            }
             REQUIRE(capture.report().errors == 0U);
             REQUIRE(raster->valid());
             CHECK(graph->last_submit_count() == 1U);
@@ -693,7 +741,10 @@ TEST_CASE("DX12 resource states initialize and reuse sampled depth aliases",
         {
             CAPTURE(frame);
             graph->execute();
-            if (capture.report().errors != 0U) { print_messages(capture); }
+            if (capture.report().errors != 0U)
+            {
+                print_messages(capture);
+            }
             REQUIRE(capture.report().errors == 0U);
             REQUIRE(raster->valid());
             CHECK(graph->last_submit_count() == 1U);
@@ -727,7 +778,10 @@ TEST_CASE("DX12 resource states activate aliased compute buffers before consumin
                 const int dst = code.buffer_decl(k::DType::U32, 0, 1, true);
                 code.stmt_buffer_store(dst, zero, code.buffer_load(src, zero));
             }
-            else { code.stmt_buffer_store(src, zero, code.constant(static_cast<double>(value), shape, k::DType::U32)); }
+            else
+            {
+                code.stmt_buffer_store(src, zero, code.constant(static_cast<double>(value), shape, k::DType::U32));
+            }
             entry.stage = k::KStage::Compute;
             entry.local_size[0] = 1U;
             entry.kernel_body_begin = 0;
@@ -765,7 +819,10 @@ TEST_CASE("DX12 resource states activate aliased compute buffers before consumin
         {
             CAPTURE(frame);
             graph->execute();
-            if (capture.report().errors != 0U) { print_messages(capture); }
+            if (capture.report().errors != 0U)
+            {
+                print_messages(capture);
+            }
             REQUIRE(capture.report().errors == 0U);
             REQUIRE(raster->valid());
             CHECK(graph->last_submit_count() == 1U);
@@ -881,7 +938,10 @@ TEST_CASE("DX12 descriptors preserve queued compute bindings beyond capacity and
             State state{kernel.get(), buffers, count, cleared.get()};
             graph->reset();
             auto& pass = graph->add_pass("queued-distinct-bindings", g::FgPassKind::Compute);
-            for (auto& storage : buffers) { pass.writes(graph->import_storage(*storage)); }
+            for (auto& storage : buffers)
+            {
+                pass.writes(graph->import_storage(*storage));
+            }
             pass.writes(graph->import_storage(*cleared));
             pass.execute([](g::IFrameContext& context, void* user) {
                 const auto& data = *static_cast<State*>(user);
@@ -1287,7 +1347,10 @@ TEST_CASE("DX12 identity attaches as a native debug name and round-trips", "[dx1
     REQUIRE(SUCCEEDED(res->GetPrivateData(WKPDID_D3DDebugObjectNameW, &wsize, wname)));
     char       got[256]{};
     const UINT wchars = wsize / static_cast<UINT>(sizeof(wchar_t)); // byte size includes the NUL terminator
-    for (UINT i = 0; i + 1U < wchars && i + 1U < sizeof(got); ++i) { got[i] = static_cast<char>(wname[i]); }
+    for (UINT i = 0; i + 1U < wchars && i + 1U < sizeof(got); ++i)
+    {
+        got[i] = static_cast<char>(wname[i]);
+    }
 
     char            expected[256]{};
     const crd::usize elen = g::format_debug_name(id, "dx12-storage", expected, sizeof(expected));
@@ -1412,7 +1475,10 @@ TEST_CASE("DX12 dx12_name_object stamps an identity without minting", "[dx12][va
     REQUIRE(SUCCEEDED(sibling->GetPrivateData(WKPDID_D3DDebugObjectNameW, &wsize, wname)));
     char       got[256]{};
     const UINT wchars = wsize / static_cast<UINT>(sizeof(wchar_t));
-    for (UINT i = 0; i + 1U < wchars && i + 1U < sizeof(got); ++i) { got[i] = static_cast<char>(wname[i]); }
+    for (UINT i = 0; i + 1U < wchars && i + 1U < sizeof(got); ++i)
+    {
+        got[i] = static_cast<char>(wname[i]);
+    }
     char             expected[256]{};
     const crd::usize elen = g::format_debug_name(id, "dx12-target-depth", expected, sizeof(expected));
     REQUIRE(elen != 0U);
@@ -1424,7 +1490,10 @@ TEST_CASE("DX12 dx12_name_object stamps an identity without minting", "[dx12][va
     REQUIRE(SUCCEEDED(primary->GetPrivateData(WKPDID_D3DDebugObjectNameW, &psize, pname)));
     char       pgot[256]{};
     const UINT pchars = psize / static_cast<UINT>(sizeof(wchar_t));
-    for (UINT i = 0; i + 1U < pchars && i + 1U < sizeof(pgot); ++i) { pgot[i] = static_cast<char>(pname[i]); }
+    for (UINT i = 0; i + 1U < pchars && i + 1U < sizeof(pgot); ++i)
+    {
+        pgot[i] = static_cast<char>(pname[i]);
+    }
     g::ObjectIdentity from_primary;
     g::ObjectIdentity from_sibling;
     REQUIRE(g::parse(std::string_view{pgot}, from_primary));
@@ -1448,7 +1517,11 @@ TEST_CASE("DX12 cached kernel PSOs mint one Program identity each, retired with 
     namespace k = crd::kir;
     crd::memory::TlsfAllocator allocator(16U << 20U);
     auto gpu = g::create_dx12_gpu_context(&allocator);
-    if (gpu == nullptr || !gpu->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gpu == nullptr || !gpu->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     // A trivial compute kernel (buffer[448] += 1), mirroring this file's existing kernel authoring. Result is irrelevant
     // -- the test only asserts identity counts, so a valid PSO build (which triggers the mint) is all that matters.
@@ -1469,7 +1542,11 @@ TEST_CASE("DX12 cached kernel PSOs mint one Program identity each, retired with 
     {
         auto raster = g::create_dx12_raster_context();
         REQUIRE(raster != nullptr);
-        if (!raster->valid()) { WARN("no D3D12 raster device; skipping"); return; }
+        if (!raster->valid())
+        {
+            WARN("no D3D12 raster device; skipping");
+            return;
+        }
 
         k::KGraph cg1(&allocator);
         k::KEntry ce1;
@@ -1530,7 +1607,11 @@ TEST_CASE("DX12 cached DXR pipelines mint one Program identity each, retired wit
     namespace k = crd::kir;
     crd::memory::TlsfAllocator allocator(64U << 20U);
     auto gpu = g::create_dx12_gpu_context(&allocator);
-    if (gpu == nullptr || !gpu->valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (gpu == nullptr || !gpu->valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     // The three required RT stages, authored in CKIR and cooked to DXIL libraries (the test_dx12_rt.cpp path).
     k::KGraph grg(&allocator);
@@ -1546,7 +1627,11 @@ TEST_CASE("DX12 cached DXR pipelines mint one Program identity each, retired wit
     REQUIRE(k::emit_rt_stage_hlsl(gch, ech, &allocator, kch, false));
     REQUIRE(k::emit_rt_stage_hlsl(gms, ems, &allocator, kms, false));
     const auto drg = g::compile_hlsl_to_dxil(g::ShaderStage::RayGen, crd::containers::to_view(krg.source), "rg", &allocator);
-    if (!drg.ok) { WARN("dxc unavailable / lib_6_3 unsupported; skipping"); return; }
+    if (!drg.ok)
+    {
+        WARN("dxc unavailable / lib_6_3 unsupported; skipping");
+        return;
+    }
     const auto dch = g::compile_hlsl_to_dxil(g::ShaderStage::ClosestHit, crd::containers::to_view(kch.source), "ch", &allocator);
     const auto dms = g::compile_hlsl_to_dxil(g::ShaderStage::Miss, crd::containers::to_view(kms.source), "ms", &allocator);
     REQUIRE(dch.ok);
@@ -1562,10 +1647,18 @@ TEST_CASE("DX12 cached DXR pipelines mint one Program identity each, retired wit
     {
         auto raster = g::create_dx12_raster_context();
         REQUIRE(raster != nullptr);
-        if (!raster->valid() || !raster->supports_rt_pipeline()) { WARN("no DXR-capable raster device; skipping"); return; }
+        if (!raster->valid() || !raster->supports_rt_pipeline())
+        {
+            WARN("no DXR-capable raster device; skipping");
+            return;
+        }
 
         g::Dx12RayTracingContext rt;
-        if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device; skipping"); return; }
+        if (!rt.valid())
+        {
+            WARN("no D3D12 DXR-1.1 device; skipping");
+            return;
+        }
         const float verts[9] = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F}; // one triangle
         auto scene = rt.build_scene(verts, 1U);
         REQUIRE(scene != nullptr);
@@ -1620,7 +1713,11 @@ TEST_CASE("DX12 acceleration structure mints one Resource identity per scene",
           "[dx12][rt][resource][identity][naming]")
 {
     g::Dx12RayTracingContext rt;
-    if (!rt.valid()) { WARN("no D3D12 DXR-1.1 device available; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no D3D12 DXR-1.1 device available; skipping");
+        return;
+    }
 
     const float      verts[9]    = {0.0F, 0.0F, 2.0F, 1.0F, 0.0F, 2.0F, 0.0F, 1.0F, 2.0F}; // one triangle
     const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
@@ -1654,7 +1751,10 @@ TEST_CASE("DIAG.7a(f-3): DX12 reports per-mode validation activation", "[dx12][v
     cfg.enable_sync_validation         = true; // Synchronization (no D3D12 equivalent)
     cfg.enable_gpu_assisted_validation = true; // GpuAssisted (GBV)
     auto ctx = g::create_dx12_gpu_context(&allocator, cfg);
-    if (ctx == nullptr || !ctx->valid()) { SKIP("no D3D12 device / Graphics Tools available"); }
+    if (ctx == nullptr || !ctx->valid())
+    {
+        SKIP("no D3D12 device / Graphics Tools available");
+    }
 
     const g::ValidationActivation va = ctx->validation_activation();
     REQUIRE(va.consistent());
@@ -1713,7 +1813,10 @@ namespace
     for (crd::u32 i = from; i < now; ++i)
     {
         g::Dx12ValidationMessage m;
-        if (capture.message(i, m) && m.identity == id && m.severity == g::Dx12ValidationSeverity::Error) { return true; }
+        if (capture.message(i, m) && m.identity == id && m.severity == g::Dx12ValidationSeverity::Error)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -1724,7 +1827,10 @@ namespace
     for (crd::u32 i = from; i < now; ++i)
     {
         g::Dx12ValidationMessage m;
-        if (capture.message(i, m) && m.identity.valid()) { return true; }
+        if (capture.message(i, m) && m.identity.valid())
+        {
+            return true;
+        }
     }
     return false;
 }

@@ -40,7 +40,10 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+exclusive-count == within-subgroup odd ra
     crd::containers::Array<crd::f64> out(&alloc);
     in.resize(threads);
     out.resize(threads, -1.0);
-    for (int i = 0; i < threads; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>(i * 2654435761U)); }
+    for (int i = 0; i < threads; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<crd::u32>(i * 2654435761U));
+    }
 
     kir::KernelBuffer kb[2] = {{in.data(), threads, 0, 0}, {out.data(), threads, 0, 1}};
     kir::eval_cpu_kernel(g, e, kb, 2, e.local_size[0], &alloc, 1U);
@@ -50,8 +53,17 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+exclusive-count == within-subgroup odd ra
     {
         const int sgbase = (t / 32) * 32;
         int       ref    = 0;
-        for (int l = sgbase; l < t; ++l) { if ((static_cast<crd::u32>(in[static_cast<crd::usize>(l)]) & 1U) != 0U) { ++ref; } }
-        if (static_cast<int>(out[static_cast<crd::usize>(t)]) != ref) { ++bad; }
+        for (int l = sgbase; l < t; ++l)
+        {
+            if ((static_cast<crd::u32>(in[static_cast<crd::usize>(l)]) & 1U) != 0U)
+            {
+                ++ref;
+            }
+        }
+        if (static_cast<int>(out[static_cast<crd::usize>(t)]) != ref)
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
 }
@@ -80,7 +92,11 @@ TEST_CASE("emit ONESWEEP sort as CUDA", "[.emit-cuda-sort]")
         const char* hit = nullptr;
         for (const char* q = p; *q != '\0'; ++q)
         {
-            if (q[0] == 'c' && q[1] == 'k' && q[2] == 'i' && q[3] == 'r' && q[4] == '(') { hit = q; break; }
+            if (q[0] == 'c' && q[1] == 'k' && q[2] == 'i' && q[3] == 'r' && q[4] == '(')
+            {
+                hit = q;
+                break;
+            }
         }
         REQUIRE(hit != nullptr);
         f.write(p, hit - p);

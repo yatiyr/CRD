@@ -33,7 +33,10 @@ inline crd::f32 bits_f32(crd::u32 b) noexcept { return std::bit_cast<crd::f32>(b
 // ── printer primitives ──
 void put(Array<char>& o, StringView s)
 {
-    for (crd::usize i = 0; i < s.size(); ++i) { o.push_back(s[i]); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        o.push_back(s[i]);
+    }
 }
 void put(Array<char>& o, char c) { o.push_back(c); }
 void put_hex(Array<char>& o, crd::u64 v, crd::u32 width)
@@ -44,15 +47,29 @@ void put_hex(Array<char>& o, crd::u64 v, crd::u32 width)
         const crd::u32 nyb = static_cast<crd::u32>((v >> ((width - 1U - i) * 4U)) & 0xFULL);
         buf[i]             = static_cast<char>(nyb < 10U ? ('0' + nyb) : ('a' + (nyb - 10U)));
     }
-    for (crd::u32 i = 0; i < width; ++i) { o.push_back(buf[i]); }
+    for (crd::u32 i = 0; i < width; ++i)
+    {
+        o.push_back(buf[i]);
+    }
 }
 void put_dec(Array<char>& o, crd::u64 v)
 {
     char     tmp[20];
     crd::u32 n = 0;
-    if (v == 0U) { o.push_back('0'); return; }
-    while (v > 0U) { tmp[n++] = static_cast<char>('0' + (v % 10U)); v /= 10U; }
-    for (crd::u32 i = 0; i < n; ++i) { o.push_back(tmp[n - 1U - i]); }
+    if (v == 0U)
+    {
+        o.push_back('0');
+        return;
+    }
+    while (v > 0U)
+    {
+        tmp[n++] = static_cast<char>('0' + (v % 10U));
+        v /= 10U;
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        o.push_back(tmp[n - 1U - i]);
+    }
 }
 void put_name(Array<char>& o, StringView s) { s.size() == 0U ? put(o, StringView("-")) : put(o, s); }
 
@@ -66,10 +83,19 @@ struct Tok
     static bool  is_ws(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
     bool         next(StringView& out) noexcept
     {
-        while (p < end && is_ws(*p)) { ++p; }
-        if (p >= end) { return false; }
+        while (p < end && is_ws(*p))
+        {
+            ++p;
+        }
+        if (p >= end)
+        {
+            return false;
+        }
         const char* s = p;
-        while (p < end && !is_ws(*p)) { ++p; }
+        while (p < end && !is_ws(*p))
+        {
+            ++p;
+        }
         out = StringView(s, static_cast<crd::usize>(p - s));
         return true;
     }
@@ -77,12 +103,18 @@ struct Tok
 
 bool parse_u64_dec(StringView s, crd::u64& out) noexcept
 {
-    if (s.size() == 0U) { return false; }
+    if (s.size() == 0U)
+    {
+        return false;
+    }
     crd::u64 v = 0;
     for (crd::usize i = 0; i < s.size(); ++i)
     {
         const char c = s[i];
-        if (c < '0' || c > '9') { return false; }
+        if (c < '0' || c > '9')
+        {
+            return false;
+        }
         const crd::u32 dig = static_cast<crd::u32>(c - '0');
         v                  = v * 10U + dig;
     }
@@ -91,15 +123,27 @@ bool parse_u64_dec(StringView s, crd::u64& out) noexcept
 }
 bool parse_u64_hex(StringView s, crd::u64& out) noexcept
 {
-    if (s.size() == 0U) { return false; }
+    if (s.size() == 0U)
+    {
+        return false;
+    }
     crd::u64 v = 0;
     for (crd::usize i = 0; i < s.size(); ++i)
     {
         const char c = s[i];
         crd::u32   d = 0;
-        if (c >= '0' && c <= '9') { d = static_cast<crd::u32>(c - '0'); }
-        else if (c >= 'a' && c <= 'f') { d = static_cast<crd::u32>(c - 'a') + 10U; }
-        else { return false; }
+        if (c >= '0' && c <= '9')
+        {
+            d = static_cast<crd::u32>(c - '0');
+        }
+        else if (c >= 'a' && c <= 'f')
+        {
+            d = static_cast<crd::u32>(c - 'a') + 10U;
+        }
+        else
+        {
+            return false;
+        }
         v = (v << 4U) | d;
     }
     out = v;
@@ -124,8 +168,14 @@ void print_schema(const SourceModel& m, Array<char>& out)
         put(out, ' ');
         put_name(out, m.str(n.name));
         put(out, ' ');
-        if (n.parent == kInvalidNode) { put(out, StringView("-1")); }
-        else { put_dec(out, n.parent); }
+        if (n.parent == kInvalidNode)
+        {
+            put(out, StringView("-1"));
+        }
+        else
+        {
+            put_dec(out, n.parent);
+        }
         put(out, ' ');
         put_dec(out, n.loc.file_id);
         put(out, ' ');
@@ -192,12 +242,21 @@ void print_schema(const SourceModel& m, Array<char>& out)
 
 bool read_schema(StringView text, SourceModel& out)
 {
-    if (out.node_count() != 0U) { return false; } // must be empty (graceful reject — never a partial/merged model)
+    if (out.node_count() != 0U) // must be empty (graceful reject — never a partial/merged model)
+    {
+        return false;
+    }
     Tok        tk(text);
     StringView t;
     // header
-    if (!tk.next(t) || t != StringView("chirgraph")) { return false; }
-    if (!tk.next(t) || t != StringView("1")) { return false; }
+    if (!tk.next(t) || t != StringView("chirgraph"))
+    {
+        return false;
+    }
+    if (!tk.next(t) || t != StringView("1"))
+    {
+        return false;
+    }
 
     crd::u32 expected_node = 0; // node lines must be dense + in index order (0,1,2,...)
     while (tk.next(t))
@@ -222,16 +281,31 @@ bool read_schema(StringView text, SourceModel& out)
             crd::u64 fil = 0;
             crd::u64 lin = 0;
             crd::u64 col = 0;
-            if (!parse_u64_dec(idx_s, idx) || idx != expected_node) { return false; }
-            if (!parse_u64_hex(id_s, idv)) { return false; }
+            if (!parse_u64_dec(idx_s, idx) || idx != expected_node)
+            {
+                return false;
+            }
+            if (!parse_u64_hex(id_s, idv))
+            {
+                return false;
+            }
             NodeKind kind{};
-            if (!node_kind_from_name(kind_s, kind)) { return false; }
-            if (!parse_u64_dec(file_s, fil) || !parse_u64_dec(line_s, lin) || !parse_u64_dec(col_s, col)) { return false; }
+            if (!node_kind_from_name(kind_s, kind))
+            {
+                return false;
+            }
+            if (!parse_u64_dec(file_s, fil) || !parse_u64_dec(line_s, lin) || !parse_u64_dec(col_s, col))
+            {
+                return false;
+            }
             crd::u32 parent = kInvalidNode;
             if (par_s != StringView("-1"))
             {
                 crd::u64 pv = 0;
-                if (!parse_u64_dec(par_s, pv) || pv >= expected_node) { return false; } // parent must precede (dense order)
+                if (!parse_u64_dec(par_s, pv) || pv >= expected_node) // parent must precede (dense order)
+                {
+                    return false;
+                }
                 parent = static_cast<crd::u32>(pv);
             }
             const SourceLoc loc{static_cast<crd::u32>(fil), static_cast<crd::u32>(lin), static_cast<crd::u32>(col)};
@@ -245,13 +319,28 @@ bool read_schema(StringView text, SourceModel& out)
             StringView dir_s;
             StringView name_s;
             StringView type_s;
-            if (!tk.next(node_s) || !tk.next(dir_s) || !tk.next(name_s) || !tk.next(type_s)) { return false; }
+            if (!tk.next(node_s) || !tk.next(dir_s) || !tk.next(name_s) || !tk.next(type_s))
+            {
+                return false;
+            }
             crd::u64 nv = 0;
-            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count()) { return false; }
+            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count())
+            {
+                return false;
+            }
             PinDir dir{};
-            if (dir_s == StringView("in")) { dir = PinDir::In; }
-            else if (dir_s == StringView("out")) { dir = PinDir::Out; }
-            else { return false; }
+            if (dir_s == StringView("in"))
+            {
+                dir = PinDir::In;
+            }
+            else if (dir_s == StringView("out"))
+            {
+                dir = PinDir::Out;
+            }
+            else
+            {
+                return false;
+            }
             out.add_pin(static_cast<crd::u32>(nv), dir, unname(name_s), unname(type_s));
         }
         else if (t == StringView("attr"))
@@ -259,9 +348,15 @@ bool read_schema(StringView text, SourceModel& out)
             StringView node_s;
             StringView key_s;
             StringView val_s;
-            if (!tk.next(node_s) || !tk.next(key_s) || !tk.next(val_s)) { return false; }
+            if (!tk.next(node_s) || !tk.next(key_s) || !tk.next(val_s))
+            {
+                return false;
+            }
             crd::u64 nv = 0;
-            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count()) { return false; }
+            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count())
+            {
+                return false;
+            }
             out.add_attr(static_cast<crd::u32>(nv), unname(key_s), unname(val_s));
         }
         else if (t == StringView("edge"))
@@ -270,7 +365,10 @@ bool read_schema(StringView text, SourceModel& out)
             StringView fp_s;
             StringView tn_s;
             StringView tp_s;
-            if (!tk.next(fn_s) || !tk.next(fp_s) || !tk.next(tn_s) || !tk.next(tp_s)) { return false; }
+            if (!tk.next(fn_s) || !tk.next(fp_s) || !tk.next(tn_s) || !tk.next(tp_s))
+            {
+                return false;
+            }
             crd::u64 fn = 0;
             crd::u64 fp = 0;
             crd::u64 tn = 0;
@@ -280,7 +378,10 @@ bool read_schema(StringView text, SourceModel& out)
             {
                 return false;
             }
-            if (fn >= out.node_count() || tn >= out.node_count()) { return false; }
+            if (fn >= out.node_count() || tn >= out.node_count())
+            {
+                return false;
+            }
             out.add_edge(static_cast<crd::u32>(fn), static_cast<crd::u32>(fp), static_cast<crd::u32>(tn),
                          static_cast<crd::u32>(tp));
         }
@@ -290,7 +391,10 @@ bool read_schema(StringView text, SourceModel& out)
             StringView x_s;
             StringView y_s;
             StringView g_s;
-            if (!tk.next(id_s) || !tk.next(x_s) || !tk.next(y_s) || !tk.next(g_s)) { return false; }
+            if (!tk.next(id_s) || !tk.next(x_s) || !tk.next(y_s) || !tk.next(g_s))
+            {
+                return false;
+            }
             crd::u64 idv = 0;
             crd::u64 xb  = 0;
             crd::u64 yb  = 0;
@@ -317,7 +421,10 @@ bool read_schema(StringView text, SourceModel& out)
     for (const Layout& l : out.layout())
     {
         // an orphaned layout row (no node carries this id) => reject.
-        if (!std::ranges::any_of(node_idx, [&](crd::u32 i) { return out.node(i).id == l.id; })) { return false; }
+        if (!std::ranges::any_of(node_idx, [&](crd::u32 i) { return out.node(i).id == l.id; }))
+        {
+            return false;
+        }
     }
     // every edge must connect a real OUT pin to a real IN pin (endpoints were range-checked as node indices as read).
     const bool edges_ok = std::ranges::all_of(out.edges(), [&](const Edge& e) {
@@ -325,7 +432,10 @@ bool read_schema(StringView text, SourceModel& out)
                out.node(e.from_node).pins[e.from_pin].dir == PinDir::Out && // from-pin must be an OUTPUT
                out.node(e.to_node).pins[e.to_pin].dir == PinDir::In;        // to-pin must be an INPUT
     });
-    if (!edges_ok) { return false; }
+    if (!edges_ok)
+    {
+        return false;
+    }
 
     // single-writer: an in-pin has EXACTLY one source. Canonical edge order (SourceModel::add_edge sorts by the consumer
     // key) puts any duplicate (to_node, to_pin) ADJACENT, so one adjacent-scan rejects a graph wiring two sources into

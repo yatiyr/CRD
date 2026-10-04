@@ -29,7 +29,9 @@ void spin_job(void* /*data*/) noexcept
 {
     g_spin_task_id.store(crd::jobs::current_task_id(), std::memory_order_release);
     while (!g_spin_gate.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
 }
 } // namespace
 
@@ -71,7 +73,9 @@ TEST_CASE("worker snapshot: a worker stuck in one job is honestly incomplete and
     crd::jobs::Counter* const sc = crd::jobs::run(spin);
 
     while (g_spin_task_id.load(std::memory_order_acquire) == 0U) // wait until the spin job is actually running
+    {
         std::this_thread::yield();
+    }
     const crd::u64 spin_id = g_spin_task_id.load(std::memory_order_relaxed);
 
     crd::containers::StaticArray<WorkerNode, 8> nodes{};
@@ -116,7 +120,9 @@ TEST_CASE("worker snapshot: the attempt is time-bounded, not a hang", "[jobs][di
     spin.fn                      = &spin_job;
     crd::jobs::Counter* const sc = crd::jobs::run(spin);
     while (g_spin_task_id.load(std::memory_order_acquire) == 0U)
+    {
         std::this_thread::yield();
+    }
 
     crd::containers::StaticArray<WorkerNode, 8> nodes{};
     const auto                 t0  = std::chrono::steady_clock::now();

@@ -43,8 +43,14 @@ rs_strength_matrix(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse:
     // −Re(a_ij): classical RS keys on the negative coupling (smooth error aligns with the
     // large negative off-diagonals of an M-matrix). For complex T use the real part.
     auto neg = [](T v) -> R {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return -v.re; }
-        else { return -v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return -v.re;
+        }
+        else
+        {
+            return -v;
+        }
     };
 
     crd::hesap::sparse::TripletBuilder<T> tb(alloc, n, n);
@@ -55,17 +61,32 @@ rs_strength_matrix(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse:
         for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
         {
             const crd::u32 j = inner[q];
-            if (j == i) { continue; }
+            if (j == i)
+            {
+                continue;
+            }
             const R c = neg(vals[q]);
-            if (c > maxneg) { maxneg = c; }
+            if (c > maxneg)
+            {
+                maxneg = c;
+            }
         }
-        if (maxneg <= R(0)) { continue; } // no negative couplings ⇒ no strong dependencies
+        if (maxneg <= R(0)) // no negative couplings ⇒ no strong dependencies
+        {
+            continue;
+        }
         const R thr = theta * maxneg;
         for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
         {
             const crd::u32 j = inner[q];
-            if (j == i) { continue; }
-            if (neg(vals[q]) >= thr) { tb.add(i, j, T(R(1))); } // i strongly depends on j
+            if (j == i)
+            {
+                continue;
+            }
+            if (neg(vals[q]) >= thr) // i strongly depends on j
+            {
+                tb.add(i, j, T(R(1)));
+            }
         }
     }
     return tb.compress();

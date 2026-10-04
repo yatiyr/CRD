@@ -101,25 +101,52 @@ enum class Wave1Format : crd::u8
 [[nodiscard]] bool ends_with_icase(crd::containers::StringView path, const char* suffix) noexcept
 {
     const crd::usize sn = std::strlen(suffix);
-    if (path.size() < sn) { return false; }
+    if (path.size() < sn)
+    {
+        return false;
+    }
     const char* p = path.data() + (path.size() - sn);
     for (crd::usize i = 0; i < sn; ++i)
     {
         char a = p[i];
-        if (a >= 'A' && a <= 'Z') { a = static_cast<char>(a + 32); }
-        if (a != suffix[i]) { return false; }
+        if (a >= 'A' && a <= 'Z')
+        {
+            a = static_cast<char>(a + 32);
+        }
+        if (a != suffix[i])
+        {
+            return false;
+        }
     }
     return true;
 }
 
 [[nodiscard]] Wave1Format detect_format(crd::containers::StringView path) noexcept
 {
-    if (ends_with_icase(path, ".stl")) { return Wave1Format::Stl; }
-    if (ends_with_icase(path, ".obj")) { return Wave1Format::Obj; }
-    if (ends_with_icase(path, ".ply")) { return Wave1Format::Ply; }
-    if (ends_with_icase(path, ".glb")) { return Wave1Format::Glb; }
-    if (ends_with_icase(path, ".gltf")) { return Wave1Format::Gltf; }
-    if (ends_with_icase(path, ".3mf")) { return Wave1Format::ThreeMf; }
+    if (ends_with_icase(path, ".stl"))
+    {
+        return Wave1Format::Stl;
+    }
+    if (ends_with_icase(path, ".obj"))
+    {
+        return Wave1Format::Obj;
+    }
+    if (ends_with_icase(path, ".ply"))
+    {
+        return Wave1Format::Ply;
+    }
+    if (ends_with_icase(path, ".glb"))
+    {
+        return Wave1Format::Glb;
+    }
+    if (ends_with_icase(path, ".gltf"))
+    {
+        return Wave1Format::Gltf;
+    }
+    if (ends_with_icase(path, ".3mf"))
+    {
+        return Wave1Format::ThreeMf;
+    }
     return Wave1Format::Unknown;
 }
 
@@ -131,7 +158,10 @@ enum class Wave1Format : crd::u8
                                           crd::containers::Array<crd::u8>& out_model)
 {
     crd::resources::ZipReader zip(alloc);
-    if (zip.open(zip_bytes) != crd::resources::ZipError::Ok) { return false; }
+    if (zip.open(zip_bytes) != crd::resources::ZipError::Ok)
+    {
+        return false;
+    }
 
     crd::containers::String part_name(alloc);
     const crd::i64          rels_index = zip.find(crd::assetio::k3mfRels);
@@ -148,22 +178,34 @@ enum class Wave1Format : crd::u8
                 {
                     const char* type   = rels.attr(rel, "Type");
                     const char* target = rels.attr(rel, "Target");
-                    if (type == nullptr || target == nullptr) { continue; }
+                    if (type == nullptr || target == nullptr)
+                    {
+                        continue;
+                    }
                     if (!ends_with_icase(crd::containers::StringView(type, std::strlen(type)), "/3dmodel"))
                     {
                         continue;
                     }
-                    if (target[0] == '/') { ++target; } // OPC part names are package-absolute; ZIP names are not
+                    if (target[0] == '/') // OPC part names are package-absolute; ZIP names are not
+                    {
+                        ++target;
+                    }
                     part_name.append(target);
                     break;
                 }
             }
         }
     }
-    if (part_name.size() == 0U) { part_name.append(crd::assetio::k3mfModelPart); }
+    if (part_name.size() == 0U)
+    {
+        part_name.append(crd::assetio::k3mfModelPart);
+    }
 
     const crd::i64 model_index = zip.find(part_name.c_str());
-    if (model_index < 0) { return false; }
+    if (model_index < 0)
+    {
+        return false;
+    }
     return zip.extract(static_cast<crd::usize>(model_index), out_model) == crd::resources::ZipError::Ok;
 }
 
@@ -175,7 +217,10 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
                                                      const crd::resources::ResourceId& material_id = {})
 {
     crd::containers::Array<crd::u8> empty(alloc);
-    if (mesh.positions.size() == 0U || mesh.indices.size() == 0U) { return empty; }
+    if (mesh.positions.size() == 0U || mesh.indices.size() == 0U)
+    {
+        return empty;
+    }
 
     // GEO-2 CONDITIONING: weld (soup → indexed; hard edges preserved by the exact tuple key) → generate normals when the
     // source has none (crease-angle smoothing, `.meta smooth_angle_deg`, production default 30°) → OUR MikkTSpace-
@@ -191,7 +236,10 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
             constexpr crd::f32 pi = 3.14159265358979F;
             crd::assetio::generate_normals(mesh, alloc, options.smooth_angle_deg * pi / 180.0F);
         }
-        if (mesh.has_uv0() && mesh.has_normals()) { (void)crd::assetio::generate_tangents(mesh, alloc); }
+        if (mesh.has_uv0() && mesh.has_normals())
+        {
+            (void)crd::assetio::generate_tangents(mesh, alloc);
+        }
     }
     // ⛔ REN-39: "fully authored" was a LIE for a skinned mesh with NO source normals (the Khronos Fox ships
     // POSITION/UV/JOINTS/WEIGHTS and nothing else). Zero normals cook through, the forward BRDF computes
@@ -206,7 +254,10 @@ crd::containers::Array<crd::u8> build_wave1_artifact(crd::assetio::ImportedMesh&
 
     const crd::u32 vc = static_cast<crd::u32>(mesh.positions.size());
     const crd::u32 ic = static_cast<crd::u32>(mesh.indices.size());
-    if (vc == 0U || ic == 0U) { return empty; }
+    if (vc == 0U || ic == 0U)
+    {
+        return empty;
+    }
 
     // the crd-geometry VALIDATE hook: hard-fail on out-of-bounds; warn-and-cook on authoring smells (repair = GEO-2)
     {
@@ -325,7 +376,10 @@ struct ImageUsage
 void classify_image_usage(const crd::assetio::ImportedAsset& asset, crd::containers::Array<ImageUsage>& usage)
 {
     const auto mark = [&](crd::i32 idx, bool c, bool l, bool n) {
-        if (idx < 0 || static_cast<crd::usize>(idx) >= usage.size()) { return; }
+        if (idx < 0 || static_cast<crd::usize>(idx) >= usage.size())
+        {
+            return;
+        }
         ImageUsage& u = usage[static_cast<crd::usize>(idx)];
         u.color  = u.color || c;
         u.linear = u.linear || l;
@@ -346,7 +400,10 @@ void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset&
                       crd::containers::Array<crd::resources::ResourceId>& image_ids)
 {
     image_ids.resize(asset.images.size()); // null = not cooked (skipped/undecodable)
-    if (asset.images.size() == 0U) { return; }
+    if (asset.images.size() == 0U)
+    {
+        return;
+    }
 
     crd::containers::Array<ImageUsage> usage(ctx.allocator);
     usage.resize(asset.images.size());
@@ -371,7 +428,10 @@ void cook_gltf_images(const CookContext& ctx, const crd::assetio::ImportedAsset&
         // touching the referenced image recooks this source)
         crd::containers::ConstSpan<crd::u8> encoded;
         crd::containers::Array<crd::u8>     file_bytes(ctx.allocator);
-        if (img.bytes.size() > 0U) { encoded = crd::containers::as_const_span(img.bytes); }
+        if (img.bytes.size() > 0U)
+        {
+            encoded = crd::containers::as_const_span(img.bytes);
+        }
         else
         {
             if (!ctx.io->read_input(crd::containers::StringView(img.uri.data(), img.uri.size()), file_bytes))
@@ -441,7 +501,10 @@ void cook_gltf_materials(const CookContext& ctx, const crd::assetio::ImportedAss
 {
     material_ids.resize(asset.materials.size());
     const auto slot_id = [&](crd::i32 image_index) -> crd::resources::ResourceId {
-        if (image_index < 0 || static_cast<crd::usize>(image_index) >= image_ids.size()) { return {}; }
+        if (image_index < 0 || static_cast<crd::usize>(image_index) >= image_ids.size())
+        {
+            return {};
+        }
         return image_ids[static_cast<crd::usize>(image_index)]; // null when the image failed to cook — honest unbound
     };
 
@@ -530,12 +593,18 @@ struct SkinCookInfo
 void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& asset, crd::f32 position_scale,
                          CookResult& result, crd::containers::Array<SkinCookInfo>& out_skins)
 {
-    if (asset.skins.size() == 0U) { return; }
+    if (asset.skins.size() == 0U)
+    {
+        return;
+    }
 
     // node → parent (from the children arrays; -1 = root)
     crd::containers::Array<crd::i32> node_parent(ctx.allocator);
     node_parent.resize(asset.nodes.size());
-    for (crd::usize i = 0; i < node_parent.size(); ++i) { node_parent[i] = -1; }
+    for (crd::usize i = 0; i < node_parent.size(); ++i)
+    {
+        node_parent[i] = -1;
+    }
     for (crd::usize i = 0; i < asset.nodes.size(); ++i)
     {
         for (crd::usize c = 0; c < asset.nodes[i].children.size(); ++c)
@@ -552,7 +621,10 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
 
         // skin-local index of each joint node
         crd::containers::HashMap<crd::i32, crd::u32> local_of_node(ctx.allocator);
-        for (crd::u32 j = 0; j < nj; ++j) { local_of_node.insert(skin.joints[j], j); }
+        for (crd::u32 j = 0; j < nj; ++j)
+        {
+            local_of_node.insert(skin.joints[j], j);
+        }
 
         // each joint's skeleton-parent (skin-local): the nearest ancestor node that is also a joint
         crd::containers::Array<crd::i32> parent_local(ctx.allocator);
@@ -574,14 +646,20 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
 
         // topological order (Kahn-style; nj is small — O(n²) is honest and simple)
         info.new_of_old.resize(nj);
-        for (crd::u32 j = 0; j < nj; ++j) { info.new_of_old[j] = 0xFFFFFFFFU; }
+        for (crd::u32 j = 0; j < nj; ++j)
+        {
+            info.new_of_old[j] = 0xFFFFFFFFU;
+        }
         crd::containers::Array<crd::u32> old_of_new(ctx.allocator);
         while (old_of_new.size() < nj)
         {
             const crd::usize before = old_of_new.size();
             for (crd::u32 j = 0; j < nj; ++j)
             {
-                if (info.new_of_old[j] != 0xFFFFFFFFU) { continue; }
+                if (info.new_of_old[j] != 0xFFFFFFFFU)
+                {
+                    continue;
+                }
                 const crd::i32 p = parent_local[j];
                 if (p < 0 || info.new_of_old[static_cast<crd::u32>(p)] != 0xFFFFFFFFU)
                 {
@@ -589,7 +667,10 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
                     old_of_new.push_back(j);
                 }
             }
-            if (old_of_new.size() == before) { break; } // a cycle — refuse below
+            if (old_of_new.size() == before) // a cycle — refuse below
+            {
+                break;
+            }
         }
         if (old_of_new.size() != nj)
         {
@@ -610,15 +691,24 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
                                        jn.translation.z * position_scale, jn.rotation.x,      jn.rotation.y,
                                        jn.rotation.z,                      jn.rotation.w,      jn.scale.x,
                                        jn.scale.y,                         jn.scale.z};
-            for (crd::f32 v : rest) { skel.rest.push_back(v); }
+            for (crd::f32 v : rest)
+            {
+                skel.rest.push_back(v);
+            }
             for (crd::u32 c = 0; c < 16U; ++c)
             {
                 crd::f32 v = skin.inverse_binds[static_cast<crd::usize>(old) * 16U + c];
-                if (c >= 12U && c <= 14U) { v *= position_scale; } // the translation column takes the SI scale
+                if (c >= 12U && c <= 14U) // the translation column takes the SI scale
+                {
+                    v *= position_scale;
+                }
                 skel.inverse_binds.push_back(v);
             }
             skel.name_offsets.push_back(static_cast<crd::u32>(skel.name_pool.size()));
-            for (const char* s = jn.name.c_str(); *s != '\0'; ++s) { skel.name_pool.push_back(*s); }
+            for (const char* s = jn.name.c_str(); *s != '\0'; ++s)
+            {
+                skel.name_pool.push_back(*s);
+            }
             skel.name_pool.push_back('\0');
             info.joint_nodes.push_back(skin.joints[old]);
         }
@@ -661,13 +751,22 @@ void cook_gltf_skeletons(const CookContext& ctx, crd::assetio::ImportedAsset& as
     for (crd::usize ni = 0; ni < asset.nodes.size(); ++ni)
     {
         const crd::assetio::ImportedNode& node = asset.nodes[ni];
-        if (node.skin < 0 || node.mesh < 0) { continue; }
+        if (node.skin < 0 || node.mesh < 0)
+        {
+            continue;
+        }
         const SkinCookInfo& info = out_skins[static_cast<crd::usize>(node.skin)];
-        if (!info.valid) { continue; }
+        if (!info.valid)
+        {
+            continue;
+        }
         for (crd::usize mi = 0; mi < asset.meshes.size(); ++mi)
         {
             crd::assetio::ImportedMesh& mesh = asset.meshes[mi];
-            if (mesh.source_mesh != node.mesh || !mesh.has_skin()) { continue; }
+            if (mesh.source_mesh != node.mesh || !mesh.has_skin())
+            {
+                continue;
+            }
             for (crd::usize k = 0; k < mesh.joints0.size(); ++k)
             {
                 const crd::u16 old = mesh.joints0[k];
@@ -681,13 +780,19 @@ void cook_gltf_animations(const CookContext& ctx, const crd::assetio::ImportedAs
                           const crd::containers::Array<SkinCookInfo>& skins, crd::f32 position_scale,
                           CookResult& result, crd::containers::Array<crd::resources::ResourceId>& out_clips)
 {
-    if (asset.animations.size() == 0U || skins.size() == 0U) { return; }
+    if (asset.animations.size() == 0U || skins.size() == 0U)
+    {
+        return;
+    }
 
     // node → (topological joint index) across skins — the first valid skin containing the node wins
     crd::containers::HashMap<crd::i32, crd::u32> joint_of_node(ctx.allocator);
     for (const SkinCookInfo& info : skins)
     {
-        if (!info.valid) { continue; }
+        if (!info.valid)
+        {
+            continue;
+        }
         for (crd::usize n = 0; n < info.joint_nodes.size(); ++n)
         {
             if (joint_of_node.find(info.joint_nodes[n]) == nullptr)
@@ -717,7 +822,10 @@ void cook_gltf_animations(const CookContext& ctx, const crd::assetio::ImportedAs
             track.components = static_cast<crd::u16>(ch.components);
             track.key_count  = static_cast<crd::u32>(ch.times.size());
             track.times_off  = static_cast<crd::u32>(clip.data.size());
-            for (crd::usize k = 0; k < ch.times.size(); ++k) { clip.data.push_back(ch.times[k]); }
+            for (crd::usize k = 0; k < ch.times.size(); ++k)
+            {
+                clip.data.push_back(ch.times[k]);
+            }
             track.values_off = static_cast<crd::u32>(clip.data.size());
             const bool scale_values = ch.path == 0U; // translation tracks take the SI position scale
             for (crd::usize k = 0; k < ch.values.size(); ++k)
@@ -726,7 +834,10 @@ void cook_gltf_animations(const CookContext& ctx, const crd::assetio::ImportedAs
             }
             clip.tracks.push_back(track);
         }
-        if (clip.tracks.size() == 0U) { continue; }
+        if (clip.tracks.size() == 0U)
+        {
+            continue;
+        }
 
         char idx_buf[24]; // gcc -Werror=format-truncation: size_t %zu can be 20 digits; size for the worst case
         std::snprintf(static_cast<char*>(idx_buf), sizeof(idx_buf), "%zu", ai);
@@ -783,7 +894,10 @@ void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& 
                      const crd::containers::Array<SkinCookInfo>&               skins,
                      const crd::containers::Array<crd::resources::ResourceId>& clips, CookResult& result)
 {
-    if (asset.nodes.size() == 0U) { return; }
+    if (asset.nodes.size() == 0U)
+    {
+        return;
+    }
 
     crd::scene::World world{ctx.allocator};
     world.register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait());
@@ -838,7 +952,10 @@ void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& 
         {
             crd::scene::SkeletonAnimator animator;
             animator.skeleton = skins[static_cast<crd::usize>(node.skin)].skeleton_id;
-            if (clips.size() > 0U) { animator.clip = clips[0]; }
+            if (clips.size() > 0U)
+            {
+                animator.clip = clips[0];
+            }
             world.add_component(e, animator);
         }
         node_entities.push_back(e);
@@ -852,14 +969,20 @@ void cook_gltf_scene(const CookContext& ctx, const crd::assetio::ImportedAsset& 
         {
             world.add_relation<crd::scene::relations::ChildOf>(node_entities[node.children[ci]], node_entities[ni]);
         }
-        if (node.mesh < 0) { continue; }
+        if (node.mesh < 0)
+        {
+            continue;
+        }
 
         // the primitives this node's LIBRARY mesh fanned out into (cooked ones only), each with ITS OWN authored
         // material (the primitive is the material-binding granularity — stage 4)
         crd::containers::Array<crd::scene::MeshRenderer> drawables(ctx.allocator);
         for (crd::usize mi = 0; mi < asset.meshes.size(); ++mi)
         {
-            if (asset.meshes[mi].source_mesh != node.mesh || mesh_ids[mi].is_null()) { continue; }
+            if (asset.meshes[mi].source_mesh != node.mesh || mesh_ids[mi].is_null())
+            {
+                continue;
+            }
             crd::resources::ResourceId mat_id{};
             const crd::i32             mat_index = asset.meshes[mi].material;
             if (mat_index >= 0 && static_cast<crd::usize>(mat_index) < material_ids.size())
@@ -924,7 +1047,10 @@ CookResult wave1_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
 
     const Wave1Format fmt = detect_format(ctx.source_path);
-    if (fmt == Wave1Format::Unknown) { return result; }
+    if (fmt == Wave1Format::Unknown)
+    {
+        return result;
+    }
 
     crd::containers::Array<crd::u8> bytes(ctx.allocator);
     if (!ctx.io->read_source(bytes))
@@ -939,10 +1065,22 @@ CookResult wave1_handler(const CookContext& ctx)
     crd::assetio::ImportedAsset asset(ctx.allocator);
     crd::assetio::ImportStatus  st = crd::assetio::ImportStatus::NotRecognized;
     const auto                  span = crd::containers::as_const_span(bytes);
-    if (fmt == Wave1Format::Stl) { st = crd::assetio::parse_stl(span, ctx.allocator, asset); }
-    else if (fmt == Wave1Format::Obj) { st = crd::assetio::parse_obj(span, ctx.allocator, asset); }
-    else if (fmt == Wave1Format::Ply) { st = crd::assetio::parse_ply(span, ctx.allocator, asset); }
-    else if (fmt == Wave1Format::Glb) { st = crd::assetio::parse_glb(span, ctx.allocator, asset); }
+    if (fmt == Wave1Format::Stl)
+    {
+        st = crd::assetio::parse_stl(span, ctx.allocator, asset);
+    }
+    else if (fmt == Wave1Format::Obj)
+    {
+        st = crd::assetio::parse_obj(span, ctx.allocator, asset);
+    }
+    else if (fmt == Wave1Format::Ply)
+    {
+        st = crd::assetio::parse_ply(span, ctx.allocator, asset);
+    }
+    else if (fmt == Wave1Format::Glb)
+    {
+        st = crd::assetio::parse_glb(span, ctx.allocator, asset);
+    }
     else if (fmt == Wave1Format::ThreeMf) // the package is unzipped HERE; the parser sees only the model part
     {
         crd::containers::Array<crd::u8> model_bytes(ctx.allocator);
@@ -1023,7 +1161,10 @@ CookResult wave1_handler(const CookContext& ctx)
         cook_gltf_materials(ctx, asset, image_ids, result, material_ids);
     }
     const auto material_of = [&](const crd::assetio::ImportedMesh& m) -> crd::resources::ResourceId {
-        if (m.material < 0 || static_cast<crd::usize>(m.material) >= material_ids.size()) { return {}; }
+        if (m.material < 0 || static_cast<crd::usize>(m.material) >= material_ids.size())
+        {
+            return {};
+        }
         return material_ids[static_cast<crd::usize>(m.material)];
     };
 
@@ -1052,7 +1193,10 @@ CookResult wave1_handler(const CookContext& ctx)
     {
         auto artifact = build_wave1_artifact(asset.meshes[static_cast<crd::usize>(main_index)], ctx.id, ctx.allocator,
                                              cook_options, material_of(asset.meshes[static_cast<crd::usize>(main_index)]));
-        if (artifact.empty()) { return result; }
+        if (artifact.empty())
+        {
+            return result;
+        }
         result.cooked_bytes    = std::move(artifact);
         result.type_fourcc     = crd::resources::kFourCC_MESH;
         result.handler_version = kWave1HandlerVersion;
@@ -1063,7 +1207,10 @@ CookResult wave1_handler(const CookContext& ctx)
     for (crd::usize mi = static_cast<crd::usize>(main_index) + 1U; mi < asset.meshes.size(); ++mi)
     {
         crd::assetio::ImportedMesh& mesh = asset.meshes[mi];
-        if (mesh.triangle_count() == 0U) { continue; }
+        if (mesh.triangle_count() == 0U)
+        {
+            continue;
+        }
 
         const crd::containers::String safe_name = sanitize_name(mesh.name.c_str(), ctx.allocator);
         crd::containers::String       suffix(ctx.allocator);

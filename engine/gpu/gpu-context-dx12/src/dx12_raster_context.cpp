@@ -50,10 +50,16 @@ constexpr UINT        kBindlessMax  = 1024; // REN-38: the material-heap capacit
 {
     D3D12_CLEAR_VALUE value{};
     value.Format = format; // the typed attachment view, including when the resource itself is typeless
-    if (depth) { value.DepthStencil.Depth = hint.depth; }
+    if (depth)
+    {
+        value.DepthStencil.Depth = hint.depth;
+    }
     else
     {
-        for (crd::u32 i = 0; i < 4U; ++i) { value.Color[i] = hint.color[i]; }
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            value.Color[i] = hint.color[i];
+        }
     }
     return value;
 }
@@ -166,14 +172,20 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     pd.RasterizerState.DepthClipEnable                  = TRUE;
     // B1-f: conservative rasterization (a PSO-baked raster state on DX12 — no dynamic-state equivalent). Both Overestimate
     // and Underestimate map to the single D3D12 ON mode; Underestimate is realized in the FS by reading SV_InnerCoverage.
-    if (conservative) { pd.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON; }
+    if (conservative)
+    {
+        pd.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON;
+    }
     // B4-tess: a hull/domain pair rasterizes PATCHES (the IA feeds control-point patches; the tessellator generates triangles).
     pd.PrimitiveTopologyType                            = (hs.pShaderBytecode != nullptr) ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH
                                                                                           : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pd.NumRenderTargets                                 = num_rts; // B5: >1 for a deferred G-buffer (MRT)
     // CEIR-14z-4c c3: PER-ATTACHMENT RTV formats (a HETEROGENEOUS uint@0+float@1 MRT). `rt_fmts` (when non-null) gives each
     // attachment's own format; else broadcast the single `rt_fmt` (the homogeneous path, byte-identical to before).
-    for (UINT i = 0; i < num_rts && i < 8U; ++i) { pd.RTVFormats[i] = rt_fmts != nullptr ? rt_fmts[i] : rt_fmt; }
+    for (UINT i = 0; i < num_rts && i < 8U; ++i)
+    {
+        pd.RTVFormats[i] = rt_fmts != nullptr ? rt_fmts[i] : rt_fmt;
+    }
     pd.SampleDesc.Count                                 = samples;
     pd.DSVFormat                                        = dsv;
     if (dsv != DXGI_FORMAT_UNKNOWN) // B1-d: depth test + write ON with the given compare func
@@ -187,8 +199,14 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     if (state != nullptr)
     {
         auto& rs = pd.RasterizerState;
-        if (state->face_cull == FaceCull::Back)  { rs.CullMode = D3D12_CULL_MODE_BACK; }
-        if (state->face_cull == FaceCull::Front) { rs.CullMode = D3D12_CULL_MODE_FRONT; }
+        if (state->face_cull == FaceCull::Back)
+        {
+            rs.CullMode = D3D12_CULL_MODE_BACK;
+        }
+        if (state->face_cull == FaceCull::Front)
+        {
+            rs.CullMode = D3D12_CULL_MODE_FRONT;
+        }
         rs.FrontCounterClockwise = state->front_face == FrontFace::CounterClockwise ? TRUE : FALSE;
         // ⛔ D3D12's constant bias is an INT in device units where Vulkan's is a float — the asset declares the
         // same number for both, which is the portable meaning for the fixed-point depth paths shadows use.
@@ -214,7 +232,11 @@ ComPtr<ID3D12PipelineState> build_graphics_pso(ID3D12Device* dev, ID3D12RootSign
     }
     ComPtr<ID3D12PipelineState> pso;
     const HRESULT result = dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso));
-    if (FAILED(result)) { detail::dx12_execution_failure(result, "CreateGraphicsPipelineState"); return nullptr; }
+    if (FAILED(result))
+    {
+        detail::dx12_execution_failure(result, "CreateGraphicsPipelineState");
+        return nullptr;
+    }
     return pso;
 }
 
@@ -241,7 +263,10 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
                                            D3D12_SHADER_BYTECODE as = D3D12_SHADER_BYTECODE{}, // B4: AS = the task shader (empty = none)
                                            const PassRasterState* state = nullptr) // REN-38 audit: pass state
 {
-    if (dev2 == nullptr) { return nullptr; }
+    if (dev2 == nullptr)
+    {
+        return nullptr;
+    }
     D3D12_RASTERIZER_DESC rast{};
     rast.FillMode        = D3D12_FILL_MODE_SOLID;
     rast.CullMode        = D3D12_CULL_MODE_NONE; // match the graphics path (attributeless / mesh-generated winding moot)
@@ -249,8 +274,14 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     // REN-38 audit: a mesh pass declares the same state a geometry pass does — same fields, same defaults.
     if (state != nullptr)
     {
-        if (state->face_cull == FaceCull::Back)  { rast.CullMode = D3D12_CULL_MODE_BACK; }
-        if (state->face_cull == FaceCull::Front) { rast.CullMode = D3D12_CULL_MODE_FRONT; }
+        if (state->face_cull == FaceCull::Back)
+        {
+            rast.CullMode = D3D12_CULL_MODE_BACK;
+        }
+        if (state->face_cull == FaceCull::Front)
+        {
+            rast.CullMode = D3D12_CULL_MODE_FRONT;
+        }
         rast.FrontCounterClockwise = state->front_face == FrontFace::CounterClockwise ? TRUE : FALSE;
         rast.DepthBias             = static_cast<INT>(state->depth_bias);
         rast.SlopeScaledDepthBias  = state->depth_bias_slope;
@@ -263,7 +294,10 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     // ⚠ NAMED-FORWARD: the mesh PSO hardcodes kColorFormat for every RT. The graphics path threads PER-ATTACHMENT RTV formats
     // (CEIR-14z-4c c3), but a heterogeneous mesh-MRT has no consumer yet (14z-7 mesh proves single-RT kColorFormat) — mirror the
     // c3 pso_for fix here on the FIRST mesh-MRT consumer (CEIR-15/16 executor migration is the likely home).
-    for (UINT i = 0; i < num_rts; ++i) { rts.RTFormats[i] = kColorFormat; }
+    for (UINT i = 0; i < num_rts; ++i)
+    {
+        rts.RTFormats[i] = kColorFormat;
+    }
     DXGI_SAMPLE_DESC sd{};
     sd.Count = samples;
     D3D12_DEPTH_STENCIL_DESC ds{};
@@ -314,7 +348,10 @@ ComPtr<ID3D12PipelineState> build_mesh_pso(ID3D12Device2* dev2, ID3D12RootSignat
     sdesc.SizeInBytes                   = sizeof(stream);
     sdesc.pPipelineStateSubobjectStream = &stream;
     ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(dev2->CreatePipelineState(&sdesc, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    if (FAILED(dev2->CreatePipelineState(&sdesc, IID_PPV_ARGS(&pso))))
+    {
+        return nullptr;
+    }
     return pso;
 }
 
@@ -413,7 +450,10 @@ public:
           m_readback(std::move(readback)), m_rtv_heap(std::move(rtv_heap)), m_dsv_heap(std::move(dsv_heap)),
           m_mapped(mapped), m_fp(fp), m_samples(samples), m_w(w), m_h(h), m_has_stencil(has_stencil)
     {
-        if (identity_mode == IdentityMode::None) { return; } // frame-graph node: no mint, identity stays invalid
+        if (identity_mode == IdentityMode::None) // frame-graph node: no mint, identity stays invalid
+        {
+            return;
+        }
         // DIAG.7a(d2b-dx12-b): ONE identity for the whole logical target, minted on the colour primary and stamped
         // onto every native sibling it owns -- a validation message about any of them resolves to this one identity.
         m_identity = detail::dx12_attach_identity(m_tex.Get(), ObjectKind::Resource, "dx12-target-color");
@@ -425,7 +465,10 @@ public:
     }
     ~Dx12RasterTarget() override
     {
-        if (m_mapped != nullptr && m_readback != nullptr) { m_readback->Unmap(0, nullptr); }
+        if (m_mapped != nullptr && m_readback != nullptr)
+        {
+            m_readback->Unmap(0, nullptr);
+        }
         detail::dx12_detach_identity(m_identity); // DIAG.7a(d2b-dx12-b): retire the logical target's identity
     }
     Dx12RasterTarget(const Dx12RasterTarget&)            = delete;
@@ -437,12 +480,18 @@ public:
     [[nodiscard]] crd::u32 height() const noexcept override { return m_h; }
     [[nodiscard]] crd::u32 read_pixel(crd::u32 x, crd::u32 y) const noexcept override
     {
-        if (m_mapped == nullptr || x >= m_w || y >= m_h) { return 0U; }
+        if (m_mapped == nullptr || x >= m_w || y >= m_h)
+        {
+            return 0U;
+        }
         const auto*      base   = static_cast<const crd::u8*>(m_mapped) + m_fp.Offset;
         const crd::usize pitch  = m_fp.Footprint.RowPitch; // 256-byte-aligned, so ≥ width*4
         const crd::usize offset = static_cast<crd::usize>(y) * pitch + static_cast<crd::usize>(x) * 4U;
         crd::u32         px     = 0U;
-        for (int i = 0; i < 4; ++i) { px |= static_cast<crd::u32>(base[offset + static_cast<crd::usize>(i)]) << (8 * i); }
+        for (int i = 0; i < 4; ++i)
+        {
+            px |= static_cast<crd::u32>(base[offset + static_cast<crd::usize>(i)]) << (8 * i);
+        }
         return px; // little-endian RGBA8: R low byte
     }
 
@@ -468,7 +517,10 @@ public:
     }
     [[nodiscard]] DXGI_FORMAT       color_format() const noexcept
     {
-        if (m_tex == nullptr) { return kColorFormat; }
+        if (m_tex == nullptr)
+        {
+            return kColorFormat;
+        }
         return m_tex->GetDesc().Format;
     }
     [[nodiscard]] D3D12_CLEAR_FLAGS clear_flags() const noexcept
@@ -515,9 +567,15 @@ public:
                        PresentMode mode) noexcept
         : m_queue(queue), m_mode(mode), m_device(device)
     {
-        if (hwnd == nullptr) { return; } // DXGI presents to windows only — nullptr is the Vulkan headless path
+        if (hwnd == nullptr) // DXGI presents to windows only — nullptr is the Vulkan headless path
+        {
+            return;
+        }
         ComPtr<IDXGIFactory2> factory;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) { return; }
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+        {
+            return;
+        }
         {
             ComPtr<IDXGIFactory5> f5; // tearing (true immediate mode) is a CAPABILITY — probe, never assume
             BOOL                  allow = FALSE;
@@ -541,18 +599,33 @@ public:
         {
             return;
         }
-        if (FAILED(sc1.As(&m_swapchain))) { return; }
+        if (FAILED(sc1.As(&m_swapchain)))
+        {
+            return;
+        }
 
-        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc)))) { return; }
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc))))
+        {
+            return;
+        }
         if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_alloc.Get(), nullptr,
                                              IID_PPV_ARGS(&m_list))))
         {
             return;
         }
-        if (FAILED(m_list->Close())) { return; }
-        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) { return; }
+        if (FAILED(m_list->Close()))
+        {
+            return;
+        }
+        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence))))
+        {
+            return;
+        }
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (m_event == nullptr) { return; }
+        if (m_event == nullptr)
+        {
+            return;
+        }
         m_w     = w;
         m_h     = h;
         m_valid = true;
@@ -561,7 +634,10 @@ public:
     ~Dx12PresentSurface() override
     {
         wait_gpu();
-        if (m_event != nullptr) { CloseHandle(m_event); }
+        if (m_event != nullptr)
+        {
+            CloseHandle(m_event);
+        }
     }
     Dx12PresentSurface(const Dx12PresentSurface&)            = delete;
     Dx12PresentSurface& operator=(const Dx12PresentSurface&) = delete;
@@ -583,15 +659,28 @@ public:
     // Vulkan twin documents.
     [[nodiscard]] bool present(IRasterTarget& target, OverlayFn overlay, void* user) override
     {
-        if (!m_valid) { return false; }
+        if (!m_valid)
+        {
+            return false;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
-        if (t.width() != m_w || t.height() != m_h) { return false; } // never a stretched half-frame
+        if (t.width() != m_w || t.height() != m_h) // never a stretched half-frame
+        {
+            return false;
+        }
 
         const UINT             idx = m_swapchain->GetCurrentBackBufferIndex();
         ComPtr<ID3D12Resource> bb;
-        if (FAILED(m_swapchain->GetBuffer(idx, IID_PPV_ARGS(&bb)))) { return false; }
+        if (FAILED(m_swapchain->GetBuffer(idx, IID_PPV_ARGS(&bb))))
+        {
+            return false;
+        }
 
-        if (FAILED(detail::dx12_reset(m_alloc.Get(), m_list.Get()))) { m_valid = false; return false; }
+        if (FAILED(detail::dx12_reset(m_alloc.Get(), m_list.Get())))
+        {
+            m_valid = false;
+            return false;
+        }
         barrier(bb.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
         barrier(t.copy_src(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
         m_list->CopyResource(bb.Get(), t.copy_src()); // same format + extent — the whole-resource copy
@@ -624,14 +713,20 @@ public:
         const UINT flags = m_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0U;
         const HRESULT pr = m_swapchain->Present(sync, flags);
         // Include DXGI's queue work as well as our copy/overlay list in the surface's retirement fence.
-        if (FAILED(detail::dx12_signal(m_device, m_queue, m_fence.Get(), m_fence_value))) { m_valid = false; }
+        if (FAILED(detail::dx12_signal(m_device, m_queue, m_fence.Get(), m_fence_value)))
+        {
+            m_valid = false;
+        }
         wait_gpu(); // full per-frame serialization (v1 pacing — the frame graph takes over later)
         if (FAILED(pr))
         {
             detail::dx12_execution_failure(pr, "Present swapchain");
             m_valid = false;
         }
-        if (!m_valid) { return false; }
+        if (!m_valid)
+        {
+            return false;
+        }
         ++m_frames;
         return true;
     }
@@ -642,16 +737,31 @@ public:
 
     [[nodiscard]] bool resize(crd::u32 width, crd::u32 height) override
     {
-        if (!m_valid) { return false; }
+        if (!m_valid)
+        {
+            return false;
+        }
         wait_gpu();
-        if (!m_valid) { return false; }
+        if (!m_valid)
+        {
+            return false;
+        }
         const UINT flags = m_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0U;
         // REN-39-D2: ResizeBuffers hands back NEW backbuffer resources at the same indices — forget the RTVs or
         // the overlay would render into freed views (the class of bug the `m_bb_rtv_for` identity check exists for).
-        for (ID3D12Resource*& r : m_bb_rtv_for) { r = nullptr; }
-        if (FAILED(m_swapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags))) { return false; }
+        for (ID3D12Resource*& r : m_bb_rtv_for)
+        {
+            r = nullptr;
+        }
+        if (FAILED(m_swapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, flags)))
+        {
+            return false;
+        }
         DXGI_SWAP_CHAIN_DESC1 sd{};
-        if (FAILED(m_swapchain->GetDesc1(&sd))) { return false; }
+        if (FAILED(m_swapchain->GetDesc1(&sd)))
+        {
+            return false;
+        }
         m_w = sd.Width; // a real window's swapchain follows the client area — report the truth
         m_h = sd.Height;
         return true;
@@ -663,13 +773,19 @@ private:
     // which hands back NEW resources at the same indices — cannot leave a stale view behind).
     [[nodiscard]] bool ensure_backbuffer_rtv(ID3D12Resource* bb, UINT idx)
     {
-        if (m_device == nullptr || idx >= kBackBufferCount) { return false; }
+        if (m_device == nullptr || idx >= kBackBufferCount)
+        {
+            return false;
+        }
         if (m_bb_rtv_heap == nullptr)
         {
             D3D12_DESCRIPTOR_HEAP_DESC hd{};
             hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
             hd.NumDescriptors = kBackBufferCount;
-            if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_bb_rtv_heap)))) { return false; }
+            if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_bb_rtv_heap))))
+            {
+                return false;
+            }
             m_bb_rtv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         }
         if (m_bb_rtv_for[idx] != bb)
@@ -693,8 +809,14 @@ private:
     }
     void wait_gpu()
     {
-        if (m_fence == nullptr || m_event == nullptr) { return; }
-        if (FAILED(detail::dx12_wait(m_device, m_fence.Get(), m_fence_value, m_event))) { m_valid = false; }
+        if (m_fence == nullptr || m_event == nullptr)
+        {
+            return;
+        }
+        if (FAILED(detail::dx12_wait(m_device, m_fence.Get(), m_fence_value, m_event)))
+        {
+            m_valid = false;
+        }
     }
 
     ID3D12CommandQueue*               m_queue = nullptr;
@@ -779,7 +901,10 @@ public:
         for (crd::u32 i = 0; i < nf; ++i)
         {
             fmts[i] = rt_fmts != nullptr ? rt_fmts[i] : rt_fmt;
-            if (fmts[i] != kColorFormat) { all_default = false; }
+            if (fmts[i] != kColorFormat)
+            {
+                all_default = false;
+            }
         }
         // REN-38-A15: fold the blend modes into the cache key. ⛔ Without this, two passes asking for DIFFERENT
         // blends would share one PSO and the second would render with the first's equations — a wrong image with
@@ -824,7 +949,10 @@ public:
                 return m_cache[i].pso.Get();
             }
         }
-        if (m_cache_n >= kPsoCacheCap) { return nullptr; }
+        if (m_cache_n >= kPsoCacheCap)
+        {
+            return nullptr;
+        }
         m_cache[m_cache_n].key = key;
         std::memcpy(m_cache[m_cache_n].rt_fmts, fmts, sizeof(fmts));
         m_cache[m_cache_n].state = st;
@@ -885,7 +1013,10 @@ public:
     }
     ~Dx12StorageBuffer() override
     {
-        if (m_mapped != nullptr && m_readback != nullptr) { m_readback->Unmap(0, nullptr); }
+        if (m_mapped != nullptr && m_readback != nullptr)
+        {
+            m_readback->Unmap(0, nullptr);
+        }
         // DIAG.7a(d2b-dx12-a): retire the identity so the freed native object's slot generation bumps -- a later
         // message about it resolves to alive()==false (the retired-provenance primitive lifecycle coverage (e) uses).
         detail::dx12_detach_identity(m_identity);
@@ -898,7 +1029,10 @@ public:
     [[nodiscard]] crd::u32 size_bytes() const noexcept override { return m_size; }
     [[nodiscard]] crd::u32 read_u32(crd::u32 index) const noexcept override
     {
-        if (m_mapped == nullptr || index >= m_size / 4U) { return 0U; }
+        if (m_mapped == nullptr || index >= m_size / 4U)
+        {
+            return 0U;
+        }
         crd::u32 v = 0U;
         std::memcpy(&v, static_cast<const crd::u8*>(m_mapped) + static_cast<crd::usize>(index) * 4U, 4U);
         return v;
@@ -965,17 +1099,35 @@ public:
                       ComPtr<ID3D12DescriptorHeap> rtv_heap, UINT rtv_inc, crd::u32 n, crd::u32 w, crd::u32 h) noexcept
         : m_rtv_heap(std::move(rtv_heap)), m_rtv_inc(rtv_inc), m_n(n), m_w(w), m_h(h)
     {
-        for (crd::u32 i = 0; i < n; ++i) { m_tex[i] = std::move(tex[i]); m_rb[i] = std::move(rb[i]); m_mapped[i] = mapped[i]; m_fp[i] = fp[i]; }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            m_tex[i] = std::move(tex[i]);
+            m_rb[i] = std::move(rb[i]);
+            m_mapped[i] = mapped[i];
+            m_fp[i] = fp[i];
+        }
         // DIAG.7a(d2b-dx12-b): ONE identity for the whole logical G-buffer (all N colour planes + readbacks + heap),
         // minted on plane 0 and stamped onto every sibling -- so live_count rises by 1, not N, per G-buffer target.
         m_identity = detail::dx12_attach_identity(m_tex[0].Get(), ObjectKind::Resource, "dx12-gbuffer-color");
-        for (crd::u32 i = 1; i < m_n; ++i) { detail::dx12_name_object(m_tex[i].Get(), m_identity, "dx12-gbuffer-color"); }
-        for (crd::u32 i = 0; i < m_n; ++i) { detail::dx12_name_object(m_rb[i].Get(), m_identity, "dx12-gbuffer-readback"); }
+        for (crd::u32 i = 1; i < m_n; ++i)
+        {
+            detail::dx12_name_object(m_tex[i].Get(), m_identity, "dx12-gbuffer-color");
+        }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            detail::dx12_name_object(m_rb[i].Get(), m_identity, "dx12-gbuffer-readback");
+        }
         detail::dx12_name_object(m_rtv_heap.Get(), m_identity, "dx12-gbuffer-rtv-heap");
     }
     ~Dx12GBufferTarget() override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { if (m_mapped[i] != nullptr && m_rb[i] != nullptr) { m_rb[i]->Unmap(0, nullptr); } }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            if (m_mapped[i] != nullptr && m_rb[i] != nullptr)
+            {
+                m_rb[i]->Unmap(0, nullptr);
+            }
+        }
         detail::dx12_detach_identity(m_identity); // DIAG.7a(d2b-dx12-b): retire the logical G-buffer's identity
     }
     Dx12GBufferTarget(const Dx12GBufferTarget&)            = delete;
@@ -988,12 +1140,18 @@ public:
     [[nodiscard]] crd::u32 attachment_count() const noexcept override { return m_n; }
     [[nodiscard]] crd::u32 read_pixel(crd::u32 attachment, crd::u32 x, crd::u32 y) const noexcept override
     {
-        if (attachment >= m_n || m_mapped[attachment] == nullptr || x >= m_w || y >= m_h) { return 0U; }
+        if (attachment >= m_n || m_mapped[attachment] == nullptr || x >= m_w || y >= m_h)
+        {
+            return 0U;
+        }
         const auto*      base   = static_cast<const crd::u8*>(m_mapped[attachment]) + m_fp[attachment].Offset;
         const crd::usize pitch  = m_fp[attachment].Footprint.RowPitch;
         const crd::usize offset = static_cast<crd::usize>(y) * pitch + static_cast<crd::usize>(x) * 4U;
         crd::u32         px     = 0U;
-        for (int i = 0; i < 4; ++i) { px |= static_cast<crd::u32>(base[offset + static_cast<crd::usize>(i)]) << (8 * i); }
+        for (int i = 0; i < 4; ++i)
+        {
+            px |= static_cast<crd::u32>(base[offset + static_cast<crd::usize>(i)]) << (8 * i);
+        }
         return px;
     }
     [[nodiscard]] ID3D12Resource*                          tex(crd::u32 i) const noexcept { return m_tex[i].Get(); }
@@ -1042,11 +1200,20 @@ public:
     }
     explicit Dx12RasterContext(crd::memory::IAllocator* allocator) : m_allocator(allocator)
     {
-        if (allocator == nullptr) { return; }
-        if (FAILED(m_validation.create(m_device))) { return; }
+        if (allocator == nullptr)
+        {
+            return;
+        }
+        if (FAILED(m_validation.create(m_device)))
+        {
+            return;
+        }
         D3D12_COMMAND_QUEUE_DESC qd{};
         qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT; // graphics queue (vs the compute context's COMPUTE queue)
-        if (FAILED(m_device->CreateCommandQueue(&qd, IID_PPV_ARGS(&m_queue)))) { return; }
+        if (FAILED(m_device->CreateCommandQueue(&qd, IID_PPV_ARGS(&m_queue))))
+        {
+            return;
+        }
         // REN-8: the frame graph's allocator+list RING (see frame_rec_begin). Allocation failure is non-fatal —
         // `m_ring_list[0] == nullptr` simply means the graph records on the dedicated pair, exactly as before.
         for (crd::u32 s = 0; s < kFrameRingSize; ++s)
@@ -1056,10 +1223,17 @@ public:
                 || FAILED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_ring_alloc[s].Get(),
                                                       nullptr, IID_PPV_ARGS(&m_ring_list[s]))))
             {
-                for (crd::u32 k = 0; k <= s; ++k) { m_ring_list[k].Reset(); m_ring_alloc[k].Reset(); }
+                for (crd::u32 k = 0; k <= s; ++k)
+                {
+                    m_ring_list[k].Reset();
+                    m_ring_alloc[k].Reset();
+                }
                 break;
             }
-            if (FAILED(m_ring_list[s]->Close())) { return; } // Created open; reset before recording.
+            if (FAILED(m_ring_list[s]->Close())) // Created open; reset before recording.
+            {
+                return;
+            }
         }
         if (FAILED(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_cmd_alloc))))
         {
@@ -1070,8 +1244,14 @@ public:
         {
             return;
         }
-        if (FAILED(m_list->Close())) { return; }
-        if (FAILED(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) { return; }
+        if (FAILED(m_list->Close()))
+        {
+            return;
+        }
+        if (FAILED(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence))))
+        {
+            return;
+        }
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         m_ok    = m_event != nullptr;
 
@@ -1184,11 +1364,26 @@ public:
         drain_upload_batches(); // wait out any in-flight upload batch before its ring/list ComPtrs release
         // DIAG.7a(d2b-dx12-b) batch 3c: retire the identities of every cached compute-kernel PSO. These caches are
         // append-only (never evicted), so the context dtor is the single retire site; the count is the source of truth.
-        for (crd::u32 i = 0; i < m_kernel_n; ++i) { detail::dx12_detach_identity(m_kernel_id[i]); }
-        for (crd::u32 i = 0; i < m_rt_pso_n; ++i) { detail::dx12_detach_identity(m_rt_pso_id[i]); }
-        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i) { detail::dx12_detach_identity(m_sampled_id[i]); }
-        for (crd::u32 i = 0; i < m_dxr_n; ++i) { detail::dx12_detach_identity(m_dxr[i].identity); } // DIAG.7a batch 3d
-        if (m_event != nullptr) { CloseHandle(m_event); }
+        for (crd::u32 i = 0; i < m_kernel_n; ++i)
+        {
+            detail::dx12_detach_identity(m_kernel_id[i]);
+        }
+        for (crd::u32 i = 0; i < m_rt_pso_n; ++i)
+        {
+            detail::dx12_detach_identity(m_rt_pso_id[i]);
+        }
+        for (crd::u32 i = 0; i < m_sampled_pso_n; ++i)
+        {
+            detail::dx12_detach_identity(m_sampled_id[i]);
+        }
+        for (crd::u32 i = 0; i < m_dxr_n; ++i) // DIAG.7a batch 3d
+        {
+            detail::dx12_detach_identity(m_dxr[i].identity);
+        }
+        if (m_event != nullptr)
+        {
+            CloseHandle(m_event);
+        }
     }
     Dx12RasterContext(const Dx12RasterContext&)            = delete;
     Dx12RasterContext& operator=(const Dx12RasterContext&) = delete;
@@ -1217,7 +1412,10 @@ public:
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_target(crd::u32 width, crd::u32 height) override
     {
-        if (!m_ok || width == 0U || height == 0U) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U)
+        {
+            return nullptr;
+        }
 
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1251,17 +1449,26 @@ public:
         m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
 
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), total);
-        if (readback == nullptr) { return nullptr; }
+        if (readback == nullptr)
+        {
+            return nullptr;
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         hd.NumDescriptors = 1;
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap))))
+        {
+            return nullptr;
+        }
         m_device->CreateRenderTargetView(tex.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
 
         void* mapped = nullptr;
-        if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(readback->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
 
         return std::make_unique<Dx12RasterTarget>(std::move(tex), ComPtr<ID3D12Resource>{}, ComPtr<ID3D12Resource>{},
                                                   std::move(readback), std::move(rtv_heap),
@@ -1273,7 +1480,10 @@ public:
     // draw_visbuffer. (The RTV uses the texture's own format via a null view desc.)
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_visbuffer_target(crd::u32 width, crd::u32 height) override
     {
-        if (!m_ok || width == 0U || height == 0U) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U)
+        {
+            return nullptr;
+        }
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};
@@ -1298,15 +1508,24 @@ public:
         UINT64                             total     = 0;
         m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), total);
-        if (readback == nullptr) { return nullptr; }
+        if (readback == nullptr)
+        {
+            return nullptr;
+        }
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         hd.NumDescriptors = 1;
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap))))
+        {
+            return nullptr;
+        }
         m_device->CreateRenderTargetView(tex.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
         void* mapped = nullptr;
-        if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(readback->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         return std::make_unique<Dx12RasterTarget>(std::move(tex), ComPtr<ID3D12Resource>{}, ComPtr<ID3D12Resource>{},
                                                   std::move(readback), std::move(rtv_heap),
                                                   ComPtr<ID3D12DescriptorHeap>{}, mapped, fp, 1U, width, height);
@@ -1315,9 +1534,18 @@ public:
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_target_ms(crd::u32 width, crd::u32 height,
                                                                         crd::u32 samples) override
     {
-        if (!m_ok || width == 0U || height == 0U) { return nullptr; }
-        if (samples <= 1U) { return create_color_target(width, height); }             // 1x ⇒ the single-sample path
-        if (samples != 2U && samples != 4U && samples != 8U) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U)
+        {
+            return nullptr;
+        }
+        if (samples <= 1U) // 1x ⇒ the single-sample path
+        {
+            return create_color_target(width, height);
+        }
+        if (samples != 2U && samples != 4U && samples != 8U)
+        {
+            return nullptr;
+        }
 
         // Is this sample count supported for the colour format? (quality level 0 = the standard pattern.)
         D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS ql{};
@@ -1372,18 +1600,27 @@ public:
         m_device->GetCopyableFootprints(&rrd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
 
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), total);
-        if (readback == nullptr) { return nullptr; }
+        if (readback == nullptr)
+        {
+            return nullptr;
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         hd.NumDescriptors = 1;
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap))))
+        {
+            return nullptr;
+        }
         // A null RTV desc on a multisampled resource infers a TEXTURE2DMS view.
         m_device->CreateRenderTargetView(tex.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
 
         void* mapped = nullptr;
-        if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(readback->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
 
         return std::make_unique<Dx12RasterTarget>(std::move(tex), std::move(resolve), ComPtr<ID3D12Resource>{},
                                                   std::move(readback), std::move(rtv_heap),
@@ -1405,7 +1642,10 @@ public:
     [[nodiscard]] std::unique_ptr<IRasterTarget> make_color_depth_target(crd::u32 width, crd::u32 height,
                                                                          DXGI_FORMAT depth_fmt)
     {
-        if (!m_ok || width == 0U || height == 0U) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U)
+        {
+            return nullptr;
+        }
 
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1451,24 +1691,36 @@ public:
         m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
 
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), total);
-        if (readback == nullptr) { return nullptr; }
+        if (readback == nullptr)
+        {
+            return nullptr;
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC rhd{};
         rhd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         rhd.NumDescriptors = 1;
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&rhd, IID_PPV_ARGS(&rtv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&rhd, IID_PPV_ARGS(&rtv_heap))))
+        {
+            return nullptr;
+        }
         m_device->CreateRenderTargetView(tex.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
 
         D3D12_DESCRIPTOR_HEAP_DESC dhd{};
         dhd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         dhd.NumDescriptors = 1;
         ComPtr<ID3D12DescriptorHeap> dsv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&dhd, IID_PPV_ARGS(&dsv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&dhd, IID_PPV_ARGS(&dsv_heap))))
+        {
+            return nullptr;
+        }
         m_device->CreateDepthStencilView(depth.Get(), nullptr, dsv_heap->GetCPUDescriptorHandleForHeapStart());
 
         void* mapped = nullptr;
-        if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(readback->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
 
         return std::make_unique<Dx12RasterTarget>(std::move(tex), ComPtr<ID3D12Resource>{}, std::move(depth),
                                                   std::move(readback), std::move(rtv_heap), std::move(dsv_heap), mapped,
@@ -1516,15 +1768,27 @@ public:
         UINT64                             vtotal = 0;
         m_device->GetCopyableFootprints(&vd, 0, 1, 0, &vfp, &vrows, &vrb, &vtotal);
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), vtotal);
-        if (upload == nullptr) { return target; }
+        if (upload == nullptr)
+        {
+            return target;
+        }
         void* mapped = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &mapped))) { return target; }
+        if (FAILED(upload->Map(0, nullptr, &mapped)))
+        {
+            return target;
+        }
         const crd::u8 packed = vrs_packed(tile_rate);
         auto*         base   = static_cast<crd::u8*>(mapped) + vfp.Offset;
-        for (crd::u32 row = 0; row < vh; ++row) { std::memset(base + row * vfp.Footprint.RowPitch, packed, vw); }
+        for (crd::u32 row = 0; row < vh; ++row)
+        {
+            std::memset(base + row * vfp.Footprint.RowPitch, packed, vw);
+        }
         upload->Unmap(0, nullptr);
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         transition(vrs.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = vrs.Get();
@@ -1536,7 +1800,10 @@ public:
         src.PlacedFootprint = vfp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(vrs.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_SHADING_RATE_SOURCE);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
 
         static_cast<Dx12RasterTarget&>(*target).set_vrs(std::move(vrs)); // the target owns the rate image
         return target;
@@ -1550,26 +1817,41 @@ public:
     // an arbitrary integer id (the draw_visbuffer L2457 note); the visibility draw is what writes real ids anyway.
     void clear_scope(const RenderingDesc& rendering) override
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[crd::gpu::kMaxColorAttachments];
         crd::u32                    ncol = 0U;
         for (crd::u32 i = 0; i < static_cast<crd::u32>(rendering.color.size()) && ncol < crd::gpu::kMaxColorAttachments;
              ++i)
         {
-            if (rendering.color[i].target == nullptr) { continue; }
+            if (rendering.color[i].target == nullptr)
+            {
+                continue;
+            }
             rtvs[ncol++] = static_cast<Dx12RasterTarget&>(*rendering.color[i].target).rtv();
         }
         const bool have_depth =
             rendering.depth.enabled && rendering.depth.target != nullptr
             && static_cast<Dx12RasterTarget&>(*rendering.depth.target).has_depth();
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
-        if (have_depth) { dsv = static_cast<Dx12RasterTarget&>(*rendering.depth.target).dsv(); }
-        if (ncol == 0U && !have_depth) { return; }
+        if (have_depth)
+        {
+            dsv = static_cast<Dx12RasterTarget&>(*rendering.depth.target).dsv();
+        }
+        if (ncol == 0U && !have_depth)
+        {
+            return;
+        }
         m_list->OMSetRenderTargets(ncol, ncol > 0U ? rtvs : nullptr, FALSE, have_depth ? &dsv : nullptr);
         crd::u32 ci = 0U;
         for (crd::u32 i = 0; i < static_cast<crd::u32>(rendering.color.size()) && ci < ncol; ++i)
         {
-            if (rendering.color[i].target == nullptr) { continue; }
+            if (rendering.color[i].target == nullptr)
+            {
+                continue;
+            }
             if (rendering.color[i].load == LoadOp::Clear)
             {
                 const float z[4]    = {0.0F, 0.0F, 0.0F, 0.0F};
@@ -1589,7 +1871,10 @@ public:
 
     void clear(IRasterTarget& target, ClearColor color) override
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
 
         // ⭐ REN-38-A6: CLEAR IS RECORDABLE — the last verb in the surface with no recording path. Without it a
@@ -1604,7 +1889,10 @@ public:
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const float rgba[4] = {color.r, color.g, color.b, color.a};
@@ -1791,7 +2079,10 @@ public:
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         ComPtr<ID3D12RootSignature> root;
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
         {
@@ -1805,7 +2096,10 @@ public:
         ComPtr<ID3D12PipelineState> pso1 =
             build_mesh_pso(m_device2.Get(), root.Get(), D3D12_SHADER_BYTECODE{ms.data(), ms.size()},
                            D3D12_SHADER_BYTECODE{ps.data(), ps.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS);
-        if (pso1 == nullptr) { return nullptr; }
+        if (pso1 == nullptr)
+        {
+            return nullptr;
+        }
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(ms_copy), ms.size(),
                                                    std::move(ps_copy), ps.size(), std::move(pso1), m_device2.Get(),
                                                    /*is_mesh=*/true);
@@ -1850,7 +2144,10 @@ public:
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         ComPtr<ID3D12RootSignature> root;
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
         {
@@ -1867,7 +2164,10 @@ public:
             build_mesh_pso(m_device2.Get(), root.Get(), D3D12_SHADER_BYTECODE{ms.data(), ms.size()},
                            D3D12_SHADER_BYTECODE{ps.data(), ps.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS,
                            1U, D3D12_SHADER_BYTECODE{as.data(), as.size()});
-        if (pso1 == nullptr) { return nullptr; }
+        if (pso1 == nullptr)
+        {
+            return nullptr;
+        }
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(ms_copy), ms.size(),
                                                    std::move(ps_copy), ps.size(), std::move(pso1), m_device2.Get(),
                                                    /*is_mesh=*/true, std::move(as_copy), as.size());
@@ -1915,7 +2215,10 @@ public:
         rsd.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         ComPtr<ID3D12RootSignature> root;
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
         {
@@ -1934,7 +2237,10 @@ public:
             m_device.Get(), root.Get(), D3D12_SHADER_BYTECODE{vs.data(), vs.size()},
             D3D12_SHADER_BYTECODE{ps.data(), ps.size()}, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
             D3D12_SHADER_BYTECODE{hs.data(), hs.size()}, D3D12_SHADER_BYTECODE{ds.data(), ds.size()}); // B4-tess: HS + DS ⇒ PATCH PSO
-        if (pso1 == nullptr) { return nullptr; }
+        if (pso1 == nullptr)
+        {
+            return nullptr;
+        }
         return std::make_unique<Dx12RasterProgram>(m_device.Get(), std::move(root), std::move(vs_copy), vs.size(),
                                                    std::move(ps_copy), ps.size(), std::move(pso1), nullptr, /*is_mesh=*/false,
                                                    nullptr, 0, std::move(hs_copy), hs.size(), std::move(ds_copy), ds.size());
@@ -1949,38 +2255,65 @@ public:
     void draw_tess_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                            IStorageBuffer& storage, crd::u32 patch_count)
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
-        if (!p.is_tess()) { return; }
+        if (!p.is_tess())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_plain_topology(t, p, pso, clear, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/true, &s2);
     }
     void draw_tess_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                 crd::u32 patch_count)
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
-        if (!p.is_tess()) { return; }
+        if (!p.is_tess())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/false, &s2);
     }
 
     void draw_tess_load(IRasterTarget& target, IRasterProgram& program, crd::u32 patch_count)
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        if (!p.is_tess()) { return; }
+        if (!p.is_tess())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST,
                               patch_count * 4U, /*clear=*/false);
     }
@@ -1989,13 +2322,22 @@ public:
     void draw_mesh_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                            IStorageBuffer& storage, crd::u32 group_count)
     {
-        if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr)
+        {
+            return;
+        }
         auto& t  = static_cast<Dx12RasterTarget&>(target);
         auto& p  = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
-        if (!p.is_mesh() || !p.valid()) { return; }
+        if (!p.is_mesh() || !p.valid())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (pso == nullptr) { return; }
+        if (pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
@@ -2006,7 +2348,10 @@ public:
         // frame-recording path, so a direct (gate) call no-op'd — every other draw verb has a synchronous form.
         // Mirrors the synchronous draw_mesh + binds the storage buffer as a UAV at root param 0 exactly as the
         // synchronous draw_storage does (m_uav_heap slot 0), then DispatchMesh + copy-to-readback + wait.
-        if (m_uav_heap == nullptr) { return; }
+        if (m_uav_heap == nullptr)
+        {
+            return;
+        }
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_UNKNOWN;
         uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
@@ -2014,7 +2359,10 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s2.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -2047,38 +2395,65 @@ public:
     void draw_mesh_storage_load(IRasterTarget& target, IRasterProgram& program, IStorageBuffer& storage,
                                 crd::u32 group_count)
     {
-        if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
+        if (!m_ok || !frame_recording() || m_list6 == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s2 = static_cast<Dx12StorageBuffer&>(storage);
-        if (!p.is_mesh()) { return; }
+        if (!p.is_mesh())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/false, &s2);
     }
 
     void draw_mesh_load(IRasterTarget& target, IRasterProgram& program, crd::u32 group_count)
     {
-        if (!m_ok || !frame_recording() || m_list6 == nullptr) { return; }
+        if (!m_ok || !frame_recording() || m_list6 == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        if (!p.is_mesh()) { return; }
+        if (!p.is_mesh())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_mesh(t, p, pso, ClearColor{}, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1,
                     nullptr, nullptr, 0U, /*clear=*/false);
     }
 
     void draw_tess(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 patch_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
-        if (!p.is_tess()) { return; } // only a VS+HS+DS+PS program can be patch-drawn
+        if (!p.is_tess()) // only a VS+HS+DS+PS program can be patch-drawn
+        {
+            return;
+        }
         const bool ms = t.multisampled();
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         // REN-38-A1d: inside a frame, RECORD — same attachment-and-draw shape as `record_plain` plus the patch
         // topology the tessellator consumes. No allocator/list reset, no transitions, no resolve, no readback.
         if (frame_recording())
@@ -2088,7 +2463,10 @@ public:
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2144,12 +2522,18 @@ public:
     // readback tail is identical to draw() — only the topology-less DispatchMesh replaces IASetPrimitiveTopology+DrawInstanced.
     void draw_mesh(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count)
     {
-        if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr)
+        {
+            return;
+        }
         auto&      t   = static_cast<Dx12RasterTarget&>(target);
         auto&      p   = static_cast<Dx12RasterProgram&>(program);
         const bool ms  = t.multisampled();
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+        if (!p.valid() || !p.is_mesh() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_mesh(t, p, pso, clear, group_count, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1, nullptr,
@@ -2157,7 +2541,10 @@ public:
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2212,7 +2599,10 @@ public:
     // so the mesh's per-primitive SV_ShadingRate output drives the coarse fragment rate (the base rate stays 1×1).
     void draw_mesh_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 group_count)
     {
-        if (!m_ok || !m_mesh_shader || m_list6 == nullptr) { return; }
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (m_list5 == nullptr || m_vrs_tier == D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED)
@@ -2221,7 +2611,10 @@ public:
             return;
         }
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+        if (!p.valid() || !p.is_mesh() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             const D3D12_SHADING_RATE_COMBINER fcomb[2] = {D3D12_SHADING_RATE_COMBINER_OVERRIDE,
@@ -2231,7 +2624,10 @@ public:
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -2272,11 +2668,17 @@ public:
     void draw_mesh_indirect(IRasterTarget& target, IRasterProgram& program, ClearColor clear, void* native_args,
                             crd::u64 args_offset)
     {
-        if (!m_ok || !m_mesh_shader || m_list6 == nullptr || native_args == nullptr) { return; }
+        if (!m_ok || !m_mesh_shader || m_list6 == nullptr || native_args == nullptr)
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+        if (!p.valid() || !p.is_mesh() || pso == nullptr)
+        {
+            return;
+        }
         auto* args = static_cast<ID3D12Resource*>(native_args);
         // REN-38-A1c: the GPU-DRIVEN mesh path. ⛔ The args buffer must already be in INDIRECT_ARGUMENT state —
         // inside a frame that is the GRAPH's job (it is a declared read), not this verb's, which is why the
@@ -2296,10 +2698,16 @@ public:
             csd.ByteStride       = 3U * static_cast<UINT>(sizeof(UINT)); // {X, Y, Z}
             csd.NumArgumentDescs = 1U;
             csd.pArgumentDescs   = &arg;
-            if (FAILED(m_device->CreateCommandSignature(&csd, nullptr, IID_PPV_ARGS(&m_mesh_indirect_sig)))) { return; }
+            if (FAILED(m_device->CreateCommandSignature(&csd, nullptr, IID_PPV_ARGS(&m_mesh_indirect_sig))))
+            {
+                return;
+            }
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         transition(args, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2344,18 +2752,30 @@ public:
         }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        if (!t.has_depth()) { return; } // needs a create_color_depth_target
+        if (!t.has_depth()) // needs a create_color_depth_target
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || !p.is_mesh() || pso == nullptr) { return; }
+        if (!p.valid() || !p.is_mesh() || pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1c: the mesh path with the BINDLESS run from 38-A1a's frame ring + a depth attachment. The
         // synchronous body below mints into the GLOBAL heap at fixed slots, which is exactly what cannot happen
         // inside a frame.
         if (frame_recording())
         {
-            if (!frame_prepare(kBindlessMax)) { return; }
+            if (!frame_prepare(kBindlessMax))
+            {
+                return;
+            }
             const D3D12_GPU_DESCRIPTOR_HANDLE run = frame_alloc_bindless_run(textures, n);
-            if (run.ptr == 0U) { return; }
+            if (run.ptr == 0U)
+            {
+                return;
+            }
             record_mesh(t, p, pso, clear, group_count, true, clear_depth, &run, false, D3D12_SHADING_RATE_1X1,
                         nullptr, nullptr, 0U);
             return;
@@ -2373,7 +2793,10 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc; // slot 2
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
@@ -2431,7 +2854,10 @@ public:
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
         const bool                        use_depth = depth_on && t.has_depth();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv       = use_depth ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        if (!frame_prepare(storage != nullptr ? 1U : 0U)) { return; }
+        if (!frame_prepare(storage != nullptr ? 1U : 0U))
+        {
+            return;
+        }
         m_list->OMSetRenderTargets(1, &rtv, FALSE, use_depth ? &dsv : nullptr);
         // ⛔ REN-38-A8: a CONTINUING mesh draw KEEPS the previous contents — on D3D12 "load" is simply not
         // issuing the clear, since OMSetRenderTargets never discards. Depth too: clearing it would let the second
@@ -2440,7 +2866,10 @@ public:
         {
             const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (use_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (use_depth)
+            {
+                m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -2451,7 +2880,10 @@ public:
         if (storage != nullptr)
         {
             const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(*storage);
-            if (frame_table.ptr == 0U) { return; }
+            if (frame_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         }
         if (bindless != nullptr)
@@ -2464,13 +2896,19 @@ public:
         if (vrs && m_list5 != nullptr)
         {
             m_list5->RSSetShadingRate(rate, comb);
-            if (t.has_vrs()) { m_list5->RSSetShadingRateImage(t.vrs_tex()); }
+            if (t.has_vrs())
+            {
+                m_list5->RSSetShadingRateImage(t.vrs_tex());
+            }
         }
         if (indirect != nullptr)
         {
             m_list->ExecuteIndirect(m_mesh_indirect_sig.Get(), 1U, indirect, indirect_offset, nullptr, 0U);
         }
-        else { m_list6->DispatchMesh(group_count, 1, 1); }
+        else
+        {
+            m_list6->DispatchMesh(group_count, 1, 1);
+        }
     }
 
     void record_plain_topology(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso,
@@ -2478,7 +2916,10 @@ public:
                                bool clear = true, Dx12StorageBuffer* storage = nullptr)
     {
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
-        if (!frame_prepare(storage != nullptr ? 1U : 0U)) { return; }
+        if (!frame_prepare(storage != nullptr ? 1U : 0U))
+        {
+            return;
+        }
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         if (clear) // REN-38-A7: a CONTINUING patch draw keeps what the previous patches wrote
         {
@@ -2494,7 +2935,10 @@ public:
         if (storage != nullptr)
         {
             const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(*storage);
-            if (frame_table.ptr == 0U) { return; }
+            if (frame_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         }
         m_list->SetPipelineState(pso);
@@ -2515,7 +2959,10 @@ public:
         // REN-40-G1: honour set_next_draw_load_depth — a depth PREPASS wrote this buffer in a prior pass, so LOAD it (skip the
         // clear), do not re-clear. The other depth record paths gate on !m_next_load_depth; record_plain (draw / draw_depth) did
         // NOT, so a fullscreen depth-tested draw always re-cleared the depth (CEIR-14z-5 occlusion caught it). Consumed here.
-        if (use_depth && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        if (use_depth && !m_next_load_depth)
+        {
+            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+        }
         m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -2530,15 +2977,28 @@ public:
 
     void draw(IRasterTarget& target, IRasterProgram& program, ClearColor clear, crd::u32 vertex_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto&      t  = static_cast<Dx12RasterTarget&>(target);
         auto&      p  = static_cast<Dx12RasterProgram&>(program);
         const bool ms = t.multisampled();
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format()); // colour, no depth
-        if (!p.valid() || pso == nullptr) { return; }
-        if (frame_recording()) { record_plain(t, p, pso, clear, false, 0.0F, vertex_count); return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
+        if (frame_recording())
+        {
+            record_plain(t, p, pso, clear, false, 0.0F, vertex_count);
+            return;
+        }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -2628,8 +3088,14 @@ public:
     // depends on the capability having been exercised is not a query. Answer from the feature check itself.
     [[nodiscard]] bool supports_rt_pipeline() const noexcept override
     {
-        if (m_dxr_device != nullptr) { return true; }
-        if (m_device == nullptr) { return false; }
+        if (m_dxr_device != nullptr)
+        {
+            return true;
+        }
+        if (m_device == nullptr)
+        {
+            return false;
+        }
         D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
         return SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5)))
                && o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
@@ -2664,34 +3130,67 @@ public:
                          IStorageBuffer* const* buffers, crd::u32 count, IGpuProgram* intersection = nullptr,
                          IGpuProgram* callable = nullptr)
     {
-        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
-        if (!ensure_dxr()) { return; }
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U)
+        {
+            return;
+        }
+        if (!ensure_dxr())
+        {
+            return;
+        }
         const crd::u64 tlas_va = dx12_scene_tlas(as);
-        if (tlas_va == 0U) { return; } // ⛔ never trace against address 0 — undefined, not a frame of misses
+        if (tlas_va == 0U) // ⛔ never trace against address 0 — undefined, not a frame of misses
+        {
+            return;
+        }
         auto* rg = dynamic_cast<Dx12GpuProgram*>(&raygen);
         auto* ms = dynamic_cast<Dx12GpuProgram*>(&miss);
         auto* ch = dynamic_cast<Dx12GpuProgram*>(&closest_hit);
         auto* ah = any_hit != nullptr ? dynamic_cast<Dx12GpuProgram*>(any_hit) : nullptr;
         auto* is = intersection != nullptr ? dynamic_cast<Dx12GpuProgram*>(intersection) : nullptr;
         auto* cl = callable != nullptr ? dynamic_cast<Dx12GpuProgram*>(callable) : nullptr;
-        if (rg == nullptr || ms == nullptr || ch == nullptr) { return; }
-        if (any_hit != nullptr && ah == nullptr) { return; } // a named any-hit that is not ours is never dropped silently
-        if (intersection != nullptr && is == nullptr) { return; } // F13: same rule for the last two stages
-        if (callable != nullptr && cl == nullptr) { return; }
+        if (rg == nullptr || ms == nullptr || ch == nullptr)
+        {
+            return;
+        }
+        if (any_hit != nullptr && ah == nullptr) // a named any-hit that is not ours is never dropped silently
+        {
+            return;
+        }
+        if (intersection != nullptr && is == nullptr) // F13: same rule for the last two stages
+        {
+            return;
+        }
+        if (callable != nullptr && cl == nullptr)
+        {
+            return;
+        }
         DxrPipe* pipe = dxr_pipeline(rg->dxil(), ms->dxil(), ch->dxil(),
                                      ah != nullptr ? ah->dxil() : crd::containers::ConstSpan<crd::u8>{},
                                      is != nullptr ? is->dxil() : crd::containers::ConstSpan<crd::u8>{},
                                      cl != nullptr ? cl->dxil() : crd::containers::ConstSpan<crd::u8>{});
-        if (pipe == nullptr) { return; }
+        if (pipe == nullptr)
+        {
+            return;
+        }
 
         ComPtr<ID3D12GraphicsCommandList4> list4;
-        if (FAILED(m_list.As(&list4))) { return; }
+        if (FAILED(m_list.As(&list4)))
+        {
+            return;
+        }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
-        if (!frame_prepare(kMaxKernelBuffers)) { return; }
+        if (!frame_prepare(kMaxKernelBuffers))
+        {
+            return;
+        }
         list4->SetComputeRootSignature(rt_kernel_root());
         list4->SetComputeRootShaderResourceView(0, static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(tlas_va));
         const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
-        if (frame_table.ptr == 0U) { return; }
+        if (frame_table.ptr == 0U)
+        {
+            return;
+        }
         list4->SetComputeRootDescriptorTable(1, frame_table);
         list4->SetPipelineState1(pipe->state.Get());
 
@@ -2720,7 +3219,10 @@ public:
 
     [[nodiscard]] bool ensure_dxr()
     {
-        if (m_dxr_tried) { return m_dxr_device != nullptr; }
+        if (m_dxr_tried)
+        {
+            return m_dxr_device != nullptr;
+        }
         m_dxr_tried = true;
         D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5{};
         if (FAILED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5)))
@@ -2728,7 +3230,11 @@ public:
         {
             return false; // no DXR ⇒ the verb is a NO-OP, and `supports_rt_pipeline()` says so
         }
-        if (FAILED(m_device.As(&m_dxr_device))) { m_dxr_device.Reset(); return false; }
+        if (FAILED(m_device.As(&m_dxr_device)))
+        {
+            m_dxr_device.Reset();
+            return false;
+        }
         return true;
     }
 
@@ -2761,9 +3267,15 @@ public:
                 return &m_dxr[i];
             }
         }
-        if (m_dxr_n >= kKernelPsoCap) { return nullptr; }
+        if (m_dxr_n >= kKernelPsoCap)
+        {
+            return nullptr;
+        }
         ID3D12RootSignature* root = rt_kernel_root();
-        if (root == nullptr) { return nullptr; }
+        if (root == nullptr)
+        {
+            return nullptr;
+        }
 
         // ── the state object: 3–4 renamed DXIL libraries · 1 hit group · shader config · pipeline config ·
         // root sig. REN-38 audit: the ANY-HIT is a fourth renamed library joining the same hit group. ──
@@ -2787,7 +3299,10 @@ public:
         crd::u32                                  n_libs  = 0U;
         for (crd::u32 i = 0; i < 6U; ++i)
         {
-            if (code[i].data() == nullptr || code[i].size() == 0U) { continue; }
+            if (code[i].data() == nullptr || code[i].size() == 0U)
+            {
+                continue;
+            }
             libs[n_libs].DXILLibrary = {code[i].data(), code[i].size()};
             libs[n_libs].NumExports  = 1U;
             libs[n_libs].pExports    = &ex[i];
@@ -2798,8 +3313,14 @@ public:
         // REN-38-F13: an intersection shader makes the hit group PROCEDURAL — its AABBs only bound the shape
         hg.Type                     = has_is ? D3D12_HIT_GROUP_TYPE_PROCEDURAL_PRIMITIVE : D3D12_HIT_GROUP_TYPE_TRIANGLES;
         hg.ClosestHitShaderImport   = ch_name;
-        if (has_ah) { hg.AnyHitShaderImport = ah_name; }
-        if (has_is) { hg.IntersectionShaderImport = is_name; }
+        if (has_ah)
+        {
+            hg.AnyHitShaderImport = ah_name;
+        }
+        if (has_is)
+        {
+            hg.IntersectionShaderImport = is_name;
+        }
         // ⛔ The payload is `struct RtPayload { float m0; ... }` from the CKIR emitter and the attributes are
         // `BuiltInTriangleIntersectionAttributes` (2 floats). Declaring these too SMALL is undefined behaviour the
         // runtime does not always catch, so both are sized generously from what the emitter can produce.
@@ -2813,7 +3334,10 @@ public:
 
         D3D12_STATE_SUBOBJECT so[10]{};
         crd::u32              n_so = 0U;
-        for (crd::u32 i = 0; i < n_libs; ++i) { so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[i]}; }
+        for (crd::u32 i = 0; i < n_libs; ++i)
+        {
+            so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[i]};
+        }
         so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hg};
         so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shader_cfg};
         so[n_so++] = {D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipe_cfg};
@@ -2831,9 +3355,15 @@ public:
         out.key[4] = k4; // REN-38-F13: and so do the intersection + callable stages
         out.key[5] = k5;
         out.has_callable = has_cl;
-        if (FAILED(m_dxr_device->CreateStateObject(&sod, IID_PPV_ARGS(&out.state)))) { return nullptr; }
+        if (FAILED(m_dxr_device->CreateStateObject(&sod, IID_PPV_ARGS(&out.state))))
+        {
+            return nullptr;
+        }
         ComPtr<ID3D12StateObjectProperties> props;
-        if (FAILED(out.state.As(&props))) { return nullptr; }
+        if (FAILED(out.state.As(&props)))
+        {
+            return nullptr;
+        }
 
         // ── the SBT: three records. ⛔ The RECORD stride must be a multiple of
         // D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT (32) and each TABLE base a multiple of
@@ -2844,16 +3374,26 @@ public:
         const crd::u32   n_rec = has_cl ? 4U : 3U; // REN-38-F13: the callable identifier is record 3
         const UINT64 total    = rec_bytes * n_rec;
         out.sbt               = make_upload_buffer(m_device.Get(), total);
-        if (out.sbt == nullptr) { return nullptr; }
+        if (out.sbt == nullptr)
+        {
+            return nullptr;
+        }
         void* mapped = nullptr;
-        if (FAILED(out.sbt->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(out.sbt->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         std::memset(mapped, 0, static_cast<crd::usize>(total));
         auto*                 dst   = static_cast<crd::u8*>(mapped);
         const wchar_t* const  ids[4] = {rg_name, ms_name, hg_name, cl_name};
         for (crd::u32 i = 0; i < n_rec; ++i)
         {
             const void* id = props->GetShaderIdentifier(ids[i]);
-            if (id == nullptr) { out.sbt->Unmap(0, nullptr); return nullptr; }
+            if (id == nullptr)
+            {
+                out.sbt->Unmap(0, nullptr);
+                return nullptr;
+            }
             std::memcpy(dst + rec_bytes * i, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
         }
         out.sbt->Unmap(0, nullptr);
@@ -2899,12 +3439,18 @@ public:
 
     void apply_stencil_ref()
     {
-        if (m_pass_state.stencil_enable && m_list != nullptr) { m_list->OMSetStencilRef(m_pass_state.stencil_ref); }
+        if (m_pass_state.stencil_enable && m_list != nullptr)
+        {
+            m_list->OMSetStencilRef(m_pass_state.stencil_ref);
+        }
     }
 
     [[nodiscard]] crd::u32 sampler_slot_for(const SamplerDesc& d)
     {
-        if (m_sampler_heap == nullptr) { return 0U; }
+        if (m_sampler_heap == nullptr)
+        {
+            return 0U;
+        }
         for (crd::u32 i = 0; i < m_sampler_n; ++i)
         {
             const SamplerDesc& k = m_sampler_key[i];
@@ -2915,18 +3461,27 @@ public:
                 return 2U + i;
             }
         }
-        if (m_sampler_n >= kSamplerCacheCap) { return d.compare ? 1U : 0U; }
+        if (m_sampler_n >= kSamplerCacheCap)
+        {
+            return d.compare ? 1U : 0U;
+        }
         D3D12_SAMPLER_DESC sd{};
         // ⛔ D3D12 packs min/mag/mip filtering + comparison into ONE enum rather than three fields, so the mapping
         // is a lookup, not a field copy. Anisotropy is a FILTER MODE here (not a separate toggle as in Vulkan) and
         // it OVERRIDES the min/mag/mip choice — asking for both is not additive, it is a different filter.
         const bool aniso = d.anisotropy > 1U;
-        if (aniso) { sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_ANISOTROPIC : D3D12_FILTER_ANISOTROPIC; }
+        if (aniso)
+        {
+            sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_ANISOTROPIC : D3D12_FILTER_ANISOTROPIC;
+        }
         else if (d.min_filter == SamplerFilter::Nearest && d.mag_filter == SamplerFilter::Nearest)
         {
             sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_POINT;
         }
-        else { sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR : D3D12_FILTER_MIN_MAG_MIP_LINEAR; }
+        else
+        {
+            sd.Filter = d.compare ? D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        }
         D3D12_TEXTURE_ADDRESS_MODE am = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         switch (d.address)
         {
@@ -2943,7 +3498,10 @@ public:
         sd.MaxAnisotropy  = aniso ? d.anisotropy : 1U;
         sd.ComparisonFunc = d.compare ? D3D12_COMPARISON_FUNC_LESS_EQUAL : D3D12_COMPARISON_FUNC_NEVER;
         sd.MaxLOD         = D3D12_FLOAT32_MAX;
-        for (int c = 0; c < 4; ++c) { sd.BorderColor[c] = 1.0F; } // a shadow lookup outside its frustum must be LIT
+        for (int c = 0; c < 4; ++c) // a shadow lookup outside its frustum must be LIT
+        {
+            sd.BorderColor[c] = 1.0F;
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE h = m_sampler_heap->GetCPUDescriptorHandleForHeapStart();
         h.ptr += static_cast<SIZE_T>(2U + m_sampler_n) * m_sampler_inc;
         m_device->CreateSampler(&sd, h);
@@ -2981,22 +3539,37 @@ public:
 
     void fill_buffer(IStorageBuffer& buffer, crd::u64 offset, crd::u64 size, crd::u32 value) override
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         ID3D12Resource* res = dx_buffer_of(buffer);
-        if (res == nullptr || !ensure_clear_heap()) { return; }
+        if (res == nullptr || !ensure_clear_heap())
+        {
+            return;
+        }
         const crd::u32 first = static_cast<crd::u32>(offset / 4U);
         const crd::u32 n     = static_cast<crd::u32>((size == 0U ? buffer.size_bytes() - offset : size) / 4U);
-        if (n == 0U) { return; }
+        if (n == 0U)
+        {
+            return;
+        }
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_R32_UINT; // a RAW u32 view — the fill value is a u32
         uav.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
         uav.Buffer.FirstElement        = first;
         uav.Buffer.NumElements         = n;
         m_device->CreateUnorderedAccessView(res, nullptr, &uav, m_clear_heap->GetCPUDescriptorHandleForHeapStart());
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(1U, cpu, gpu)) { return; }
+        if (!frame_take(1U, cpu, gpu))
+        {
+            return;
+        }
         m_device->CreateUnorderedAccessView(res, nullptr, &uav, cpu);
         const UINT vals[4] = {value, value, value, value};
         m_list->ClearUnorderedAccessViewUint(gpu, m_clear_heap->GetCPUDescriptorHandleForHeapStart(), res, vals, 0,
@@ -3006,7 +3579,10 @@ public:
 
     [[nodiscard]] bool ensure_clear_heap()
     {
-        if (m_clear_heap != nullptr) { return true; }
+        if (m_clear_heap != nullptr)
+        {
+            return true;
+        }
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = 1U;
@@ -3016,12 +3592,18 @@ public:
 
     void draw_visbuffer_load(IRasterTarget& target, IRasterProgram& program, crd::u32 vertex_count)
     {
-        if (!m_ok || !frame_recording()) { return; }
+        if (!m_ok || !frame_recording())
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso =
             pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_plain_topology(t, p, pso, ClearColor{}, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertex_count,
                               /*clear=*/false);
     }
@@ -3032,23 +3614,35 @@ public:
     void draw_bindless_blend_load(IRasterTarget& target, IRasterProgram& program, ITexture* const* textures,
                                   crd::u32 count, crd::u32 vertex_count, BlendMode blend)
     {
-        if (!m_ok || !frame_recording() || textures == nullptr || count == 0U) { return; }
+        if (!m_ok || !frame_recording() || textures == nullptr || count == 0U)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         const BlendMode      modes[1] = {blend};
         ID3D12PipelineState* pso      = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
                                                   t.color_format(), static_cast<const BlendMode*>(modes));
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_bindless(t, p, pso, textures, count, ClearColor{}, vertex_count, /*clear=*/false);
     }
 
     void draw_visbuffer(IRasterTarget& target, IRasterProgram& program, crd::u32 /*clear_id*/, crd::u32 vertex_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, DXGI_FORMAT_R32_UINT);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         // REN-38-A1e: inside a frame, RECORD. `ClearRenderTargetView` takes a FLOAT[4] even for an R32_UINT
         // target, and D3D12 VALUE-CONVERTS the floats to the target format — so an id goes in as `float(id)` (exact for
         // id < 2^24), NOT a bit reinterpret (⛔ the old comment claimed bitcast, but this path only ever clears to 0 where
@@ -3061,7 +3655,10 @@ public:
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -3094,15 +3691,31 @@ public:
     void draw_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
                     DepthCompare compare, crd::u32 vertex_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        if (!t.has_depth()) { return; } // needs a create_color_depth_target target
+        if (!t.has_depth()) // needs a create_color_depth_target target
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format()); // depth-enabled PSO (baked)
-        if (!p.valid() || pso == nullptr) { return; }
-        if (frame_recording()) { record_plain(t, p, pso, clear, true, clear_depth, vertex_count); return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
+        if (frame_recording())
+        {
+            record_plain(t, p, pso, clear, true, clear_depth, vertex_count);
+            return;
+        }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3139,7 +3752,10 @@ public:
     void draw_vrs(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ShadingRate pipeline_rate,
                   ShadingRateCombiner primitive_combiner, crd::u32 vertex_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         if (m_list5 == nullptr || m_vrs_tier == D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED)
@@ -3148,7 +3764,10 @@ public:
             return;
         }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         // REN-38-A1g: inside a frame, RECORD. VRS is DYNAMIC state on DX12, so it is set after the PSO is
         // bound and before the draw; `record_plain_topology` with vertex_count 0 sets up the pass without
         // drawing, then the rate + optional rate IMAGE go on and the draw follows.
@@ -3159,12 +3778,18 @@ public:
                 t.has_vrs() ? D3D12_SHADING_RATE_COMBINER_OVERRIDE : D3D12_SHADING_RATE_COMBINER_PASSTHROUGH};
             record_plain_topology(t, p, pso, clear, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, 0U);
             m_list5->RSSetShadingRate(to_d3d12_rate(pipeline_rate), fcomb);
-            if (t.has_vrs()) { m_list5->RSSetShadingRateImage(t.vrs_tex()); }
+            if (t.has_vrs())
+            {
+                m_list5->RSSetShadingRateImage(t.vrs_tex());
+            }
             m_list->DrawInstanced(vertex_count, 1, 0, 0);
             return;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3187,11 +3812,17 @@ public:
             to_d3d12_combiner(primitive_combiner),
             t.has_vrs() ? D3D12_SHADING_RATE_COMBINER_OVERRIDE : D3D12_SHADING_RATE_COMBINER_PASSTHROUGH};
         m_list5->RSSetShadingRate(to_d3d12_rate(pipeline_rate), comb);
-        if (t.has_vrs()) { m_list5->RSSetShadingRateImage(t.vrs_tex()); }
+        if (t.has_vrs())
+        {
+            m_list5->RSSetShadingRateImage(t.vrs_tex());
+        }
 
         m_list->DrawInstanced(vertex_count, 1, 0, 0);
 
-        if (t.has_vrs()) { m_list5->RSSetShadingRateImage(nullptr); } // unbind before the image is freed
+        if (t.has_vrs()) // unbind before the image is freed
+        {
+            m_list5->RSSetShadingRateImage(nullptr);
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION dst{};
@@ -3210,11 +3841,18 @@ public:
     void draw_conservative(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ConservativeMode mode,
                            crd::u32 vertex_count)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto&      t            = static_cast<Dx12RasterTarget&>(target);
         auto&      p            = static_cast<Dx12RasterProgram&>(program);
         const bool conservative = mode != ConservativeMode::Off && supports_conservative_raster();
-        if (!conservative) { draw(target, program, clear, vertex_count); return; } // no conservative raster ⇒ a normal draw
+        if (!conservative) // no conservative raster ⇒ a normal draw
+        {
+            draw(target, program, clear, vertex_count);
+            return;
+        }
         const bool           ms  = t.multisampled();
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, true,
                                              1U, t.color_format());
@@ -3225,9 +3863,15 @@ public:
             record_plain_topology(t, p, pso, clear, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, vertex_count);
             return;
         }
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3279,7 +3923,10 @@ public:
 
     [[nodiscard]] std::unique_ptr<IStorageBuffer> create_storage_buffer(crd::u32 size_bytes) override
     {
-        if (!m_ok || size_bytes == 0U) { return nullptr; }
+        if (!m_ok || size_bytes == 0U)
+        {
+            return nullptr;
+        }
         const UINT64 size = (static_cast<UINT64>(size_bytes) + 3U) & ~static_cast<UINT64>(3U); // round up to 4-byte words
 
         // DEFAULT buffers start in COMMON and promote to COPY_DEST for zero-fill, then park in UAV state.
@@ -3303,22 +3950,40 @@ public:
 
         // Zero-init from an UPLOAD staging buffer (committed resources are not guaranteed zeroed).
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), size);
-        if (upload == nullptr) { return nullptr; }
+        if (upload == nullptr)
+        {
+            return nullptr;
+        }
         void* umap = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &umap))) { return nullptr; }
+        if (FAILED(upload->Map(0, nullptr, &umap)))
+        {
+            return nullptr;
+        }
         std::memset(umap, 0, static_cast<size_t>(size));
         upload->Unmap(0, nullptr);
 
         ComPtr<ID3D12Resource> readback = make_readback_buffer(m_device.Get(), size);
-        if (readback == nullptr) { return nullptr; }
+        if (readback == nullptr)
+        {
+            return nullptr;
+        }
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         m_list->CopyBufferRegion(buf.Get(), 0, upload.Get(), 0, size);
         transition(buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
 
         void* mapped = nullptr;
-        if (FAILED(readback->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(readback->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         // DIAG.7a(d2b-dx12-a): mint a stable Cerid identity and SetName it onto the native UAV buffer so a validation
         // message about it resolves back to this resource. batch 4d: the host-visible readback is an OWNED sibling of
         // this one logical resource, so name it with the SAME identity (not a second mint) — parity with
@@ -3333,17 +3998,32 @@ public:
     [[nodiscard]] bool upload_storage(IStorageBuffer& storage, crd::u32 byte_offset, const void* data,
                                       crd::u32 size_bytes) override
     {
-        if (!m_ok || data == nullptr || size_bytes == 0U) { return false; }
+        if (!m_ok || data == nullptr || size_bytes == 0U)
+        {
+            return false;
+        }
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (static_cast<crd::u64>(byte_offset) + size_bytes > s.size_bytes()) { return false; }
+        if (static_cast<crd::u64>(byte_offset) + size_bytes > s.size_bytes())
+        {
+            return false;
+        }
         // ⭐⭐ inside a batch, the upload is a ring memcpy + one recorded copy — no committed resource, no submit,
         // no wait. False (ring alloc failed) falls through to the synchronous body below.
-        if (m_batch_open && upload_batched(s, byte_offset, data, size_bytes)) { return true; }
+        if (m_batch_open && upload_batched(s, byte_offset, data, size_bytes))
+        {
+            return true;
+        }
 
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), size_bytes);
-        if (upload == nullptr) { return false; }
+        if (upload == nullptr)
+        {
+            return false;
+        }
         void* umap = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &umap))) { return false; }
+        if (FAILED(upload->Map(0, nullptr, &umap)))
+        {
+            return false;
+        }
         std::memcpy(umap, data, size_bytes);
         upload->Unmap(0, nullptr);
 
@@ -3366,11 +4046,17 @@ public:
             return true;
         }
 
-        if (!reset_commands()) { return false; }
+        if (!reset_commands())
+        {
+            return false;
+        }
         transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
         m_list->CopyBufferRegion(s.buf(), byte_offset, upload.Get(), 0, size_bytes);
         transition(s.buf(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (!submit_and_wait()) { return false; }
+        if (!submit_and_wait())
+        {
+            return false;
+        }
         return true;
     }
 
@@ -3380,15 +4066,25 @@ public:
                       crd::u32 vertex_count, LoadOp load = LoadOp::Clear, BlendMode blend = BlendMode::Opaque,
                       crd::u32 first_vertex = 0U)
     {
-        if (!m_ok || m_uav_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr)
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format(), &blend); // single-sample colour
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
         // REN-2: in frame-graph recording mode, draw_storage into an RTT transient records color-only (no readback).
-        if (frame_recording()) { record_offscreen(t, p, s, pso, clear, vertex_count, load, first_vertex); return; }
+        if (frame_recording())
+        {
+            record_offscreen(t, p, s, pso, clear, vertex_count, load, first_vertex);
+            return;
+        }
 
         // Point the heap's slot-0 UAV at the storage buffer (a structured buffer of uint words — the shader's RWStructured…).
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
@@ -3399,7 +4095,10 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3451,15 +4150,28 @@ public:
     void draw_storage_depth_only(IRasterTarget& target, IRasterProgram& program, float clear_depth,
                                  DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (!t.has_depth()) { return; }
+        if (!t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
-        if (frame_recording()) { record_depth_only(t, p, s, pso, true, clear_depth, vertex_count); return; }
+        if (frame_recording())
+        {
+            record_depth_only(t, p, s, pso, true, clear_depth, vertex_count);
+            return;
+        }
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_UNKNOWN;
@@ -3469,7 +4181,10 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
         m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
@@ -3492,20 +4207,35 @@ public:
     void draw_storage_depth_only_load(IRasterTarget& target, IRasterProgram& program, DepthCompare compare,
                                       IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (!t.has_depth()) { return; }
+        if (!t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
-        if (!p.valid() || pso == nullptr) { return; }
-        if (frame_recording()) { record_depth_only(t, p, s, pso, false, 0.0F, vertex_count); }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
+        if (frame_recording())
+        {
+            record_depth_only(t, p, s, pso, false, 0.0F, vertex_count);
+        }
     }
 
     void draw_storage_depth(IRasterTarget& target, IRasterProgram& program, ClearColor clear, float clear_depth,
                             DepthCompare compare, IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
@@ -3515,7 +4245,10 @@ public:
         ID3D12PipelineState* pso =
             pass_pso(p, 1U, depth_on ? kDepthFormat : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
                      1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         if (!depth_on && !frame_recording())
         {
             // The SYNCHRONOUS path below binds the DSV unconditionally, so it delegates rather than growing a
@@ -3525,7 +4258,11 @@ public:
         }
 
         // REN-1 pt-2: in frame-graph recording mode, record into the shared open list (no per-draw reset/submit).
-        if (frame_recording()) { record_scene(t, p, s, pso, true, clear, clear_depth, vertex_count); return; }
+        if (frame_recording())
+        {
+            record_scene(t, p, s, pso, true, clear, clear_depth, vertex_count);
+            return;
+        }
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_UNKNOWN;
@@ -3535,7 +4272,10 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -3589,14 +4329,23 @@ public:
                                     ITexture& texture, crd::u32 vertex_count, crd::u32 sampler_slot,
                                     Dx12Texture* atlas = nullptr)
     {
-        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr)
+        {
+            return;
+        }
         auto& t   = static_cast<Dx12RasterTarget&>(target);
         auto& p   = static_cast<Dx12RasterProgram&>(program);
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
-        if (!t.has_depth()) { return; }
+        if (!t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_scene_textured(t, p, s, tex, pso, true, clear, clear_depth, vertex_count, sampler_slot, atlas);
@@ -3626,7 +4375,10 @@ public:
             atlas_gpu.ptr += static_cast<UINT64>(2U + kBindlessMax) * m_srv_inc;
         }
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
@@ -3678,9 +4430,15 @@ public:
         auto& p   = static_cast<Dx12RasterProgram&>(program);
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(texture);
-        if (!m_ok || !t.has_depth()) { return; }
+        if (!m_ok || !t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 0U);
@@ -3707,9 +4465,15 @@ public:
         auto& p   = static_cast<Dx12RasterProgram&>(program);
         auto& s   = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex = static_cast<Dx12Texture&>(shadow_atlas);
-        if (!m_ok || !t.has_depth()) { return; }
+        if (!m_ok || !t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 1U, &tex);
@@ -3739,9 +4503,15 @@ public:
         auto& s     = static_cast<Dx12StorageBuffer&>(storage);
         auto& tex   = static_cast<Dx12Texture&>(texture);
         auto& atlas = static_cast<Dx12Texture&>(shadow_atlas);
-        if (!m_ok || !t.has_depth()) { return; }
+        if (!m_ok || !t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         if (frame_recording())
         {
             record_scene_textured(t, p, s, tex, pso, false, ClearColor{}, 0.0F, vertex_count, 0U, &atlas);
@@ -3764,14 +4534,20 @@ public:
                                        crd::u32 count, crd::u32 first_draw_index, bool load_target)
     {
         (void)first_draw_index;
-        if (vertex_counts == nullptr) { return; }
+        if (vertex_counts == nullptr)
+        {
+            return;
+        }
         for (crd::u32 i = 0; i < count; ++i)
         {
             if (i == 0U && !load_target)
             {
                 draw_storage_depth_only(target, program, clear_depth, compare, storage, vertex_counts[i]);
             }
-            else { draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]); }
+            else
+            {
+                draw_storage_depth_only_load(target, program, compare, storage, vertex_counts[i]);
+            }
         }
     }
 
@@ -3783,9 +4559,15 @@ public:
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
-        if (!m_ok || count == 0U || vertex_counts == nullptr || !t.has_depth()) { return; }
+        if (!m_ok || count == 0U || vertex_counts == nullptr || !t.has_depth())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < kMultiMax ? count : kMultiMax;
         if (!frame_recording() || !ensure_multi(p.root()))
         {
@@ -3795,7 +4577,10 @@ public:
                 {
                     draw_storage_depth(target, program, clear, clear_depth, compare, storage, vertex_counts[i]);
                 }
-                else { draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]); }
+                else
+                {
+                    draw_storage_depth_load(target, program, compare, storage, vertex_counts[i]);
+                }
             }
             return;
         }
@@ -3812,9 +4597,15 @@ public:
             std::memcpy(w + static_cast<crd::u64>(i) * kMultiStride, static_cast<const void*>(args), kMultiStride);
         }
 
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
@@ -3822,7 +4613,10 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (!m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (!m_next_load_depth)
+            {
+                m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
@@ -3867,7 +4661,11 @@ public:
             }
             const D3D12_RANGE none{0, 0};
             void*             mapped = nullptr;
-            if (FAILED(m_multi_args->Map(0, &none, &mapped))) { m_multi_args.Reset(); return false; }
+            if (FAILED(m_multi_args->Map(0, &none, &mapped)))
+            {
+                m_multi_args.Reset();
+                return false;
+            }
             m_multi_map = static_cast<crd::u8*>(mapped);
         }
         if (m_multi_sig == nullptr || m_multi_sig_root != root)
@@ -3883,7 +4681,10 @@ public:
             csd.NumArgumentDescs = 2;
             csd.pArgumentDescs   = args;
             m_multi_sig.Reset();
-            if (FAILED(m_device->CreateCommandSignature(&csd, root, IID_PPV_ARGS(&m_multi_sig)))) { return false; }
+            if (FAILED(m_device->CreateCommandSignature(&csd, root, IID_PPV_ARGS(&m_multi_sig))))
+            {
+                return false;
+            }
             m_multi_sig_root = root;
         }
         return true;
@@ -3948,7 +4749,10 @@ public:
     // on allocation/Map failure ⇒ the caller falls back to the plain non-indexed draw (visibly wrong beats a crash).
     [[nodiscard]] bool ensure_identity_index_buffer(crd::u32 count)
     {
-        if (m_identity_ib != nullptr && m_identity_ib_count >= count) { return true; }
+        if (m_identity_ib != nullptr && m_identity_ib_count >= count)
+        {
+            return true;
+        }
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC rd{};
@@ -3967,9 +4771,15 @@ public:
         }
         const D3D12_RANGE none{0, 0};
         void*             mapped = nullptr;
-        if (FAILED(ib->Map(0, &none, &mapped))) { return false; }
+        if (FAILED(ib->Map(0, &none, &mapped)))
+        {
+            return false;
+        }
         auto* idx = static_cast<crd::u32*>(mapped);
-        for (crd::u32 i = 0U; i < count; ++i) { idx[i] = i; }
+        for (crd::u32 i = 0U; i < count; ++i)
+        {
+            idx[i] = i;
+        }
         ib->Unmap(0, nullptr);
         m_identity_ib       = ib;
         m_identity_ib_count = count;
@@ -4072,11 +4882,20 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        if (!frame_prepare(2U)) { return; }
+        if (!frame_prepare(2U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4162,11 +4981,20 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        if (!frame_prepare(2U)) { return; }
+        if (!frame_prepare(2U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         if (!load_target && !m_next_load_depth)
@@ -4227,11 +5055,20 @@ public:
         }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
+        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U)))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4256,7 +5093,10 @@ public:
         {
             auto& tex = static_cast<Dx12Texture&>(*texture);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
-            if (srv_table.ptr == 0U) { return; }
+            if (srv_table.ptr == 0U)
+            {
+                return;
+            }
             D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc; // REN-38-B8
             m_list->SetGraphicsRootDescriptorTable(1, srv_table);                         // base-color SRV (t1)
@@ -4266,7 +5106,10 @@ public:
         {
             auto& atl = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
-            if (atlas_table.ptr == 0U) { return; }
+            if (atlas_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
@@ -4296,7 +5139,10 @@ public:
                                   crd::u32 index_count, crd::u32 instance_count, crd::u32 first_index, ITexture* texture,
                                   ITexture* atlas, bool load_target, crd::u32 first_draw_index)
     {
-        if (targets == nullptr || attachments == nullptr || count == 0U || !m_ok || !frame_recording()) { return; }
+        if (targets == nullptr || attachments == nullptr || count == 0U || !m_ok || !frame_recording())
+        {
+            return;
+        }
         auto& p  = static_cast<Dx12RasterProgram&>(program);
         auto& s  = static_cast<Dx12StorageBuffer&>(storage);
         auto& t0 = static_cast<Dx12RasterTarget&>(*targets[0]);
@@ -4318,16 +5164,31 @@ public:
         }
         ID3D12PipelineState* pso = pass_pso(p, 1U, depth_on ? dtp->dsv_format() : DXGI_FORMAT_UNKNOWN,
                                             to_d3d12_compare(compare), false, n, t0.color_format(), blends, rt_fmts);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
+        if (!frame_prepare(2U + (texture != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U)))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE       rtvs[8]{};
-        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv();
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? dtp->dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
                                    depth_on ? &dsv : nullptr);
@@ -4338,12 +5199,28 @@ public:
                 const AttachmentClear& a    = attachments[i];
                 const bool             mult = a.blend == BlendMode::Multiply || a.blend == BlendMode::RevealageMultiply;
                 float                  rgba[4];
-                if (mult) { rgba[0] = rgba[1] = rgba[2] = rgba[3] = 1.0F; }
-                else if (a.kind == ClearKind::Uint) { rgba[0] = static_cast<float>(a.uint_value); rgba[1] = rgba[2] = rgba[3] = 0.0F; }
-                else { rgba[0] = a.color.r; rgba[1] = a.color.g; rgba[2] = a.color.b; rgba[3] = a.color.a; }
+                if (mult)
+                {
+                    rgba[0] = rgba[1] = rgba[2] = rgba[3] = 1.0F;
+                }
+                else if (a.kind == ClearKind::Uint)
+                {
+                    rgba[0] = static_cast<float>(a.uint_value);
+                    rgba[1] = rgba[2] = rgba[3] = 0.0F;
+                }
+                else
+                {
+                    rgba[0] = a.color.r;
+                    rgba[1] = a.color.g;
+                    rgba[2] = a.color.b;
+                    rgba[3] = a.color.a;
+                }
                 m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr);
             }
-            if (depth_on) { m_list->ClearDepthStencilView(dsv, dtp->clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (depth_on)
+            {
+                m_list->ClearDepthStencilView(dsv, dtp->clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
@@ -4356,7 +5233,10 @@ public:
         {
             auto&                             tex       = static_cast<Dx12Texture&>(*texture);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
-            if (srv_table.ptr == 0U) { return; }
+            if (srv_table.ptr == 0U)
+            {
+                return;
+            }
             D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc;
             m_list->SetGraphicsRootDescriptorTable(1, srv_table); // base-color SRV (t1)
@@ -4366,7 +5246,10 @@ public:
         {
             auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
-            if (atlas_table.ptr == 0U) { return; }
+            if (atlas_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table);
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
             m_list->SetGraphicsRootDescriptorTable(8, plain_depth_tbl());
@@ -4394,7 +5277,10 @@ public:
                                  IStorageBuffer& storage, crd::u32 vertex_count, BlendMode blend = BlendMode::Opaque,
                                  crd::u32 first_vertex = 0U)
     {
-        if (!m_ok || m_uav_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
@@ -4406,10 +5292,17 @@ public:
             return;
         }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, 1U, t.color_format(), &blend);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
         // REN-1 pt-2: record into the shared open list (LOAD variant — no clears) when a frame graph is executing.
-        if (frame_recording()) { record_scene(t, p, s, pso, false, ClearColor{}, 0.0F, vertex_count, first_vertex); return; }
+        if (frame_recording())
+        {
+            record_scene(t, p, s, pso, false, ClearColor{}, 0.0F, vertex_count, first_vertex);
+            return;
+        }
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
         uav.Format                     = DXGI_FORMAT_UNKNOWN;
@@ -4419,7 +5312,10 @@ public:
         uav.Buffer.StructureByteStride = 4;
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, m_uav_heap->GetCPUDescriptorHandleForHeapStart());
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -4500,11 +5396,20 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         auto& a = static_cast<Dx12StorageBuffer&>(args);
-        if (!m_ok || max_draws == 0U || !frame_recording()) { return; }
-        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        if (!m_ok || max_draws == 0U || !frame_recording())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes())
+        {
+            return;
+        }
         const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
                               + static_cast<crd::u64>(max_draws) * kMultiIdxStride;
-        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes())
+        {
+            return;
+        }
         auto* cb = static_cast<Dx12StorageBuffer*>(count_buf);
         if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
                               || (count_offset_bytes & 3U) != 0U))
@@ -4515,14 +5420,26 @@ public:
         ID3D12PipelineState* pso =
             pass_pso(p, 1U, depth_on ? t.dsv_format() : DXGI_FORMAT_UNKNOWN, to_d3d12_compare(compare), false,
                      1U, t.color_format());
-        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
+        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root()))
+        {
+            return;
+        }
 
         frame_indexed_indirect_transition(s, a, cb, false);
-        if (!frame_prepare(2U + (map != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U))) { return; }
+        if (!frame_prepare(2U + (map != nullptr ? 1U : 0U) + (atlas != nullptr ? 1U : 0U)))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
         m_list->OMSetRenderTargets(1, &rtv, FALSE, depth_on ? &dsv : nullptr);
@@ -4530,7 +5447,10 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (depth_on && !m_next_load_depth)
+            {
+                m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F,
@@ -4545,7 +5465,10 @@ public:
         {
             auto&                             tex       = static_cast<Dx12Texture&>(*map);
             const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
-            if (srv_table.ptr == 0U) { return; }
+            if (srv_table.ptr == 0U)
+            {
+                return;
+            }
             D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
             samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(0U)) * m_sampler_inc; // REN-38-B8
             m_list->SetGraphicsRootDescriptorTable(1, srv_table);                         // base-colour SRV (t1)
@@ -4555,7 +5478,10 @@ public:
         {
             auto&                             atl         = static_cast<Dx12Texture&>(*atlas);
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(atl);
-            if (atlas_table.ptr == 0U) { return; }
+            if (atlas_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(atl));
@@ -4596,11 +5522,20 @@ public:
         auto& p = static_cast<Dx12RasterProgram&>(program);
         auto& s = static_cast<Dx12StorageBuffer&>(storage);
         auto& a = static_cast<Dx12StorageBuffer&>(args);
-        if (!m_ok || max_draws == 0U || !frame_recording() || !t.has_depth()) { return; }
-        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes()) { return; }
+        if (!m_ok || max_draws == 0U || !frame_recording() || !t.has_depth())
+        {
+            return;
+        }
+        if ((index_offset_bytes & 3U) != 0U || index_offset_bytes >= s.size_bytes())
+        {
+            return;
+        }
         const crd::u64 need = static_cast<crd::u64>(args_offset_bytes)
                               + static_cast<crd::u64>(max_draws) * kMultiIdxStride;
-        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes()) { return; }
+        if ((args_offset_bytes & 3U) != 0U || need > a.size_bytes())
+        {
+            return;
+        }
         auto* cb = static_cast<Dx12StorageBuffer*>(count_buf);
         if (cb != nullptr && (static_cast<crd::u64>(count_offset_bytes) + 4ULL > cb->size_bytes()
                               || (count_offset_bytes & 3U) != 0U))
@@ -4608,17 +5543,32 @@ public:
             return;
         }
         ID3D12PipelineState* pso = pass_pso(p, 1U, t.dsv_format(), to_d3d12_compare(compare), false, /*num_rts*/ 0U);
-        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root())) { return; }
+        if (!p.valid() || pso == nullptr || !ensure_multi_indexed(p.root()))
+        {
+            return;
+        }
 
         frame_indexed_indirect_transition(s, a, cb, false);
-        if (!frame_prepare(2U)) { return; }
+        if (!frame_prepare(2U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro    = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
-        if (!load_target && !m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        if (!load_target && !m_next_load_depth)
+        {
+            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+        }
         m_next_load_depth = false;
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F,
                                 1.0F};
@@ -4711,7 +5661,10 @@ public:
         ro_cpu.ptr += static_cast<SIZE_T>(3U + kBindlessMax) * m_srv_inc;
         m_device->CreateShaderResourceView(s.buf(), &ro, ro_cpu);
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
 
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
@@ -4722,7 +5675,10 @@ public:
         {
             const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (!m_next_load_depth) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (!m_next_load_depth)
+            {
+                m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         m_next_load_depth = false;
 
@@ -4766,7 +5722,10 @@ public:
 
     [[nodiscard]] std::unique_ptr<ITexture> create_texture(crd::u32 width, crd::u32 height, const void* rgba) override
     {
-        if (!m_ok || width == 0U || height == 0U || rgba == nullptr) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U || rgba == nullptr)
+        {
+            return nullptr;
+        }
 
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -4793,9 +5752,15 @@ public:
         UINT64                             total     = 0;
         m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), total);
-        if (upload == nullptr) { return nullptr; }
+        if (upload == nullptr)
+        {
+            return nullptr;
+        }
         void* mapped = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(upload->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         auto*            dst_base = static_cast<crd::u8*>(mapped) + fp.Offset;
         const auto*      src_base = static_cast<const crd::u8*>(rgba);
         const crd::usize src_row  = static_cast<crd::usize>(width) * 4U;
@@ -4805,7 +5770,10 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = tex.Get();
         dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -4816,7 +5784,10 @@ public:
         src.PlacedFootprint = fp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = kColorFormat;
@@ -4832,10 +5803,16 @@ public:
     [[nodiscard]] std::unique_ptr<IPresentSurface> create_present_surface(void* native_window, crd::u32 width,
                                                                           crd::u32 height, PresentMode mode) override
     {
-        if (!m_ok || native_window == nullptr) { return nullptr; }
+        if (!m_ok || native_window == nullptr)
+        {
+            return nullptr;
+        }
         auto surface =
             std::make_unique<Dx12PresentSurface>(m_device.Get(), m_queue.Get(), native_window, width, height, mode);
-        if (!surface->valid()) { return nullptr; }
+        if (!surface->valid())
+        {
+            return nullptr;
+        }
         return surface;
     }
 
@@ -4850,7 +5827,10 @@ public:
         }
         for (crd::u32 i = 0; i < mip_count; ++i)
         {
-            if (mips[i] == nullptr) { return nullptr; }
+            if (mips[i] == nullptr)
+            {
+                return nullptr;
+            }
         }
         const DXGI_FORMAT fmt = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : kColorFormat;
 
@@ -4878,9 +5858,15 @@ public:
         UINT64                             total = 0;
         m_device->GetCopyableFootprints(&rd, 0, mip_count, 0, fps, rows, rowbytes, &total);
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), total);
-        if (upload == nullptr) { return nullptr; }
+        if (upload == nullptr)
+        {
+            return nullptr;
+        }
         void* mapped = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(upload->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         {
             crd::u32 mw = width;
             crd::u32 mh = height;
@@ -4900,7 +5886,10 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         for (crd::u32 i = 0; i < mip_count; ++i)
         {
             D3D12_TEXTURE_COPY_LOCATION dst{};
@@ -4914,7 +5903,10 @@ public:
             m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         }
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = fmt;
@@ -4929,7 +5921,10 @@ public:
     [[nodiscard]] std::unique_ptr<ITexture> create_texture_dim(TextureKind kind, crd::u32 width, crd::u32 height,
                                                                crd::u32 depth_or_layers, const void* rgba) override
     {
-        if (!m_ok || width == 0U || height == 0U || rgba == nullptr) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U || rgba == nullptr)
+        {
+            return nullptr;
+        }
         UINT                     depth   = 1;
         UINT                     layers  = 1;
         D3D12_RESOURCE_DIMENSION rdim    = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -4964,16 +5959,25 @@ public:
 
         // Upload per subresource (3D = 1 subresource with `depth` planes; cube/array = one per layer).
         const UINT nsub = (rdim == D3D12_RESOURCE_DIMENSION_TEXTURE3D) ? 1U : layers;
-        if (nsub > 32U) { return nullptr; }
+        if (nsub > 32U)
+        {
+            return nullptr;
+        }
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT fps[32]{};
         UINT                               rows[32]{};
         UINT64                             rowbytes[32]{};
         UINT64                             total = 0;
         m_device->GetCopyableFootprints(&rd, 0, nsub, 0, fps, rows, rowbytes, &total);
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), total);
-        if (upload == nullptr) { return nullptr; }
+        if (upload == nullptr)
+        {
+            return nullptr;
+        }
         void* mapped = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(upload->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         const auto* src     = static_cast<const crd::u8*>(rgba);
         crd::usize  src_off = 0;
         for (UINT s = 0; s < nsub; ++s)
@@ -4995,7 +5999,10 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         for (UINT s = 0; s < nsub; ++s)
         {
             D3D12_TEXTURE_COPY_LOCATION d{};
@@ -5009,7 +6016,10 @@ public:
             m_list->CopyTextureRegion(&d, 0, 0, 0, &sr, nullptr);
         }
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = kColorFormat;
@@ -5041,20 +6051,29 @@ public:
     void draw_textured_storage(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture& texture,
                                IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || !frame_recording()) { return; }
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || !frame_recording())
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         auto&                s   = static_cast<Dx12StorageBuffer&>(storage);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
                                             t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         record_textured_storage(t, p, pso, static_cast<Dx12Texture&>(texture), s, 0U, clear, vertex_count);
     }
 
     [[nodiscard]] std::unique_ptr<ITexture> create_depth_texture(crd::u32 width, crd::u32 height,
                                                                  const float* depth) override
     {
-        if (!m_ok || width == 0U || height == 0U || depth == nullptr) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U || depth == nullptr)
+        {
+            return nullptr;
+        }
         // R32_FLOAT + a comparison sampler realises shadow-compare sampling on DX12 (no true depth format needed for SRVs).
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -5079,9 +6098,15 @@ public:
         UINT64                             total     = 0;
         m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp, &num_rows, &row_bytes, &total);
         ComPtr<ID3D12Resource> upload = make_upload_buffer(m_device.Get(), total);
-        if (upload == nullptr) { return nullptr; }
+        if (upload == nullptr)
+        {
+            return nullptr;
+        }
         void* mapped = nullptr;
-        if (FAILED(upload->Map(0, nullptr, &mapped))) { return nullptr; }
+        if (FAILED(upload->Map(0, nullptr, &mapped)))
+        {
+            return nullptr;
+        }
         auto*            dst_base = static_cast<crd::u8*>(mapped) + fp.Offset;
         const auto*      src_base = reinterpret_cast<const crd::u8*>(depth);
         const crd::usize src_row  = static_cast<crd::usize>(width) * 4U; // one float per texel
@@ -5091,7 +6116,10 @@ public:
         }
         upload->Unmap(0, nullptr);
 
-        if (!reset_commands()) { return nullptr; }
+        if (!reset_commands())
+        {
+            return nullptr;
+        }
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = tex.Get();
         dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -5102,7 +6130,10 @@ public:
         src.PlacedFootprint = fp;
         m_list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         transition(tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!submit_and_wait()) { return nullptr; }
+        if (!submit_and_wait())
+        {
+            return nullptr;
+        }
         D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
         srv.Format                  = DXGI_FORMAT_R32_FLOAT;
         srv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -5139,14 +6170,24 @@ public:
     void draw_bindless(IRasterTarget& target, IRasterProgram& program, ClearColor clear, ITexture* const* textures,
                        crd::u32 count, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr || count == 0U || textures == nullptr)
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         // REN-38-A1a: inside a frame, RECORD — never stomp the global heap or reset the list mid-frame.
-        if (frame_recording()) { record_bindless(t, p, pso, textures, n, clear, vertex_count); return; }
+        if (frame_recording())
+        {
+            record_bindless(t, p, pso, textures, n, clear, vertex_count);
+            return;
+        }
 
         // Mint the bindless SRV array into heap slots 2..2+kBindlessMax-1 (elements 0..n-1 = textures, rest replicate #0).
         for (UINT i = 0; i < kBindlessMax; ++i)
@@ -5160,7 +6201,10 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = m_uav_heap->GetGPUDescriptorHandleForHeapStart();
         bindless_gpu.ptr += static_cast<UINT64>(2U) * m_srv_inc; // slot 2
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -5206,7 +6250,10 @@ public:
     // its own PSO; the raster root signature is a graphics layout and cannot describe a compute dispatch.
     [[nodiscard]] ID3D12RootSignature* kernel_root()
     {
-        if (m_kernel_root != nullptr) { return m_kernel_root.Get(); }
+        if (m_kernel_root != nullptr)
+        {
+            return m_kernel_root.Get();
+        }
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType      = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         range.NumDescriptors = kMaxKernelBuffers;
@@ -5220,7 +6267,10 @@ public:
         rsd.pParameters   = &rp;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                                  IID_PPV_ARGS(&m_kernel_root))))
         {
@@ -5233,16 +6283,28 @@ public:
     {
         for (crd::u32 i = 0; i < m_kernel_n; ++i)
         {
-            if (m_kernel_key[i] == dxil) { return m_kernel_pso[i].Get(); }
+            if (m_kernel_key[i] == dxil)
+            {
+                return m_kernel_pso[i].Get();
+            }
         }
-        if (m_kernel_n >= kKernelPsoCap) { return nullptr; }
+        if (m_kernel_n >= kKernelPsoCap)
+        {
+            return nullptr;
+        }
         ID3D12RootSignature* root = kernel_root();
-        if (root == nullptr) { return nullptr; }
+        if (root == nullptr)
+        {
+            return nullptr;
+        }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = root;
         pd.CS             = D3D12_SHADER_BYTECODE{dxil, size};
         ComPtr<ID3D12PipelineState> pso;
-        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
+        {
+            return nullptr;
+        }
         m_kernel_key[m_kernel_n] = dxil;
         m_kernel_pso[m_kernel_n] = pso;
         // DIAG.7a(d2b-dx12-b) batch 3c: mint ONE Program identity per cached kernel PSO, on the cache-MISS path only
@@ -5261,7 +6323,10 @@ public:
     // is the entire mission.
     [[nodiscard]] ID3D12RootSignature* rt_kernel_root()
     {
-        if (m_rt_root != nullptr) { return m_rt_root.Get(); }
+        if (m_rt_root != nullptr)
+        {
+            return m_rt_root.Get();
+        }
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         range.NumDescriptors     = kMaxKernelBuffers;
@@ -5277,7 +6342,10 @@ public:
         rsd.pParameters   = rp;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                                  IID_PPV_ARGS(&m_rt_root))))
         {
@@ -5292,16 +6360,28 @@ public:
     {
         for (crd::u32 i = 0; i < m_rt_pso_n; ++i)
         {
-            if (m_rt_pso_key[i] == dxil) { return m_rt_pso[i].Get(); }
+            if (m_rt_pso_key[i] == dxil)
+            {
+                return m_rt_pso[i].Get();
+            }
         }
-        if (m_rt_pso_n >= kKernelPsoCap) { return nullptr; }
+        if (m_rt_pso_n >= kKernelPsoCap)
+        {
+            return nullptr;
+        }
         ID3D12RootSignature* root = rt_kernel_root();
-        if (root == nullptr) { return nullptr; }
+        if (root == nullptr)
+        {
+            return nullptr;
+        }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = root;
         pd.CS             = {dxil, size};
         ComPtr<ID3D12PipelineState> pso;
-        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
+        {
+            return nullptr;
+        }
         m_rt_pso_key[m_rt_pso_n] = dxil;
         m_rt_pso[m_rt_pso_n]     = pso;
         m_rt_pso_id[m_rt_pso_n]  = detail::dx12_attach_identity(pso.Get(), ObjectKind::Program, "dx12-rt-kernel-pso"); // DIAG.7a batch 3c: mint on miss; m_rt_root is shared, not named
@@ -5312,7 +6392,10 @@ public:
     // REN-40-G3: sampled-compute root — UAV table (u0..u7) + SRV table (t8) + static NEAREST/CLAMP sampler (s9).
     [[nodiscard]] ID3D12RootSignature* sampled_kernel_root()
     {
-        if (m_sampled_kernel_root != nullptr) { return m_sampled_kernel_root.Get(); }
+        if (m_sampled_kernel_root != nullptr)
+        {
+            return m_sampled_kernel_root.Get();
+        }
         D3D12_DESCRIPTOR_RANGE uav_range{};
         uav_range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         uav_range.NumDescriptors     = kMaxKernelBuffers;
@@ -5343,7 +6426,10 @@ public:
         rsd.pStaticSamplers   = &ss;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return nullptr;
+        }
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                                  IID_PPV_ARGS(&m_sampled_kernel_root))))
         {
@@ -5356,16 +6442,28 @@ public:
     {
         for (crd::u32 i = 0; i < m_sampled_pso_n; ++i)
         {
-            if (m_sampled_pso_key[i] == dxil) { return m_sampled_pso[i].Get(); }
+            if (m_sampled_pso_key[i] == dxil)
+            {
+                return m_sampled_pso[i].Get();
+            }
         }
-        if (m_sampled_pso_n >= kKernelPsoCap) { return nullptr; }
+        if (m_sampled_pso_n >= kKernelPsoCap)
+        {
+            return nullptr;
+        }
         ID3D12RootSignature* root = sampled_kernel_root();
-        if (root == nullptr) { return nullptr; }
+        if (root == nullptr)
+        {
+            return nullptr;
+        }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = root;
         pd.CS             = {dxil, size};
         ComPtr<ID3D12PipelineState> pso;
-        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return nullptr; }
+        if (FAILED(m_device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
+        {
+            return nullptr;
+        }
         m_sampled_pso_key[m_sampled_pso_n] = dxil;
         m_sampled_pso[m_sampled_pso_n]     = pso;
         m_sampled_id[m_sampled_pso_n]      = detail::dx12_attach_identity(pso.Get(), ObjectKind::Program, "dx12-sampled-kernel-pso"); // DIAG.7a batch 3c: mint on miss; m_sampled_kernel_root is shared, not named
@@ -5379,7 +6477,10 @@ public:
     {
         D3D12_CPU_DESCRIPTOR_HANDLE base{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(kMaxKernelBuffers, base, gpu)) { return {}; }
+        if (!frame_take(kMaxKernelBuffers, base, gpu))
+        {
+            return {};
+        }
         for (UINT i = 0; i < kMaxKernelBuffers; ++i)
         {
             IStorageBuffer&                  sb = *buffers[i < n ? i : 0U];
@@ -5406,23 +6507,41 @@ public:
     void dispatch_kernel_rt(IGpuProgram& kernel, IAccelerationStructure& as, crd::u32 gx, crd::u32 gy, crd::u32 gz,
                             IStorageBuffer* const* buffers, crd::u32 count)
     {
-        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U)
+        {
+            return;
+        }
         const crd::u64 tlas_va = dx12_scene_tlas(as);
         // ⛔ A scene that does not resolve is a NO-OP, never a dispatch against address 0 — DXR traversal from a
         // null AS is undefined, not a miss.
-        if (tlas_va == 0U) { return; }
+        if (tlas_va == 0U)
+        {
+            return;
+        }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
-        if (dx_prog == nullptr) { return; }
+        if (dx_prog == nullptr)
+        {
+            return;
+        }
         const auto           code = dx_prog->dxil();
         ID3D12PipelineState* pso  = rt_kernel_pipeline(code.data(), code.size());
-        if (pso == nullptr) { return; }
+        if (pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
-        if (!frame_prepare(kMaxKernelBuffers)) { return; }
+        if (!frame_prepare(kMaxKernelBuffers))
+        {
+            return;
+        }
         m_list->SetComputeRootSignature(rt_kernel_root());
         m_list->SetComputeRootShaderResourceView(0, static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(tlas_va));
         const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
-        if (frame_table.ptr == 0U) { return; }
+        if (frame_table.ptr == 0U)
+        {
+            return;
+        }
         m_list->SetComputeRootDescriptorTable(1, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -5434,21 +6553,39 @@ public:
     void dispatch_kernel_sampled(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz,
                                  IStorageBuffer* const* buffers, crd::u32 count, ITexture& tex)
     {
-        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U)
+        {
+            return;
+        }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
-        if (dx_prog == nullptr) { return; }
+        if (dx_prog == nullptr)
+        {
+            return;
+        }
         const auto           code = dx_prog->dxil();
         ID3D12PipelineState* pso  = sampled_kernel_pipeline(code.data(), code.size());
-        if (pso == nullptr) { return; }
+        if (pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
-        if (!frame_prepare(kMaxKernelBuffers + 1U)) { return; }
+        if (!frame_prepare(kMaxKernelBuffers + 1U))
+        {
+            return;
+        }
         D3D12_GPU_DESCRIPTOR_HANDLE uav_gpu = alloc_kernel_uav_run(buffers, n);
-        if (uav_gpu.ptr == 0U) { return; }
+        if (uav_gpu.ptr == 0U)
+        {
+            return;
+        }
         auto& dx_tex = static_cast<Dx12Texture&>(tex);
         D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu{};
         D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu{};
-        if (!frame_take(1U, srv_cpu, srv_gpu)) { return; }
+        if (!frame_take(1U, srv_cpu, srv_gpu))
+        {
+            return;
+        }
         m_device->CreateShaderResourceView(dx_tex.tex(), &dx_tex.srv(), srv_cpu);
 
         m_list->SetComputeRootSignature(sampled_kernel_root());
@@ -5464,25 +6601,46 @@ public:
     void dispatch_kernel_indirect(IGpuProgram& kernel, IStorageBuffer& args, crd::u64 args_offset,
                                   IStorageBuffer* const* buffers, crd::u32 count)
     {
-        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U)
+        {
+            return;
+        }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
-        if (dx_prog == nullptr) { return; }
+        if (dx_prog == nullptr)
+        {
+            return;
+        }
         const auto           code = dx_prog->dxil();
         ID3D12PipelineState* pso  = kernel_pipeline(code.data(), code.size());
-        if (pso == nullptr) { return; }
+        if (pso == nullptr)
+        {
+            return;
+        }
         ID3D12CommandSignature* sig = dispatch_indirect_sig();
-        if (sig == nullptr) { return; }
+        if (sig == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
         ID3D12Resource* ab = dx_buffer_of(args);
-        if (ab == nullptr) { return; }
+        if (ab == nullptr)
+        {
+            return;
+        }
         // ⛔ D3D12 requires INDIRECT_ARGUMENT state on the args buffer; a storage buffer lives in UNORDERED_ACCESS
         // between passes, so the move is made here and made BACK — the graph's own state tracking stays true.
         frame_transition(ab, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-        if (!frame_prepare(kMaxKernelBuffers)) { return; }
+        if (!frame_prepare(kMaxKernelBuffers))
+        {
+            return;
+        }
         m_list->SetComputeRootSignature(kernel_root());
         const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = alloc_kernel_uav_run(buffers, n);
-        if (frame_table.ptr == 0U) { return; }
+        if (frame_table.ptr == 0U)
+        {
+            return;
+        }
         m_list->SetComputeRootDescriptorTable(0, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -5494,14 +6652,26 @@ public:
     void draw_mesh_indirect_buffer(IRasterTarget& target, IRasterProgram& program, ClearColor clear,
                                    IStorageBuffer& args, crd::u64 args_offset)
     {
-        if (!m_ok || !frame_recording() || !m_mesh_shader || m_list6 == nullptr) { return; }
+        if (!m_ok || !frame_recording() || !m_mesh_shader || m_list6 == nullptr)
+        {
+            return;
+        }
         auto& t = static_cast<Dx12RasterTarget&>(target);
         auto& p = static_cast<Dx12RasterProgram&>(program);
-        if (!p.is_mesh()) { return; }
+        if (!p.is_mesh())
+        {
+            return;
+        }
         ID3D12PipelineState* pso = pass_pso(p, t.samples(), DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         ID3D12Resource* ab = dx_buffer_of(args);
-        if (ab == nullptr) { return; }
+        if (ab == nullptr)
+        {
+            return;
+        }
         frame_transition(ab, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         record_mesh(t, p, pso, clear, 0U, false, 0.0F, nullptr, false, D3D12_SHADING_RATE_1X1, nullptr, ab,
                     args_offset);
@@ -5511,31 +6681,52 @@ public:
     // The DISPATCH command signature (one D3D12_DISPATCH_ARGUMENTS: {x, y, z}) — built once, lazily.
     [[nodiscard]] ID3D12CommandSignature* dispatch_indirect_sig()
     {
-        if (m_dispatch_sig != nullptr) { return m_dispatch_sig.Get(); }
+        if (m_dispatch_sig != nullptr)
+        {
+            return m_dispatch_sig.Get();
+        }
         D3D12_INDIRECT_ARGUMENT_DESC arg{};
         arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
         D3D12_COMMAND_SIGNATURE_DESC csd{};
         csd.ByteStride       = sizeof(D3D12_DISPATCH_ARGUMENTS);
         csd.NumArgumentDescs = 1;
         csd.pArgumentDescs   = &arg;
-        if (FAILED(m_device->CreateCommandSignature(&csd, nullptr, IID_PPV_ARGS(&m_dispatch_sig)))) { return nullptr; }
+        if (FAILED(m_device->CreateCommandSignature(&csd, nullptr, IID_PPV_ARGS(&m_dispatch_sig))))
+        {
+            return nullptr;
+        }
         return m_dispatch_sig.Get();
     }
 
     void dispatch_kernel(IGpuProgram& kernel, crd::u32 gx, crd::u32 gy, crd::u32 gz, IStorageBuffer* const* buffers,
                          crd::u32 count)
     {
-        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U) { return; }
+        if (!m_ok || !frame_recording() || buffers == nullptr || count == 0U)
+        {
+            return;
+        }
         auto* dx_prog = dynamic_cast<Dx12GpuProgram*>(&kernel);
-        if (dx_prog == nullptr) { return; }
+        if (dx_prog == nullptr)
+        {
+            return;
+        }
         const auto           code = dx_prog->dxil();
         ID3D12PipelineState* pso  = kernel_pipeline(code.data(), code.size());
-        if (pso == nullptr) { return; }
+        if (pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < kMaxKernelBuffers ? count : kMaxKernelBuffers;
 
-        if (!frame_prepare(kMaxKernelBuffers)) { return; }
+        if (!frame_prepare(kMaxKernelBuffers))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE gpu = alloc_kernel_uav_run(buffers, n);
-        if (gpu.ptr == 0U) { return; }
+        if (gpu.ptr == 0U)
+        {
+            return;
+        }
         m_list->SetComputeRootSignature(kernel_root());
         m_list->SetComputeRootDescriptorTable(0, gpu);
         m_list->SetPipelineState(pso);
@@ -5556,7 +6747,10 @@ public:
                           const AttachmentClear* attachments, float clear_depth, DepthCompare compare,
                           IStorageBuffer& storage, crd::u32 vertex_count)
     {
-        if (targets == nullptr || attachments == nullptr || count == 0U || !frame_recording()) { return; }
+        if (targets == nullptr || attachments == nullptr || count == 0U || !frame_recording())
+        {
+            return;
+        }
         auto&          p  = static_cast<Dx12RasterProgram&>(program);
         auto&          sb = static_cast<Dx12StorageBuffer&>(storage);
         auto&          t0 = static_cast<Dx12RasterTarget&>(*targets[0]);
@@ -5578,12 +6772,21 @@ public:
         // record_pass inline-verb-path removal; a multi-colour G-buffer is executor-gated when one is needed.)
         ID3D12PipelineState* pso = pass_pso(p, 1U, has_depth ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN,
                                              to_d3d12_compare(compare), false, n, t0.color_format(), blends, rt_fmts);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};
-        for (crd::u32 i = 0; i < n; ++i) { rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv(); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            rtvs[i] = static_cast<Dx12RasterTarget&>(*targets[i]).rtv();
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = has_depth ? t0.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         m_list->OMSetRenderTargets(n, static_cast<const D3D12_CPU_DESCRIPTOR_HANDLE*>(rtvs), FALSE,
                                    has_depth ? &dsv : nullptr);
         for (crd::u32 i = 0; i < n; ++i)
@@ -5622,14 +6825,20 @@ public:
             }
             m_list->ClearRenderTargetView(rtvs[i], rgba, 0, nullptr);
         }
-        if (has_depth) { m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr); }
+        if (has_depth)
+        {
+            m_list->ClearDepthStencilView(dsv, t0.clear_flags(), clear_depth, 0, 0, nullptr);
+        }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t0.width()), static_cast<float>(t0.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t0.width()), static_cast<LONG>(t0.height())};
         m_list->RSSetViewports(1, &vp);
         m_list->RSSetScissorRects(1, &sc);
         m_list->SetGraphicsRootSignature(p.root());
         const D3D12_GPU_DESCRIPTOR_HANDLE frame_table = frame_alloc_storage_slot(sb);
-        if (frame_table.ptr == 0U) { return; }
+        if (frame_table.ptr == 0U)
+        {
+            return;
+        }
         m_list->SetGraphicsRootDescriptorTable(0, frame_table);
         m_list->SetPipelineState(pso);
         apply_stencil_ref(); // REN-38 audit: the stencil REFERENCE is command-list state, not PSO state
@@ -5640,12 +6849,18 @@ public:
     [[nodiscard]] std::unique_ptr<IGBufferTarget> create_gbuffer_target(crd::u32 width, crd::u32 height,
                                                                         crd::u32 attachments) override
     {
-        if (!m_ok || width == 0U || height == 0U || attachments < 2U || attachments > kMaxGBuffer) { return nullptr; }
+        if (!m_ok || width == 0U || height == 0U || attachments < 2U || attachments > kMaxGBuffer)
+        {
+            return nullptr;
+        }
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         hd.NumDescriptors = attachments;
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap)))) { return nullptr; }
+        if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtv_heap))))
+        {
+            return nullptr;
+        }
         const UINT rtv_inc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
         ComPtr<ID3D12Resource>             tex[kMaxGBuffer]{};
@@ -5676,7 +6891,10 @@ public:
             UINT64 total     = 0;
             m_device->GetCopyableFootprints(&rd, 0, 1, 0, &fp[i], &num_rows, &row_bytes, &total);
             rb[i] = make_readback_buffer(m_device.Get(), total);
-            if (rb[i] == nullptr || FAILED(rb[i]->Map(0, nullptr, &mapped[i]))) { return nullptr; }
+            if (rb[i] == nullptr || FAILED(rb[i]->Map(0, nullptr, &mapped[i])))
+            {
+                return nullptr;
+            }
             D3D12_CPU_DESCRIPTOR_HANDLE h = rtv_heap->GetCPUDescriptorHandleForHeapStart();
             h.ptr += static_cast<SIZE_T>(i) * rtv_inc;
             m_device->CreateRenderTargetView(tex[i].Get(), nullptr, h);
@@ -5688,19 +6906,34 @@ public:
     void draw_gbuffer(IGBufferTarget& target, IRasterProgram& program, ClearColor clear,
                       crd::u32 vertex_count) // RAF-12.4: reached via friend encoder
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12GBufferTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         const crd::u32       n   = t.attachment_count();
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, n);
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
-        if (!reset_commands()) { return; }
-        for (crd::u32 i = 0; i < n; ++i) { transition(t.tex(i), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET); }
+        if (!reset_commands())
+        {
+            return;
+        }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            transition(t.tex(i), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv0 = t.rtv_start();
         m_list->OMSetRenderTargets(n, &rtv0, TRUE, nullptr); // TRUE: the N RTVs are contiguous in one heap
         const float rgba[4] = {clear.r, clear.g, clear.b, clear.a};
-        for (crd::u32 i = 0; i < n; ++i) { m_list->ClearRenderTargetView(t.rtv(i), rgba, 0, nullptr); }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            m_list->ClearRenderTargetView(t.rtv(i), rgba, 0, nullptr);
+        }
 
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -5735,14 +6968,24 @@ private:
     void draw_sampled(IRasterTarget& target, IRasterProgram& program, ClearColor clear, Dx12Texture& tex,
                       UINT sampler_slot, crd::u32 vertex_count)
     {
-        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr) { return; }
+        if (!m_ok || m_uav_heap == nullptr || m_sampler_heap == nullptr)
+        {
+            return;
+        }
         auto&                t   = static_cast<Dx12RasterTarget&>(target);
         auto&                p   = static_cast<Dx12RasterProgram&>(program);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U, t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
 
         // REN-2: in frame-graph recording mode, sampling records into the shared list (RTT compose / material forward).
-        if (frame_recording()) { record_textured(t, p, pso, tex, sampler_slot, clear, vertex_count); return; }
+        if (frame_recording())
+        {
+            record_textured(t, p, pso, tex, sampler_slot, clear, vertex_count);
+            return;
+        }
 
         const D3D12_SHADER_RESOURCE_VIEW_DESC srv     = tex.srv();
         D3D12_CPU_DESCRIPTOR_HANDLE           srv_cpu = m_uav_heap->GetCPUDescriptorHandleForHeapStart();
@@ -5753,7 +6996,10 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
 
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(t.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
@@ -5805,7 +7051,10 @@ private:
 
     [[nodiscard]] bool ensure_blit()
     {
-        if (m_blit.tried) { return m_blit.pso != nullptr; }
+        if (m_blit.tried)
+        {
+            return m_blit.pso != nullptr;
+        }
         m_blit.tried = true;
 
         static const char* blit_vs_src =
@@ -5835,7 +7084,10 @@ private:
                                              crd::containers::StringView("crd_blit_vs"));
         const auto ps = compile_hlsl_to_dxil(ShaderStage::Fragment, crd::containers::StringView(blit_ps_src),
                                              crd::containers::StringView("crd_blit_ps"));
-        if (!vs.ok || !ps.ok) { return false; } // dxc unavailable ⇒ blit_image is a NO-OP, never a wrong image
+        if (!vs.ok || !ps.ok) // dxc unavailable ⇒ blit_image is a NO-OP, never a wrong image
+        {
+            return false;
+        }
 
         D3D12_DESCRIPTOR_RANGE srv_range{};
         srv_range.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -5873,7 +7125,10 @@ private:
         rsd.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
         ComPtr<ID3DBlob> sig;
         ComPtr<ID3DBlob> err;
-        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return false; }
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+        {
+            return false;
+        }
         if (FAILED(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                                  IID_PPV_ARGS(&m_blit.root))))
         {
@@ -5928,7 +7183,10 @@ private:
         {
             D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
             D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-            if (!frame_take(1U, cpu, gpu)) { return {}; }
+            if (!frame_take(1U, cpu, gpu))
+            {
+                return {};
+            }
             m_device->CreateShaderResourceView(src, &srv, cpu);
             return gpu;
         }
@@ -5942,32 +7200,58 @@ private:
 
     void copy_image(IRasterTarget& dst_t, IRasterTarget& src_t)
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         // ⛔ A MISMATCH IS A NO-OP, never a partial copy — CopyResource requires identical descs, and copying a
         // sub-region instead would read back as a plausible image.
-        if (dst_t.width() != src_t.width() || dst_t.height() != src_t.height()) { return; }
+        if (dst_t.width() != src_t.width() || dst_t.height() != src_t.height())
+        {
+            return;
+        }
         auto& dst = static_cast<Dx12RasterTarget&>(dst_t);
         auto& src = static_cast<Dx12RasterTarget&>(src_t);
-        if (frame_recording()) { xfer_copy(m_list.Get(), dst, src); return; }
+        if (frame_recording())
+        {
+            xfer_copy(m_list.Get(), dst, src);
+            return;
+        }
         sync_xfer(dst, src, false, BlitFilter::Nearest);
     }
 
     void resolve_image(IRasterTarget& dst_t, IRasterTarget& src_t)
     {
-        if (!m_ok) { return; }
-        if (dst_t.width() != src_t.width() || dst_t.height() != src_t.height()) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
+        if (dst_t.width() != src_t.width() || dst_t.height() != src_t.height())
+        {
+            return;
+        }
         auto& dst = static_cast<Dx12RasterTarget&>(dst_t);
         auto& src = static_cast<Dx12RasterTarget&>(src_t);
         // ⛔ A SINGLE-SAMPLE source is REJECTED rather than degraded to a copy: the author asked for a resolve, so
         // a non-multisampled source means the graph declared the wrong sample count.
-        if (!src.multisampled()) { return; }
-        if (frame_recording()) { xfer_resolve(m_list.Get(), dst, src); return; }
+        if (!src.multisampled())
+        {
+            return;
+        }
+        if (frame_recording())
+        {
+            xfer_resolve(m_list.Get(), dst, src);
+            return;
+        }
         sync_xfer(dst, src, true, BlitFilter::Nearest);
     }
 
     void blit_image(IRasterTarget& dst_t, IRasterTarget& src_t, BlitFilter filter)
     {
-        if (!m_ok || !ensure_blit()) { return; }
+        if (!m_ok || !ensure_blit())
+        {
+            return;
+        }
         auto& dst = static_cast<Dx12RasterTarget&>(dst_t);
         auto& src = static_cast<Dx12RasterTarget&>(src_t);
         if (frame_recording())
@@ -5979,16 +7263,25 @@ private:
             frame_transition(src.copy_src(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             frame_transition(dst.tex(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            if (!frame_prepare(1U)) { return; }
+            if (!frame_prepare(1U))
+            {
+                return;
+            }
             const D3D12_GPU_DESCRIPTOR_HANDLE table = blit_srv(src.copy_src(), true);
-            if (table.ptr == 0U) { return; }
+            if (table.ptr == 0U)
+            {
+                return;
+            }
             emit_blit_draw(dst, table, filter);
             frame_transition(dst.tex(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
             frame_transition(src.copy_src(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              D3D12_RESOURCE_STATE_COPY_SOURCE);
             return;
         }
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         transition(src.copy_src(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(dst.tex(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         ID3D12DescriptorHeap* heaps[] = {m_uav_heap.Get()};
@@ -6005,14 +7298,23 @@ private:
     // the instant the call returns — the affordance every other synchronous verb provides.
     void sync_xfer(Dx12RasterTarget& dst, Dx12RasterTarget& src, bool resolve, BlitFilter /*filter*/)
     {
-        if (!reset_commands()) { return; }
+        if (!reset_commands())
+        {
+            return;
+        }
         ID3D12Resource* src_res = resolve ? src.tex() : src.copy_src();
         transition(src_res, D3D12_RESOURCE_STATE_COMMON,
                    resolve ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE : D3D12_RESOURCE_STATE_COPY_SOURCE);
         transition(dst.tex(), D3D12_RESOURCE_STATE_COMMON,
                    resolve ? D3D12_RESOURCE_STATE_RESOLVE_DEST : D3D12_RESOURCE_STATE_COPY_DEST);
-        if (resolve) { xfer_resolve(m_list.Get(), dst, src); }
-        else         { xfer_copy(m_list.Get(), dst, src); }
+        if (resolve)
+        {
+            xfer_resolve(m_list.Get(), dst, src);
+        }
+        else
+        {
+            xfer_copy(m_list.Get(), dst, src);
+        }
         transition(src_res, resolve ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE : D3D12_RESOURCE_STATE_COPY_SOURCE,
                    D3D12_RESOURCE_STATE_COMMON);
         transition(dst.tex(), resolve ? D3D12_RESOURCE_STATE_RESOLVE_DEST : D3D12_RESOURCE_STATE_COPY_DEST,
@@ -6028,18 +7330,30 @@ private:
     // asymmetry survived because no DX12 test ever read a compute result back through the raster context.
     [[nodiscard]] bool download_storage(IStorageBuffer& storage) override
     {
-        if (!m_ok || frame_recording()) { return false; } // inside a frame the graph owns the list
+        if (!m_ok || frame_recording()) // inside a frame the graph owns the list
+        {
+            return false;
+        }
         ID3D12Resource* src = dx_buffer_of(storage);
         auto*           sb  = dynamic_cast<Dx12StorageBuffer*>(&storage);
         // Only an APPLICATION buffer has a readback resource — a graph transient lives in device-local aliased
         // memory with no host mapping, which is exactly why an authored pass writes its results to an
         // `external_buffer` when anything outside the frame needs to see them.
-        if (src == nullptr || sb == nullptr || sb->readback() == nullptr) { return false; }
-        if (!reset_commands()) { return false; }
+        if (src == nullptr || sb == nullptr || sb->readback() == nullptr)
+        {
+            return false;
+        }
+        if (!reset_commands())
+        {
+            return false;
+        }
         transition(src, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         m_list->CopyResource(sb->readback(), src);
         transition(src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (!submit_and_wait()) { return false; }
+        if (!submit_and_wait())
+        {
+            return false;
+        }
         return true;
     }
 
@@ -6114,11 +7428,17 @@ private:
     // frame's draws (end runs at the end of sync, before render() submits the frame).
     void begin_upload_batch() override
     {
-        if (m_batch_open || !m_ok || m_queue == nullptr || m_fence == nullptr || frame_recording()) { return; }
+        if (m_batch_open || !m_ok || m_queue == nullptr || m_fence == nullptr || frame_recording())
+        {
+            return;
+        }
         UploadBatch& b = m_upload[m_upload_slot];
         if (b.submitted) // reclaim the slot from 2 batches ago (its submission has normally long completed)
         {
-            if (!wait_value(b.fence_val)) { return; }
+            if (!wait_value(b.fence_val))
+            {
+                return;
+            }
             b.submitted = false;
         }
         if (b.ring == nullptr)
@@ -6145,7 +7465,11 @@ private:
         }
         else
         {
-            if (FAILED(detail::dx12_reset(b.alloc.Get(), b.list.Get()))) { m_ok = false; return; }
+            if (FAILED(detail::dx12_reset(b.alloc.Get(), b.list.Get())))
+            {
+                m_ok = false;
+                return;
+            }
         }
         b.used       = 0U;
         m_batch_open = true;
@@ -6153,7 +7477,10 @@ private:
 
     void end_upload_batch() override
     {
-        if (!m_batch_open) { return; }
+        if (!m_batch_open)
+        {
+            return;
+        }
         m_batch_open   = false;
         UploadBatch& b = m_upload[m_upload_slot];
         bool submitted = false;
@@ -6180,14 +7507,20 @@ private:
         // one big committed-buffer copy is fine as a one-time cost, and it keeps the persistent ring small
         // (8 MB × 2 slots) instead of ballooning to hundreds of MB for the rest of the session. Steady-state
         // uploads (the per-run dirty ranges) are all far below this, so they still batch.
-        if (aligned > kUploadRingBytes) { return false; }
+        if (aligned > kUploadRingBytes)
+        {
+            return false;
+        }
         if (b.used + aligned > b.cap)
         {
             // grow: submit this batch, drain THIS slot (its copies reference the current ring), rebuild it bigger,
             // reopen on the next slot, retry. `b` still names the just-submitted slot after end advances the cursor.
             const crd::u32 want = (b.cap * 2U > b.used + aligned) ? b.cap * 2U : (b.used + aligned) * 2U;
             end_upload_batch();
-            if (!wait_value(b.fence_val)) { return false; }
+            if (!wait_value(b.fence_val))
+            {
+                return false;
+            }
             b.submitted = false;
             b.map       = nullptr;
             b.ring.Reset();
@@ -6201,7 +7534,10 @@ private:
             }
             b.cap = want;
             begin_upload_batch();
-            if (!m_batch_open) { return false; }
+            if (!m_batch_open)
+            {
+                return false;
+            }
             return upload_batched(s, byte_offset, data, size_bytes);
         }
         std::memcpy(b.map + b.used, data, size_bytes);
@@ -6224,12 +7560,24 @@ private:
     // Flush + drain every batch (waits their submissions). Called at teardown and before a frame starts recording.
     void drain_upload_batches()
     {
-        if (m_batch_open) { end_upload_batch(); }
-        if (m_fence == nullptr) { return; }
+        if (m_batch_open)
+        {
+            end_upload_batch();
+        }
+        if (m_fence == nullptr)
+        {
+            return;
+        }
         for (UploadBatch& b : m_upload)
         {
-            if (!b.submitted) { continue; }
-            if (!wait_value(b.fence_val)) { return; }
+            if (!b.submitted)
+            {
+                continue;
+            }
+            if (!wait_value(b.fence_val))
+            {
+                return;
+            }
             b.submitted = false;
         }
     }
@@ -6250,8 +7598,14 @@ private:
 
     [[nodiscard]] bool frame_prepare(UINT count)
     {
-        if (!m_ok) { return false; }
-        if (!frame_recording() || count == 0U) { return true; }
+        if (!m_ok)
+        {
+            return false;
+        }
+        if (!frame_recording() || count == 0U)
+        {
+            return true;
+        }
         const HRESULT result = m_frame_rec.arena->reserve(count, m_frame_rec.range);
         if (FAILED(result))
         {
@@ -6322,8 +7676,14 @@ public:
 
     [[nodiscard]] bool frame_rec_begin(detail::Dx12FrameDescriptors& arena)
     {
-        if (!valid()) { return false; }
-        if (m_batch_open) { end_upload_batch(); } // never carry an open upload batch across a frame boundary
+        if (!valid())
+        {
+            return false;
+        }
+        if (m_batch_open) // never carry an open upload batch across a frame boundary
+        {
+            end_upload_batch();
+        }
         // ── REN-8: FRAMES IN FLIGHT (the DX12 half). ────────────────────────────────────────────────────────
         // The frame graph records into its OWN ring of allocator+list pairs, swapped in here and restored in
         // frame_rec_end(). The standalone synchronous draw paths keep the context's dedicated pair untouched —
@@ -6336,7 +7696,10 @@ public:
         if (m_ring_list[0] != nullptr)
         {
             m_ring_slot = (m_ring_slot + 1U) % kFrameRingSize;
-            if (!wait_value(m_ring_val[m_ring_slot])) { return false; }
+            if (!wait_value(m_ring_val[m_ring_slot]))
+            {
+                return false;
+            }
             m_saved_alloc = m_cmd_alloc;
             m_saved_list  = m_list;
             m_cmd_alloc   = m_ring_alloc[m_ring_slot];
@@ -6344,7 +7707,10 @@ public:
         }
         // REN-39-D1: this slot's fence has retired above, so last cycle's in-frame staging buffers are dead.
         m_frame_uploads[m_ring_slot].clear();
-        if (!reset_commands()) { return false; }
+        if (!reset_commands())
+        {
+            return false;
+        }
         arena.reset_after_retirement();
         m_frame_rec = FrameRec{};
         m_frame_rec.arena = &arena;
@@ -6384,10 +7750,17 @@ public:
                                          D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT};
         for (crd::u32 i = 0; i != 3U; ++i)
         {
-            if (resources[i] == nullptr) { continue; }
+            if (resources[i] == nullptr)
+            {
+                continue;
+            }
             for (crd::u32 j = i + 1U; j != 3U; ++j)
             {
-                if (resources[j] == resources[i]) { states[i] |= states[j]; resources[j] = nullptr; }
+                if (resources[j] == resources[i])
+                {
+                    states[i] |= states[j];
+                    resources[j] = nullptr;
+                }
             }
             frame_transition(resources[i], restore ? states[i] : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                               restore ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : states[i]);
@@ -6478,7 +7851,10 @@ private:
         uav.Buffer.StructureByteStride = 4;
         D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(1U, cpu, gpu)) { return {}; }
+        if (!frame_take(1U, cpu, gpu))
+        {
+            return {};
+        }
         m_device->CreateUnorderedAccessView(s.buf(), nullptr, &uav, cpu);
         return gpu;
     }
@@ -6497,7 +7873,10 @@ private:
         srv.Buffer.StructureByteStride = 4;
         D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(1U, cpu, gpu)) { return {}; }
+        if (!frame_take(1U, cpu, gpu))
+        {
+            return {};
+        }
         m_device->CreateShaderResourceView(s.buf(), &srv, cpu);
         return gpu;
     }
@@ -6510,9 +7889,15 @@ private:
                       bool clear, ClearColor clear_color, float clear_depth, crd::u32 vertex_count,
                       crd::u32 first_vertex = 0U)
     {
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         // ⭐ REN-38-A6: DEPTH IS OPTIONAL — the DX12 mirror of the Vulkan rule. A frame-graph COLOUR transient
         // has no depth texture (depth is a separate `D32Float` resource here), so a `raster.geometry` pass
@@ -6526,7 +7911,10 @@ private:
         {
             const float rgba[4] = {clear_color.r, clear_color.g, clear_color.b, clear_color.a};
             m_list->ClearRenderTargetView(rtv, rgba, 0, nullptr);
-            if (depth_on) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+            if (depth_on)
+            {
+                m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+            }
         }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
@@ -6549,11 +7937,20 @@ private:
                               crd::u32 index_count, crd::u32 instance_count)
     {
         frame_transition(s.buf(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kIndexedDrawStates);
-        if (!frame_prepare(2U)) { return; }
+        if (!frame_prepare(2U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE ro = frame_alloc_storage_srv_slot(s); // t0 (REN-39-C1)
-        if (ro.ptr == 0U) { return; }
+        if (ro.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
         const bool depth_on = t.has_depth(); // ⭐ REN-38-A6: depth is OPTIONAL
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth_on ? t.dsv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
@@ -6592,14 +7989,23 @@ private:
     void record_depth_only(Dx12RasterTarget& t, Dx12RasterProgram& p, Dx12StorageBuffer& s,
                            ID3D12PipelineState* pso, bool clear, float clear_depth, crd::u32 vertex_count)
     {
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE dsv   = t.dsv();
         m_list->OMSetRenderTargets(0, nullptr, FALSE, &dsv); // ⛔ zero RTVs: depth-only
         // clear ⇒ the FIRST mesh of the shadow pass; otherwise every later mesh joins the SAME map (clearing per
         // draw would wipe the previous occluder — see draw_storage_depth_only_load).
-        if (clear) { m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr); }
+        if (clear)
+        {
+            m_list->ClearDepthStencilView(dsv, t.clear_flags(), clear_depth, 0, 0, nullptr);
+        }
         const D3D12_VIEWPORT vp{0.0F, 0.0F, static_cast<float>(t.width()), static_cast<float>(t.height()), 0.0F, 1.0F};
         const D3D12_RECT     sc{0, 0, static_cast<LONG>(t.width()), static_cast<LONG>(t.height())};
         m_list->RSSetViewports(1, &vp);
@@ -6618,7 +8024,10 @@ private:
         const D3D12_SHADER_RESOURCE_VIEW_DESC srv = tex.srv();
         D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(1U, cpu, gpu)) { return {}; }
+        if (!frame_take(1U, cpu, gpu))
+        {
+            return {};
+        }
         m_device->CreateShaderResourceView(tex.tex(), &srv, cpu);
         return gpu;
     }
@@ -6638,7 +8047,10 @@ private:
     {
         D3D12_CPU_DESCRIPTOR_HANDLE base{};
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-        if (!frame_take(kBindlessMax, base, gpu)) { return {}; }
+        if (!frame_take(kBindlessMax, base, gpu))
+        {
+            return {};
+        }
         for (UINT i = 0; i < static_cast<UINT>(kBindlessMax); ++i)
         {
             auto&                                 tex = static_cast<Dx12Texture&>(*textures[i < n ? i : 0U]);
@@ -6654,9 +8066,15 @@ private:
                          ITexture* const* textures, crd::u32 n, ClearColor clear_color, crd::u32 vertex_count,
                          bool clear = true)
     {
-        if (!frame_prepare(kBindlessMax)) { return; }
+        if (!frame_prepare(kBindlessMax))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n);
-        if (bindless_gpu.ptr == 0U) { return; }
+        if (bindless_gpu.ptr == 0U)
+        {
+            return;
+        }
         // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER on the bindless run. This binding IGNORED it (heap-start = the
         // default s0 WRAP sampler) while EVERY non-bindless draw offsets by active_sampler_slot (REN-38-B8) — so a bindless
         // fullscreen pass could not clamp on DX12, and the frosted-glass composite's half-res upsample WRAPPED opposite-edge
@@ -6692,11 +8110,20 @@ private:
                                  ITexture* const* textures, crd::u32 n, Dx12StorageBuffer& s,
                                  ClearColor clear_color, crd::u32 vertex_count)
     {
-        if (!frame_prepare(kBindlessMax + 1U)) { return; }
+        if (!frame_prepare(kBindlessMax + 1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE storage_gpu  = frame_alloc_storage_slot(s);          // u0, param 0
-        if (storage_gpu.ptr == 0U) { return; }
+        if (storage_gpu.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE bindless_gpu = frame_alloc_bindless_run(textures, n); // t3[], param 3
-        if (bindless_gpu.ptr == 0U) { return; }
+        if (bindless_gpu.ptr == 0U)
+        {
+            return;
+        }
         // ⛔ CEIR-31b-4-b-iii-2: HONOR THE PASS SAMPLER (REN-38-B8 offset, as :4086) — this bindless-storage path (TAA's
         // resolve) likewise IGNORED it (heap-start = s0 WRAP). Behaviour is unchanged until a pass sets `address` (default
         // slot 0), but it makes the knob work: TAA reprojects by UV, and a reprojection past the edge WRAPPED to the far
@@ -6734,7 +8161,10 @@ private:
         auto&                s   = static_cast<Dx12StorageBuffer&>(constants);
         ID3D12PipelineState* pso = pass_pso(p, 1U, DXGI_FORMAT_UNKNOWN, D3D12_COMPARISON_FUNC_LESS, false, 1U,
                                             t.color_format());
-        if (!p.valid() || pso == nullptr) { return; }
+        if (!p.valid() || pso == nullptr)
+        {
+            return;
+        }
         const crd::u32 n = count < static_cast<crd::u32>(kBindlessMax) ? count : static_cast<crd::u32>(kBindlessMax);
         record_bindless_storage(t, p, pso, textures, n, s, clear, vertex_count);
     }
@@ -6745,9 +8175,15 @@ private:
                           ClearColor clear_color, crd::u32 vertex_count, LoadOp load = LoadOp::Clear,
                           crd::u32 first_vertex = 0U)
     {
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE table = frame_alloc_storage_slot(s);
-        if (table.ptr == 0U) { return; }
+        if (table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv   = t.rtv();
         m_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
         if (load == LoadOp::Clear) // CEIR-34 R2: LOAD composes over existing contents (overlay's colour-only bucket)
@@ -6772,9 +8208,15 @@ private:
     void record_textured(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso, Dx12Texture& tex,
                          UINT sampler_slot, ClearColor clear_color, crd::u32 vertex_count)
     {
-        if (!frame_prepare(1U)) { return; }
+        if (!frame_prepare(1U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu  = frame_alloc_srv_slot(tex);
-        if (srv_gpu.ptr == 0U) { return; }
+        if (srv_gpu.ptr == 0U)
+        {
+            return;
+        }
         D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -6805,11 +8247,20 @@ private:
     void record_textured_storage(Dx12RasterTarget& t, Dx12RasterProgram& p, ID3D12PipelineState* pso, Dx12Texture& tex,
                                  Dx12StorageBuffer& s, UINT sampler_slot, ClearColor clear_color, crd::u32 vertex_count)
     {
-        if (!frame_prepare(2U)) { return; }
+        if (!frame_prepare(2U))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
-        if (uav_table.ptr == 0U) { return; }
+        if (uav_table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu   = frame_alloc_srv_slot(tex);
-        if (srv_gpu.ptr == 0U) { return; }
+        if (srv_gpu.ptr == 0U)
+        {
+            return;
+        }
         D3D12_GPU_DESCRIPTOR_HANDLE       samp_gpu  = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = t.rtv();
@@ -6841,11 +8292,20 @@ private:
                                ID3D12PipelineState* pso, bool clear, ClearColor clear_color, float clear_depth,
                                crd::u32 vertex_count, crd::u32 sampler_slot = 0U, Dx12Texture* atlas = nullptr)
     {
-        if (!frame_prepare(2U + (atlas != nullptr ? 1U : 0U))) { return; }
+        if (!frame_prepare(2U + (atlas != nullptr ? 1U : 0U)))
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE uav_table = frame_alloc_storage_slot(s);
-        if (uav_table.ptr == 0U) { return; }
+        if (uav_table.ptr == 0U)
+        {
+            return;
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE srv_table = frame_alloc_srv_slot(tex);
-        if (srv_table.ptr == 0U) { return; }
+        if (srv_table.ptr == 0U)
+        {
+            return;
+        }
         D3D12_GPU_DESCRIPTOR_HANDLE samp_gpu = m_sampler_heap->GetGPUDescriptorHandleForHeapStart();
         samp_gpu.ptr += static_cast<UINT64>(active_sampler_slot(sampler_slot)) * m_sampler_inc; // REN-38-B8
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv       = t.rtv();
@@ -6868,7 +8328,10 @@ private:
         if (atlas != nullptr)
         {
             const D3D12_GPU_DESCRIPTOR_HANDLE atlas_table = frame_alloc_srv_slot(*atlas);
-            if (atlas_table.ptr == 0U) { return; }
+            if (atlas_table.ptr == 0U)
+            {
+                return;
+            }
             m_list->SetGraphicsRootDescriptorTable(4, atlas_table); // shadow atlas (t4)
             // REN-40-D: s5 keyed by WHAT the atlas is — comparison for depth, LINEAR/CLAMP for moments.
             m_list->SetGraphicsRootDescriptorTable(5, atlas_samp_tbl(*atlas));
@@ -7038,14 +8501,26 @@ private:
 
 ID3D12Resource* dx_buffer_of(IStorageBuffer& b) noexcept
 {
-    if (auto* sb = dynamic_cast<Dx12StorageBuffer*>(&b)) { return sb->buf(); }
-    if (auto* tb = dynamic_cast<Dx12TransientBuffer*>(&b)) { return tb->buf(); }
+    if (auto* sb = dynamic_cast<Dx12StorageBuffer*>(&b))
+    {
+        return sb->buf();
+    }
+    if (auto* tb = dynamic_cast<Dx12TransientBuffer*>(&b))
+    {
+        return tb->buf();
+    }
     return nullptr;
 }
 crd::u32 dx_buffer_elems(IStorageBuffer& b) noexcept
 {
-    if (auto* sb = dynamic_cast<Dx12StorageBuffer*>(&b)) { return sb->num_elements(); }
-    if (auto* tb = dynamic_cast<Dx12TransientBuffer*>(&b)) { return tb->num_elements(); }
+    if (auto* sb = dynamic_cast<Dx12StorageBuffer*>(&b))
+    {
+        return sb->num_elements();
+    }
+    if (auto* tb = dynamic_cast<Dx12TransientBuffer*>(&b))
+    {
+        return tb->num_elements();
+    }
     return 0U;
 }
 
@@ -7086,7 +8561,10 @@ public:
                 m_ts_heap.Reset();
             }
         }
-        else { m_ts_heap.Reset(); }
+        else
+        {
+            m_ts_heap.Reset();
+        }
     }
     // ⛔ never release a placed resource / heap with work still in flight
     ~Dx12FrameGraph() override
@@ -7096,7 +8574,10 @@ public:
         free_transients();
         // REN-37.5: the persistent registry is the one thing `reset()` never touches, so the DESTRUCTOR is the
         // only place it is released.
-        for (Persistent& p : m_persist) { destroy_persistent_impl(p); }
+        for (Persistent& p : m_persist)
+        {
+            destroy_persistent_impl(p);
+        }
         m_persist.clear();
     }
     Dx12FrameGraph(const Dx12FrameGraph&)            = delete;
@@ -7108,17 +8589,26 @@ public:
     [[nodiscard]] IRasterContext& raster() noexcept override { return *m_rc; }
     [[nodiscard]] IRasterTarget*  image(FgImage h) noexcept override
     {
-        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        if (!h.valid() || h.id > m_images.size())
+        {
+            return nullptr;
+        }
         return m_images[h.id - 1U].target;
     }
     [[nodiscard]] ITexture*       texture(FgImage h) noexcept override // REN-2: a `sampled` transient resolves to its SRV
     {
-        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        if (!h.valid() || h.id > m_images.size())
+        {
+            return nullptr;
+        }
         return m_images[h.id - 1U].texture;
     }
     [[nodiscard]] IStorageBuffer* buffer(FgBuffer h) noexcept override
     {
-        if (!h.valid() || h.id > m_buffers.size()) { return nullptr; }
+        if (!h.valid() || h.id > m_buffers.size())
+        {
+            return nullptr;
+        }
         return m_buffers[h.id - 1U].buffer;
     }
     // REN-3.2: one SLICE of a layered transient as a render target (the per-cascade shadow write). A non-layered
@@ -7126,26 +8616,44 @@ public:
     // `image(h)` there, which is what lets a for_each-expanded pass use ONE code path for both shapes.
     [[nodiscard]] IRasterTarget* image_layer(FgImage h, crd::u32 layer) noexcept override
     {
-        if (!h.valid() || h.id > m_images.size()) { return nullptr; }
+        if (!h.valid() || h.id > m_images.size())
+        {
+            return nullptr;
+        }
         ImageNode& n = m_images[h.id - 1U];
-        if (layer < n.layer_targets.size()) { return n.layer_targets[layer]; }
+        if (layer < n.layer_targets.size())
+        {
+            return n.layer_targets[layer];
+        }
         return layer == 0U ? n.target : nullptr;
     }
 
     // ── ⭐ REN-40-G3: a render target whose COLOUR comes from one image and DEPTH from another. ──
     [[nodiscard]] IRasterTarget* image_with_depth(FgImage colour, FgImage depth) noexcept override
     {
-        if (!colour.valid() || colour.id > m_images.size()) { return nullptr; }
-        if (!depth.valid()  || depth.id  > m_images.size()) { return nullptr; }
+        if (!colour.valid() || colour.id > m_images.size())
+        {
+            return nullptr;
+        }
+        if (!depth.valid()  || depth.id  > m_images.size())
+        {
+            return nullptr;
+        }
         ImageNode& cn = m_images[colour.id - 1U];
         ImageNode& dn = m_images[depth.id  - 1U];
-        if (cn.shared_depth_target != nullptr) { return cn.shared_depth_target; }
+        if (cn.shared_depth_target != nullptr)
+        {
+            return cn.shared_depth_target;
+        }
         const D3D12_PLACED_SUBRESOURCE_FOOTPRINT tfp{};
         auto* t = new (std::nothrow) Dx12RasterTarget(cn.resource, nullptr, dn.resource, nullptr, cn.rtv_heap,
                                                       dn.dsv_heap ? dn.dsv_heap : dn.depth_dsv_heap, nullptr, tfp, 1U,
                                                       cn.desc.width, cn.desc.height, /*has_stencil=*/false,
                                                       Dx12RasterTarget::IdentityMode::None); // REN-40 fg node: deferred
-        if (t == nullptr) { return nullptr; } // OOM: the caller's needs_target guard skips the pass
+        if (t == nullptr) // OOM: the caller's needs_target guard skips the pass
+        {
+            return nullptr;
+        }
         cn.shared_depth_target = t;
         return t;
     }
@@ -7173,7 +8681,10 @@ public:
     {
         for (crd::usize i = 0; i < m_images.size(); ++i)
         {
-            if (m_images[i].target == &target) { return FgImage{static_cast<crd::u32>(i + 1U)}; }
+            if (m_images[i].target == &target)
+            {
+                return FgImage{static_cast<crd::u32>(i + 1U)};
+            }
         }
         ImageNode n{};
         n.target = &target;
@@ -7185,7 +8696,10 @@ public:
     {
         for (crd::usize i = 0; i < m_buffers.size(); ++i)
         {
-            if (m_buffers[i].buffer == &buffer) { return FgBuffer{static_cast<crd::u32>(i + 1U)}; }
+            if (m_buffers[i].buffer == &buffer)
+            {
+                return FgBuffer{static_cast<crd::u32>(i + 1U)};
+            }
         }
         BufferNode n{};
         n.buffer    = &buffer;
@@ -7196,11 +8710,17 @@ public:
 
     [[nodiscard]] FgImage create_transient_image(const FgImageDesc& desc) override
     {
-        if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
+        if (desc.width == 0U || desc.height == 0U)
+        {
+            return FgImage{0U};
+        }
         // REN-3.2: reject a bad layer count by RETURN VALUE — an invalid handle build() then refuses — rather
         // than clamping. A silently truncated cascade atlas renders a plausible-looking image with missing
         // cascades, which is the worst class of graphics bug: it looks like art direction.
-        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
+        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers)
+        {
+            return FgImage{0U};
+        }
         ImageNode n{};
         n.own  = Own::Transient;
         n.desc = desc;
@@ -7224,8 +8744,14 @@ public:
         const crd::u32 volume_depth = desc.depth > 0U ? desc.depth : 1U;
         const crd::u32 cube_count   = desc.layers > 0U ? desc.layers : 1U;
         crd::u32       depth_or_layers = desc.layers;
-        if (is_3d)        { depth_or_layers = volume_depth; }
-        else if (is_cube) { depth_or_layers = 6U * cube_count; }
+        if (is_3d)
+        {
+            depth_or_layers = volume_depth;
+        }
+        else if (is_cube)
+        {
+            depth_or_layers = 6U * cube_count;
+        }
         n.rdesc.DepthOrArraySize = static_cast<UINT16>(depth_or_layers);
         n.rdesc.MipLevels        = static_cast<UINT16>(desc.mips > 0U ? desc.mips : 1U);
         n.no_alias               = desc.no_alias; // REN-38-B6
@@ -7256,13 +8782,22 @@ public:
     // is precisely what makes it persistent.
     [[nodiscard]] FgImage create_persistent_image(crd::u32 key, const FgImageDesc& desc) override
     {
-        if (desc.width == 0U || desc.height == 0U) { return FgImage{0U}; }
-        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers) { return FgImage{0U}; }
+        if (desc.width == 0U || desc.height == 0U)
+        {
+            return FgImage{0U};
+        }
+        if (desc.layers == 0U || desc.layers > kFgMaxImageLayers)
+        {
+            return FgImage{0U};
+        }
 
         crd::i32 found = -1;
         for (crd::u32 i = 0; i < m_persist.size(); ++i)
         {
-            if (m_persist[i].key != key) { continue; }
+            if (m_persist[i].key != key)
+            {
+                continue;
+            }
             const FgImageDesc& d = m_persist[i].node.desc;
             // A desc change (a resize, a format switch) genuinely INVALIDATES the history; reusing a
             // differently-shaped image would read plausible-looking garbage rather than obviously-missing data.
@@ -7271,7 +8806,11 @@ public:
             {
                 found = static_cast<crd::i32>(i);
             }
-            else { destroy_persistent_impl(m_persist[i]); m_persist[i].key = 0U; }
+            else
+            {
+                destroy_persistent_impl(m_persist[i]);
+                m_persist[i].key = 0U;
+            }
             break;
         }
 
@@ -7310,18 +8849,32 @@ public:
             crd::i32 dead = -1;
             for (crd::u32 i = 0; i < m_persist.size(); ++i)
             {
-                if (m_persist[i].key == 0U) { dead = static_cast<crd::i32>(i); break; }
+                if (m_persist[i].key == 0U)
+                {
+                    dead = static_cast<crd::i32>(i);
+                    break;
+                }
             }
-            if (dead >= 0) { m_persist[static_cast<crd::u32>(dead)] = static_cast<Persistent&&>(p); found = dead; }
+            if (dead >= 0)
+            {
+                m_persist[static_cast<crd::u32>(dead)] = static_cast<Persistent&&>(p);
+                found = dead;
+            }
             else
             {
                 m_persist.push_back(static_cast<Persistent&&>(p));
                 found = static_cast<crd::i32>(m_persist.size() - 1U);
             }
-            if (!materialize_image(m_persist[static_cast<crd::u32>(found)].node)) { return FgImage{0U}; }
+            if (!materialize_image(m_persist[static_cast<crd::u32>(found)].node))
+            {
+                return FgImage{0U};
+            }
             m_persist[static_cast<crd::u32>(found)].was_live = false;
         }
-        else { m_persist[static_cast<crd::u32>(found)].was_live = true; }
+        else
+        {
+            m_persist[static_cast<crd::u32>(found)].was_live = true;
+        }
 
         Persistent& pe = m_persist[static_cast<crd::u32>(found)];
         ImageNode   n{};
@@ -7329,7 +8882,10 @@ public:
         n.texture       = pe.node.texture;
         n.rtv_heap      = pe.node.rtv_heap;
         n.dsv_heap      = pe.node.dsv_heap;
-        for (IRasterTarget* t : pe.node.layer_targets) { n.layer_targets.push_back(t); }
+        for (IRasterTarget* t : pe.node.layer_targets)
+        {
+            n.layer_targets.push_back(t);
+        }
         n.own           = Own::Persistent;
         n.persist_index = found;
         n.desc          = pe.node.desc;
@@ -7349,14 +8905,20 @@ public:
     {
         for (crd::u32 i = 0; i < m_persist.size(); ++i)
         {
-            if (m_persist[i].key == key) { return m_persist[i].was_live; }
+            if (m_persist[i].key == key)
+            {
+                return m_persist[i].was_live;
+            }
         }
         return false;
     }
 
     [[nodiscard]] FgBuffer create_transient_buffer(crd::u32 size_bytes) override
     {
-        if (size_bytes == 0U) { return FgBuffer{0U}; }
+        if (size_bytes == 0U)
+        {
+            return FgBuffer{0U};
+        }
         BufferNode n{};
         n.transient              = true;
         n.size                   = size_bytes;
@@ -7392,7 +8954,10 @@ public:
     // BOTH (identity goes where the destroy is). No-op-safe for a default identity.
     void retire_pass_identities() noexcept
     {
-        for (Pass& pp : m_passes) { detail::dx12_detach_identity(pp.identity); }
+        for (Pass& pp : m_passes)
+        {
+            detail::dx12_detach_identity(pp.identity);
+        }
     }
 
     [[nodiscard]] bool build() override;
@@ -7435,7 +9000,10 @@ public:
     // ── DIAG.6b(i2): raw per-pass ticks so a profiler can PLACE each pass (see IFrameGraph). ──
     [[nodiscard]] bool pass_gpu_ticks(crd::u32 i, crd::u64& begin_ticks, crd::u64& end_ticks) const noexcept override
     {
-        if (i >= m_timed_passes) { return false; } // stale/unresolved -> unavailable, never zeros reported as real
+        if (i >= m_timed_passes) // stale/unresolved -> unavailable, never zeros reported as real
+        {
+            return false;
+        }
         begin_ticks = m_pass_ticks[i * 2U];
         end_ticks   = m_pass_ticks[i * 2U + 1U];
         return true;
@@ -7640,8 +9208,14 @@ private:
                 n.texture = nullptr;
                 // REN-3.2: on a layered transient `target` ALIASES layer_targets[0] — free the per-slice targets
                 // and null `target` FIRST, or the shared slice-0 wrapper is deleted twice.
-                for (IRasterTarget* lt : n.layer_targets) { delete lt; }
-                if (n.layer_targets.size() > 0) { n.target = nullptr; }
+                for (IRasterTarget* lt : n.layer_targets)
+                {
+                    delete lt;
+                }
+                if (n.layer_targets.size() > 0)
+                {
+                    n.target = nullptr;
+                }
                 n.layer_targets.clear();
                 delete n.target; // Dx12RasterTarget — virtual dtor
                 n.target = nullptr;
@@ -7689,9 +9263,15 @@ private:
 
     [[nodiscard]] bool activate_alias(crd::i32 slot_index, ID3D12Resource* resource)
     {
-        if (slot_index < 0 || resource == nullptr) { return false; }
+        if (slot_index < 0 || resource == nullptr)
+        {
+            return false;
+        }
         auto& slot = m_slots[static_cast<crd::u32>(slot_index)];
-        if (slot.active == resource) { return false; }
+        if (slot.active == resource)
+        {
+            return false;
+        }
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
         barrier.Aliasing.pResourceBefore = slot.active;
@@ -7710,8 +9290,14 @@ private:
         ImageNode& n = p.node;
         delete n.texture;
         n.texture = nullptr;
-        for (IRasterTarget* lt : n.layer_targets) { delete lt; }
-        if (n.layer_targets.size() > 0) { n.target = nullptr; }
+        for (IRasterTarget* lt : n.layer_targets)
+        {
+            delete lt;
+        }
+        if (n.layer_targets.size() > 0)
+        {
+            n.target = nullptr;
+        }
         n.layer_targets.clear();
         delete n.target;
         n.target = nullptr;
@@ -7764,8 +9350,20 @@ bool Dx12FrameGraph::build()
     // 1) every pass access must reference an existing resource
     for (const Pass& p : m_passes)
     {
-        for (const Access& a : p.img_access) { if (a.handle == 0U || a.handle > m_images.size()) { return false; } }
-        for (const Access& a : p.buf_access) { if (a.handle == 0U || a.handle > m_buffers.size()) { return false; } }
+        for (const Access& a : p.img_access)
+        {
+            if (a.handle == 0U || a.handle > m_images.size())
+            {
+                return false;
+            }
+        }
+        for (const Access& a : p.buf_access)
+        {
+            if (a.handle == 0U || a.handle > m_buffers.size())
+            {
+                return false;
+            }
+        }
     }
 
     // ── 1b) TOPOLOGICAL SORT — identical semantics to the Vulkan graph. ────────────────────────────────────
@@ -7784,9 +9382,16 @@ bool Dx12FrameGraph::build()
         indeg.resize(np, 0U);
         edges.resize(static_cast<crd::usize>(np) * np, 0U);
         const auto add_edge = [&](crd::u32 from, crd::u32 to) {
-            if (from == to) { return; }
+            if (from == to)
+            {
+                return;
+            }
             crd::u32& e = edges[static_cast<crd::usize>(from) * np + to];
-            if (e == 0U) { e = 1U; ++indeg[to]; }
+            if (e == 0U)
+            {
+                e = 1U;
+                ++indeg[to];
+            }
         };
         // ── ⭐⭐ WAR vs forward-reference RAW — the lifetime-aware rule (mirrors frame-cook's DependencyCycle fix;
         // the plain declaration-order heuristic that shipped here MASKED genuine cycles). A read matching a writer
@@ -7815,23 +9420,41 @@ bool Dx12FrameGraph::build()
             {
                 for (const Access& aw : accessor(m_passes[w]))
                 {
-                    if (aw.access == FgAccess::Read || aw.access == FgAccess::DepthRead) { continue; }
+                    if (aw.access == FgAccess::Read || aw.access == FgAccess::DepthRead)
+                    {
+                        continue;
+                    }
                     for (crd::u32 r = 0; r < np; ++r)
                     {
                         for (const Access& ar : accessor(m_passes[r]))
                         {
-                            if (ar.handle != aw.handle) { continue; }
+                            if (ar.handle != aw.handle)
+                            {
+                                continue;
+                            }
                             const bool r_reads = (ar.access == FgAccess::Read || ar.access == FgAccess::DepthRead);
                             if (r_reads)
                             {
-                                if (w < r) { add_edge(w, r); } // RAW: reader after writer
+                                if (w < r) // RAW: reader after writer
+                                {
+                                    add_edge(w, r);
+                                }
                                 else if (w > r)                // reader declared BEFORE this writer
                                 {
-                                    if (has_value(ar.handle) || written_before(ar.handle, r)) { add_edge(r, w); } // WAR
-                                    else { add_edge(w, r); } // forward-reference RAW → surfaces a cycle
+                                    if (has_value(ar.handle) || written_before(ar.handle, r)) // WAR
+                                    {
+                                        add_edge(r, w);
+                                    }
+                                    else // forward-reference RAW → surfaces a cycle
+                                    {
+                                        add_edge(w, r);
+                                    }
                                 }
                             }
-                            else if (w < r) { add_edge(w, r); } // WAW: declaration order
+                            else if (w < r) // WAW: declaration order
+                            {
+                                add_edge(w, r);
+                            }
                         }
                     }
                 }
@@ -7847,14 +9470,24 @@ bool Dx12FrameGraph::build()
             crd::u32 pick = np;
             for (crd::u32 i = 0; i < np; ++i)
             {
-                if (indeg[i] == 0U) { pick = i; break; }
+                if (indeg[i] == 0U)
+                {
+                    pick = i;
+                    break;
+                }
             }
-            if (pick == np) { return false; } // ⛔ a dependency CYCLE — never a partial schedule
+            if (pick == np) // ⛔ a dependency CYCLE — never a partial schedule
+            {
+                return false;
+            }
             indeg[pick] = 0xFFFFFFFFU;
             m_order.push_back(pick);
             for (crd::u32 t = 0; t < np; ++t)
             {
-                if (edges[static_cast<crd::usize>(pick) * np + t] != 0U && indeg[t] != 0xFFFFFFFFU) { --indeg[t]; }
+                if (edges[static_cast<crd::usize>(pick) * np + t] != 0U && indeg[t] != 0xFFFFFFFFU)
+                {
+                    --indeg[t];
+                }
             }
         }
     }
@@ -7862,28 +9495,64 @@ bool Dx12FrameGraph::build()
     // 2) transient LIFETIME analysis — [first pass touching .. last pass touching] + whether any pass writes it
     // ⛔ Positions index the SORTED order: aliasing reuses memory across disjoint lifetimes, and "disjoint" is
     // only meaningful in EXECUTION order.
-    for (ImageNode& n : m_images) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
-    for (BufferNode& n : m_buffers) { n.first_pass = -1; n.last_pass = -1; n.has_write = false; n.slot = -1; }
+    for (ImageNode& n : m_images)
+    {
+        n.first_pass = -1;
+        n.last_pass = -1;
+        n.has_write = false;
+        n.slot = -1;
+    }
+    for (BufferNode& n : m_buffers)
+    {
+        n.first_pass = -1;
+        n.last_pass = -1;
+        n.has_write = false;
+        n.slot = -1;
+    }
     for (crd::usize oi = 0; oi < m_order.size(); ++oi)
     {
         const crd::usize pi = m_order[oi];
         for (const Access& a : m_passes[pi].img_access)
         {
             ImageNode& n = m_images[a.handle - 1U];
-            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
+            if (n.first_pass < 0)
+            {
+                n.first_pass = static_cast<crd::i32>(oi);
+            }
             n.last_pass = static_cast<crd::i32>(oi);
-            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead) { n.has_write = true; }
+            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead)
+            {
+                n.has_write = true;
+            }
         }
         for (const Access& a : m_passes[pi].buf_access)
         {
             BufferNode& n = m_buffers[a.handle - 1U];
-            if (n.first_pass < 0) { n.first_pass = static_cast<crd::i32>(oi); }
+            if (n.first_pass < 0)
+            {
+                n.first_pass = static_cast<crd::i32>(oi);
+            }
             n.last_pass = static_cast<crd::i32>(oi);
-            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead) { n.has_write = true; }
+            if (a.access != FgAccess::Read && a.access != FgAccess::DepthRead)
+            {
+                n.has_write = true;
+            }
         }
     }
-    for (const ImageNode& n : m_images) { if (aliasable(n) && !n.has_write) { return false; } } // a transient no pass writes
-    for (const BufferNode& n : m_buffers) { if (n.transient && !n.has_write) { return false; } }
+    for (const ImageNode& n : m_images) // a transient no pass writes
+    {
+        if (aliasable(n) && !n.has_write)
+        {
+            return false;
+        }
+    }
+    for (const BufferNode& n : m_buffers)
+    {
+        if (n.transient && !n.has_write)
+        {
+            return false;
+        }
+    }
 
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
     //    occupant's lifetime ended before this one begins (disjoint ⇒ shared heap). Images then buffers (each a
@@ -7892,14 +9561,23 @@ bool Dx12FrameGraph::build()
     m_logical_bytes  = 0U;
 
     const crd::u32 img_slots = alias_class(true);
-    if (img_slots == 0xFFFFFFFFU) { return false; }
-    if (alias_class(false) == 0xFFFFFFFFU) { return false; }
+    if (img_slots == 0xFFFFFFFFU)
+    {
+        return false;
+    }
+    if (alias_class(false) == 0xFFFFFFFFU)
+    {
+        return false;
+    }
     // ── ⭐ REN-38-B6: THE HARD BUDGET. Checked AFTER aliasing, because the budget is about what the frame
     // actually costs, not what it would cost without the aliaser — bounding the pre-alias total would reject
     // graphs that fit comfortably. ⛔ FAIL, never warn: the failure this prevents is an allocation that succeeds
     // on the dev machine and OOMs on the target months later, in a build nobody can bisect.
     m_over_budget = m_budget != 0U && static_cast<crd::u64>(m_physical_bytes) > m_budget;
-    if (m_over_budget) { return false; }
+    if (m_over_budget)
+    {
+        return false;
+    }
     return true;
 }
 
@@ -7914,14 +9592,21 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
     for (crd::u32 i = 0; i < count; ++i)
     {
         const bool tr = images ? aliasable(m_images[i]) : m_buffers[i].transient;
-        if (tr) { order.push_back(i); }
+        if (tr)
+        {
+            order.push_back(i);
+        }
     }
     const auto first_pass_of = [&](crd::u32 i) { return images ? m_images[i].first_pass : m_buffers[i].first_pass; };
     for (crd::usize a = 1; a < order.size(); ++a) // insertion sort by first_pass (small N)
     {
         const crd::u32 v = order[a];
         crd::usize     b = a;
-        while (b > 0 && first_pass_of(order[b - 1]) > first_pass_of(v)) { order[b] = order[b - 1]; --b; }
+        while (b > 0 && first_pass_of(order[b - 1]) > first_pass_of(v))
+        {
+            order[b] = order[b - 1];
+            --b;
+        }
         order[b] = v;
     }
 
@@ -7945,7 +9630,11 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             // offset 0 — the whole graph then refuses to build. Latent for as long as every same-class transient
             // happened to be the same size; the moment chain (three RGBA16F atlases beside the R32_TYPELESS
             // depth atlas, whose allocation infos differ by padding) is what finally hit it.
-            if (m_slots[si].alias_allowed && m_slots[si].free_after < fp && m_slots[si].size >= sz) { chosen = static_cast<crd::i32>(si); break; }
+            if (m_slots[si].alias_allowed && m_slots[si].free_after < fp && m_slots[si].size >= sz)
+            {
+                chosen = static_cast<crd::i32>(si);
+                break;
+            }
         }
         if (chosen < 0)
         {
@@ -7957,7 +9646,10 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
             hd.Properties.Type       = D3D12_HEAP_TYPE_DEFAULT;
             hd.Alignment             = images ? m_images[idx].mem_align : m_buffers[idx].mem_align;
             hd.Flags                 = class_flags;
-            if (FAILED(m_device->CreateHeap(&hd, IID_PPV_ARGS(&s.heap)))) { return 0xFFFFFFFFU; }
+            if (FAILED(m_device->CreateHeap(&hd, IID_PPV_ARGS(&s.heap))))
+            {
+                return 0xFFFFFFFFU;
+            }
             m_slots.push_back(std::move(s));
             chosen = static_cast<crd::i32>(m_slots.size() - 1U);
             m_physical_bytes += static_cast<crd::u32>(sz);
@@ -7978,7 +9670,10 @@ crd::u32 Dx12FrameGraph::alias_class(bool images)
                 return 0xFFFFFFFFU;
             }
             n.state = init;
-            if (!materialize_image(n)) { return 0xFFFFFFFFU; }
+            if (!materialize_image(n))
+            {
+                return 0xFFFFFFFFU;
+            }
         }
         else
         {
@@ -8016,7 +9711,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                 D3D12_DESCRIPTOR_HEAP_DESC hd{};
                 hd.Type           = n.is_depth ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV : D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
                 hd.NumDescriptors = 1;
-                if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&out)))) { return false; }
+                if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&out))))
+                {
+                    return false;
+                }
                 const D3D12_CPU_DESCRIPTOR_HANDLE h = out->GetCPUDescriptorHandleForHeapStart();
                 if (n.is_depth)
                 {
@@ -8029,7 +9727,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                         dsv.Texture2DArray.FirstArraySlice = l;
                         dsv.Texture2DArray.ArraySize       = 1;
                     }
-                    else { dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D; }
+                    else
+                    {
+                        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+                    }
                     m_device->CreateDepthStencilView(n.resource.Get(), &dsv, h);
                 }
                 else if (is_array)
@@ -8041,7 +9742,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                     rtv.Texture2DArray.ArraySize       = 1;
                     m_device->CreateRenderTargetView(n.resource.Get(), &rtv, h);
                 }
-                else { m_device->CreateRenderTargetView(n.resource.Get(), nullptr, h); }
+                else
+                {
+                    m_device->CreateRenderTargetView(n.resource.Get(), nullptr, h);
+                }
                 return true;
             };
             // ⭐⭐ REN-39-D2: build the COMPANION DEPTH before any target is made (`slice_target` reads it).
@@ -8072,7 +9776,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                 D3D12_DESCRIPTOR_HEAP_DESC dhd{};
                 dhd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
                 dhd.NumDescriptors = 1;
-                if (FAILED(m_device->CreateDescriptorHeap(&dhd, IID_PPV_ARGS(&n.depth_dsv_heap)))) { return false; }
+                if (FAILED(m_device->CreateDescriptorHeap(&dhd, IID_PPV_ARGS(&n.depth_dsv_heap))))
+                {
+                    return false;
+                }
                 D3D12_DEPTH_STENCIL_VIEW_DESC ddsv{};
                 ddsv.Format        = DXGI_FORMAT_D32_FLOAT;
                 ddsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -8100,7 +9807,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
                 for (crd::u32 l = 0; l < slices; ++l)
                 {
                     ComPtr<ID3D12DescriptorHeap> heap;
-                    if (!slice_heap(l, heap)) { return false; }
+                    if (!slice_heap(l, heap))
+                    {
+                        return false;
+                    }
                     n.layer_targets.push_back(slice_target(heap));
                 }
                 n.target = n.layer_targets[0]; // image() on a layered transient = slice 0 (never the whole array)
@@ -8108,7 +9818,10 @@ bool Dx12FrameGraph::materialize_image(ImageNode& n)
             else
             {
                 ComPtr<ID3D12DescriptorHeap>& heap = n.is_depth ? n.dsv_heap : n.rtv_heap;
-                if (!slice_heap(0U, heap)) { return false; }
+                if (!slice_heap(0U, heap))
+                {
+                    return false;
+                }
                 n.target = slice_target(heap);
             }
 
@@ -8174,7 +9887,10 @@ void Dx12FrameGraph::execute()
         for (const Access& a : p.img_access)
         {
             ImageNode& n = m_images[a.handle - 1U];
-            if (n.target == nullptr) { continue; }
+            if (n.target == nullptr)
+            {
+                continue;
+            }
             if (activate_alias(n.slot, n.resource.Get()))
             {
                 // Activate the full placed resource before accessing its memory. RT/DS metadata must then be
@@ -8250,7 +9966,10 @@ void Dx12FrameGraph::execute()
                 }
                 continue;
             }
-            if (p.present != nullptr) { continue; } // present pass reads → readback loop transitions
+            if (p.present != nullptr) // present pass reads → readback loop transitions
+            {
+                continue;
+            }
             if (xfer) // an IMPORTED target inside a transfer pass — same rule, no attachment special-casing
             {
                 const D3D12_RESOURCE_STATES want = writes ? want_w : want_r;
@@ -8275,8 +9994,14 @@ void Dx12FrameGraph::execute()
         m_rc->frame_rec_new_pass(); // REN-38-B8: no pass inherits its neighbour's sampler
         ID3D12GraphicsCommandList* ts_list = m_rc->frame_cmd_list();
         const bool stamp = m_ts_heap != nullptr && ts_list != nullptr && pass_index < kMaxTimedPasses;
-        if (stamp) { ts_list->EndQuery(m_ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, pass_index * 2U); }
-        if (p.fn != nullptr) { p.fn(*this, p.user); }
+        if (stamp)
+        {
+            ts_list->EndQuery(m_ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, pass_index * 2U);
+        }
+        if (p.fn != nullptr)
+        {
+            p.fn(*this, p.user);
+        }
         if (stamp)
         {
             ts_list->EndQuery(m_ts_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, pass_index * 2U + 1U);
@@ -8306,7 +10031,10 @@ void Dx12FrameGraph::execute()
         // ⛔ REN-38-A6: any live state that is not already COMMON, not just RENDER_TARGET. A transfer pass
         // leaves its destination in COPY_DEST, and the old `== RENDER_TARGET` test skipped it — so a frame whose
         // LAST write was a copy read back the target's PREVIOUS contents. Every check green, image stale.
-        if (graph_owned(n) || n.target == nullptr || n.state == D3D12_RESOURCE_STATE_COMMON) { continue; }
+        if (graph_owned(n) || n.target == nullptr || n.state == D3D12_RESOURCE_STATE_COMMON)
+        {
+            continue;
+        }
         if (m_readback)
         {
             m_rc->frame_readback_from(static_cast<Dx12RasterTarget&>(*n.target), n.state);
@@ -8333,9 +10061,18 @@ void Dx12FrameGraph::execute()
     m_submit_count = m_rc->frame_did_submit() ? 1U : 0U;
     m_pending_submit = submitted_ok;
     m_rc->frame_rec_end();
-    if (!submitted_ok) { return; }
-    if (m_readback) { wait_pending_submit(); }
-    if (!m_rc->valid()) { return; }
+    if (!submitted_ok)
+    {
+        return;
+    }
+    if (m_readback)
+    {
+        wait_pending_submit();
+    }
+    if (!m_rc->valid())
+    {
+        return;
+    }
 
     // ── ⭐ REN-38-A5: THE PRESENT PASS PRESENTS — the DXGI mirror of the Vulkan rule. ──
     // ⛔ `.present(surface)` was stored, read by the barrier scheduler to SKIP a transition, and then never acted
@@ -8347,19 +10084,35 @@ void Dx12FrameGraph::execute()
     for (const crd::u32 pass_idx : m_order)
     {
         Pass& p = m_passes[pass_idx];
-        if (p.present == nullptr) { continue; }
+        if (p.present == nullptr)
+        {
+            continue;
+        }
         IRasterTarget* src = nullptr;
         for (const Access& a : p.img_access)
         {
-            if (a.handle == 0U || a.handle > m_images.size()) { continue; }
+            if (a.handle == 0U || a.handle > m_images.size())
+            {
+                continue;
+            }
             ImageNode& n = m_images[a.handle - 1U];
             // ⛔ A GRAPH-OWNED image cannot be presented: its memory is aliased and retired once its last reader
             // is done, so the surface would copy from storage another transient already owns. Only an IMPORTED
             // target outlives the graph, so only an imported target is a legal present source.
-            if (n.target != nullptr && !graph_owned(n)) { src = n.target; break; }
+            if (n.target != nullptr && !graph_owned(n))
+            {
+                src = n.target;
+                break;
+            }
         }
-        if (src == nullptr) { continue; }
-        if (p.present->present(*src)) { ++m_present_count; }
+        if (src == nullptr)
+        {
+            continue;
+        }
+        if (p.present->present(*src))
+        {
+            ++m_present_count;
+        }
     }
 }
 
@@ -8367,22 +10120,34 @@ void Dx12FrameGraph::execute()
 // from the dtor — every point about to touch something the GPU could still be reading.
 void Dx12FrameGraph::wait_pending_submit() noexcept
 {
-    if (!m_pending_submit) { return; }
+    if (!m_pending_submit)
+    {
+        return;
+    }
     const bool completed = m_rc->frame_wait_submitted();
     m_pending_submit = false;
-    if (completed) { resolve_timestamps(); }
+    if (completed)
+    {
+        resolve_timestamps();
+    }
 }
 
 // REN-8: the fence has been reached, so the resolved ticks are readable. Ticks → ms via the queue frequency.
 void Dx12FrameGraph::resolve_timestamps() noexcept
 {
     m_timed_passes = 0U;
-    if (m_ts_heap == nullptr || m_ts_readback == nullptr || m_pass_names.empty() || m_ts_freq <= 0.0) { return; }
+    if (m_ts_heap == nullptr || m_ts_readback == nullptr || m_pass_names.empty() || m_ts_freq <= 0.0)
+    {
+        return;
+    }
     const crd::u32 n = static_cast<crd::u32>(m_pass_names.size());
     // read ONLY the range that was resolved; a wider range would map uninitialised bytes
     D3D12_RANGE  rr{0U, sizeof(UINT64) * n * 2U};
     UINT64* ticks = nullptr; // Map wants a writable void**; the mapping itself is only ever READ below
-    if (FAILED(m_ts_readback->Map(0U, &rr, reinterpret_cast<void**>(&ticks))) || ticks == nullptr) { return; }
+    if (FAILED(m_ts_readback->Map(0U, &rr, reinterpret_cast<void**>(&ticks))) || ticks == nullptr)
+    {
+        return;
+    }
     for (crd::u32 i = 0; i < n; ++i)
     {
         const UINT64 a = ticks[i * 2U];
@@ -8407,7 +10172,10 @@ std::unique_ptr<IFrameGraph> Dx12RasterContext::create_frame_graph()
 std::unique_ptr<IRasterContext> create_dx12_raster_context(crd::memory::IAllocator* alloc)
 {
     auto ctx = std::make_unique<Dx12RasterContext>(alloc);
-    if (!ctx->valid()) { return nullptr; }
+    if (!ctx->valid())
+    {
+        return nullptr;
+    }
     return ctx;
 }
 

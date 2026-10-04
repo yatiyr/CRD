@@ -82,13 +82,19 @@ crd::u64 tnumel(ce::Context& c, ce::TypeId t)
 {
     const ce::Type sh = c.type_of(c.type_of(t).members[1]);
     crd::u64       n  = 1;
-    for (crd::usize i = 0; i < sh.members.size(); ++i) { n *= c.type_of(sh.members[i]).count; }
+    for (crd::usize i = 0; i < sh.members.size(); ++i)
+    {
+        n *= c.type_of(sh.members[i]).count;
+    }
     return n;
 }
 crd::u32 const_grid(ce::Context& c, const ce::Value* v)
 {
     const ce::Operation* const d = v->defining_op();
-    if (d == nullptr) { return 1U; }
+    if (d == nullptr)
+    {
+        return 1U;
+    }
     const ce::AttrValue av = c.attr_value(d->attr(crd::containers::StringView("value")));
     return av.i > 0 ? static_cast<crd::u32>(av.i) : 1U;
 }
@@ -121,7 +127,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         //    emit_contract_cuda return false (it does NOT unwrap the epilogue like emit_contract_hlsl) ⇒ UnresolvedKernel.
         const ceg::GemmEpilogue ep = st.kind == ceg::StageKind::GemmRelu ? ceg::GemmEpilogue::Relu : ceg::GemmEpilogue::None;
         const ceg::GraphSynth   s  = ceg::synth_gemm(c, *st.op, g, ep);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_cuda(g, s.output, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_cuda(g, s.output, kern))
+        {
+            return rs;
+        }
         const crd::u32 m     = dim_ext(c, st.op->operand(0U)->type(), 0U);
         const crd::u32 k     = dim_ext(c, st.op->operand(0U)->type(), 1U);
         const crd::u32 nn    = dim_ext(c, st.op->operand(1U)->type(), 1U);
@@ -134,7 +143,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Elementwise)
     {
         const ceg::GraphSynth s = ceg::synth_elementwise(c, *st.op, g);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_elementwise_cuda(g, s.output, res.alloc, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_elementwise_cuda(g, s.output, res.alloc, kern))
+        {
+            return rs;
+        }
         const crd::u32 out_n = static_cast<crd::u32>(tnumel(c, st.op->result(0U)->type()));
         std::memcpy(rs.push, &out_n, sizeof(out_n)); // emit_elementwise_cuda's push is `unsigned n` (4B), NOT DX12's 16B blob
         pushsize = 4U;
@@ -147,16 +159,25 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         kir::KEntry         ve;
         // CEIR-30b-2b-2b: the shared VizDispatch loader (relu/viz_* → assets/ckir/<sym>.ckir → ckir_read) — the same resolver the
         // Host executor's HostKernelResolveFn uses, so the CUDA relu and the Host relu load the IDENTICAL authored kernel.
-        if (!crd::tests::resolve_ckir_asset(kv.s, g, ve, res.alloc)) { return rs; }
+        if (!crd::tests::resolve_ckir_asset(kv.s, g, ve, res.alloc))
+        {
+            return rs;
+        }
         // a SENTINEL local_size(0) (relu.ckir) binds to the trailing-write operand's numel (M·hidden) — the DX12 resolver's job.
         if (st.n_out >= 1U)
         {
             const crd::u32              wop = 3U + st.nbind - st.n_out;
             const ceg::KernelShapeError kse = ceg::bind_authored_local_size(
                 ve.local_size[0], tnumel(c, st.op->operand(wop)->type()), ceg::kMaxAuthoredLocalSize);
-            if (kse != ceg::KernelShapeError::None) { return rs; } // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            if (kse != ceg::KernelShapeError::None) // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            {
+                return rs;
+            }
         }
-        if (!kir::emit_compute_kernel_cuda(g, ve, res.alloc, kern)) { return rs; }
+        if (!kir::emit_compute_kernel_cuda(g, ve, res.alloc, kern))
+        {
+            return rs;
+        }
         local_size = ve.local_size[0]; // CUDA launches this block dim (Vk/DX12 baked it into the shader)
         rs.gx      = const_grid(c, st.op->operand(0U));
         rs.gy      = const_grid(c, st.op->operand(1U));
@@ -165,11 +186,17 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         nbind      = static_cast<int>(st.nbind);
     }
 
-    if (res.n >= 16) { return rs; }
+    if (res.n >= 16)
+    {
+        return rs;
+    }
     res.pipes[res.n] = res.compute->create_pipeline_from_cuda(crd::containers::to_view(kern.source),
                                                               crd::containers::StringView("ckir"), nbind, local_size, pushsize,
                                                               /*fmad=*/false);
-    if (res.pipes[res.n] == nullptr) { return rs; }
+    if (res.pipes[res.n] == nullptr)
+    {
+        return rs;
+    }
     rs.pipeline  = res.pipes[res.n].get();
     rs.push_size = pushsize;
     ++res.n;
@@ -193,7 +220,13 @@ struct BenchResolver
 ceg::ResolvedStage resolve_stage_cached(const ceg::PlanStage& st, void* user)
 {
     auto& br = *static_cast<BenchResolver*>(user);
-    for (int i = 0; i < br.n_cached; ++i) { if (br.keys[i] == st.op) { return br.vals[i]; } }
+    for (int i = 0; i < br.n_cached; ++i)
+    {
+        if (br.keys[i] == st.op)
+        {
+            return br.vals[i];
+        }
+    }
     const ceg::ResolvedStage rs = resolve_stage(st, &br.base); // real resolve — creates + OWNS the pipeline in br.base.pipes
     if (rs.pipeline != nullptr && br.n_cached < 16)
     {
@@ -229,7 +262,10 @@ bool run_mlp_module(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40] = {};
@@ -237,50 +273,112 @@ bool run_mlp_module(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; } // 26f: share the realized buffer
+        if (pb.alias_of >= 0) // 26f: share the realized buffer
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i] = dev[i].get();
         ++alloc_count;
         const MlpSeed* seed = nullptr;
         if (pb.role == ceg::BufferRole::ExternalIn)
         {
-            for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
         }
-        if (seed == nullptr) { continue; } // an Intermediate/Output (no host seed)
+        if (seed == nullptr) // an Intermediate/Output (no host seed)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         auto* raw = static_cast<float*>(up[i]->map());
-        if (raw == nullptr) { return false; }
-        for (crd::u32 e = 0; e < seed->count; ++e) { raw[e] = seed->floats[e]; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            raw[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out.value) { out_idx = static_cast<crd::i32>(i); } }
-    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out.value)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
+    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> rb =
         compute.create_buffer(plan.buffers[static_cast<crd::usize>(out_idx)].bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (rb == nullptr) { return false; }
+    if (rb == nullptr)
+    {
+        return false;
+    }
 
     Resolver res;
     res.alloc_ctx = &ctx;
     res.alloc     = alloc;
     res.compute   = &compute;
     auto& rec     = compute.begin();
-    for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
-    for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (up[i] != nullptr)
+        {
+            rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+        }
+    }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (up[i] != nullptr)
+        {
+            rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+        }
+    }
     const ceg::ExecuteError ee = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                               crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb));
-    if (ee != ceg::ExecuteError::None) { return false; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     rec.barrier(*dev[static_cast<crd::usize>(out_idx)], g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
     rec.copy(*dev[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, plan.buffers[static_cast<crd::usize>(out_idx)].bytes);
     compute.submit_and_wait();
     const auto* got = static_cast<const float*>(rb->map());
-    if (got == nullptr) { return false; }
-    for (crd::usize e = 0; e < out.len; ++e) { out.dst[e] = got[e]; }
+    if (got == nullptr)
+    {
+        return false;
+    }
+    for (crd::usize e = 0; e < out.len; ++e)
+    {
+        out.dst[e] = got[e];
+    }
     rb->unmap();
-    if (n_allocated != nullptr) { *n_allocated = alloc_count; }
+    if (n_allocated != nullptr)
+    {
+        *n_allocated = alloc_count;
+    }
     return true;
 }
 
@@ -298,7 +396,11 @@ ceg::TensorPipelinePlan build_mlp_plan(ce::Context& ctx, ce::Module& m, crd::mem
     (void)ce::linalg::register_dialect(ctx);
     (void)ce::ml::register_dialect(ctx);
     ce::Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -322,7 +424,10 @@ ceg::TensorPipelinePlan build_mlp_plan(ce::Context& ctx, ce::Module& m, crd::mem
     out_val = nullptr;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
     }
     return plan;
 }
@@ -332,22 +437,39 @@ ceg::TensorPipelinePlan build_mlp_plan(ce::Context& ctx, ce::Module& m, crd::mem
 void fill_mlp_data_and_oracle(crd::u32 mrows, crd::u32 d0, crd::u32 d1, crd::u32 d2, float* x_in, float* w1_in, float* w2_in,
                               float* oracle)
 {
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     float h1[64]; // hidden row (relu output); d1 <= 64 in every gate here (no VLA)
     for (crd::u32 mm = 0; mm < mrows; ++mm)
     {
         for (crd::u32 nn = 0; nn < d1; ++nn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { const float prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn]; acc = acc + prod; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                const float prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn];
+                acc = acc + prod;
+            }
             h1[nn] = crd::math::max(acc, 0.0F); // relu
         }
         for (crd::u32 j = 0; j < d2; ++j)
         {
             float acc = 0.0F;
-            for (crd::u32 nn = 0; nn < d1; ++nn) { const float prod = h1[nn] * w2_in[nn * d2 + j]; acc = acc + prod; }
+            for (crd::u32 nn = 0; nn < d1; ++nn)
+            {
+                const float prod = h1[nn] * w2_in[nn * d2 + j];
+                acc = acc + prod;
+            }
             oracle[mm * d2 + j] = acc;
         }
     }
@@ -368,37 +490,78 @@ bool run_mlp_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, c
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40] = {};
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i] = dev[i].get();
         const MlpSeed* seed = nullptr;
         if (pb.role == ceg::BufferRole::ExternalIn)
         {
-            for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
         }
-        if (seed == nullptr) { continue; }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         auto* raw = static_cast<float*>(up[i]->map());
-        if (raw == nullptr) { return false; }
-        for (crd::u32 e = 0; e < seed->count; ++e) { raw[e] = seed->floats[e]; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            raw[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
-    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
+    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0)
+    {
+        return false;
+    }
     const crd::u64                    out_bytes = plan.buffers[static_cast<crd::usize>(out_idx)].bytes;
     std::unique_ptr<g::ComputeBuffer> rb = compute.create_buffer(out_bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (rb == nullptr) { return false; }
+    if (rb == nullptr)
+    {
+        return false;
+    }
 
     Resolver res;
     res.alloc_ctx = &ctx;
@@ -409,7 +572,13 @@ bool run_mlp_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, c
     // 1. UPLOAD (once, outside any capture): H->D copies of the seeded inputs.
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
         compute.submit_and_wait();
     }
     // readback dev[out] -> host dst via a fresh submit (also outside any capture).
@@ -419,8 +588,14 @@ bool run_mlp_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, c
         rec.copy(*dev[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, out_bytes);
         compute.submit_and_wait();
         const auto* got = static_cast<const float*>(rb->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < len; ++e) { dst[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < len; ++e)
+        {
+            dst[e] = got[e];
+        }
         rb->unmap();
         return true;
     };
@@ -429,21 +604,36 @@ bool run_mlp_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, c
     {
         auto&                   rec = compute.begin();
         const ceg::ExecuteError ee  = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res, span);
-        if (ee != ceg::ExecuteError::None) { return false; }
+        if (ee != ceg::ExecuteError::None)
+        {
+            return false;
+        }
         compute.submit_and_wait();
     }
-    if (!readback(fallback_dst)) { return false; }
+    if (!readback(fallback_dst))
+    {
+        return false;
+    }
 
     // 3. CAPTURE — record the SAME dispatches into a cudaGraph, instantiate once, launch, read back.
     auto&                   crec = compute.begin_capture();
     const ceg::ExecuteError ce2  = ceg::execute_tensor_pipeline(plan, crec, &resolve_stage, &res, span);
-    if (ce2 != ceg::ExecuteError::None) { return false; }
+    if (ce2 != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     std::unique_ptr<g::CudaGraph> graph = compute.end_capture();
     *node_count                         = graph->node_count();
     *graph_ok                           = graph->valid();
-    if (!graph->valid()) { return true; } // surfaced via *graph_ok; the test REQUIREs it before comparing
+    if (!graph->valid()) // surfaced via *graph_ok; the test REQUIREs it before comparing
+    {
+        return true;
+    }
     compute.launch(*graph);
-    if (!readback(graph_dst)) { return false; }
+    if (!readback(graph_dst))
+    {
+        return false;
+    }
 
     // 4. REPLAY — launch the SAME instantiated exec again (instantiate-once / launch-many).
     compute.launch(*graph);
@@ -483,7 +673,11 @@ ceg::TensorPipelinePlan build_two_class_plan(ce::Context& ctx, ce::Module& m, cr
     (void)ce::linalg::register_dialect(ctx);
     (void)ce::ml::register_dialect(ctx);
     ce::Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -515,7 +709,10 @@ ceg::TensorPipelinePlan build_two_class_plan(ce::Context& ctx, ce::Module& m, cr
     // PARTITION (cuda_graphs claims the mlp; the flanking gemms are non-ml -> assignments.size()==1) BEFORE expansion.
     const ceg::MlProvider  provs[1] = {cuda_graphs_provider()};
     const ceg::MlPartition part     = ceg::partition_ml(ctx, m, crd::containers::ConstSpan<ceg::MlProvider>(provs, 1U), alloc);
-    if (n_assign != nullptr) { *n_assign = static_cast<crd::u32>(part.assignments.size()); }
+    if (n_assign != nullptr)
+    {
+        *n_assign = static_cast<crd::u32>(part.assignments.size());
+    }
 
     // EXPAND with lineage, then plan PARTITIONED: the mlp's stages tag provider 0, the flanking gemms (no lineage) tag -1.
     crd::containers::HashMap<const ce::Operation*, crd::i32> lineage(alloc);
@@ -528,7 +725,10 @@ ceg::TensorPipelinePlan build_two_class_plan(ce::Context& ctx, ce::Module& m, cr
     out_val                      = nullptr;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; } // z, the terminal value
+        if (plan.buffers[i].role == ceg::BufferRole::Output) // z, the terminal value
+        {
+            out_val = plan.buffers[i].value;
+        }
     }
     return plan;
 }
@@ -562,7 +762,10 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40]  = {};
@@ -570,31 +773,73 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; ++aliases; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            ++aliases;
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i] = dev[i].get();
         const MlpSeed* seed = nullptr;
         if (pb.role == ceg::BufferRole::ExternalIn)
         {
-            for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
         }
-        if (seed == nullptr) { continue; }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         auto* raw = static_cast<float*>(up[i]->map());
-        if (raw == nullptr) { return false; }
-        for (crd::u32 e = 0; e < seed->count; ++e) { raw[e] = seed->floats[e]; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            raw[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
-    if (n_aliases != nullptr) { *n_aliases = aliases; }
+    if (n_aliases != nullptr)
+    {
+        *n_aliases = aliases;
+    }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
-    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
+    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0)
+    {
+        return false;
+    }
     const crd::u64                    out_bytes = plan.buffers[static_cast<crd::usize>(out_idx)].bytes;
     std::unique_ptr<g::ComputeBuffer> rb = compute.create_buffer(out_bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (rb == nullptr) { return false; }
+    if (rb == nullptr)
+    {
+        return false;
+    }
 
     Resolver res;
     res.alloc_ctx = &ctx;
@@ -604,16 +849,34 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
 
     // DERIVE the claimed run [lo,hi) — the maximal contiguous provider==0 range (29c-1 proved it is a single contiguous run).
     crd::usize lo = 0;
-    while (lo < plan.stages.size() && plan.stages[lo].provider != 0) { ++lo; }
+    while (lo < plan.stages.size() && plan.stages[lo].provider != 0)
+    {
+        ++lo;
+    }
     crd::usize hi = lo;
-    while (hi < plan.stages.size() && plan.stages[hi].provider == 0) { ++hi; }
-    if (claim_lo != nullptr) { *claim_lo = lo; }
-    if (claim_hi != nullptr) { *claim_hi = hi; }
+    while (hi < plan.stages.size() && plan.stages[hi].provider == 0)
+    {
+        ++hi;
+    }
+    if (claim_lo != nullptr)
+    {
+        *claim_lo = lo;
+    }
+    if (claim_hi != nullptr)
+    {
+        *claim_hi = hi;
+    }
 
     // 1. UPLOAD (once, outside any capture).
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
         compute.submit_and_wait();
     }
     const auto readback = [&](float* dst) -> bool
@@ -622,18 +885,30 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
         rec.copy(*dev[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, out_bytes);
         compute.submit_and_wait();
         const auto* got = static_cast<const float*>(rb->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < len; ++e) { dst[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < len; ++e)
+        {
+            dst[e] = got[e];
+        }
         rb->unmap();
         return true;
     };
     const auto run_range = [&](crd::usize rlo, crd::usize rhi) -> bool
     {
-        if (rlo >= rhi) { return true; } // an empty class (no prefix / no suffix) is a no-op
+        if (rlo >= rhi) // an empty class (no prefix / no suffix) is a no-op
+        {
+            return true;
+        }
         const ceg::TensorPipelinePlan sub = slice_plan(plan, rlo, rhi, alloc);
         auto&                         rec = compute.begin();
         const ceg::ExecuteError       ee  = ceg::execute_tensor_pipeline(sub, rec, &resolve_stage, &res, span);
-        if (ee != ceg::ExecuteError::None) { return false; }
+        if (ee != ceg::ExecuteError::None)
+        {
+            return false;
+        }
         compute.submit_and_wait();
         return true;
     };
@@ -642,35 +917,68 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
     {
         auto&                   rec = compute.begin();
         const ceg::ExecuteError ee  = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res, span);
-        if (ee != ceg::ExecuteError::None) { return false; }
+        if (ee != ceg::ExecuteError::None)
+        {
+            return false;
+        }
         compute.submit_and_wait();
     }
-    if (!readback(fallback_dst)) { return false; }
+    if (!readback(fallback_dst))
+    {
+        return false;
+    }
 
     // 3. TWO-CLASS — fallback prefix eager, then CAPTURE only the claimed run, launch, then fallback suffix eager.
-    if (!run_range(0U, lo)) { return false; }
+    if (!run_range(0U, lo))
+    {
+        return false;
+    }
     auto&                   crec = compute.begin_capture();
     const ceg::ExecuteError ce2  = ceg::execute_tensor_pipeline(slice_plan(plan, lo, hi, alloc), crec, &resolve_stage, &res, span);
-    if (ce2 != ceg::ExecuteError::None) { return false; }
+    if (ce2 != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     std::unique_ptr<g::CudaGraph> graph = compute.end_capture();
     *node_count                         = graph->node_count();
     *graph_ok                           = graph->valid();
-    if (!graph->valid()) { return true; } // surfaced via *graph_ok; the test REQUIREs it before comparing
+    if (!graph->valid()) // surfaced via *graph_ok; the test REQUIREs it before comparing
+    {
+        return true;
+    }
     compute.launch(*graph);
-    if (!run_range(hi, plan.stages.size())) { return false; }
-    if (!readback(graph_dst)) { return false; }
+    if (!run_range(hi, plan.stages.size()))
+    {
+        return false;
+    }
+    if (!readback(graph_dst))
+    {
+        return false;
+    }
 
     // 4. REPLAY — re-run the PREFIX first: with 26f storage-sharing LIVE the captured run destroys its own input's slot (a1
     //    aliases x''s storage), so x' is NOT stable across launches — a faithful instantiate-once/launch-many must re-establish
     //    the graph's inputs before each launch. Recompute x' -> launch the SAME exec -> re-run the suffix -> read z.
-    if (!run_range(0U, lo)) { return false; }
+    if (!run_range(0U, lo))
+    {
+        return false;
+    }
     compute.launch(*graph);
-    if (!run_range(hi, plan.stages.size())) { return false; }
+    if (!run_range(hi, plan.stages.size()))
+    {
+        return false;
+    }
     // the total distinct pipeline resolves: ALL-FALLBACK 5 + TWO-CLASS (prefix 1 + captured 3 + suffix 1 = 5) + REPLAY (prefix
     // 1 + suffix 1 = 2) = 12 — every fallback stage resolved once per dispatch pass, the captured run ONCE (the launches re-run
     // the SAME exec, resolving NOTHING). The identity that proves the flanking gemms actually DISPATCHED and the graph launched.
-    if (n_pipes != nullptr) { *n_pipes = static_cast<crd::u32>(res.n); }
-    if (!readback(graph_replay_dst)) { return false; }
+    if (n_pipes != nullptr)
+    {
+        *n_pipes = static_cast<crd::u32>(res.n);
+    }
+    if (!readback(graph_replay_dst))
+    {
+        return false;
+    }
 
     // CEIR-29z: PROVE the SINGLE-SUBMIT enqueue form here (CI-gated), not only in the env-gated bench — the two-class boundary
     // now has TWO execution paths (waiting launch() above + this one) and both must be bit-exact. begin -> eager prefix ->
@@ -692,7 +1000,10 @@ bool run_two_class_captured(crd::gpu::CudaComputeContext& compute, ce::Context& 
             return false;
         }
         compute.submit_and_wait();
-        if (!readback(enqueue_dst)) { return false; }
+        if (!readback(enqueue_dst))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -704,7 +1015,10 @@ double median_of(double* v, crd::u32 k)
     {
         const double t = v[i];
         crd::u32     j = i;
-        for (; j > 0 && v[j - 1] > t; --j) { v[j] = v[j - 1]; }
+        for (; j > 0 && v[j - 1] > t; --j)
+        {
+            v[j] = v[j - 1];
+        }
         v[j] = t;
     }
     return v[k / 2U];
@@ -736,37 +1050,78 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U || len > 64U) { return false; }
+    if (nb > 40U || len > 64U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40] = {};
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i]             = dev[i].get();
         const MlpSeed* seed = nullptr;
         if (pb.role == ceg::BufferRole::ExternalIn)
         {
-            for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
         }
-        if (seed == nullptr) { continue; }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         auto* raw = static_cast<float*>(up[i]->map());
-        if (raw == nullptr) { return false; }
-        for (crd::u32 e = 0; e < seed->count; ++e) { raw[e] = seed->floats[e]; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            raw[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
-    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
+    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0)
+    {
+        return false;
+    }
     const crd::u64                    out_bytes = plan.buffers[static_cast<crd::usize>(out_idx)].bytes;
     std::unique_ptr<g::ComputeBuffer> rb = compute.create_buffer(out_bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (rb == nullptr) { return false; }
+    if (rb == nullptr)
+    {
+        return false;
+    }
 
     BenchResolver bres;
     bres.base.alloc_ctx = &ctx;
@@ -776,17 +1131,39 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
 
     // the claimed run [lo,hi) — the contiguous provider==0 range; NONE (an unpartitioned mlp plan, all -1) => the WHOLE plan.
     crd::usize lo = 0;
-    while (lo < plan.stages.size() && plan.stages[lo].provider != 0) { ++lo; }
+    while (lo < plan.stages.size() && plan.stages[lo].provider != 0)
+    {
+        ++lo;
+    }
     crd::usize hi = lo;
-    while (hi < plan.stages.size() && plan.stages[hi].provider == 0) { ++hi; }
-    if (lo >= plan.stages.size()) { lo = 0; hi = plan.stages.size(); }
-    if (cap_lo_out != nullptr) { *cap_lo_out = lo; }
-    if (cap_hi_out != nullptr) { *cap_hi_out = hi; }
+    while (hi < plan.stages.size() && plan.stages[hi].provider == 0)
+    {
+        ++hi;
+    }
+    if (lo >= plan.stages.size())
+    {
+        lo = 0;
+        hi = plan.stages.size();
+    }
+    if (cap_lo_out != nullptr)
+    {
+        *cap_lo_out = lo;
+    }
+    if (cap_hi_out != nullptr)
+    {
+        *cap_hi_out = hi;
+    }
 
     // 1. UPLOAD (once, outside any capture).
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
         compute.submit_and_wait();
     }
     const auto readback = [&](float* dst) -> bool
@@ -795,8 +1172,14 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
         rec.copy(*dev[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, out_bytes);
         compute.submit_and_wait();
         const auto* got = static_cast<const float*>(rb->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < len; ++e) { dst[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < len; ++e)
+        {
+            dst[e] = got[e];
+        }
         rb->unmap();
         return true;
     };
@@ -811,23 +1194,35 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
     {
         auto&                   rec = compute.begin();
         const ceg::ExecuteError ee  = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage_cached, &bres, span);
-        if (ee != ceg::ExecuteError::None) { return false; }
+        if (ee != ceg::ExecuteError::None)
+        {
+            return false;
+        }
         compute.submit_and_wait();
         return true;
     };
     // ⛔ PRE-RESOLVE before capturing: a NORMAL execute of the whole plan compiles + caches every kernel (NVRTC) NOW — a
     //    resolve/compile inside begin_capture is not stream-ordered and invalidates the capture (the run_mlp_captured
     //    "fallback before capture" order). This resolves every stage the capture + prefix/suffix later replay from cache.
-    if (!fb_once()) { return false; }
+    if (!fb_once())
+    {
+        return false;
+    }
 
     // CAPTURE the claimed run ONCE (kernels now cached => the capture only RECORDS dispatches); the launches replay the SAME exec.
     auto&                   crec = compute.begin_capture();
     const ceg::ExecuteError cee  = ceg::execute_tensor_pipeline(sub_cap, crec, &resolve_stage_cached, &bres, span);
-    if (cee != ceg::ExecuteError::None) { return false; }
+    if (cee != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     std::unique_ptr<g::CudaGraph> graph = compute.end_capture();
     *node_count                         = graph->node_count();
     *graph_ok                           = graph->valid();
-    if (!graph->valid()) { return true; } // surfaced via *graph_ok; the caller REQUIREs it
+    if (!graph->valid()) // surfaced via *graph_ok; the caller REQUIREs it
+    {
+        return true;
+    }
     // ONE begin()/submit_and_wait() bracket: eager prefix + the ENQUEUED graph + eager suffix (ONE wait; same-stream order
     // carries x'->graph->z). For the whole-plan mlp fixture pre/suf are empty => begin/enqueue/submit_and_wait (the graph
     // alone in one bracket). The prefix re-runs each iteration — the 29c-2 aliased-storage finding: it re-establishes x'.
@@ -850,21 +1245,51 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
     };
 
     // WARMUP (device clocks + first-launch driver work — the 28b n_warmup=5 mold).
-    for (crd::u32 w = 0; w < 5U; ++w) { if (!fb_once() || !gr_once()) { return false; } }
+    for (crd::u32 w = 0; w < 5U; ++w)
+    {
+        if (!fb_once() || !gr_once())
+        {
+            return false;
+        }
+    }
 
     // SINGLE-SHOT gpu_ms + bit-exact (both arms == the CPU oracle). fb: one submit => last_gpu_ms is the whole N-dispatch run.
-    if (!fb_once()) { return false; }
+    if (!fb_once())
+    {
+        return false;
+    }
     *fb_gpu_ms = compute.last_gpu_ms();
-    if (!readback(tmp)) { return false; }
-    for (crd::usize e = 0; e < len; ++e) { if (tmp[e] != oracle[e]) { ok = false; } }
+    if (!readback(tmp))
+    {
+        return false;
+    }
+    for (crd::usize e = 0; e < len; ++e)
+    {
+        if (tmp[e] != oracle[e])
+        {
+            ok = false;
+        }
+    }
     // gr: ONE bracket around prefix + enqueued graph + suffix => last_gpu_ms is the whole two-class pipeline's GPU time,
     // DIRECTLY comparable to fb's one-bracket whole-plan GPU time (both arms now: ONE event bracket, ONE wait — the honest
     // measurement; a summed-three-brackets form would inflate gr by ~2 event-record+sync fixed costs — the artifact the
     // enqueue split removes).
-    if (!gr_once()) { return false; }
+    if (!gr_once())
+    {
+        return false;
+    }
     *gr_gpu_ms = compute.last_gpu_ms();
-    if (!readback(tmp)) { return false; }
-    for (crd::usize e = 0; e < len; ++e) { if (tmp[e] != oracle[e]) { ok = false; } }
+    if (!readback(tmp))
+    {
+        return false;
+    }
+    for (crd::usize e = 0; e < len; ++e)
+    {
+        if (tmp[e] != oracle[e])
+        {
+            ok = false;
+        }
+    }
     *bitexact = ok;
 
     // CPU SUBMIT-PATH wall-clock: median of 9, per-iteration (wall / K), for K in {1,10,100}.
@@ -877,7 +1302,13 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
         for (crd::u32 si = 0; si < nt; ++si)
         {
             const auto t0 = std::chrono::steady_clock::now();
-            for (crd::u32 k = 0; k < kvals[ki]; ++k) { if (!fb_once()) { return false; } }
+            for (crd::u32 k = 0; k < kvals[ki]; ++k)
+            {
+                if (!fb_once())
+                {
+                    return false;
+                }
+            }
             const double ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
             s_fb[si]        = ns / 1000.0 / static_cast<double>(kvals[ki]);
         }
@@ -885,7 +1316,13 @@ bool bench_captured(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd
         for (crd::u32 si = 0; si < nt; ++si)
         {
             const auto t0 = std::chrono::steady_clock::now();
-            for (crd::u32 k = 0; k < kvals[ki]; ++k) { if (!gr_once()) { return false; } }
+            for (crd::u32 k = 0; k < kvals[ki]; ++k)
+            {
+                if (!gr_once())
+                {
+                    return false;
+                }
+            }
             const double ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
             s_gr[si]        = ns / 1000.0 / static_cast<double>(kvals[ki]);
         }
@@ -916,7 +1353,10 @@ ceg::ExecuteError cuda_gpu_stage(const ceg::TensorPipelinePlan& slice, void* use
     auto&                   rec  = tg.compute->begin();
     const auto              span = crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(tg.bufs, tg.nb);
     const ceg::ExecuteError ee   = ceg::execute_tensor_pipeline(slice, rec, &resolve_stage, &tg.res, span);
-    if (ee != ceg::ExecuteError::None) { return ee; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return ee;
+    }
     tg.compute->submit_and_wait();
     return ceg::ExecuteError::None;
 }
@@ -934,10 +1374,19 @@ ceg::ExecuteError cuda_transfer(const ceg::Transfer& t, float* host_ptr, crd::u6
     if (t.direction == ceg::TransferDir::HostToDevice)
     {
         std::unique_ptr<g::ComputeBuffer> up = tg.compute->create_buffer(sz, g::compute_usage::transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up == nullptr) { return ceg::ExecuteError::UnmappedBinding; }
+        if (up == nullptr)
+        {
+            return ceg::ExecuteError::UnmappedBinding;
+        }
         auto* raw = static_cast<float*>(up->map());
-        if (raw == nullptr) { return ceg::ExecuteError::UnmappedBinding; }
-        for (crd::usize e = 0; e < n; ++e) { raw[e] = host_ptr[e]; }
+        if (raw == nullptr)
+        {
+            return ceg::ExecuteError::UnmappedBinding;
+        }
+        for (crd::usize e = 0; e < n; ++e)
+        {
+            raw[e] = host_ptr[e];
+        }
         up->unmap();
         auto& rec = tg.compute->begin();
         rec.copy(*up, *dst, 0U, 0U, bytes);
@@ -946,13 +1395,22 @@ ceg::ExecuteError cuda_transfer(const ceg::Transfer& t, float* host_ptr, crd::u6
     else
     {
         std::unique_ptr<g::ComputeBuffer> rb = tg.compute->create_buffer(sz, g::compute_usage::transfer_dst, g::ComputeMemory::GpuToCpu);
-        if (rb == nullptr) { return ceg::ExecuteError::UnmappedBinding; }
+        if (rb == nullptr)
+        {
+            return ceg::ExecuteError::UnmappedBinding;
+        }
         auto& rec = tg.compute->begin();
         rec.copy(*dst, *rb, 0U, 0U, bytes);
         tg.compute->submit_and_wait();
         const auto* got = static_cast<const float*>(rb->map());
-        if (got == nullptr) { return ceg::ExecuteError::UnmappedBinding; }
-        for (crd::usize e = 0; e < n; ++e) { host_ptr[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return ceg::ExecuteError::UnmappedBinding;
+        }
+        for (crd::usize e = 0; e < n; ++e)
+        {
+            host_ptr[e] = got[e];
+        }
         rb->unmap();
     }
     return ceg::ExecuteError::None;
@@ -974,7 +1432,10 @@ ceg::ExecuteError bench_gpu_stage(const ceg::TensorPipelinePlan& slice, void* us
     auto&                   rec  = btc.tg.compute->begin();
     const auto              span = crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(btc.tg.bufs, btc.tg.nb);
     const ceg::ExecuteError ee   = ceg::execute_tensor_pipeline(slice, rec, &resolve_stage_cached, &btc.bres, span);
-    if (ee != ceg::ExecuteError::None) { return ee; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return ee;
+    }
     btc.tg.compute->submit_and_wait();
     btc.combine_gpu_ms = btc.tg.compute->last_gpu_ms(); // the combine kernel's OWN GPU bracket (not the trailing readback)
     return ceg::ExecuteError::None;
@@ -990,31 +1451,68 @@ bool run_all_host(ce::Context& ctx, crd::memory::IAllocator* alloc, const ceg::T
                   crd::usize n_seeds, const ce::Value* out_val, crd::usize len, float* out)
 {
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     crd::u64 offs[40] = {};
     crd::u64 total    = 0;
-    for (crd::usize i = 0; i < nb; ++i) { offs[i] = total; if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(float); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        offs[i] = total;
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(float);
+        }
+    }
     crd::containers::Array<float> store(alloc);
     store.resize(static_cast<crd::usize>(total), -777.0F); // sentinel: a skipped stage / missed write leaves a loud marker, not 0
     float* ptr[40] = {};
-    for (crd::usize i = 0; i < nb; ++i) { ptr[i] = plan.buffers[i].alias_of >= 0 ? ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : store.data() + offs[i]; }
     for (crd::usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != ceg::BufferRole::ExternalIn) { continue; }
+        ptr[i] = plan.buffers[i].alias_of >= 0 ? ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : store.data() + offs[i];
+    }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         for (crd::usize s = 0; s < n_seeds; ++s)
         {
-            if (seeds[s].value == plan.buffers[i].value) { for (crd::u32 e = 0; e < seeds[s].count; ++e) { ptr[i][e] = seeds[s].floats[e]; } }
+            if (seeds[s].value == plan.buffers[i].value)
+            {
+                for (crd::u32 e = 0; e < seeds[s].count; ++e)
+                {
+                    ptr[i][e] = seeds[s].floats[e];
+                }
+            }
         }
     }
     ceg::HostRunOptions host_opts;
     host_opts.kernel = &crd::tests::resolve_ckir_asset;
     host_opts.user   = alloc;
-    if (ceg::execute_tensor_pipeline_host(ctx, plan, crd::containers::ConstSpan<float*>(ptr, nb), alloc, nullptr, host_opts) != ceg::ExecuteError::None) { return false; }
+    if (ceg::execute_tensor_pipeline_host(ctx, plan, crd::containers::ConstSpan<float*>(ptr, nb), alloc, nullptr, host_opts) != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     crd::i32 oi = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { oi = static_cast<crd::i32>(i); } }
-    if (oi < 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            oi = static_cast<crd::i32>(i);
+        }
+    }
+    if (oi < 0)
+    {
+        return false;
+    }
     const crd::usize ol = plan.buffers[static_cast<crd::usize>(oi)].alias_of >= 0 ? static_cast<crd::usize>(plan.buffers[static_cast<crd::usize>(oi)].alias_of) : static_cast<crd::usize>(oi);
-    for (crd::usize e = 0; e < len; ++e) { out[e] = ptr[ol][e]; }
+    for (crd::usize e = 0; e < len; ++e)
+    {
+        out[e] = ptr[ol][e];
+    }
     return true;
 }
 
@@ -1029,34 +1527,78 @@ bool run_all_gpu(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd::m
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40] = {};
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i] = dev[i].get();
         const MlpSeed* seed = nullptr;
-        if (pb.role == ceg::BufferRole::ExternalIn) { for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } } }
-        if (seed == nullptr) { continue; }
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
+        }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         auto* raw = static_cast<float*>(up[i]->map());
-        if (raw == nullptr) { return false; }
-        for (crd::u32 e = 0; e < seed->count; ++e) { raw[e] = seed->floats[e]; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            raw[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
-    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
+    if (out_idx < 0 || plan.buffers[static_cast<crd::usize>(out_idx)].alias_of >= 0)
+    {
+        return false;
+    }
     const crd::u64                    out_bytes = plan.buffers[static_cast<crd::usize>(out_idx)].bytes;
     std::unique_ptr<g::ComputeBuffer> rb        = compute.create_buffer(out_bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-    if (rb == nullptr) { return false; }
+    if (rb == nullptr)
+    {
+        return false;
+    }
     Resolver res;
     res.alloc_ctx   = &ctx;
     res.alloc       = alloc;
@@ -1064,13 +1606,22 @@ bool run_all_gpu(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd::m
     const auto span = crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb);
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
         compute.submit_and_wait();
     }
     {
         auto&                   rec = compute.begin();
         const ceg::ExecuteError ee  = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res, span);
-        if (ee != ceg::ExecuteError::None) { return false; }
+        if (ee != ceg::ExecuteError::None)
+        {
+            return false;
+        }
         compute.submit_and_wait();
     }
     {
@@ -1078,8 +1629,14 @@ bool run_all_gpu(crd::gpu::CudaComputeContext& compute, ce::Context& ctx, crd::m
         rec.copy(*dev[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, out_bytes);
         compute.submit_and_wait();
         const auto* got = static_cast<const float*>(rb->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < len; ++e) { out[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < len; ++e)
+        {
+            out[e] = got[e];
+        }
         rb->unmap();
     }
     return true;
@@ -1098,20 +1655,42 @@ bool run_two_class_cuda(crd::gpu::CudaComputeContext& compute, ce::Context& ctx,
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     crd::u64 offs[40] = {};
     crd::u64 total    = 0;
-    for (crd::usize i = 0; i < nb; ++i) { offs[i] = total; if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(float); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        offs[i] = total;
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(float);
+        }
+    }
     crd::containers::Array<float> hstore(alloc);
     hstore.resize(static_cast<crd::usize>(total), -777.0F); // sentinel: a skipped Host stage leaves -777 (·beta=0 biases stay safe)
     float* hptr[40] = {};
-    for (crd::usize i = 0; i < nb; ++i) { hptr[i] = plan.buffers[i].alias_of >= 0 ? hptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : hstore.data() + offs[i]; }
     for (crd::usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != ceg::BufferRole::ExternalIn) { continue; }
+        hptr[i] = plan.buffers[i].alias_of >= 0 ? hptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : hstore.data() + offs[i];
+    }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         for (crd::usize s = 0; s < n_seeds; ++s)
         {
-            if (seeds[s].value == plan.buffers[i].value) { for (crd::u32 e = 0; e < seeds[s].count; ++e) { hptr[i][e] = seeds[s].floats[e]; } }
+            if (seeds[s].value == plan.buffers[i].value)
+            {
+                for (crd::u32 e = 0; e < seeds[s].count; ++e)
+                {
+                    hptr[i][e] = seeds[s].floats[e];
+                }
+            }
         }
     }
     TwoClassGpu tg;
@@ -1125,10 +1704,17 @@ bool run_two_class_cuda(crd::gpu::CudaComputeContext& compute, ce::Context& ctx,
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { tg.bufs[i] = tg.bufs[static_cast<crd::usize>(pb.alias_of)]; continue; } // NO seed — transfers fill it
+        if (pb.alias_of >= 0) // NO seed — transfers fill it
+        {
+            tg.bufs[i] = tg.bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         tg.dev[i]         = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (tg.dev[i] == nullptr) { return false; }
+        if (tg.dev[i] == nullptr)
+        {
+            return false;
+        }
         tg.bufs[i] = tg.dev[i].get();
     }
     ceg::HostRunOptions host_opts;
@@ -1136,14 +1722,35 @@ bool run_two_class_cuda(crd::gpu::CudaComputeContext& compute, ce::Context& ctx,
     host_opts.user   = alloc;
     const ceg::ExecuteError ee = ceg::execute_two_class(ctx, plan, sc, crd::containers::ConstSpan<float*>(hptr, nb), &tg,
                                                         &cuda_gpu_stage, &cuda_transfer, alloc, host_opts, profile);
-    if (ee != ceg::ExecuteError::None) { return false; }
-    if (n_pipes != nullptr) { *n_pipes = static_cast<crd::u32>(tg.res.n); }
-    if (n_xfer != nullptr) { *n_xfer = tg.transfers; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return false;
+    }
+    if (n_pipes != nullptr)
+    {
+        *n_pipes = static_cast<crd::u32>(tg.res.n);
+    }
+    if (n_xfer != nullptr)
+    {
+        *n_xfer = tg.transfers;
+    }
     crd::i32 oi = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { oi = static_cast<crd::i32>(i); } }
-    if (oi < 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            oi = static_cast<crd::i32>(i);
+        }
+    }
+    if (oi < 0)
+    {
+        return false;
+    }
     const crd::usize ol = plan.buffers[static_cast<crd::usize>(oi)].alias_of >= 0 ? static_cast<crd::usize>(plan.buffers[static_cast<crd::usize>(oi)].alias_of) : static_cast<crd::usize>(oi);
-    for (crd::usize e = 0; e < len; ++e) { out[e] = hptr[ol][e]; }
+    for (crd::usize e = 0; e < len; ++e)
+    {
+        out[e] = hptr[ol][e];
+    }
     return true;
 }
 
@@ -1172,7 +1779,11 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     (void)ce::dist::register_dist_ops(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(fn);
     ce::Block* const b = ce::func::func_body_block(fn);
@@ -1192,14 +1803,23 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     ce::Value* exops[1] = {rd->result(0U)};
     b->append(ctx.create_operation(ctx.intern_op("resource", "export"), ConstSpan<ce::Value*>(exops, 1U), 0U));
 
-    if (ceg::materialize_sharding(ctx, *m, root).inserted != 1U) { return false; }
+    if (ceg::materialize_sharding(ctx, *m, root).inserted != 1U)
+    {
+        return false;
+    }
     crd::containers::HashMap<const ce::Operation*, crd::i32> lineage(root);
-    if (ceg::lower_sharded_reduction(ctx, *m, root, lineage).ranks != 2U) { return false; }
+    if (ceg::lower_sharded_reduction(ctx, *m, root, lineage).ranks != 2U)
+    {
+        return false;
+    }
     ceg::MlPartition partition(root);
     partition.assignments.push_back(ceg::MlAssignment{nullptr, 0, -1});
     partition.assignments.push_back(ceg::MlAssignment{nullptr, 1, -1});
     const ceg::TensorPipelinePlan plan = ceg::plan_tensor_pipeline_partitioned(ctx, *m, root, partition, lineage);
-    if (plan.reject != ceg::PlanReject::None || plan.stages.size() != 3U) { return false; }
+    if (plan.reject != ceg::PlanReject::None || plan.stages.size() != 3U)
+    {
+        return false;
+    }
     ceg::MlProvider provs[2] = {};
     provs[0].provider_class = ce::ProviderClass::Host;
     provs[1].provider_class = ce::ProviderClass::Host;
@@ -1209,10 +1829,16 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
 
     crd::containers::Array<ce::Operation*> decls(root);
     collect_named_cuda(ctx, m->body(), StringView("resource.declare"), decls);
-    if (decls.size() != 2U) { return false; }
+    if (decls.size() != 2U)
+    {
+        return false;
+    }
     crd::containers::Array<ce::Operation*> exps(root);
     collect_named_cuda(ctx, m->body(), StringView("resource.export"), exps);
-    if (exps.size() != 1U) { return false; }
+    if (exps.size() != 1U)
+    {
+        return false;
+    }
     const ce::Value* const out_val = exps[0]->operand(0U);
 
     // seed T[rows,cols] (0.01*(i-mid)); shard r = rows [r*half,(r+1)*half). Oracle[c] = fold(shard0 col c) + fold(shard1 col c).
@@ -1226,7 +1852,10 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     crd::containers::Array<float> oracle(root);
     oracle.resize(cols, 0.0F);
     const float mid = 0.5F * static_cast<float>(rows * cols);
-    for (crd::u32 i = 0; i < rows * cols; ++i) { t[i] = 0.01F * (static_cast<float>(i) - mid); }
+    for (crd::u32 i = 0; i < rows * cols; ++i)
+    {
+        t[i] = 0.01F * (static_cast<float>(i) - mid);
+    }
     for (crd::u32 li = 0; li < half; ++li)
     {
         for (crd::u32 c = 0; c < cols; ++c)
@@ -1242,18 +1871,37 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     const MlpSeed seeds[2] = {{decls[0]->result(0U), shard0.data(), half * cols}, {decls[1]->result(0U), shard1.data(), half * cols}};
 
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U) { return false; }
+    if (nb > 40U)
+    {
+        return false;
+    }
     crd::u64 offs[40] = {};
     crd::u64 total    = 0;
-    for (crd::usize i = 0; i < nb; ++i) { offs[i] = total; if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(float); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        offs[i] = total;
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(float);
+        }
+    }
     const auto seed_host = [&](float** ptr)
     {
         for (crd::usize i = 0; i < nb; ++i)
         {
-            if (plan.buffers[i].role != ceg::BufferRole::ExternalIn) { continue; }
+            if (plan.buffers[i].role != ceg::BufferRole::ExternalIn)
+            {
+                continue;
+            }
             for (crd::usize s = 0; s < 2U; ++s)
             {
-                if (seeds[s].value == plan.buffers[i].value) { for (crd::u32 e = 0; e < seeds[s].count; ++e) { ptr[i][e] = seeds[s].floats[e]; } }
+                if (seeds[s].value == plan.buffers[i].value)
+                {
+                    for (crd::u32 e = 0; e < seeds[s].count; ++e)
+                    {
+                        ptr[i][e] = seeds[s].floats[e];
+                    }
+                }
             }
         }
     };
@@ -1261,8 +1909,17 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     host_opts.kernel = &crd::tests::resolve_ckir_asset;
     host_opts.user   = root;
     crd::i32 oi      = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { oi = static_cast<crd::i32>(i); } }
-    if (oi < 0) { return false; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            oi = static_cast<crd::i32>(i);
+        }
+    }
+    if (oi < 0)
+    {
+        return false;
+    }
     const crd::usize ol = plan.buffers[static_cast<crd::usize>(oi)].alias_of >= 0
                               ? static_cast<crd::usize>(plan.buffers[static_cast<crd::usize>(oi)].alias_of)
                               : static_cast<crd::usize>(oi);
@@ -1271,7 +1928,10 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     crd::containers::Array<float> a_store(root);
     a_store.resize(static_cast<crd::usize>(total), -777.0F);
     float* a_ptr[40] = {};
-    for (crd::usize i = 0; i < nb; ++i) { a_ptr[i] = plan.buffers[i].alias_of >= 0 ? a_ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : a_store.data() + offs[i]; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        a_ptr[i] = plan.buffers[i].alias_of >= 0 ? a_ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : a_store.data() + offs[i];
+    }
     const auto arm_a = [&]() -> bool
     { return ceg::execute_tensor_pipeline_host(ctx, plan, ConstSpan<float*>(a_ptr, nb), root, nullptr, host_opts) == ceg::ExecuteError::None; };
 
@@ -1293,14 +1953,24 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     crd::containers::Array<float> b_store(root);
     b_store.resize(static_cast<crd::usize>(total), -777.0F);
     float* b_ptr[40] = {};
-    for (crd::usize i = 0; i < nb; ++i) { b_ptr[i] = plan.buffers[i].alias_of >= 0 ? b_ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : b_store.data() + offs[i]; }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        b_ptr[i] = plan.buffers[i].alias_of >= 0 ? b_ptr[static_cast<crd::usize>(plan.buffers[i].alias_of)] : b_store.data() + offs[i];
+    }
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { btc.tg.bufs[i] = btc.tg.bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            btc.tg.bufs[i] = btc.tg.bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         btc.tg.dev[i]     = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (btc.tg.dev[i] == nullptr) { return false; }
+        if (btc.tg.dev[i] == nullptr)
+        {
+            return false;
+        }
         btc.tg.bufs[i] = btc.tg.dev[i].get();
     }
     const auto arm_b = [&]() -> bool {
@@ -1317,7 +1987,10 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
         {
             const ceg::Transfer& xf    = tp.transfers[i];
             const crd::u64       bytes = plan.buffers[static_cast<crd::usize>(xf.buffer)].bytes;
-            if (cuda_transfer(xf, b_ptr[static_cast<crd::usize>(xf.buffer)], bytes, &btc.tg) != ceg::ExecuteError::None) { return false; }
+            if (cuda_transfer(xf, b_ptr[static_cast<crd::usize>(xf.buffer)], bytes, &btc.tg) != ceg::ExecuteError::None)
+            {
+                return false;
+            }
         }
         return true;
     };
@@ -1329,13 +2002,31 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     // ── GATE run: 10 back-to-back executes of BOTH arms, then bit-exact vs oracle on the 10th output (the aliased-storage clobber
     //    catch — symmetric on A and B so the "asserted after 10 back-to-back" claim holds for both, not just B) ──
     btc.tg.transfers = 0;
-    for (int it = 0; it < 10; ++it) { if (!arm_b()) { return false; } }
-    for (int it = 0; it < 10; ++it) { if (!arm_a()) { return false; } }
+    for (int it = 0; it < 10; ++it)
+    {
+        if (!arm_b())
+        {
+            return false;
+        }
+    }
+    for (int it = 0; it < 10; ++it)
+    {
+        if (!arm_a())
+        {
+            return false;
+        }
+    }
     *bitexact = true;
     for (crd::u32 c = 0; c < cols; ++c)
     {
-        if (a_ptr[ol][c] != oracle[c]) { *bitexact = false; }
-        if (b_ptr[ol][c] != oracle[c]) { *bitexact = false; }
+        if (a_ptr[ol][c] != oracle[c])
+        {
+            *bitexact = false;
+        }
+        if (b_ptr[ol][c] != oracle[c])
+        {
+            *bitexact = false;
+        }
     }
     *n_xfer   = btc.tg.transfers / 10U; // 3 per execute
     *gpu_ms_b = btc.combine_gpu_ms;
@@ -1344,7 +2035,13 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
     constexpr crd::u32 warmup = 5;
     constexpr crd::u32 n_samp = 9;
     constexpr crd::u32 k_rep  = 10;
-    for (crd::u32 w = 0; w < warmup; ++w) { if (!arm_a() || !arm_b() || !arm_c()) { return false; } }
+    for (crd::u32 w = 0; w < warmup; ++w)
+    {
+        if (!arm_a() || !arm_b() || !arm_c())
+        {
+            return false;
+        }
+    }
     double s_a[n_samp] = {};
     double s_b[n_samp] = {};
     double s_c[n_samp] = {};
@@ -1353,13 +2050,22 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
         for (crd::u32 s = 0; s < n_samp; ++s)
         {
             const auto t0 = std::chrono::steady_clock::now();
-            for (crd::u32 k = 0; k < k_rep; ++k) { if (!arm()) { return false; } }
+            for (crd::u32 k = 0; k < k_rep; ++k)
+            {
+                if (!arm())
+                {
+                    return false;
+                }
+            }
             const double ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
             samples[s]      = ns / static_cast<double>(k_rep) / 1000.0; // per-iter microseconds
         }
         return true;
     };
-    if (!time_arm(s_a, arm_a) || !time_arm(s_b, arm_b) || !time_arm(s_c, arm_c)) { return false; }
+    if (!time_arm(s_a, arm_a) || !time_arm(s_b, arm_b) || !time_arm(s_c, arm_c))
+    {
+        return false;
+    }
     *cpu_us_a = median_of(s_a, n_samp);
     *cpu_us_b = median_of(s_b, n_samp);
     *cpu_us_c = median_of(s_c, n_samp);
@@ -1398,14 +2104,21 @@ TEST_CASE("ceir 29b-1: an expanded ml.mlp runs device-resident on CUDA via execu
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-29b-1 MLP pipeline gate"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-29b-1 MLP pipeline gate");
+        return;
+    }
 
     const MlpSeed seeds[3] = {{x_val, x_in, mrows * d0}, {w1_val, w1_in, d0 * d1}, {w2_val, w2_in, d1 * d2}};
     float         d_out[mrows * d2] = {};
     crd::u32      n_alloc = 0;
     REQUIRE(run_mlp_module(*cudactx, ctx, &root, plan, seeds, 3U, MlpOut{out_val, d_out, mrows * d2}, &n_alloc));
 
-    for (crd::u32 i = 0; i < mrows * d2; ++i) { CHECK(d_out[i] == oracle[i]); } // ⭐ BIT-EXACT (fmad=false + the per-op oracle)
+    for (crd::u32 i = 0; i < mrows * d2; ++i) // ⭐ BIT-EXACT (fmad=false + the per-op oracle)
+    {
+        CHECK(d_out[i] == oracle[i]);
+    }
 
     // IDENTITY on the plan's buffer topology (not self-consistency): the unfused 3-stage MLP has exactly 8 buffers -- x,W1,W2
     // (ExternalIn) + a per-gemm C-accumulator + h1,a1 (the two Intermediates) + out (Output). 26f storage-sharing is ON (the
@@ -1419,8 +2132,14 @@ TEST_CASE("ceir 29b-1: an expanded ml.mlp runs device-resident on CUDA via execu
     crd::u32 aliases   = 0;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].alias_of < 0) { ++non_alias; }
-        else { ++aliases; }
+        if (plan.buffers[i].alias_of < 0)
+        {
+            ++non_alias;
+        }
+        else
+        {
+            ++aliases;
+        }
     }
     CHECK(plan.buffers.size() == 8U); // silent stage/buffer add or drop can't pass
     CHECK(aliases == 0U);             // the only Intermediates (h1,a1) have non-disjoint lifetimes; out is Output-role
@@ -1457,7 +2176,11 @@ TEST_CASE("ceir 29b-2a: the CUDA-Graphs capture of the ml.mlp pipeline is BIT-EX
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-29b-2a CUDA-Graphs capture gate"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-29b-2a CUDA-Graphs capture gate");
+        return;
+    }
 
     const MlpSeed seeds[3] = {{x_val, x_in, mrows * d0}, {w1_val, w1_in, d0 * d1}, {w2_val, w2_in, d1 * d2}};
     float         fb_out[mrows * d2]     = {};
@@ -1481,7 +2204,10 @@ TEST_CASE("ceir 29b-2a: the CUDA-Graphs capture of the ml.mlp pipeline is BIT-EX
     }
     // REPLAY: the instantiate-once/launch-many property -- a second launch of the SAME exec is bit-identical (the property
     // 29z benches: launch overhead is the only difference, never the result).
-    for (crd::u32 i = 0; i < mrows * d2; ++i) { CHECK(gr_replay[i] == gr_out[i]); }
+    for (crd::u32 i = 0; i < mrows * d2; ++i)
+    {
+        CHECK(gr_replay[i] == gr_out[i]);
+    }
 }
 
 // CEIR-29c-2 — the TWO-CLASS boundary on a real device: a partitioned plan whose cuda_graphs-claimed mlp is CAPTURED into ONE
@@ -1518,12 +2244,21 @@ TEST_CASE("ceir 29c-2: a two-class plan captures ONLY the cuda_graphs mlp run; t
     CHECK(n_assign == 1U);              // only the mlp is an ml op; the flanking linalg.gemms are invisible to partition_ml
     REQUIRE(plan.stages.size() == 5U);  // [gemm(x'), gemm(mlp), relu, gemm(mlp), gemm(z)] — a silent stage drop can't pass
     const crd::i32 want[5] = {-1, 0, 0, 0, -1}; // one contiguous cuda_graphs run flanked by two fallback gemms
-    for (crd::usize s = 0; s < 5U; ++s) { CHECK(plan.stages[s].provider == want[s]); }
+    for (crd::usize s = 0; s < 5U; ++s)
+    {
+        CHECK(plan.stages[s].provider == want[s]);
+    }
     // derive the claimed run the SAME way the runner does (scan provider==0) — it must be exactly [1,4).
     crd::usize lo = 0;
-    while (lo < plan.stages.size() && plan.stages[lo].provider != 0) { ++lo; }
+    while (lo < plan.stages.size() && plan.stages[lo].provider != 0)
+    {
+        ++lo;
+    }
     crd::usize hi = lo;
-    while (hi < plan.stages.size() && plan.stages[hi].provider == 0) { ++hi; }
+    while (hi < plan.stages.size() && plan.stages[hi].provider == 0)
+    {
+        ++hi;
+    }
     CHECK(lo == 1U);
     CHECK(hi == 4U);
     // READ (not guess — the 29b-1 mechanism-read scar), then LOCK the 26f alias materializations (the topology, the 29b-1
@@ -1543,14 +2278,23 @@ TEST_CASE("ceir 29c-2: a two-class plan captures ONLY the cuda_graphs mlp run; t
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of < 0) { continue; }
+        if (pb.alias_of < 0)
+        {
+            continue;
+        }
         ++plan_aliases;
         const ceg::PlanBuffer& lp = plan.buffers[static_cast<crd::usize>(pb.alias_of)];
         CHECK(pb.role == ceg::BufferRole::Intermediate); // only Intermediate-role buffers tenant (out is Output, pinned). NOTE
         CHECK(lp.role == ceg::BufferRole::Intermediate); // (a)'s tenant is a `resource.declare` (a1) — declares aren't always
         CHECK(pb.bytes <= lp.bytes);                     // ExternalIn; the plan gives a written-then-read declare Intermediate role.
-        if (pb.bytes == b_md1 && lp.bytes == b_md0) { ++alias_a1_x; } // a1 -> x'
-        if (pb.bytes == b_md2 && lp.bytes == b_md1) { ++alias_y_h1; } // y  -> h1
+        if (pb.bytes == b_md1 && lp.bytes == b_md0) // a1 -> x'
+        {
+            ++alias_a1_x;
+        }
+        if (pb.bytes == b_md2 && lp.bytes == b_md1) // y  -> h1
+        {
+            ++alias_y_h1;
+        }
     }
     CHECK(plan_aliases == 2U); // ⭐ FIRST live alias materialization on the CUDA runner (29b-1 had 0)
     CHECK(alias_a1_x == 1U);
@@ -1567,7 +2311,11 @@ TEST_CASE("ceir 29c-2: a two-class plan captures ONLY the cuda_graphs mlp run; t
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-29c-2 two-class capture gate"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-29c-2 two-class capture gate");
+        return;
+    }
 
     const MlpSeed seeds[5] = {{x_val, x_in, mrows * d0}, {w0_val, w0_in, d0 * d0}, {w1_val, w1_in, d0 * d1},
                               {w2_val, w2_in, d1 * d2}, {w3_val, w3_in, d2 * d3}};
@@ -1602,7 +2350,10 @@ TEST_CASE("ceir 29c-2: a two-class plan captures ONLY the cuda_graphs mlp run; t
         CHECK(gr_out[i] == fb_out[i]); // two-class == the N-dispatch fallback
         CHECK(gr_out[i] == oracle[i]); // ...and both == the CPU oracle (fmad=false, sequential-k)
     }
-    for (crd::u32 i = 0; i < mrows * d3; ++i) { CHECK(gr_replay[i] == gr_out[i]); } // instantiate-once / launch-many
+    for (crd::u32 i = 0; i < mrows * d3; ++i) // instantiate-once / launch-many
+    {
+        CHECK(gr_replay[i] == gr_out[i]);
+    }
 
     // ⭐ CEIR-29z: the SINGLE-SUBMIT enqueue path (begin -> prefix -> enqueue(graph) -> suffix -> submit_and_wait, ONE wait) is
     //    the honest two-class execution the 29z bench times — PROVEN bit-exact here (CI-gated), so the enqueue split is a real
@@ -1659,12 +2410,19 @@ TEST_CASE("ceir 30b-2b-2b: execute_two_class runs the sandwich Host+CUDA bit-exa
     // ARM 1 — all-HOST (device-FREE: runs in a CI job with no CUDA device).
     float host_out[mrows * d3] = {};
     REQUIRE(run_all_host(ctx, &root, plan, seeds, 5U, out_val, mrows * d3, host_out));
-    for (crd::u32 i = 0; i < mrows * d3; ++i) { CHECK(host_out[i] == oracle[i]); } // the Host executor is bit-exact vs the oracle
+    for (crd::u32 i = 0; i < mrows * d3; ++i) // the Host executor is bit-exact vs the oracle
+    {
+        CHECK(host_out[i] == oracle[i]);
+    }
 
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-30b-2b-2b device arms (the all-Host arm ran above)"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-30b-2b-2b device arms (the all-Host arm ran above)");
+        return;
+    }
 
     // ARM 2 — all-CUDA (the whole plan through execute_tensor_pipeline).
     float gpu_out[mrows * d3] = {};
@@ -1691,7 +2449,10 @@ TEST_CASE("ceir 30b-2b-2b: execute_two_class runs the sandwich Host+CUDA bit-exa
     REQUIRE(profile.stages.size() == 5U);
     const ceg::StageKind want[5] = {ceg::StageKind::Gemm, ceg::StageKind::Gemm, ceg::StageKind::VizDispatch,
                                     ceg::StageKind::Gemm, ceg::StageKind::Gemm};
-    for (crd::usize s = 0; s < 5U; ++s) { CHECK(profile.stages[s].kind == want[s]); }
+    for (crd::usize s = 0; s < 5U; ++s)
+    {
+        CHECK(profile.stages[s].kind == want[s]);
+    }
 
     // ⭐ THE §140 CLAIM: split == all-Gpu == all-Host == the oracle, BIT-EXACT (placement changed the WHERE, never the WHAT).
     for (crd::u32 i = 0; i < mrows * d3; ++i)
@@ -1708,13 +2469,22 @@ namespace
 void collect_named_cuda(ce::Context& ctx, ce::Region* r, crd::containers::StringView name, // NOLINT(misc-no-recursion)
                         crd::containers::Array<ce::Operation*>& out)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (ce::Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (ce::Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == name) { out.push_back(op); }
-            for (crd::u32 i = 0; i < op->num_regions(); ++i) { collect_named_cuda(ctx, op->region(i), name, out); }
+            if (ctx.op_name(op->kind()) == name)
+            {
+                out.push_back(op);
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_named_cuda(ctx, op->region(i), name, out);
+            }
         }
     }
 }
@@ -1722,7 +2492,10 @@ void collect_named_cuda(ce::Context& ctx, ce::Region* r, crd::containers::String
 float fold_sum_c(const float* base, crd::u32 n, crd::u32 stride)
 {
     float acc = base[0];
-    for (crd::u32 i = 1; i < n; ++i) { acc = acc + base[static_cast<crd::usize>(i) * stride]; }
+    for (crd::u32 i = 1; i < n; ++i)
+    {
+        acc = acc + base[static_cast<crd::usize>(i) * stride];
+    }
     return acc;
 }
 } // namespace
@@ -1752,7 +2525,11 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
     (void)ce::transform::register_transform_ops(ctx); // CEIR-30c-2b: parse the committed place_mesh.ceir placement asset
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(fn);
     ce::Block* const b = ce::func::func_body_block(fn);
@@ -1826,7 +2603,10 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
     //   (plan_transfers, n_xfer, oracle) self-agrees with WHATEVER the asset resolved to — a DRIFTED asset must ABORT
     //   the arm HERE (the ONE place the loaded vector is compared to the independent hand-written reference), not
     //   decorate an otherwise-green run with a single buried failure.
-    for (crd::usize i = 0; i < scv.size(); ++i) { REQUIRE(scv_asset[i] == scv[i]); }
+    for (crd::usize i = 0; i < scv.size(); ++i)
+    {
+        REQUIRE(scv_asset[i] == scv[i]);
+    }
     const ConstSpan<ce::ProviderClass> sc(scv_asset.data(), scv_asset.size()); // ⭐ the LOADED placement drives execution
 
     // the 2 shard-declare inputs (decls[0]=rank 0 rows [0,4), decls[1]=rank 1 rows [4,8)) + the Output (the combine the export reads).
@@ -1840,7 +2620,10 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
 
     // seed T[8,4] (0.1*(i-12)); shard0 = rows [0,4), shard1 = rows [4,8), each [4,4]. Oracle = fold(rows 0-3)+fold(rows 4-7) per col.
     float t[32];
-    for (crd::u32 i = 0; i < 32U; ++i) { t[i] = 0.1F * static_cast<float>(static_cast<crd::i32>(i) - 12); }
+    for (crd::u32 i = 0; i < 32U; ++i)
+    {
+        t[i] = 0.1F * static_cast<float>(static_cast<crd::i32>(i) - 12);
+    }
     float shard0[16];
     float shard1[16];
     for (crd::u32 li = 0; li < 4U; ++li)
@@ -1858,7 +2641,10 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
         const float p0 = fold_sum_c(&t[c], 4U, 4U);       // rank 0: rows [0,4), column c
         const float p1 = fold_sum_c(&t[16U + c], 4U, 4U); // rank 1: rows [4,8)
         oracle[c]      = p0 + p1;                          // the two-stage combine
-        if (oracle[c] != fold_sum_c(&t[c], 8U, 4U)) { any_diff = true; } // != a flat 8-row fold (non-assoc)
+        if (oracle[c] != fold_sum_c(&t[c], 8U, 4U)) // != a flat 8-row fold (non-assoc)
+        {
+            any_diff = true;
+        }
     }
     CHECK(any_diff); // the split changes the summation grouping — the oracle is genuinely the TWO-STAGE one
     const MlpSeed seeds[2] = {{decls[0]->result(0U), shard0, 16U}, {decls[1]->result(0U), shard1, 16U}};
@@ -1866,12 +2652,19 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
     // ARM 1 — all-HOST (device-FREE: runs in CI without a CUDA device).
     float host_out[4] = {};
     REQUIRE(run_all_host(ctx, &root, plan, seeds, 2U, out_val, 4U, host_out));
-    for (crd::u32 c = 0; c < 4U; ++c) { CHECK(host_out[c] == oracle[c]); }
+    for (crd::u32 c = 0; c < 4U; ++c)
+    {
+        CHECK(host_out[c] == oracle[c]);
+    }
 
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-30b-3b device arm (the all-Host arm ran above)"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-30b-3b device arm (the all-Host arm ran above)");
+        return;
+    }
 
     // ARM 2 — the Host+CUDA SPLIT [Host, Host, Gpu] via execute_two_class: the per-rank reduces on the CPU, the all-reduce COMBINE on CUDA.
     float                      mix_out[4] = {};
@@ -1889,7 +2682,10 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
     crd::u32 rb_at_end = 0;
     for (crd::usize i = 0; i < tp.transfers.size(); ++i)
     {
-        if (tp.transfers[i].direction == ceg::TransferDir::HostToDevice && tp.transfers[i].before_stage == 2U) { ++up_at2; }
+        if (tp.transfers[i].direction == ceg::TransferDir::HostToDevice && tp.transfers[i].before_stage == 2U)
+        {
+            ++up_at2;
+        }
         if (tp.transfers[i].direction == ceg::TransferDir::DeviceToHost
             && tp.transfers[i].before_stage == static_cast<crd::u32>(plan.stages.size()))
         {
@@ -1931,7 +2727,11 @@ TEST_CASE("ceir 29z: CUDA-Graphs launch vs the N-dispatch fallback bench (submit
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-29z bench"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-29z bench");
+        return;
+    }
 
     // ── fixture A: the 3-stage mlp (gemm/relu/gemm) — the WHOLE plan captured into ONE graph (unpartitioned; cap=[0,3)) ──
     {
@@ -2052,7 +2852,11 @@ TEST_CASE("ceir 30z: sharded-reduction transfer-cost bench (all-Host vs [Host,Ho
     crd::memory::TlsfAllocator devalloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(devalloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping the CEIR-30z bench"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping the CEIR-30z bench");
+        return;
+    }
 
     // the dim sweep: [8,4] the proof fixture, then growing rows×cols. The partials that CROSS the domain are [cols] (the reduce
     // outputs), so the transfer floor is ~constant in rows while the Host reduce is O(rows×cols) — the tax AMORTIZES as rows grow.

@@ -30,14 +30,23 @@ struct Dx12AdapterEvidence
     }
     if (evidence.kernel_available)
     {
-        if (evidence.kernel_software) { return Dx12AdapterKind::Software; }
+        if (evidence.kernel_software)
+        {
+            return Dx12AdapterKind::Software;
+        }
         if (evidence.kernel_render)
         {
-            if (evidence.dxgi_available && evidence.dxgi_software) { return Dx12AdapterKind::Unknown; }
+            if (evidence.dxgi_available && evidence.dxgi_software)
+            {
+                return Dx12AdapterKind::Unknown;
+            }
             return Dx12AdapterKind::Hardware;
         }
     }
-    if (evidence.dxgi_available && evidence.dxgi_software) { return Dx12AdapterKind::Software; }
+    if (evidence.dxgi_available && evidence.dxgi_software)
+    {
+        return Dx12AdapterKind::Software;
+    }
     return Dx12AdapterKind::Unknown;
 }
 

@@ -34,7 +34,10 @@ namespace
     void write_available_range(JsonWriter& w, const ImportedMediaRef& ref)
     {
         w.key("available_range");
-        if (ref.has_available_range) { write_time_range(w, ref.available_range); }
+        if (ref.has_available_range)
+        {
+            write_time_range(w, ref.available_range);
+        }
         else
         {
             w.value_null();
@@ -150,7 +153,10 @@ namespace
             w.key("media_references");
             w.begin_object();
             w.key("DEFAULT_MEDIA");
-            if (item.media_ref != kOtioInvalid) { write_media_ref(w, tl.media[item.media_ref]); }
+            if (item.media_ref != kOtioInvalid)
+            {
+                write_media_ref(w, tl.media[item.media_ref]);
+            }
             else
             {
                 w.begin_object();
@@ -163,7 +169,10 @@ namespace
             w.end_object();
             w.kv("name", item.name.c_str());
             w.key("source_range");
-            if (item.has_source_range) { write_time_range(w, item.source_range); }
+            if (item.has_source_range)
+            {
+                write_time_range(w, item.source_range);
+            }
             else
             {
                 w.value_null();
@@ -206,7 +215,10 @@ crd::containers::String otio_export(const ImportedTimeline& timeline, crd::memor
     w.begin_object();
     w.kv("OTIO_SCHEMA", "Timeline.1");
     w.key("global_start_time");
-    if (timeline.has_global_start) { write_rational_time(w, timeline.global_start); }
+    if (timeline.has_global_start)
+    {
+        write_rational_time(w, timeline.global_start);
+    }
     else
     {
         w.value_null();
@@ -237,8 +249,14 @@ crd::containers::String otio_export(const ImportedTimeline& timeline, crd::memor
             w.begin_array();
             w.end_array();
             const char* kind = track.kind_name.c_str();
-            if (track.kind == OtioTrackKind::Video) { kind = "Video"; }
-            else if (track.kind == OtioTrackKind::Audio) { kind = "Audio"; }
+            if (track.kind == OtioTrackKind::Video)
+            {
+                kind = "Video";
+            }
+            else if (track.kind == OtioTrackKind::Audio)
+            {
+                kind = "Audio";
+            }
             w.kv("kind", kind);
             w.key("markers");
             write_markers(w, timeline, track.first_marker, track.marker_count);

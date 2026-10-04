@@ -90,12 +90,21 @@ Operation* lone_import(Context& ctx, const Kit& k, Module*& m_out)
 Operation* main_declare(const Context& ctx, Module& m)
 {
     Block* const top = m.body()->first_block();
-    if (top == nullptr) { return nullptr; }
+    if (top == nullptr)
+    {
+        return nullptr;
+    }
     Operation* const fn = top->first_op(); // the @main func op
-    if (fn == nullptr) { return nullptr; }
+    if (fn == nullptr)
+    {
+        return nullptr;
+    }
     for (Operation* op = func::func_body_block(fn)->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) == containers::StringView("resource.declare")) { return op; }
+        if (ctx.op_name(op->kind()) == containers::StringView("resource.declare"))
+        {
+            return op;
+        }
     }
     return nullptr;
 }

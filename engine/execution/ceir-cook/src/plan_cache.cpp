@@ -30,8 +30,14 @@ PlanCache::~PlanCache() { clear(); }
 
 void PlanCache::free_entry(Entry& e) noexcept
 {
-    if (e.artifact != nullptr) { m_alloc->deallocate(e.artifact); }
-    if (e.deps != nullptr) { m_alloc->deallocate(e.deps); }
+    if (e.artifact != nullptr)
+    {
+        m_alloc->deallocate(e.artifact);
+    }
+    if (e.deps != nullptr)
+    {
+        m_alloc->deallocate(e.deps);
+    }
     e.artifact      = nullptr;
     e.artifact_size = 0U;
     e.deps          = nullptr;
@@ -42,7 +48,10 @@ crd::usize PlanCache::find(const PlanKey& key) const noexcept
 {
     for (crd::usize i = 0; i < m_entries.size(); ++i)
     {
-        if (key_eq(m_entries[i].key, key)) { return i; }
+        if (key_eq(m_entries[i].key, key))
+        {
+            return i;
+        }
     }
     return m_entries.size();
 }
@@ -53,7 +62,10 @@ bool PlanCache::deps_valid(const Entry& e) const
     {
         const crd::u64 current = m_resolver(e.deps[i].id, m_user);
         // ⛔ EMPTY≠UNKNOWN: a resolver return of 0 (gone/unresolvable) is STALE, never valid.
-        if (current == 0U || current != e.deps[i].interface_hash) { return false; }
+        if (current == 0U || current != e.deps[i].interface_hash)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -71,7 +83,10 @@ PlanLookup PlanCache::get(const PlanKey& key)
         // a recorded dep drifted → the cached plan is stale; drop it (lazy eviction) and report a recompile.
         free_entry(m_entries[idx]);
         const crd::usize last = m_entries.size() - 1U;
-        if (idx != last) { m_entries[idx] = m_entries[last]; }
+        if (idx != last)
+        {
+            m_entries[idx] = m_entries[last];
+        }
         m_entries.pop_back();
         ++m_misses;
         return PlanLookup{PlanStatus::StaleDeps, nullptr, 0U};
@@ -101,7 +116,10 @@ void PlanCache::put(AssetId owner, const PlanKey& key, containers::ConstSpan<crd
     if (artifact.size() > 0U)
     {
         auto* const buf = static_cast<crd::u8*>(m_alloc->allocate(artifact.size(), alignof(crd::u8)));
-        for (crd::usize i = 0; i < artifact.size(); ++i) { buf[i] = artifact[i]; }
+        for (crd::usize i = 0; i < artifact.size(); ++i)
+        {
+            buf[i] = artifact[i];
+        }
         target->artifact      = buf;
         target->artifact_size = artifact.size();
     }
@@ -109,7 +127,10 @@ void PlanCache::put(AssetId owner, const PlanKey& key, containers::ConstSpan<crd
     if (deps.size() > 0U)
     {
         auto* const dbuf = static_cast<PlanDep*>(m_alloc->allocate(sizeof(PlanDep) * deps.size(), alignof(PlanDep)));
-        for (crd::usize i = 0; i < deps.size(); ++i) { dbuf[i] = deps[i]; }
+        for (crd::usize i = 0; i < deps.size(); ++i)
+        {
+            dbuf[i] = deps[i];
+        }
         target->deps      = dbuf;
         target->dep_count = deps.size();
     }
@@ -124,7 +145,10 @@ void PlanCache::evict(AssetId owner)
         {
             free_entry(m_entries[i]);
             const crd::usize last = m_entries.size() - 1U;
-            if (i != last) { m_entries[i] = m_entries[last]; }
+            if (i != last)
+            {
+                m_entries[i] = m_entries[last];
+            }
             m_entries.pop_back(); // do NOT advance i — a swapped-in entry now occupies slot i
         }
         else
@@ -136,7 +160,10 @@ void PlanCache::evict(AssetId owner)
 
 void PlanCache::clear()
 {
-    for (crd::usize i = 0; i < m_entries.size(); ++i) { free_entry(m_entries[i]); }
+    for (crd::usize i = 0; i < m_entries.size(); ++i)
+    {
+        free_entry(m_entries[i]);
+    }
     m_entries.clear();
 }
 } // namespace crd::ceir::cook

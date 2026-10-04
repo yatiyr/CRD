@@ -72,20 +72,66 @@ template <class T>
 
 // NaN-IGNORING max/min (IEEE-754 maxNum/minNum): a NaN operand is dropped in favour of the number — distinct from min/max,
 // which propagate whatever the comparison yields. `a != a` is the branchless isnan.
-[[nodiscard]] inline double fmax(double a, double b) noexcept { if (a != a) { return b; } if (b != b) { return a; } return a < b ? b : a; }
-[[nodiscard]] inline float fmax(float a, float b) noexcept { if (a != a) { return b; } if (b != b) { return a; } return a < b ? b : a; }
-[[nodiscard]] inline double fmin(double a, double b) noexcept { if (a != a) { return b; } if (b != b) { return a; } return b < a ? b : a; }
-[[nodiscard]] inline float fmin(float a, float b) noexcept { if (a != a) { return b; } if (b != b) { return a; } return b < a ? b : a; }
+[[nodiscard]] inline double fmax(double a, double b) noexcept
+{
+    if (a != a)
+    {
+        return b;
+    }
+    if (b != b)
+    {
+        return a;
+    }
+    return a < b ? b : a; }
+[[nodiscard]] inline float fmax(float a, float b) noexcept
+{
+    if (a != a)
+    {
+        return b;
+    }
+    if (b != b)
+    {
+        return a;
+    }
+    return a < b ? b : a; }
+[[nodiscard]] inline double fmin(double a, double b) noexcept
+{
+    if (a != a)
+    {
+        return b;
+    }
+    if (b != b)
+    {
+        return a;
+    }
+    return b < a ? b : a; }
+[[nodiscard]] inline float fmin(float a, float b) noexcept
+{
+    if (a != a)
+    {
+        return b;
+    }
+    if (b != b)
+    {
+        return a;
+    }
+    return b < a ? b : a; }
 
 // positive difference: max(x − y, 0), NaN-propagating.
 [[nodiscard]] inline double fdim(double x, double y) noexcept
 {
-    if (x != x || y != y) { return x - y; } // NaN propagates
+    if (x != x || y != y) // NaN propagates
+    {
+        return x - y;
+    }
     return x > y ? x - y : 0.0;
 }
 [[nodiscard]] inline float fdim(float x, float y) noexcept
 {
-    if (x != x || y != y) { return x - y; }
+    if (x != x || y != y)
+    {
+        return x - y;
+    }
     return x > y ? x - y : 0.0F;
 }
 
@@ -94,8 +140,14 @@ template <class T>
 {
     const double t = trunc(x);
     const double f = abs(x - t); // fractional magnitude in [0,1)
-    if (f < 0.5) { return t; }
-    if (f > 0.5) { return t + copysign(1.0, x); }
+    if (f < 0.5)
+    {
+        return t;
+    }
+    if (f > 0.5)
+    {
+        return t + copysign(1.0, x);
+    }
     const double h = t * 0.5; // exact tie → keep t if even, else step to the even neighbour
     return (trunc(h) == h) ? t : t + copysign(1.0, x);
 }
@@ -103,8 +155,14 @@ template <class T>
 {
     const float t = trunc(x);
     const float f = abs(x - t);
-    if (f < 0.5F) { return t; }
-    if (f > 0.5F) { return t + copysign(1.0F, x); }
+    if (f < 0.5F)
+    {
+        return t;
+    }
+    if (f > 0.5F)
+    {
+        return t + copysign(1.0F, x);
+    }
     const float h = t * 0.5F;
     return (trunc(h) == h) ? t : t + copysign(1.0F, x);
 }
@@ -122,7 +180,11 @@ template <class T>
 {
     crd::u64  b      = std::bit_cast<crd::u64>(x);
     const int rawexp = static_cast<int>((b >> 52U) & 0x7FFU);
-    if (rawexp == 0x7FF || x == 0.0) { *e = 0; return x; } // inf/nan/±0
+    if (rawexp == 0x7FF || x == 0.0) // inf/nan/±0
+    {
+        *e = 0;
+        return x;
+    }
     int shift = 0;
     if (rawexp == 0) // subnormal: scale up by 2^54, re-read the exponent, account for the scale
     {
@@ -137,7 +199,11 @@ template <class T>
 {
     crd::u32  b      = std::bit_cast<crd::u32>(x);
     const int rawexp = static_cast<int>((b >> 23U) & 0xFFU);
-    if (rawexp == 0xFF || x == 0.0F) { *e = 0; return x; }
+    if (rawexp == 0xFF || x == 0.0F)
+    {
+        *e = 0;
+        return x;
+    }
     int shift = 0;
     if (rawexp == 0)
     {
@@ -162,12 +228,26 @@ template <class T>
     double r = fmod(ax, ay + ay);
     if (ay < std::numeric_limits<double>::min()) // tiny/zero |y|: 0.5*|y| would underflow ⇒ compare via r+r
     {
-        if (r + r > ay) { r -= ay; if (r + r >= ay) { r -= ay; } }
+        if (r + r > ay)
+        {
+            r -= ay;
+            if (r + r >= ay)
+            {
+                r -= ay;
+            }
+        }
     }
     else
     {
         const double hp = 0.5 * ay; // reduce to [−|y|/2, |y|/2]; ties-to-even fall out of having reduced mod 2|y|
-        if (r > hp) { r -= ay; if (r >= hp) { r -= ay; } }
+        if (r > hp)
+        {
+            r -= ay;
+            if (r >= hp)
+            {
+                r -= ay;
+            }
+        }
     }
     return signbit(x) ? -r : r; // remainder is ODD in x; r carries its own sign (NOT x's) — copysign would be wrong
 }
@@ -178,12 +258,26 @@ template <class T>
     float       r  = fmod(ax, ay + ay);
     if (ay < std::numeric_limits<float>::min())
     {
-        if (r + r > ay) { r -= ay; if (r + r >= ay) { r -= ay; } }
+        if (r + r > ay)
+        {
+            r -= ay;
+            if (r + r >= ay)
+            {
+                r -= ay;
+            }
+        }
     }
     else
     {
         const float hp = 0.5F * ay;
-        if (r > hp) { r -= ay; if (r >= hp) { r -= ay; } }
+        if (r > hp)
+        {
+            r -= ay;
+            if (r >= hp)
+            {
+                r -= ay;
+            }
+        }
     }
     return signbit(x) ? -r : r; // remainder is ODD in x; r carries its own sign
 }

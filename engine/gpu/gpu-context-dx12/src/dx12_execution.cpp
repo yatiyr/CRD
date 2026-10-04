@@ -37,8 +37,14 @@ HRESULT dx12_reset(ID3D12CommandAllocator* allocator, ID3D12GraphicsCommandList*
         return E_POINTER;
     }
     HRESULT result = allocator->Reset();
-    if (SUCCEEDED(result)) { result = list->Reset(allocator, nullptr); }
-    if (FAILED(result)) { dx12_execution_failure(result, "Reset command allocator/list"); }
+    if (SUCCEEDED(result))
+    {
+        result = list->Reset(allocator, nullptr);
+    }
+    if (FAILED(result))
+    {
+        dx12_execution_failure(result, "Reset command allocator/list");
+    }
     return result;
 }
 
@@ -52,21 +58,36 @@ HRESULT dx12_submit(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Graph
         return E_POINTER;
     }
     HRESULT result = device->GetDeviceRemovedReason();
-    if (SUCCEEDED(result)) { result = list->Close(); }
-    if (SUCCEEDED(result) && value >= std::numeric_limits<UINT64>::max() - 1U) { result = E_UNEXPECTED; }
+    if (SUCCEEDED(result))
+    {
+        result = list->Close();
+    }
+    if (SUCCEEDED(result) && value >= std::numeric_limits<UINT64>::max() - 1U)
+    {
+        result = E_UNEXPECTED;
+    }
     if (SUCCEEDED(result))
     {
         ID3D12CommandList* lists[] = {list};
         queue->ExecuteCommandLists(1U, lists);
         submitted = true;
         result = device->GetDeviceRemovedReason();
-        if (SUCCEEDED(result)) { result = queue->Signal(fence, value + 1U); }
-        if (SUCCEEDED(result)) { ++value; }
+        if (SUCCEEDED(result))
+        {
+            result = queue->Signal(fence, value + 1U);
+        }
+        if (SUCCEEDED(result))
+        {
+            ++value;
+        }
     }
     if (FAILED(result))
     {
         dx12_execution_failure(result, "Close/execute/signal command list");
-        if (submitted) { stop_failed_device(device); }
+        if (submitted)
+        {
+            stop_failed_device(device);
+        }
     }
     return result;
 }
@@ -76,13 +97,25 @@ HRESULT dx12_signal(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Fence
     if (device == nullptr || queue == nullptr || fence == nullptr)
     {
         dx12_execution_failure(E_POINTER, "Signal missing device/queue/fence");
-        if (device != nullptr) { stop_failed_device(device); }
+        if (device != nullptr)
+        {
+            stop_failed_device(device);
+        }
         return E_POINTER;
     }
     HRESULT result = device->GetDeviceRemovedReason();
-    if (SUCCEEDED(result) && value >= std::numeric_limits<UINT64>::max() - 1U) { result = E_UNEXPECTED; }
-    if (SUCCEEDED(result)) { result = queue->Signal(fence, value + 1U); }
-    if (SUCCEEDED(result)) { ++value; }
+    if (SUCCEEDED(result) && value >= std::numeric_limits<UINT64>::max() - 1U)
+    {
+        result = E_UNEXPECTED;
+    }
+    if (SUCCEEDED(result))
+    {
+        result = queue->Signal(fence, value + 1U);
+    }
+    if (SUCCEEDED(result))
+    {
+        ++value;
+    }
     else
     {
         dx12_execution_failure(result, "Signal queue completion");
@@ -97,12 +130,18 @@ HRESULT dx12_wait(ID3D12Device* device, ID3D12Fence* fence, UINT64 value, HANDLE
     {
         const HRESULT result = timeout_ms == INFINITE ? E_INVALIDARG : E_POINTER;
         dx12_execution_failure(result, "Wait missing device/fence/event or unbounded timeout");
-        if (device != nullptr) { stop_failed_device(device); }
+        if (device != nullptr)
+        {
+            stop_failed_device(device);
+        }
         return result;
     }
     HRESULT result = device->GetDeviceRemovedReason();
     UINT64 completed = fence->GetCompletedValue();
-    if (SUCCEEDED(result) && completed == std::numeric_limits<UINT64>::max()) { result = DXGI_ERROR_DEVICE_REMOVED; }
+    if (SUCCEEDED(result) && completed == std::numeric_limits<UINT64>::max())
+    {
+        result = DXGI_ERROR_DEVICE_REMOVED;
+    }
     if (SUCCEEDED(result) && completed < value)
     {
         result = fence->SetEventOnCompletion(value, event);
@@ -113,9 +152,18 @@ HRESULT dx12_wait(ID3D12Device* device, ID3D12Fence* fence, UINT64 value, HANDLE
             if (wait != WAIT_OBJECT_0)
             {
                 DWORD error = ERROR_GEN_FAILURE;
-                if (wait == WAIT_FAILED) { error = GetLastError(); }
-                else if (wait == WAIT_TIMEOUT) { error = ERROR_TIMEOUT; }
-                if (error == ERROR_SUCCESS) { error = ERROR_GEN_FAILURE; }
+                if (wait == WAIT_FAILED)
+                {
+                    error = GetLastError();
+                }
+                else if (wait == WAIT_TIMEOUT)
+                {
+                    error = ERROR_TIMEOUT;
+                }
+                if (error == ERROR_SUCCESS)
+                {
+                    error = ERROR_GEN_FAILURE;
+                }
                 result = HRESULT_FROM_WIN32(error);
             }
         }
@@ -127,7 +175,10 @@ HRESULT dx12_wait(ID3D12Device* device, ID3D12Fence* fence, UINT64 value, HANDLE
             {
                 result = DXGI_ERROR_DEVICE_REMOVED;
             }
-            else if (SUCCEEDED(result) && completed < value) { result = E_UNEXPECTED; }
+            else if (SUCCEEDED(result) && completed < value)
+            {
+                result = E_UNEXPECTED;
+            }
         }
     }
     if (FAILED(result))

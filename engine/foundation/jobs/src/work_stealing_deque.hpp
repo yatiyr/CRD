@@ -150,7 +150,9 @@ std::optional<T> WorkStealingDeque<T>::pop() noexcept
     {
         T item = m_buf[buf_index(b)];
         if (t < b)
+        {
             return item; // > 1 element — no race possible
+        }
 
         // Exactly 1 element: race with concurrent steal() for the last slot.
         if (!m_top.compare_exchange_strong(t, t + 1,

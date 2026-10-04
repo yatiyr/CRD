@@ -159,7 +159,13 @@ TEST_CASE("B8-a: lighting brdf_direct (Cook-Torrance GGX + multiscatter) bit-exa
         const double n_i[3]    = {nrm[0][i], nrm[1][i], nrm[2][i]};
         const double v_i[3]    = {vw[0][i], vw[1][i], vw[2][i]};
         const double l_i[3]    = {lw[0][i], lw[1][i], lw[2][i]};
-        for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref_brdf(base_i, mev[i], rov[i], n_i, v_i, l_i, lc, c)) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            if (o[i * 3 + c] != ref_brdf(base_i, mev[i], rov[i], n_i, v_i, l_i, lc, c))
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -274,8 +280,31 @@ TEST_CASE("B8-b: OpenPBR lobes (aniso/sheen/clearcoat/subsurface) bit-exact vs F
     const double shr[3] = {0.9, 0.7, 0.5};
     const double ssr[3] = {0.8, 0.3, 0.2};
     int bad = 0;
-    const auto chkv = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     chkv(lt2::aniso_specular_lobe(g, f0v, f90, al, an, tng, bit, nn, vv, llv), [&](int i, int c) {
         const double t_i[3] = {tarr[0][i], tarr[1][i], tarr[2][i]}; const double b_i[3] = {barr[0][i], barr[1][i], barr[2][i]};
@@ -307,7 +336,19 @@ double rsq(double x) { return x * x; }
 double rclamp(double x, double lo, double hi) { const double m = x > lo ? x : lo; return m < hi ? m : hi; }
 double rmix(double x, double y, double t) { return x * (1.0 - t) + y * t; }                                                       // oracle Mix
 double rsmooth(double e0, double e1, double x) { const double u = (x - e0) / (e1 - e0); const double hi = u > 1.0 ? 1.0 : u; const double t = u < 0.0 ? 0.0 : hi; return t * t * (3.0 - 2.0 * t); } // oracle Smoothstep
-void   rnorm3(const double a[3], double out[3]) { double s = 0.0; for (int k = 0; k < 3; ++k) { s += a[k] * a[k]; } const double len = crd::math::sqrt(s); for (int k = 0; k < 3; ++k) { out[k] = a[k] / len; } }
+void   rnorm3(const double a[3], double out[3])
+{
+    double s = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        s += a[k] * a[k];
+    }
+    const double len = crd::math::sqrt(s);
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = a[k] / len;
+    }
+}
 
 // evalSensitivity — line-for-line from glTF iridescence.glsl (op grouping matches the CKIR graph exactly).
 void reval_sensitivity(double opd, const double sh[3], double out[3])
@@ -327,7 +368,10 @@ void reval_sensitivity(double opd, const double sh[3], double out[3])
     }
     const double extra = ((9.7470e-14 * crd::math::sqrt((2.0 * kPiG) * 4.5282e+09)) * crd::math::cos(2.2399e+06 * phase + sh[0])) * crd::math::exp((-4.5282e+09) * sqp);
     xyz[0]             = xyz[0] + extra;
-    for (int k = 0; k < 3; ++k) { xyz[k] = xyz[k] / 1.0685e-7; }
+    for (int k = 0; k < 3; ++k)
+    {
+        xyz[k] = xyz[k] / 1.0685e-7;
+    }
     const double cx = xyz[0];
     const double cy = xyz[1];
     const double cz = xyz[2];
@@ -351,13 +395,30 @@ void reval_iridescence(double outside_ior, double eta2, double cos_theta1, doubl
     double       r1[3];
     double       r23[3];
     double       phi23[3];
-    for (int k = 0; k < 3; ++k) { const double f = rclamp(base_f0[k], 0.0, 0.9999); const double s = crd::math::sqrt(f); base_ior[k] = (1.0 + s) / (1.0 - s); }
-    for (int k = 0; k < 3; ++k) { r1[k]  = rsq((base_ior[k] - irid_ior) / (base_ior[k] + irid_ior)); }
-    for (int k = 0; k < 3; ++k) { r23[k] = r1[k] + (1.0 - r1[k]) * rpow5(1.0 - cos_t2); }
-    for (int k = 0; k < 3; ++k) { phi23[k] = (base_ior[k] < irid_ior) ? kPiG : 0.0; }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double f = rclamp(base_f0[k], 0.0, 0.9999);
+        const double s = crd::math::sqrt(f);
+        base_ior[k] = (1.0 + s) / (1.0 - s);
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        r1[k]  = rsq((base_ior[k] - irid_ior) / (base_ior[k] + irid_ior));
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        r23[k] = r1[k] + (1.0 - r1[k]) * rpow5(1.0 - cos_t2);
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        phi23[k] = (base_ior[k] < irid_ior) ? kPiG : 0.0;
+    }
     const double opd = ((2.0 * irid_ior) * thickness) * cos_t2;
     double       phi[3];
-    for (int k = 0; k < 3; ++k) { phi[k] = phi21 + phi23[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        phi[k] = phi21 + phi23[k];
+    }
     double r123r[3];
     double out_i[3];
     double cm[3];
@@ -374,9 +435,17 @@ void reval_iridescence(double outside_ior, double eta2, double cos_theta1, doubl
         const double sh[3] = {static_cast<double>(m) * phi[0], static_cast<double>(m) * phi[1], static_cast<double>(m) * phi[2]};
         double       sens[3];
         reval_sensitivity(static_cast<double>(m) * opd, sh, sens);
-        for (int k = 0; k < 3; ++k) { cm[k] = cm[k] * r123r[k]; const double sm = 2.0 * sens[k]; out_i[k] = out_i[k] + cm[k] * sm; }
+        for (int k = 0; k < 3; ++k)
+        {
+            cm[k] = cm[k] * r123r[k];
+            const double sm = 2.0 * sens[k];
+            out_i[k] = out_i[k] + cm[k] * sm;
+        }
     }
-    for (int k = 0; k < 3; ++k) { out[k] = out_i[k] > 0.0 ? out_i[k] : 0.0; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = out_i[k] > 0.0 ? out_i[k] : 0.0;
+    }
 }
 
 // transmission BTDF helpers (glTF KHR_materials_transmission; D/V are Filament's stable forms, so π = kPi here).
@@ -392,13 +461,22 @@ double ref_transmission(const double base[3], const double f0[3], double f90, do
     rnorm3(view, vv);
     rnorm3(l, ll);
     double dp = 0.0;
-    for (int k = 0; k < 3; ++k) { dp += (-ll[k]) * nn[k]; }             // dot(-l, n), oracle order
+    for (int k = 0; k < 3; ++k) // dot(-l, n), oracle order
+    {
+        dp += (-ll[k]) * nn[k];
+    }
     double lm_pre[3];
-    for (int k = 0; k < 3; ++k) { lm_pre[k] = ll[k] + (2.0 * nn[k]) * dp; }
+    for (int k = 0; k < 3; ++k)
+    {
+        lm_pre[k] = ll[k] + (2.0 * nn[k]) * dp;
+    }
     double lmir[3];
     rnorm3(lm_pre, lmir);
     double h_pre[3];
-    for (int k = 0; k < 3; ++k) { h_pre[k] = lmir[k] + vv[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        h_pre[k] = lmir[k] + vv[k];
+    }
     double h[3];
     rnorm3(h_pre, h);
     const double noh  = rclamp01(rdot3(nn, h));
@@ -419,14 +497,33 @@ void   ref_refract_ray(const double n[3], const double v[3], double ior, double 
     const double iv[3] = {-v[0], -v[1], -v[2]};
     const double eta   = 1.0 / ior;
     double       dp    = 0.0;
-    for (int k = 0; k < 3; ++k) { dp += nn[k] * iv[k]; }               // oracle Refract dot order (n·i)
+    for (int k = 0; k < 3; ++k) // oracle Refract dot order (n·i)
+    {
+        dp += nn[k] * iv[k];
+    }
     const double kk = 1.0 - eta * eta * (1.0 - dp * dp);
     double       rv[3];
-    if (kk < 0.0) { for (int k = 0; k < 3; ++k) { rv[k] = 0.0; } }
-    else { const double coef = eta * dp + crd::math::sqrt(kk); for (int k = 0; k < 3; ++k) { rv[k] = eta * iv[k] - coef * nn[k]; } }
+    if (kk < 0.0)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            rv[k] = 0.0;
+        }
+    }
+    else
+    {
+        const double coef = eta * dp + crd::math::sqrt(kk);
+        for (int k = 0; k < 3; ++k)
+        {
+            rv[k] = eta * iv[k] - coef * nn[k];
+        }
+    }
     double rn[3];
     rnorm3(rv, rn);
-    for (int k = 0; k < 3; ++k) { out[k] = rn[k] * thickness; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = rn[k] * thickness;
+    }
 }
 } // namespace
 
@@ -470,7 +567,13 @@ TEST_CASE("B8-b: thin-film iridescence (Belcour-Barla) bit-exact vs glTF", "[kir
         const double bf[3] = {f0[0][i], f0[1][i], f0[2][i]};
         double       ref[3];
         reval_iridescence(1.0, e2v[i], c1v[i], thv[i], bf, ref);
-        for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref[c]) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            if (o[i * 3 + c] != ref[c])
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -515,7 +618,20 @@ TEST_CASE("B8-b: transmission BTDF + Beer's-law absorption + refraction ray bit-
     const double attr[3] = {0.7, 0.5, 0.3};
     const double radr[3] = {1.5, 1.2, 0.9};
     int          bad     = 0;
-    const auto   chkv    = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto   chkv    = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chkv(lgt::transmission_btdf(g, base, f0v, f90, al, io, nn, vv, llv), [&](int i, int c) {
         const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; const double v_i[3] = {varr[0][i], varr[1][i], varr[2][i]}; const double l_i[3] = {larr[0][i], larr[1][i], larr[2][i]};
@@ -549,19 +665,67 @@ void rintegrate_edge_vec(const double v1[3], const double v2[3], double out[3])
     const double tst = (x > 0.0) ? vv : 0.5 * crd::math::rsqrt(rmax2(1.0 - x * x, 1e-7)) - vv;
     double       cr[3];
     rcross(v1, v2, cr);
-    for (int k = 0; k < 3; ++k) { out[k] = cr[k] * tst; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = cr[k] * tst;
+    }
 }
 // column-major 3×3 helpers matching the oracle (MatFromCols / MatTranspose / MatMatMul / MatVecMul).
-void rmat3_cols(const double c0[3], const double c1[3], const double c2[3], double m[9]) { for (int r = 0; r < 3; ++r) { m[0 * 3 + r] = c0[r]; m[1 * 3 + r] = c1[r]; m[2 * 3 + r] = c2[r]; } }
-void rtranspose3(const double m[9], double out[9]) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { out[col * 3 + r] = m[r * 3 + col]; } } }
-void rmatmul3(const double a[9], const double b[9], double out[9]) { for (int col = 0; col < 3; ++col) { for (int r = 0; r < 3; ++r) { double s = 0.0; for (int k = 0; k < 3; ++k) { s = s + a[k * 3 + r] * b[col * 3 + k]; } out[col * 3 + r] = s; } } }
-void rmatvec3(const double m[9], const double v[3], double out[3]) { for (int r = 0; r < 3; ++r) { double s = 0.0; for (int col = 0; col < 3; ++col) { s = s + m[col * 3 + r] * v[col]; } out[r] = s; } }
+void rmat3_cols(const double c0[3], const double c1[3], const double c2[3], double m[9])
+{
+    for (int r = 0; r < 3; ++r)
+    {
+        m[0 * 3 + r] = c0[r];
+        m[1 * 3 + r] = c1[r];
+        m[2 * 3 + r] = c2[r];
+    }
+}
+void rtranspose3(const double m[9], double out[9])
+{
+    for (int col = 0; col < 3; ++col)
+    {
+        for (int r = 0; r < 3; ++r)
+        {
+            out[col * 3 + r] = m[r * 3 + col];
+        }
+    }
+}
+void rmatmul3(const double a[9], const double b[9], double out[9])
+{
+    for (int col = 0; col < 3; ++col)
+    {
+        for (int r = 0; r < 3; ++r)
+        {
+            double s = 0.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                s = s + a[k * 3 + r] * b[col * 3 + k];
+            }
+            out[col * 3 + r] = s;
+        }
+    }
+}
+void rmatvec3(const double m[9], const double v[3], double out[3])
+{
+    for (int r = 0; r < 3; ++r)
+    {
+        double s = 0.0;
+        for (int col = 0; col < 3; ++col)
+        {
+            s = s + m[col * 3 + r] * v[col];
+        }
+        out[r] = s;
+    }
+}
 // LTC_Evaluate rect (clipless).
 double rltc_rect(const double n[3], const double v[3], const double p[3], const double minv[9], const double pts[4][3], double scale, bool two_sided)
 {
     const double nov = rdot3(v, n);
     double       t1pre[3];
-    for (int k = 0; k < 3; ++k) { t1pre[k] = v[k] - n[k] * nov; }
+    for (int k = 0; k < 3; ++k)
+    {
+        t1pre[k] = v[k] - n[k] * nov;
+    }
     double t1[3];
     rnorm3(t1pre, t1);
     double t2[3];
@@ -573,11 +737,26 @@ double rltc_rect(const double n[3], const double v[3], const double p[3], const 
     double m[9];
     rmatmul3(minv, basis_t, m);
     double lproj[4][3];
-    for (int i = 0; i < 4; ++i) { double d[3]; for (int k = 0; k < 3; ++k) { d[k] = pts[i][k] - p[k]; } double md[3]; rmatvec3(m, d, md); rnorm3(md, lproj[i]); }
+    for (int i = 0; i < 4; ++i)
+    {
+        double d[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            d[k] = pts[i][k] - p[k];
+        }
+        double md[3];
+        rmatvec3(m, d, md);
+        rnorm3(md, lproj[i]);
+    }
     double e1[3];
     double e3[3];
     double dir[3];
-    for (int k = 0; k < 3; ++k) { e1[k] = pts[1][k] - pts[0][k]; e3[k] = pts[3][k] - pts[0][k]; dir[k] = pts[0][k] - p[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        e1[k] = pts[1][k] - pts[0][k];
+        e3[k] = pts[3][k] - pts[0][k];
+        dir[k] = pts[0][k] - p[k];
+    }
     double lnrm[3];
     rcross(e1, e3, lnrm);
     const bool behind = rdot3(dir, lnrm) < 0.0;
@@ -590,10 +769,17 @@ double rltc_rect(const double n[3], const double v[3], const double p[3], const 
     rintegrate_edge_vec(lproj[2], lproj[3], e23);
     rintegrate_edge_vec(lproj[3], lproj[0], e30);
     double s = 0.0;
-    for (int k = 0; k < 3; ++k) { const double vs = ((e01[k] + e12[k]) + e23[k]) + e30[k]; s = s + vs * vs; }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double vs = ((e01[k] + e12[k]) + e23[k]) + e30[k];
+        s = s + vs * vs;
+    }
     const double len = crd::math::sqrt(s);
     double       sum = len * scale;
-    if (!two_sided && behind) { sum = 0.0; }
+    if (!two_sided && behind)
+    {
+        sum = 0.0;
+    }
     return sum;
 }
 } // namespace
@@ -633,7 +819,13 @@ TEST_CASE("B8-d: LTC integrate_edge_vec + rect area light bit-exact vs Heitz ltc
             const double b_i[3] = {barr[0][i], barr[1][i], barr[2][i]};
             double       ref[3];
             rintegrate_edge_vec(a_i, b_i, ref);
-            for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref[c]) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref[c])
+                {
+                    ++bad;
+                }
+            }
         }
     }
     // 2) ltc_evaluate_rect bit-exact — a fixed rect light + a fitted-like Minv, varying the shading point P.
@@ -658,7 +850,10 @@ TEST_CASE("B8-d: LTC integrate_edge_vec + rect area light bit-exact vs Heitz ltc
         for (int i = 0; i < kN; ++i)
         {
             const double p_i[3] = {parr[0][i], parr[1][i], parr[2][i]};
-            if (o[i] != rltc_rect(nr, vr, p_i, mr, pts, scale, ts)) { ++bad; }
+            if (o[i] != rltc_rect(nr, vr, p_i, mr, pts, scale, ts))
+            {
+                ++bad;
+            }
         }
     };
     chk(lgt::ltc_evaluate_rect(g, n, view, pp, ident, q0, q1, q2, q3, g.constant(inv2pi, sh, kir::DType::F64), true), ident_r, inv2pi, true);
@@ -741,14 +936,30 @@ TEST_CASE("B8-e: IBL SH L2 irradiance + Karis split-sum specular bit-exact vs Fi
     // a representative sky SH set (9 RGB coefficients).
     const double shr[9][3] = {{0.7, 0.75, 0.9}, {0.15, 0.16, 0.2}, {0.28, 0.3, 0.38}, {-0.08, -0.07, -0.05}, {0.02, 0.02, 0.03}, {-0.03, -0.03, -0.02}, {0.1, 0.11, 0.14}, {0.04, 0.04, 0.03}, {-0.05, -0.05, -0.06}};
     int        shn[9];
-    for (int i = 0; i < 9; ++i) { shn[i] = kc(shr[i][0], shr[i][1], shr[i][2]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        shn[i] = kc(shr[i][0], shr[i][1], shr[i][2]);
+    }
     const int  prefiltered = kc(0.6, 0.7, 0.95);
     const int  f0          = kc(0.04, 0.05, 0.08);
     const double pref_r[3] = {0.6, 0.7, 0.95};
     const double f0r[3]    = {0.04, 0.05, 0.08};
 
     int        bad = 0;
-    const auto chkv = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chkv = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chkv(lgt::ibl_diffuse(g, kc(0.8, 0.5, 0.3), lgt::sh_irradiance(g, nn, shn)), [&](int i, int c) {
         const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; double irr[3]; rsh_irradiance(n_i, shr, irr);
@@ -783,8 +994,16 @@ void rdfg_integrand(const double u[2], double nov, double roughness, double out[
     const auto   g1   = [&](double x) { return x / (x * (1.0 - k) + k); };
     const double gvis = (g1(nov) * g1(nol) * voh) / (noh * nov);
     const double fc   = rpow5(1.0 - voh);
-    if (nol > 0.0) { out[0] = (1.0 - fc) * gvis; out[1] = fc * gvis; }
-    else { out[0] = 0.0; out[1] = 0.0; }
+    if (nol > 0.0)
+    {
+        out[0] = (1.0 - fc) * gvis;
+        out[1] = fc * gvis;
+    }
+    else
+    {
+        out[0] = 0.0;
+        out[1] = 0.0;
+    }
 }
 } // namespace
 
@@ -808,7 +1027,20 @@ TEST_CASE("B8-e: IBL generation (GGX importance sample + split-sum DFG integrand
     const int     u2 = g.vec2(ux, uy);
 
     int        bad = 0;
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chkv(lgt::importance_sample_ggx(g, u2, rg), 3, [&](int i, int c) {
         const double u_i[2] = {uxv[i], uyv[i]}; double h[3]; rimportance_ggx(u_i, rgv[i], h); return h[c]; });
@@ -830,7 +1062,17 @@ double rdet3(const double m[9])                                       // cofacto
     {
         double minor[4];
         int    mi = 0;
-        for (int col = 0; col < 3; ++col) { if (col == col0) { continue; } for (int row = 1; row < 3; ++row) { minor[mi++] = m[col * 3 + row]; } }
+        for (int col = 0; col < 3; ++col)
+        {
+            if (col == col0)
+            {
+                continue;
+            }
+            for (int row = 1; row < 3; ++row)
+            {
+                minor[mi++] = m[col * 3 + row];
+            }
+        }
         const double cof = m[col0 * 3 + 0] * rdet2(minor);
         det              = det + ((col0 % 2 == 0) ? cof : -cof);
     }
@@ -840,32 +1082,65 @@ double rminor_det3(const double m[9], int sr, int sc)
 {
     double minor[4];
     int    mi = 0;
-    for (int col = 0; col < 3; ++col) { if (col == sc) { continue; } for (int row = 0; row < 3; ++row) { if (row == sr) { continue; } minor[mi++] = m[col * 3 + row]; } }
+    for (int col = 0; col < 3; ++col)
+    {
+        if (col == sc)
+        {
+            continue;
+        }
+        for (int row = 0; row < 3; ++row)
+        {
+            if (row == sr)
+            {
+                continue;
+            }
+            minor[mi++] = m[col * 3 + row];
+        }
+    }
     return rdet2(minor);
 }
 void rmat_inverse3(const double m[9], double out[9])
 {
     const double det = rdet3(m);
-    for (int ri = 0; ri < 3; ++ri) { for (int cj = 0; cj < 3; ++cj) { const double sign = ((ri + cj) % 2 == 0) ? 1.0 : -1.0; out[cj * 3 + ri] = sign * rminor_det3(m, cj, ri) / det; } }
+    for (int ri = 0; ri < 3; ++ri)
+    {
+        for (int cj = 0; cj < 3; ++cj)
+        {
+            const double sign = ((ri + cj) % 2 == 0) ? 1.0 : -1.0;
+            out[cj * 3 + ri] = sign * rminor_det3(m, cj, ri) / det;
+        }
+    }
 }
 double rfpo(double d, double l) { return l / (d * (d * d + l * l)) + crd::math::atan(l / d) / (d * d); }
 double rfwt(double d, double l) { return l * l / (d * (d * d + l * l)); }
 double ri_diffuse_line(const double p1[3], const double p2[3])
 {
     double wtpre[3];
-    for (int k = 0; k < 3; ++k) { wtpre[k] = p2[k] - p1[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        wtpre[k] = p2[k] - p1[k];
+    }
     double wt[3];
     rnorm3(wtpre, wt);
     const double p1z = p1[2];
     const double p2z = p2[2];
     double       p1c[3];
     double       p2c[3];
-    for (int k = 0; k < 3; ++k) { p1c[k] = (p1z < 0.0) ? (p1[k] * p2z - p2[k] * p1z) / (p2z - p1z) : p1[k]; }
-    for (int k = 0; k < 3; ++k) { p2c[k] = (p2z < 0.0) ? (-p1[k] * p2z + p2[k] * p1z) / (-p2z + p1z) : p2[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        p1c[k] = (p1z < 0.0) ? (p1[k] * p2z - p2[k] * p1z) / (p2z - p1z) : p1[k];
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        p2c[k] = (p2z < 0.0) ? (-p1[k] * p2z + p2[k] * p1z) / (-p2z + p1z) : p2[k];
+    }
     const double l1 = rdot3(p1c, wt);
     const double l2 = rdot3(p2c, wt);
     double       po[3];
-    for (int k = 0; k < 3; ++k) { po[k] = p1c[k] - l1 * wt[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        po[k] = p1c[k] - l1 * wt[k];
+    }
     const double d   = rlen(po);
     const double i   = (rfpo(d, l2) - rfpo(d, l1)) * po[2] + (rfwt(d, l2) - rfwt(d, l1)) * wt[2];
     const double ipi = i / kLtcPi;
@@ -894,7 +1169,10 @@ double rltc_line(const double n[3], const double v[3], const double p[3], const 
 {
     const double nov = rdot3(v, n);
     double       t1pre[3];
-    for (int k = 0; k < 3; ++k) { t1pre[k] = v[k] - n[k] * nov; }
+    for (int k = 0; k < 3; ++k)
+    {
+        t1pre[k] = v[k] - n[k] * nov;
+    }
     double t1[3];
     rnorm3(t1pre, t1);
     double t2[3];
@@ -905,7 +1183,11 @@ double rltc_line(const double n[3], const double v[3], const double p[3], const 
     rtranspose3(basis, bm);
     double da[3];
     double db[3];
-    for (int k = 0; k < 3; ++k) { da[k] = pa[k] - p[k]; db[k] = pb[k] - p[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        da[k] = pa[k] - p[k];
+        db[k] = pb[k] - p[k];
+    }
     double p1[3];
     double p2[3];
     rmatvec3(bm, da, p1);
@@ -922,7 +1204,12 @@ TEST_CASE("B8-d: LTC line/tube area light bit-exact vs Heitz ltc_code", "[kir][l
 
     const int px = g.input(sh, kir::DType::F64); const int py = g.input(sh, kir::DType::F64); const int pz = g.input(sh, kir::DType::F64);
     double    parr[3][kN];
-    for (int i = 0; i < kN; ++i) { parr[0][i] = 0.2 * i - 2.0; parr[1][i] = 0.12 * i - 1.2; parr[2][i] = 0.0; }
+    for (int i = 0; i < kN; ++i)
+    {
+        parr[0][i] = 0.2 * i - 2.0;
+        parr[1][i] = 0.12 * i - 1.2;
+        parr[2][i] = 0.0;
+    }
     const double* inp[] = {parr[0], parr[1], parr[2]};
 
     const auto kc = [&](double x, double y, double z) { return g.vec3(g.constant(x, sh, kir::DType::F64), g.constant(y, sh, kir::DType::F64), g.constant(z, sh, kir::DType::F64)); };
@@ -948,7 +1235,10 @@ TEST_CASE("B8-d: LTC line/tube area light bit-exact vs Heitz ltc_code", "[kir][l
         for (int i = 0; i < kN; ++i)
         {
             const double p_i[3] = {parr[0][i], parr[1][i], parr[2][i]};
-            if (o[i] != rltc_line(nr, vr, p_i, mr, par, pbr, 0.5)) { ++bad; }
+            if (o[i] != rltc_line(nr, vr, p_i, mr, par, pbr, 0.5))
+            {
+                ++bad;
+            }
         }
     };
     chk(lgt::ltc_evaluate_line(g, n, view, pp, ident, pa, pb, rad), ident_r); // diffuse tube (Minv = I)
@@ -999,9 +1289,24 @@ void rsolve_cubic(const double coeff[4], double out[3])
     const double r0  = xsx / xsy;
     const double r1  = xmx / xmy;
     const double r2  = xlx / xly;
-    if (r0 < r1 && r0 < r2) { out[0] = r1; out[1] = r0; out[2] = r2; }
-    else if (r2 < r0 && r2 < r1) { out[0] = r0; out[1] = r2; out[2] = r1; }
-    else { out[0] = r0; out[1] = r1; out[2] = r2; }
+    if (r0 < r1 && r0 < r2)
+    {
+        out[0] = r1;
+        out[1] = r0;
+        out[2] = r2;
+    }
+    else if (r2 < r0 && r2 < r1)
+    {
+        out[0] = r0;
+        out[1] = r2;
+        out[2] = r1;
+    }
+    else
+    {
+        out[0] = r0;
+        out[1] = r1;
+        out[2] = r2;
+    }
 }
 } // namespace
 
@@ -1035,7 +1340,13 @@ TEST_CASE("B8-d: LTC SolveCubic (Blinn ellipse cubic) bit-exact vs Heitz ltc_cod
         const double cf[4] = {c0v[i], c1v[i], c2v[i], 1.0};
         double       ref[3];
         rsolve_cubic(cf, ref);
-        for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref[c]) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            if (o[i * 3 + c] != ref[c])
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -1046,7 +1357,10 @@ double rltc_disk(const double n[3], const double v[3], const double p[3], const 
 {
     const double nov = rdot3(v, n);
     double       t1pre[3];
-    for (int k = 0; k < 3; ++k) { t1pre[k] = v[k] - n[k] * nov; }
+    for (int k = 0; k < 3; ++k)
+    {
+        t1pre[k] = v[k] - n[k] * nov;
+    }
     double t1[3];
     rnorm3(t1pre, t1);
     double t2[3];
@@ -1058,13 +1372,36 @@ double rltc_disk(const double n[3], const double v[3], const double p[3], const 
     double l0[3];
     double l1[3];
     double l2[3];
-    { double d[3]; for (int k = 0; k < 3; ++k) { d[k] = p0[k] - p[k]; } rmatvec3(rmat, d, l0); }
-    { double d[3]; for (int k = 0; k < 3; ++k) { d[k] = p1[k] - p[k]; } rmatvec3(rmat, d, l1); }
-    { double d[3]; for (int k = 0; k < 3; ++k) { d[k] = p2[k] - p[k]; } rmatvec3(rmat, d, l2); }
+    {
+        double d[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            d[k] = p0[k] - p[k];
+        }
+        rmatvec3(rmat, d, l0); }
+    {
+        double d[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            d[k] = p1[k] - p[k];
+        }
+        rmatvec3(rmat, d, l1); }
+    {
+        double d[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            d[k] = p2[k] - p[k];
+        }
+        rmatvec3(rmat, d, l2); }
     double cpre[3];
     double v1pre[3];
     double v2pre[3];
-    for (int k = 0; k < 3; ++k) { cpre[k] = 0.5 * (l0[k] + l2[k]); v1pre[k] = 0.5 * (l1[k] - l2[k]); v2pre[k] = 0.5 * (l1[k] - l0[k]); }
+    for (int k = 0; k < 3; ++k)
+    {
+        cpre[k] = 0.5 * (l0[k] + l2[k]);
+        v1pre[k] = 0.5 * (l1[k] - l2[k]);
+        v2pre[k] = 0.5 * (l1[k] - l0[k]);
+    }
     double cvec[3];
     double v1[3];
     double v2[3];
@@ -1101,16 +1438,30 @@ double rltc_disk(const double n[3], const double v[3], const double p[3], const 
     const double bax  = 1.0 / d22;
     double       v1ax[3];
     double       v2ax[3];
-    for (int k = 0; k < 3; ++k) { v1ax[k] = v1[k] * crd::math::sqrt(aax); v2ax[k] = v2[k] * crd::math::sqrt(bax); }
+    for (int k = 0; k < 3; ++k)
+    {
+        v1ax[k] = v1[k] * crd::math::sqrt(aax);
+        v2ax[k] = v2[k] * crd::math::sqrt(bax);
+    }
     const bool   ecc = (d12 < 0.0 ? -d12 : d12) / crd::math::sqrt(d11 * d22) > 0.0001;
     const double a_val  = ecc ? agen : aax;
     const double b_val  = ecc ? bgen : bax;
     double       vv1[3];
     double       vv2[3];
-    for (int k = 0; k < 3; ++k) { vv1[k] = ecc ? v1gen[k] : v1ax[k]; vv2[k] = ecc ? v2gen[k] : v2ax[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        vv1[k] = ecc ? v1gen[k] : v1ax[k];
+        vv2[k] = ecc ? v2gen[k] : v2ax[k];
+    }
     double v3[3];
     rcross(vv1, vv2, v3);
-    if (rdot3(cvec, v3) < 0.0) { for (int k = 0; k < 3; ++k) { v3[k] = -v3[k]; } }
+    if (rdot3(cvec, v3) < 0.0)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            v3[k] = -v3[k];
+        }
+    }
     const double ld  = rdot3(v3, cvec);
     const double x0  = rdot3(vv1, cvec) / ld;
     const double y0  = rdot3(vv2, cvec) / ld;
@@ -1141,7 +1492,10 @@ double rltc_disk(const double n[3], const double v[3], const double p[3], const 
     const double l2r  = crd::math::sqrt(-e2r / e1r);
     const double ffac = l1r * l2r * crd::math::rsqrt((1.0 + l1r * l1r) * (1.0 + l2r * l2r));
     double       spec = ffac * scale;
-    if (!two_sided && cull) { spec = 0.0; }
+    if (!two_sided && cull)
+    {
+        spec = 0.0;
+    }
     return spec;
 }
 } // namespace
@@ -1171,7 +1525,13 @@ TEST_CASE("B8-d: LTC LUT Minv reconstruction (isotropic + anisotropic) bit-exact
         for (int i = 0; i < kN; ++i)
         {
             const double want[9] = {t1[0][i], 0.0, t1[2][i], 0.0, 1.0, 0.0, t1[1][i], 0.0, t1[3][i]};
-            for (int c = 0; c < 9; ++c) { if (o[i * 9 + c] != want[c]) { ++bad; } }
+            for (int c = 0; c < 9; ++c)
+            {
+                if (o[i * 9 + c] != want[c])
+                {
+                    ++bad;
+                }
+            }
         }
     }
     { // anisotropic: columns (m00,m01,m20),(m01,m11,0),(m02,0,m22)
@@ -1180,7 +1540,13 @@ TEST_CASE("B8-d: LTC LUT Minv reconstruction (isotropic + anisotropic) bit-exact
         for (int i = 0; i < kN; ++i)
         {
             const double want[9] = {t1[0][i], t2[0][i], t1[2][i], t2[0][i], t2[1][i], 0.0, t1[1][i], 0.0, t1[3][i]};
-            for (int c = 0; c < 9; ++c) { if (o[i * 9 + c] != want[c]) { ++bad; } }
+            for (int c = 0; c < 9; ++c)
+            {
+                if (o[i * 9 + c] != want[c])
+                {
+                    ++bad;
+                }
+            }
         }
     }
     CHECK(bad == 0);
@@ -1194,7 +1560,12 @@ TEST_CASE("B8-d: LTC disk/sphere area light bit-exact vs Heitz ltc_code", "[kir]
 
     const int px = g.input(sh, kir::DType::F64); const int py = g.input(sh, kir::DType::F64); const int pz = g.input(sh, kir::DType::F64);
     double    parr[3][kN];
-    for (int i = 0; i < kN; ++i) { parr[0][i] = 0.18 * i - 1.8; parr[1][i] = 0.1 * i - 1.0; parr[2][i] = 0.0; }
+    for (int i = 0; i < kN; ++i)
+    {
+        parr[0][i] = 0.18 * i - 1.8;
+        parr[1][i] = 0.1 * i - 1.0;
+        parr[2][i] = 0.0;
+    }
     const double* inp[] = {parr[0], parr[1], parr[2]};
 
     const auto kc = [&](double x, double y, double z) { return g.vec3(g.constant(x, sh, kir::DType::F64), g.constant(y, sh, kir::DType::F64), g.constant(z, sh, kir::DType::F64)); };
@@ -1222,7 +1593,10 @@ TEST_CASE("B8-d: LTC disk/sphere area light bit-exact vs Heitz ltc_code", "[kir]
         for (int i = 0; i < kN; ++i)
         {
             const double p_i[3] = {parr[0][i], parr[1][i], parr[2][i]};
-            if (o[i] != rltc_disk(nr, vr, p_i, mr, q0r, q1r, q2r, 0.9, true)) { ++bad; }
+            if (o[i] != rltc_disk(nr, vr, p_i, mr, q0r, q1r, q2r, 0.9, true))
+            {
+                ++bad;
+            }
         }
     };
     chk(lgt::ltc_evaluate_disk(g, n, view, pp, ident, q0, q1, q2, scl, true), ident_r);
@@ -1236,7 +1610,15 @@ void rshadow_project(const double wp[3], const double vp[16], double out[3])
 {
     const double wp4[4] = {wp[0], wp[1], wp[2], 1.0};
     double       clip[4];
-    for (int r = 0; r < 4; ++r) { double s = 0.0; for (int c = 0; c < 4; ++c) { s = s + vp[c * 4 + r] * wp4[c]; } clip[r] = s; } // column-major matvec, oracle order
+    for (int r = 0; r < 4; ++r) // column-major matvec, oracle order
+    {
+        double s = 0.0;
+        for (int c = 0; c < 4; ++c)
+        {
+            s = s + vp[c * 4 + r] * wp4[c];
+        }
+        clip[r] = s;
+    }
     const double invw = 1.0 / clip[3];
     out[0] = (clip[0] * invw) * 0.5 + 0.5;
     out[1] = (clip[1] * invw) * 0.5 + 0.5;
@@ -1246,7 +1628,10 @@ void rnormal_offset(const double wp[3], const double n[3], double nol, double sc
 {
     const double sin_a = crd::math::sqrt(rmax2(1.0 - nol * nol, 0.0));
     const double off   = scale * sin_a;
-    for (int k = 0; k < 3; ++k) { out[k] = wp[k] + n[k] * off; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = wp[k] + n[k] * off;
+    }
 }
 double rslope_scaled(double nol, double base, double max_bias)
 {
@@ -1300,8 +1685,31 @@ TEST_CASE("B8-f: shadow-map projection + bias stack (normal-offset/slope-scaled/
     const int  maxb  = g.constant(0.01, sh, kir::DType::F64);
 
     int        bad = 0;
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     chkv(lgt::shadow_project(g, wp, lvp), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; double o[3]; rshadow_project(w_i, vp16, o); return o[c]; });
     chkv(lgt::normal_offset_bias(g, wp, nn, nl, scale), 3, [&](int i, int c) { const double w_i[3] = {warr[0][i], warr[1][i], warr[2][i]}; const double n_i[3] = {narr[0][i], narr[1][i], narr[2][i]}; double o[3]; rnormal_offset(w_i, n_i, nlv[i], 0.03, o); return o[c]; });
@@ -1358,9 +1766,27 @@ double rmsm(const double m[4], double zf, double depth_bias, double moment_bias)
     const double z1     = (-p) * 0.5 - r;
     const double z2     = (-p) * 0.5 + r;
     double       s[4];
-    if (z2 < z0) { s[0] = z1; s[1] = z0; s[2] = 1.0; s[3] = 1.0; }
-    else if (z1 < z0) { s[0] = z0; s[1] = z1; s[2] = 0.0; s[3] = 1.0; }
-    else { s[0] = 0.0; s[1] = 0.0; s[2] = 0.0; s[3] = 0.0; }
+    if (z2 < z0)
+    {
+        s[0] = z1;
+        s[1] = z0;
+        s[2] = 1.0;
+        s[3] = 1.0;
+    }
+    else if (z1 < z0)
+    {
+        s[0] = z0;
+        s[1] = z1;
+        s[2] = 0.0;
+        s[3] = 1.0;
+    }
+    else
+    {
+        s[0] = 0.0;
+        s[1] = 0.0;
+        s[2] = 0.0;
+        s[3] = 0.0;
+    }
     const double quotient  = (s[0] * z2 - b0 * (s[0] + z2) + b1) / ((z2 - s[1]) * (z0 - z1));
     const double intensity = s[2] + s[3] * quotient;
     return 1.0 - rclamp01(intensity);
@@ -1405,7 +1831,17 @@ TEST_CASE("B8-g: filtered soft shadows (IGN/PCSS/EVSM/MSM) bit-exact vs referenc
     const double* inp[] = {fxv, fyv, zrv, zbv, lsv, emv[0], emv[1], emv[2], emv[3], ezv, mmv[0], mmv[1], mmv[2], mmv[3], mzv};
 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
-    const auto chk = [&](int node, auto ref) { int b = 0; double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++b; } } return b; };
+    const auto chk = [&](int node, auto ref)
+    {
+        int b = 0; double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++b;
+            }
+        }
+        return b; };
 
     const int b_ign  = chk(lgt::detail::ign(g, g.vec2(fx, fy)), [&](int i) { return rign(fxv[i], fyv[i]); });
     const int b_pcss = chk(lgt::pcss_penumbra(g, zr, zb, ls), [&](int i) { return rpcss(zrv[i], zbv[i], lsv[i]); });
@@ -1429,7 +1865,13 @@ double rcsm_split(double near, double far, double lambda, double i, double count
 }
 double rstep(double edge, double v) { return v < edge ? 0.0 : 1.0; }
 double rcsm_select(double d, double s0, double s1, double s2) { return (rstep(s0, d) + rstep(s1, d)) + rstep(s2, d); }
-void   rcsm_snap(const double uv[2], double ms, double out[2]) { for (int k = 0; k < 2; ++k) { out[k] = crd::math::nearbyint(uv[k] * ms) / ms; } }
+void   rcsm_snap(const double uv[2], double ms, double out[2])
+{
+    for (int k = 0; k < 2; ++k)
+    {
+        out[k] = crd::math::nearbyint(uv[k] * ms) / ms;
+    }
+}
 double rcsm_blend(double d, double split, double w) { return rclamp01((d - (split - w)) / w); }
 } // namespace
 
@@ -1453,8 +1895,31 @@ TEST_CASE("B8-h: cascaded shadow maps (split/select/texel-snap/blend) bit-exact"
 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, auto ref) { double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 2; ++c) { if (o[i * 2 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, auto ref)
+    {
+        double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                if (o[i * 2 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(lgt::csm_split_practical(g, nf, ff, lam, ci, kc(4.0)), [&](int i) { return rcsm_split(nfv[i], ffv[i], lamv[i], civ[i], 4.0); });
     chk(lgt::csm_select_cascade(g, vd, s0, s1, s2), [&](int i) { return rcsm_select(vdv[i], s0v[i], s1v[i], s2v[i]); });
@@ -1470,7 +1935,13 @@ double rmax(double x, double y) { return x > y ? x : y; }
 double rcontact(const double rz[4], const double sz[4], double bias, double thick, double fade)
 {
     double o[4];
-    for (int k = 0; k < 4; ++k) { const double d = rz[k] - sz[k]; const double lo = d < bias ? 0.0 : 1.0; const double hi = thick < d ? 0.0 : 1.0; o[k] = lo * hi; }
+    for (int k = 0; k < 4; ++k)
+    {
+        const double d = rz[k] - sz[k];
+        const double lo = d < bias ? 0.0 : 1.0;
+        const double hi = thick < d ? 0.0 : 1.0;
+        o[k] = lo * hi;
+    }
     const double occ = rmax(rmax(o[0], o[1]), rmax(o[2], o[3]));
     return rclamp01(1.0 - occ * fade);
 }
@@ -1485,7 +1956,13 @@ double rfom(double a0, double a1, double b1, double a2, double b2, double d)
     return crd::math::exp(0.0 - tau);
 }
 double rvsm_level(double z, double base, double maxl) { const double l = crd::math::floor(crd::math::log2(z / base)); const double m = l > 0.0 ? l : 0.0; return m < maxl ? m : maxl; }
-void   rvsm_page(const double uv[2], double pages, double out[2]) { for (int k = 0; k < 2; ++k) { out[k] = crd::math::floor(uv[k] * pages); } }
+void   rvsm_page(const double uv[2], double pages, double out[2])
+{
+    for (int k = 0; k < 2; ++k)
+    {
+        out[k] = crd::math::floor(uv[k] * pages);
+    }
+}
 } // namespace
 
 TEST_CASE("B8-i: screen-space + translucent shadows (contact / Fourier-opacity / VSM addressing) bit-exact", "[kir][lighting][ssshadow]")
@@ -1511,8 +1988,31 @@ TEST_CASE("B8-i: screen-space + translucent shadows (contact / Fourier-opacity /
 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, auto ref) { double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 2; ++c) { if (o[i * 2 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, auto ref)
+    {
+        double o[kN * 2]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                if (o[i * 2 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(lgt::contact_shadow(g, g.vec4(rz0, rz1, rz2, rz3), g.vec4(sz0, sz1, sz2, sz3), kc(0.01), kc(0.5), kc(0.9)),
         [&](int i) { const double rz[4] = {rz0v[i], rz1v[i], rz2v[i], rz3v[i]}; const double sz[4] = {sz0v[i], sz1v[i], sz2v[i], sz3v[i]}; return rcontact(rz, sz, 0.01, 0.5, 0.9); });
@@ -1525,17 +2025,60 @@ TEST_CASE("B8-i: screen-space + translucent shadows (contact / Fourier-opacity /
 
 namespace
 {
-void   rmatvec4(const double m[16], const double v[4], double out[4]) { for (int r = 0; r < 4; ++r) { double s = 0.0; for (int col = 0; col < 4; ++col) { s += m[col * 4 + r] * v[col]; } out[r] = s; } }
+void   rmatvec4(const double m[16], const double v[4], double out[4])
+{
+    for (int r = 0; r < 4; ++r)
+    {
+        double s = 0.0;
+        for (int col = 0; col < 4; ++col)
+        {
+            s += m[col * 4 + r] * v[col];
+        }
+        out[r] = s;
+    }
+}
 void   rcross3(const double a[3], const double b[3], double out[3]) { out[0] = a[1] * b[2] - a[2] * b[1]; out[1] = a[2] * b[0] - a[0] * b[2]; out[2] = a[0] * b[1] - a[1] * b[0]; }
-double rdot4(const double a[4], const double b[4]) { double s = 0.0; for (int k = 0; k < 4; ++k) { s += a[k] * b[k]; } return s; }
-double rlen4(const double a[4]) { double s = 0.0; for (int k = 0; k < 4; ++k) { s += a[k] * a[k]; } return crd::math::sqrt(s); }
+double rdot4(const double a[4], const double b[4])
+{
+    double s = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        s += a[k] * b[k];
+    }
+    return s; }
+double rlen4(const double a[4])
+{
+    double s = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        s += a[k] * a[k];
+    }
+    return crd::math::sqrt(s); }
 void   rlbs(const double* M[4], const double w[4], const double p[3], bool is_normal, double out[3])
 {
     const double p4[4] = {p[0], p[1], p[2], is_normal ? 0.0 : 1.0};
     double       c[4][3];
-    for (int i = 0; i < 4; ++i) { double mv[4]; rmatvec4(M[i], p4, mv); for (int k = 0; k < 3; ++k) { c[i][k] = mv[k] * w[i]; } }
-    for (int k = 0; k < 3; ++k) { out[k] = (c[0][k] + c[1][k]) + (c[2][k] + c[3][k]); }
-    if (is_normal) { const double len = crd::math::sqrt((out[0] * out[0] + out[1] * out[1]) + out[2] * out[2]); for (int k = 0; k < 3; ++k) { out[k] /= len; } }
+    for (int i = 0; i < 4; ++i)
+    {
+        double mv[4];
+        rmatvec4(M[i], p4, mv);
+        for (int k = 0; k < 3; ++k)
+        {
+            c[i][k] = mv[k] * w[i];
+        }
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = (c[0][k] + c[1][k]) + (c[2][k] + c[3][k]);
+    }
+    if (is_normal)
+    {
+        const double len = crd::math::sqrt((out[0] * out[0] + out[1] * out[1]) + out[2] * out[2]);
+        for (int k = 0; k < 3; ++k)
+        {
+            out[k] /= len;
+        }
+    }
 }
 void rdquat(const double r0[4], const double d0[4], const double r1[4], const double d1[4], double w0, double w1, const double p[3], double out[3])
 {
@@ -1543,19 +2086,42 @@ void rdquat(const double r0[4], const double d0[4], const double r1[4], const do
     const double sgn = (2.0 * (dt < 0.0 ? 0.0 : 1.0)) - 1.0;
     const double w1s = w1 * sgn;
     double       br[4]; double bd[4];
-    for (int k = 0; k < 4; ++k) { br[k] = r0[k] * w0 + r1[k] * w1s; bd[k] = d0[k] * w0 + d1[k] * w1s; }
+    for (int k = 0; k < 4; ++k)
+    {
+        br[k] = r0[k] * w0 + r1[k] * w1s;
+        bd[k] = d0[k] * w0 + d1[k] * w1s;
+    }
     const double len = rlen4(br);
     double       qr[4]; double qd[4];
-    for (int k = 0; k < 4; ++k) { qr[k] = br[k] / len; qd[k] = bd[k] / len; }
+    for (int k = 0; k < 4; ++k)
+    {
+        qr[k] = br[k] / len;
+        qd[k] = bd[k] / len;
+    }
     const double rxyz[3] = {qr[0], qr[1], qr[2]}; const double rw = qr[3];
     const double dxyz[3] = {qd[0], qd[1], qd[2]}; const double dw = qd[3];
     double       cr1[3]; rcross3(rxyz, p, cr1);
-    double       inner[3]; for (int k = 0; k < 3; ++k) { inner[k] = cr1[k] + p[k] * rw; }
+    double       inner[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        inner[k] = cr1[k] + p[k] * rw;
+    }
     double       cr2[3]; rcross3(rxyz, inner, cr2);
-    double       rot[3]; for (int k = 0; k < 3; ++k) { rot[k] = p[k] + cr2[k] * 2.0; }
+    double       rot[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        rot[k] = p[k] + cr2[k] * 2.0;
+    }
     double       cr3[3]; rcross3(rxyz, dxyz, cr3);
-    double       tt[3]; for (int k = 0; k < 3; ++k) { tt[k] = (dxyz[k] * rw - rxyz[k] * dw) + cr3[k]; }
-    for (int k = 0; k < 3; ++k) { out[k] = rot[k] + tt[k] * 2.0; }
+    double       tt[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        tt[k] = (dxyz[k] * rw - rxyz[k] * dw) + cr3[k];
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = rot[k] + tt[k] * 2.0;
+    }
 }
 } // namespace
 
@@ -1579,7 +2145,13 @@ double rcluster_z_slice(double z, double near, double far, double ns) { return c
 double rsq_dist_aabb(const double c[3], const double amin[3], const double amax[3])
 {
     double s = 0.0;
-    for (int k = 0; k < 3; ++k) { const double m = c[k] > amin[k] ? c[k] : amin[k]; const double cl = m < amax[k] ? m : amax[k]; const double d = c[k] - cl; s += d * d; }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double m = c[k] > amin[k] ? c[k] : amin[k];
+        const double cl = m < amax[k] ? m : amax[k];
+        const double d = c[k] - cl;
+        s += d * d;
+    }
     return s;
 }
 double rin1(double a) { const double ab = a < 0.0 ? -a : a; return ab > 0.5 ? 0.0 : 1.0; }
@@ -1628,7 +2200,11 @@ double rssilvb_ao(crd::i64 bitfield, double nsec)
 {
     crd::u32 v   = static_cast<crd::u32>(bitfield);
     int      cnt = 0;
-    while (v != 0U) { cnt += static_cast<int>(v & 1U); v >>= 1U; }
+    while (v != 0U)
+    {
+        cnt += static_cast<int>(v & 1U);
+        v >>= 1U;
+    }
     return 1.0 - static_cast<double>(cnt) / nsec;
 }
 } // namespace
@@ -1638,7 +2214,10 @@ namespace
 double rreflect(const double iv[3], const double nv[3], int c)
 {
     double dp = 0.0;
-    for (int k = 0; k < 3; ++k) { dp += nv[k] * iv[k]; }
+    for (int k = 0; k < 3; ++k)
+    {
+        dp += nv[k] * iv[k];
+    }
     return iv[c] - (2.0 * dp) * nv[c];
 }
 double rssr_hit(double rz, double sz, double thick)
@@ -1703,12 +2282,21 @@ void rpbr(const double col[3], double out[3])
 {
     const double x      = rmin2(col[0], rmin2(col[1], col[2]));
     const double offset = x < 0.08 ? x - 6.25 * (x * x) : 0.04;
-    double       c1[3]; for (int k = 0; k < 3; ++k) { c1[k] = col[k] - offset; }
+    double       c1[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        c1[k] = col[k] - offset;
+    }
     const double peak    = rmax2(c1[0], rmax2(c1[1], c1[2]));
     const double start_c = 0.8 - 0.04; const double dd = 1.0 - start_c;
     const double npk     = 1.0 - (dd * dd) / ((peak + dd) - start_c);
     const double gg      = 1.0 - 1.0 / (0.15 * (peak - npk) + 1.0);
-    for (int k = 0; k < 3; ++k) { const double sc = c1[k] * (npk / peak); const double cmp = sc * (1.0 - gg) + npk * gg; out[k] = peak < start_c ? c1[k] : cmp; }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double sc = c1[k] * (npk / peak);
+        const double cmp = sc * (1.0 - gg) + npk * gg;
+        out[k] = peak < start_c ? c1[k] : cmp;
+    }
 }
 double rsrgb(double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * crd::math::pow(x, 1.0 / 2.4) - 0.055; }
 double rpq(double l)
@@ -1721,7 +2309,10 @@ void rgamut(const double col[3], double amount, double out[3])
     const double luma = 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2];
     const double peak = rmax2(col[0], rmax2(col[1], col[2]));
     const double over = rclamp01((peak - 1.0) * amount);
-    for (int k = 0; k < 3; ++k) { out[k] = col[k] * (1.0 - over) + luma * over; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = col[k] * (1.0 - over) + luma * over;
+    }
 }
 } // namespace
 
@@ -1742,8 +2333,31 @@ TEST_CASE("B13-c: HDR exposure + tonemap (AgX / PBR-Neutral) + output encode (sR
     const double* inp[] = {lumv, evv, crv, cgv, cbv, lvv, amtv};
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
     const int  col = g.vec3(cr, cg, cb);
 
     chk(pst::ev100_from_luminance(g, lum), [&](int i) { return rev100(lumv[i]); });
@@ -1786,7 +2400,10 @@ void rclip(const double hist[3], const double amin[3], const double amax[3], dou
     }
     const double maxr  = rmax2(ratio[0], rmax2(ratio[1], ratio[2]));
     const double denom = rmax2(maxr, 1.0);
-    for (int k = 0; k < 3; ++k) { out[k] = centre[k] + v[k] / denom; }
+    for (int k = 0; k < 3; ++k)
+    {
+        out[k] = centre[k] + v[k] / denom;
+    }
 }
 void rvarclip(const double hist[3], const double m1[3], const double m2[3], double gamma, double out[3])
 {
@@ -1859,8 +2476,31 @@ TEST_CASE("B13-a: temporal AA resolve (YCoCg / AABB+variance clip / Catmull-Rom 
     const double* inp[] = {xrv, xgv, xbv, hrv, hgv, hbv, mav, mbv, mcv, qav, qbv, qcv, ttv, alv, hlv, clv, pdv, cdv, fxv, fyv, frv, nsv, lcv, llv, lpv};
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     const int cur  = g.vec3(xr, xg, xb); const int his = g.vec3(hr, hg, hb);
     const int mom1 = g.vec3(ma, mb, mc); const int mom2 = g.vec3(qa, qb, qc);
@@ -1890,14 +2530,21 @@ double bl_luma(const double c[3]) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.072
 double bl_kw(const double c[3]) { return 1.0 / (1.0 + bl_luma(c)); }
 void bl_q(const double a[3], const double b[3], const double c[3], const double d[3], double o[3])
 {
-    for (int k = 0; k < 3; ++k) { o[k] = ((a[k] + b[k]) + (c[k] + d[k])) * 0.25; }
+    for (int k = 0; k < 3; ++k)
+    {
+        o[k] = ((a[k] + b[k]) + (c[k] + d[k])) * 0.25;
+    }
 }
 void bl_down13(const double t[13][3], double o[3])
 {
     double inner[3]; double tl[3]; double tr[3]; double bl[3]; double br[3];
     bl_q(t[9], t[10], t[11], t[12], inner); bl_q(t[0], t[1], t[3], t[4], tl); bl_q(t[1], t[2], t[4], t[5], tr);
     bl_q(t[3], t[4], t[6], t[7], bl); bl_q(t[4], t[5], t[7], t[8], br);
-    for (int k = 0; k < 3; ++k) { const double outer = ((tl[k] + tr[k]) + (bl[k] + br[k])); o[k] = inner[k] * 0.5 + outer * 0.125; }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double outer = ((tl[k] + tr[k]) + (bl[k] + br[k]));
+        o[k] = inner[k] * 0.5 + outer * 0.125;
+    }
 }
 void bl_downk(const double t[13][3], double o[3])
 {
@@ -1906,7 +2553,11 @@ void bl_downk(const double t[13][3], double o[3])
     bl_q(t[3], t[4], t[6], t[7], b[3]); bl_q(t[4], t[5], t[7], t[8], b[4]);
     const double w[5] = {bl_kw(b[0]) * 0.5, bl_kw(b[1]) * 0.125, bl_kw(b[2]) * 0.125, bl_kw(b[3]) * 0.125, bl_kw(b[4]) * 0.125};
     const double den  = ((w[0] + w[1]) + (w[2] + w[3])) + w[4];
-    for (int k = 0; k < 3; ++k) { const double num = ((b[0][k] * w[0] + b[1][k] * w[1]) + (b[2][k] * w[2] + b[3][k] * w[3])) + b[4][k] * w[4]; o[k] = num / (den + 1.0e-5); }
+    for (int k = 0; k < 3; ++k)
+    {
+        const double num = ((b[0][k] * w[0] + b[1][k] * w[1]) + (b[2][k] * w[2] + b[3][k] * w[3])) + b[4][k] * w[4];
+        o[k] = num / (den + 1.0e-5);
+    }
 }
 void bl_softknee(const double c[3], double thr, double knee, double o[3])
 {
@@ -1914,7 +2565,10 @@ void bl_softknee(const double c[3], double thr, double knee, double o[3])
     const double soft = rclamp((brr + knee) - thr, 0.0, 2.0 * knee);
     const double sq   = (soft * soft) / (4.0 * knee + 1.0e-5);
     const double con  = rmax2(sq, brr - thr) / rmax2(brr, 1.0e-5);
-    for (int k = 0; k < 3; ++k) { o[k] = c[k] * con; }
+    for (int k = 0; k < 3; ++k)
+    {
+        o[k] = c[k] * con;
+    }
 }
 void bl_tent(const double t[9][3], double o[3])
 {
@@ -1965,18 +2619,68 @@ TEST_CASE("B13-b: bloom (Karis 13-tap + firefly downsample / soft-knee / tent up
     const auto tap_node = [&](int j) { const auto ch = [&](int c) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, bcn[c], g.constant(1.0 + 0.07 * j, sh, kir::DType::F64)), g.constant(0.03 * j + 0.02 * c, sh, kir::DType::F64)); }; return g.vec3(ch(0), ch(1), ch(2)); };
     const auto tap_val  = [&](int i, int j, int c) { const double* bv[3] = {brv, bgv, bbv}; return bv[c][i] * (1.0 + 0.07 * j) + (0.03 * j + 0.02 * c); };
 
-    int taps13[13]; for (int j = 0; j < 13; ++j) { taps13[j] = tap_node(j); }
-    int taps9[9];   for (int j = 0; j < 9; ++j) { taps9[j] = taps13[j]; }
+    int taps13[13];
+    for (int j = 0; j < 13; ++j)
+    {
+        taps13[j] = tap_node(j);
+    }
+    int taps9[9];
+    for (int j = 0; j < 9; ++j)
+    {
+        taps9[j] = taps13[j];
+    }
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
-    const auto fill_t = [&](int i, double t[13][3]) { for (int j = 0; j < 13; ++j) { for (int c = 0; c < 3; ++c) { t[j][c] = tap_val(i, j, c); } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
+    const auto fill_t = [&](int i, double t[13][3])
+    {
+        for (int j = 0; j < 13; ++j)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                t[j][c] = tap_val(i, j, c);
+            }
+        }
+    };
 
     chkv(blm::downsample_13tap(g, taps13), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_down13(t, o); return o[c]; });
     chkv(blm::downsample_karis(g, taps13), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_downk(t, o); return o[c]; });
     chkv(blm::soft_knee(g, taps13[0], 0.8, 0.5), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double o[3]; bl_softknee(t[0], 0.8, 0.5, o); return o[c]; });
-    chkv(blm::upsample_tent(g, taps9), 3, [&](int i, int c) { double t[13][3]; fill_t(i, t); double t9[9][3]; for (int j = 0; j < 9; ++j) { for (int k = 0; k < 3; ++k) { t9[j][k] = t[j][k]; } } double o[3]; bl_tent(t9, o); return o[c]; });
+    chkv(blm::upsample_tent(g, taps9), 3, [&](int i, int c)
+    {
+        double t[13][3]; fill_t(i, t); double t9[9][3];
+        for (int j = 0; j < 9; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                t9[j][k] = t[j][k];
+            }
+        }
+        double o[3]; bl_tent(t9, o); return o[c]; });
     chkv(blm::combine(g, g.vec3(sr, sg, sb), taps13[1], inten), 3, [&](int i, int c) { const double sc[3] = {srv[i], sgv[i], sbv[i]}; const double bcol = tap_val(i, 1, c); return rmix(sc[c], bcol, intv[i]); });
     chkv(blm::complex_mul(g, are, aim, bre, bim), 2, [&](int i, int c) { return c == 0 ? (arev[i] * brev[i] - aimv[i] * bimv[i]) : (arev[i] * bimv[i] + aimv[i] * brev[i]); });
     chk(blm::lens_halo(g, g.vec2(ux, uy), g.vec2(cx, cy), 0.3, 0.15), [&](int i) { return bl_halo(uxv[i], uyv[i], cxv[i], cyv[i], 0.3, 0.15); });
@@ -2002,7 +2706,10 @@ double ci_cov(double tap_coc, double dist) { return rclamp01((tap_coc - dist) + 
 void ci_dofcomp(const double sh[3], const double bl[3], double coc, double maxc, double o[3])
 {
     const double t = rclamp01(rabs(coc) / maxc);
-    for (int k = 0; k < 3; ++k) { o[k] = rmix(sh[k], bl[k], t); }
+    for (int k = 0; k < 3; ++k)
+    {
+        o[k] = rmix(sh[k], bl[k], t);
+    }
 }
 void ci_velscale(double vx, double vy, double shutter, double maxl, double o[2])
 {
@@ -2045,8 +2752,31 @@ TEST_CASE("B13-d: cinematic (thin-lens CoC / Garcia complex-Gaussian phasor / bo
     const double* inp[] = {depv, focv, r2v, rev, imv, tcv, dsv, shrv, shgv, shbv, blrv, blgv, blbv, cocv, vxv, vyv, mdsv, mvlv, zav, zbv};
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(ci::circle_of_confusion(g, dep, foc, 0.05, 2.8), [&](int i) { return ci_coc(depv[i], focv[i], 0.05, 2.8); });
     chkv(ci::complex_gaussian(g, r2, -4.0, 1.0), 2, [&](int i, int c) { double o[2]; ci_cgauss(r2v[i], -4.0, 1.0, o); return o[c]; });
@@ -2085,7 +2815,10 @@ void fi_grain(const double c[3], double noise, double intensity, double o[3])
     const double lum  = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     const double resp = lum * (1.0 - lum);
     const double amt  = ((noise * 2.0 - 1.0) * intensity) * resp;
-    for (int k = 0; k < 3; ++k) { o[k] = c[k] + amt; }
+    for (int k = 0; k < 3; ++k)
+    {
+        o[k] = c[k] + amt;
+    }
 }
 void fi_cas(const double c[3], const double u[3], const double d[3], const double l[3], const double r[3], double sharp, double o[3])
 {
@@ -2129,14 +2862,43 @@ TEST_CASE("B13-e: finish (Tokuyoshi geometric specular AA / chromatic aberration
     const double* inp[] = {alv, dx0v, dx1v, dx2v, dy0v, dy1v, dy2v, uxv, uyv, cxv, cyv, grv, ggv, gbv, gnv, krv, kgv, kbv};
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int comps, auto ref) { double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < comps; ++c) { if (o[i * comps + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int comps, auto ref)
+    {
+        double o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < comps; ++c)
+            {
+                if (o[i * comps + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     // CAS taps: tap_t[k] = kbase_k·(1+0.1t) + 0.05t, t = 0..4 (c,u,d,l,r).
     const int  kbn[3]  = {kr, kg, kb};
     const auto castap  = [&](int t) { const auto ch = [&](int c) { return g.binary(kir::KOp::Add, g.binary(kir::KOp::Mul, kbn[c], g.constant(1.0 + 0.1 * t, sh, kir::DType::F64)), g.constant(0.05 * t, sh, kir::DType::F64)); }; return g.vec3(ch(0), ch(1), ch(2)); };
     const auto casval  = [&](int i, int t, int c) { const double* kv[3] = {krv, kgv, kbv}; return kv[c][i] * (1.0 + 0.1 * t) + 0.05 * t; };
-    const auto fillcas = [&](int i, int t, double o[3]) { for (int c = 0; c < 3; ++c) { o[c] = casval(i, t, c); } };
+    const auto fillcas = [&](int i, int t, double o[3])
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            o[c] = casval(i, t, c);
+        }
+    };
 
     chk(fin::specular_aa(g, al, g.vec3(dx0, dx1, dx2), g.vec3(dy0, dy1, dy2), 0.5, 0.18), [&](int i) { const double dx[3] = {dx0v[i], dx1v[i], dx2v[i]}; const double dy[3] = {dy0v[i], dy1v[i], dy2v[i]}; return fi_specaa(alv[i], dx, dy, 0.5, 0.18); });
     chkv(fin::ca_offset(g, g.vec2(ux, uy), g.vec2(cxn, cyn), 0.6), 2, [&](int i, int c) { double o[2]; fi_ca(uxv[i], uyv[i], cxv[i], cyv[i], 0.6, o); return o[c]; });
@@ -2167,8 +2929,31 @@ TEST_CASE("B12-b: screen-space reflections (reflect ray / Hi-Z hit / edge fade /
 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk3(scr::ssr_reflect(g, g.vec3(ix, iy, iz), g.vec3(nx, ny, nz)), [&](int i, int c) { const double iv[3] = {ixv[i], iyv[i], izv[i]}; const double nv[3] = {nxv[i], nyv[i], nzv[i]}; return rreflect(iv, nv, c); });
     chk(scr::ssr_hiz_hit(g, rz, sz, kc(0.5)), [&](int i) { return rssr_hit(rzv[i], szv[i], 0.5); });
@@ -2200,8 +2985,31 @@ TEST_CASE("B12-a: screen-space ambient occlusion (GTAO / multibounce / spec-occ 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     const int  alb = g.vec3(kc(0.8), kc(0.4), kc(0.2));
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(scr::gtao_slice(g, h1, h2, gam, nlen), [&](int i) { return rgtao_slice(h1v[i], h2v[i], gamv[i], nlv[i]); });
     chk3(scr::gtao_multibounce(g, vis, alb), [&](int i, int c) { const double al[3] = {0.8, 0.4, 0.2}; double o[3]; rgtao_mb(visv[i], al, o); return o[c]; });
@@ -2221,7 +3029,11 @@ double rssgi(const double rad[3], crd::i64 sm, crd::i64 bf, double cos_n, double
     const crd::i64 nb  = sm & (~bf);
     crd::u32       v   = static_cast<crd::u32>(nb);
     int            cnt = 0;
-    while (v != 0U) { cnt += static_cast<int>(v & 1U); v >>= 1U; }
+    while (v != 0U)
+    {
+        cnt += static_cast<int>(v & 1U);
+        v >>= 1U;
+    }
     return rad[c] * ((static_cast<double>(cnt) / nsec) * cos_n);
 }
 } // namespace
@@ -2243,7 +3055,20 @@ TEST_CASE("B12-c: screen-space GI (visibility-bitmask indirect diffuse bounce) b
     const double* inp[] = {mn1v, mx1v, mn2v, mx2v, rrv, rgv, rbv, cnv};
 
     int        bad = 0;
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     const int sm  = scr::ssilvb_sector_mask(g, mn1, mx1, 32.0);
     const int bf  = scr::ssilvb_sector_mask(g, mn2, mx2, 32.0);
@@ -2286,8 +3111,31 @@ TEST_CASE("B12-d/e: volumetric phase family + Beer-Lambert + froxel scatter + Bu
 
     const auto kc  = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(scr::henyey_greenstein(g, ct, ga), [&](int i) { return rhg(ctv[i], gav[i]); });
     chk(scr::cornette_shanks(g, ct, ga), [&](int i) { return rcs(ctv[i], gav[i]); });
@@ -2325,13 +3173,46 @@ TEST_CASE("B8-l: render-path math (clustered light cull / deferred G-buffer deco
 
     const auto kc = [&](double v) { return g.constant(v, sh, kir::DType::F64); };
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        double o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     // Forward+ : the exponential z-slice + the froxel coord + the light-sphere-vs-cluster cull.
     chk(rn::cluster_z_slice(g, vz, kc(0.1), kc(100.0), kc(16.0)), [&](int i) { return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
     chk3(rn::cluster_coord(g, g.vec2(ux, uy), vz, kc(16.0), kc(8.0), kc(16.0), kc(0.1), kc(100.0)),
-         [&](int i, int c) { if (c == 0) { return crd::math::floor(uxv[i] * 16.0); } if (c == 1) { return crd::math::floor(uyv[i] * 8.0); } return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
+         [&](int i, int c)
+         {
+             if (c == 0)
+             {
+                 return crd::math::floor(uxv[i] * 16.0);
+             }
+             if (c == 1)
+             {
+                 return crd::math::floor(uyv[i] * 8.0);
+             }
+             return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
     const int amin = g.vec3(kc(-1.0), kc(-1.0), kc(-1.0));
     const int amax = g.vec3(kc(1.0), kc(1.0), kc(1.0));
     chk(rn::sphere_aabb_sq_dist(g, g.vec3(cx, cy, cz), amin, amax), [&](int i) { const double c[3] = {cxv[i], cyv[i], czv[i]}; const double lo[3] = {-1, -1, -1}; const double hi[3] = {1, 1, 1}; return rsq_dist_aabb(c, lo, hi); });
@@ -2342,7 +3223,15 @@ TEST_CASE("B8-l: render-path math (clustered light cull / deferred G-buffer deco
     const int    dminv  = g.mat4(g.vec4(kc(1.5), kc(0), kc(0), kc(0)), g.vec4(kc(0), kc(1.5), kc(0), kc(0)), g.vec4(kc(0), kc(0), kc(1.5), kc(0)), g.vec4(kc(0), kc(0), kc(0), kc(1)));
     chk3(rn::decal_project(g, g.vec3(wx, wy, wz), dminv), [&](int i, int c) {
         const double wp[4] = {wxv[i], wyv[i], wzv[i], 1.0}; double loc[4]; rmatvec4(dm, wp, loc);
-        if (c == 0) { return loc[0] + 0.5; } if (c == 1) { return loc[1] + 0.5; } return (rin1(loc[0]) * rin1(loc[1])) * rin1(loc[2]); });
+        if (c == 0)
+        {
+            return loc[0] + 0.5;
+        }
+        if (c == 1)
+        {
+            return loc[1] + 0.5;
+        }
+        return (rin1(loc[0]) * rin1(loc[1])) * rin1(loc[2]); });
 
     // Deferred : the B5 G-buffer round-trips base/metallic/roughness through pack → decode (F32 surface; direct channels).
     {
@@ -2359,9 +3248,21 @@ TEST_CASE("B8-l: render-path math (clustered light cull / deferred G-buffer deco
         const double eb[3] = {static_cast<double>(0.7F), static_cast<double>(0.3F), static_cast<double>(0.2F)};
         for (int i = 0; i < kN; ++i)
         {
-            for (int c = 0; c < 3; ++c) { if (base_dec[i * 3 + c] != eb[c]) { ++bad; } } // g0.rgb recovers base
-            if (met_dec[i] != static_cast<double>(0.1F)) { ++bad; }                       // g0.a recovers metallic
-            if (rgh_dec[i] != static_cast<double>(0.55F)) { ++bad; }                      // g1.a recovers roughness
+            for (int c = 0; c < 3; ++c) // g0.rgb recovers base
+            {
+                if (base_dec[i * 3 + c] != eb[c])
+                {
+                    ++bad;
+                }
+            }
+            if (met_dec[i] != static_cast<double>(0.1F)) // g0.a recovers metallic
+            {
+                ++bad;
+            }
+            if (rgh_dec[i] != static_cast<double>(0.55F)) // g1.a recovers roughness
+            {
+                ++bad;
+            }
         }
     }
 
@@ -2391,8 +3292,14 @@ TEST_CASE("B8-k: material cook seam (per-pass variants + lowering round-trip + S
             kir::KEntry        e; ck::build_fs_for_pass(tmpl, passes[p], {am, 0.5}, in, g, e, ldir, lcol);
             CHECK(e.stage == kir::KStage::Fragment);
             CHECK(e.n_out == expect[p]);
-            if (mask != 0) { CHECK(e.discard_cond >= 0); } // masked → alpha test wired
-            else { CHECK(e.discard_cond < 0); }            // opaque → no alpha test
+            if (mask != 0) // masked → alpha test wired
+            {
+                CHECK(e.discard_cond >= 0);
+            }
+            else // opaque → no alpha test
+            {
+                CHECK(e.discard_cond < 0);
+            }
         }
     }
 
@@ -2405,7 +3312,17 @@ TEST_CASE("B8-k: material cook seam (per-pass variants + lowering round-trip + S
         const int   nnx = g.input(sh, kir::DType::F32); const int nny = g.input(sh, kir::DType::F32); const int nnz = g.input(sh, kir::DType::F32);
         const int   vvx = g.input(sh, kir::DType::F32); const int vvy = g.input(sh, kir::DType::F32); const int vvz = g.input(sh, kir::DType::F32);
         double      uvxv[kN]; double uvyv[kN]; double nnxv[kN]; double nnyv[kN]; double nnzv[kN]; double vvxv[kN]; double vvyv[kN]; double vvzv[kN];
-        for (int i = 0; i < kN; ++i) { uvxv[i] = 0.2 + 0.03 * i; uvyv[i] = 0.3 + 0.02 * i; nnxv[i] = 0.1 + 0.02 * i; nnyv[i] = 0.2 - 0.01 * i; nnzv[i] = 0.9; vvxv[i] = 0.0; vvyv[i] = 0.02 * i; vvzv[i] = 1.0; }
+        for (int i = 0; i < kN; ++i)
+        {
+            uvxv[i] = 0.2 + 0.03 * i;
+            uvyv[i] = 0.3 + 0.02 * i;
+            nnxv[i] = 0.1 + 0.02 * i;
+            nnyv[i] = 0.2 - 0.01 * i;
+            nnzv[i] = 0.9;
+            vvxv[i] = 0.0;
+            vvyv[i] = 0.02 * i;
+            vvzv[i] = 1.0;
+        }
         const double* inp[] = {uvxv, uvyv, nnxv, nnyv, nnzv, vvxv, vvyv, vvzv};
         const auto    kf = [&](double v) { return g.constant(v, sh, kir::DType::F32); };
         ck::SurfaceInputs in; in.uv = g.vec2(uvx, uvy); in.world_normal = g.normalize(g.vec3(nnx, nny, nnz)); in.view_dir = g.normalize(g.vec3(vvx, vvy, vvz));
@@ -2414,12 +3331,22 @@ TEST_CASE("B8-k: material cook seam (per-pass variants + lowering round-trip + S
         double      before[kN * 4]; kir::eval_cpu(g, inp, &alloc, e.out[0].node, before);
         crd::kir::lower::lower_entry(g, e);
         double      after[kN * 4]; kir::eval_cpu(g, inp, &alloc, e.out[0].node, after);
-        for (int i = 0; i < kN * 4; ++i) { if (before[i] != after[i]) { ++bad; } }
+        for (int i = 0; i < kN * 4; ++i)
+        {
+            if (before[i] != after[i])
+            {
+                ++bad;
+            }
+        }
     }
 
     // ── (3) SHADEROPTION SPECIALIZE: pinning a runtime selector bakes the chosen branch, bit-identical to a direct build ──
     {
-        double xv[kN]; for (int i = 0; i < kN; ++i) { xv[i] = 0.1 + 0.05 * i; }
+        double xv[kN];
+        for (int i = 0; i < kN; ++i)
+        {
+            xv[i] = 0.1 + 0.05 * i;
+        }
         for (int pick = 0; pick < 2; ++pick)
         {
             kir::KGraph g(&alloc);
@@ -2431,10 +3358,21 @@ TEST_CASE("B8-k: material cook seam (per-pass variants + lowering round-trip + S
             const int   col = g.select(opt, a, b);
             kir::KEntry e; e.stage = kir::KStage::Fragment; e.n_out = 1; e.out[0] = {col, 0};
             ck::specialize_variant(g, e, opt, pick == 0 ? 1.0 : 0.0);
-            double        optv[kN]; for (int i = 0; i < kN; ++i) { optv[i] = pick == 0 ? 1.0 : 0.0; }
+            double        optv[kN];
+            for (int i = 0; i < kN; ++i)
+            {
+                optv[i] = pick == 0 ? 1.0 : 0.0;
+            }
             const double* inp[] = {xv, optv};
             double        out[kN]; kir::eval_cpu(g, inp, &alloc, e.out[0].node, out);
-            for (int i = 0; i < kN; ++i) { const double want = pick == 0 ? xv[i] * 2.0 : xv[i] + 1.0; if (out[i] != want) { ++bad; } }
+            for (int i = 0; i < kN; ++i)
+            {
+                const double want = pick == 0 ? xv[i] * 2.0 : xv[i] + 1.0;
+                if (out[i] != want)
+                {
+                    ++bad;
+                }
+            }
         }
     }
 
@@ -2483,7 +3421,20 @@ TEST_CASE("B8-j: skinning (linear-blend position/normal + dual-quaternion) bit-e
     const double  rq0[4]  = {0, 0, 0, 1}; const double dq0[4] = {0, 0, 0, 0}; const double dq1[4] = {0.1, 0.05, 0.02, 0.0};
 
     int        bad  = 0;
-    const auto chk3 = [&](int node, auto ref) { double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < 3; ++c) { if (o[i * 3 + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk3 = [&](int node, auto ref)
+    {
+        double o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                if (o[i * 3 + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk3(lgt::lbs_skin_position(g, m0, m1, m2, m3, lw, pp), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {pxv[i], pyv[i], pzv[i]}; double o[3]; rlbs(bmats, w, p, false, o); return o[c]; });
     chk3(lgt::lbs_skin_normal(g, m0, m1, m2, m3, lw, nn), [&](int i, int c) { const double w[4] = {lw0v[i], lw1v[i], lw2v[i], lw3v[i]}; const double p[3] = {nxv[i], nyv[i], nzv[i]}; double o[3]; rlbs(bmats, w, p, true, o); return o[c]; });
@@ -2562,7 +3513,10 @@ TEST_CASE("B8-c: punctual lights (directional + point + spot) forward loop bit-e
             const double want = ref_brdf(bref, 0.1, 0.4, n_i, v_i, ld, dcr, c)
                               + ref_brdf(bref, 0.1, 0.4, n_i, v_i, lp, pcr, c) * att_p
                               + ref_brdf(bref, 0.1, 0.4, n_i, v_i, ls, scr, c) * att_s;
-            if (o[i * 3 + c] != want) { ++bad; }
+            if (o[i * 3 + c] != want)
+            {
+                ++bad;
+            }
         }
     }
     CHECK(bad == 0);

@@ -29,13 +29,28 @@ void adapter_pre(crd::u8 op, void* user)
 {
     auto* const              s   = static_cast<ProfState*>(user);
     const crd::time::Instant now = crd::time::MonotonicClock::now();
-    if (s->depth > 0U && s->depth <= kStack) { s->prof.self_s[s->stack[s->depth - 1U]] += (now - s->mark).value; }
-    if (s->depth < kStack) { s->stack[s->depth] = op; }
-    else { ++s->prof.depth_overflow; } // ⛔ witness — the parent-pause loses this level's self-time attribution
+    if (s->depth > 0U && s->depth <= kStack)
+    {
+        s->prof.self_s[s->stack[s->depth - 1U]] += (now - s->mark).value;
+    }
+    if (s->depth < kStack)
+    {
+        s->stack[s->depth] = op;
+    }
+    else // ⛔ witness — the parent-pause loses this level's self-time attribution
+    {
+        ++s->prof.depth_overflow;
+    }
     ++s->depth;
-    if (s->depth > s->prof.max_depth) { s->prof.max_depth = s->depth; }
+    if (s->depth > s->prof.max_depth)
+    {
+        s->prof.max_depth = s->depth;
+    }
     s->mark = now;
-    if (op < PlanProfile::kMaxOps) { ++s->prof.dispatch[op]; }
+    if (op < PlanProfile::kMaxOps)
+    {
+        ++s->prof.dispatch[op];
+    }
     ++s->prof.total_dispatch;
 }
 // post: the time since the last event belongs to THIS op (its own body after its last child); banked via the op ARG
@@ -45,8 +60,14 @@ void adapter_post(crd::u8 op, void* user)
 {
     auto* const              s   = static_cast<ProfState*>(user);
     const crd::time::Instant now = crd::time::MonotonicClock::now();
-    if (op < PlanProfile::kMaxOps) { s->prof.self_s[op] += (now - s->mark).value; }
-    if (s->depth > 0U) { --s->depth; }
+    if (op < PlanProfile::kMaxOps)
+    {
+        s->prof.self_s[op] += (now - s->mark).value;
+    }
+    if (s->depth > 0U)
+    {
+        --s->depth;
+    }
     s->mark = now;
 }
 } // namespace

@@ -74,8 +74,12 @@ TEST_CASE("apply_q_block: BLAS-3 dlarfb matches scalar apply (all 4 modes)",
     constexpr crd::usize k_cols = 5;
     auto fill = [&](Matrix<double, Layout::RowMajor>& c) {
         for (crd::usize i = 0; i < c.rows(); ++i)
+        {
             for (crd::usize j = 0; j < c.cols(); ++j)
+            {
                 c.at(i, j) = std::cos(static_cast<double>(i * 3 + j) * 0.21) + 0.5;
+            }
+        }
     };
 
     // Left modes: C is m × k_cols; column j transforms as op(Q)·col_j.
@@ -89,19 +93,33 @@ TEST_CASE("apply_q_block: BLAS-3 dlarfb matches scalar apply (all 4 modes)",
         {
             crd::containers::Array<double> col(&alloc);
             col.resize(k_m);
-            for (crd::usize i = 0; i < k_m; ++i) col[i] = c.at(i, j);
+            for (crd::usize i = 0; i < k_m; ++i)
+            {
+                col[i] = c.at(i, j);
+            }
             if (trans)
+            {
                 apply_q_transpose(qr, crd::containers::Span<double>{col.data(), k_m});
+            }
             else
+            {
                 crd::hesap::dense::apply_q(qr, crd::containers::Span<double>{col.data(), k_m});
-            for (crd::usize i = 0; i < k_m; ++i) ref.at(i, j) = col[i];
+            }
+            for (crd::usize i = 0; i < k_m; ++i)
+            {
+                ref.at(i, j) = col[i];
+            }
         }
         crd::hesap::dense::detail::apply_q_block<double>(qp, ld, k_m, kk, taus, c.data(), c.ld(), k_m,
                                                          k_cols, /*right=*/false, trans, &alloc);
         double e = 0.0;
         for (crd::usize i = 0; i < k_m; ++i)
+        {
             for (crd::usize j = 0; j < k_cols; ++j)
+            {
                 e = std::max(e, std::abs(c.at(i, j) - ref.at(i, j)));
+            }
+        }
         INFO("Left trans=" << trans);
         REQUIRE(e < 1e-11);
     }
@@ -118,12 +136,22 @@ TEST_CASE("apply_q_block: BLAS-3 dlarfb matches scalar apply (all 4 modes)",
         {
             crd::containers::Array<double> row(&alloc);
             row.resize(k_m);
-            for (crd::usize j = 0; j < k_m; ++j) row[j] = c.at(i, j);
+            for (crd::usize j = 0; j < k_m; ++j)
+            {
+                row[j] = c.at(i, j);
+            }
             if (trans)
+            {
                 crd::hesap::dense::apply_q(qr, crd::containers::Span<double>{row.data(), k_m});
+            }
             else
+            {
                 apply_q_transpose(qr, crd::containers::Span<double>{row.data(), k_m});
-            for (crd::usize j = 0; j < k_m; ++j) ref.at(i, j) = row[j];
+            }
+            for (crd::usize j = 0; j < k_m; ++j)
+            {
+                ref.at(i, j) = row[j];
+            }
         }
         // k_cols/k_m arg names trip the swapped-argument heuristic against params crows/ccols;
         // the call order is correct (unchanged, long-tested) -- false positive.
@@ -132,8 +160,12 @@ TEST_CASE("apply_q_block: BLAS-3 dlarfb matches scalar apply (all 4 modes)",
                                                          k_cols, k_m, /*right=*/true, trans, &alloc);
         double e = 0.0;
         for (crd::usize i = 0; i < k_cols; ++i)
+        {
             for (crd::usize j = 0; j < k_m; ++j)
+            {
                 e = std::max(e, std::abs(c.at(i, j) - ref.at(i, j)));
+            }
+        }
         INFO("Right trans=" << trans);
         REQUIRE(e < 1e-11);
     }

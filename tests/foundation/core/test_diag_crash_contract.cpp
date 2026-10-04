@@ -65,8 +65,12 @@ fs::path fresh_temp_dir()
     std::size_t     n = 0;
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".dmp")
+        {
             ++n;
+        }
+    }
     return n;
 }
 
@@ -85,9 +89,13 @@ void recording_hook(const crd::crash::CrashReport& r, void* user) noexcept
     auto* s = static_cast<HookState*>(user);
     s->total.fetch_add(1, std::memory_order_relaxed);
     if (r.write == WriteResult::Ok)
+    {
         s->ok.fetch_add(1, std::memory_order_relaxed);
+    }
     if (r.write == WriteResult::Suppressed)
+    {
         s->suppressed.fetch_add(1, std::memory_order_relaxed);
+    }
     s->last_faulting_tid.store(r.faulting_tid, std::memory_order_relaxed);
     s->last_hook_thread.store(static_cast<unsigned>(::GetCurrentThreadId()), std::memory_order_relaxed);
 }
@@ -205,7 +213,9 @@ TEST_CASE("crash contract: a hang-kind live dump embeds and round-trips its evid
         crd::crash::read_dump_stream(path, crd::crash::kEvidenceStreamType, read_back.data(), read_back.size());
     REQUIRE(n == blob.size()); // the evidence stream is present with the exact byte count
     for (std::size_t i = 0; i < blob.size(); ++i)
+    {
         CHECK(read_back[i] == blob[i]); // ...and the exact bytes
+    }
 
     // The dump really captured threads (MiniDumpWriteDump suspended and walked them): NumberOfThreads >= 1.
     constexpr std::uint32_t             thread_list_stream = 3U; // MINIDUMP_STREAM_TYPE::ThreadListStream
@@ -282,12 +292,18 @@ TEST_CASE("crash contract: a concurrent second fault is Suppressed with exactly 
     std::atomic<bool>       go{false};
     auto                    fault = [&]() noexcept {
         while (!go.load(std::memory_order_acquire))
+        {
             std::this_thread::yield();
+        }
         const crd::crash::CrashReport r = crd::crash::test_fatal_path(0xC0000005U);
         if (r.write == WriteResult::Ok)
+        {
             ok_returns.fetch_add(1, std::memory_order_relaxed);
+        }
         else if (r.write == WriteResult::Suppressed)
+        {
             suppressed_returns.fetch_add(1, std::memory_order_relaxed);
+        }
     };
 
     std::thread t1{fault};
@@ -347,8 +363,12 @@ TEST_CASE("crash contract: an injected MiniDumpWriteDump failure is honest (Dump
     std::size_t     files = 0;
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".dmp")
+        {
             ++files;
+        }
+    }
     CHECK(files == 0U); // the forced failure deleted its partial; nothing plausible is left behind
 
     crd::crash::test_inject_write_failure(WriteResult::Ok); // clear -> the next write succeeds honestly

@@ -55,7 +55,10 @@ public:
     {
         const crd::u32 t = m_tail.load(std::memory_order_relaxed);
         const crd::u32 h = m_head.load(std::memory_order_acquire);
-        if (t - h >= CapacityPow2) { return false; }
+        if (t - h >= CapacityPow2)
+        {
+            return false;
+        }
         m_slots[t & (CapacityPow2 - 1)] = cmd;
         m_tail.store(t + 1, std::memory_order_release);
         return true;
@@ -66,7 +69,10 @@ public:
     {
         const crd::u32 h = m_head.load(std::memory_order_relaxed);
         const crd::u32 t = m_tail.load(std::memory_order_acquire);
-        if (h == t) { return false; }
+        if (h == t)
+        {
+            return false;
+        }
         out = m_slots[h & (CapacityPow2 - 1)];
         m_head.store(h + 1, std::memory_order_release);
         return true;
@@ -122,20 +128,32 @@ public:
                 }
                 break;
             case AudioCommandType::StopVoice:
-                if (cmd.voice < kVoiceCount) { m_voices[cmd.voice].active = false; }
+                if (cmd.voice < kVoiceCount)
+                {
+                    m_voices[cmd.voice].active = false;
+                }
                 break;
             case AudioCommandType::SetVoiceGain:
-                if (cmd.voice < kVoiceCount) { m_voices[cmd.voice].gain = cmd.gain; }
+                if (cmd.voice < kVoiceCount)
+                {
+                    m_voices[cmd.voice].gain = cmd.gain;
+                }
                 break;
             case AudioCommandType::StopAll:
             default:
-                for (Voice& v : m_voices) { v.active = false; }
+                for (Voice& v : m_voices)
+                {
+                    v.active = false;
+                }
                 break;
             }
         }
         for (Voice& v : m_voices)
         {
-            if (!v.active) { continue; }
+            if (!v.active)
+            {
+                continue;
+            }
             for (crd::u32 i = 0; i < frames; ++i)
             {
                 if (v.cursor >= v.frames)
@@ -160,7 +178,10 @@ public:
         crd::u32 n = 0;
         for (const Voice& v : m_voices)
         {
-            if (v.active) { ++n; }
+            if (v.active)
+            {
+                ++n;
+            }
         }
         return n;
     }

@@ -76,7 +76,10 @@ TEST_CASE("SVGF a-trous: a uniform image is PRESERVED (weights normalize away)",
         for (int c = 0; c < 3; ++c)
         {
             const double dev = std::abs(r.col_out[uz(p * 3 + c)] - wants[c]);
-            if (dev > maxdev) { maxdev = dev; }
+            if (dev > maxdev)
+            {
+                maxdev = dev;
+            }
         }
     }
     CHECK(maxdev < 1e-5); // Σw·c/Σw == c up to fp rounding of the weighted mean
@@ -107,10 +110,17 @@ TEST_CASE("SVGF a-trous: a NOISY flat surface is SMOOTHED (variance drops)", "[k
     run_svgf(g, cfg, r, &alloc);
     const auto stddev = [&](const crd::containers::Array<crd::f64>& a) {
         double m = 0.0;
-        for (int p = 0; p < np; ++p) { m += a[uz(p * 3)]; }
+        for (int p = 0; p < np; ++p)
+        {
+            m += a[uz(p * 3)];
+        }
         m /= np;
         double v = 0.0;
-        for (int p = 0; p < np; ++p) { const double d = a[uz(p * 3)] - m; v += d * d; }
+        for (int p = 0; p < np; ++p)
+        {
+            const double d = a[uz(p * 3)] - m;
+            v += d * d;
+        }
         return v / np;
     };
     CHECK(stddev(r.col_out) < stddev(r.color) * 0.5); // the blur cuts the noise variance at least in half
@@ -154,9 +164,18 @@ TEST_CASE("SVGF temporal: multi-frame accumulation REDUCES noise + grows history
         cg[uz(p * 4 + 3)]   = 1.0; // normal +Z
         pg[uz(p * 4 + 0)]   = 0.0; // prev geom zeroed ⇒ frame 1 rejects (no history)
     }
-    for (int i = 0; i < np * 2; ++i) { mv[uz(i)] = 0.0; }
-    for (int i = 0; i < np * 4; ++i) { ps[uz(i)] = 0.0; }
-    for (int i = 0; i < np * 3; ++i) { pc[uz(i)] = 0.0; }
+    for (int i = 0; i < np * 2; ++i)
+    {
+        mv[uz(i)] = 0.0;
+    }
+    for (int i = 0; i < np * 4; ++i)
+    {
+        ps[uz(i)] = 0.0;
+    }
+    for (int i = 0; i < np * 3; ++i)
+    {
+        pc[uz(i)] = 0.0;
+    }
 
     kir::KernelBuffer bufs[8] = {{cc.data(), np * 3, 0, 0}, {cg.data(), np * 4, 0, 1}, {mv.data(), np * 2, 0, 2},
                                  {pc.data(), np * 3, 0, 3}, {ps.data(), np * 4, 0, 4}, {pg.data(), np * 4, 0, 5},
@@ -165,7 +184,11 @@ TEST_CASE("SVGF temporal: multi-frame accumulation REDUCES noise + grows history
     auto       rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     const auto err = [&]() {
         double e2 = 0.0;
-        for (int p = 0; p < np; ++p) { const double d = oc[uz(p * 3)] - truth[uz(p)]; e2 += d * d; }
+        for (int p = 0; p < np; ++p)
+        {
+            const double d = oc[uz(p * 3)] - truth[uz(p)];
+            e2 += d * d;
+        }
         return e2 / np;
     };
 
@@ -182,11 +205,23 @@ TEST_CASE("SVGF temporal: multi-frame accumulation REDUCES noise + grows history
             cc[uz(p * 3 + 2)] = n;
         }
         kir::eval_cpu_kernel(g, e, bufs, 8, e.local_size[0], &alloc, static_cast<crd::u32>(np / 64));
-        if (f == 0) { err1 = err(); }
+        if (f == 0)
+        {
+            err1 = err();
+        }
         // ping-pong: out → prev; prev-geometry becomes this frame's geometry (static ⇒ frame 2+ reprojects validly)
-        for (int i = 0; i < np * 3; ++i) { pc[uz(i)] = oc[uz(i)]; }
-        for (int i = 0; i < np * 4; ++i) { ps[uz(i)] = os[uz(i)]; }
-        for (int i = 0; i < np * 4; ++i) { pg[uz(i)] = cg[uz(i)]; }
+        for (int i = 0; i < np * 3; ++i)
+        {
+            pc[uz(i)] = oc[uz(i)];
+        }
+        for (int i = 0; i < np * 4; ++i)
+        {
+            ps[uz(i)] = os[uz(i)];
+        }
+        for (int i = 0; i < np * 4; ++i)
+        {
+            pg[uz(i)] = cg[uz(i)];
+        }
     }
     errn = err();
 
@@ -231,7 +266,12 @@ TEST_CASE("A-SVGF: adaptive-alpha RESETS on a real step change (faster response)
         crd::containers::Array<crd::f64> os(&alloc);
         cc.resize(uz(np * 3)); cg.resize(uz(np * 4)); mv.resize(uz(np * 2)); pc.resize(uz(np * 3));
         ps.resize(uz(np * 4)); pg.resize(uz(np * 4)); oc.resize(uz(np * 3)); os.resize(uz(np * 4));
-        for (int p = 0; p < np; ++p) { cg[uz(p * 4 + 0)] = 1.0; cg[uz(p * 4 + 3)] = 1.0; pg[uz(p * 4 + 0)] = 0.0; }
+        for (int p = 0; p < np; ++p)
+        {
+            cg[uz(p * 4 + 0)] = 1.0;
+            cg[uz(p * 4 + 3)] = 1.0;
+            pg[uz(p * 4 + 0)] = 0.0;
+        }
         kir::KernelBuffer bufs[8] = {{cc.data(), np * 3, 0, 0}, {cg.data(), np * 4, 0, 1}, {mv.data(), np * 2, 0, 2},
                                      {pc.data(), np * 3, 0, 3}, {ps.data(), np * 4, 0, 4}, {pg.data(), np * 4, 0, 5},
                                      {oc.data(), np * 3, 0, 6}, {os.data(), np * 4, 0, 7}};
@@ -247,8 +287,15 @@ TEST_CASE("A-SVGF: adaptive-alpha RESETS on a real step change (faster response)
                 cc[uz(p * 3 + 0)] = n; cc[uz(p * 3 + 1)] = n; cc[uz(p * 3 + 2)] = n;
             }
             kir::eval_cpu_kernel(g, e, bufs, 8, e.local_size[0], &alloc, static_cast<crd::u32>(np / 64));
-            for (int i = 0; i < np * 3; ++i) { pc[uz(i)] = oc[uz(i)]; }
-            for (int i = 0; i < np * 4; ++i) { ps[uz(i)] = os[uz(i)]; pg[uz(i)] = cg[uz(i)]; }
+            for (int i = 0; i < np * 3; ++i)
+            {
+                pc[uz(i)] = oc[uz(i)];
+            }
+            for (int i = 0; i < np * 4; ++i)
+            {
+                ps[uz(i)] = os[uz(i)];
+                pg[uz(i)] = cg[uz(i)];
+            }
         }
         lag     = std::abs(oc[uz(0)] - 0.8);
         histlen = os[uz(2)];
@@ -301,7 +348,11 @@ TEST_CASE("SVGF PIPELINE (temporal accumulate -> a-trous x5): the full gold deno
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     const auto stddev = [&](const crd::containers::Array<crd::f64>& a) {
         double e2 = 0.0;
-        for (int p = 0; p < np; ++p) { const double d = a[uz(p * 3)] - truth[uz(p)]; e2 += d * d; }
+        for (int p = 0; p < np; ++p)
+        {
+            const double d = a[uz(p * 3)] - truth[uz(p)];
+            e2 += d * d;
+        }
         return e2 / np;
     };
     double noisy_err = 0.0;
@@ -312,10 +363,24 @@ TEST_CASE("SVGF PIPELINE (temporal accumulate -> a-trous x5): the full gold deno
             const double n = truth[uz(p)] + 0.35 * (rnd() - 0.5);
             cc[uz(p * 3 + 0)] = n; cc[uz(p * 3 + 1)] = n; cc[uz(p * 3 + 2)] = n;
         }
-        if (f == 0) { for (int p = 0; p < np; ++p) { noisy_err += (cc[uz(p * 3)] - truth[uz(p)]) * (cc[uz(p * 3)] - truth[uz(p)]); } noisy_err /= np; }
+        if (f == 0)
+        {
+            for (int p = 0; p < np; ++p)
+            {
+                noisy_err += (cc[uz(p * 3)] - truth[uz(p)]) * (cc[uz(p * 3)] - truth[uz(p)]);
+            }
+            noisy_err /= np;
+        }
         kir::eval_cpu_kernel(gt, et, tb, 8, et.local_size[0], &alloc, static_cast<crd::u32>(np / 64));
-        for (int i = 0; i < np * 3; ++i) { pc[uz(i)] = oc[uz(i)]; }
-        for (int i = 0; i < np * 4; ++i) { ps[uz(i)] = os[uz(i)]; pg[uz(i)] = cg[uz(i)]; }
+        for (int i = 0; i < np * 3; ++i)
+        {
+            pc[uz(i)] = oc[uz(i)];
+        }
+        for (int i = 0; i < np * 4; ++i)
+        {
+            ps[uz(i)] = os[uz(i)];
+            pg[uz(i)] = cg[uz(i)];
+        }
     }
     const double temporal_err = stddev(oc);
 
@@ -325,8 +390,14 @@ TEST_CASE("SVGF PIPELINE (temporal accumulate -> a-trous x5): the full gold deno
     crd::containers::Array<crd::f64> col2(&alloc);
     crd::containers::Array<crd::f64> var2(&alloc);
     col.resize(uz(np * 3)); var.resize(uz(np)); col2.resize(uz(np * 3)); var2.resize(uz(np));
-    for (int i = 0; i < np * 3; ++i) { col[uz(i)] = oc[uz(i)]; }
-    for (int p = 0; p < np; ++p) { var[uz(p)] = os[uz(p * 4 + 3)]; } // extract variance from the temporal stat
+    for (int i = 0; i < np * 3; ++i)
+    {
+        col[uz(i)] = oc[uz(i)];
+    }
+    for (int p = 0; p < np; ++p) // extract variance from the temporal stat
+    {
+        var[uz(p)] = os[uz(p * 4 + 3)];
+    }
     for (int it = 0; it < 5; ++it)
     {
         kir::SvgfConfig ac = cfg;
@@ -336,11 +407,21 @@ TEST_CASE("SVGF PIPELINE (temporal accumulate -> a-trous x5): the full gold deno
         kir::KernelBuffer ab[5] = {{col.data(), np * 3, 0, 0}, {cg.data(), np * 4, 0, 1}, {var.data(), np, 0, 2},
                                    {col2.data(), np * 3, 0, 3}, {var2.data(), np, 0, 4}};
         kir::eval_cpu_kernel(ga, ea, ab, 5, ea.local_size[0], &alloc, static_cast<crd::u32>(np / 64));
-        for (int i = 0; i < np * 3; ++i) { col[uz(i)] = col2[uz(i)]; }
-        for (int p = 0; p < np; ++p) { var[uz(p)] = var2[uz(p)]; }
+        for (int i = 0; i < np * 3; ++i)
+        {
+            col[uz(i)] = col2[uz(i)];
+        }
+        for (int p = 0; p < np; ++p)
+        {
+            var[uz(p)] = var2[uz(p)];
+        }
     }
     double final_err = 0.0;
-    for (int p = 0; p < np; ++p) { const double d = col[uz(p * 3)] - truth[uz(p)]; final_err += d * d; }
+    for (int p = 0; p < np; ++p)
+    {
+        const double d = col[uz(p * 3)] - truth[uz(p)];
+        final_err += d * d;
+    }
     final_err /= np;
 
     CHECK(temporal_err < noisy_err);        // temporal accumulation reduces the error

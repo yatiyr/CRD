@@ -84,8 +84,14 @@ TEST_CASE("save_capture round-trips through CaptureView", "[perf][capture][round
         for (const auto& s : samples)
         {
             const char* nm = view.resolve_name(crd::perf::NameId{s.name_id});
-            if (std::strcmp(nm, "alpha") == 0) found_alpha = true;
-            if (std::strcmp(nm, "beta")  == 0) found_beta  = true;
+            if (std::strcmp(nm, "alpha") == 0)
+            {
+                found_alpha = true;
+            }
+            if (std::strcmp(nm, "beta")  == 0)
+            {
+                found_beta  = true;
+            }
         }
     }
     CHECK(found_alpha);

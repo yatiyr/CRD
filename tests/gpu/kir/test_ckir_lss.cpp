@@ -163,7 +163,10 @@ TEST_CASE("ckir LSS tapered segment interpolates its radius linearly", "[ckir][l
         const double got  = out[static_cast<crd::usize>(i) * 2U + 0U];
         INFO("u = " << u << " radius " << rad << ": t = " << got << " want " << want);
         CHECK(crd::math::abs(got - want) < 2.0e-5);
-        if (crd::math::abs(got - want) > worst) { worst = crd::math::abs(got - want); }
+        if (crd::math::abs(got - want) > worst)
+        {
+            worst = crd::math::abs(got - want);
+        }
     }
     INFO("worst taper deviation " << worst);
     // ⭐ THE TAPER MUST BE MONOTONE. If it were not, a strand's silhouette would wobble along its length — the single
@@ -172,7 +175,10 @@ TEST_CASE("ckir LSS tapered segment interpolates its radius linearly", "[ckir][l
     for (int i = 0; i < 10; ++i)
     {
         const double got = out[static_cast<crd::usize>(i) * 2U + 0U];
-        if (i > 0) { CHECK(got > prev); } // thinner further along ⇒ the surface is farther ⇒ t grows
+        if (i > 0) // thinner further along ⇒ the surface is farther ⇒ t grows
+        {
+            CHECK(got > prev);
+        }
         prev = got;
     }
 }
@@ -197,7 +203,10 @@ TEST_CASE("ckir LSS picks the nearest of several segments", "[ckir][lss]")
         segs[o + 4U] =  2.0; segs[o + 5U] = y; segs[o + 6U] = 0.0; segs[o + 7U] = r;
     }
     // fire +y from below: must always find the FIRST strand, never one behind it
-    for (int i = 0; i < 6; ++i) { set_ray(rays, i, -1.0 + 0.4 * static_cast<double>(i), 0.0, 0.0, 0.0, 1.0, 0.0); }
+    for (int i = 0; i < 6; ++i)
+    {
+        set_ray(rays, i, -1.0 + 0.4 * static_cast<double>(i), 0.0, 0.0, 0.0, 1.0, 0.0);
+    }
     trace(alloc, nseg, rays, segs, out);
 
     for (int i = 0; i < 6; ++i)
@@ -222,9 +231,15 @@ TEST_CASE("ckir LSS AABB is conservative", "[ckir][lss]")
     for (int s = 0; s < kLanes; ++s)
     {
         const crd::usize o = static_cast<crd::usize>(s) * 8U;
-        for (int k = 0; k < 3; ++k) { in[o + static_cast<crd::usize>(k)] = rnd() * 4.0 - 2.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            in[o + static_cast<crd::usize>(k)] = rnd() * 4.0 - 2.0;
+        }
         in[o + 3U] = 0.02 + rnd() * 0.3;
-        for (int k = 0; k < 3; ++k) { in[o + 4U + static_cast<crd::usize>(k)] = rnd() * 4.0 - 2.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            in[o + 4U + static_cast<crd::usize>(k)] = rnd() * 4.0 - 2.0;
+        }
         in[o + 7U] = 0.02 + rnd() * 0.3;
     }
     out.resize(static_cast<crd::usize>(kLanes) * 6U, 0.0);
@@ -485,7 +500,10 @@ TEST_CASE("ckir RT strand tier shades a curve hit with the hair BCSDF in the cor
         // ⚠ F32 tolerance: both sides run the f32 statement tier, and the BCSDF is a long chain (Bessel, logistic,
         //   Fresnel), so this is an accumulated-rounding bound, not a "close enough" fudge.
         CHECK(crd::math::abs(f - refv[static_cast<crd::usize>(i)]) < 2.0e-5);
-        if (i > 0 && crd::math::abs(f - out[static_cast<crd::usize>(i - 1) * 2U + 0U]) > 1.0e-7) { ++distinct; }
+        if (i > 0 && crd::math::abs(f - out[static_cast<crd::usize>(i - 1) * 2U + 0U]) > 1.0e-7)
+        {
+            ++distinct;
+        }
     }
     // h must actually REACH the BCSDF: if the frame code computed a constant h (say, always 0) every lane would return
     // the same value and every check above would still pass.

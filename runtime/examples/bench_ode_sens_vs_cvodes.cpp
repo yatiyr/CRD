@@ -136,10 +136,14 @@ int main()
                               {
                                   y_c.resize(n);
                                   for (usize i = 0; i < n; ++i)
+                                  {
                                       y_c[i] = y0[i];
+                                  }
                                   s_c.resize(n * np);
                                   for (usize i = 0; i < n * np; ++i)
+                                  {
                                       s_c[i] = 0.0;
+                                  }
                                   ode::OdeOptions<f64> o;
                                   o.rtol = rtol;
                                   o.atol = atol;
@@ -160,7 +164,9 @@ int main()
                                   N_Vector y = N_VNew_Serial(static_cast<sunindextype>(n), ctx);
                                   double* yd = N_VGetArrayPointer(y);
                                   for (usize i = 0; i < n; ++i)
+                                  {
                                       yd[i] = y0[i];
+                                  }
                                   void* mem = CVodeCreate(CV_BDF, ctx);
                                   CVodeInit(mem, cv_rhs, 0.0, y);
                                   CVodeSStolerances(mem, rtol, atol);
@@ -172,7 +178,9 @@ int main()
                                   CVodeSetJacFn(mem, cv_jac);
                                   N_Vector* yS = N_VCloneVectorArray(static_cast<int>(np), y);
                                   for (usize j = 0; j < np; ++j)
+                                  {
                                       N_VConst(0.0, yS[j]);
+                                  }
                                   CVodeSensInit(mem, static_cast<int>(np), CV_SIMULTANEOUS, nullptr, yS); // DQ rhs
                                   CVodeSensEEtolerances(mem);
                                   double pbar[3] = {g_p[0], g_p[1], g_p[2]};
@@ -184,7 +192,9 @@ int main()
                                   {
                                       const double* sj = N_VGetArrayPointer(yS[j]);
                                       for (usize i = 0; i < n; ++i)
+                                      {
                                           s_cv[j * n + i] = sj[i];
+                                      }
                                   }
                                   CVodeGetNumRhsEvals(mem, &cv_nfev);
                                   CVodeGetSensNumRhsEvals(mem, &cv_nfes);
@@ -201,6 +211,7 @@ int main()
     std::printf("\nS = dy/dp(T)   [Cerid analytic FSA   vs   CVODES DQ FSA]\n");
     double maxrel = 0.0;
     for (usize j = 0; j < np; ++j)
+    {
         for (usize i = 0; i < n; ++i)
         {
             const double a = s_c[j * n + i], b = s_cv[j * n + i];
@@ -208,6 +219,7 @@ int main()
             maxrel = std::max(maxrel, rel);
             std::printf("  dy[%zu]/dp[%zu] : % .6e  vs  % .6e\n", i, j, a, b);
         }
+    }
     std::printf("\nmax relative |Cerid - CVODES| = %.2e  (value cross-validation)\n", maxrel);
     std::printf("wall: Cerid %.3f ms  vs  CVODES %.3f ms  [%.2fx]\n", cms, ams, ams / cms);
     std::printf("CVODES RHS evals: state %ld + sensitivity %ld (DQ); Cerid uses analytic J_y + df/dp.\n", cv_nfev,

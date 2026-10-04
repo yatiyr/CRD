@@ -38,13 +38,19 @@ struct MapResult { bool done = false; };
 void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView /*msg*/, void* ud1, void* /*ud2*/)
 {
     auto* r = static_cast<AdapterResult*>(ud1);
-    if (status == WGPURequestAdapterStatus_Success) { r->adapter = adapter; }
+    if (status == WGPURequestAdapterStatus_Success)
+    {
+        r->adapter = adapter;
+    }
     r->done = true;
 }
 void on_device(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView /*msg*/, void* ud1, void* /*ud2*/)
 {
     auto* r = static_cast<DeviceResult*>(ud1);
-    if (status == WGPURequestDeviceStatus_Success) { r->device = device; }
+    if (status == WGPURequestDeviceStatus_Success)
+    {
+        r->device = device;
+    }
     r->done = true;
 }
 void on_map(WGPUMapAsyncStatus /*status*/, WGPUStringView /*msg*/, void* ud1, void* /*ud2*/)
@@ -66,7 +72,10 @@ KirBackendWebGpu::KirBackendWebGpu(crd::memory::IAllocator* alloc) : m_impl(std:
     auto& impl = *m_impl;
     impl.alloc = alloc;
     impl.instance = wgpuCreateInstance(nullptr);
-    if (impl.instance == nullptr) { return; }
+    if (impl.instance == nullptr)
+    {
+        return;
+    }
 
     AdapterResult                  ar;
     WGPURequestAdapterCallbackInfo aci{};
@@ -74,8 +83,14 @@ KirBackendWebGpu::KirBackendWebGpu(crd::memory::IAllocator* alloc) : m_impl(std:
     aci.callback  = on_adapter;
     aci.userdata1 = &ar;
     wgpuInstanceRequestAdapter(impl.instance, nullptr, aci);
-    while (!ar.done) { wgpuInstanceProcessEvents(impl.instance); }
-    if (ar.adapter == nullptr) { return; }
+    while (!ar.done)
+    {
+        wgpuInstanceProcessEvents(impl.instance);
+    }
+    if (ar.adapter == nullptr)
+    {
+        return;
+    }
     impl.adapter = ar.adapter;
 
     DeviceResult                  dr;
@@ -84,8 +99,14 @@ KirBackendWebGpu::KirBackendWebGpu(crd::memory::IAllocator* alloc) : m_impl(std:
     dci.callback  = on_device;
     dci.userdata1 = &dr;
     wgpuAdapterRequestDevice(impl.adapter, nullptr, dci);
-    while (!dr.done) { wgpuInstanceProcessEvents(impl.instance); }
-    if (dr.device == nullptr) { return; }
+    while (!dr.done)
+    {
+        wgpuInstanceProcessEvents(impl.instance);
+    }
+    if (dr.device == nullptr)
+    {
+        return;
+    }
     impl.device = dr.device;
     impl.queue  = wgpuDeviceGetQueue(impl.device);
     impl.ok     = impl.queue != nullptr;
@@ -94,10 +115,22 @@ KirBackendWebGpu::KirBackendWebGpu(crd::memory::IAllocator* alloc) : m_impl(std:
 KirBackendWebGpu::~KirBackendWebGpu()
 {
     auto& impl = *m_impl;
-    if (impl.queue != nullptr) { wgpuQueueRelease(impl.queue); }
-    if (impl.device != nullptr) { wgpuDeviceRelease(impl.device); }
-    if (impl.adapter != nullptr) { wgpuAdapterRelease(impl.adapter); }
-    if (impl.instance != nullptr) { wgpuInstanceRelease(impl.instance); }
+    if (impl.queue != nullptr)
+    {
+        wgpuQueueRelease(impl.queue);
+    }
+    if (impl.device != nullptr)
+    {
+        wgpuDeviceRelease(impl.device);
+    }
+    if (impl.adapter != nullptr)
+    {
+        wgpuAdapterRelease(impl.adapter);
+    }
+    if (impl.instance != nullptr)
+    {
+        wgpuInstanceRelease(impl.instance);
+    }
 }
 
 bool KirBackendWebGpu::valid() const noexcept { return m_impl->ok; }
@@ -105,7 +138,10 @@ bool KirBackendWebGpu::valid() const noexcept { return m_impl->ok; }
 bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_inputs > kMaxIn) { return false; }
+    if (!impl.ok || n_inputs > kMaxIn)
+    {
+        return false;
+    }
     auto*        dev  = impl.device;
     const KNode& outn = g.node(output);
 
@@ -129,7 +165,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
         consts[2]       = static_cast<crd::u32>(an.shape.dims[r - 1]);             // d2 = K
         in_bytes[0]     = static_cast<crd::u64>(consts[0]) * consts[2] * sizeof(float);
         in_bytes[1]     = static_cast<crd::u64>(consts[2]) * consts[1] * sizeof(float);
-        for (int j = 0; j < fuse.n_bias; ++j) { in_bytes[2 + j] = static_cast<crd::u64>(consts[1]) * sizeof(float); }
+        for (int j = 0; j < fuse.n_bias; ++j)
+        {
+            in_bytes[2 + j] = static_cast<crd::u64>(consts[1]) * sizeof(float);
+        }
         out_bytes = static_cast<crd::u64>(consts[0]) * consts[1] * sizeof(float);
         groups    = (consts[0] * consts[1] + 255U) / 256U;
         fused     = true;
@@ -145,7 +184,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
         consts[1]       = static_cast<crd::u32>(an.shape.dims[r - 1]);
         consts[2]       = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
         consts[3]       = 1U;
-        for (int k = 0; k < r - 2; ++k) { consts[3] *= static_cast<crd::u32>(an.shape.dims[k]); }
+        for (int k = 0; k < r - 2; ++k)
+        {
+            consts[3] *= static_cast<crd::u32>(an.shape.dims[k]);
+        }
         in_bytes[0] = static_cast<crd::u64>(consts[0]) * consts[1] * consts[3] * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(consts[1]) * consts[2] * consts[3] * sizeof(float);
         out_bytes   = static_cast<crd::u64>(consts[0]) * consts[2] * consts[3] * sizeof(float);
@@ -157,15 +199,27 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
         }
         else
         {
-            if (!emit_contract_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+            if (!emit_contract_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
             groups = (consts[0] * consts[2] * consts[3] + 255U) / 256U;
         }
     }
     else if (is_reduce(outn.op))
     {
         const bool fast = (outn.tier == DetTier::Fast && is_fast_reduceable(outn.op)); // T2 parallel workgroup tree-reduce
-        if (fast) { if (!emit_reduce_fast_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_reduce_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_reduce_fast_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_reduce_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
         const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
         consts[0]                = static_cast<crd::u32>(out_numel);
@@ -176,7 +230,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     }
     else if (outn.op == KOp::Gather)
     {
-        if (!emit_gather_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_gather_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   dn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 data_numel = static_cast<crd::u64>(dn.shape.numel());
@@ -190,7 +247,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     }
     else if (outn.op == KOp::Scatter)
     {
-        if (!emit_scatter_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_scatter_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   bn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 base_numel = static_cast<crd::u64>(bn.shape.numel());
@@ -208,8 +268,17 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     else if (outn.op == KOp::ScanSum)
     {
         const bool fast = (outn.tier == DetTier::Fast); // T2 parallel workgroup prefix-sum
-        if (fast) { if (!emit_scan_fast_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_scan_wgsl(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_scan_fast_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_scan_wgsl(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 numel   = static_cast<crd::u64>(outn.shape.numel());
         const crd::u32 scanlen = static_cast<crd::u32>(outn.shape.dims[outn.shape.rank - 1]);
         consts[0]              = static_cast<crd::u32>(numel / scanlen); // nrows
@@ -222,19 +291,31 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     // `comps` floats per element), exactly as the Vulkan/DX12 backends do.
     else if (graph_uses_vec(g, output, impl.alloc))
     {
-        if (!emit_vec_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_vec_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         consts[0]         = static_cast<crd::u32>(on);
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float);
+        }
         out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
     else
     {
-        if (!emit_elementwise_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_elementwise_wgsl(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         consts[0]         = static_cast<crd::u32>(on);
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * sizeof(float);
+        }
         out_bytes = on * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
@@ -245,7 +326,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     WGPUShaderModuleDescriptor smd{};
     smd.nextInChain      = &wgsl.chain;
     WGPUShaderModule module = wgpuDeviceCreateShaderModule(dev, &smd);
-    if (module == nullptr) { return false; }
+    if (module == nullptr)
+    {
+        return false;
+    }
 
     WGPUBuffer in_buf[kMaxIn] = {};
     for (int i = 0; i < n_inputs; ++i)
@@ -262,7 +346,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     pd.compute.module     = module;
     pd.compute.entryPoint = sv("cs_main");
     WGPUComputePipeline pipeline = wgpuDeviceCreateComputePipeline(dev, &pd);
-    if (pipeline == nullptr) { return false; }
+    if (pipeline == nullptr)
+    {
+        return false;
+    }
     WGPUBindGroupLayout bgl = wgpuComputePipelineGetBindGroupLayout(pipeline, 0);
 
     WGPUBindGroupEntry entries[kMaxIn + 2] = {};
@@ -300,10 +387,16 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     mci.callback  = on_map;
     mci.userdata1 = &mr;
     wgpuBufferMapAsync(readback, WGPUMapMode_Read, 0, out_bytes, mci);
-    while (!mr.done) { wgpuDevicePoll(impl.device, 1, nullptr); }
+    while (!mr.done)
+    {
+        wgpuDevicePoll(impl.device, 1, nullptr);
+    }
     const void* mapped = wgpuBufferGetMappedRange(readback, 0, out_bytes);
     bool        ok     = mapped != nullptr;
-    if (ok) { std::memcpy(out, mapped, out_bytes); }
+    if (ok)
+    {
+        std::memcpy(out, mapped, out_bytes);
+    }
     wgpuBufferUnmap(readback);
 
     wgpuCommandBufferRelease(cmd);
@@ -316,7 +409,10 @@ bool KirBackendWebGpu::run(const KGraph& g, int output, const float* const* inpu
     wgpuBufferRelease(uniform);
     wgpuBufferRelease(readback);
     wgpuBufferRelease(out_buf);
-    for (int i = 0; i < n_inputs; ++i) { wgpuBufferRelease(in_buf[i]); }
+    for (int i = 0; i < n_inputs; ++i)
+    {
+        wgpuBufferRelease(in_buf[i]);
+    }
     return ok;
 }
 

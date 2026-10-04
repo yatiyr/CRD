@@ -59,7 +59,9 @@ void append_key(cont::String& out, const char* key) noexcept
 void append_kv_str(cont::String& out, const char* key, const char* val, bool comma) noexcept
 {
     if (comma)
+    {
         out.push_back(',');
+    }
     append_key(out, key);
     out.push_back('"');
     append_json_escaped(out, cont::StringView{val ? val : ""});
@@ -70,7 +72,9 @@ void append_kv_str(cont::String& out, const char* key, const char* val, bool com
 void append_kv_u64(cont::String& out, const char* key, crd::u64 val, bool comma) noexcept
 {
     if (comma)
+    {
         out.push_back(',');
+    }
     append_key(out, key);
     append_u64(out, val);
 }
@@ -87,10 +91,16 @@ struct SeenSet
     [[nodiscard]] bool add(crd::u64 key) noexcept // true if not already recorded (past N: always true -> repeats)
     {
         for (crd::u32 i = 0U; i < count; ++i)
+        {
             if (items[i] == key)
+            {
                 return false;
+            }
+        }
         if (count < N)
+        {
             items[count++] = key;
+        }
         return true;
     }
 };
@@ -103,13 +113,17 @@ struct SeenSet
 {
     stats = PerfettoExportStats{};
     if (!view.is_valid())
+    {
         return false;
+    }
 
     out.append("{\"traceEvents\":[");
     bool       need_comma = false;
     const auto comma      = [&]() noexcept {
         if (need_comma)
+        {
             out.push_back(',');
+        }
         need_comma = true;
     };
 
@@ -206,15 +220,23 @@ struct SeenSet
             append_u64(out, tid);
             out.append(",\"ts\":");
             if (raw_gpu)
+            {
                 append_i64(out, s.begin_ns);
+            }
             else
+            {
                 append_us_from_ns(out, s.begin_ns);
+            }
             out.append(",\"dur\":");
             const crd::i64 dur = s.end_ns - s.begin_ns;
             if (raw_gpu)
+            {
                 append_i64(out, dur);
+            }
             else
+            {
                 append_us_from_ns(out, dur);
+            }
             append_kv_str(out, "name", view.resolve_name(NameId{s.name_id}), true);
             append_kv_str(out, "cat", category_name(s.category), true);
 
@@ -224,9 +246,13 @@ struct SeenSet
             append_kv_u64(out, "depth", s.depth, acomma);
             acomma = true;
             if (s.fiber_id != 0U)
+            {
                 append_kv_u64(out, "fiber_id", s.fiber_id, acomma);
+            }
             if (s.end_thread != s.begin_thread)
+            {
                 append_kv_u64(out, "end_thread", s.end_thread, acomma);
+            }
             if (corr != nullptr)
             {
                 append_kv_u64(out, "queue", corr->queue_id, acomma);
@@ -238,11 +264,17 @@ struct SeenSet
                 out.append(calibrated ? "true" : "false");
                 // Uncertainty is meaningful only when calibrated; otherwise it is the sentinel -- report it as such.
                 if (calibrated)
+                {
                     append_kv_u64(out, "uncertainty_ns", corr->clock_uncertainty_ns, true);
+                }
                 if (corr->pass_id != kNoCorrelationName)
+                {
                     append_kv_str(out, "pass", view.resolve_name(NameId{corr->pass_id}), true);
+                }
                 if (corr->resource_id != kNoCorrelationName)
+                {
                     append_kv_str(out, "resource", view.resolve_name(NameId{corr->resource_id}), true);
+                }
             }
             out.append("}}");
             ++stats.sample_events;
@@ -320,20 +352,28 @@ struct SeenSet
                                                 crd::memory::IAllocator* alloc) noexcept
 {
     if (path == nullptr || alloc == nullptr)
+    {
         return false;
+    }
     cont::String out{alloc};
     if (!export_perfetto_json(view, out, stats))
+    {
         return false;
+    }
 
     std::FILE* fp = nullptr;
 #if defined(_MSC_VER)
     if (fopen_s(&fp, path, "wb") != 0)
+    {
         return false;
+    }
 #else
     fp = std::fopen(path, "wb");
 #endif
     if (fp == nullptr)
+    {
         return false;
+    }
     const auto written = std::fwrite(out.c_str(), 1U, out.size(), fp);
     std::fclose(fp);
     return written == out.size();

@@ -275,7 +275,10 @@ void parallel_radix_pass(const MortonPair<KeyT>* src,
             const crd::usize begin = static_cast<crd::usize>(i)        * hpp->n / hpp->num_jobs;
             const crd::usize end   = static_cast<crd::usize>(i + 1U)   * hpp->n / hpp->num_jobs;
             crd::usize* hist = hpp->hist_tiles + static_cast<crd::usize>(i) * kRadixBins;
-            for (crd::usize k = 0U; k < kRadixBins; ++k) { hist[k] = 0U; }
+            for (crd::usize k = 0U; k < kRadixBins; ++k)
+            {
+                hist[k] = 0U;
+            }
             for (crd::usize j = begin; j < end; ++j)
             {
                 const crd::usize bucket =
@@ -384,14 +387,20 @@ sort_morton_pairs_parallel(crd::containers::ConstSpan<KeyT> codes,
     CRD_ASSERT_MSG(n <= static_cast<crd::usize>(UINT32_MAX),
                    "sort_morton_pairs_parallel: input exceeds the u32 index ceiling (D144)");
 
-    if (n == 0U) { return out; }
+    if (n == 0U)
+    {
+        return out;
+    }
     out.resize(n);
     for (crd::usize i = 0U; i < n; ++i)
     {
         out[i].code  = codes[i];
         out[i].index = static_cast<crd::u32>(i);
     }
-    if (n < 2U) { return out; }
+    if (n < 2U)
+    {
+        return out;
+    }
 
     constexpr crd::usize num_passes = (sizeof(KeyT) * CHAR_BIT) / kRadixBits;
     static_assert(num_passes % 2U == 0U,

@@ -79,7 +79,10 @@ inline crd::math::Vec3<T> scale(const crd::math::Vec3<T>& a, T s) noexcept
 
 inline crd::u32 canonical_he(crd::u32 h, crd::u32 twin) noexcept
 {
-    if (twin == k_null_he) { return h; }
+    if (twin == k_null_he)
+    {
+        return h;
+    }
     return (h < twin) ? h : twin;
 }
 
@@ -122,7 +125,10 @@ crd::math::Vec3<T> compute_updated_vertex_position(const HalfEdgeMesh<T>& m, crd
 
     m.for_each_outgoing_he(v, [&](crd::u32 ho) {
         const crd::u32 dest = m.he_dest(ho);
-        if (dest == k_null_vertex) { return; }
+        if (dest == k_null_vertex)
+        {
+            return;
+        }
         const auto& pd = m.vertex(dest).position;
         sum_all = add(sum_all, pd);
         ++valence;
@@ -150,7 +156,10 @@ crd::math::Vec3<T> compute_updated_vertex_position(const HalfEdgeMesh<T>& m, crd
         return p;
     }
 
-    if (valence == 0U) { return p; }
+    if (valence == 0U)
+    {
+        return p;
+    }
 
     // Loop interior weight.
     constexpr T two_pi = static_cast<T>(6.28318530717958647692);
@@ -173,7 +182,10 @@ void subdivide_one_level(const HalfEdgeMesh<T>&                       m,
     crd::u32 next_idx = 0;
     for (crd::u32 v = 0; v < m.vertex_pool_size(); ++v)
     {
-        if (!m.vertex_alive(v)) { continue; }
+        if (!m.vertex_alive(v))
+        {
+            continue;
+        }
         slot_to_new[v] = next_idx++;
     }
     const crd::u32 n_old_verts = next_idx;
@@ -183,7 +195,10 @@ void subdivide_one_level(const HalfEdgeMesh<T>&                       m,
     out_pos.reserve(n_old_verts + m.he_pool_size() / 2U);
     for (crd::u32 v = 0; v < m.vertex_pool_size(); ++v)
     {
-        if (!m.vertex_alive(v)) { continue; }
+        if (!m.vertex_alive(v))
+        {
+            continue;
+        }
         out_pos.push_back(compute_updated_vertex_position(m, v));
     }
 
@@ -192,11 +207,20 @@ void subdivide_one_level(const HalfEdgeMesh<T>&                       m,
     canonical_to_mid.resize(m.he_pool_size(), k_null_vertex);
     for (crd::u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
         const crd::u32 t = m.he(h).twin;
         const crd::u32 c = canonical_he(h, t);
-        if (c != h) { continue; }              // process each canonical exactly once
-        if (canonical_to_mid[c] != k_null_vertex) { continue; }
+        if (c != h) // process each canonical exactly once
+        {
+            continue;
+        }
+        if (canonical_to_mid[c] != k_null_vertex)
+        {
+            continue;
+        }
         const auto mid = compute_edge_midpoint(m, h);
         const crd::u32 mid_idx = static_cast<crd::u32>(out_pos.size());
         out_pos.push_back(mid);
@@ -208,7 +232,10 @@ void subdivide_one_level(const HalfEdgeMesh<T>&                       m,
     out_idx.reserve(m.face_count() * 12U);
     for (crd::u32 f = 0; f < m.face_pool_size(); ++f)
     {
-        if (!m.face_alive(f)) { continue; }
+        if (!m.face_alive(f))
+        {
+            continue;
+        }
         const crd::u32 h0 = m.face(f).first_he;
         const crd::u32 h1 = m.he(h0).next;
         const crd::u32 h2 = m.he(h1).next;
@@ -243,7 +270,10 @@ HalfEdgeMesh<T> loop_subdivide(const HalfEdgeMesh<T>&        input,
 {
     LoopSubdivideReport report{};
     auto                report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr

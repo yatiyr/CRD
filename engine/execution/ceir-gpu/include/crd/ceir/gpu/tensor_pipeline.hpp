@@ -248,9 +248,18 @@ inline constexpr crd::u32 kMaxAuthoredLocalSize = 1024U;
 [[nodiscard]] inline KernelShapeError bind_authored_local_size(crd::u32& local_size_x, crd::u64 extent,
                                                                crd::u32 max_local_size) noexcept
 {
-    if (local_size_x != 0U) { return KernelShapeError::None; }        // authored fixed size — the asset drives it
-    if (extent == 0U) { return KernelShapeError::LocalSizeUnbound; }
-    if (extent > static_cast<crd::u64>(max_local_size)) { return KernelShapeError::LocalSizeExceedsLimit; }
+    if (local_size_x != 0U) // authored fixed size — the asset drives it
+    {
+        return KernelShapeError::None;
+    }
+    if (extent == 0U)
+    {
+        return KernelShapeError::LocalSizeUnbound;
+    }
+    if (extent > static_cast<crd::u64>(max_local_size))
+    {
+        return KernelShapeError::LocalSizeExceedsLimit;
+    }
     local_size_x = static_cast<crd::u32>(extent);
     return KernelShapeError::None;
 }

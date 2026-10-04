@@ -17,24 +17,62 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_dequantize(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 3U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("axis");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("scheme");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("axis");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("scheme");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_quantize(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 3U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("axis");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("scheme");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("axis");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("scheme");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

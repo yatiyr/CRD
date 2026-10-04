@@ -35,7 +35,10 @@ void* create_test_window(unsigned width, unsigned height)
     HWND hwnd = CreateWindowExW(0, kClassName, L"cerid present gate", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                                 CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, inst,
                                 nullptr);
-    if (hwnd != nullptr) { ShowWindow(hwnd, SW_SHOWNOACTIVATE); }
+    if (hwnd != nullptr)
+    {
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
     return hwnd;
 }
 
@@ -51,7 +54,10 @@ void pump_test_window()
 
 void destroy_test_window(void* hwnd)
 {
-    if (hwnd != nullptr) { DestroyWindow(static_cast<HWND>(hwnd)); }
+    if (hwnd != nullptr)
+    {
+        DestroyWindow(static_cast<HWND>(hwnd));
+    }
     pump_test_window();
 }
 

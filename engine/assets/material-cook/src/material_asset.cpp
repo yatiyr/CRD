@@ -169,7 +169,10 @@ const OpEntry kOps[] = {
 {
     for (crd::u32 i = 0; i < static_cast<crd::u32>(sizeof(kOps) / sizeof(kOps[0])); ++i)
     {
-        if (op_is(op, kOps[i].name)) { return static_cast<crd::i32>(i); }
+        if (op_is(op, kOps[i].name))
+        {
+            return static_cast<crd::i32>(i);
+        }
     }
     return -1;
 }
@@ -178,86 +181,320 @@ const OpEntry kOps[] = {
 // step with the table by hand — which is the drift this generated pair exists to remove.
 [[nodiscard]] int dispatch_op(crd::kir::KGraph& g, crd::containers::StringView op, const int* in)
 {
-    if (op_is(op, "aastep")) { return crd::kir::nodes::aastep(g, in[0], in[1]); }
-    if (op_is(op, "absval")) { return crd::kir::nodes::absval(g, in[0]); }
-    if (op_is(op, "acos")) { return crd::kir::nodes::acos(g, in[0]); }
-    if (op_is(op, "add")) { return crd::kir::nodes::add(g, in[0], in[1]); }
-    if (op_is(op, "asin")) { return crd::kir::nodes::asin(g, in[0]); }
-    if (op_is(op, "atan2")) { return crd::kir::nodes::atan2(g, in[0], in[1]); }
-    if (op_is(op, "bitangent")) { return crd::kir::nodes::bitangent(g, in[0]); }
-    if (op_is(op, "burn")) { return crd::kir::nodes::burn(g, in[0], in[1], in[2]); }
-    if (op_is(op, "ceil")) { return crd::kir::nodes::ceil(g, in[0]); }
-    if (op_is(op, "checkerboard")) { return crd::kir::nodes::checkerboard(g, in[0], in[1], in[2], in[3], in[4]); }
-    if (op_is(op, "clamp")) { return crd::kir::nodes::clamp(g, in[0], in[1], in[2]); }
-    if (op_is(op, "clamp01")) { return crd::kir::nodes::clamp01(g, in[0]); }
-    if (op_is(op, "combine2")) { return crd::kir::nodes::combine2(g, in[0], in[1]); }
-    if (op_is(op, "combine3")) { return crd::kir::nodes::combine3(g, in[0], in[1], in[2]); }
-    if (op_is(op, "combine4")) { return crd::kir::nodes::combine4(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "combine_c3f")) { return crd::kir::nodes::combine_c3f(g, in[0], in[1]); }
-    if (op_is(op, "comp_in")) { return crd::kir::nodes::comp_in(g, in[0], in[1], in[2]); }
-    if (op_is(op, "comp_out")) { return crd::kir::nodes::comp_out(g, in[0], in[1], in[2]); }
-    if (op_is(op, "contrast")) { return crd::kir::nodes::contrast(g, in[0], in[1], in[2]); }
-    if (op_is(op, "convert_c3_c4")) { return crd::kir::nodes::convert_c3_c4(g, in[0]); }
-    if (op_is(op, "convert_f_vec")) { return crd::kir::nodes::convert_f_vec(g, in[0], in[1]); }
-    if (op_is(op, "cos")) { return crd::kir::nodes::cos(g, in[0]); }
-    if (op_is(op, "crossproduct")) { return crd::kir::nodes::crossproduct(g, in[0], in[1]); }
-    if (op_is(op, "difference")) { return crd::kir::nodes::difference(g, in[0], in[1], in[2]); }
-    if (op_is(op, "disjointover")) { return crd::kir::nodes::disjointover(g, in[0], in[1], in[2]); }
-    if (op_is(op, "distance")) { return crd::kir::nodes::distance(g, in[0], in[1]); }
-    if (op_is(op, "divide")) { return crd::kir::nodes::divide(g, in[0], in[1]); }
-    if (op_is(op, "dodge")) { return crd::kir::nodes::dodge(g, in[0], in[1], in[2]); }
-    if (op_is(op, "dotproduct")) { return crd::kir::nodes::dotproduct(g, in[0], in[1]); }
-    if (op_is(op, "exp")) { return crd::kir::nodes::exp(g, in[0]); }
-    if (op_is(op, "extract")) { return crd::kir::nodes::extract(g, in[0], in[1]); }
+    if (op_is(op, "aastep"))
+    {
+        return crd::kir::nodes::aastep(g, in[0], in[1]);
+    }
+    if (op_is(op, "absval"))
+    {
+        return crd::kir::nodes::absval(g, in[0]);
+    }
+    if (op_is(op, "acos"))
+    {
+        return crd::kir::nodes::acos(g, in[0]);
+    }
+    if (op_is(op, "add"))
+    {
+        return crd::kir::nodes::add(g, in[0], in[1]);
+    }
+    if (op_is(op, "asin"))
+    {
+        return crd::kir::nodes::asin(g, in[0]);
+    }
+    if (op_is(op, "atan2"))
+    {
+        return crd::kir::nodes::atan2(g, in[0], in[1]);
+    }
+    if (op_is(op, "bitangent"))
+    {
+        return crd::kir::nodes::bitangent(g, in[0]);
+    }
+    if (op_is(op, "burn"))
+    {
+        return crd::kir::nodes::burn(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "ceil"))
+    {
+        return crd::kir::nodes::ceil(g, in[0]);
+    }
+    if (op_is(op, "checkerboard"))
+    {
+        return crd::kir::nodes::checkerboard(g, in[0], in[1], in[2], in[3], in[4]);
+    }
+    if (op_is(op, "clamp"))
+    {
+        return crd::kir::nodes::clamp(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "clamp01"))
+    {
+        return crd::kir::nodes::clamp01(g, in[0]);
+    }
+    if (op_is(op, "combine2"))
+    {
+        return crd::kir::nodes::combine2(g, in[0], in[1]);
+    }
+    if (op_is(op, "combine3"))
+    {
+        return crd::kir::nodes::combine3(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "combine4"))
+    {
+        return crd::kir::nodes::combine4(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "combine_c3f"))
+    {
+        return crd::kir::nodes::combine_c3f(g, in[0], in[1]);
+    }
+    if (op_is(op, "comp_in"))
+    {
+        return crd::kir::nodes::comp_in(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "comp_out"))
+    {
+        return crd::kir::nodes::comp_out(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "contrast"))
+    {
+        return crd::kir::nodes::contrast(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "convert_c3_c4"))
+    {
+        return crd::kir::nodes::convert_c3_c4(g, in[0]);
+    }
+    if (op_is(op, "convert_f_vec"))
+    {
+        return crd::kir::nodes::convert_f_vec(g, in[0], in[1]);
+    }
+    if (op_is(op, "cos"))
+    {
+        return crd::kir::nodes::cos(g, in[0]);
+    }
+    if (op_is(op, "crossproduct"))
+    {
+        return crd::kir::nodes::crossproduct(g, in[0], in[1]);
+    }
+    if (op_is(op, "difference"))
+    {
+        return crd::kir::nodes::difference(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "disjointover"))
+    {
+        return crd::kir::nodes::disjointover(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "distance"))
+    {
+        return crd::kir::nodes::distance(g, in[0], in[1]);
+    }
+    if (op_is(op, "divide"))
+    {
+        return crd::kir::nodes::divide(g, in[0], in[1]);
+    }
+    if (op_is(op, "dodge"))
+    {
+        return crd::kir::nodes::dodge(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "dotproduct"))
+    {
+        return crd::kir::nodes::dotproduct(g, in[0], in[1]);
+    }
+    if (op_is(op, "exp"))
+    {
+        return crd::kir::nodes::exp(g, in[0]);
+    }
+    if (op_is(op, "extract"))
+    {
+        return crd::kir::nodes::extract(g, in[0], in[1]);
+    }
     // ⛔ `faceforward`/`invert` are BOOL parameters of the node function, not wires — the asset writes 0 or 1 and
     // the branch is taken at COOK time, which is what MaterialX's `ifequal`-switch nodegraph means by them.
-    if (op_is(op, "facingratio")) { return crd::kir::nodes::facingratio(g, in[0], in[1], in[2] != 0, in[3] != 0); }
-    if (op_is(op, "floor")) { return crd::kir::nodes::floor(g, in[0]); }
-    if (op_is(op, "fwidth")) { return g.unary(crd::kir::KOp::Fwidth, in[0]); }
-    if (op_is(op, "geomcolor")) { return crd::kir::nodes::geomcolor(g, in[0]); }
-    if (op_is(op, "gooch_shade")) { return crd::kir::nodes::gooch_shade(g, in[0], in[1], in[2], in[3], in[4], in[5], in[6]); }
-    if (op_is(op, "heighttonormal")) { return crd::kir::nodes::heighttonormal(g, in[0], in[1], in[2]); }
-    if (op_is(op, "hsvadjust")) { return crd::kir::nodes::hsvadjust(g, in[0], in[1]); }
-    if (op_is(op, "hsvtorgb")) { return crd::kir::nodes::hsvtorgb(g, in[0]); }
-    if (op_is(op, "ifequal")) { return crd::kir::nodes::ifequal(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "ifgreater")) { return crd::kir::nodes::ifgreater(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "ifgreatereq")) { return crd::kir::nodes::ifgreatereq(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "inside")) { return crd::kir::nodes::inside(g, in[0], in[1]); }
-    if (op_is(op, "invert")) { return crd::kir::nodes::invert(g, in[0], in[1]); }
-    if (op_is(op, "ln")) { return crd::kir::nodes::ln(g, in[0]); }
-    if (op_is(op, "logical_and")) { return crd::kir::nodes::logical_and(g, in[0], in[1]); }
-    if (op_is(op, "logical_not")) { return crd::kir::nodes::logical_not(g, in[0]); }
-    if (op_is(op, "logical_or")) { return crd::kir::nodes::logical_or(g, in[0], in[1]); }
-    if (op_is(op, "logical_xor")) { return crd::kir::nodes::logical_xor(g, in[0], in[1]); }
-    if (op_is(op, "luminance")) { return crd::kir::nodes::luminance(g, in[0], in[1]); }
-    if (op_is(op, "magnitude")) { return crd::kir::nodes::magnitude(g, in[0]); }
-    if (op_is(op, "mask")) { return crd::kir::nodes::mask(g, in[0], in[1], in[2]); }
-    if (op_is(op, "matte")) { return crd::kir::nodes::matte(g, in[0], in[1], in[2]); }
-    if (op_is(op, "maximum")) { return crd::kir::nodes::maximum(g, in[0], in[1]); }
-    if (op_is(op, "minimum")) { return crd::kir::nodes::minimum(g, in[0], in[1]); }
-    if (op_is(op, "minus")) { return crd::kir::nodes::minus(g, in[0], in[1], in[2]); }
-    if (op_is(op, "mix")) { return crd::kir::nodes::mix(g, in[0], in[1], in[2]); }
-    if (op_is(op, "modulo")) { return crd::kir::nodes::modulo(g, in[0], in[1]); }
-    if (op_is(op, "multiply")) { return crd::kir::nodes::multiply(g, in[0], in[1]); }
-    if (op_is(op, "normal")) { return crd::kir::nodes::normal(g, in[0]); }
-    if (op_is(op, "normalize")) { return crd::kir::nodes::normalize(g, in[0]); }
-    if (op_is(op, "outside")) { return crd::kir::nodes::outside(g, in[0], in[1]); }
-    if (op_is(op, "over")) { return crd::kir::nodes::over(g, in[0], in[1], in[2]); }
-    if (op_is(op, "overlay")) { return crd::kir::nodes::overlay(g, in[0], in[1], in[2]); }
-    if (op_is(op, "place2d")) { return crd::kir::nodes::place2d(g, in[0], in[1], in[2], in[3], in[4], in[5]); }
-    if (op_is(op, "plus")) { return crd::kir::nodes::plus(g, in[0], in[1], in[2]); }
-    if (op_is(op, "position")) { return crd::kir::nodes::position(g, in[0]); }
-    if (op_is(op, "power")) { return crd::kir::nodes::power(g, in[0], in[1]); }
-    if (op_is(op, "premult")) { return crd::kir::nodes::premult(g, in[0]); }
-    if (op_is(op, "ramplr")) { return crd::kir::nodes::ramplr(g, in[0], in[1], in[2]); }
-    if (op_is(op, "ramptb")) { return crd::kir::nodes::ramptb(g, in[0], in[1], in[2]); }
-    if (op_is(op, "range")) { return crd::kir::nodes::range(g, in[0], in[1], in[2], in[3], in[4], in[5], in[6] != 0); }
-    if (op_is(op, "remap")) { return crd::kir::nodes::remap(g, in[0], in[1], in[2], in[3], in[4]); }
-    if (op_is(op, "remap01")) { return crd::kir::nodes::remap01(g, in[0], in[1], in[2]); }
-    if (op_is(op, "rgbtohsv")) { return crd::kir::nodes::rgbtohsv(g, in[0]); }
-    if (op_is(op, "rotate2d")) { return crd::kir::nodes::rotate2d(g, in[0], in[1]); }
-    if (op_is(op, "rotate3d")) { return crd::kir::nodes::rotate3d(g, in[0], in[1], in[2]); }
-    if (op_is(op, "round")) { return crd::kir::nodes::round(g, in[0]); }
+    if (op_is(op, "facingratio"))
+    {
+        return crd::kir::nodes::facingratio(g, in[0], in[1], in[2] != 0, in[3] != 0);
+    }
+    if (op_is(op, "floor"))
+    {
+        return crd::kir::nodes::floor(g, in[0]);
+    }
+    if (op_is(op, "fwidth"))
+    {
+        return g.unary(crd::kir::KOp::Fwidth, in[0]);
+    }
+    if (op_is(op, "geomcolor"))
+    {
+        return crd::kir::nodes::geomcolor(g, in[0]);
+    }
+    if (op_is(op, "gooch_shade"))
+    {
+        return crd::kir::nodes::gooch_shade(g, in[0], in[1], in[2], in[3], in[4], in[5], in[6]);
+    }
+    if (op_is(op, "heighttonormal"))
+    {
+        return crd::kir::nodes::heighttonormal(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "hsvadjust"))
+    {
+        return crd::kir::nodes::hsvadjust(g, in[0], in[1]);
+    }
+    if (op_is(op, "hsvtorgb"))
+    {
+        return crd::kir::nodes::hsvtorgb(g, in[0]);
+    }
+    if (op_is(op, "ifequal"))
+    {
+        return crd::kir::nodes::ifequal(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "ifgreater"))
+    {
+        return crd::kir::nodes::ifgreater(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "ifgreatereq"))
+    {
+        return crd::kir::nodes::ifgreatereq(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "inside"))
+    {
+        return crd::kir::nodes::inside(g, in[0], in[1]);
+    }
+    if (op_is(op, "invert"))
+    {
+        return crd::kir::nodes::invert(g, in[0], in[1]);
+    }
+    if (op_is(op, "ln"))
+    {
+        return crd::kir::nodes::ln(g, in[0]);
+    }
+    if (op_is(op, "logical_and"))
+    {
+        return crd::kir::nodes::logical_and(g, in[0], in[1]);
+    }
+    if (op_is(op, "logical_not"))
+    {
+        return crd::kir::nodes::logical_not(g, in[0]);
+    }
+    if (op_is(op, "logical_or"))
+    {
+        return crd::kir::nodes::logical_or(g, in[0], in[1]);
+    }
+    if (op_is(op, "logical_xor"))
+    {
+        return crd::kir::nodes::logical_xor(g, in[0], in[1]);
+    }
+    if (op_is(op, "luminance"))
+    {
+        return crd::kir::nodes::luminance(g, in[0], in[1]);
+    }
+    if (op_is(op, "magnitude"))
+    {
+        return crd::kir::nodes::magnitude(g, in[0]);
+    }
+    if (op_is(op, "mask"))
+    {
+        return crd::kir::nodes::mask(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "matte"))
+    {
+        return crd::kir::nodes::matte(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "maximum"))
+    {
+        return crd::kir::nodes::maximum(g, in[0], in[1]);
+    }
+    if (op_is(op, "minimum"))
+    {
+        return crd::kir::nodes::minimum(g, in[0], in[1]);
+    }
+    if (op_is(op, "minus"))
+    {
+        return crd::kir::nodes::minus(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "mix"))
+    {
+        return crd::kir::nodes::mix(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "modulo"))
+    {
+        return crd::kir::nodes::modulo(g, in[0], in[1]);
+    }
+    if (op_is(op, "multiply"))
+    {
+        return crd::kir::nodes::multiply(g, in[0], in[1]);
+    }
+    if (op_is(op, "normal"))
+    {
+        return crd::kir::nodes::normal(g, in[0]);
+    }
+    if (op_is(op, "normalize"))
+    {
+        return crd::kir::nodes::normalize(g, in[0]);
+    }
+    if (op_is(op, "outside"))
+    {
+        return crd::kir::nodes::outside(g, in[0], in[1]);
+    }
+    if (op_is(op, "over"))
+    {
+        return crd::kir::nodes::over(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "overlay"))
+    {
+        return crd::kir::nodes::overlay(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "place2d"))
+    {
+        return crd::kir::nodes::place2d(g, in[0], in[1], in[2], in[3], in[4], in[5]);
+    }
+    if (op_is(op, "plus"))
+    {
+        return crd::kir::nodes::plus(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "position"))
+    {
+        return crd::kir::nodes::position(g, in[0]);
+    }
+    if (op_is(op, "power"))
+    {
+        return crd::kir::nodes::power(g, in[0], in[1]);
+    }
+    if (op_is(op, "premult"))
+    {
+        return crd::kir::nodes::premult(g, in[0]);
+    }
+    if (op_is(op, "ramplr"))
+    {
+        return crd::kir::nodes::ramplr(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "ramptb"))
+    {
+        return crd::kir::nodes::ramptb(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "range"))
+    {
+        return crd::kir::nodes::range(g, in[0], in[1], in[2], in[3], in[4], in[5], in[6] != 0);
+    }
+    if (op_is(op, "remap"))
+    {
+        return crd::kir::nodes::remap(g, in[0], in[1], in[2], in[3], in[4]);
+    }
+    if (op_is(op, "remap01"))
+    {
+        return crd::kir::nodes::remap01(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "rgbtohsv"))
+    {
+        return crd::kir::nodes::rgbtohsv(g, in[0]);
+    }
+    if (op_is(op, "rotate2d"))
+    {
+        return crd::kir::nodes::rotate2d(g, in[0], in[1]);
+    }
+    if (op_is(op, "rotate3d"))
+    {
+        return crd::kir::nodes::rotate3d(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "round"))
+    {
+        return crd::kir::nodes::round(g, in[0]);
+    }
     if (op_is(op, "sample2d"))
     {
         // set/binding/sampler are the DESCRIPTOR coordinates; ADR-0102 puts a material map at set 2 by
@@ -267,44 +504,126 @@ const OpEntry kOps[] = {
         const int samp = g.sampler(in[1], in[3], false);
         return g.tex_sample(tex, samp, in[0]);
     }
-    if (op_is(op, "saturate")) { return crd::kir::nodes::saturate(g, in[0], in[1]); }
+    if (op_is(op, "saturate"))
+    {
+        return crd::kir::nodes::saturate(g, in[0], in[1]);
+    }
     // 38-G1: the POST/TONEMAP family — legal only under the POST context (`cook_post_graph`); `cook_material`
     // refuses them by name below, the same way it refuses lighting ops.
-    if (op_is(op, "agx")) { return crd::kir::post::agx(g, in[0]); }
-    if (op_is(op, "contrast_curve")) { return crd::kir::post::agx_detail::contrast(g, in[0]); }
-    if (op_is(op, "ev100")) { return crd::kir::post::ev100_from_luminance(g, in[0]); }
-    if (op_is(op, "exposure_scale")) { return crd::kir::post::exposure_from_ev100(g, in[0]); }
-    if (op_is(op, "gamut_compress")) { return crd::kir::post::gamut_compress(g, in[0], in[1]); }
-    if (op_is(op, "pbr_neutral")) { return crd::kir::post::pbr_neutral(g, in[0]); }
-    if (op_is(op, "pq_encode")) { return crd::kir::post::pq_encode(g, in[0]); }
-    if (op_is(op, "srgb_encode")) { return crd::kir::post::srgb_encode(g, in[0]); }
-    if (op_is(op, "screen")) { return crd::kir::nodes::screen(g, in[0], in[1], in[2]); }
-    if (op_is(op, "sign")) { return crd::kir::nodes::sign(g, in[0]); }
-    if (op_is(op, "sin")) { return crd::kir::nodes::sin(g, in[0]); }
-    if (op_is(op, "smoothstep")) { return crd::kir::nodes::smoothstep(g, in[0], in[1], in[2]); }
-    if (op_is(op, "splitlr")) { return crd::kir::nodes::splitlr(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "splittb")) { return crd::kir::nodes::splittb(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "sqrt")) { return crd::kir::nodes::sqrt(g, in[0]); }
-    if (op_is(op, "subtract")) { return crd::kir::nodes::subtract(g, in[0], in[1]); }
-    if (op_is(op, "switch5")) { return crd::kir::nodes::switch5(g, in[0], in[1], in[2], in[3], in[4], in[5]); }
-    if (op_is(op, "tan")) { return crd::kir::nodes::tan(g, in[0]); }
-    if (op_is(op, "tangent")) { return crd::kir::nodes::tangent(g, in[0]); }
-    if (op_is(op, "texcoord")) { return crd::kir::nodes::texcoord(g, in[0]); }
-    if (op_is(op, "triplanar")) { return crd::kir::nodes::triplanar(g, in[0], in[1], in[2], in[3]); }
-    if (op_is(op, "triplanar_weights")) { return crd::kir::nodes::triplanar_weights(g, in[0], in[1]); }
-    if (op_is(op, "unpremult")) { return crd::kir::nodes::unpremult(g, in[0]); }
-    if (op_is(op, "viewdirection")) { return crd::kir::nodes::viewdirection(g, in[0]); }
+    if (op_is(op, "agx"))
+    {
+        return crd::kir::post::agx(g, in[0]);
+    }
+    if (op_is(op, "contrast_curve"))
+    {
+        return crd::kir::post::agx_detail::contrast(g, in[0]);
+    }
+    if (op_is(op, "ev100"))
+    {
+        return crd::kir::post::ev100_from_luminance(g, in[0]);
+    }
+    if (op_is(op, "exposure_scale"))
+    {
+        return crd::kir::post::exposure_from_ev100(g, in[0]);
+    }
+    if (op_is(op, "gamut_compress"))
+    {
+        return crd::kir::post::gamut_compress(g, in[0], in[1]);
+    }
+    if (op_is(op, "pbr_neutral"))
+    {
+        return crd::kir::post::pbr_neutral(g, in[0]);
+    }
+    if (op_is(op, "pq_encode"))
+    {
+        return crd::kir::post::pq_encode(g, in[0]);
+    }
+    if (op_is(op, "srgb_encode"))
+    {
+        return crd::kir::post::srgb_encode(g, in[0]);
+    }
+    if (op_is(op, "screen"))
+    {
+        return crd::kir::nodes::screen(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "sign"))
+    {
+        return crd::kir::nodes::sign(g, in[0]);
+    }
+    if (op_is(op, "sin"))
+    {
+        return crd::kir::nodes::sin(g, in[0]);
+    }
+    if (op_is(op, "smoothstep"))
+    {
+        return crd::kir::nodes::smoothstep(g, in[0], in[1], in[2]);
+    }
+    if (op_is(op, "splitlr"))
+    {
+        return crd::kir::nodes::splitlr(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "splittb"))
+    {
+        return crd::kir::nodes::splittb(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "sqrt"))
+    {
+        return crd::kir::nodes::sqrt(g, in[0]);
+    }
+    if (op_is(op, "subtract"))
+    {
+        return crd::kir::nodes::subtract(g, in[0], in[1]);
+    }
+    if (op_is(op, "switch5"))
+    {
+        return crd::kir::nodes::switch5(g, in[0], in[1], in[2], in[3], in[4], in[5]);
+    }
+    if (op_is(op, "tan"))
+    {
+        return crd::kir::nodes::tan(g, in[0]);
+    }
+    if (op_is(op, "tangent"))
+    {
+        return crd::kir::nodes::tangent(g, in[0]);
+    }
+    if (op_is(op, "texcoord"))
+    {
+        return crd::kir::nodes::texcoord(g, in[0]);
+    }
+    if (op_is(op, "triplanar"))
+    {
+        return crd::kir::nodes::triplanar(g, in[0], in[1], in[2], in[3]);
+    }
+    if (op_is(op, "triplanar_weights"))
+    {
+        return crd::kir::nodes::triplanar_weights(g, in[0], in[1]);
+    }
+    if (op_is(op, "unpremult"))
+    {
+        return crd::kir::nodes::unpremult(g, in[0]);
+    }
+    if (op_is(op, "viewdirection"))
+    {
+        return crd::kir::nodes::viewdirection(g, in[0]);
+    }
     return -1;
 }
 
 void set_str(crd::containers::String& d, std::string_view v)
 {
     d.clear();
-    for (char c : v) { const char one[2] = {c, 0}; d.append(static_cast<const char*>(one)); }
+    for (char c : v)
+    {
+        const char one[2] = {c, 0};
+        d.append(static_cast<const char*>(one));
+    }
 }
 void set_where(crd::containers::String* w, std::string_view v)
 {
-    if (w != nullptr) { set_str(*w, v); }
+    if (w != nullptr)
+    {
+        set_str(*w, v);
+    }
 }
 [[nodiscard]] bool str_eq(const crd::containers::String& a, std::string_view b) noexcept
 {
@@ -351,7 +670,10 @@ void read_value(const crd::toml::node& n, double* v, crd::u32& comps)
         crd::u32 i = 0;
         for (const auto& e : *arr)
         {
-            if (i < 4U) { v[i++] = e.value_or<double>(0.0); }
+            if (i < 4U)
+            {
+                v[i++] = e.value_or<double>(0.0);
+            }
         }
         comps = i > 0U ? i : 1U;
         return;
@@ -369,7 +691,10 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
     crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
-    if (!pr) { return MaterialCookError::ParseFailed; }
+    if (!pr)
+    {
+        return MaterialCookError::ParseFailed;
+    }
     crd::toml::node root = std::move(pr).table();
     auto* alloc = out.nodes.allocator();
 
@@ -383,10 +708,16 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     out.surface = MatSurfaceDesc(alloc);
 
     const auto sch = root["schema"].value<int64_t>();
-    if (!sch || *sch != static_cast<int64_t>(kMaterialSchemaVersion)) { return MaterialCookError::BadSchema; }
+    if (!sch || *sch != static_cast<int64_t>(kMaterialSchemaVersion))
+    {
+        return MaterialCookError::BadSchema;
+    }
     out.schema = kMaterialSchemaVersion;
     const auto nm = root["name"].value<std::string_view>();
-    if (!nm || nm->empty()) { return MaterialCookError::MissingName; }
+    if (!nm || nm->empty())
+    {
+        return MaterialCookError::MissingName;
+    }
     set_str(out.name, *nm);
 
     if (const auto* pt = root["param"].as_array())
@@ -394,16 +725,29 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
         for (const auto& e : *pt)
         {
             const crd::toml::node* t = e.as_table();
-            if (t == nullptr) { continue; }
+            if (t == nullptr)
+            {
+                continue;
+            }
             MatParamDesc p(alloc);
             const auto   pn = (*t)["name"].value<std::string_view>();
-            if (!pn || pn->empty()) { return MaterialCookError::MissingName; }
+            if (!pn || pn->empty())
+            {
+                return MaterialCookError::MissingName;
+            }
             set_str(p.name, *pn);
             for (crd::usize i = 0; i < out.params.size(); ++i)
             {
-                if (str_eq(out.params[i].name, *pn)) { set_where(where, *pn); return MaterialCookError::DuplicateName; }
+                if (str_eq(out.params[i].name, *pn))
+                {
+                    set_where(where, *pn);
+                    return MaterialCookError::DuplicateName;
+                }
             }
-            if (const crd::toml::node* v = (*t)["value"].node_ptr()) { read_value(*v, static_cast<double*>(p.value), p.comps); }
+            if (const crd::toml::node* v = (*t)["value"].node_ptr())
+            {
+                read_value(*v, static_cast<double*>(p.value), p.comps);
+            }
             out.params.push_back(static_cast<MatParamDesc&&>(p));
         }
     }
@@ -413,22 +757,36 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
         for (const auto& e : *nt)
         {
             const crd::toml::node* t = e.as_table();
-            if (t == nullptr) { continue; }
+            if (t == nullptr)
+            {
+                continue;
+            }
             MatNodeDesc n(alloc);
             const auto  nn = (*t)["name"].value<std::string_view>();
             const auto  op = (*t)["op"].value<std::string_view>();
-            if (!nn || nn->empty() || !op || op->empty()) { return MaterialCookError::MissingName; }
+            if (!nn || nn->empty() || !op || op->empty())
+            {
+                return MaterialCookError::MissingName;
+            }
             set_str(n.name, *nn);
             set_str(n.op, *op);
             for (crd::usize i = 0; i < out.nodes.size(); ++i)
             {
-                if (str_eq(out.nodes[i].name, *nn)) { set_where(where, *nn); return MaterialCookError::DuplicateName; }
+                if (str_eq(out.nodes[i].name, *nn))
+                {
+                    set_where(where, *nn);
+                    return MaterialCookError::DuplicateName;
+                }
             }
             if (const auto* ia = (*t)["inputs"].as_array())
             {
                 for (const auto& ie : *ia)
                 {
-                    if (n.inputs.size() >= kMaxNodeInputs) { set_where(where, *nn); return MaterialCookError::TooManyInputs; }
+                    if (n.inputs.size() >= kMaxNodeInputs)
+                    {
+                        set_where(where, *nn);
+                        return MaterialCookError::TooManyInputs;
+                    }
                     MatInput in(alloc);
                     // ⛔ A STRING input names something; a NUMBER is a literal. The `$` prefix distinguishes a
                     // PARAMETER from a node, because the two are overridden differently and guessing from context
@@ -463,14 +821,24 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
         for (const auto& e : *it)
         {
             const crd::toml::node* t = e.as_table();
-            if (t == nullptr) { continue; }
+            if (t == nullptr)
+            {
+                continue;
+            }
             MatInstanceDesc inst(alloc);
             const auto      iname = (*t)["name"].value<std::string_view>();
-            if (!iname || iname->empty()) { return MaterialCookError::MissingName; }
+            if (!iname || iname->empty())
+            {
+                return MaterialCookError::MissingName;
+            }
             set_str(inst.name, *iname);
             for (crd::usize i = 0; i < out.instances.size(); ++i)
             {
-                if (str_eq(out.instances[i].name, *iname)) { set_where(where, *iname); return MaterialCookError::DuplicateName; }
+                if (str_eq(out.instances[i].name, *iname))
+                {
+                    set_where(where, *iname);
+                    return MaterialCookError::DuplicateName;
+                }
             }
             if (const auto* ov = (*t)["set"].as_table())
             {
@@ -489,7 +857,10 @@ MaterialCookError parse_material_core(crd::containers::StringView toml_text, Mat
     if (const auto* sf = root["surface"].as_table())
     {
         const auto get = [&](const char* k, crd::containers::String& d) {
-            if (const auto v = (*sf)[k].value<std::string_view>()) { set_str(d, *v); }
+            if (const auto v = (*sf)[k].value<std::string_view>())
+            {
+                set_str(d, *v);
+            }
         };
         get("base_color", out.surface.base_color);
         get("metallic", out.surface.metallic);
@@ -506,7 +877,10 @@ MaterialCookError parse_material_toml(crd::containers::StringView toml_text, Mat
                                       crd::containers::String* where)
 {
     const MaterialCookError e = parse_material_core(toml_text, out, where);
-    if (e != MaterialCookError::Ok) { return e; }
+    if (e != MaterialCookError::Ok)
+    {
+        return e;
+    }
     return validate_material(out, where);
 }
 
@@ -549,11 +923,19 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
     {
         const MatNodeDesc& n  = desc.nodes[i];
         const std::string_view opv(n.op.c_str(), n.op.size());
-        if (is_lighting_op(opv)) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::ForbiddenLighting; }
+        if (is_lighting_op(opv))
+        {
+            set_where(where, std::string_view(n.name.c_str(), n.name.size()));
+            return MaterialCookError::ForbiddenLighting;
+        }
         // 38-G1: the display transform is a FRAME operation — a material carrying `agx`/`srgb_encode` couples
         // every surface to the output encoding, the mirror image of the lighting coupling above. Same error:
         // the asset names an op this CONTEXT may not use, and the message points at the node.
-        if (is_post_op(opv)) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::ForbiddenLighting; }
+        if (is_post_op(opv))
+        {
+            set_where(where, std::string_view(n.name.c_str(), n.name.size()));
+            return MaterialCookError::ForbiddenLighting;
+        }
         const crd::i32 oi = find_op(crd::containers::StringView(n.op.c_str(), n.op.size()));
         if (oi < 0)
         {
@@ -561,11 +943,19 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
             return MaterialCookError::UnknownOp;
         }
         const OpEntry& oe = kOps[static_cast<crd::usize>(oi)];
-        if (n.inputs.size() > kMaxNodeInputs) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::TooManyInputs; }
+        if (n.inputs.size() > kMaxNodeInputs)
+        {
+            set_where(where, std::string_view(n.name.c_str(), n.name.size()));
+            return MaterialCookError::TooManyInputs;
+        }
         // ⛔ ARITY IS CHECKED, not tolerated. A `mix` with two inputs would otherwise wire a garbage node id into
         // the third slot — CKIR does not bounds-check a node index, so the result is a graph that builds and
         // computes something unrelated.
-        if (n.inputs.size() != oe.arity) { set_where(where, std::string_view(n.name.c_str(), n.name.size())); return MaterialCookError::WrongArity; }
+        if (n.inputs.size() != oe.arity)
+        {
+            set_where(where, std::string_view(n.name.c_str(), n.name.size()));
+            return MaterialCookError::WrongArity;
+        }
 
         for (crd::usize k = 0; k < n.inputs.size(); ++k)
         {
@@ -595,7 +985,11 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
             if (in.kind == MatInputKind::Node)
             {
                 const crd::i32 src = find_node(in.name);
-                if (src < 0) { set_where(where, std::string_view(in.name.c_str(), in.name.size())); return MaterialCookError::UnknownInput; }
+                if (src < 0)
+                {
+                    set_where(where, std::string_view(in.name.c_str(), in.name.size()));
+                    return MaterialCookError::UnknownInput;
+                }
                 // ⛔ A DAG, enforced by DECLARATION ORDER: a node may only read one declared BEFORE it. That is a
                 // stricter rule than "no cycles" and it is deliberate — it makes the cook a single forward pass
                 // with no topological sort, and it makes a cycle impossible to write rather than merely rejected.
@@ -616,14 +1010,25 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
     // ⛔ BASE COLOUR IS REQUIRED. Every other surface field has a defensible default (metal 0, rough 1, the
     // geometric normal); base colour does not — a material with none is either unfinished or misspelled, and
     // defaulting it to white renders a plausible object that is not the one the author described.
-    if (desc.surface.base_color.empty()) { set_where(where, std::string_view(desc.name.c_str(), desc.name.size())); return MaterialCookError::NoBaseColor; }
+    if (desc.surface.base_color.empty())
+    {
+        set_where(where, std::string_view(desc.name.c_str(), desc.name.size()));
+        return MaterialCookError::NoBaseColor;
+    }
     const crd::containers::String* fields[6] = {&desc.surface.base_color, &desc.surface.metallic,
                                                 &desc.surface.roughness,  &desc.surface.normal,
                                                 &desc.surface.emissive,   &desc.surface.opacity};
     for (const crd::containers::String* f : fields)
     {
-        if (f->empty()) { continue; }
-        if (find_node(*f) < 0) { set_where(where, std::string_view(f->c_str(), f->size())); return MaterialCookError::SurfaceUnbound; }
+        if (f->empty())
+        {
+            continue;
+        }
+        if (find_node(*f) < 0)
+        {
+            set_where(where, std::string_view(f->c_str(), f->size()));
+            return MaterialCookError::SurfaceUnbound;
+        }
     }
 
     // ⛔ An instance may only override a parameter that EXISTS. A typo would otherwise be silently ignored and the
@@ -633,7 +1038,11 @@ MaterialCookError validate_material(const MaterialDesc& desc, crd::containers::S
         for (crd::usize k = 0; k < desc.instances[i].overrides.size(); ++k)
         {
             const crd::containers::String& on = desc.instances[i].overrides[k].name;
-            if (!has_param(on)) { set_where(where, std::string_view(on.c_str(), on.size())); return MaterialCookError::UnknownOverride; }
+            if (!has_param(on))
+            {
+                set_where(where, std::string_view(on.c_str(), on.size()));
+                return MaterialCookError::UnknownOverride;
+            }
         }
     }
     return MaterialCookError::Ok;
@@ -662,9 +1071,15 @@ void app_f64(crd::containers::String& o, double v)
     bool plain = true;
     for (const char* p = static_cast<const char*>(buf); *p != 0; ++p)
     {
-        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i') { plain = false; }
+        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i')
+        {
+            plain = false;
+        }
     }
-    if (plain) { app(o, ".0"); }
+    if (plain)
+    {
+        app(o, ".0");
+    }
 }
 void app_i32(crd::containers::String& o, crd::i32 v)
 {
@@ -682,7 +1097,10 @@ void app_value(crd::containers::String& o, const double* v, crd::u32 comps)
     app(o, "[");
     for (crd::u32 i = 0; i < comps && i < 4U; ++i)
     {
-        if (i > 0U) { app(o, ", "); }
+        if (i > 0U)
+        {
+            app(o, ", ");
+        }
         app_f64(o, v[i]);
     }
     app(o, "]");
@@ -718,9 +1136,15 @@ crd::containers::String emit_material_toml(const MaterialDesc& desc, crd::memory
         app(o, "\ninputs = [");
         for (crd::usize k = 0; k < n.inputs.size(); ++k)
         {
-            if (k > 0U) { app(o, ", "); }
+            if (k > 0U)
+            {
+                app(o, ", ");
+            }
             const MatInput& in = n.inputs[k];
-            if (in.kind == MatInputKind::Node) { app_quoted(o, in.name); }
+            if (in.kind == MatInputKind::Node)
+            {
+                app_quoted(o, in.name);
+            }
             else if (in.kind == MatInputKind::Param)
             {
                 // ⭐ The `$` is what distinguishes a PARAMETER from a node, and it has to be written back or an
@@ -736,7 +1160,10 @@ crd::containers::String emit_material_toml(const MaterialDesc& desc, crd::memory
             {
                 app_i32(o, static_cast<crd::i32>(in.value[0]));
             }
-            else { app_value(o, static_cast<const double*>(in.value), in.comps); }
+            else
+            {
+                app_value(o, static_cast<const double*>(in.value), in.comps);
+            }
         }
         app(o, "]\n");
     }
@@ -764,7 +1191,10 @@ crd::containers::String emit_material_toml(const MaterialDesc& desc, crd::memory
                                               &desc.surface.emissive,   &desc.surface.opacity};
     for (int i = 0; i < 6; ++i)
     {
-        if (vals[i]->empty()) { continue; }
+        if (vals[i]->empty())
+        {
+            continue;
+        }
         app(o, keys[i]);
         app(o, " = ");
         app_quoted(o, *vals[i]);
@@ -788,7 +1218,10 @@ int cook_post_graph(const MaterialDesc& desc, crd::kir::KGraph& g, crd::containe
         }
         return -1;
     };
-    if (desc.nodes.size() == 0U) { return fail("empty"); }
+    if (desc.nodes.size() == 0U)
+    {
+        return fail("empty");
+    }
     const crd::kir::Shape sh1 = crd::kir::make_shape({1});
     crd::containers::Array<int> built(crd::memory::default_allocator());
     built.resize(static_cast<crd::u32>(desc.nodes.size()), -1);
@@ -799,12 +1232,24 @@ int cook_post_graph(const MaterialDesc& desc, crd::kir::KGraph& g, crd::containe
         const std::string_view opv(n.op.c_str(), n.op.size());
         // the TWO-SIDED legality, post face: lighting ops stay out (a post pass shades nothing), and surface
         // readers stay out (a display transform that sampled a normal would be a material in a post costume)
-        if (is_lighting_op(opv)) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
-        if (is_surface_reader_op(opv)) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        if (is_lighting_op(opv))
+        {
+            return fail(std::string_view(n.name.c_str(), n.name.size()));
+        }
+        if (is_surface_reader_op(opv))
+        {
+            return fail(std::string_view(n.name.c_str(), n.name.size()));
+        }
         const crd::i32 oi = find_op(crd::containers::StringView(n.op.c_str(), n.op.size()));
-        if (oi < 0) { return fail(opv); }
+        if (oi < 0)
+        {
+            return fail(opv);
+        }
         const OpEntry& oe = kOps[static_cast<crd::usize>(oi)];
-        if (n.inputs.size() != oe.arity) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        if (n.inputs.size() != oe.arity)
+        {
+            return fail(std::string_view(n.name.c_str(), n.name.size()));
+        }
         int in[kMaxNodeInputs] = {};
         for (crd::usize k = 0; k < n.inputs.size(); ++k)
         {
@@ -826,40 +1271,70 @@ int cook_post_graph(const MaterialDesc& desc, crd::kir::KGraph& g, crd::containe
                         break;
                     }
                 }
-                if (found < 0) { return fail(std::string_view(mi.name.c_str(), mi.name.size())); }
+                if (found < 0)
+                {
+                    return fail(std::string_view(mi.name.c_str(), mi.name.size()));
+                }
                 in[k] = found;
             }
             else // literal (Param has no post meaning yet — a param input is a refusal, not a silent default)
             {
-                if (mi.kind == MatInputKind::Param) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+                if (mi.kind == MatInputKind::Param)
+                {
+                    return fail(std::string_view(n.name.c_str(), n.name.size()));
+                }
                 const int c0 = g.constant(mi.value[0], sh1, crd::kir::DType::F32);
-                if (mi.comps <= 1U) { in[k] = c0; }
+                if (mi.comps <= 1U)
+                {
+                    in[k] = c0;
+                }
                 else
                 {
                     const int c1 = g.constant(mi.value[1], sh1, crd::kir::DType::F32);
                     const int c2 = g.constant(mi.value[2], sh1, crd::kir::DType::F32);
-                    if (mi.comps == 2U) { in[k] = g.vec2(c0, c1); }
-                    else if (mi.comps == 3U) { in[k] = g.vec3(c0, c1, c2); }
-                    else { in[k] = g.vec4(c0, c1, c2, g.constant(mi.value[3], sh1, crd::kir::DType::F32)); }
+                    if (mi.comps == 2U)
+                    {
+                        in[k] = g.vec2(c0, c1);
+                    }
+                    else if (mi.comps == 3U)
+                    {
+                        in[k] = g.vec3(c0, c1, c2);
+                    }
+                    else
+                    {
+                        in[k] = g.vec4(c0, c1, c2, g.constant(mi.value[3], sh1, crd::kir::DType::F32));
+                    }
                 }
             }
         }
         const int r = material_build_op(g, crd::containers::StringView(n.op.c_str(), n.op.size()),
                                         static_cast<const int*>(in), static_cast<crd::u32>(n.inputs.size()));
-        if (r < 0) { return fail(std::string_view(n.name.c_str(), n.name.size())); }
+        if (r < 0)
+        {
+            return fail(std::string_view(n.name.c_str(), n.name.size()));
+        }
         built[static_cast<crd::u32>(i)] = r;
-        if (n.name.size() == 6U && std::memcmp(n.name.c_str(), "output", 6U) == 0) { out_node = r; }
+        if (n.name.size() == 6U && std::memcmp(n.name.c_str(), "output", 6U) == 0)
+        {
+            out_node = r;
+        }
     }
     // ⛔ the OUTPUT is named, never inferred: "the last node" changes meaning under a reorder that alters
     // nothing else, which is exactly the silent-drift shape every vocabulary here refuses.
-    if (out_node < 0) { return fail("output"); }
+    if (out_node < 0)
+    {
+        return fail("output");
+    }
     return out_node;
 }
 
 int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, crd::containers::StringView instance,
                   crd::kir::ShapeIssue* shape_issue)
 {
-    if (validate_material(desc, nullptr) != MaterialCookError::Ok) { return -1; }
+    if (validate_material(desc, nullptr) != MaterialCookError::Ok)
+    {
+        return -1;
+    }
 
     // The parameter set this cook uses: the declared defaults, with an instance's overrides applied on top.
     // ⛔ Resolved to VALUES here rather than left as a runtime indirection, because that is what makes an instance
@@ -868,7 +1343,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
     crd::containers::Array<crd::u32> pc(crd::memory::default_allocator());
     for (crd::usize i = 0; i < desc.params.size(); ++i)
     {
-        for (int k = 0; k < 4; ++k) { pv.push_back(desc.params[i].value[k]); }
+        for (int k = 0; k < 4; ++k)
+        {
+            pv.push_back(desc.params[i].value[k]);
+        }
         pc.push_back(desc.params[i].comps);
     }
     if (instance.size() > 0U)
@@ -883,7 +1361,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
                 break;
             }
         }
-        if (found < 0) { return -1; } // ⛔ an unknown instance FAILS; falling back to defaults would hide a typo
+        if (found < 0) // ⛔ an unknown instance FAILS; falling back to defaults would hide a typo
+        {
+            return -1;
+        }
         const MatInstanceDesc& inst = desc.instances[static_cast<crd::usize>(found)];
         for (crd::usize o = 0; o < inst.overrides.size(); ++o)
         {
@@ -895,7 +1376,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
                 {
                     continue;
                 }
-                for (int k = 0; k < 4; ++k) { pv[p * 4U + static_cast<crd::usize>(k)] = inst.overrides[o].value[k]; }
+                for (int k = 0; k < 4; ++k)
+                {
+                    pv[p * 4U + static_cast<crd::usize>(k)] = inst.overrides[o].value[k];
+                }
                 pc[p] = inst.overrides[o].comps;
                 break;
             }
@@ -905,11 +1389,20 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
     const auto sh1 = crd::kir::make_shape({1});
     const auto make_const = [&](const double* v, crd::u32 comps) {
         const int c0 = g.constant(v[0], sh1, crd::kir::DType::F32);
-        if (comps <= 1U) { return c0; }
+        if (comps <= 1U)
+        {
+            return c0;
+        }
         const int c1 = g.constant(v[1], sh1, crd::kir::DType::F32);
-        if (comps == 2U) { return g.vec2(c0, c1); }
+        if (comps == 2U)
+        {
+            return g.vec2(c0, c1);
+        }
         const int c2 = g.constant(v[2], sh1, crd::kir::DType::F32);
-        if (comps == 3U) { return g.vec3(c0, c1, c2); }
+        if (comps == 3U)
+        {
+            return g.vec3(c0, c1, c2);
+        }
         return g.vec4(c0, c1, c2, g.constant(v[3], sh1, crd::kir::DType::F32));
     };
 
@@ -918,7 +1411,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
     {
         const MatNodeDesc& n                  = desc.nodes[i];
         const crd::i32     oi                 = find_op(crd::containers::StringView(n.op.c_str(), n.op.size()));
-        if (oi < 0) { return -1; }
+        if (oi < 0)
+        {
+            return -1;
+        }
         const crd::u32 attr_mask              = kOps[static_cast<crd::usize>(oi)].attr_mask;
         int            in[kMaxNodeInputs]     = {-1, -1, -1, -1, -1, -1, -1};
         for (crd::usize k = 0; k < n.inputs.size(); ++k)
@@ -931,7 +1427,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
                 in[k] = static_cast<int>(mi.value[0]);
                 continue;
             }
-            if (mi.kind == MatInputKind::Literal) { in[k] = make_const(static_cast<const double*>(mi.value), mi.comps); }
+            if (mi.kind == MatInputKind::Literal)
+            {
+                in[k] = make_const(static_cast<const double*>(mi.value), mi.comps);
+            }
             else if (mi.kind == MatInputKind::Param)
             {
                 for (crd::usize p = 0; p < desc.params.size(); ++p)
@@ -956,16 +1455,25 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
                     }
                 }
             }
-            if (in[k] < 0) { return -1; }
+            if (in[k] < 0)
+            {
+                return -1;
+            }
         }
         const int r = dispatch_op(g, crd::containers::StringView(n.op.c_str(), n.op.size()),
                                   static_cast<const int*>(in));
-        if (r < 0) { return -1; }
+        if (r < 0)
+        {
+            return -1;
+        }
         built.push_back(r);
     }
 
     const auto node_of = [&](const crd::containers::String& nm, int fallback) {
-        if (nm.empty()) { return fallback; }
+        if (nm.empty())
+        {
+            return fallback;
+        }
         for (crd::usize s = 0; s < desc.nodes.size(); ++s)
         {
             if (desc.nodes[s].name.size() == nm.size()
@@ -1002,7 +1510,10 @@ int cook_material(const MaterialDesc& desc, crd::kir::KGraph& g, int struct_id, 
 
 bool material_op_post_only(crd::u32 i) noexcept
 {
-    if (i >= material_op_count()) { return false; }
+    if (i >= material_op_count())
+    {
+        return false;
+    }
     return is_post_op(std::string_view(kOps[i].name));
 }
 crd::u32    material_op_count() noexcept { return static_cast<crd::u32>(sizeof(kOps) / sizeof(kOps[0])); }
@@ -1014,13 +1525,19 @@ bool material_op_exists(crd::containers::StringView op) noexcept { return find_o
 int material_build_op(crd::kir::KGraph& g, crd::containers::StringView op, const int* in, crd::u32 n)
 {
     const crd::i32 oi = find_op(op);
-    if (oi < 0 || in == nullptr || n != kOps[static_cast<crd::usize>(oi)].arity) { return -1; }
+    if (oi < 0 || in == nullptr || n != kOps[static_cast<crd::usize>(oi)].arity)
+    {
+        return -1;
+    }
     return dispatch_op(g, op, in);
 }
 
 bool material_op_arg_is_attr(crd::u32 op_index, crd::u32 arg_index) noexcept
 {
-    if (op_index >= material_op_count() || arg_index >= kOps[op_index].arity) { return false; }
+    if (op_index >= material_op_count() || arg_index >= kOps[op_index].arity)
+    {
+        return false;
+    }
     return (kOps[op_index].attr_mask & (1U << arg_index)) != 0U;
 }
 crd::i32 material_op_attr_min(crd::u32 i) noexcept { return i < material_op_count() ? kOps[i].attr_lo : 0; }
@@ -1028,7 +1545,10 @@ crd::i32 material_op_attr_max(crd::u32 i) noexcept { return i < material_op_coun
 
 crd::u32 material_op_arg_width(crd::u32 op_index, crd::u32 arg_index) noexcept
 {
-    if (op_index >= material_op_count() || arg_index >= kOps[op_index].arity) { return 0U; }
+    if (op_index >= material_op_count() || arg_index >= kOps[op_index].arity)
+    {
+        return 0U;
+    }
     return kOps[op_index].width[arg_index];
 }
 

@@ -41,7 +41,13 @@ int main()
     bench("f32->bf16 (batch)", [&] { convert_f32_to_bf16({x, kN}, {h, kN}); });
     bench("f32->e4m3 (batch)", [&] { convert_f32_to_fp8_e4m3({x, kN}, {b, kN}); });
     bench("f32->e5m2 (batch)", [&] { convert_f32_to_fp8_e5m2({x, kN}, {b, kN}); });
-    bench("f32->f16 SR (scalar)", [&] { for (crd::u32 i = 0; i < kN; ++i) h[i] = f32_to_f16_bits_sr(x[i], 7U, i); });
+    bench("f32->f16 SR (scalar)", [&]
+    {
+        for (crd::u32 i = 0; i < kN; ++i)
+        {
+            h[i] = f32_to_f16_bits_sr(x[i], 7U, i);
+        }
+    });
     bench("f32->f16 SR (batch)", [&] { convert_f32_to_f16_sr({x, kN}, {h, kN}, 7U); });
     bench("f32->bf16 SR (batch)", [&] { convert_f32_to_bf16_sr({x, kN}, {h, kN}, 7U); });
     bench("f32->e4m3 SR (batch)", [&] { convert_f32_to_fp8_e4m3_sr({x, kN}, {b, kN}, 7U); });

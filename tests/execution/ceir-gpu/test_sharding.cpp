@@ -99,29 +99,47 @@ Operation* mk_export(Context& ctx, Block* b, Value* v)
 u32 count_named(Context& ctx, Region* r, StringView name) // NOLINT(misc-no-recursion)
 {
     u32 n = 0;
-    if (r == nullptr) { return n; }
+    if (r == nullptr)
+    {
+        return n;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == name) { ++n; }
-            for (u32 i = 0; i < op->num_regions(); ++i) { n += count_named(ctx, op->region(i), name); }
+            if (ctx.op_name(op->kind()) == name)
+            {
+                ++n;
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                n += count_named(ctx, op->region(i), name);
+            }
         }
     }
     return n;
 }
 Operation* first_named(Context& ctx, Region* r, StringView name) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == name) { return op; }
+            if (ctx.op_name(op->kind()) == name)
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 Operation* const f = first_named(ctx, op->region(i), name);
-                if (f != nullptr) { return f; }
+                if (f != nullptr)
+                {
+                    return f;
+                }
             }
         }
     }
@@ -419,13 +437,22 @@ using crd::containers::HashMap;
 // collect every op named `name` (pre-order) — the shard declares / reduces the lowered module carries, in creation order.
 void collect_named(Context& ctx, Region* r, StringView name, Array<Operation*>& out) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == name) { out.push_back(op); }
-            for (u32 i = 0; i < op->num_regions(); ++i) { collect_named(ctx, op->region(i), name, out); }
+            if (ctx.op_name(op->kind()) == name)
+            {
+                out.push_back(op);
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_named(ctx, op->region(i), name, out);
+            }
         }
     }
 }
@@ -434,7 +461,10 @@ void collect_named(Context& ctx, Region* r, StringView name, Array<Operation*>& 
 [[nodiscard]] f32 fold_sum(const f32* base, u32 n, u32 stride)
 {
     f32 acc = base[0];
-    for (u32 i = 1; i < n; ++i) { acc = acc + base[static_cast<usize>(i) * stride]; }
+    for (u32 i = 1; i < n; ++i)
+    {
+        acc = acc + base[static_cast<usize>(i) * stride];
+    }
     return acc;
 }
 struct Seed
@@ -455,7 +485,10 @@ ExecuteError run_all_host(Context& ctx, memory::IAllocator* alloc, const TensorP
     for (usize i = 0; i < nb; ++i)
     {
         offs[i] = total;
-        if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(f32); }
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(f32);
+        }
     }
     Array<f32> store(alloc);
     store.resize(static_cast<usize>(total), 0.0F);
@@ -466,12 +499,18 @@ ExecuteError run_all_host(Context& ctx, memory::IAllocator* alloc, const TensorP
     }
     for (usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != BufferRole::ExternalIn) { continue; }
+        if (plan.buffers[i].role != BufferRole::ExternalIn)
+        {
+            continue;
+        }
         for (usize s = 0; s < n_seeds; ++s)
         {
             if (seeds[s].value == plan.buffers[i].value)
             {
-                for (u32 e = 0; e < seeds[s].count; ++e) { ptr[i][e] = seeds[s].floats[e]; }
+                for (u32 e = 0; e < seeds[s].count; ++e)
+                {
+                    ptr[i][e] = seeds[s].floats[e];
+                }
             }
         }
     }
@@ -481,10 +520,16 @@ ExecuteError run_all_host(Context& ctx, memory::IAllocator* alloc, const TensorP
         i32 oi = -1;
         for (usize i = 0; i < nb; ++i)
         {
-            if (plan.buffers[i].role == BufferRole::Output) { oi = static_cast<i32>(i); }
+            if (plan.buffers[i].role == BufferRole::Output)
+            {
+                oi = static_cast<i32>(i);
+            }
         }
         REQUIRE(oi >= 0);
-        for (usize e = 0; e < out_len; ++e) { out[e] = ptr[static_cast<usize>(oi)][e]; }
+        for (usize e = 0; e < out_len; ++e)
+        {
+            out[e] = ptr[static_cast<usize>(oi)][e];
+        }
     }
     return ee;
 }
@@ -591,7 +636,10 @@ TEST_CASE("ceir 30b-3a: lower_sharded_reduction splits a sec-140 reduction into 
         i32 shard1_bi = -1;
         for (usize i = 0; i < plan.buffers.size(); ++i)
         {
-            if (plan.buffers[i].value == decls[1]->result(0U)) { shard1_bi = static_cast<i32>(i); }
+            if (plan.buffers[i].value == decls[1]->result(0U))
+            {
+                shard1_bi = static_cast<i32>(i);
+            }
         }
         REQUIRE(shard1_bi >= 0);
         REQUIRE(plan.stages[1].nbind >= 1U);
@@ -614,7 +662,10 @@ TEST_CASE("ceir 30b-3a: lower_sharded_reduction splits a sec-140 reduction into 
 
         // all-Host run == the TWO-STAGE f32 oracle, which DIFFERS from a flat 8-row fold (non-associativity, proven live).
         f32 t[32] = {};
-        for (u32 idx = 0; idx < 32U; ++idx) { t[idx] = 0.1F * static_cast<f32>(static_cast<i32>(idx) - 12); }
+        for (u32 idx = 0; idx < 32U; ++idx)
+        {
+            t[idx] = 0.1F * static_cast<f32>(static_cast<i32>(idx) - 12);
+        }
         f32 shard0[16] = {};
         f32 shard1[16] = {};
         for (u32 li = 0; li < 4U; ++li)
@@ -639,7 +690,10 @@ TEST_CASE("ceir 30b-3a: lower_sharded_reduction splits a sec-140 reduction into 
             const f32 two_stage = p0 + p1;
             const f32 flat      = fold_sum(&t[c], 8U, 4U);       // one sequential fold over all 8 rows
             CHECK(result[c] == two_stage);                       // BIT-EXACT vs the placed two-stage reduction
-            if (two_stage != flat) { any_diff = true; }
+            if (two_stage != flat)
+            {
+                any_diff = true;
+            }
         }
         CHECK(any_diff); // the split changes the summation grouping — f32 non-associativity is observable, not assumed
     }
@@ -681,7 +735,10 @@ TEST_CASE("ceir 30b-3a: lower_sharded_reduction splits a sec-140 reduction into 
         REQUIRE(decls.size() == 2U);
         // T[4,8] row-major; shard0 = cols [0,4), shard1 = cols [4,8), each [4,4] row-major.
         f32 t[32] = {};
-        for (u32 idx = 0; idx < 32U; ++idx) { t[idx] = 0.1F * static_cast<f32>(static_cast<i32>(idx) - 12); }
+        for (u32 idx = 0; idx < 32U; ++idx)
+        {
+            t[idx] = 0.1F * static_cast<f32>(static_cast<i32>(idx) - 12);
+        }
         f32 shard0[16] = {};
         f32 shard1[16] = {};
         for (u32 r = 0; r < 4U; ++r)
@@ -706,7 +763,10 @@ TEST_CASE("ceir 30b-3a: lower_sharded_reduction splits a sec-140 reduction into 
             const f32 two_stage = p0 + p1;
             const f32 flat      = fold_sum(&t[r * 8U], 8U, 1U);       // one sequential fold over all 8 cols
             CHECK(result[r] == two_stage);
-            if (two_stage != flat) { any_diff = true; }
+            if (two_stage != flat)
+            {
+                any_diff = true;
+            }
         }
         CHECK(any_diff);
     }
@@ -873,7 +933,10 @@ TEST_CASE("ceir 30c-1: transform.place_mesh authored placement feeds stage_class
     const Array<ProviderClass> sc_partition =
         stage_class_from_partition(plan, ConstSpan<MlProvider>(provs, 2U), ProviderClass::Gpu, &root);
     REQUIRE(sc_partition.size() == sc_placement.size());
-    for (usize i = 0; i < sc_placement.size(); ++i) { CHECK(sc_placement[i] == sc_partition[i]); }
+    for (usize i = 0; i < sc_placement.size(); ++i)
+    {
+        CHECK(sc_placement[i] == sc_partition[i]);
+    }
 }
 
 // CEIR-30c-2 (sec-146 "placement is an asset") — the COMMITTED placement .ceir asset: assets/ceir/place_mesh_host_host_gpu.ceir

@@ -30,8 +30,14 @@ struct RingNoExp
     {
         using crd::math::sin;
         S acc = x[0] * x[1 % n];
-        for (int i = 1; i < n; ++i) { acc = acc + x[i] * x[(i + 1) % n]; }
-        for (int i = 0; i < n; ++i) { acc = acc + sin(x[i]); }
+        for (int i = 1; i < n; ++i)
+        {
+            acc = acc + x[i] * x[(i + 1) % n];
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            acc = acc + sin(x[i]);
+        }
         return acc;
     }
 };
@@ -43,7 +49,11 @@ TEST_CASE("v16-e: VECTORIZED HVP == scalar HVP == hyper-dual H*v == FD, determin
     crd::memory::TlsfAllocator alloc(8 << 20);
     f64                        x[n];
     f64                        v[n];
-    for (int i = 0; i < n; ++i) { x[i] = 0.3 + 0.2 * std::sin(1.0 + i); v[i] = 0.5 * std::cos(0.4 + i); }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = 0.3 + 0.2 * std::sin(1.0 + i);
+        v[i] = 0.5 * std::cos(0.4 + i);
+    }
 
     // vectorized HVP: express f as vector ops — sum(x ⊙ roll(x,−1)) + sum(sin(x))
     auto build = [&](vec::VTape& t) -> vec::VVar
@@ -82,7 +92,10 @@ TEST_CASE("v16-e: VECTORIZED HVP == scalar HVP == hyper-dual H*v == FD, determin
     for (int i = 0; i < n; ++i)
     {
         f64 s = 0.0;
-        for (int j = 0; j < n; ++j) { s += hess[i * n + j] * v[j]; }
+        for (int j = 0; j < n; ++j)
+        {
+            s += hess[i * n + j] * v[j];
+        }
         CHECK_THAT(vh[i], WithinAbs(s, 1e-9));
     }
 

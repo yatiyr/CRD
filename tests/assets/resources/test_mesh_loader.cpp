@@ -480,15 +480,27 @@ TEST_CASE("GEO-1: an imported STL cooks, packs, mounts, and LOADS via ResourceMa
         const auto pushf = [&](float v) {
             crd::u8 raw[4];
             std::memcpy(raw, &v, 4);
-            for (crd::u8 x : raw) { stl.push_back(x); }
+            for (crd::u8 x : raw)
+            {
+                stl.push_back(x);
+            }
         };
-        for (int i = 0; i < 80; ++i) { stl.push_back(0); }
+        for (int i = 0; i < 80; ++i)
+        {
+            stl.push_back(0);
+        }
         const crd::u32 count = 1;
         crd::u8        raw[4];
         std::memcpy(raw, &count, 4);
-        for (crd::u8 x : raw) { stl.push_back(x); }
+        for (crd::u8 x : raw)
+        {
+            stl.push_back(x);
+        }
         const float tri[12] = {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1000.0F, 0.0F, 0.0F, 0.0F, 1000.0F, 0.0F};
-        for (float v : tri) { pushf(v); }
+        for (float v : tri)
+        {
+            pushf(v);
+        }
         stl.push_back(0);
         stl.push_back(0);
     }

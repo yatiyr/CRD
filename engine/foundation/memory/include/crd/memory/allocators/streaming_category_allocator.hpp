@@ -45,7 +45,10 @@ public:
 
     void deallocate(void* p) noexcept override
     {
-        if (p != nullptr) { m_sa->release_resident(m_category, p); }
+        if (p != nullptr)
+        {
+            m_sa->release_resident(m_category, p);
+        }
     }
 
     [[nodiscard]] bool owns(const void* /*p*/) const noexcept override

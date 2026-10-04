@@ -50,13 +50,21 @@ Csr grid2d(crd::memory::IAllocator* alloc, crd::u32 w, crd::u32 h)
             const crd::u32 v = idx(r, c);
             tb.add(v, v, 4.0);
             if (r > 0)
+            {
                 tb.add(v, idx(r - 1, c), -1.0);
+            }
             if (r + 1 < h)
+            {
                 tb.add(v, idx(r + 1, c), -1.0);
+            }
             if (c > 0)
+            {
                 tb.add(v, idx(r, c - 1), -1.0);
+            }
             if (c + 1 < w)
+            {
                 tb.add(v, idx(r, c + 1), -1.0);
+            }
         }
     }
     return tb.compress();
@@ -606,9 +614,13 @@ Csr two_blocks(crd::memory::IAllocator* alloc, crd::u32 n1, crd::u32 n2)
         {
             tb.add(base + i, base + i, 2.0);
             if (i > 0)
+            {
                 tb.add(base + i, base + i - 1, -1.0);
+            }
             if (i + 1 < len)
+            {
                 tb.add(base + i, base + i + 1, -1.0);
+            }
         }
     };
     block(0, n1);
@@ -619,11 +631,15 @@ Csr two_blocks(crd::memory::IAllocator* alloc, crd::u32 n1, crd::u32 n2)
 bool is_valid_partition(crd::containers::ConstSpan<crd::u8> part, crd::u32 n)
 {
     if (part.size() != n)
+    {
         return false;
+    }
     for (crd::u32 v = 0; v < n; ++v)
     {
         if (part[v] > 1U)
+        {
             return false;
+        }
     }
     return true;
 }
@@ -634,7 +650,9 @@ crd::u32 count_part(crd::containers::ConstSpan<crd::u8> part, crd::u8 val)
     for (crd::u32 v = 0; v < part.size(); ++v)
     {
         if (part[v] == val)
+        {
             ++c;
+        }
     }
     return c;
 }
@@ -687,7 +705,9 @@ TEST_CASE("nd: heavy-edge matching is a valid matching (coarse groups <= 2 fine)
         crd::containers::Array<crd::u32> grp(&alloc);
         grp.resize(nc);
         for (crd::u32 c = 0; c < nc; ++c)
+        {
             grp[c] = 0;
+        }
         for (crd::u32 v = 0; v < w.n; ++v)
         {
             REQUIRE(cmap[v] < nc);
@@ -733,7 +753,9 @@ TEST_CASE("nd: contract produces a well-formed symmetric weighted graph, weight 
                 CHECK(u < nc);
                 CHECK(c.adjwgt[p] >= 1U); // merged weight at least 1
                 if (p > c.xadj[v])
+                {
                     CHECK(c.adjncy[p - 1] < u); // ascending, dup-free
+                }
                 // symmetry: (u,v) exists in u's row with the same weight
                 bool mirror = false;
                 for (crd::u32 q = c.xadj[u]; q < c.xadj[u + 1]; ++q)
@@ -973,9 +995,13 @@ TEST_CASE("vertex_separator is a valid minimal cut cover", "[hesap][ordering][nd
         crd::containers::Array<crd::u8> insep(&alloc);
         insep.resize(g.n);
         for (crd::u32 v = 0; v < g.n; ++v)
+        {
             insep[v] = 0U;
+        }
         for (crd::u32 i = 0; i < sep.size(); ++i)
+        {
             insep[sep[i]] = 1U;
+        }
         for (crd::u32 v = 0; v < g.n; ++v)
         {
             for (crd::u32 p = g.xadj[v]; p < g.xadj[v + 1]; ++p)
@@ -992,7 +1018,9 @@ TEST_CASE("vertex_separator is a valid minimal cut cover", "[hesap][ordering][nd
         {
             CHECK(sep[i] < g.n);
             if (i > 0)
+            {
                 CHECK(sep[i - 1] < sep[i]);
+            }
         }
     };
     check(grid2d(&alloc, 10, 10));
@@ -1006,7 +1034,9 @@ TEST_CASE("induced_subgraph keeps only internal edges, remapped + ascending", "[
     // keep even-indexed vertices
     crd::containers::Array<crd::u32> verts(&alloc);
     for (crd::u32 v = 0; v < g.n; v += 2)
+    {
         verts.push_back(v);
+    }
     auto s = ord::detail::induced_subgraph(g, {verts.data(), verts.size()}, &alloc);
     REQUIRE(s.n == verts.size());
     REQUIRE(s.xadj.size() == s.n + 1U);
@@ -1017,7 +1047,9 @@ TEST_CASE("induced_subgraph keeps only internal edges, remapped + ascending", "[
             CHECK(s.adjncy[p] < s.n);
             CHECK(s.adjncy[p] != i);
             if (p > s.xadj[i])
+            {
                 CHECK(s.adjncy[p - 1] < s.adjncy[p]); // ascending
+            }
         }
     }
 }
@@ -1081,20 +1113,28 @@ TEST_CASE("camd_order reproduces AMD with one class; nd_order on a 1D path stays
     crd::containers::Array<crd::u8> loc(&alloc);
     loc.resize(n);
     for (crd::u32 v = 0; v < n; ++v)
+    {
         loc[v] = part[v];
+    }
     for (crd::u32 i = 0; i < sep.size(); ++i)
+    {
         loc[sep[i]] = 2U;
+    }
     ord::detail::node_fm_refine(g, loc, &alloc);
     crd::u32 sep_after = 0;
     for (crd::u32 v = 0; v < n; ++v)
+    {
         sep_after += (loc[v] == 2U) ? 1U : 0U;
+    }
     const crd::u64 amd_fill =
         ord::nnz_l(ord::apply_symmetric(m.pattern(), ord::amd_order(m.pattern(), &alloc), &alloc), &alloc);
     // CAMD validation: a UNIFORM cmember must reproduce plain AMD's fill exactly.
     crd::containers::Array<crd::u32> uniform(&alloc);
     uniform.resize(n);
     for (crd::u32 v = 0; v < n; ++v)
+    {
         uniform[v] = 0U;
+    }
     auto camd_u = ord::detail::camd_order(g, {uniform.data(), uniform.size()}, &alloc);
     const crd::u64 camd_u_fill = ord::nnz_l(ord::apply_symmetric(m.pattern(), camd_u, &alloc), &alloc);
     INFO("path nd_fill=" << nd << " amd_fill=" << amd_fill << " camd(uniform)=" << camd_u_fill << " natural=" << nat

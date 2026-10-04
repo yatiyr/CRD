@@ -28,7 +28,10 @@ crd::containers::Array<Vec3f> make_cloud(u32 n, u32 seed, crd::memory::IAllocato
     pts.reserve(n);
     std::mt19937 rng(seed);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < n; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     return pts;
 }
 
@@ -66,12 +69,18 @@ TEST_CASE("kd_range_aabb matches brute force on random cloud", "[geometry-spatia
         crd::containers::Array<u32> expected(&f.alloc);
         for (u32 i = 0; i < pts.size(); ++i)
         {
-            if (inside(pts[i], box)) { expected.push_back(i); }
+            if (inside(pts[i], box))
+            {
+                expected.push_back(i);
+            }
         }
         std::sort(got.data(), got.data() + got.size());
         std::sort(expected.data(), expected.data() + expected.size());
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 

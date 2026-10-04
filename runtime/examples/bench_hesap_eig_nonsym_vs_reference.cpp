@@ -134,7 +134,9 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < n * n; ++k)
+                {
                     a.data()[k] = a0.data()[k];
+                }
                 hessenberg<crd::f64>(a, 0, n - 1, tau);
             });
 
@@ -164,7 +166,9 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < n * n; ++k)
+                {
                     acm.data()[k] = acm0.data()[k];
+                }
                 int inf = 0;
                 dgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
             });
@@ -223,7 +227,9 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < n * n; ++k)
+                {
                     a.data()[k] = a0.data()[k];
+                }
                 hessenberg<C>(a, 0, n - 1, tau);
             });
 
@@ -255,18 +261,24 @@ int main()
                 [&]()
                 {
                     for (crd::usize k = 0; k < n * n; ++k)
+                    {
                         acm[k] = acm0[k];
+                    }
                     int inf = 0;
                     zgehrd_(&ni, &ilo, &ni, acm.data(), &ni, tlp.data(), wk.data(), &lwork, &inf);
                 });
         }
 
         if (run_refs)
+        {
             std::fprintf(stdout, "%-6zu | %8.4f %8.4f %6.2fx | %8.4f %6.2fx\n", static_cast<size_t>(n), ct * 1e3,
                          et * 1e3, et / ct, lt * 1e3, lt / ct);
+        }
         else
+        {
             std::fprintf(stdout, "%-6zu | %8.4f %8s %7s | %8s %7s\n", static_cast<size_t>(n), ct * 1e3, "ref-AV", "n/a",
                          "n/a", "n/a");
+        }
     }
 
     // ==== complex Schur (from Hessenberg, c64): zlahqr vs Eigen ComplexSchur vs zhseqr ====
@@ -285,6 +297,7 @@ int main()
         Matrix<C> hbuild(&alloc, n, n);
         crd::u32 s = 24611U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
             {
                 s = s * 1664525U + 1013904223U;
@@ -293,6 +306,7 @@ int main()
                 const crd::f64 im = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 hbuild.at(i, j) = C{re, im};
             }
+        }
         crd::containers::Array<C> tau(&alloc);
         hessenberg<C>(hbuild, 0, n - 1, tau);
         Matrix<C> hmat(&alloc, n, n);
@@ -300,6 +314,7 @@ int main()
         crd::containers::Array<std::complex<double>> hcm0(&alloc);
         hcm0.resize(n * n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
             {
                 const C v = (j + 1 >= i) ? hbuild.at(i, j) : C{0.0, 0.0};
@@ -307,6 +322,7 @@ int main()
                 eh(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = std::complex<double>(v.re, v.im);
                 hcm0[j * n + i] = std::complex<double>(v.re, v.im);
             }
+        }
 
         crd::f64 recon = 0.0;
         const crd::f64 ct = time_loop(
@@ -321,21 +337,29 @@ int main()
             // O(n^3) recon max|Z·T·Zᴴ − H|.
             Matrix<C> zt(&alloc, n, n);
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize p = 0; p < n; ++p)
                 {
                     C acc{0.0, 0.0};
                     for (crd::usize q = 0; q < n; ++q)
+                    {
                         acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
+                    }
                     zt.at(i, p) = acc;
                 }
+            }
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize j = 0; j < n; ++j)
                 {
                     C acc{0.0, 0.0};
                     for (crd::usize p = 0; p < n; ++p)
+                    {
                         acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
+                    }
                     recon = std::max(recon, std::abs(acc.re - hmat.at(i, j).re) + std::abs(acc.im - hmat.at(i, j).im));
                 }
+            }
         }
 
         crd::f64 et = 0.0;
@@ -370,7 +394,9 @@ int main()
                 [&]()
                 {
                     for (crd::usize k = 0; k < n * n; ++k)
+                    {
                         hcm[k] = hcm0[k];
+                    }
                     int inf = 0;
                     zhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, w.data(), zlp.data(), &ni, wk.data(), &lwork,
                             &inf);
@@ -378,11 +404,15 @@ int main()
         }
 
         if (run_refs)
+        {
             std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n", static_cast<size_t>(n),
                          ct * 1e3, et * 1e3, et / ct, lt * 1e3, lt / ct, recon);
+        }
         else
+        {
             std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n), ct * 1e3,
                          "ref-AV", "n/a", "n/a", "n/a", recon);
+        }
     }
 
     // ==== complex Schur AED vs single-shift complex_schur (c64): the scale crush ====
@@ -399,6 +429,7 @@ int main()
         Matrix<C> hbuild(&alloc, n, n);
         crd::u32 s = 88017U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
             {
                 s = s * 1664525U + 1013904223U;
@@ -407,12 +438,17 @@ int main()
                 const crd::f64 im = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 hbuild.at(i, j) = C{re, im};
             }
+        }
         crd::containers::Array<C> tau(&alloc);
         hessenberg<C>(hbuild, 0, n - 1, tau);
         Matrix<C> hmat(&alloc, n, n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
+            {
                 hmat.at(i, j) = (j + 1 >= i) ? hbuild.at(i, j) : C{0.0, 0.0};
+            }
+        }
 
         const bool large = (n > 256);
         crd::usize sweeps = 0;
@@ -428,21 +464,29 @@ int main()
             auto sc = complex_schur_aed<C>(&alloc, hmat, 0, n - 1, true, &sweeps);
             Matrix<C> zt(&alloc, n, n);
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize p = 0; p < n; ++p)
                 {
                     C acc{0.0, 0.0};
                     for (crd::usize q = 0; q < n; ++q)
+                    {
                         acc = acc + sc.z.at(i, q) * sc.t.at(q, p);
+                    }
                     zt.at(i, p) = acc;
                 }
+            }
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize j = 0; j < n; ++j)
                 {
                     C acc{0.0, 0.0};
                     for (crd::usize p = 0; p < n; ++p)
+                    {
                         acc = acc + zt.at(i, p) * crd::hesap::conj(sc.z.at(j, p));
+                    }
                     recon = std::max(recon, std::abs(acc.re - hmat.at(i, j).re) + std::abs(acc.im - hmat.at(i, j).im));
                 }
+            }
         }
         const crd::f64 t_1s = timed(large,
                                     [&]()
@@ -495,8 +539,12 @@ int main()
         crd::containers::Array<crd::f64> hcm0(&alloc);
         hcm0.resize(n * n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
+            {
                 hcm0[j * n + i] = hmat.at(i, j);
+            }
+        }
 
         // n>400: single-shot timing (each call is seconds) + drop the un-accelerated
         // pure-dlahqr reference (pathologically slow at large N and NOT a production
@@ -517,21 +565,29 @@ int main()
             // O(n^3) recon: ZT = Z*T, then max|ZT*Zᵀ - H| (NOT the O(n^4) naive form).
             Matrix<crd::f64> zt(&alloc, n, n);
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize p = 0; p < n; ++p)
                 {
                     crd::f64 acc = 0.0;
                     for (crd::usize q = 0; q < n; ++q)
+                    {
                         acc += sc.z.at(i, q) * sc.t.at(q, p);
+                    }
                     zt.at(i, p) = acc;
                 }
+            }
             for (crd::usize i = 0; i < n; ++i)
+            {
                 for (crd::usize j = 0; j < n; ++j)
                 {
                     crd::f64 acc = 0.0;
                     for (crd::usize p = 0; p < n; ++p)
+                    {
                         acc += zt.at(i, p) * sc.z.at(j, p);
+                    }
                     recon = std::max(recon, std::abs(acc - hmat.at(i, j)));
                 }
+            }
         }
         crd::f64 t_dlq = 0.0;
         if (!large)
@@ -579,7 +635,9 @@ int main()
                 [&]()
                 {
                     for (crd::usize k = 0; k < n * n; ++k)
+                    {
                         hcm[k] = hcm0[k];
+                    }
                     int inf = 0;
                     dhseqr_("S", "I", &ni, &one_i, &ni, hcm.data(), &ni, wr.data(), wi.data(), zlp.data(), &ni,
                             wk.data(), &lwork, &inf);
@@ -588,14 +646,22 @@ int main()
 
         std::fprintf(stdout, "%-6zu | %8.4f %6zu | ", static_cast<size_t>(n), t_aed * 1e3, static_cast<size_t>(sweeps));
         if (!large)
+        {
             std::fprintf(stdout, "%8.4f %6.2fx | ", t_dlq * 1e3, t_dlq / t_aed);
+        }
         else
+        {
             std::fprintf(stdout, "%8s %7s | ", "n/a", "n/a");
+        }
         std::fprintf(stdout, "%8.4f %6.2fx | ", t_eig * 1e3, t_eig / t_aed);
         if (run_lapack)
+        {
             std::fprintf(stdout, "%8.4f %6.2fx | %.1e\n", t_lp * 1e3, t_lp / t_aed, recon);
+        }
         else
+        {
             std::fprintf(stdout, "%8s %7s | %.1e\n", "n/a", "n/a", recon);
+        }
     }
 
     // ==== full eig (values + vectors): Cerid eig vs Eigen EigenSolver vs LAPACK dgeev ====
@@ -650,7 +716,9 @@ int main()
                 const crd::f64 li = e.values.data()[k].im;
                 crd::f64 vnorm = 0.0;
                 for (crd::usize i = 0; i < n; ++i)
+                {
                     vnorm = std::max(vnorm, std::abs(e.vectors.at(i, k).re) + std::abs(e.vectors.at(i, k).im));
+                }
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     crd::f64 avre = 0.0;
@@ -696,7 +764,9 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < n * n; ++k)
+                {
                     acm[k] = acm0[k];
+                }
                 int inf = 0;
                 dgeev_("N", "V", &ni, acm.data(), &ni, lwr.data(), lwi.data(), nullptr, &ni, vr.data(), &ni, wk.data(),
                        &lwork, &inf);
@@ -708,7 +778,9 @@ int main()
             crd::containers::Array<crd::usize> idx(&alloc);
             idx.resize(n);
             for (crd::usize i = 0; i < n; ++i)
+            {
                 idx[i] = i;
+            }
             std::sort(idx.data(), idx.data() + n,
                       [&](crd::usize p, crd::usize q) { return wr[p] < wr[q] || (wr[p] == wr[q] && wi[p] < wi[q]); });
             crd::containers::Array<crd::f64> r(&alloc);
@@ -730,7 +802,9 @@ int main()
         sort_eigs(lwr, lwi);
         crd::f64 dlam = 0.0;
         for (crd::usize i = 0; i < n; ++i)
+        {
             dlam = std::max(dlam, std::abs(cwr[i] - lwr[i]) + std::abs(std::abs(cwi[i]) - std::abs(lwi[i])));
+        }
 
         std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e %.1e\n", static_cast<size_t>(n),
                      t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3, t_lp / t_cerid, resid, dlam);
@@ -754,6 +828,7 @@ int main()
         acm0.resize(n * n);
         crd::u32 s = 60611U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
             {
                 s = s * 1664525U + 1013904223U;
@@ -764,6 +839,7 @@ int main()
                 ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = std::complex<double>(re, im);
                 acm0[j * n + i] = std::complex<double>(re, im);
             }
+        }
 
         const crd::f64 t_cerid = timed(n > 128,
                                        [&]()
@@ -780,12 +856,16 @@ int main()
                 const C lam = e.values.data()[k];
                 crd::f64 vnorm = 0.0;
                 for (crd::usize i = 0; i < n; ++i)
+                {
                     vnorm = std::max(vnorm, std::abs(e.vectors.at(i, k).re) + std::abs(e.vectors.at(i, k).im));
+                }
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     C av{0.0, 0.0};
                     for (crd::usize j = 0; j < n; ++j)
+                    {
                         av = av + a0.at(i, j) * e.vectors.at(j, k);
+                    }
                     const C r = av - lam * e.vectors.at(i, k);
                     resid = std::max(resid, (std::abs(r.re) + std::abs(r.im)) / vnorm);
                 }
@@ -823,7 +903,9 @@ int main()
                 [&]()
                 {
                     for (crd::usize k = 0; k < n * n; ++k)
+                    {
                         acm[k] = acm0[k];
+                    }
                     int inf = 0;
                     zgeev_("N", "V", &ni, acm.data(), &ni, w.data(), nullptr, &ni, vr.data(), &ni, wk.data(), &lwork,
                            rwk.data(), &inf);
@@ -831,11 +913,15 @@ int main()
         }
 
         if (run_refs)
+        {
             std::fprintf(stdout, "%-6zu | %8.4f | %8.4f %6.2fx | %8.4f %6.2fx | %.1e\n", static_cast<size_t>(n),
                          t_cerid * 1e3, t_eig * 1e3, t_eig / t_cerid, t_lp * 1e3, t_lp / t_cerid, resid);
+        }
         else
+        {
             std::fprintf(stdout, "%-6zu | %8.4f | %8s %7s | %8s %7s | %.1e\n", static_cast<size_t>(n), t_cerid * 1e3,
                          "ref-AV", "n/a", "n/a", "n/a", resid);
+        }
     }
 
     crd::jobs::shutdown();

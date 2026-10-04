@@ -26,7 +26,9 @@ namespace crd::memory
 [[nodiscard]] constexpr bool checked_add(usize a, usize b, usize* out) noexcept
 {
     if (a > SIZE_MAX - b)
+    {
         return false;
+    }
     *out = a + b;
     return true;
 }
@@ -35,7 +37,9 @@ namespace crd::memory
 [[nodiscard]] constexpr bool checked_mul(usize a, usize b, usize* out) noexcept
 {
     if (a != 0U && b > SIZE_MAX / a)
+    {
         return false;
+    }
     *out = a * b;
     return true;
 }
@@ -52,10 +56,14 @@ namespace crd::memory
 [[nodiscard]] constexpr bool checked_align_up(usize value, usize alignment, usize* out) noexcept
 {
     if (alignment == 0U || !is_pow2(alignment))
+    {
         return false;
+    }
     usize sum = 0U;
     if (!checked_add(value, alignment - 1U, &sum))
+    {
         return false;
+    }
     *out = sum & ~(alignment - 1U);
     return true;
 }
@@ -65,10 +73,14 @@ namespace crd::memory
 [[nodiscard]] constexpr bool checked_page_count(usize bytes, usize page_size, usize* out) noexcept
 {
     if (page_size == 0U)
+    {
         return false;
+    }
     usize sum = 0U;
     if (!checked_add(bytes, page_size - 1U, &sum))
+    {
         return false;
+    }
     *out = sum / page_size;
     return true;
 }
@@ -81,7 +93,9 @@ namespace crd::memory
 {
     usize padded = 0U;
     if (!checked_align_up(stride, alignment, &padded))
+    {
         return false;
+    }
     return checked_mul(count, padded, out);
 }
 

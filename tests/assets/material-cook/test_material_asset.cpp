@@ -174,7 +174,10 @@ TEST_CASE("REN-38-C2: the MaterialX-class node set is reachable AS DATA", "[mate
         toml.append("\"\ninputs = [");
         for (u32 k = 0; k < arity; ++k)
         {
-            if (k > 0U) { toml.append(", "); }
+            if (k > 0U)
+            {
+                toml.append(", ");
+            }
             if (mc::material_op_arg_is_attr(i, k))
             {
                 char buf[16];
@@ -184,9 +187,16 @@ TEST_CASE("REN-38-C2: the MaterialX-class node set is reachable AS DATA", "[mate
             }
             const u32 w = mc::material_op_arg_width(i, k);
             CHECK(w >= 1U);
-            if (w <= 1U) { toml.append("0.5"); continue; }
+            if (w <= 1U)
+            {
+                toml.append("0.5");
+                continue;
+            }
             toml.append("[0.5");
-            for (u32 c = 1; c < w; ++c) { toml.append(", 0.5"); }
+            for (u32 c = 1; c < w; ++c)
+            {
+                toml.append(", 0.5");
+            }
             toml.append("]");
         }
         toml.append("]\n\n[surface]\nbase_color = \"n\"\n");
@@ -209,7 +219,10 @@ TEST_CASE("REN-38-C2: the MaterialX-class node set is reachable AS DATA", "[mate
                 == mc::MaterialCookError::Ok);
         kir::KGraph g(&alloc);
         const int   sid = kir::material::define_surface(g);
-        if (mc::cook_material(d, g, sid) >= 0) { ++built; }
+        if (mc::cook_material(d, g, sid) >= 0)
+        {
+            ++built;
+        }
     }
     UNSCOPED_INFO("ops that cooked = " << built << " / " << n);
     CHECK(built == n);
@@ -218,7 +231,10 @@ TEST_CASE("REN-38-C2: the MaterialX-class node set is reachable AS DATA", "[mate
     // it makes those nodes unauthorable and reports the wrong reason. Asserted so a later cap change cannot
     // quietly delete them from the library.
     u32 widest = 0U;
-    for (u32 i = 0; i < n; ++i) { widest = mc::material_op_arity(i) > widest ? mc::material_op_arity(i) : widest; }
+    for (u32 i = 0; i < n; ++i)
+    {
+        widest = mc::material_op_arity(i) > widest ? mc::material_op_arity(i) : widest;
+    }
     CHECK(widest <= mc::kMaxNodeInputs);
     CHECK(widest == 7U);
 }
@@ -289,7 +305,10 @@ TEST_CASE("REN-38-C3: material INSTANCES give one graph N looks", "[material-coo
         for (int i = 0; i < g.size(); ++i)
         {
             const kir::KNode& nd = g.node(i);
-            if (nd.op == kir::KOp::Const && nd.cval == want) { return true; }
+            if (nd.op == kir::KOp::Const && nd.cval == want)
+            {
+                return true;
+            }
         }
         return false;
     };

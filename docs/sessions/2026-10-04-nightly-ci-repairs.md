@@ -263,3 +263,16 @@ third batch). All are repaired; every touched file is clean under the local LLVM
 Workstation verification: `crd-memory-tests` 140 cases, `crd-core-tests` 30, `crd-jobs-tests [diag]` 73,
 `crd-gpu-context-tests [identity]` 16, `crd-gpu-context-vulkan-tests [validation],[identity]` 20,
 `crd-gpu-context-dx12-tests [validation],[identity]` 39, `crd-kir-tests` lighting file 28, `crd-toml-tests` 6.
+
+## After run 37231001716: the crash control under UndefinedBehaviorSanitizer
+
+Run 37231001716 (`8e17e307`), `linux-gcc-asan`: the register gate failed on one unexpected failure. TP-5 failed as
+registered. The crash specimen, the positive control for the harness's Crashed verdict, ended as `Unexpected`: UBSan
+reported `crash_specimen.cpp:24:8: runtime error: store to null pointer` and the non-recovering runtime aborted before
+the write faulted. ASan was already told not to handle the fault (`handle_segv=0`); UBSan was not. The deliberate
+store now lives in one function marked `no_sanitize("null")` (GCC and Clang), so the control faults for real and
+every other check and specimen stays instrumented. The specimen builds and the `[harness]` cases pass on the
+workstation (10 cases); the sanitizer lane is the hosted one.
+
+`win-release` in the same run was not a test result: the hosted runner lost contact with the service two hours into
+Build. Its earlier failures (`519c6634`, `bf99a5e5`) were the Release dump-identity oracle fixed in the fourth batch.

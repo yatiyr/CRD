@@ -23,7 +23,10 @@ using containers::StringView;
 {
     for (usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].value == v) { return static_cast<crd::i32>(i); }
+        if (plan.buffers[i].value == v)
+        {
+            return static_cast<crd::i32>(i);
+        }
     }
     return -1;
 }
@@ -45,7 +48,10 @@ using containers::StringView;
         }
         return 0ULL; // a future FloatKind — reject until sized (the widen-enum-audit discipline)
     }
-    if (e.kind == TypeKind::Int) { return (e.count > 0U && e.count % 8U == 0U) ? static_cast<crd::u64>(e.count) / 8ULL : 0ULL; }
+    if (e.kind == TypeKind::Int)
+    {
+        return (e.count > 0U && e.count % 8U == 0U) ? static_cast<crd::u64>(e.count) / 8ULL : 0ULL;
+    }
     return 0ULL; // Bool / Index / aggregate / unknown — reject (never a silent size)
 }
 // Byte size of a Tensor type's (all-static) shape × its ELEMENT size; 0 if malformed / a dynamic dim / an unrecognized element
@@ -55,15 +61,24 @@ using containers::StringView;
 [[nodiscard]] crd::u64 tensor_bytes(const Context& ctx, TypeId t) noexcept
 {
     const Type tt = ctx.type_of(t);
-    if (tt.members.size() < 2U) { return 0; }
+    if (tt.members.size() < 2U)
+    {
+        return 0;
+    }
     const crd::u64 eb = element_bytes(ctx, tt.members[0]);
-    if (eb == 0ULL) { return 0; }
+    if (eb == 0ULL)
+    {
+        return 0;
+    }
     const Type sh = ctx.type_of(tt.members[1]);
     crd::u64   n  = 1;
     for (usize i = 0; i < sh.members.size(); ++i)
     {
         const Type d = ctx.type_of(sh.members[i]);
-        if (static_cast<DimKind>(d.cols) != DimKind::Static) { return 0; }
+        if (static_cast<DimKind>(d.cols) != DimKind::Static)
+        {
+            return 0;
+        }
         n *= static_cast<crd::u64>(d.count);
     }
     return n * eb;
@@ -81,15 +96,24 @@ using containers::StringView;
 // every token is valid r|w|rw + the count == the binding count), so no malformed-token path is needed here.
 [[nodiscard]] crd::u32 parse_write_flags(StringView s, bool (&is_write)[8]) noexcept
 {
-    for (auto& w : is_write) { w = false; }
+    for (auto& w : is_write)
+    {
+        w = false;
+    }
     crd::u32   count = 0;
     crd::usize start = 0;
     for (crd::usize i = 0; i <= s.size(); ++i)
     {
-        if (s.size() == 0U) { break; } // empty access string = zero bindings
+        if (s.size() == 0U) // empty access string = zero bindings
+        {
+            break;
+        }
         if (i == s.size() || s[i] == ',')
         {
-            if (count < 8U) { is_write[count] = (i - start == 1U && s[start] == 'w'); }
+            if (count < 8U)
+            {
+                is_write[count] = (i - start == 1U && s[start] == 'w');
+            }
             ++count;
             start = i + 1U;
         }
@@ -104,11 +128,20 @@ using containers::StringView;
 // (find_quant_misuse None) guarantees the attr kind + operand arity this reads (belt-and-braces guards remain).
 [[nodiscard]] bool dequant_is_symmetric_per_tensor(const Context& ctx, const Operation* dq) noexcept
 {
-    if (dq == nullptr || dq->num_operands() < 2U) { return false; }
+    if (dq == nullptr || dq->num_operands() < 2U)
+    {
+        return false;
+    }
     const AttrValue sc = ctx.attr_value(dq->attr(StringView("scheme")));
-    if (sc.kind != AttrKind::String || sc.s != StringView("symmetric")) { return false; } // symmetric only (no zp subtract)
+    if (sc.kind != AttrKind::String || sc.s != StringView("symmetric")) // symmetric only (no zp subtract)
+    {
+        return false;
+    }
     const Type stt = ctx.type_of(dq->operand(1U)->type());                                 // scale (operand-1)
-    if (stt.members.size() < 2U) { return false; }                                         // not a well-formed tensor
+    if (stt.members.size() < 2U) // not a well-formed tensor
+    {
+        return false;
+    }
     return ctx.type_of(stt.members[1]).members.size() == 0U;                               // scale shape RANK-0 (per-tensor)
 }
 // ⭐ CEIR-23b-2b: is `g` (a linalg.gemm) the PLAIN form the fused quant-gemm kernel computes — D = A·B with alpha==1, beta==0,
@@ -122,47 +155,104 @@ using containers::StringView;
     const AttrValue be = ctx.attr_value(g->attr(StringView("beta")));
     const AttrValue ta = ctx.attr_value(g->attr(StringView("trans_a")));
     const AttrValue tb = ctx.attr_value(g->attr(StringView("trans_b")));
-    if (al.kind != AttrKind::Float || al.f != 0x3ff0000000000000ULL) { return false; } // alpha == 1.0
-    if (be.kind != AttrKind::Float || be.f != 0x0ULL) { return false; }                // beta  == +0.0
-    if (ta.kind == AttrKind::Bool && ta.b) { return false; }                           // trans_a == false
-    if (tb.kind == AttrKind::Bool && tb.b) { return false; }                           // trans_b == false
+    if (al.kind != AttrKind::Float || al.f != 0x3ff0000000000000ULL) // alpha == 1.0
+    {
+        return false;
+    }
+    if (be.kind != AttrKind::Float || be.f != 0x0ULL) // beta  == +0.0
+    {
+        return false;
+    }
+    if (ta.kind == AttrKind::Bool && ta.b) // trans_a == false
+    {
+        return false;
+    }
+    if (tb.kind == AttrKind::Bool && tb.b) // trans_b == false
+    {
+        return false;
+    }
     return true;
 }
 } // namespace
 
 bool fusable_dequant_into_gemm_weight(const Context& ctx, const Operation* dequant_op) noexcept
 {
-    if (dequant_op == nullptr || dequant_op->num_results() < 1U) { return false; }
-    if (ctx.op_name(dequant_op->kind()) != StringView("quant.dequantize")) { return false; }
-    if (!dequant_is_symmetric_per_tensor(ctx, dequant_op)) { return false; } // ⛔ fuse ONLY the symmetric per-tensor form
+    if (dequant_op == nullptr || dequant_op->num_results() < 1U)
+    {
+        return false;
+    }
+    if (ctx.op_name(dequant_op->kind()) != StringView("quant.dequantize"))
+    {
+        return false;
+    }
+    if (!dequant_is_symmetric_per_tensor(ctx, dequant_op)) // ⛔ fuse ONLY the symmetric per-tensor form
+    {
+        return false;
+    }
     const Value* r = dequant_op->result(0U);
-    if (r == nullptr || r->num_uses() != 1U) { return false; }   // ⛔ EXACTLY one use (multi-use → unfused fallback)
+    if (r == nullptr || r->num_uses() != 1U) // ⛔ EXACTLY one use (multi-use → unfused fallback)
+    {
+        return false;
+    }
     const Use* u = r->first_use();
-    if (u == nullptr || u->owner == nullptr) { return false; }
+    if (u == nullptr || u->owner == nullptr)
+    {
+        return false;
+    }
     const Operation* g = u->owner;                               // the sole using op
-    if (ctx.op_name(g->kind()) != StringView("linalg.gemm")) { return false; }
-    if (g->num_operands() < 2U || g->operand(1U) != r) { return false; } // ⛔ specifically the gemm's WEIGHT slot (operand-1)
+    if (ctx.op_name(g->kind()) != StringView("linalg.gemm"))
+    {
+        return false;
+    }
+    if (g->num_operands() < 2U || g->operand(1U) != r) // ⛔ specifically the gemm's WEIGHT slot (operand-1)
+    {
+        return false;
+    }
     return gemm_is_plain(ctx, g); // ⛔ the fused kernel is alpha=1 β=0 no-transpose — a scaled/accumulating/transposed gemm miscompiles
 }
 
 bool fusable_gemm_into_relu(const Context& ctx, const Operation* gemm_op) noexcept
 {
-    if (gemm_op == nullptr || gemm_op->num_results() < 1U) { return false; }
-    if (ctx.op_name(gemm_op->kind()) != StringView("linalg.gemm")) { return false; }        // (1) op-name (cheapest)
-    if (!gemm_is_plain(ctx, gemm_op)) { return false; }                                     // (2) α=1 β=0 no-transpose (no fused form)
+    if (gemm_op == nullptr || gemm_op->num_results() < 1U)
+    {
+        return false;
+    }
+    if (ctx.op_name(gemm_op->kind()) != StringView("linalg.gemm")) // (1) op-name (cheapest)
+    {
+        return false;
+    }
+    if (!gemm_is_plain(ctx, gemm_op)) // (2) α=1 β=0 no-transpose (no fused form)
+    {
+        return false;
+    }
     // (3) ⛔⛆ the WEIGHT (operand-1) is NOT itself a fusable quant.dequantize — a QuantGemm target's f32 result is never allocated,
     //     so folding it here → DanglingOperand + the QuantGemm gates go red. The quant MLP `dequant→gemm→relu` is BOTH; f32-weight only.
     const Operation* const wdq = gemm_op->num_operands() >= 2U ? gemm_op->operand(1U)->defining_op() : nullptr;
-    if (wdq != nullptr && fusable_dequant_into_gemm_weight(ctx, wdq)) { return false; }
+    if (wdq != nullptr && fusable_dequant_into_gemm_weight(ctx, wdq))
+    {
+        return false;
+    }
     // (4) result is single-use by a compute.dispatch{kernel=="relu"} reading bind[0] (operand-3), with the {grid×3, r, w} arity.
     const Value* const r = gemm_op->result(0U);
-    if (r == nullptr || r->num_uses() != 1U) { return false; }
+    if (r == nullptr || r->num_uses() != 1U)
+    {
+        return false;
+    }
     const Use* const u = r->first_use();
-    if (u == nullptr || u->owner == nullptr) { return false; }
+    if (u == nullptr || u->owner == nullptr)
+    {
+        return false;
+    }
     const Operation* const d = u->owner;
-    if (ctx.op_name(d->kind()) != StringView("compute.dispatch")) { return false; }
+    if (ctx.op_name(d->kind()) != StringView("compute.dispatch"))
+    {
+        return false;
+    }
     const AttrValue kv = ctx.attr_value(d->attr(StringView("kernel")));
-    if (kv.kind != AttrKind::SymbolRef || kv.s != StringView("relu")) { return false; }
+    if (kv.kind != AttrKind::SymbolRef || kv.s != StringView("relu"))
+    {
+        return false;
+    }
     return d->num_operands() == 5U && d->operand(3U) == r; // grid×3 + bind[0]=read(gemm result) + bind[1]=write(h)
 }
 
@@ -177,15 +267,30 @@ namespace
 void assign_shared_storage(const Context& ctx, Block* body, TensorPipelinePlan& plan)
 {
     const usize nb = plan.buffers.size();
-    if (nb == 0U || nb > 32U) { return; } // >32 ⇒ skip sharing (conservative; matches the executor's buffer cap)
+    if (nb == 0U || nb > 32U) // >32 ⇒ skip sharing (conservative; matches the executor's buffer cap)
+    {
+        return;
+    }
 
     // func.return operands are PINNED (read back by the caller — never a tenant/landlord).
     const auto is_returned = [&](const Value* v) -> bool {
-        if (v == nullptr) { return false; }
+        if (v == nullptr)
+        {
+            return false;
+        }
         for (Operation* op = body->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) != StringView("func.return")) { continue; }
-            for (crd::u32 i = 0; i < op->num_operands(); ++i) { if (op->operand(i) == v) { return true; } }
+            if (ctx.op_name(op->kind()) != StringView("func.return"))
+            {
+                continue;
+            }
+            for (crd::u32 i = 0; i < op->num_operands(); ++i)
+            {
+                if (op->operand(i) == v)
+                {
+                    return true;
+                }
+            }
         }
         return false;
     };
@@ -217,13 +322,25 @@ void assign_shared_storage(const Context& ctx, Block* body, TensorPipelinePlan& 
         for (crd::u32 k = 0; k < st.nbind; ++k)
         {
             const crd::i32 bi = st.bind[k];
-            if (bi < 0 || static_cast<usize>(bi) >= nb) { continue; }
-            if (k >= first_out) { produce[static_cast<usize>(bi)] = static_cast<crd::i32>(s); }
+            if (bi < 0 || static_cast<usize>(bi) >= nb)
+            {
+                continue;
+            }
+            if (k >= first_out)
+            {
+                produce[static_cast<usize>(bi)] = static_cast<crd::i32>(s);
+            }
             // n_out==0 reader ⇒ never_free (see the barrier note above); a later normal read overwrites it (max-in-stage-order).
-            else { last_read[static_cast<usize>(bi)] = (st.n_out == 0U) ? never_free : static_cast<crd::i32>(s); }
+            else
+            {
+                last_read[static_cast<usize>(bi)] = (st.n_out == 0U) ? never_free : static_cast<crd::i32>(s);
+            }
         }
     }
-    for (usize i = 0; i < nb; ++i) { free_at[i] = shareable[i] ? last_read[i] : -1; }
+    for (usize i = 0; i < nb; ++i)
+    {
+        free_at[i] = shareable[i] ? last_read[i] : -1;
+    }
 
     // The single pass, in PRODUCE (== stage) order. A buffer with no reader (last_read<0) is never a tenant (nothing to alias into)
     // and never lends (freeing it early gains nothing) — left as its own buffer.
@@ -231,30 +348,56 @@ void assign_shared_storage(const Context& ctx, Block* body, TensorPipelinePlan& 
     {
         for (usize b = 0; b < nb; ++b)
         {
-            if (!shareable[b] || produce[b] != static_cast<crd::i32>(s) || last_read[b] < produce[b]) { continue; }
+            if (!shareable[b] || produce[b] != static_cast<crd::i32>(s) || last_read[b] < produce[b])
+            {
+                continue;
+            }
             // smallest-fit ROOT landlord free strictly before b is born.
             crd::i32 best = -1;
             crd::u64 best_bytes = 0;
             for (usize l = 0; l < nb; ++l)
             {
-                if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0) { continue; }        // l must be a ROOT
-                if (free_at[l] < 0 || free_at[l] >= produce[b] || plan.buffers[l].bytes < plan.buffers[b].bytes) { continue; }
-                if (best < 0 || plan.buffers[l].bytes < best_bytes) { best = static_cast<crd::i32>(l); best_bytes = plan.buffers[l].bytes; }
+                if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0) // l must be a ROOT
+                {
+                    continue;
+                }
+                if (free_at[l] < 0 || free_at[l] >= produce[b] || plan.buffers[l].bytes < plan.buffers[b].bytes)
+                {
+                    continue;
+                }
+                if (best < 0 || plan.buffers[l].bytes < best_bytes)
+                {
+                    best = static_cast<crd::i32>(l);
+                    best_bytes = plan.buffers[l].bytes;
+                }
             }
             if (best < 0) // no fit → largest free root + GROW to b (advisor's smallest-fit-else-largest-and-grow)
             {
                 crd::u64 big = 0;
                 for (usize l = 0; l < nb; ++l)
                 {
-                    if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0) { continue; }
-                    if (free_at[l] < 0 || free_at[l] >= produce[b]) { continue; }
-                    if (best < 0 || plan.buffers[l].bytes > big) { best = static_cast<crd::i32>(l); big = plan.buffers[l].bytes; }
+                    if (l == b || !shareable[l] || plan.buffers[l].alias_of >= 0)
+                    {
+                        continue;
+                    }
+                    if (free_at[l] < 0 || free_at[l] >= produce[b])
+                    {
+                        continue;
+                    }
+                    if (best < 0 || plan.buffers[l].bytes > big)
+                    {
+                        best = static_cast<crd::i32>(l);
+                        big = plan.buffers[l].bytes;
+                    }
                 }
             }
             if (best >= 0)
             {
                 const usize land = static_cast<usize>(best);
-                if (plan.buffers[land].bytes < plan.buffers[b].bytes) { plan.buffers[land].bytes = plan.buffers[b].bytes; } // grow to max
+                if (plan.buffers[land].bytes < plan.buffers[b].bytes) // grow to max
+                {
+                    plan.buffers[land].bytes = plan.buffers[b].bytes;
+                }
                 plan.buffers[b].alias_of = best;         // b tenants the root landlord
                 free_at[land]            = last_read[b]; // the landlord is now occupied until b's last read (a later buffer may take it again)
                 free_at[b]               = -1;           // b is a tenant, not an independent root
@@ -296,12 +439,24 @@ PlanOptions plan_options_from_transform(Context& ctx, const Module& transform_mo
         {
             const bool is_fuse  = op->kind() == fuse_k;
             const bool is_share = op->kind() == share_k;
-            if (!is_fuse && !is_share) { continue; }
+            if (!is_fuse && !is_share)
+            {
+                continue;
+            }
             const AttrId a = op->attr(containers::StringView("enable"));
-            if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { continue; }
+            if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool)
+            {
+                continue;
+            }
             const bool enable = ctx.attr_value(a).b;
-            if (is_fuse) { base.fuse_gemm_relu = enable; }
-            else { base.share_intermediate_storage = enable; }
+            if (is_fuse)
+            {
+                base.fuse_gemm_relu = enable;
+            }
+            else
+            {
+                base.share_intermediate_storage = enable;
+            }
         }
     }
     return base;
@@ -356,12 +511,19 @@ TensorPipelinePlan plan_tensor_pipeline_partitioned(Context& ctx, const Module& 
                                                     PlanOptions                                            opts)
 {
     TensorPipelinePlan plan = plan_tensor_pipeline(ctx, m, alloc, opts);
-    if (plan.reject != PlanReject::None) { return plan; } // a reject leaves stages partial — nothing to tag
+    if (plan.reject != PlanReject::None) // a reject leaves stages partial — nothing to tag
+    {
+        return plan;
+    }
     const crd::i32 nprov = static_cast<crd::i32>(partition.assignments.size());
     for (crd::usize s = 0; s < plan.stages.size(); ++s)
     {
         const crd::i32* const idx = lineage.find(plan.stages[s].op); // the expanded stage op → its source ml op's pre-order index
-        if (idx == nullptr) { plan.stages[s].provider = -1; continue; } // a non-ml stage carries no lineage entry → the fallback
+        if (idx == nullptr) // a non-ml stage carries no lineage entry → the fallback
+        {
+            plan.stages[s].provider = -1;
+            continue;
+        }
         if (*idx < 0 || *idx >= nprov) // a lineage index OUTSIDE the partition: expand_ml_ops and partition_ml disagree on the
         {                              // ml-op pre-order, or the partition was built on a DIFFERENT module. ⛔ a LOUD typed reject,
             plan.reject    = PlanReject::PartitionLineageMismatch; // never a silent -1 that would masquerade as "the fallback
@@ -395,10 +557,18 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == StringView("func.func")) { body = func::func_body_block(op); break; }
+            if (ctx.op_name(op->kind()) == StringView("func.func"))
+            {
+                body = func::func_body_block(op);
+                break;
+            }
         }
     }
-    if (body == nullptr) { plan.reject = PlanReject::NoOutput; return plan; }
+    if (body == nullptr)
+    {
+        plan.reject = PlanReject::NoOutput;
+        return plan;
+    }
 
     for (Operation* op = body->first_op(); op != nullptr; op = op->next_in_block())
     {
@@ -438,7 +608,10 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             //    QuantGemm detect: a gemm cannot be BOTH (fusable_gemm_into_relu excludes a QuantGemm-weight gemm), but the skip
             //    ordering makes the exclusion ENFORCED, not implied. ⛔ opts.fuse_gemm_relu gates it (the raw-vs-opt differential
             //    plans the SAME module with the flag OFF — the semantics-preserving witness needs both forms of ONE program).
-            if (opts.fuse_gemm_relu && fusable_gemm_into_relu(ctx, op)) { continue; }
+            if (opts.fuse_gemm_relu && fusable_gemm_into_relu(ctx, op))
+            {
+                continue;
+            }
             // ⭐ 23b-2b: if the WEIGHT operand (B, operand-1) is a fusable quant.dequantize, COLLAPSE into a QuantGemm stage —
             //    bind {A, W_q8 (the dequant INPUT, alias-through), scale, D}; the dequantize's f32 output is NEVER allocated (§54).
             //    ⛔ M,K,N/grid come from the GEMM operand types (f32 [.,K,N]) but the stage BINDS the dequant INPUT (int8 [.,K,N])
@@ -449,7 +622,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
                 const crd::i32 ba = find_buffer(plan, op->operand(0U));  // A (f32 activations)
                 const crd::i32 bw = find_buffer(plan, wdq->operand(0U)); // W_q8 (int8) — the dequant INPUT, not its result
                 const crd::i32 bs = find_buffer(plan, wdq->operand(1U)); // scale
-                if (ba < 0 || bw < 0 || bs < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+                if (ba < 0 || bw < 0 || bs < 0)
+                {
+                    plan.reject = PlanReject::DanglingOperand;
+                    plan.reject_op = op;
+                    return plan;
+                }
                 PlanBuffer d;
                 d.value           = op->result(0U);
                 d.role            = BufferRole::Intermediate;
@@ -482,7 +660,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             }
             const crd::i32 ba = find_buffer(plan, op->operand(0U)); // A
             const crd::i32 bb = find_buffer(plan, op->operand(1U)); // B (C = operand 2 is unused under the beta==0 envelope)
-            if (ba < 0 || bb < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (ba < 0 || bb < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             PlanBuffer d;
             d.value          = op->result(0U);
             d.role           = BufferRole::Intermediate;
@@ -501,7 +684,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
         if (nm == StringView("tensor.reshape"))
         {
             const crd::i32 bin = find_buffer(plan, op->operand(0U));
-            if (bin < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (bin < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             if (tensor_bytes(ctx, op->result(0U)->type()) != tensor_bytes(ctx, op->operand(0U)->type()))
             {
                 plan.reject = PlanReject::ReshapeNotAlias; plan.reject_op = op; return plan;
@@ -534,7 +722,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
                 return plan;
             }
             const crd::i32 bin = find_buffer(plan, op->operand(0U));
-            if (bin < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (bin < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             PlanBuffer d;
             d.value           = op->result(0U);
             d.role            = BufferRole::Intermediate;
@@ -566,7 +759,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             }
             const crd::i32 ba = find_buffer(plan, op->operand(0U));
             const crd::i32 bb = find_buffer(plan, op->operand(1U));
-            if (ba < 0 || bb < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (ba < 0 || bb < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             PlanBuffer d;
             d.value           = op->result(0U);
             d.role            = BufferRole::Intermediate;
@@ -598,7 +796,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             }
             const crd::i32 bre = find_buffer(plan, op->operand(0U)); // in_re (the chain)
             const crd::i32 bim = find_buffer(plan, op->operand(1U)); // in_im (a real signal's imaginary → Zeros)
-            if (bre < 0 || bim < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (bre < 0 || bim < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             if (plan.buffers[static_cast<usize>(bim)].role == BufferRole::ExternalIn)
             {
                 plan.buffers[static_cast<usize>(bim)].fill = FillKind::Zeros;
@@ -652,7 +855,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
                 return plan;
             }
             const crd::i32 bin = find_buffer(plan, op->operand(0U));
-            if (bin < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (bin < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             PlanBuffer o;
             o.value          = op->result(0U);
             o.role           = BufferRole::Intermediate;
@@ -677,14 +885,27 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
         {
             // ⭐ 23b-2b: if this dequantize FUSES into a following gemm's weight (single-use), SKIP it — the QuantGemm stage
             //    (emitted at the gemm) binds THIS op's INPUT buffers directly; the dequantize's output is NEVER allocated (§54).
-            if (fusable_dequant_into_gemm_weight(ctx, op)) { continue; }
+            if (fusable_dequant_into_gemm_weight(ctx, op))
+            {
+                continue;
+            }
             // ⛔ name-forward: the plan-path Dequant kernel is SYMMETRIC PER-TENSOR only (reads scale[0], no zp). An asymmetric
             //    or per-axis (rank-1 scale) dequantize would MISCOMPILE silently under it — TYPED-REJECT, never silent-symmetric.
-            if (!dequant_is_symmetric_per_tensor(ctx, op)) { plan.reject = PlanReject::UnsupportedQuantScheme; plan.reject_op = op; return plan; }
+            if (!dequant_is_symmetric_per_tensor(ctx, op))
+            {
+                plan.reject = PlanReject::UnsupportedQuantScheme;
+                plan.reject_op = op;
+                return plan;
+            }
             const crd::i32 bw = find_buffer(plan, op->operand(0U)); // W_q8 (int8, u32-packed device view)
             const crd::i32 bs = find_buffer(plan, op->operand(1U)); // scale
             const crd::i32 bz = find_buffer(plan, op->operand(2U)); // zero_point (validated present; symmetric ⇒ NOT bound)
-            if (bw < 0 || bs < 0 || bz < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+            if (bw < 0 || bs < 0 || bz < 0)
+            {
+                plan.reject = PlanReject::DanglingOperand;
+                plan.reject_op = op;
+                return plan;
+            }
             PlanBuffer o;
             o.value           = op->result(0U);
             o.role            = BufferRole::Intermediate;
@@ -710,7 +931,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
         {
             const crd::u32 nops  = op->num_operands();
             const crd::u32 nbind = nops >= 3U ? nops - 3U : 0U; // grid(3) then the variadic bindings
-            if (nbind > 8U) { plan.reject = PlanReject::UnsupportedOp; plan.reject_op = op; return plan; } // the exec bind[8] cap
+            if (nbind > 8U) // the exec bind[8] cap
+            {
+                plan.reject = PlanReject::UnsupportedOp;
+                plan.reject_op = op;
+                return plan;
+            }
             bool            is_write[8] = {};
             const AttrValue av          = ctx.attr_value(op->attr(StringView("access")));
             (void)parse_write_flags(av.s, is_write); // dispatch-verify-clean guarantees kind==String + token-count==nbind
@@ -718,10 +944,18 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             // outputs = the TRAILING contiguous run of `w` bindings; any `w` BEFORE that run violates the executor's
             // "outputs = the last n_out binds" barrier contract (advisor: author inputs then outputs).
             crd::u32 n_out = 0;
-            while (n_out < nbind && is_write[nbind - 1U - n_out]) { ++n_out; }
+            while (n_out < nbind && is_write[nbind - 1U - n_out])
+            {
+                ++n_out;
+            }
             for (crd::u32 i = 0; i + n_out < nbind; ++i)
             {
-                if (is_write[i]) { plan.reject = PlanReject::DispatchOutputsNotTrailing; plan.reject_op = op; return plan; }
+                if (is_write[i])
+                {
+                    plan.reject = PlanReject::DispatchOutputsNotTrailing;
+                    plan.reject_op = op;
+                    return plan;
+                }
             }
 
             // ⭐ 26e: a @relu dispatch whose read (bind[0] = operand-3) is a fusable plain f32 gemm result → emit the FUSED
@@ -734,7 +968,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
                 const crd::i32 ba = find_buffer(plan, gp->operand(0U));            // A
                 const crd::i32 bb = find_buffer(plan, gp->operand(1U));            // B (f32 weight — cond (3) guarantees NOT a dequant)
                 const crd::i32 bh = find_buffer(plan, op->operand(nops - 1U));     // h = the relu's WRITE target (trailing operand)
-                if (ba < 0 || bb < 0 || bh < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+                if (ba < 0 || bb < 0 || bh < 0)
+                {
+                    plan.reject = PlanReject::DanglingOperand;
+                    plan.reject_op = op;
+                    return plan;
+                }
                 if (plan.buffers[static_cast<usize>(bh)].role == BufferRole::ExternalIn)
                 {
                     plan.buffers[static_cast<usize>(bh)].role = BufferRole::Intermediate; // device-produced by GemmRelu, not a caller upload
@@ -757,7 +996,12 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
             for (crd::u32 i = 0; i < nbind; ++i)
             {
                 const crd::i32 bi = find_buffer(plan, op->operand(3U + i));
-                if (bi < 0) { plan.reject = PlanReject::DanglingOperand; plan.reject_op = op; return plan; }
+                if (bi < 0)
+                {
+                    plan.reject = PlanReject::DanglingOperand;
+                    plan.reject_op = op;
+                    return plan;
+                }
                 st.bind[i] = bi;
                 // a WRITE binding realizes a DEVICE-PRODUCED buffer, not a caller upload — re-mark ExternalIn→Intermediate (the
                 // fft im0 re-mark precedent). ⛔ only bare `w` (an `rw` in-place binding stays CallerData — name-forward).
@@ -783,9 +1027,17 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
     //    behavior-identical to the reduce-terminal shape (the reduce's single output is its trailing bind) but ALSO correct for
     //    a dispatch-terminal pipeline (the advisor-caught wrong-buffer-Output bug). NoOutput = no stages / a terminal stage that
     //    writes nothing (an all-read terminal dispatch produces no result). ──
-    if (plan.stages.size() == 0U) { plan.reject = PlanReject::NoOutput; return plan; }
+    if (plan.stages.size() == 0U)
+    {
+        plan.reject = PlanReject::NoOutput;
+        return plan;
+    }
     const PlanStage& fin = plan.stages[plan.stages.size() - 1U];
-    if (fin.n_out == 0U) { plan.reject = PlanReject::NoOutput; return plan; }
+    if (fin.n_out == 0U)
+    {
+        plan.reject = PlanReject::NoOutput;
+        return plan;
+    }
     for (crd::u32 o = 0; o < fin.n_out; ++o)
     {
         const crd::u32 bi = fin.nbind - fin.n_out + o; // the o-th trailing output bind
@@ -793,7 +1045,10 @@ TensorPipelinePlan plan_tensor_pipeline(Context& ctx, const Module& m, memory::I
     }
     // ⭐ 26f: after roles are final (ExternalIn/Intermediate/Output/Alias), share physical storage among disjoint-lifetime
     //    Intermediates (a free-list pass; the runner honors a tenant's alias_of). Skips func.return-pinned readback targets.
-    if (opts.share_intermediate_storage) { assign_shared_storage(ctx, body, plan); }
+    if (opts.share_intermediate_storage)
+    {
+        assign_shared_storage(ctx, body, plan);
+    }
     return plan;
 }
 } // namespace crd::ceir::gpu

@@ -22,12 +22,18 @@ namespace
     Operation* find_main_func(const crd::ceir::Context& ctx, const crd::ceir::Module& m)
     {
         Region* const body = m.body();
-        if (body == nullptr) { return nullptr; }
+        if (body == nullptr)
+        {
+            return nullptr;
+        }
         for (Block* b = body->first_block(); b != nullptr; b = b->next_in_region())
         {
             for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
             {
-                if (ctx.op_name(op->kind()) == StringView("func.func")) { return op; }
+                if (ctx.op_name(op->kind()) == StringView("func.func"))
+                {
+                    return op;
+                }
             }
         }
         return nullptr;
@@ -37,7 +43,10 @@ namespace
     {
         for (const CeirSourceBinding& b : bindings)
         {
-            if (b.name == name) { return &b.binding; }
+            if (b.name == name)
+            {
+                return &b.binding;
+            }
         }
         return nullptr;
     }
@@ -48,27 +57,45 @@ namespace
     [[nodiscard]] bool read_f32(const crd::ceir::Context& ctx, const Operation* op, const char* name, crd::f32& out)
     {
         const crd::ceir::AttrId a = op->attr(name);
-        if (!a.valid()) { return false; }
+        if (!a.valid())
+        {
+            return false;
+        }
         const crd::ceir::AttrValue v = ctx.attr_value(a);
-        if (v.kind != crd::ceir::AttrKind::Float) { return false; }
+        if (v.kind != crd::ceir::AttrKind::Float)
+        {
+            return false;
+        }
         out = static_cast<crd::f32>(v.as_float());
         return true;
     }
     [[nodiscard]] bool read_i64(const crd::ceir::Context& ctx, const Operation* op, const char* name, crd::i64& out)
     {
         const crd::ceir::AttrId a = op->attr(name);
-        if (!a.valid()) { return false; }
+        if (!a.valid())
+        {
+            return false;
+        }
         const crd::ceir::AttrValue v = ctx.attr_value(a);
-        if (v.kind != crd::ceir::AttrKind::Int) { return false; }
+        if (v.kind != crd::ceir::AttrKind::Int)
+        {
+            return false;
+        }
         out = v.i;
         return true;
     }
     [[nodiscard]] bool read_sym(const crd::ceir::Context& ctx, const Operation* op, const char* name, StringView& out)
     {
         const crd::ceir::AttrId a = op->attr(name);
-        if (!a.valid()) { return false; }
+        if (!a.valid())
+        {
+            return false;
+        }
         const crd::ceir::AttrValue v = ctx.attr_value(a);
-        if (v.kind != crd::ceir::AttrKind::SymbolRef) { return false; }
+        if (v.kind != crd::ceir::AttrKind::SymbolRef)
+        {
+            return false;
+        }
         out = v.s;
         return true;
     }
@@ -91,11 +118,20 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
                                   crd::containers::Array<crd::f32>& out)
 {
     out.clear();
-    if (frames <= 0) { return 0; }
+    if (frames <= 0)
+    {
+        return 0;
+    }
     Operation* const fn = find_main_func(ctx, module);
-    if (fn == nullptr || fn->num_regions() == 0U) { return 0; }
+    if (fn == nullptr || fn->num_regions() == 0U)
+    {
+        return 0;
+    }
     Block* const body = fn->region(0)->first_block();
-    if (body == nullptr) { return 0; }
+    if (body == nullptr)
+    {
+        return 0;
+    }
 
     // the graph-global sample_rate (an OPTIONAL func attr -- rides the GRAPH not this exec call, so the authored DSP carries
     // the rate it was designed at; audio.compressor's ms->coeff needs it). ABSENT -> 48000 (the AudioGraphResource default);
@@ -106,7 +142,10 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
         if (sra.valid())
         {
             const crd::ceir::AttrValue srv = ctx.attr_value(sra);
-            if (srv.kind != crd::ceir::AttrKind::Int || srv.i <= 0) { return 0; }
+            if (srv.kind != crd::ceir::AttrKind::Int || srv.i <= 0)
+            {
+                return 0;
+            }
             sample_rate = static_cast<crd::u32>(srv.i);
         }
     }
@@ -120,10 +159,16 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
     crd::u32                                             n = 0;
     for (Operation* op = body->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (!is_audio_op(ctx.op_name(op->kind()))) { return 0; } // a non-audio op in the body = a malformed audio graph
+        if (!is_audio_op(ctx.op_name(op->kind()))) // a non-audio op in the body = a malformed audio graph
+        {
+            return 0;
+        }
         slot.insert(op, n++);
     }
-    if (n == 0) { return 0; }
+    if (n == 0)
+    {
+        return 0;
+    }
 
     crd::containers::Array<crd::f32> bus(alloc); // one [frames x 2] stereo bus per node, flat (render_graph's shape)
     bus.resize(static_cast<crd::usize>(n) * span, 0.0F);
@@ -140,15 +185,24 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
         {
             Operation* const   src = op->operand(i)->defining_op();
             const crd::u32* const s = (src != nullptr) ? slot.find(src) : nullptr;
-            if (s == nullptr) { return 0; } // an operand that is not an earlier audio op
-            if (*s >= my) { return 0; }     // ⛔ 31z (2): a BACK-EDGE (operand defined at/after this op) = a feedback cycle.
+            if (s == nullptr) // an operand that is not an earlier audio op
+            {
+                return 0;
+            }
+            if (*s >= my) // ⛔ 31z (2): a BACK-EDGE (operand defined at/after this op) = a feedback cycle.
+            {
+                return 0;
+            }
                                             // This single-pass topological walk cannot run graph feedback (the source bus is
                                             // not yet computed), and render_graph refuses cycles too (Kahn, audio_resources.cpp).
                                             // The delay/biquad StateEdge trait makes the 5d VERIFIER accept a delay-headed
                                             // back-edge (structural legality); the EXECUTOR refuses to RUN it (no bit-exact
                                             // oracle — sample-interleaved SCC eval is a future capability, not a close item).
             const crd::f32* const theirs = bus.data() + static_cast<crd::usize>(*s) * span;
-            for (crd::usize k = 0; k < span; ++k) { mine[k] += theirs[k]; }
+            for (crd::usize k = 0; k < span; ++k)
+            {
+                mine[k] += theirs[k];
+            }
             consumed.insert(src, true);
         }
 
@@ -156,18 +210,30 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
         if (nm == StringView("audio.source"))
         {
             StringView sname;
-            if (!read_sym(ctx, op, "name", sname)) { return 0; }
+            if (!read_sym(ctx, op, "name", sname))
+            {
+                return 0;
+            }
             const GraphSourceBinding* const b = binding_for(bindings, sname);
-            if (b == nullptr || b->samples.size() == 0 || b->channels == 0) { return 0; }
+            if (b == nullptr || b->samples.size() == 0 || b->channels == 0)
+            {
+                return 0;
+            }
             crd::i64 start_frame = 0;
             crd::i64 loopv       = 0;
-            if (!read_i64(ctx, op, "start_frame", start_frame) || !read_i64(ctx, op, "loop", loopv)) { return 0; }
+            if (!read_i64(ctx, op, "start_frame", start_frame) || !read_i64(ctx, op, "loop", loopv))
+            {
+                return 0;
+            }
             apply_source(mine, 0, frames, *b, start_frame, loopv != 0);
         }
         else if (nm == StringView("audio.gain") || nm == StringView("audio.send"))
         {
             crd::f32 gain_db = 0.0F;
-            if (!read_f32(ctx, op, "gain_db", gain_db)) { return 0; }
+            if (!read_f32(ctx, op, "gain_db", gain_db))
+            {
+                return 0;
+            }
             apply_gain(mine, frames, gain_db);
         }
         else if (nm == StringView("audio.biquad"))
@@ -187,7 +253,10 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
         else if (nm == StringView("audio.delay"))
         {
             crd::i64 delay_frames = 0;
-            if (!read_i64(ctx, op, "delay_frames", delay_frames)) { return 0; }
+            if (!read_i64(ctx, op, "delay_frames", delay_frames))
+            {
+                return 0;
+            }
             apply_delay(mine, frames, delay_frames);
         }
         else if (nm == StringView("audio.compressor"))
@@ -219,11 +288,17 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
     {
         if (consumed.find(op) == nullptr)
         {
-            if (sink != nullptr) { return 0; } // >1 unconsumed result -- an ambiguous output
+            if (sink != nullptr) // >1 unconsumed result -- an ambiguous output
+            {
+                return 0;
+            }
             sink = op;
         }
     }
-    if (sink == nullptr) { return 0; }
+    if (sink == nullptr)
+    {
+        return 0;
+    }
 
     // ⛔ 31z ruling (5): the output tensor's FRAME extent, WHEN PINNED (a Static dim0), IS the block-size contract — reject a
     // `frames` that disagrees (the declared-words-validated family; a Dynamic dim0 is the runtime block size, so any `frames`).
@@ -246,7 +321,10 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
 
     out.resize(span, 0.0F);
     const crd::f32* const fb = bus.data() + static_cast<crd::usize>(*slot.find(sink)) * span;
-    for (crd::usize k = 0; k < span; ++k) { out[k] = fb[k]; }
+    for (crd::usize k = 0; k < span; ++k)
+    {
+        out[k] = fb[k];
+    }
     return frames;
 }
 

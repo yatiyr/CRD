@@ -31,7 +31,10 @@ struct BitWriter
             if (++nbit == 8)
             {
                 out->push_back(static_cast<crd::u8>(acc));
-                if ((acc & 0xFFU) == 0xFFU) { out->push_back(0x00U); } // byte stuffing
+                if ((acc & 0xFFU) == 0xFFU) // byte stuffing
+                {
+                    out->push_back(0x00U);
+                }
                 acc  = 0;
                 nbit = 0;
             }
@@ -39,7 +42,10 @@ struct BitWriter
     }
     void flush()
     {
-        while (nbit != 0) { put(1U, 1); } // pad with 1s per convention
+        while (nbit != 0) // pad with 1s per convention
+        {
+            put(1U, 1);
+        }
     }
 };
 
@@ -87,7 +93,10 @@ void jpeg_prologue(crd::containers::Array<crd::u8>& b, crd::u16 w, crd::u16 h, i
     b.push_back(0xDBU); // DQT
     push16be(b, 2 + 1 + 64);
     b.push_back(0x00U); // 8-bit, table 0
-    for (int i = 0; i < 64; ++i) { b.push_back(static_cast<crd::u8>(q)); }
+    for (int i = 0; i < 64; ++i)
+    {
+        b.push_back(static_cast<crd::u8>(q));
+    }
     b.push_back(0xFFU);
     b.push_back(0xC0U); // SOF0
     push16be(b, static_cast<crd::u16>(8 + 3 * ncomp));
@@ -107,8 +116,14 @@ void jpeg_prologue(crd::containers::Array<crd::u8>& b, crd::u16 w, crd::u16 h, i
     push16be(b, 2 + (1 + 16 + 12) + (1 + 16 + 6));
     b.push_back(0x00U); // DC, id 0
     const crd::u8 dc_bits[16] = {0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-    for (crd::u8 v : dc_bits) { b.push_back(v); }
-    for (crd::u8 v = 0; v < 12; ++v) { b.push_back(v); }
+    for (crd::u8 v : dc_bits)
+    {
+        b.push_back(v);
+    }
+    for (crd::u8 v = 0; v < 12; ++v)
+    {
+        b.push_back(v);
+    }
     // AC table 0 — a MINIMAL canonical table carrying exactly the symbols the fixtures use, with the STANDARD codes:
     // len2: 0x01 ("00") · len4: 0x00 EOB ("1010")... canonical len2 first code 00; len3 codes 010,011,100,101,110 unused
     // → declare bits: {1,0,1,...}: len1:0 len2:1(0x01) len3:0 len4:1(0x00)? canonical: len2 code=00; len4: code = ((00+1)<<2)=0100? That is NOT 1010.
@@ -116,9 +131,15 @@ void jpeg_prologue(crd::containers::Array<crd::u8>& b, crd::u16 w, crd::u16 h, i
     // canonical then gives 0x01="00", 0x02="01", 0x03="100", 0x00="1010" — the standard assignments the writers above use.
     b.push_back(0x10U); // AC, id 0
     const crd::u8 ac_bits[16] = {0, 2, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    for (crd::u8 v : ac_bits) { b.push_back(v); }
+    for (crd::u8 v : ac_bits)
+    {
+        b.push_back(v);
+    }
     const crd::u8 ac_vals[6] = {0x01, 0x02, 0x03, 0x00, 0x04, 0x11};
-    for (crd::u8 v : ac_vals) { b.push_back(v); }
+    for (crd::u8 v : ac_vals)
+    {
+        b.push_back(v);
+    }
     if (dri != 0U)
     {
         b.push_back(0xFFU);
@@ -242,7 +263,10 @@ TEST_CASE("resources: JPEG AC coefficient -- structural gates on the u=1 cosine"
     for (crd::u32 x = 0; x < 8U; ++x)
     {
         const crd::u8 v0 = img.pixels[x * 4U];
-        for (crd::u32 y = 1; y < 8U; ++y) { CHECK(img.pixels[(y * 8U + x) * 4U] == v0); }
+        for (crd::u32 y = 1; y < 8U; ++y)
+        {
+            CHECK(img.pixels[(y * 8U + x) * 4U] == v0);
+        }
         const int a = img.pixels[x * 4U];
         const int b = img.pixels[(7U - x) * 4U];
         CHECK(std::abs(a + b - 2 * 144) <= 2); // antisymmetry within rounding

@@ -63,7 +63,9 @@ void watchdog_loop(crd::u32 period_ms) noexcept
             g_watchdog_cv.wait_for(lock, std::chrono::milliseconds(period_ms),
                                    [] { return g_watchdog_stop; });
             if (g_watchdog_stop)
+            {
                 return;
+            }
         }
         const auto     t1        = std::chrono::steady_clock::now();
         const crd::u32 actual_ms = static_cast<crd::u32>(
@@ -111,7 +113,9 @@ void watchdog_loop(crd::u32 period_ms) noexcept
                 for (crd::u32 lane = 0U; lane < 3U; ++lane)
                 {
                     if ((fired & static_cast<crd::u8>(1U << lane)) == 0U)
+                    {
                         continue;
+                    }
                     StarvationReport sreport{};
                     sreport.lane          = static_cast<crd::u8>(lane);
                     sreport.backlog       = after_lanes.backlog[lane];
@@ -245,7 +249,9 @@ static detail::Counter* submit_jobs(std::span<const JobDecl> jobs)
     // completion. It names the pool exactly as acquire() does ("CounterPool exhausted"), so one oracle recognises the
     // exhaustion in every build type (the counter-exhaustion specimen keys on that text).
     if (c == nullptr)
+    {
         CRD_FATAL("crd::jobs::run: CounterPool exhausted — raise max_counters in jobs::Config");
+    }
 
     for (const JobDecl& src : jobs)
     {
@@ -281,7 +287,9 @@ void wait(Counter* counter, crd::u32 target)
     // never changes behaviour). Reported at the entry, before the fast path, so even a wait that returns
     // immediately still records the forbidden call. Zero-cost in shipping builds.
     if (crd::in_rt_scope())
+    {
         crd::report_rt_violation(crd::RtViolationKind::Blocking, 0U);
+    }
 #endif
 
     detail::Fiber* current_fiber = detail::tl_current_fiber_ref();
@@ -308,7 +316,9 @@ void wait(Counter* counter, crd::u32 target)
         while (counter->value.load(std::memory_order_acquire) != target)
         {
             if (is_main && g_pool.pump())
+            {
                 continue;
+            }
             std::this_thread::yield();
         }
     }
@@ -365,7 +375,9 @@ bool pump_main_thread_until_idle()
                    "pump_main_thread_until_idle: must be called from the enrolled main thread (thread 0)");
     bool did_work = false;
     while (g_pool.pump())
+    {
         did_work = true;
+    }
     return did_work;
 }
 
@@ -414,7 +426,9 @@ crd::u64 current_task_id() noexcept
     // fiber resumes, tl_current_fiber_ref() points back to it, so the parent's id reappears for free.
     const detail::Fiber* const f = detail::tl_current_fiber_ref();
     if (f == nullptr)
+    {
         return 0U; // off-fiber caller (main thread, or outside any job)
+    }
     const detail::Counter* const c = f->job_counter;
     return (c != nullptr) ? c->task_id : 0U;
 }
@@ -423,7 +437,9 @@ crd::u64 parent_task_id() noexcept
 {
     const detail::Fiber* const f = detail::tl_current_fiber_ref();
     if (f == nullptr)
+    {
         return 0U; // off-fiber caller (main thread, or outside any job)
+    }
     const detail::Counter* const c = f->job_counter;
     return (c != nullptr) ? c->parent_task_id : 0U;
 }
@@ -432,7 +448,9 @@ void note_progress() noexcept
 {
     detail::Fiber* const f = detail::tl_current_fiber_ref();
     if (f == nullptr)
+    {
         return; // off-fiber caller: nothing to instrument
+    }
     // Opt in (first call moves the epoch off 0) and record forward progress. Relaxed: only this fiber writes it,
     // and the watchdog reads it racily as a diagnostic sample.
     f->progress_epoch.fetch_add(1U, std::memory_order_relaxed);
@@ -449,7 +467,9 @@ bool is_quiescent() noexcept
 crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
 {
     if (!g_pool.is_initialized())
+    {
         return 0U;
+    }
 
     crd::usize total = 0U;
     g_pool.fiber_pool().for_each_fiber(
@@ -458,7 +478,9 @@ crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
             // Relaxed racy read: a diagnostics dump, not an oracle (see the header contract).
             const detail::Counter* const c = f.waiting_on.load(std::memory_order_relaxed);
             if (c == nullptr)
+            {
                 return; // not parked
+            }
 
             const crd::usize idx = total++;
             if (idx < out.size())
@@ -483,7 +505,9 @@ crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
 crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept
 {
     if (!g_pool.is_initialized())
+    {
         return 0U;
+    }
 
     crd::usize total = 0U;
     g_pool.fiber_pool().for_each_fiber(
@@ -492,9 +516,13 @@ crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept
             // Monitored == opted in (epoch > 0). A parked monitored task is the hang detector's domain, not
             // livelock, so exclude waiting_on != nullptr. Relaxed racy reads: a diagnostics dump, not an oracle.
             if (f.progress_epoch.load(std::memory_order_relaxed) == 0U)
+            {
                 return;
+            }
             if (f.waiting_on.load(std::memory_order_relaxed) != nullptr)
+            {
                 return;
+            }
 
             const crd::usize idx = total++;
             if (idx < out.size())
@@ -515,7 +543,9 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
 {
     WorkerSnapshotResult r{0U, 0U, 0U, true};
     if (!g_pool.is_initialized())
+    {
         return r; // no workers -> vacuously complete
+    }
 
     const crd::u32 n = g_pool.num_threads();
     // If a background worker itself calls this, it must not be polled for its own ack (it is busy here, not at
@@ -528,8 +558,12 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
 
     crd::usize expected = 0U;
     for (crd::u32 i = 1U; i < n; ++i)
+    {
         if (i != self)
+        {
             ++expected;
+        }
+    }
 
     // Bounded poll: return as soon as every expected worker has acked, or when the timeout elapses.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -537,10 +571,16 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
     {
         crd::usize acked = 0U;
         for (crd::u32 i = 1U; i < n; ++i)
+        {
             if (i != self && g_pool.worker_ack_gen(i) == gen)
+            {
                 ++acked;
+            }
+        }
         if (acked >= expected || std::chrono::steady_clock::now() >= deadline)
+        {
             break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -550,7 +590,9 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
         // Thread 0 and the calling worker are not polled loop workers -> reported responsive from the dump.
         const bool responsive = (i == 0U || i == self) ? true : (g_pool.worker_ack_gen(i) == gen);
         if (i >= 1U && i != self && responsive)
+        {
             ++responded;
+        }
         if (i < out.size())
         {
             WorkerNode& node    = out[i];
@@ -572,7 +614,9 @@ ProgressSample progress_snapshot() noexcept
 {
     ProgressSample s{0U, 0U, 0U, true, 0U};
     if (!g_pool.is_initialized())
+    {
         return s;
+    }
     g_pool.progress_counts(s.completions, s.executing);
     // outstanding = counters with value > 0 (jobs still to finish). A completed-but-unwaited counter sits at 0
     // and is correctly NOT counted, so this is the true "work in flight" signal (unlike quiescent, which stays
@@ -582,7 +626,9 @@ ProgressSample progress_snapshot() noexcept
         [&outstanding](const detail::Counter& c) noexcept
         {
             if (c.value.load(std::memory_order_relaxed) > 0U)
+            {
                 ++outstanding;
+            }
         });
     s.outstanding = outstanding;
     s.quiescent   = is_quiescent();
@@ -594,7 +640,9 @@ LaneSample lane_snapshot() noexcept
 {
     LaneSample s{};
     if (!g_pool.is_initialized())
+    {
         return s;
+    }
     g_pool.scheduler().injection_diagnostics(s.backlog, s.pops);
     return s;
 }

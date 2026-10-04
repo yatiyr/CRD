@@ -24,12 +24,30 @@ namespace
 
 [[nodiscard]] crd::f64 unit_scale(const char* unit) noexcept
 {
-    if (unit == nullptr || std::strcmp(unit, "millimeter") == 0) { return 1.0e-3; } // the spec default
-    if (std::strcmp(unit, "micron") == 0) { return 1.0e-6; }
-    if (std::strcmp(unit, "centimeter") == 0) { return 1.0e-2; }
-    if (std::strcmp(unit, "inch") == 0) { return 0.0254; }
-    if (std::strcmp(unit, "foot") == 0) { return 0.3048; }
-    if (std::strcmp(unit, "meter") == 0) { return 1.0; }
+    if (unit == nullptr || std::strcmp(unit, "millimeter") == 0) // the spec default
+    {
+        return 1.0e-3;
+    }
+    if (std::strcmp(unit, "micron") == 0)
+    {
+        return 1.0e-6;
+    }
+    if (std::strcmp(unit, "centimeter") == 0)
+    {
+        return 1.0e-2;
+    }
+    if (std::strcmp(unit, "inch") == 0)
+    {
+        return 0.0254;
+    }
+    if (std::strcmp(unit, "foot") == 0)
+    {
+        return 0.3048;
+    }
+    if (std::strcmp(unit, "meter") == 0)
+    {
+        return 1.0;
+    }
     return 0.0; // unknown unit — Malformed
 }
 
@@ -43,28 +61,49 @@ namespace
 
 [[nodiscard]] bool parse_f64(const char* s, crd::f64& out) noexcept
 {
-    if (s == nullptr) { return false; }
+    if (s == nullptr)
+    {
+        return false;
+    }
     char*          end = nullptr;
     const crd::f64 v   = std::strtod(s, &end);
-    if (end == s || !std::isfinite(v)) { return false; }
+    if (end == s || !std::isfinite(v))
+    {
+        return false;
+    }
     out = v;
     return true;
 }
 [[nodiscard]] bool parse_u32(const char* s, crd::u32& out) noexcept
 {
-    if (s == nullptr) { return false; }
+    if (s == nullptr)
+    {
+        return false;
+    }
     char*                   end = nullptr;
     const unsigned long long v  = std::strtoull(s, &end, 10);
-    if (end == s || v > 0xFFFFFFFFULL) { return false; }
+    if (end == s || v > 0xFFFFFFFFULL)
+    {
+        return false;
+    }
     out = static_cast<crd::u32>(v);
     return true;
 }
 
 [[nodiscard]] int hex_nibble(char c) noexcept
 {
-    if (c >= '0' && c <= '9') { return c - '0'; }
-    if (c >= 'a' && c <= 'f') { return 10 + c - 'a'; }
-    if (c >= 'A' && c <= 'F') { return 10 + c - 'A'; }
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        return 10 + c - 'a';
+    }
+    if (c >= 'A' && c <= 'F')
+    {
+        return 10 + c - 'A';
+    }
     return -1;
 }
 
@@ -83,28 +122,49 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
 {
     XmlDoc doc(alloc);
     const XmlError xe = doc.parse(xml_bytes);
-    if (xe == XmlError::Truncated) { return ImportStatus::Truncated; }
-    if (xe != XmlError::Ok) { return ImportStatus::Malformed; }
+    if (xe == XmlError::Truncated)
+    {
+        return ImportStatus::Truncated;
+    }
+    if (xe != XmlError::Ok)
+    {
+        return ImportStatus::Malformed;
+    }
 
     const crd::i32 model = doc.root();
-    if (std::strcmp(doc.name(model), "model") != 0) { return ImportStatus::NotRecognized; }
+    if (std::strcmp(doc.name(model), "model") != 0)
+    {
+        return ImportStatus::NotRecognized;
+    }
 
     // requiredextensions we cannot honor ⇒ Unsupported BY NAME (a print with ignored REQUIRED semantics is wrong)
     const char* required = doc.attr(model, "requiredextensions");
-    if (required != nullptr && required[0] != '\0') { return ImportStatus::Unsupported; }
+    if (required != nullptr && required[0] != '\0')
+    {
+        return ImportStatus::Unsupported;
+    }
 
     const crd::f64 scale = unit_scale(doc.attr(model, "unit"));
-    if (scale == 0.0) { return ImportStatus::Malformed; }
+    if (scale == 0.0)
+    {
+        return ImportStatus::Malformed;
+    }
 
     const crd::i32 resources = doc.child(model, "resources");
-    if (resources == kXmlInvalid) { return ImportStatus::Malformed; }
+    if (resources == kXmlInvalid)
+    {
+        return ImportStatus::Malformed;
+    }
 
     // slice-extension AWARENESS: slice stacks are auxiliary print data riding beside real triangle geometry — the
     // meshes import complete, the slices are dropped, and the drop is WARNED (never silent, never a hard refusal;
     // a producer that truly requires them says so in requiredextensions, refused above)
     for (crd::i32 r = doc.first_child(resources); r != kXmlInvalid; r = doc.next(r))
     {
-        if (!doc.is_text(r) && local_name_is(doc.name(r), "slicestack")) { ++out.warning_count; }
+        if (!doc.is_text(r) && local_name_is(doc.name(r), "slicestack"))
+        {
+            ++out.warning_count;
+        }
     }
 
     // ── basematerials → ImportedMaterials (a flat list across groups; (pid,pindex) resolves into it) ─────────────
@@ -113,25 +173,37 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
     for (crd::i32 bm = doc.child(resources, "basematerials"); bm != kXmlInvalid; bm = doc.sibling(bm, "basematerials"))
     {
         crd::u32 gid = 0;
-        if (!parse_u32(doc.attr(bm, "id"), gid)) { return ImportStatus::Malformed; }
+        if (!parse_u32(doc.attr(bm, "id"), gid))
+        {
+            return ImportStatus::Malformed;
+        }
         mat_group_id.push_back(gid);
         mat_group_start.push_back(static_cast<crd::u32>(out.materials.size()));
         for (crd::i32 base = doc.child(bm, "base"); base != kXmlInvalid; base = doc.sibling(base, "base"))
         {
             ImportedMaterial m(alloc);
             const char*      nm = doc.attr(base, "name");
-            if (nm != nullptr) { m.name.append(nm); }
+            if (nm != nullptr)
+            {
+                m.name.append(nm);
+            }
             const char* dc = doc.attr(base, "displaycolor");
             if (dc != nullptr && dc[0] == '#')
             {
                 const crd::usize len = std::strlen(dc);
-                if (len != 7U && len != 9U) { return ImportStatus::Malformed; }
+                if (len != 7U && len != 9U)
+                {
+                    return ImportStatus::Malformed;
+                }
                 crd::u8 ch[4] = {255U, 255U, 255U, 255U};
                 for (crd::usize c = 0; c * 2U + 2U < len + 1U; ++c)
                 {
                     const int hi = hex_nibble(dc[1U + c * 2U]);
                     const int lo = hex_nibble(dc[2U + c * 2U]);
-                    if (hi < 0 || lo < 0) { return ImportStatus::Malformed; }
+                    if (hi < 0 || lo < 0)
+                    {
+                        return ImportStatus::Malformed;
+                    }
                     ch[c] = static_cast<crd::u8>(hi * 16 + lo);
                 }
                 m.base_color = {srgb_to_linear(ch[0]), srgb_to_linear(ch[1]), srgb_to_linear(ch[2])};
@@ -160,7 +232,10 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
     for (crd::i32 obj = doc.child(resources, "object"); obj != kXmlInvalid; obj = doc.sibling(obj, "object"))
     {
         crd::u32 oid = 0;
-        if (!parse_u32(doc.attr(obj, "id"), oid)) { return ImportStatus::Malformed; }
+        if (!parse_u32(doc.attr(obj, "id"), oid))
+        {
+            return ImportStatus::Malformed;
+        }
         const char* type = doc.attr(obj, "type");
         if (type != nullptr && std::strcmp(type, "model") != 0 && std::strcmp(type, "solidsupport") != 0)
         {
@@ -179,12 +254,18 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
         // would silently drop the printed structure. Refused BY NAME, never misclassified as Malformed.
         for (crd::i32 mc = doc.first_child(mesh); mc != kXmlInvalid; mc = doc.next(mc))
         {
-            if (!doc.is_text(mc) && local_name_is(doc.name(mc), "beamlattice")) { return ImportStatus::Unsupported; }
+            if (!doc.is_text(mc) && local_name_is(doc.name(mc), "beamlattice"))
+            {
+                return ImportStatus::Unsupported;
+            }
         }
 
         ImportedMesh im(alloc);
         const char*  oname = doc.attr(obj, "name");
-        if (oname != nullptr) { im.name.append(oname); }
+        if (oname != nullptr)
+        {
+            im.name.append(oname);
+        }
 
         const crd::i32 vertices = doc.child(mesh, "vertices");
         for (crd::i32 v = doc.child(vertices, "vertex"); v != kXmlInvalid; v = doc.sibling(v, "vertex"))
@@ -220,12 +301,18 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
                 return ImportStatus::Malformed;
             }
             const crd::u32 n = static_cast<crd::u32>(im.positions.size());
-            if (v1 >= n || v2 >= n || v3 >= n) { return ImportStatus::Malformed; }
+            if (v1 >= n || v2 >= n || v3 >= n)
+            {
+                return ImportStatus::Malformed;
+            }
             im.indices.push_back(v1);
             im.indices.push_back(v2);
             im.indices.push_back(v3);
         }
-        if (im.indices.size() == 0U) { return ImportStatus::Malformed; } // a mesh object must have triangles
+        if (im.indices.size() == 0U) // a mesh object must have triangles
+        {
+            return ImportStatus::Malformed;
+        }
 
         // the glTF fan-out convention: node.mesh names a LIBRARY mesh and each ImportedMesh points back at it via
         // source_mesh. 3MF objects are 1:1 with meshes, so the library index is the mesh's own index — without this
@@ -239,7 +326,10 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
     const auto mesh_of = [&](crd::u32 oid) -> crd::i32 {
         for (crd::usize i = 0; i < object_id.size(); ++i)
         {
-            if (object_id[i] == oid) { return object_mesh[i]; }
+            if (object_id[i] == oid)
+            {
+                return object_mesh[i];
+            }
         }
         return kXmlInvalid - 1; // distinguish "unknown object id" (error) from "object with no mesh" (kXmlInvalid)
     };
@@ -250,9 +340,15 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
          item = doc.sibling(item, "item"))
     {
         crd::u32 oid = 0;
-        if (!parse_u32(doc.attr(item, "objectid"), oid)) { return ImportStatus::Malformed; }
+        if (!parse_u32(doc.attr(item, "objectid"), oid))
+        {
+            return ImportStatus::Malformed;
+        }
         const crd::i32 mesh_idx = mesh_of(oid);
-        if (mesh_idx == kXmlInvalid - 1) { return ImportStatus::Malformed; } // an item must reference a real object
+        if (mesh_idx == kXmlInvalid - 1) // an item must reference a real object
+        {
+            return ImportStatus::Malformed;
+        }
 
         ImportedNode node(alloc);
         node.mesh = mesh_idx; // kXmlInvalid (-1) for a meshless object — a grouping node
@@ -266,14 +362,20 @@ ImportStatus parse_3mf_model(crd::containers::ConstSpan<crd::u8> xml_bytes, crd:
             {
                 char*          e  = nullptr;
                 const crd::f64 pv = std::strtod(s, &e);
-                if (e == s || !std::isfinite(pv)) { return ImportStatus::Malformed; }
+                if (e == s || !std::isfinite(pv))
+                {
+                    return ImportStatus::Malformed;
+                }
                 v[k] = pv;
                 s    = e;
             }
             // → column-major 4×4 for the shared decompose: columns are the 3MF rows' transposition
             const crd::f64 m[16] = {v[0], v[1],  v[2],  0.0, v[3], v[4],  v[5],  0.0,
                                     v[6], v[7],  v[8],  0.0, v[9] * scale, v[10] * scale, v[11] * scale, 1.0};
-            if (!decompose_matrix_trs(m, node.translation, node.rotation, node.scale)) { ++out.warning_count; }
+            if (!decompose_matrix_trs(m, node.translation, node.rotation, node.scale))
+            {
+                ++out.warning_count;
+            }
         }
         out.nodes.push_back(std::move(node));
     }
@@ -304,8 +406,14 @@ bool threemf_write_model_xml(crd::containers::ConstSpan<crd::u8> vertices48,
                              crd::memory::IAllocator* alloc, crd::containers::String& out)
 {
     out.clear();
-    if (vertices48.size() == 0U || (vertices48.size() % 48U) != 0U) { return false; }
-    if (indices_u32.size() == 0U || (indices_u32.size() % 12U) != 0U) { return false; } // whole triangles (3×u32)
+    if (vertices48.size() == 0U || (vertices48.size() % 48U) != 0U)
+    {
+        return false;
+    }
+    if (indices_u32.size() == 0U || (indices_u32.size() % 12U) != 0U) // whole triangles (3×u32)
+    {
+        return false;
+    }
 
     const crd::u32 vcount = static_cast<crd::u32>(vertices48.size() / 48U);
     const crd::u32 icount = static_cast<crd::u32>(indices_u32.size() / 4U);
@@ -323,14 +431,20 @@ bool threemf_write_model_xml(crd::containers::ConstSpan<crd::u8> vertices48,
     {
         crd::u32 iv = 0;
         std::memcpy(&iv, indices_u32.data() + static_cast<crd::usize>(i) * 4U, 4U);
-        if (iv >= vcount) { return false; }
+        if (iv >= vcount)
+        {
+            return false;
+        }
         idx.push_back(iv);
     }
     crd::geometry::mesh::TriangleMeshViewf view;
     view.vertices = crd::containers::ConstSpan<crd::math::Vec3<crd::f32>>(pos.data(), pos.size());
     view.indices  = crd::containers::ConstSpan<crd::u32>(idx.data(), idx.size());
     const auto report = crd::geometry::mesh::validate_triangle_mesh(view, alloc);
-    if (!report.watertight) { return false; } // the gate: a holed/non-manifold solid never ships to a slicer
+    if (!report.watertight) // the gate: a holed/non-manifold solid never ships to a slicer
+    {
+        return false;
+    }
 
     // emit (SI metres → unit="meter"; %.9g round-trips every f32 exactly, the json_write discipline)
     out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");

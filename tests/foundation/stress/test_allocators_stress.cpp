@@ -82,9 +82,18 @@ void drive_tlsf(crd::stress::Config cfg)
             {
                 const u32 bucket = rng.next_u32(4U);
                 usize size = 1U + rng.next_u32(64U * 1024U);
-                if (bucket == 0U)      { size = 1U + rng.next_u32(64U); }
-                else if (bucket == 1U) { size = 1U + rng.next_u32(512U); }
-                else if (bucket == 2U) { size = 1U + rng.next_u32(8U * 1024U); }
+                if (bucket == 0U)
+                {
+                    size = 1U + rng.next_u32(64U);
+                }
+                else if (bucket == 1U)
+                {
+                    size = 1U + rng.next_u32(512U);
+                }
+                else if (bucket == 2U)
+                {
+                    size = 1U + rng.next_u32(8U * 1024U);
+                }
                 const usize align = usize{8} << rng.next_u32(6U); // 8..256
                 void* p = heap.try_allocate(size, align);
                 if (p == nullptr) // pool pressure — free something and move on

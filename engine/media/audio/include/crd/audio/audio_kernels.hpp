@@ -30,8 +30,14 @@ inline void apply_source(crd::f32* bus, crd::i64 start, crd::i64 len, const Grap
     for (crd::i64 i = 0; i < len; ++i)
     {
         crd::u64 f = static_cast<crd::u64>(start + i) + static_cast<crd::u64>(start_frame);
-        if (loop) { f %= bframes; }
-        if (f >= bframes) { continue; } // one-shot past the end = silence
+        if (loop)
+        {
+            f %= bframes;
+        }
+        if (f >= bframes) // one-shot past the end = silence
+        {
+            continue;
+        }
         if (b.channels >= 2)
         {
             bus[i * 2] += b.samples[f * b.channels];

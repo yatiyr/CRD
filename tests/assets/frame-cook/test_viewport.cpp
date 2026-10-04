@@ -35,7 +35,10 @@ void thumb_id(crd::containers::String& d, crd::u32 n)
     d.append("thumb.");
     char buf[8];
     int  i = 0;
-    if (n == 0U) { buf[i++] = '0'; }
+    if (n == 0U)
+    {
+        buf[i++] = '0';
+    }
     while (n > 0U)
     {
         buf[i++] = static_cast<char>('0' + (n % 10U));
@@ -52,7 +55,10 @@ void thumb_id(crd::containers::String& d, crd::u32 n)
 {
     for (crd::usize i = 0; i < v.size(); ++i)
     {
-        if (v[i] == x) { return true; }
+        if (v[i] == x)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -97,7 +103,10 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
         d.height   = 256;
         d.readback = true; // a thumbnail CAPTURE pays the stall once; the live viewports never do
         const crd::u32 i = reg.add(d);
-        if (t == 0U) { thumb_first = i; }
+        if (t == 0U)
+        {
+            thumb_first = i;
+        }
         reg.note_cost(i, 0.1);
         reg.depends_on(i, fc::DependencyKind::Asset, 1000ULL + t);
         reg.depends_on(i, fc::DependencyKind::Material, 500ULL); // they all share one material
@@ -138,10 +147,16 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
         fc::select_viewports(reg, budget, frame, sel);
         CHECK(contains(sel.active, main_i)); // never starved, on any frame
         fc::commit_selection(reg, sel, frame);
-        if (sel.active.size() == 2U && sel.deferred.empty()) { break; }
+        if (sel.active.size() == 2U && sel.deferred.empty())
+        {
+            break;
+        }
     }
     CHECK(frame < 32U);
-    for (crd::u32 t = 0; t < thumb_count; ++t) { CHECK_FALSE(reg.at(thumb_first + t).dirty); }
+    for (crd::u32 t = 0; t < thumb_count; ++t)
+    {
+        CHECK_FALSE(reg.at(thumb_first + t).dirty);
+    }
 
     // ── SETTLED: only the two live viewports run; the thumbnails contribute NOTHING. That is the property that
     // makes a 400-asset folder viable at all.
@@ -165,9 +180,15 @@ TEST_CASE("REN-37.9 GATE: an editor-shaped viewport set schedules within budget 
     CHECK(sel.active.size() <= budget.max_viewports);
     CHECK(sel.deferred.size() == thumb_count - (sel.active.size() - 2U));
     // ⛔ deferred viewports stay DIRTY. Marking them clean here is the silent-cap failure in its purest form.
-    for (crd::usize i = 0; i < sel.deferred.size(); ++i) { CHECK(reg.at(sel.deferred[i]).dirty); }
+    for (crd::usize i = 0; i < sel.deferred.size(); ++i)
+    {
+        CHECK(reg.at(sel.deferred[i]).dirty);
+    }
     fc::commit_selection(reg, sel, frame);
-    for (crd::usize i = 0; i < sel.active.size(); ++i) { CHECK_FALSE(reg.at(sel.active[i]).dirty); }
+    for (crd::usize i = 0; i < sel.active.size(); ++i)
+    {
+        CHECK_FALSE(reg.at(sel.active[i]).dirty);
+    }
 }
 
 TEST_CASE("REN-37.9: an UNMEASURED viewport is charged pessimistically", "[framecook][ren37]")

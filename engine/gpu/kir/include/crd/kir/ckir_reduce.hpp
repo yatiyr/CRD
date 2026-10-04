@@ -108,7 +108,10 @@ struct ReducePlan
     if (n <= threads * 8) // small ⇒ ONE workgroup (avoid a needless second dispatch); span = n, threads capped to n
     {
         int t = threads;
-        while (t > n) { t /= 2; }
+        while (t > n)
+        {
+            t /= 2;
+        }
         plan.single_pass     = true;
         plan.nblocks         = 1;
         plan.elems_per_block = n;
@@ -125,7 +128,10 @@ struct ReducePlan
     plan.block_graph     = graphs[0];
     // pass 1 reduces the `nblocks` partials in ONE workgroup (threads capped to nblocks).
     int ft = threads;
-    while (ft > nblocks) { ft /= 2; }
+    while (ft > nblocks)
+    {
+        ft /= 2;
+    }
     plan.final_pass  = build_reduce_block(*graphs[1], nblocks, ft, op);
     plan.final_graph = graphs[1];
     return plan;

@@ -157,17 +157,26 @@ template <typename T>
     {
         const T xmin = std::min({v0.x, v1.x, v2.x});
         const T xmax = std::max({v0.x, v1.x, v2.x});
-        if (xmin > half_extents.x || xmax < -half_extents.x) { return false; }
+        if (xmin > half_extents.x || xmax < -half_extents.x)
+        {
+            return false;
+        }
     }
     {
         const T ymin = std::min({v0.y, v1.y, v2.y});
         const T ymax = std::max({v0.y, v1.y, v2.y});
-        if (ymin > half_extents.y || ymax < -half_extents.y) { return false; }
+        if (ymin > half_extents.y || ymax < -half_extents.y)
+        {
+            return false;
+        }
     }
     {
         const T zmin = std::min({v0.z, v1.z, v2.z});
         const T zmax = std::max({v0.z, v1.z, v2.z});
-        if (zmin > half_extents.z || zmax < -half_extents.z) { return false; }
+        if (zmin > half_extents.z || zmax < -half_extents.z)
+        {
+            return false;
+        }
     }
 
     // Triangle edges.
@@ -180,31 +189,58 @@ template <typename T>
         const T fex = crd::math::abs(e0.x);
         const T fey = crd::math::abs(e0.y);
         const T fez = crd::math::abs(e0.z);
-        if (axis_test_x01<T>( e0.z, e0.y, fez, fey, v0, v2, half_extents)) { return false; }
-        if (axis_test_y02<T>( e0.z, e0.x, fez, fex, v0, v2, half_extents)) { return false; }
-        if (axis_test_z12<T>( e0.y, e0.x, fey, fex, v1, v2, half_extents)) { return false; }
+        if (axis_test_x01<T>( e0.z, e0.y, fez, fey, v0, v2, half_extents))
+        {
+            return false;
+        }
+        if (axis_test_y02<T>( e0.z, e0.x, fez, fex, v0, v2, half_extents))
+        {
+            return false;
+        }
+        if (axis_test_z12<T>( e0.y, e0.x, fey, fex, v1, v2, half_extents))
+        {
+            return false;
+        }
     }
     {
         const T fex = crd::math::abs(e1.x);
         const T fey = crd::math::abs(e1.y);
         const T fez = crd::math::abs(e1.z);
-        if (axis_test_x01<T>( e1.z, e1.y, fez, fey, v0, v2, half_extents)) { return false; }
-        if (axis_test_y02<T>( e1.z, e1.x, fez, fex, v0, v2, half_extents)) { return false; }
+        if (axis_test_x01<T>( e1.z, e1.y, fez, fey, v0, v2, half_extents))
+        {
+            return false;
+        }
+        if (axis_test_y02<T>( e1.z, e1.x, fez, fex, v0, v2, half_extents))
+        {
+            return false;
+        }
         // Note: AKM uses (v0, v1) for this axis (skipping v2); see paper.
         const T p0 = e1.y * v0.x - e1.x * v0.y;
         const T p1 = e1.y * v1.x - e1.x * v1.y;
         const T pmin = std::min(p0, p1);
         const T pmax = std::max(p0, p1);
         const T rad  = fey * half_extents.x + fex * half_extents.y;
-        if (pmin > rad || pmax < -rad) { return false; }
+        if (pmin > rad || pmax < -rad)
+        {
+            return false;
+        }
     }
     {
         const T fex = crd::math::abs(e2.x);
         const T fey = crd::math::abs(e2.y);
         const T fez = crd::math::abs(e2.z);
-        if (axis_test_x01<T>( e2.z, e2.y, fez, fey, v0, v1, half_extents)) { return false; }
-        if (axis_test_y02<T>( e2.z, e2.x, fez, fex, v0, v1, half_extents)) { return false; }
-        if (axis_test_z12<T>( e2.y, e2.x, fey, fex, v1, v2, half_extents)) { return false; }
+        if (axis_test_x01<T>( e2.z, e2.y, fez, fey, v0, v1, half_extents))
+        {
+            return false;
+        }
+        if (axis_test_y02<T>( e2.z, e2.x, fez, fex, v0, v1, half_extents))
+        {
+            return false;
+        }
+        if (axis_test_z12<T>( e2.y, e2.x, fey, fex, v1, v2, half_extents))
+        {
+            return false;
+        }
     }
 
     // Triangle face-normal axis.
@@ -213,7 +249,10 @@ template <typename T>
         e0.z * e1.x - e0.x * e1.z,
         e0.x * e1.y - e0.y * e1.x,
     };
-    if (!plane_box_overlap<T>(normal, v0, half_extents)) { return false; }
+    if (!plane_box_overlap<T>(normal, v0, half_extents))
+    {
+        return false;
+    }
 
     return true;
 }

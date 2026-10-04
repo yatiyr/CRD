@@ -43,9 +43,15 @@ namespace
 bool load_spirv(const char* path, const char* name, crd::containers::Array<crd::u8>& out, crd::memory::IAllocator* a)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
-    if (sz <= 0) { return false; }
+    if (sz <= 0)
+    {
+        return false;
+    }
     f.seekg(0);
     crd::containers::Array<char> src(a);
     src.resize(static_cast<crd::usize>(sz), '\0');
@@ -71,7 +77,10 @@ bool load_spirv(const char* path, const char* name, crd::containers::Array<crd::
         return false;
     }
     out.resize(cres.spirv.size(), 0U);
-    if (cres.spirv.size() > 0U) { std::memcpy(out.data(), cres.spirv.data(), cres.spirv.size()); }
+    if (cres.spirv.size() > 0U)
+    {
+        std::memcpy(out.data(), cres.spirv.data(), cres.spirv.size());
+    }
     return true;
 }
 } // namespace
@@ -84,9 +93,17 @@ TEST_CASE("CEIR-20c-2: the authored ceir.work smoke runs as a VK_EXT_device_gene
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vkctx->device_generated_commands_ext()) { WARN("no VK_EXT_device_generated_commands (cross-vendor) adapter; skipping"); return; }
+    if (!vkctx->device_generated_commands_ext())
+    {
+        WARN("no VK_EXT_device_generated_commands (cross-vendor) adapter; skipping");
+        return;
+    }
 
     gpu::VulkanDgcContext dgc(*vkctx);
     REQUIRE(dgc.valid());

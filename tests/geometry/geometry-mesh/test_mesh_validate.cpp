@@ -49,7 +49,10 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
         1, 3, 5,  3, 7, 5   // +X
     };
     m.indices.reserve(36);
-    for (crd::u32 j = 0U; j < 36U; ++j) { m.indices.push_back(idx[j]); }
+    for (crd::u32 j = 0U; j < 36U; ++j)
+    {
+        m.indices.push_back(idx[j]);
+    }
     return m;
 }
 
@@ -63,7 +66,10 @@ crd::u32 count_defect(const MeshValidationReport& r, MeshDefectKind k) noexcept
     crd::u32 c = 0;
     for (const MeshDefect& d : r.defects)
     {
-        if (d.kind == k) { ++c; }
+        if (d.kind == k)
+        {
+            ++c;
+        }
     }
     return c;
 }

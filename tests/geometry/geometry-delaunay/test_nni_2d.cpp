@@ -310,7 +310,10 @@ TEST_CASE("sibson_interpolate_2d: many-query reuse on cached interpolator",
     pts.push_back(Vec2<f64>{1.5, 1.5});
 
     crd::containers::Array<f64> vals(&f.alloc);
-    for (u32 i = 0; i < 5; ++i) { vals.push_back(static_cast<f64>(i)); }
+    for (u32 i = 0; i < 5; ++i)
+    {
+        vals.push_back(static_cast<f64>(i));
+    }
 
     NniInterpolator2<f64> interp{
         crd::containers::ConstSpan<Vec2<f64>>{pts.data(), pts.size()},
@@ -352,7 +355,10 @@ TEST_CASE("sibson_interpolate_2d: determinism",
     pts.push_back(Vec2<f64>{2, 2});
 
     crd::containers::Array<f64> vals(&f.alloc);
-    for (u32 i = 0; i < 8; ++i) { vals.push_back(static_cast<f64>(i) * 0.5); }
+    for (u32 i = 0; i < 8; ++i)
+    {
+        vals.push_back(static_cast<f64>(i) * 0.5);
+    }
 
     NniInterpolator2<f64> interp{
         crd::containers::ConstSpan<Vec2<f64>>{pts.data(), pts.size()},

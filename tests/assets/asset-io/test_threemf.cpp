@@ -28,7 +28,10 @@ void build_tetrahedron(crd::containers::Array<crd::u8>& verts, crd::containers::
     {
         float rec[12] = {v[0], v[1], v[2], 0, 0, 1, 0, 0, 1, 0, 0, 1};
         const auto* b = reinterpret_cast<const crd::u8*>(rec);
-        for (crd::u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (crd::u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const crd::u32 faces[4][3] = {{0, 2, 1}, {0, 1, 3}, {0, 3, 2}, {1, 2, 3}};
     for (const auto& f : faces)
@@ -36,7 +39,10 @@ void build_tetrahedron(crd::containers::Array<crd::u8>& verts, crd::containers::
         for (crd::u32 k = 0; k < 3U; ++k)
         {
             const auto* b = reinterpret_cast<const crd::u8*>(&f[k]);
-            for (crd::u32 j = 0; j < 4U; ++j) { idx.push_back(b[j]); }
+            for (crd::u32 j = 0; j < 4U; ++j)
+            {
+                idx.push_back(b[j]);
+            }
         }
     }
 }
@@ -161,8 +167,14 @@ TEST_CASE("3mf: a REAL reference-producer file imports -- the lib3mf fixture thr
     namespace res = crd::resources;
 
     crd::containers::String path(&alloc);
-    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0') { path.append(root); }
-    else { path.append("tests/assets/asset-io/data"); }
+    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0')
+    {
+        path.append(root);
+    }
+    else
+    {
+        path.append("tests/assets/asset-io/data");
+    }
     path.append("/lib3mf_box.3mf");
 
     crd::containers::Array<crd::u8> bytes(&alloc);
@@ -196,7 +208,10 @@ TEST_CASE("3mf: a REAL reference-producer file imports -- the lib3mf fixture thr
     crd::f32 max_x = 0.0F;
     for (crd::usize v = 0; v < ia.meshes[0].positions.size(); ++v)
     {
-        if (ia.meshes[0].positions[v].x > max_x) { max_x = ia.meshes[0].positions[v].x; }
+        if (ia.meshes[0].positions[v].x > max_x)
+        {
+            max_x = ia.meshes[0].positions[v].x;
+        }
     }
     CHECK(max_x == 0.02F); // 20 mm -> SI metres
 
@@ -222,8 +237,14 @@ TEST_CASE("3mf: a REAL slicer-authored file imports -- PrusaSlicer 2.9.6's own r
     namespace res = crd::resources;
 
     crd::containers::String path(&alloc);
-    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0') { path.append(root); }
-    else { path.append("tests/assets/asset-io/data"); }
+    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0')
+    {
+        path.append(root);
+    }
+    else
+    {
+        path.append("tests/assets/asset-io/data");
+    }
     path.append("/prusaslicer_tetra.3mf");
 
     crd::containers::Array<crd::u8> bytes(&alloc);
@@ -260,8 +281,14 @@ TEST_CASE("3mf: a REAL slicer-authored file imports -- PrusaSlicer 2.9.6's own r
     for (crd::usize v = 1; v < ia.meshes[0].positions.size(); ++v)
     {
         const crd::f32 x = ia.meshes[0].positions[v].x;
-        if (x < min_x) { min_x = x; }
-        if (x > max_x) { max_x = x; }
+        if (x < min_x)
+        {
+            min_x = x;
+        }
+        if (x > max_x)
+        {
+            max_x = x;
+        }
     }
     CHECK(max_x - min_x > 0.999F); // mm-authored by the slicer -> SI metres
     CHECK(max_x - min_x < 1.001F);

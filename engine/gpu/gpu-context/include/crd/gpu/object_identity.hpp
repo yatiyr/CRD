@@ -69,21 +69,39 @@ inline constexpr crd::usize kObjectIdentityBufferSize = kObjectIdentityMaxChars 
 // emit a distinguished "invalid" string that could be mistaken for one).
 [[nodiscard]] inline crd::usize encode(const ObjectIdentity& id, char* out, crd::usize cap) noexcept
 {
-    if (out == nullptr || !id.valid()) { return 0U; }
+    if (out == nullptr || !id.valid())
+    {
+        return 0U;
+    }
     const char* kind = to_string(id.kind);
     crd::usize kind_len = 0U;
-    while (kind[kind_len] != '\0') { ++kind_len; }
+    while (kind[kind_len] != '\0')
+    {
+        ++kind_len;
+    }
     const crd::usize need = 4U + kind_len + 1U + 8U + 2U + 8U; // "crd:" + kind + ":" + idx + ":g" + gen (no NUL)
-    if (cap < need + 1U) { return 0U; }
+    if (cap < need + 1U)
+    {
+        return 0U;
+    }
 
     static constexpr char kHex[] = "0123456789abcdef";
     crd::usize p = 0U;
     out[p++] = 'c'; out[p++] = 'r'; out[p++] = 'd'; out[p++] = ':';
-    for (crd::usize i = 0U; i < kind_len; ++i) { out[p++] = kind[i]; }
+    for (crd::usize i = 0U; i < kind_len; ++i)
+    {
+        out[p++] = kind[i];
+    }
     out[p++] = ':';
-    for (int shift = 28; shift >= 0; shift -= 4) { out[p++] = kHex[(id.index >> shift) & 0xFU]; }
+    for (int shift = 28; shift >= 0; shift -= 4)
+    {
+        out[p++] = kHex[(id.index >> shift) & 0xFU];
+    }
     out[p++] = ':'; out[p++] = 'g';
-    for (int shift = 28; shift >= 0; shift -= 4) { out[p++] = kHex[(id.generation >> shift) & 0xFU]; }
+    for (int shift = 28; shift >= 0; shift -= 4)
+    {
+        out[p++] = kHex[(id.generation >> shift) & 0xFU];
+    }
     out[p] = '\0';
     return p;
 }
@@ -92,9 +110,21 @@ namespace detail
 {
 [[nodiscard]] constexpr bool hex_nibble(char c, crd::u32& value) noexcept
 {
-    if (c >= '0' && c <= '9') { value = static_cast<crd::u32>(c - '0');       return true; }
-    if (c >= 'a' && c <= 'f') { value = static_cast<crd::u32>(c - 'a' + 10);  return true; }
-    if (c >= 'A' && c <= 'F') { value = static_cast<crd::u32>(c - 'A' + 10);  return true; }
+    if (c >= '0' && c <= '9')
+    {
+        value = static_cast<crd::u32>(c - '0');
+        return true;
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        value = static_cast<crd::u32>(c - 'a' + 10);
+        return true;
+    }
+    if (c >= 'A' && c <= 'F')
+    {
+        value = static_cast<crd::u32>(c - 'A' + 10);
+        return true;
+    }
     return false;
 }
 
@@ -102,12 +132,18 @@ namespace detail
 // unambiguous when it is embedded in a longer string (encode always zero-pads to 8).
 [[nodiscard]] constexpr bool read_hex8(std::string_view s, crd::usize& i, crd::u32& out) noexcept
 {
-    if (i + 8U > s.size()) { return false; }
+    if (i + 8U > s.size())
+    {
+        return false;
+    }
     crd::u32 acc = 0U;
     for (crd::usize k = 0U; k < 8U; ++k)
     {
         crd::u32 nibble = 0U;
-        if (!hex_nibble(s[i + k], nibble)) { return false; }
+        if (!hex_nibble(s[i + k], nibble))
+        {
+            return false;
+        }
         acc = (acc << 4) | nibble;
     }
     i += 8U;
@@ -119,22 +155,49 @@ namespace detail
 [[nodiscard]] inline bool parse_after_prefix(std::string_view s, crd::usize i, ObjectIdentity& out) noexcept
 {
     const crd::usize kind_begin = i;
-    while (i < s.size() && s[i] != ':') { ++i; }
-    if (i >= s.size()) { return false; }
+    while (i < s.size() && s[i] != ':')
+    {
+        ++i;
+    }
+    if (i >= s.size())
+    {
+        return false;
+    }
     const std::string_view kind = s.substr(kind_begin, i - kind_begin);
     ObjectKind resolved = ObjectKind::Resource;
-    if      (kind == "res")  { resolved = ObjectKind::Resource; }
-    else if (kind == "prog") { resolved = ObjectKind::Program; }
-    else if (kind == "pass") { resolved = ObjectKind::Pass; }
-    else                     { return false; }
+    if      (kind == "res")
+    {
+        resolved = ObjectKind::Resource;
+    }
+    else if (kind == "prog")
+    {
+        resolved = ObjectKind::Program;
+    }
+    else if (kind == "pass")
+    {
+        resolved = ObjectKind::Pass;
+    }
+    else
+    {
+        return false;
+    }
     ++i; // consume ':' after the kind
 
     crd::u32 index = 0U;
-    if (!read_hex8(s, i, index)) { return false; }
-    if (i + 2U > s.size() || s[i] != ':' || s[i + 1U] != 'g') { return false; }
+    if (!read_hex8(s, i, index))
+    {
+        return false;
+    }
+    if (i + 2U > s.size() || s[i] != ':' || s[i + 1U] != 'g')
+    {
+        return false;
+    }
     i += 2U; // consume ":g"
     crd::u32 generation = 0U;
-    if (!read_hex8(s, i, generation)) { return false; }
+    if (!read_hex8(s, i, generation))
+    {
+        return false;
+    }
 
     out = ObjectIdentity{resolved, index, generation};
     return true;
@@ -151,7 +214,10 @@ namespace detail
     for (;;)
     {
         const crd::usize pos = text.find(kPrefix, start);
-        if (pos == std::string_view::npos) { return false; }
+        if (pos == std::string_view::npos)
+        {
+            return false;
+        }
         ObjectIdentity candidate;
         if (detail::parse_after_prefix(text, pos + kPrefix.size(), candidate) && candidate.valid())
         {
@@ -174,19 +240,34 @@ inline constexpr crd::usize kDebugNamePrefixChars = 1U + kObjectIdentityMaxChars
 [[nodiscard]] inline crd::usize format_debug_name(const ObjectIdentity& id, std::string_view site_label, char* out,
                                                   crd::usize cap) noexcept
 {
-    if (out == nullptr || !id.valid()) { return 0U; }
+    if (out == nullptr || !id.valid())
+    {
+        return 0U;
+    }
     char token[kObjectIdentityBufferSize];
     const crd::usize token_len = encode(id, token, sizeof(token));
-    if (token_len == 0U) { return 0U; }
+    if (token_len == 0U)
+    {
+        return 0U;
+    }
     const crd::usize need = 1U + token_len + 2U + site_label.size(); // "[" + token + "] " + label (excludes NUL)
-    if (cap < need + 1U) { return 0U; }
+    if (cap < need + 1U)
+    {
+        return 0U;
+    }
 
     crd::usize p = 0U;
     out[p++] = '[';
-    for (crd::usize i = 0U; i < token_len; ++i) { out[p++] = token[i]; }
+    for (crd::usize i = 0U; i < token_len; ++i)
+    {
+        out[p++] = token[i];
+    }
     out[p++] = ']';
     out[p++] = ' ';
-    for (crd::usize i = 0U; i < site_label.size(); ++i) { out[p++] = site_label[i]; }
+    for (crd::usize i = 0U; i < site_label.size(); ++i)
+    {
+        out[p++] = site_label[i];
+    }
     out[p] = '\0';
     return p;
 }

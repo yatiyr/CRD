@@ -146,17 +146,29 @@ template <crd::math::MathScalar T>
     for (crd::u32 i = 1; i < n; ++i)
     {
         if (points[i].x < points[ext[0]].x)
+        {
             ext[0] = i;
+        }
         if (points[i].x > points[ext[1]].x)
+        {
             ext[1] = i;
+        }
         if (points[i].y < points[ext[2]].y)
+        {
             ext[2] = i;
+        }
         if (points[i].y > points[ext[3]].y)
+        {
             ext[3] = i;
+        }
         if (points[i].z < points[ext[4]].z)
+        {
             ext[4] = i;
+        }
         if (points[i].z > points[ext[5]].z)
+        {
             ext[5] = i;
+        }
     }
 
     // Step 2: pick the 2 most-spread extremals (largest pairwise distance).
@@ -192,7 +204,9 @@ template <crd::math::MathScalar T>
     for (crd::u32 i = 0; i < n; ++i)
     {
         if (i == p0 || i == p1)
+        {
             continue;
+        }
         const T d_sq = distance_squared_to_line(points[i], points[p0], points[p1]);
         if (d_sq > best_line_dist_sq ||
             (d_sq == best_line_dist_sq && p2 != ~crd::u32{0} && i < p2))
@@ -236,7 +250,9 @@ template <crd::math::MathScalar T>
     for (crd::u32 i = 0; i < n; ++i)
     {
         if (i == p0 || i == p1 || i == p2)
+        {
             continue;
+        }
         const T d = crd::math::dot(normal_p012, points[i]) + plane_d_012;
         const T abs_d = std::fabs(d);
         if (abs_d > best_abs_dist || (abs_d == best_abs_dist && p3 != ~crd::u32{0} && i < p3))
@@ -349,7 +365,9 @@ void build_initial_tetrahedron(crd::containers::Array<QhFace<T>>& mesh,
             for (crd::u32 gi = 0; gi < mesh.size(); ++gi)
             {
                 if (gi == fi)
+                {
                     continue;
+                }
                 for (int g_e = 0; g_e < 3; ++g_e)
                 {
                     const crd::u32 ga = mesh[gi].v[g_e];
@@ -362,7 +380,9 @@ void build_initial_tetrahedron(crd::containers::Array<QhFace<T>>& mesh,
                     }
                 }
                 if (mesh[fi].neighbors[e] != ~crd::u32{0})
+                {
                     break;
+                }
             }
         }
     }
@@ -592,7 +612,9 @@ QuickhullResult<T> quickhull(crd::containers::ConstSpan<crd::math::Vec3<T>> poin
     for (crd::u32 i = 0; i < n; ++i)
     {
         if (i == p0 || i == p1 || i == p2 || i == p3)
+        {
             continue;
+        }
         for (crd::u32 fi = 0; fi < mesh.size(); ++fi)
         {
             // Use the cached plane distance for the fast filter; for the
@@ -913,7 +935,9 @@ QuickhullResult<T> quickhull(crd::containers::ConstSpan<crd::math::Vec3<T>> poin
     for (crd::usize fi = 0; fi < mesh.size(); ++fi)
     {
         if (mesh[fi].removed)
+        {
             continue;
+        }
         for (int e = 0; e < 3; ++e)
         {
             const crd::u32 vi = mesh[fi].v[e];
@@ -930,7 +954,9 @@ QuickhullResult<T> quickhull(crd::containers::ConstSpan<crd::math::Vec3<T>> poin
     for (crd::usize fi = 0; fi < mesh.size(); ++fi)
     {
         if (mesh[fi].removed)
+        {
             continue;
+        }
         for (int e = 0; e < 3; ++e)
         {
             result.face_vertex_indices.push_back(input_to_result_idx[mesh[fi].v[e]]);

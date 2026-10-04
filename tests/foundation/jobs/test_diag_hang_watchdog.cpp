@@ -48,7 +48,9 @@ void gated_child(void* /*data*/) noexcept
 {
     g_child_running.store(true, std::memory_order_release);
     while (!g_gate.load(std::memory_order_acquire))
+    {
         std::this_thread::yield(); // keeps this worker EXECUTING (a long/blocked job), not parked
+    }
 }
 
 // Feed a verdict sequence to a fresh K=3 detector and return the 1-based index of the single window it fires

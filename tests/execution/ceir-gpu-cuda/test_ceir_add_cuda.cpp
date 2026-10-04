@@ -61,7 +61,11 @@ TEST_CASE("ceir 13z: add CEIR asset on CUDA == direct CKIR (byte-identical) + or
     crd::memory::TlsfAllocator alloc(32U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(alloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     gpu::CudaComputeContext& compute = *cudactx;
 
     constexpr int   n = 64;
@@ -92,14 +96,24 @@ TEST_CASE("ceir 13z: add CEIR asset on CUDA == direct CKIR (byte-identical) + or
     float ad[n];
     float bd[n];
     float cd[n];
-    for (int i = 0; i < n; ++i) { ad[i] = a0[i]; bd[i] = b0[i]; cd[i] = 0.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        ad[i] = a0[i];
+        bd[i] = b0[i];
+        cd[i] = 0.0F;
+    }
     float* hd[3] = {ad, bd, cd};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, hd, lens, 3, 1U);
 
     float ac[n];
     float bc[n];
     float cc[n];
-    for (int i = 0; i < n; ++i) { ac[i] = a0[i]; bc[i] = b0[i]; cc[i] = 0.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        ac[i] = a0[i];
+        bc[i] = b0[i];
+        cc[i] = 0.0F;
+    }
     float* hc[3] = {ac, bc, cc};
     const ceg::ExecuteError err =
         cgt::dispatch_ceir_1wg(cctx, crd::containers::ConstSpan<ceg::LoweredCommand>(cmds.data(), cmds.size()), binds, *pipe,
@@ -107,7 +121,10 @@ TEST_CASE("ceir 13z: add CEIR asset on CUDA == direct CKIR (byte-identical) + or
 
     CHECK(err == ceg::ExecuteError::None);
     CHECK(std::memcmp(cc, cd, sizeof(cc)) == 0);        // ⭐ CEIR path byte-identical to the direct CKIR path
-    for (int i = 0; i < n; ++i) { CHECK(cc[i] == a0[i] + b0[i]); } // == the CPU oracle (f32 add exact)
+    for (int i = 0; i < n; ++i) // == the CPU oracle (f32 add exact)
+    {
+        CHECK(cc[i] == a0[i] + b0[i]);
+    }
 }
 
 TEST_CASE("ceir 13z: reduce CEIR asset on CUDA == direct CKIR (byte-identical) + oracle", "[ceir][ceir-gpu][cuda][gpu]")
@@ -116,7 +133,11 @@ TEST_CASE("ceir 13z: reduce CEIR asset on CUDA == direct CKIR (byte-identical) +
     crd::memory::TlsfAllocator alloc(32U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(alloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     gpu::CudaComputeContext& compute = *cudactx;
 
     constexpr int   n = 64;
@@ -145,14 +166,20 @@ TEST_CASE("ceir 13z: reduce CEIR asset on CUDA == direct CKIR (byte-identical) +
 
     float ind[n];
     float outd[1];
-    for (int i = 0; i < n; ++i) { ind[i] = in0[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        ind[i] = in0[i];
+    }
     outd[0]      = 0.0F;
     float* hd[2] = {ind, outd};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, hd, lens, 2, 1U);
 
     float inc[n];
     float outc[1];
-    for (int i = 0; i < n; ++i) { inc[i] = in0[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        inc[i] = in0[i];
+    }
     outc[0]      = 0.0F;
     float* hc[2] = {inc, outc};
     const ceg::ExecuteError err =
@@ -170,7 +197,11 @@ TEST_CASE("ceir 13z: scan CEIR asset on CUDA == direct CKIR (byte-identical) + o
     crd::memory::TlsfAllocator alloc(32U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(alloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     gpu::CudaComputeContext& compute = *cudactx;
 
     constexpr int   n = 64;
@@ -228,7 +259,10 @@ TEST_CASE("ceir 13z: scan CEIR asset on CUDA == direct CKIR (byte-identical) + o
     CHECK(err == ceg::ExecuteError::None);
     CHECK(std::memcmp(outc, outd, sizeof(outc)) == 0); // ⭐ CEIR path byte-identical to the direct CKIR path
     CHECK(bsc[0] == bsd[0]);
-    for (int i = 0; i < n; ++i) { CHECK(outc[i] == pref[i]); } // == the inclusive-scan oracle
+    for (int i = 0; i < n; ++i) // == the inclusive-scan oracle
+    {
+        CHECK(outc[i] == pref[i]);
+    }
     CHECK(bsc[0] == total);                                    // bsum[0] == the span total
 }
 
@@ -242,7 +276,11 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
     crd::memory::TlsfAllocator alloc(64U << 20U);
     auto                       cudactx = gpu::create_cuda_compute_context(alloc);
     REQUIRE(cudactx != nullptr);
-    if (!cudactx->valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cudactx->valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     gpu::CudaComputeContext& compute = *cudactx;
 
     kir::KGraph          g0(&alloc);
@@ -257,7 +295,11 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    aref(&alloc);
     crd::containers::Array<float>    acei(&alloc);
@@ -324,7 +366,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
         mp[pi].nbind  = plan.passes[pi].nbind;
         mp[pi].access = (plan.passes[pi].nbind == 6) ? "r,r,r,r,w,w" : "r,w";
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
-        for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
+        for (int k = 0; k < plan.passes[pi].nbind; ++k)
+        {
+            mp[pi].bind[k] = plan.passes[pi].bind[k];
+        }
     }
     crd::memory::GrowableTlsfAllocator                croot;
     ce::Context                                 cctx(&croot);
@@ -332,7 +377,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
     crd::containers::Array<ceg::LoweredCommand> cmds(&croot);
     ceg::lower_region(cctx, *asset.block, cmds);
     int sizes[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { sizes[b] = plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        sizes[b] = plan.buffers[b].size;
+    }
     const ceg::ExecuteError err = cgt::dispatch_ceir_multi(
         cctx, asset, crd::containers::ConstSpan<ceg::LoweredCommand>(cmds.data(), cmds.size()), sizes, pipes, compute, hcei);
     CHECK(err == ceg::ExecuteError::None);
@@ -342,7 +390,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
     int bad_vs_direct = 0;
     for (int i = 0; i < total; ++i)
     {
-        if (acei[static_cast<crd::usize>(i)] != aref[static_cast<crd::usize>(i)]) { ++bad_vs_direct; }
+        if (acei[static_cast<crd::usize>(i)] != aref[static_cast<crd::usize>(i)])
+        {
+            ++bad_vs_direct;
+        }
     }
     CHECK(bad_vs_direct == 0);
 
@@ -353,8 +404,14 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on CUDA == direct dispatch_f
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
     {
-        if (hcei[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (hcei[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (hcei[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (hcei[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     CHECK(badr == 0);
     CHECK(badi == 0);

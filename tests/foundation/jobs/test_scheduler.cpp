@@ -491,8 +491,14 @@ TEST_CASE("scheduler: concurrent multi-thread stress", "[jobs][scheduler][stress
     for (int i = 0; i < kTotalJobs; ++i)
     {
         Priority prio = Priority::Low;
-        if (i % 3 == 0)      { prio = Priority::High; }
-        else if (i % 3 == 1) { prio = Priority::Normal; }
+        if (i % 3 == 0)
+        {
+            prio = Priority::High;
+        }
+        else if (i % 3 == 1)
+        {
+            prio = Priority::Normal;
+        }
         sched.push(make_count_job(&executed, prio));
     }
 

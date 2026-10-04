@@ -24,7 +24,9 @@ void gated_child(void* /*data*/) noexcept
 {
     g_child_task.store(crd::jobs::current_task_id(), std::memory_order_relaxed);
     while (!g_gate.load(std::memory_order_acquire))
+    {
         std::this_thread::yield(); // spin, never decrement, until the test opens the gate
+    }
 }
 
 void parking_root(void* /*data*/) noexcept
@@ -61,7 +63,9 @@ TEST_CASE("wait_graph: a parked fiber is reported waiting on its child's counter
     {
         parked = crd::jobs::wait_graph_snapshot(nodes);
         if (parked >= 1U && g_child_task.load(std::memory_order_relaxed) != 0U)
+        {
             break;
+        }
         std::this_thread::yield();
     }
 
@@ -127,7 +131,9 @@ TEST_CASE("wait_graph: snapshot truncates but still returns the true parked coun
 
     g_gate.store(true, std::memory_order_release);
     for (crd::jobs::Counter* h : handles)
+    {
         crd::jobs::wait(h);
+    }
 
     crd::jobs::shutdown();
 }

@@ -264,8 +264,14 @@ template <crd::math::MathScalar T>
     const T    col2_len    = static_cast<T>(std::sqrt(static_cast<double>(col2_len_sq)));
 
     a.max_axial_scale = col0_len;
-    if (col1_len > a.max_axial_scale) { a.max_axial_scale = col1_len; }
-    if (col2_len > a.max_axial_scale) { a.max_axial_scale = col2_len; }
+    if (col1_len > a.max_axial_scale)
+    {
+        a.max_axial_scale = col1_len;
+    }
+    if (col2_len > a.max_axial_scale)
+    {
+        a.max_axial_scale = col2_len;
+    }
 
     a.determinant = det3(upper);
 
@@ -374,7 +380,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline AABB3<T> transform_aabb(const crd::math::Mat4<T>& m,
                                               const AABB3<T>&           box) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return box; } // D229 fast path
+    if (detail_transform::is_identity_mat4(m)) // D229 fast path
+    {
+        return box;
+    }
 
     using crd::math::Vec3;
     const Vec3<T> corners[8] = {
@@ -403,7 +412,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline OBB3<T> transform_obb(const crd::math::Mat4<T>& m,
                                             const OBB3<T>&            obb) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return obb; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return obb;
+    }
 
     const auto attrs = detail_transform::compute_attributes(m);
     const auto upper = detail_transform::upper3(m);
@@ -488,7 +500,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Sphere<T> transform_sphere(const crd::math::Mat4<T>& m,
                                                  const Sphere<T>&          sphere) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return sphere; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return sphere;
+    }
     const auto attrs = detail_transform::compute_attributes(m);
     Sphere<T> out;
     out.center = detail_transform::mul_point(m, sphere.center);
@@ -503,7 +518,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Capsule3<T> transform_capsule3(const crd::math::Mat4<T>& m,
                                                      const Capsule3<T>&        cap) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return cap; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return cap;
+    }
     const auto attrs = detail_transform::compute_attributes(m);
     Capsule3<T> out;
     out.a      = detail_transform::mul_point(m, cap.a);
@@ -517,7 +535,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Cylinder3<T> transform_cylinder3(const crd::math::Mat4<T>& m,
                                                        const Cylinder3<T>&       cyl) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return cyl; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return cyl;
+    }
     const auto attrs = detail_transform::compute_attributes(m);
     Cylinder3<T> out;
     out.a      = detail_transform::mul_point(m, cyl.a);
@@ -532,7 +553,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Triangle3<T> transform_triangle3(const crd::math::Mat4<T>& m,
                                                        const Triangle3<T>&       tri) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return tri; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return tri;
+    }
     return Triangle3<T>{detail_transform::mul_point(m, tri.a), detail_transform::mul_point(m, tri.b),
                          detail_transform::mul_point(m, tri.c)};
 }
@@ -541,7 +565,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Tetrahedron<T> transform_tetrahedron(const crd::math::Mat4<T>& m,
                                                            const Tetrahedron<T>&     tet) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return tet; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return tet;
+    }
     return Tetrahedron<T>{detail_transform::mul_point(m, tet.a), detail_transform::mul_point(m, tet.b),
                            detail_transform::mul_point(m, tet.c), detail_transform::mul_point(m, tet.d)};
 }
@@ -551,7 +578,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Plane<T> transform_plane(const crd::math::Mat4<T>& m,
                                                const Plane<T>&           plane) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return plane; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return plane;
+    }
 
     const auto                  upper = detail_transform::upper3(m);
     [[maybe_unused]] const T    det   = detail_transform::det3(upper);
@@ -575,7 +605,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Ray3<T> transform_ray3(const crd::math::Mat4<T>& m,
                                              const Ray3<T>&            ray) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return ray; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return ray;
+    }
     return Ray3<T>{detail_transform::mul_point(m, ray.origin),
                     detail_transform::mul_dir(m, ray.direction)};
 }
@@ -598,7 +631,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Segment3<T> transform_segment3(const crd::math::Mat4<T>& m,
                                                      const Segment3<T>&        seg) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return seg; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return seg;
+    }
     return Segment3<T>{detail_transform::mul_point(m, seg.a), detail_transform::mul_point(m, seg.b)};
 }
 
@@ -606,7 +642,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Line3<T> transform_line3(const crd::math::Mat4<T>& m,
                                                const Line3<T>&           line) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return line; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return line;
+    }
     return Line3<T>{detail_transform::mul_point(m, line.point),
                      detail_transform::mul_dir(m, line.direction)};
 }
@@ -617,7 +656,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Frustum<T> transform_frustum(const crd::math::Mat4<T>& m,
                                                    const Frustum<T>&         frustum) noexcept
 {
-    if (detail_transform::is_identity_mat4(m)) { return frustum; } // D229
+    if (detail_transform::is_identity_mat4(m)) // D229
+    {
+        return frustum;
+    }
 
     const auto                  upper = detail_transform::upper3(m);
     [[maybe_unused]] const T    det   = detail_transform::det3(upper);
@@ -649,7 +691,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline AABB2<T> transform_aabb2(const crd::math::Mat3<T>& m,
                                                const AABB2<T>&           box) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return box; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return box;
+    }
 
     using crd::math::Vec2;
     const Vec2<T> corners[4] = {
@@ -673,7 +718,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline OBB2<T> transform_obb2(const crd::math::Mat3<T>& m,
                                              const OBB2<T>&            obb) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return obb; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return obb;
+    }
 
     const auto attrs = detail_transform::compute_attributes_2d(m);
     const auto upper = detail_transform::upper2(m);
@@ -732,7 +780,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Circle<T> transform_circle(const crd::math::Mat3<T>& m,
                                                  const Circle<T>&          c) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return c; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return c;
+    }
     const auto attrs = detail_transform::compute_attributes_2d(m);
     Circle<T> out;
     out.center = detail_transform::mul_point2(m, c.center);
@@ -745,7 +796,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Capsule2<T> transform_capsule2(const crd::math::Mat3<T>& m,
                                                      const Capsule2<T>&        cap) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return cap; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return cap;
+    }
     const auto attrs = detail_transform::compute_attributes_2d(m);
     Capsule2<T> out;
     out.a      = detail_transform::mul_point2(m, cap.a);
@@ -759,7 +813,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Segment2<T> transform_segment2(const crd::math::Mat3<T>& m,
                                                      const Segment2<T>&        seg) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return seg; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return seg;
+    }
     return Segment2<T>{detail_transform::mul_point2(m, seg.a), detail_transform::mul_point2(m, seg.b)};
 }
 
@@ -767,7 +824,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Ray2<T> transform_ray2(const crd::math::Mat3<T>& m,
                                              const Ray2<T>&            ray) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return ray; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return ray;
+    }
     return Ray2<T>{detail_transform::mul_point2(m, ray.origin),
                     detail_transform::mul_dir2(m, ray.direction)};
 }
@@ -776,7 +836,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] inline Triangle2<T> transform_triangle2(const crd::math::Mat3<T>& m,
                                                        const Triangle2<T>&       tri) noexcept
 {
-    if (detail_transform::is_identity_mat3(m)) { return tri; }
+    if (detail_transform::is_identity_mat3(m))
+    {
+        return tri;
+    }
     return Triangle2<T>{detail_transform::mul_point2(m, tri.a), detail_transform::mul_point2(m, tri.b),
                          detail_transform::mul_point2(m, tri.c)};
 }

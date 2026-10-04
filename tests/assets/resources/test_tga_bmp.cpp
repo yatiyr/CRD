@@ -21,7 +21,10 @@ void push16(crd::containers::Array<crd::u8>& b, crd::u16 v)
 }
 void push32(crd::containers::Array<crd::u8>& b, crd::u32 v)
 {
-    for (int i = 0; i < 4; ++i) { b.push_back(static_cast<crd::u8>(v >> (8 * i))); }
+    for (int i = 0; i < 4; ++i)
+    {
+        b.push_back(static_cast<crd::u8>(v >> (8 * i)));
+    }
 }
 void tga_header(crd::containers::Array<crd::u8>& b, crd::u8 type, crd::u16 w, crd::u16 h, crd::u8 bpp, crd::u8 desc,
                 crd::u8 cmap_type = 0, crd::u16 cmap_len = 0, crd::u8 cmap_bits = 0)
@@ -51,8 +54,14 @@ TEST_CASE("resources: TGA raw 24-bit bottom-up + RLE 32-bit + palette + 16-bit",
         tga_header(t, 2, 1, 2, 24, 0); // bottom-origin
         const crd::u8 bottom[3] = {10, 20, 30}; // stored first = image BOTTOM row (B,G,R)
         const crd::u8 top[3]    = {40, 50, 60};
-        for (crd::u8 v : bottom) { t.push_back(v); }
-        for (crd::u8 v : top) { t.push_back(v); }
+        for (crd::u8 v : bottom)
+        {
+            t.push_back(v);
+        }
+        for (crd::u8 v : top)
+        {
+            t.push_back(v);
+        }
         LdrImage img(&alloc);
         REQUIRE(tga_decode(crd::containers::as_const_span(t), img, &alloc) == LdrError::Ok);
         CHECK(img.pixels[0] == 60); // row 0 (TOP) = the second stored record, BGR→RGB
@@ -66,10 +75,16 @@ TEST_CASE("resources: TGA raw 24-bit bottom-up + RLE 32-bit + palette + 16-bit",
         tga_header(t, 10, 3, 1, 32, 0x20U); // top-origin
         t.push_back(0x81U);                 // run of 2
         const crd::u8 bgra[4] = {1, 2, 3, 200};
-        for (crd::u8 v : bgra) { t.push_back(v); }
+        for (crd::u8 v : bgra)
+        {
+            t.push_back(v);
+        }
         t.push_back(0x00U); // 1 literal
         const crd::u8 lit[4] = {9, 8, 7, 100};
-        for (crd::u8 v : lit) { t.push_back(v); }
+        for (crd::u8 v : lit)
+        {
+            t.push_back(v);
+        }
         LdrImage img(&alloc);
         REQUIRE(tga_decode(crd::containers::as_const_span(t), img, &alloc) == LdrError::Ok);
         CHECK(img.pixels[0] == 3);  // BGRA→RGBA
@@ -83,7 +98,10 @@ TEST_CASE("resources: TGA raw 24-bit bottom-up + RLE 32-bit + palette + 16-bit",
         crd::containers::Array<crd::u8> t(&alloc);
         tga_header(t, 1, 2, 1, 8, 0x20U, 1, 2, 24); // palette: 2 × 24-bit BGR entries
         const crd::u8 pal[6] = {0, 0, 255, 0, 255, 0}; // red, green
-        for (crd::u8 v : pal) { t.push_back(v); }
+        for (crd::u8 v : pal)
+        {
+            t.push_back(v);
+        }
         t.push_back(1); // indices: green, red
         t.push_back(0);
         LdrImage img(&alloc);
@@ -141,10 +159,22 @@ TEST_CASE("resources: BMP 24-bit padding + palette + bitfields + RLE8 + top-down
         // bottom row first; 3·3=9 bytes padded to 12
         const crd::u8 row_bot[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9}; // BGR triplets
         const crd::u8 row_top[9] = {11, 12, 13, 14, 15, 16, 17, 18, 19};
-        for (crd::u8 v : row_bot) { b.push_back(v); }
-        for (int i = 0; i < 3; ++i) { b.push_back(0); }
-        for (crd::u8 v : row_top) { b.push_back(v); }
-        for (int i = 0; i < 3; ++i) { b.push_back(0); }
+        for (crd::u8 v : row_bot)
+        {
+            b.push_back(v);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            b.push_back(0);
+        }
+        for (crd::u8 v : row_top)
+        {
+            b.push_back(v);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            b.push_back(0);
+        }
         LdrImage img(&alloc);
         REQUIRE(bmp_decode(crd::containers::as_const_span(b), img, &alloc) == LdrError::Ok);
         CHECK(img.pixels[0] == 13); // top row (stored second), BGR→RGB
@@ -156,7 +186,10 @@ TEST_CASE("resources: BMP 24-bit padding + palette + bitfields + RLE8 + top-down
         crd::containers::Array<crd::u8> b(&alloc);
         bmp_headers(b, 4, 2, 8, 1, 2, 54 + 8);
         const crd::u8 pal[8] = {0, 0, 255, 0, /*red*/ 0, 255, 0, 0 /*green*/};
-        for (crd::u8 v : pal) { b.push_back(v); }
+        for (crd::u8 v : pal)
+        {
+            b.push_back(v);
+        }
         // bottom row: run 3×idx0, then 1 literal idx1 (absolute needs ≥3 — use a 1-run) | EOL | top row: absolute 4 | EOB
         b.push_back(3);
         b.push_back(0); // run: 3 × red
@@ -199,9 +232,15 @@ TEST_CASE("resources: BMP 24-bit padding + palette + bitfields + RLE8 + top-down
         crd::containers::Array<crd::u8> b(&alloc);
         b.push_back('B');
         b.push_back('M');
-        for (int i = 0; i < 12; ++i) { b.push_back(0); }
+        for (int i = 0; i < 12; ++i)
+        {
+            b.push_back(0);
+        }
         push32(b, 12U); // core header size
-        for (int i = 0; i < 40; ++i) { b.push_back(0); }
+        for (int i = 0; i < 40; ++i)
+        {
+            b.push_back(0);
+        }
         LdrImage img(&alloc);
         CHECK(bmp_decode(crd::containers::as_const_span(b), img, &alloc) == LdrError::Unsupported);
     }

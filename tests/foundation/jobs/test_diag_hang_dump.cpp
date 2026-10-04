@@ -57,7 +57,9 @@ void tick_job(void* /*data*/) noexcept {}
 void hang_dumps(const crd::jobs::HangReport& report, void* /*user*/) noexcept
 {
     if (g_captured.exchange(true, std::memory_order_acq_rel))
+    {
         return; // one dump per episode
+    }
 
     HangEvidence ev{};
     ev.stale_windows = report.stale_windows;
@@ -76,7 +78,9 @@ void hang_dumps(const crd::jobs::HangReport& report, void* /*user*/) noexcept
     g_dump_result.store(static_cast<int>(wr), std::memory_order_relaxed);
     g_evidence_bytes.store(note.evidence_bytes, std::memory_order_relaxed);
     if (wr == WriteResult::Ok && path != nullptr)
+    {
         g_dump_path = path; // safe: capture_dump has returned, all threads resumed
+    }
     g_dump_done.store(true, std::memory_order_release);
 }
 } // namespace
@@ -104,7 +108,9 @@ TEST_CASE("hang dump: a watchdog-fired hang writes one non-fatal dump with evide
     // never catch this thread holding the CRT heap lock.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_dump_done.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+    {
         std::this_thread::yield();
+    }
 
     REQUIRE(g_dump_done.load(std::memory_order_acquire));
     CHECK(g_dump_result.load(std::memory_order_relaxed) == static_cast<int>(WriteResult::Ok));

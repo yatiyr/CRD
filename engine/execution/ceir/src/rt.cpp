@@ -28,7 +28,10 @@ constexpr containers::StringView kGeomKindVocab[] = {containers::StringView("tri
 // Is `v`'s type the rt Extern class `cls`? (A non-Extern / wrong-class / null value ⇒ false.)
 [[nodiscard]] bool is_rt_class(const Context& ctx, const Value* v, TypeClassId cls) noexcept
 {
-    if (v == nullptr) { return false; }
+    if (v == nullptr)
+    {
+        return false;
+    }
     const Type t = ctx.type_of(v->type());
     return t.kind == TypeKind::Extern && t.type_class == cls;
 }
@@ -63,7 +66,10 @@ constexpr containers::StringView kGeomKindVocab[] = {containers::StringView("tri
 [[nodiscard]] bool parse_access(containers::StringView s, u32& count) noexcept
 {
     count = 0U;
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     usize start = 0U;
     for (usize i = 0; i <= s.size(); ++i)
     {
@@ -72,7 +78,10 @@ constexpr containers::StringView kGeomKindVocab[] = {containers::StringView("tri
             const usize len = i - start;
             const char* t   = s.data() + start;
             const bool  ok  = (len == 1U && (t[0] == 'r' || t[0] == 'w')) || (len == 2U && t[0] == 'r' && t[1] == 'w');
-            if (!ok) { return false; }
+            if (!ok)
+            {
+                return false;
+            }
             ++count;
             start = i + 1U;
         }
@@ -97,9 +106,18 @@ constexpr containers::StringView kGeomKindVocab[] = {containers::StringView("tri
     const u32       bindings = op->num_operands() >= fixed ? op->num_operands() - fixed : 0U;
     u32             tokens   = 0U;
     const AttrValue av       = ctx.attr_value(op->attr(containers::StringView("access")));
-    if (av.kind != AttrKind::String) { return {nullptr, op, RtMisuseKind::AccessTokenInvalid}; }
-    if (!parse_access(av.s, tokens)) { return {nullptr, op, RtMisuseKind::AccessTokenInvalid}; }
-    if (tokens != bindings) { return {nullptr, op, RtMisuseKind::AccessArityMismatch}; }
+    if (av.kind != AttrKind::String)
+    {
+        return {nullptr, op, RtMisuseKind::AccessTokenInvalid};
+    }
+    if (!parse_access(av.s, tokens))
+    {
+        return {nullptr, op, RtMisuseKind::AccessTokenInvalid};
+    }
+    if (tokens != bindings)
+    {
+        return {nullptr, op, RtMisuseKind::AccessArityMismatch};
+    }
     for (u32 i = fixed; i < op->num_operands(); ++i)
     {
         if (!is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
@@ -116,7 +134,10 @@ constexpr containers::StringView kGeomKindVocab[] = {containers::StringView("tri
 RtMisuse scan_rt_region(const Context& ctx, const Region* r, TypeClassId blas, TypeClassId tlas,
                         TypeClassId sbt) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -135,10 +156,17 @@ RtMisuse scan_rt_region(const Context& ctx, const Region* r, TypeClassId blas, T
                         ok = false;
                         for (const containers::StringView& kk : kGeomKindVocab)
                         {
-                            if (gv.s == kk) { ok = true; break; }
+                            if (gv.s == kk)
+                            {
+                                ok = true;
+                                break;
+                            }
                         }
                     }
-                    if (!ok) { return {nullptr, op, RtMisuseKind::GeometryKindInvalid}; }
+                    if (!ok)
+                    {
+                        return {nullptr, op, RtMisuseKind::GeometryKindInvalid};
+                    }
                 }
             }
             // ⛔ rt.instance_populate: operand(0) is rt.blas; `instance_count` >= 1.
@@ -149,7 +177,10 @@ RtMisuse scan_rt_region(const Context& ctx, const Region* r, TypeClassId blas, T
                     return {op->operand(0U), op, RtMisuseKind::BlasTypeMismatch};
                 }
                 const AttrValue iv = ctx.attr_value(op->attr(containers::StringView("instance_count")));
-                if (iv.kind != AttrKind::Int || iv.i < 1) { return {nullptr, op, RtMisuseKind::InstanceCountInvalid}; }
+                if (iv.kind != AttrKind::Int || iv.i < 1)
+                {
+                    return {nullptr, op, RtMisuseKind::InstanceCountInvalid};
+                }
             }
             // ⛔ rt.trace (the PIPELINE path): operand(3) is rt.tlas, operand(4) is rt.sbt; `max_recursion` (opt) >= 1.
             else if (nm == containers::StringView("rt.trace"))
@@ -164,12 +195,18 @@ RtMisuse scan_rt_region(const Context& ctx, const Region* r, TypeClassId blas, T
                 }
                 // the dispatch shape (dims Index / access tokens+arity / bindings resource) — fixed=5 (dims+tlas+sbt).
                 const RtMisuse d = check_dispatch_shape(ctx, op, 5U);
-                if (d.kind != RtMisuseKind::None) { return d; }
+                if (d.kind != RtMisuseKind::None)
+                {
+                    return d;
+                }
                 const AttrId mr = op->attr(containers::StringView("max_recursion"));
                 if (mr.valid())
                 {
                     const AttrValue mv = ctx.attr_value(mr);
-                    if (mv.kind != AttrKind::Int || mv.i < 1) { return {nullptr, op, RtMisuseKind::MaxRecursionInvalid}; }
+                    if (mv.kind != AttrKind::Int || mv.i < 1)
+                    {
+                        return {nullptr, op, RtMisuseKind::MaxRecursionInvalid};
+                    }
                 }
             }
             // ⛔ rt.ray_query (the INLINE path): operand(3) is rt.tlas — and consumes NO sbt (the pipeline-vs-inline line).
@@ -181,12 +218,18 @@ RtMisuse scan_rt_region(const Context& ctx, const Region* r, TypeClassId blas, T
                 }
                 // the dispatch shape (grid Index / access tokens+arity / bindings resource) — fixed=4 (grid+tlas, NO sbt).
                 const RtMisuse d = check_dispatch_shape(ctx, op, 4U);
-                if (d.kind != RtMisuseKind::None) { return d; }
+                if (d.kind != RtMisuseKind::None)
+                {
+                    return d;
+                }
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const RtMisuse e = scan_rt_region(ctx, op->region(i), blas, tlas, sbt);
-                if (e.kind != RtMisuseKind::None) { return e; }
+                if (e.kind != RtMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

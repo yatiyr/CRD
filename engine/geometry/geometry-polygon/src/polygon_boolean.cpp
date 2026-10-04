@@ -122,7 +122,10 @@ void collect_input_edges(PolygonView2<T> poly, int owner /*0=subject, 1=clip*/,
             const auto& a = ring[i];
             const auto& b = ring[ring.next(i)];
             // Skip zero-length edges (degenerate input — query-tolerate).
-            if (a.x == b.x && a.y == b.y) { continue; }
+            if (a.x == b.x && a.y == b.y)
+            {
+                continue;
+            }
             InputEdge<T> e{};
             e.a            = a;
             e.b            = b;
@@ -178,7 +181,10 @@ SegSegHit<T> segment_segment_intersect(const crd::math::Vec2<T>& a1,
         const T dbx = b2.x - b1.x;
         const T dby = b2.y - b1.y;
         const T denom = dax * dby - day * dbx;
-        if (denom == T{0}) { return {}; } // parallel — already caught by strict orient signs
+        if (denom == T{0}) // parallel — already caught by strict orient signs
+        {
+            return {};
+        }
         const T ta = ((b1.x - a1.x) * dby - (b1.y - a1.y) * dbx) / denom;
         const T tb = ((b1.x - a1.x) * day - (b1.y - a1.y) * dax) / denom;
         SegSegHit<T> h;
@@ -195,10 +201,19 @@ SegSegHit<T> segment_segment_intersect(const crd::math::Vec2<T>& a1,
 
     auto on_segment_interior = [&](const crd::math::Vec2<T>& s1, const crd::math::Vec2<T>& s2,
                                     const crd::math::Vec2<T>& p, T sign_check) noexcept {
-        if (sign_check != T{0}) { return false; } // not collinear
+        if (sign_check != T{0}) // not collinear
+        {
+            return false;
+        }
         // p must be strictly between s1 and s2 (not at endpoints).
-        if (p.x == s1.x && p.y == s1.y) { return false; }
-        if (p.x == s2.x && p.y == s2.y) { return false; }
+        if (p.x == s1.x && p.y == s1.y)
+        {
+            return false;
+        }
+        if (p.x == s2.x && p.y == s2.y)
+        {
+            return false;
+        }
         const T lo_x = s1.x < s2.x ? s1.x : s2.x;
         const T hi_x = s1.x > s2.x ? s1.x : s2.x;
         const T lo_y = s1.y < s2.y ? s1.y : s2.y;
@@ -274,8 +289,14 @@ struct VertexKey
 
     [[nodiscard]] bool operator<(const VertexKey& o) const noexcept
     {
-        if (x != o.x) { return x < o.x; }
-        if (y != o.y) { return y < o.y; }
+        if (x != o.x)
+        {
+            return x < o.x;
+        }
+        if (y != o.y)
+        {
+            return y < o.y;
+        }
         return original_idx < o.original_idx;
     }
 };
@@ -319,9 +340,18 @@ inline int direction_quadrant(const crd::math::Vec2<T>& dir) noexcept
     // Quadrant numbering: 0 = +x, +y (incl. +x axis); 1 = -x, +y;
     // 2 = -x, -y (incl. -x axis); 3 = +x, -y.
     // This partitions the unit circle into 4 quadrants in CCW order.
-    if (dir.x > T{0} && dir.y >= T{0}) { return 0; }
-    if (dir.x <= T{0} && dir.y > T{0}) { return 1; }
-    if (dir.x < T{0} && dir.y <= T{0}) { return 2; }
+    if (dir.x > T{0} && dir.y >= T{0})
+    {
+        return 0;
+    }
+    if (dir.x <= T{0} && dir.y > T{0})
+    {
+        return 1;
+    }
+    if (dir.x < T{0} && dir.y <= T{0})
+    {
+        return 2;
+    }
     // dir.x >= 0 && dir.y < 0
     return 3;
 }
@@ -336,10 +366,16 @@ inline bool ccw_less(const crd::math::Vec2<T>& v, const crd::math::Vec2<T>& a,
     const crd::math::Vec2<T> db{b.x - v.x, b.y - v.y};
     const int                qa = direction_quadrant(da);
     const int                qb = direction_quadrant(db);
-    if (qa != qb) { return qa < qb; }
+    if (qa != qb)
+    {
+        return qa < qb;
+    }
     // Same quadrant — compare by cross product (orient2d of v, a, b).
     const T cross = orient2d_signed(v, a, b);
-    if (cross != T{0}) { return cross > T{0}; }
+    if (cross != T{0})
+    {
+        return cross > T{0};
+    }
     // Collinear from v — order by squared distance (closer first, arbitrary).
     const T da2 = da.x * da.x + da.y * da.y;
     const T db2 = db.x * db.x + db.y * db.y;
@@ -360,7 +396,10 @@ inline bool ccw_less(const crd::math::Vec2<T>& v, const crd::math::Vec2<T>& a,
 
 inline bool inside_under_fill(int winding, FillRule rule) noexcept
 {
-    if (rule == FillRule::EvenOdd) { return (winding & 1) != 0; }
+    if (rule == FillRule::EvenOdd)
+    {
+        return (winding & 1) != 0;
+    }
     return winding != 0;
 }
 
@@ -386,7 +425,11 @@ inline bool boolean_predicate(int subject_w, int clip_w, BooleanOp op, FillRule 
 template <crd::math::MathScalar T>
 void clean_ring(crd::containers::Array<crd::math::Vec2<T>>& ring) noexcept
 {
-    if (ring.size() < 3U) { ring.clear(); return; }
+    if (ring.size() < 3U)
+    {
+        ring.clear();
+        return;
+    }
     // Pass 1: drop consecutive duplicates.
     crd::usize w = 1U;
     for (crd::usize r = 1U; r < ring.size(); ++r)
@@ -397,9 +440,19 @@ void clean_ring(crd::containers::Array<crd::math::Vec2<T>>& ring) noexcept
         }
     }
     // Wrap dedup: last vs first.
-    if (w > 1U && ring[w - 1U].x == ring[0].x && ring[w - 1U].y == ring[0].y) { --w; }
-    while (ring.size() > w) { ring.pop_back(); }
-    if (ring.size() < 3U) { ring.clear(); return; }
+    if (w > 1U && ring[w - 1U].x == ring[0].x && ring[w - 1U].y == ring[0].y)
+    {
+        --w;
+    }
+    while (ring.size() > w)
+    {
+        ring.pop_back();
+    }
+    if (ring.size() < 3U)
+    {
+        ring.clear();
+        return;
+    }
 
     // Pass 2: drop collinear interior vertices (orient2d == 0).
     bool any_dropped = true;
@@ -414,11 +467,19 @@ void clean_ring(crd::containers::Array<crd::math::Vec2<T>>& ring) noexcept
             const auto& a = ring[(i + n - 1U) % n];
             const auto& b = ring[i];
             const auto& c = ring[(i + 1U) % n];
-            if (orient2d_signed(a, b, c) == T{0}) { any_dropped = true; continue; }
+            if (orient2d_signed(a, b, c) == T{0})
+            {
+                any_dropped = true;
+                continue;
+            }
             kept.push_back(b);
         }
         ring = kept;
-        if (ring.size() < 3U) { ring.clear(); return; }
+        if (ring.size() < 3U)
+        {
+            ring.clear();
+            return;
+        }
     }
 }
 
@@ -485,7 +546,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
             const auto& ea = in_edges[i];
             const auto& eb = in_edges[j];
             const auto  h  = segment_segment_intersect<T>(ea.a, ea.b, eb.a, eb.b);
-            if (!h.hit) { continue; }
+            if (!h.hit)
+            {
+                continue;
+            }
             edge_split_points[i].push_back(h.point);
             edge_split_points[j].push_back(h.point);
         }
@@ -553,8 +617,14 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     crd::containers::Array<PBHalfEdge<T>> halfedges(alloc);
     crd::containers::Array<PBVertex<T>>    verts(alloc);
     verts.reserve(vertex_count);
-    for (crd::u32 v = 0; v < vertex_count; ++v) { verts.emplace_back(alloc); }
-    for (crd::u32 v = 0; v < vertex_count; ++v) { verts[v].pos = vertex_pos[v]; }
+    for (crd::u32 v = 0; v < vertex_count; ++v)
+    {
+        verts.emplace_back(alloc);
+    }
+    for (crd::u32 v = 0; v < vertex_count; ++v)
+    {
+        verts[v].pos = vertex_pos[v];
+    }
 
     crd::u32 running_origin = 0;
     for (crd::u32 i = 0; i < in_edges.size(); ++i)
@@ -589,7 +659,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         crd::containers::sort(sorted_splits.data(), sorted_splits.data() + sorted_splits.size(),
                               [](const std::pair<T, crd::u32>& lhs,
                                  const std::pair<T, crd::u32>& rhs) noexcept {
-                                  if (lhs.first != rhs.first) { return lhs.first < rhs.first; }
+                                  if (lhs.first != rhs.first)
+                                  {
+                                      return lhs.first < rhs.first;
+                                  }
                                   return lhs.second < rhs.second;
                               });
 
@@ -599,7 +672,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         {
             const crd::u32 v0 = sorted_splits[k - 1U].second;
             const crd::u32 v1 = sorted_splits[k].second;
-            if (v0 == v1) { continue; }
+            if (v0 == v1)
+            {
+                continue;
+            }
             // Two directed half-edges per segment.
             const crd::u32 fwd_idx = static_cast<crd::u32>(halfedges.size());
             const crd::u32 rev_idx = fwd_idx + 1U;
@@ -633,7 +709,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     for (crd::u32 v = 0; v < verts.size(); ++v)
     {
         auto& out_list = verts[v].outgoing;
-        if (out_list.size() < 2U) { continue; }
+        if (out_list.size() < 2U)
+        {
+            continue;
+        }
         // Insertion sort with ccw_less — O(n²) per vertex but n is the
         // degree of v which is typically <10 for non-pathological inputs.
         for (crd::u32 i = 1; i < out_list.size(); ++i)
@@ -668,7 +747,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     {
         const auto& out_list = verts[v].outgoing;
         const crd::u32 n = static_cast<crd::u32>(out_list.size());
-        if (n == 0U) { continue; }
+        if (n == 0U)
+        {
+            continue;
+        }
         for (crd::u32 k = 0; k < n; ++k)
         {
             const crd::u32 o_k     = out_list[k];
@@ -686,7 +768,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     crd::u32 face_count = 0;
     for (crd::u32 h = 0; h < halfedges.size(); ++h)
     {
-        if (halfedges[h].face_idx != kNullIdx) { continue; }
+        if (halfedges[h].face_idx != kNullIdx)
+        {
+            continue;
+        }
         // Walk the loop starting at h, assigning face_count to all visited.
         crd::u32 cur = h;
         const crd::u32 walk_cap = static_cast<crd::u32>(halfedges.size()) + 4U;
@@ -694,8 +779,14 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         {
             halfedges[cur].face_idx = face_count;
             cur = halfedges[cur].next_in_face;
-            if (cur == kNullIdx) { return BooleanResult<T>(alloc); }
-            if (cur == h) { break; }
+            if (cur == kNullIdx)
+            {
+                return BooleanResult<T>(alloc);
+            }
+            if (cur == h)
+            {
+                break;
+            }
         }
         ++face_count;
     }
@@ -725,17 +816,29 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     };
     crd::containers::Array<FaceInfo> faces(alloc);
     faces.reserve(face_count);
-    for (crd::u32 f = 0; f < face_count; ++f) { faces.emplace_back(alloc); }
+    for (crd::u32 f = 0; f < face_count; ++f)
+    {
+        faces.emplace_back(alloc);
+    }
 
     // Collect loop_starts: scan halfedges; for each half-edge whose face
     // we haven't recorded yet AS A LOOP START, walk its loop and mark
     // (we'll mark via a temporary "loop_seen" flag using visited_in_walk).
-    for (crd::u32 h = 0; h < halfedges.size(); ++h) { halfedges[h].visited_in_walk = 0U; }
     for (crd::u32 h = 0; h < halfedges.size(); ++h)
     {
-        if (halfedges[h].visited_in_walk != 0U) { continue; }
+        halfedges[h].visited_in_walk = 0U;
+    }
+    for (crd::u32 h = 0; h < halfedges.size(); ++h)
+    {
+        if (halfedges[h].visited_in_walk != 0U)
+        {
+            continue;
+        }
         const crd::u32 fi = halfedges[h].face_idx;
-        if (fi == kNullIdx) { continue; }
+        if (fi == kNullIdx)
+        {
+            continue;
+        }
         faces[fi].loop_starts.push_back(h);
         crd::u32 cur = h;
         const crd::u32 walk_cap = static_cast<crd::u32>(halfedges.size()) + 4U;
@@ -743,7 +846,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         {
             halfedges[cur].visited_in_walk = 1U;
             cur = halfedges[cur].next_in_face;
-            if (cur == h) { break; }
+            if (cur == h)
+            {
+                break;
+            }
         }
     }
 
@@ -763,7 +869,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
     // convention in the output polygon.
     for (crd::u32 f = 0; f < face_count; ++f)
     {
-        if (faces[f].loop_starts.empty()) { continue; }
+        if (faces[f].loop_starts.empty())
+        {
+            continue;
+        }
         const crd::u32 walk_cap = static_cast<crd::u32>(halfedges.size()) + 4U;
         T              bbox_dx  = T{0};
         T              bbox_dy  = T{0};
@@ -776,12 +885,27 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
             for (crd::u32 step = 0; step < walk_cap; ++step)
             {
                 const auto& a = verts[halfedges[cur].origin_v].pos;
-                if (a.x < lo_x) { lo_x = a.x; }
-                if (a.y < lo_y) { lo_y = a.y; }
-                if (a.x > hi_x) { hi_x = a.x; }
-                if (a.y > hi_y) { hi_y = a.y; }
+                if (a.x < lo_x)
+                {
+                    lo_x = a.x;
+                }
+                if (a.y < lo_y)
+                {
+                    lo_y = a.y;
+                }
+                if (a.x > hi_x)
+                {
+                    hi_x = a.x;
+                }
+                if (a.y > hi_y)
+                {
+                    hi_y = a.y;
+                }
                 cur = halfedges[cur].next_in_face;
-                if (cur == faces[f].loop_starts[0]) { break; }
+                if (cur == faces[f].loop_starts[0])
+                {
+                    break;
+                }
             }
             bbox_dx = hi_x - lo_x;
             bbox_dy = hi_y - lo_y;
@@ -791,7 +915,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         // for ANY orientation, by the DCEL convention that face is on the
         // LEFT of each directed boundary edge).
         T        eps_base = (bbox_dx > bbox_dy ? bbox_dx : bbox_dy) * static_cast<T>(1e-4);
-        if (eps_base <= T{0}) { eps_base = static_cast<T>(1e-6); }
+        if (eps_base <= T{0})
+        {
+            eps_base = static_cast<T>(1e-6);
+        }
         crd::u32 cur = faces[f].loop_starts[0];
         for (crd::u32 step = 0; step < walk_cap; ++step)
         {
@@ -818,7 +945,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
                 }
             }
             cur = halfedges[cur].next_in_face;
-            if (cur == faces[f].loop_starts[0]) { break; }
+            if (cur == faces[f].loop_starts[0])
+            {
+                break;
+            }
         }
     }
 
@@ -834,18 +964,30 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
         {
             const auto& e = in_edges[i];
             const int   w = (input_edge_index_filter == 0) ? e.wind_subject : e.wind_clip;
-            if (w == 0) { continue; }
+            if (w == 0)
+            {
+                continue;
+            }
             const auto& a = e.a;
             const auto& b = e.b;
             // Edge endpoints straddle the ray's y?
             const bool ay_above = a.y > p.y;
             const bool by_above = b.y > p.y;
-            if (ay_above == by_above) { continue; }
-            if (a.y == b.y) { continue; } // horizontal — skip
+            if (ay_above == by_above)
+            {
+                continue;
+            }
+            if (a.y == b.y) // horizontal — skip
+            {
+                continue;
+            }
             // Cross point x at y = p.y.
             const T t = (p.y - a.y) / (b.y - a.y);
             const T x = a.x + t * (b.x - a.x);
-            if (x <= p.x) { continue; }
+            if (x <= p.x)
+            {
+                continue;
+            }
             // Direction sign: if a is below and b is above (upward crossing),
             // contribution = +w; otherwise -w.
             sum += (by_above ? +w : -w);
@@ -855,7 +997,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
 
     for (crd::u32 f = 0; f < face_count; ++f)
     {
-        if (!faces[f].has_sample) { continue; }
+        if (!faces[f].has_sample)
+        {
+            continue;
+        }
         faces[f].sub_w  = ray_winding_for_edges(faces[f].sample_pt, 0);
         faces[f].clip_w = ray_winding_for_edges(faces[f].sample_pt, 1);
     }
@@ -899,7 +1044,10 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
 
     for (crd::u32 f = 0; f < face_count; ++f)
     {
-        if (face_kept[f] == 0U) { continue; }
+        if (face_kept[f] == 0U)
+        {
+            continue;
+        }
         for (crd::u32 li = 0; li < faces[f].loop_starts.size(); ++li)
         {
             crd::containers::Array<crd::math::Vec2<T>> ring(alloc);
@@ -909,9 +1057,15 @@ BooleanResult<T> polygon_boolean(PolygonView2<T> subject, PolygonView2<T> clip, 
             {
                 ring.push_back(verts[halfedges[cur].origin_v].pos);
                 cur = halfedges[cur].next_in_face;
-                if (cur == faces[f].loop_starts[li]) { break; }
+                if (cur == faces[f].loop_starts[li])
+                {
+                    break;
+                }
             }
-            if (opts.clean_output) { clean_ring<T>(ring); }
+            if (opts.clean_output)
+            {
+                clean_ring<T>(ring);
+            }
             if (ring.size() >= 3U)
             {
                 result.output.add_ring(crd::containers::ConstSpan<crd::math::Vec2<T>>{

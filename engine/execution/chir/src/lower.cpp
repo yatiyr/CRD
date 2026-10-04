@@ -59,7 +59,10 @@ public:
     Module* run()
     {
         const crd::u32 root = m_m.root();
-        if (root == kInvalidNode) { return nullptr; }
+        if (root == kInvalidNode)
+        {
+            return nullptr;
+        }
         plan_state_pins(root); // ⛔ ADR-0128 D3: precompute each state cell's reserved-band, source-derived reload id
         Module* const mod   = m_ctx.create_module();
         Block*        mbody = mod->body()->first_block();
@@ -78,7 +81,10 @@ public:
         }
         // ⛔ ADR-0128 D3 watermark-safety: reserve the band so assign_stable_ids gives every NON-state (sequential,
         // reload-invisible) op an id strictly ABOVE it — without this the sequential ids would track max(pinned)+1.
-        if (m_state_pins.size() != 0U) { m_ctx.reserve_stable_id_floor(mod, kChirStateIdReserve); }
+        if (m_state_pins.size() != 0U)
+        {
+            m_ctx.reserve_stable_id_floor(mod, kChirStateIdReserve);
+        }
         return mod;
     }
 
@@ -101,7 +107,10 @@ private:
     {
         for (crd::u32 i = 0; i < m_pins.size(); ++i)
         {
-            if (m_pins[i].node == node && m_pins[i].pin == pin) { return m_pins[i].v; }
+            if (m_pins[i].node == node && m_pins[i].pin == pin)
+            {
+                return m_pins[i].v;
+            }
         }
         return nullptr;
     }
@@ -110,7 +119,10 @@ private:
     {
         for (const Edge& e : m_m.edges())
         {
-            if (e.to_node == node && e.to_pin == in_pin) { return out_value(e.from_node, e.from_pin); }
+            if (e.to_node == node && e.to_pin == in_pin)
+            {
+                return out_value(e.from_node, e.from_pin);
+            }
         }
         return nullptr;
     }
@@ -122,7 +134,10 @@ private:
         {
             if (nd.pins[i].dir == PinDir::In)
             {
-                if (seen == n) { return i; }
+                if (seen == n)
+                {
+                    return i;
+                }
                 ++seen;
             }
         }
@@ -142,7 +157,10 @@ private:
         Array<crd::u32> decls(m_ctx.allocator());
         for (crd::u32 ci = 0; ci < prog.children.size(); ++ci)
         {
-            if (m_m.node(prog.children[ci]).kind == NodeKind::StateDecl) { decls.push_back(prog.children[ci]); }
+            if (m_m.node(prog.children[ci]).kind == NodeKind::StateDecl)
+            {
+                decls.push_back(prog.children[ci]);
+            }
         }
         for (crd::u32 i = 1; i < decls.size(); ++i) // insertion sort by CHIR StableId (no std::sort) — the probe order
         {
@@ -158,7 +176,10 @@ private:
         for (crd::u32 i = 0; i < decls.size(); ++i)
         {
             crd::u64 slot = crd::u64(1) + (m_m.node(decls[i]).id.value % kChirStateIdReserve);
-            while (pin_taken(slot)) { slot = (slot % kChirStateIdReserve) + crd::u64(1); } // probe within [1, reserve]
+            while (pin_taken(slot)) // probe within [1, reserve]
+            {
+                slot = (slot % kChirStateIdReserve) + crd::u64(1);
+            }
             m_state_pins.push_back(StatePin{decls[i], slot});
         }
     }
@@ -166,7 +187,10 @@ private:
     {
         for (crd::u32 i = 0; i < m_state_pins.size(); ++i)
         {
-            if (m_state_pins[i].id == id) { return true; }
+            if (m_state_pins[i].id == id)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -174,7 +198,10 @@ private:
     {
         for (crd::u32 i = 0; i < m_state_pins.size(); ++i)
         {
-            if (m_state_pins[i].node == node) { return m_state_pins[i].id; }
+            if (m_state_pins[i].node == node)
+            {
+                return m_state_pins[i].id;
+            }
         }
         return 0U; // an unplanned (e.g. non-program-scope) decl: StableId{0} is invalid => assign_stable_ids assigns it
     }
@@ -185,9 +212,16 @@ private:
         const ChirNode& sn     = m_m.node(st);
         for (crd::u32 pi = 0; pi < sn.pins.size(); ++pi)
         {
-            if (sn.pins[pi].dir == PinDir::Out) { st_out = pi; break; }
+            if (sn.pins[pi].dir == PinDir::Out)
+            {
+                st_out = pi;
+                break;
+            }
         }
-        if (st_out == kInvalidNode) { return kInvalidNode; }
+        if (st_out == kInvalidNode)
+        {
+            return kInvalidNode;
+        }
         for (const Edge& e : m_m.edges())
         {
             if (e.from_node == st && e.from_pin == st_out && m_m.node(e.to_node).kind == NodeKind::StateUpdate &&
@@ -215,7 +249,10 @@ private:
         for (crd::u32 ci = 0; ci < h.children.size(); ++ci)
         {
             const ChirNode& c = m_m.node(h.children[ci]);
-            if (c.kind != NodeKind::Query) { continue; }
+            if (c.kind != NodeKind::Query)
+            {
+                continue;
+            }
             for (crd::u32 ai = 0; ai < c.attrs.size(); ++ai)
             {
                 if (m_m.str(c.attrs[ai].key) == StringView("components"))
@@ -224,7 +261,10 @@ private:
                     crd::u32         n = 1;
                     for (crd::usize i = 0; i < v.size(); ++i)
                     {
-                        if (v[i] == '.') { ++n; }
+                        if (v[i] == '.')
+                        {
+                            ++n;
+                        }
                     }
                     return n;
                 }
@@ -243,8 +283,14 @@ private:
         crd::u32        oi = 0;
         for (crd::u32 pi = 0; pi < qn.pins.size(); ++pi)
         {
-            if (qn.pins[pi].dir != PinDir::Out) { continue; }
-            if (na != 0U) { record(q, pi, fb->arg(oi < na ? oi : na - 1U)); }
+            if (qn.pins[pi].dir != PinDir::Out)
+            {
+                continue;
+            }
+            if (na != 0U)
+            {
+                record(q, pi, fb->arg(oi < na ? oi : na - 1U));
+            }
             ++oi;
         }
     }
@@ -264,7 +310,10 @@ private:
         pfo->region(0)->append(pb);
         const crd::u32 first_in = nth_in_pin(pf, 0U);
         Value*         view     = (first_in != kInvalidNode) ? in_value(pf, first_in) : nullptr;
-        if (view == nullptr) { view = pb->arg(0U); } // unconnected view => self-contained yield of %iv
+        if (view == nullptr) // unconnected view => self-contained yield of %iv
+        {
+            view = pb->arg(0U);
+        }
         Value* const yv[1] = {view};
         pb->append(m_ctx.create_operation(m_o.yield, ConstSpan<Value*>(yv, 1U), 0U));
         fb->append(pfo);
@@ -311,7 +360,10 @@ private:
         {
             const crd::u32 upd = nth_in_pin(su, 1U); // the update's SECOND in-pin = the `updated` value written to the cell
             next               = (upd != kInvalidNode) ? in_value(su, upd) : nullptr;
-            if (next == nullptr) { next = konst(fb, 1, m_ctx.type_i64()); }
+            if (next == nullptr)
+            {
+                next = konst(fb, 1, m_ctx.type_i64());
+            }
         }
         Value* const     st_in[2] = {init, next};
         Operation* const cell     = m_ctx.create_operation(m_o.state, ConstSpan<Value*>(st_in, 2U), 1U, m_ctx.type_i64());
@@ -337,7 +389,10 @@ private:
         const crd::u32  ncomp = query_component_count(handler);
         Operation* const fn =
             crd::ceir::func::create_func(m_ctx, mod, m_m.str(h.name), Visibility::Public, ncomp, m_ctx.type_i64());
-        if (fn == nullptr) { return; } // a duplicate handler name — skip (create_func's no-overwrite contract)
+        if (fn == nullptr) // a duplicate handler name — skip (create_func's no-overwrite contract)
+        {
+            return;
+        }
         for (crd::u32 ai = 0; ai < h.attrs.size(); ++ai)
         {
             if (m_m.str(h.attrs[ai].key) == StringView("domain")) // the ADR-0116 typed time domain; NO new event op
@@ -355,7 +410,10 @@ private:
             const ChirNode& prog = m_m.node(program);
             for (crd::u32 ci = 0; ci < prog.children.size(); ++ci)
             {
-                if (m_m.node(prog.children[ci]).kind == NodeKind::StateDecl) { lower_state_decl(fb, prog.children[ci]); }
+                if (m_m.node(prog.children[ci]).kind == NodeKind::StateDecl)
+                {
+                    lower_state_decl(fb, prog.children[ci]);
+                }
             }
             m_decls_emitted = true;
         }

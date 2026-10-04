@@ -76,7 +76,10 @@ template <typename T>
     const crd::usize nnz  = a.values().values.size();
     crd::containers::Array<crd::f64> mag(alloc);
     mag.resize(nnz);
-    for (crd::usize k = 0; k < nnz; ++k) { mag[k] = detail::mc64_abs(vals[k]); }
+    for (crd::usize k = 0; k < nnz; ++k)
+    {
+        mag[k] = detail::mc64_abs(vals[k]);
+    }
     return mc64_match_and_scale(a.pattern(), crd::containers::ConstSpan<crd::f64>{mag.data(), mag.size()}, alloc);
 }
 

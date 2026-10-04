@@ -30,13 +30,19 @@ struct TaylorJet
     {
         TaylorJet r;
         r.a[0] = x;
-        if constexpr (K >= 1) { r.a[1] = static_cast<T>(1); }
+        if constexpr (K >= 1)
+        {
+            r.a[1] = static_cast<T>(1);
+        }
         return r;
     }
     [[nodiscard]] T derivative(int k) const noexcept // raw k-th derivative = k!·a[k]
     {
         T f = static_cast<T>(1);
-        for (int i = 2; i <= k; ++i) { f *= static_cast<T>(i); }
+        for (int i = 2; i <= k; ++i)
+        {
+            f *= static_cast<T>(i);
+        }
         return f * a[k];
     }
 };
@@ -45,21 +51,30 @@ template <typename T, int K>
 [[nodiscard]] constexpr TaylorJet<T, K> operator+(const TaylorJet<T, K>& f, const TaylorJet<T, K>& g) noexcept
 {
     TaylorJet<T, K> r;
-    for (int k = 0; k <= K; ++k) { r.a[k] = f.a[k] + g.a[k]; }
+    for (int k = 0; k <= K; ++k)
+    {
+        r.a[k] = f.a[k] + g.a[k];
+    }
     return r;
 }
 template <typename T, int K>
 [[nodiscard]] constexpr TaylorJet<T, K> operator-(const TaylorJet<T, K>& f, const TaylorJet<T, K>& g) noexcept
 {
     TaylorJet<T, K> r;
-    for (int k = 0; k <= K; ++k) { r.a[k] = f.a[k] - g.a[k]; }
+    for (int k = 0; k <= K; ++k)
+    {
+        r.a[k] = f.a[k] - g.a[k];
+    }
     return r;
 }
 template <typename T, int K>
 [[nodiscard]] constexpr TaylorJet<T, K> operator-(const TaylorJet<T, K>& f) noexcept
 {
     TaylorJet<T, K> r;
-    for (int k = 0; k <= K; ++k) { r.a[k] = -f.a[k]; }
+    for (int k = 0; k <= K; ++k)
+    {
+        r.a[k] = -f.a[k];
+    }
     return r;
 }
 // Cauchy product — (f·g)_k = Σ_{i=0}^{k} f_i·g_{k−i}.
@@ -70,7 +85,10 @@ template <typename T, int K>
     for (int k = 0; k <= K; ++k)
     {
         T s = static_cast<T>(0);
-        for (int i = 0; i <= k; ++i) { s += f.a[i] * g.a[k - i]; }
+        for (int i = 0; i <= k; ++i)
+        {
+            s += f.a[i] * g.a[k - i];
+        }
         r.a[k] = s;
     }
     return r;
@@ -84,7 +102,10 @@ template <typename T, int K>
     for (int k = 0; k <= K; ++k)
     {
         T s = f.a[k];
-        for (int i = 0; i < k; ++i) { s -= r.a[i] * g.a[k - i]; }
+        for (int i = 0; i < k; ++i)
+        {
+            s -= r.a[i] * g.a[k - i];
+        }
         r.a[k] = s * inv;
     }
     return r;
@@ -103,7 +124,10 @@ template <typename T, int K>
 [[nodiscard]] constexpr TaylorJet<T, K> operator*(T s, const TaylorJet<T, K>& f) noexcept
 {
     TaylorJet<T, K> r;
-    for (int k = 0; k <= K; ++k) { r.a[k] = s * f.a[k]; }
+    for (int k = 0; k <= K; ++k)
+    {
+        r.a[k] = s * f.a[k];
+    }
     return r;
 }
 template <typename T, int K>
@@ -118,7 +142,10 @@ template <typename T, int K>
     for (int k = 1; k <= K; ++k)
     {
         T s = static_cast<T>(0);
-        for (int i = 0; i < k; ++i) { s += static_cast<T>(k - i) * f.a[k - i] * e.a[i]; }
+        for (int i = 0; i < k; ++i)
+        {
+            s += static_cast<T>(k - i) * f.a[k - i] * e.a[i];
+        }
         e.a[k] = s / static_cast<T>(k);
     }
     return e;
@@ -133,7 +160,10 @@ template <typename T, int K>
     for (int k = 1; k <= K; ++k)
     {
         T s = static_cast<T>(0);
-        for (int i = 1; i < k; ++i) { s += static_cast<T>(i) * f.a[k - i] * l.a[i]; }
+        for (int i = 1; i < k; ++i)
+        {
+            s += static_cast<T>(i) * f.a[k - i] * l.a[i];
+        }
         l.a[k] = (f.a[k] - s / static_cast<T>(k)) * inv;
     }
     return l;
@@ -148,7 +178,10 @@ template <typename T, int K>
     for (int k = 1; k <= K; ++k)
     {
         T acc = f.a[k];
-        for (int i = 1; i < k; ++i) { acc -= s.a[i] * s.a[k - i]; }
+        for (int i = 1; i < k; ++i)
+        {
+            acc -= s.a[i] * s.a[k - i];
+        }
         s.a[k] = acc * inv2;
     }
     return s;
@@ -199,10 +232,16 @@ template <typename T, int K>
     for (int k = 1; k <= K; ++k)
     {
         T s = static_cast<T>(0);
-        for (int i = 0; i < k; ++i) { s += static_cast<T>(k - i) * f.a[k - i] * w.a[i]; }
+        for (int i = 0; i < k; ++i)
+        {
+            s += static_cast<T>(k - i) * f.a[k - i] * w.a[i];
+        }
         t.a[k] = s / static_cast<T>(k);
         T q = static_cast<T>(0); // (t·t)_k
-        for (int i = 0; i <= k; ++i) { q += t.a[i] * t.a[k - i]; }
+        for (int i = 0; i <= k; ++i)
+        {
+            q += t.a[i] * t.a[k - i];
+        }
         w.a[k] = -q;
     }
     return t;
@@ -217,7 +256,10 @@ template <typename T, int K>
     for (int k = 1; k <= K; ++k)
     {
         T s = static_cast<T>(0);
-        for (int i = 0; i < k; ++i) { s += (alpha * static_cast<T>(k - i) - static_cast<T>(i)) * f.a[k - i] * p.a[i]; }
+        for (int i = 0; i < k; ++i)
+        {
+            s += (alpha * static_cast<T>(k - i) - static_cast<T>(i)) * f.a[k - i] * p.a[i];
+        }
         p.a[k] = s * inv0 / static_cast<T>(k);
     }
     return p;

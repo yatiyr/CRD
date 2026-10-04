@@ -26,18 +26,33 @@ ReloadableCompute::Status ReloadableCompute::reload(
     CookOptions opts;
     opts.backends     = static_cast<crd::u32>(backend);
     CookResult ck = cook_compute_shader(g, e, name, opts, m_alloc);
-    if (!ck.ok) { return st; }
+    if (!ck.ok)
+    {
+        return st;
+    }
     st.ok = true;
 
     ShaderBundle bundle(m_alloc);
-    if (!read_shader_bundle(crd::containers::as_const_span(ck.crdr), bundle)) { st.ok = false; return st; }
+    if (!read_shader_bundle(crd::containers::as_const_span(ck.crdr), bundle))
+    {
+        st.ok = false;
+        return st;
+    }
     const auto refl_span = bundle.reflection();
-    if (refl_span.size() != sizeof(crd::kir::ShaderReflection)) { st.ok = false; return st; }
+    if (refl_span.size() != sizeof(crd::kir::ShaderReflection))
+    {
+        st.ok = false;
+        return st;
+    }
     crd::kir::ShaderReflection refl{};
     std::memcpy(&refl, refl_span.data(), sizeof(refl));
 
     auto pipe = create(bundle.bytecode(backend), refl.n_bindings, user);
-    if (pipe == nullptr) { st.ok = false; return st; }
+    if (pipe == nullptr)
+    {
+        st.ok = false;
+        return st;
+    }
 
     // Atomic swap: retire the previous pipeline (kept one generation), install the new one, adopt the new bundle + hash.
     m_retired = std::move(m_current);

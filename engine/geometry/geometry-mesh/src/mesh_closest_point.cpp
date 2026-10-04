@@ -32,8 +32,16 @@ inline crd::f32 aabb_dist_sq(const AABB3<crd::f32>& box, const Vec3<crd::f32>& p
         const crd::f32 v = p[static_cast<crd::usize>(ax)];
         const crd::f32 lo = box.min[static_cast<crd::usize>(ax)];
         const crd::f32 hi = box.max[static_cast<crd::usize>(ax)];
-        if (v < lo) { const crd::f32 d = lo - v; dsq += d * d; }
-        else if (v > hi) { const crd::f32 d = v - hi; dsq += d * d; }
+        if (v < lo)
+        {
+            const crd::f32 d = lo - v;
+            dsq += d * d;
+        }
+        else if (v > hi)
+        {
+            const crd::f32 d = v - hi;
+            dsq += d * d;
+        }
     }
     return dsq;
 }
@@ -128,13 +136,25 @@ mesh_closest_point(const TriangleMeshViewf& view,
         CRD_ASSERT(sp + 2U <= k_max_bvh_depth);
         if (ld <= rd)
         {
-            if (rd < best_dsq) { stack[sp++] = Frame{right, rd}; }
-            if (ld < best_dsq) { stack[sp++] = Frame{left,  ld}; }
+            if (rd < best_dsq)
+            {
+                stack[sp++] = Frame{right, rd};
+            }
+            if (ld < best_dsq)
+            {
+                stack[sp++] = Frame{left,  ld};
+            }
         }
         else
         {
-            if (ld < best_dsq) { stack[sp++] = Frame{left,  ld}; }
-            if (rd < best_dsq) { stack[sp++] = Frame{right, rd}; }
+            if (ld < best_dsq)
+            {
+                stack[sp++] = Frame{left,  ld};
+            }
+            if (rd < best_dsq)
+            {
+                stack[sp++] = Frame{right, rd};
+            }
         }
     }
 

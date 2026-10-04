@@ -167,7 +167,10 @@ struct Gsplat2dProjectConfig
     st(18, valid);
     (void)cx; (void)cy;
 
-    if (guard >= 0) { g.stmt_if_end(guard); } // close the tail-thread guard
+    if (guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);

@@ -29,7 +29,10 @@ struct DgcBuf
     vkGetPhysicalDeviceMemoryProperties(phys, &mp);
     for (crd::u32 i = 0; i < mp.memoryTypeCount; ++i)
     {
-        if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props) { return i; }
+        if ((type_bits & (1U << i)) != 0U && (mp.memoryTypes[i].propertyFlags & props) == props)
+        {
+            return i;
+        }
     }
     return UINT32_MAX;
 }
@@ -65,7 +68,10 @@ struct VulkanDgcContext::Impl
         bci.pNext = usage64 != 0U ? &u2 : nullptr;
         bci.size  = bytes;
         bci.usage = usage64 != 0U ? 0U : usage32; // when Flags2 is chained the 32-bit field is ignored (and must be 0)
-        if (vkCreateBuffer(device, &bci, nullptr, &b.buffer) != VK_SUCCESS) { return b; }
+        if (vkCreateBuffer(device, &bci, nullptr, &b.buffer) != VK_SUCCESS)
+        {
+            return b;
+        }
         VkMemoryRequirements mr{};
         vkGetBufferMemoryRequirements(device, b.buffer, &mr);
         VkMemoryAllocateFlagsInfo fi{};
@@ -76,22 +82,40 @@ struct VulkanDgcContext::Impl
         mai.pNext           = &fi;
         mai.allocationSize  = mr.size;
         mai.memoryTypeIndex = find_mem_type(physical, mr.memoryTypeBits & extra_type_bits, want);
-        if (mai.memoryTypeIndex == UINT32_MAX) { return b; }
-        if (vkAllocateMemory(device, &mai, nullptr, &b.memory) != VK_SUCCESS) { return b; }
+        if (mai.memoryTypeIndex == UINT32_MAX)
+        {
+            return b;
+        }
+        if (vkAllocateMemory(device, &mai, nullptr, &b.memory) != VK_SUCCESS)
+        {
+            return b;
+        }
         vkBindBufferMemory(device, b.buffer, b.memory, 0);
         VkBufferDeviceAddressInfo ai{};
         ai.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         ai.buffer = b.buffer;
         b.address = vkGetBufferDeviceAddress(device, &ai);
-        if ((want & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U) { vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped); }
+        if ((want & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U)
+        {
+            vkMapMemory(device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped);
+        }
         return b;
     }
 
     void free_buf(DgcBuf& b) const noexcept
     {
-        if (b.mapped != nullptr) { vkUnmapMemory(device, b.memory); }
-        if (b.buffer != VK_NULL_HANDLE) { vkDestroyBuffer(device, b.buffer, nullptr); }
-        if (b.memory != VK_NULL_HANDLE) { vkFreeMemory(device, b.memory, nullptr); }
+        if (b.mapped != nullptr)
+        {
+            vkUnmapMemory(device, b.memory);
+        }
+        if (b.buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device, b.buffer, nullptr);
+        }
+        if (b.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device, b.memory, nullptr);
+        }
         b = DgcBuf{};
     }
 
@@ -119,17 +143,26 @@ struct VulkanDgcContext::Impl
         dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dslci.bindingCount = nbind;
         dslci.pBindings    = binds;
-        if (vkCreateDescriptorSetLayout(device, &dslci, nullptr, &p.dsl) != VK_SUCCESS) { return p; }
+        if (vkCreateDescriptorSetLayout(device, &dslci, nullptr, &p.dsl) != VK_SUCCESS)
+        {
+            return p;
+        }
         VkPipelineLayoutCreateInfo plci{};
         plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
         plci.pSetLayouts    = &p.dsl;
-        if (vkCreatePipelineLayout(device, &plci, nullptr, &p.layout) != VK_SUCCESS) { return p; }
+        if (vkCreatePipelineLayout(device, &plci, nullptr, &p.layout) != VK_SUCCESS)
+        {
+            return p;
+        }
         VkShaderModuleCreateInfo smci{};
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         smci.codeSize = spirv.size();
         smci.pCode    = reinterpret_cast<const crd::u32*>(spirv.data());
-        if (vkCreateShaderModule(device, &smci, nullptr, &p.module) != VK_SUCCESS) { return p; }
+        if (vkCreateShaderModule(device, &smci, nullptr, &p.module) != VK_SUCCESS)
+        {
+            return p;
+        }
         VkComputePipelineCreateInfo cpci{};
         cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cpci.layout       = p.layout;
@@ -142,10 +175,22 @@ struct VulkanDgcContext::Impl
     }
     void free_pipe(CompPipe& p) const noexcept
     {
-        if (p.pipe != VK_NULL_HANDLE) { vkDestroyPipeline(device, p.pipe, nullptr); }
-        if (p.module != VK_NULL_HANDLE) { vkDestroyShaderModule(device, p.module, nullptr); }
-        if (p.layout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, p.layout, nullptr); }
-        if (p.dsl != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, p.dsl, nullptr); }
+        if (p.pipe != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(device, p.pipe, nullptr);
+        }
+        if (p.module != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(device, p.module, nullptr);
+        }
+        if (p.layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(device, p.layout, nullptr);
+        }
+        if (p.dsl != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(device, p.dsl, nullptr);
+        }
         p = CompPipe{};
     }
 };
@@ -157,35 +202,53 @@ VulkanDgcContext::VulkanDgcContext(VulkanGpuContext& ctx) : m_impl(std::make_uni
     impl.device   = ctx.vk_device();
     impl.queue    = ctx.compute_queue();
     impl.family   = ctx.compute_family();
-    if (!ctx.device_generated_commands_ext() || impl.device == VK_NULL_HANDLE) { return; } // adapter without the cap ⇒ invalid
+    if (!ctx.device_generated_commands_ext() || impl.device == VK_NULL_HANDLE) // adapter without the cap ⇒ invalid
+    {
+        return;
+    }
 
     impl.create_layout  = reinterpret_cast<PFN_vkCreateIndirectCommandsLayoutEXT>(vkGetDeviceProcAddr(impl.device, "vkCreateIndirectCommandsLayoutEXT"));
     impl.destroy_layout = reinterpret_cast<PFN_vkDestroyIndirectCommandsLayoutEXT>(vkGetDeviceProcAddr(impl.device, "vkDestroyIndirectCommandsLayoutEXT"));
     impl.get_gc_memreq  = reinterpret_cast<PFN_vkGetGeneratedCommandsMemoryRequirementsEXT>(vkGetDeviceProcAddr(impl.device, "vkGetGeneratedCommandsMemoryRequirementsEXT"));
     impl.cmd_execute    = reinterpret_cast<PFN_vkCmdExecuteGeneratedCommandsEXT>(vkGetDeviceProcAddr(impl.device, "vkCmdExecuteGeneratedCommandsEXT"));
-    if (impl.create_layout == nullptr || impl.destroy_layout == nullptr || impl.get_gc_memreq == nullptr || impl.cmd_execute == nullptr) { return; }
+    if (impl.create_layout == nullptr || impl.destroy_layout == nullptr || impl.get_gc_memreq == nullptr || impl.cmd_execute == nullptr)
+    {
+        return;
+    }
 
     VkCommandPoolCreateInfo cpci{};
     cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cpci.queueFamilyIndex = impl.family;
-    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS) { return; }
+    if (vkCreateCommandPool(impl.device, &cpci, nullptr, &impl.cmd_pool) != VK_SUCCESS)
+    {
+        return;
+    }
     impl.ok = true;
 }
 
 VulkanDgcContext::~VulkanDgcContext()
 {
-    if (m_impl && m_impl->cmd_pool != VK_NULL_HANDLE) { vkDestroyCommandPool(m_impl->device, m_impl->cmd_pool, nullptr); }
+    if (m_impl && m_impl->cmd_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyCommandPool(m_impl->device, m_impl->cmd_pool, nullptr);
+    }
 }
 
 bool VulkanDgcContext::valid() const noexcept { return m_impl && m_impl->ok; }
 
 bool VulkanDgcContext::dispatch_generated(const ExecuteDesc& desc, crd::containers::ConstSpan<Buffer> buffers)
 {
-    if (!valid()) { return false; }
+    if (!valid())
+    {
+        return false;
+    }
     Impl&          impl = *m_impl;
     const VkDevice dev  = impl.device;
     const crd::u32 nbuf = static_cast<crd::u32>(buffers.size());
-    if (nbuf == 0U || nbuf > 8U || desc.max_seq == 0U) { return false; }
+    if (nbuf == 0U || nbuf > 8U || desc.max_seq == 0U)
+    {
+        return false;
+    }
 
     // ── the global buffers: host-visible + device-address, STORAGE|INDIRECT (the token/count buffers are read as the command
     //    stream / sequence count; the rest are plain storage). Zero-init, then apply any host upload. ──
@@ -197,9 +260,16 @@ bool VulkanDgcContext::dispatch_generated(const ExecuteDesc& desc, crd::containe
                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
                                     | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                 0U, 0xFFFFFFFFU, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (gbuf[i].mapped == nullptr) { built = false; break; }
+        if (gbuf[i].mapped == nullptr)
+        {
+            built = false;
+            break;
+        }
         std::memset(gbuf[i].mapped, 0, static_cast<crd::usize>(buffers[i].bytes));
-        if (buffers[i].upload != nullptr) { std::memcpy(gbuf[i].mapped, buffers[i].upload, static_cast<crd::usize>(buffers[i].bytes)); }
+        if (buffers[i].upload != nullptr)
+        {
+            std::memcpy(gbuf[i].mapped, buffers[i].upload, static_cast<crd::usize>(buffers[i].bytes));
+        }
     }
 
     // ── the produce (plain compute) + consume pipelines. The consume needs NO indirect-bindable flag: with a NULL execution set
@@ -392,12 +462,21 @@ bool VulkanDgcContext::dispatch_generated(const ExecuteDesc& desc, crd::containe
     }
 
     // ── teardown ──
-    if (pool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(dev, pool, nullptr); }
-    if (layout != VK_NULL_HANDLE) { impl.destroy_layout(dev, layout, nullptr); }
+    if (pool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(dev, pool, nullptr);
+    }
+    if (layout != VK_NULL_HANDLE)
+    {
+        impl.destroy_layout(dev, layout, nullptr);
+    }
     impl.free_buf(preproc);
     impl.free_pipe(cons);
     impl.free_pipe(prod);
-    for (crd::u32 i = 0; i < nbuf; ++i) { impl.free_buf(gbuf[i]); }
+    for (crd::u32 i = 0; i < nbuf; ++i)
+    {
+        impl.free_buf(gbuf[i]);
+    }
     return ran;
 }
 

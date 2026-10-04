@@ -60,7 +60,10 @@ namespace shape_detail
 [[nodiscard]] inline bool node_shape_ok(const KGraph& g, int id, const char** why) // NOLINT(readability-function-cognitive-complexity) — a rule table; splitting it hides the table
 {
     const auto fail = [&](const char* reason) {
-        if (why != nullptr) { *why = reason; }
+        if (why != nullptr)
+        {
+            *why = reason;
+        }
         return false;
     };
     const KNode& n  = g.node(id);
@@ -75,14 +78,26 @@ namespace shape_detail
 
     if (is_unary(n.op))
     {
-        if (!ok_id(n.a)) { return fail("unary op names no operand"); }
-        if (!value_form(g.node(n.a).type)) { return fail("unary operand is not a value (a texture/sampler wired into arithmetic)"); }
-        if (comps(n.a) != n.type.comps()) { return fail("unary operand width differs from the node's"); }
+        if (!ok_id(n.a))
+        {
+            return fail("unary op names no operand");
+        }
+        if (!value_form(g.node(n.a).type))
+        {
+            return fail("unary operand is not a value (a texture/sampler wired into arithmetic)");
+        }
+        if (comps(n.a) != n.type.comps())
+        {
+            return fail("unary operand width differs from the node's");
+        }
         return true;
     }
     if (is_binary(n.op))
     {
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("binary op names a missing operand"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("binary op names a missing operand");
+        }
         if (!value_form(g.node(n.a).type) || !value_form(g.node(n.b).type))
         {
             return fail("binary operand is not a value (a texture/sampler wired into arithmetic)");
@@ -97,7 +112,10 @@ namespace shape_detail
     }
     if (is_ternary(n.op))
     {
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c)) { return fail("ternary op names a missing operand"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c))
+        {
+            return fail("ternary op names a missing operand");
+        }
         if (!value_form(g.node(n.a).type) || !value_form(g.node(n.b).type) || !value_form(g.node(n.c).type))
         {
             return fail("ternary operand is not a value (a texture/sampler wired into arithmetic)");
@@ -112,73 +130,151 @@ namespace shape_detail
     switch (n.op)
     {
     case KOp::Select:
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c)) { return fail("select names a missing operand"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c))
+        {
+            return fail("select names a missing operand");
+        }
         // The oracle reads ONE cond per element and `comps` lanes of each arm — a vector cond or a narrower
         // arm reads memory the node does not own.
-        if (comps(n.c) != 1) { return fail("select condition must be scalar (one cond per element)"); }
+        if (comps(n.c) != 1)
+        {
+            return fail("select condition must be scalar (one cond per element)");
+        }
         if (comps(n.a) != n.type.comps() || comps(n.b) != n.type.comps())
         {
             return fail("select arms must match the node's width");
         }
         return true;
     case KOp::Vec2:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("vec2 names a missing operand"); }
-        if (comps(n.a) != 1 || comps(n.b) != 1) { return fail("vec2 operands must be scalars"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("vec2 names a missing operand");
+        }
+        if (comps(n.a) != 1 || comps(n.b) != 1)
+        {
+            return fail("vec2 operands must be scalars");
+        }
         return true;
     case KOp::Vec3:
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c)) { return fail("vec3 names a missing operand"); }
-        if (comps(n.a) != 1 || comps(n.b) != 1 || comps(n.c) != 1) { return fail("vec3 operands must be scalars"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c))
+        {
+            return fail("vec3 names a missing operand");
+        }
+        if (comps(n.a) != 1 || comps(n.b) != 1 || comps(n.c) != 1)
+        {
+            return fail("vec3 operands must be scalars");
+        }
         return true;
     case KOp::VecComp:
-        if (!ok_id(n.a)) { return fail("component extract names no operand"); }
+        if (!ok_id(n.a))
+        {
+            return fail("component extract names no operand");
+        }
         // The C2 attribute scar: a node id lands in a compile-time index slot, type-checks as `int`, and
         // "swizzles component 47". The bound is the operand's actual width.
-        if (n.iidx < 0 || n.iidx >= comps(n.a)) { return fail("component index outside the operand's width"); }
+        if (n.iidx < 0 || n.iidx >= comps(n.a))
+        {
+            return fail("component index outside the operand's width");
+        }
         return true;
     case KOp::Swizzle:
     {
-        if (!ok_id(n.a)) { return fail("swizzle names no operand"); }
+        if (!ok_id(n.a))
+        {
+            return fail("swizzle names no operand");
+        }
         const int w = n.type.comps();
         for (int k = 0; k < w; ++k)
         {
-            if (static_cast<int>(n.perm[k]) >= comps(n.a)) { return fail("swizzle lane outside the operand's width"); }
+            if (static_cast<int>(n.perm[k]) >= comps(n.a))
+            {
+                return fail("swizzle lane outside the operand's width");
+            }
         }
         return true;
     }
     case KOp::VecConcat:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("concat names a missing operand"); }
-        if (comps(n.a) + comps(n.b) != n.type.comps()) { return fail("concat width is not the sum of its operands"); }
-        if (n.type.comps() > 4) { return fail("concat exceeds four components"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("concat names a missing operand");
+        }
+        if (comps(n.a) + comps(n.b) != n.type.comps())
+        {
+            return fail("concat width is not the sum of its operands");
+        }
+        if (n.type.comps() > 4)
+        {
+            return fail("concat exceeds four components");
+        }
         return true;
     case KOp::Dot:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("dot names a missing operand"); }
-        if (comps(n.a) != comps(n.b)) { return fail("dot operand widths differ"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("dot names a missing operand");
+        }
+        if (comps(n.a) != comps(n.b))
+        {
+            return fail("dot operand widths differ");
+        }
         return true;
     case KOp::Cross:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("cross names a missing operand"); }
-        if (comps(n.a) != 3 || comps(n.b) != 3) { return fail("cross operands must be vec3"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("cross names a missing operand");
+        }
+        if (comps(n.a) != 3 || comps(n.b) != 3)
+        {
+            return fail("cross operands must be vec3");
+        }
         return true;
     case KOp::Reflect:
     case KOp::Faceforward:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("geometric op names a missing operand"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("geometric op names a missing operand");
+        }
         if (comps(n.a) != n.type.comps() || comps(n.b) != n.type.comps())
         {
             return fail("geometric operand widths differ");
         }
         return true;
     case KOp::Refract:
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c)) { return fail("refract names a missing operand"); }
-        if (comps(n.a) != n.type.comps() || comps(n.b) != n.type.comps()) { return fail("refract vector widths differ"); }
-        if (comps(n.c) != 1) { return fail("refract eta must be scalar"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c))
+        {
+            return fail("refract names a missing operand");
+        }
+        if (comps(n.a) != n.type.comps() || comps(n.b) != n.type.comps())
+        {
+            return fail("refract vector widths differ");
+        }
+        if (comps(n.c) != 1)
+        {
+            return fail("refract eta must be scalar");
+        }
         return true;
     case KOp::MatVecMul:
-        if (!ok_id(n.a) || !ok_id(n.b)) { return fail("mat*vec names a missing operand"); }
-        if (kind(n.a) != TKind::Mat) { return fail("mat*vec left operand is not a matrix"); }
-        if (comps(n.b) != static_cast<int>(g.node(n.a).type.cols)) { return fail("mat*vec vector width differs from the matrix columns"); }
+        if (!ok_id(n.a) || !ok_id(n.b))
+        {
+            return fail("mat*vec names a missing operand");
+        }
+        if (kind(n.a) != TKind::Mat)
+        {
+            return fail("mat*vec left operand is not a matrix");
+        }
+        if (comps(n.b) != static_cast<int>(g.node(n.a).type.cols))
+        {
+            return fail("mat*vec vector width differs from the matrix columns");
+        }
         return true;
     case KOp::Splat:
-        if (!ok_id(n.a)) { return fail("splat names no operand"); }
-        if (comps(n.a) != 1) { return fail("splat takes a scalar"); }
+        if (!ok_id(n.a))
+        {
+            return fail("splat names no operand");
+        }
+        if (comps(n.a) != 1)
+        {
+            return fail("splat takes a scalar");
+        }
         return true;
     // ── The sample family. `a` = texture, `b` = sampler, `c` = uv. The uv width rule is the layered-atlas
     // scar; the sampler-pairing rule is the `Hard`-filter scar (`tex_sample` where `tex_sample_cmp` belonged
@@ -187,19 +283,52 @@ namespace shape_detail
     case KOp::SampleLod:
     case KOp::SampleGrad:
     case KOp::TexGather:
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c)) { return fail("texture sample names a missing operand"); }
-        if (!g.node(n.a).type.is_texture()) { return fail("sample source is not a texture"); }
-        if (!g.node(n.b).type.is_sampler()) { return fail("sample sampler operand is not a sampler"); }
-        if (g.node(n.b).type.tex_shadow()) { return fail("a comparison sampler requires tex_sample_cmp"); }
-        if (comps(n.c) != coord_comps(g.node(n.a).type)) { return fail("sample uv width differs from the texture's coordinate count"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c))
+        {
+            return fail("texture sample names a missing operand");
+        }
+        if (!g.node(n.a).type.is_texture())
+        {
+            return fail("sample source is not a texture");
+        }
+        if (!g.node(n.b).type.is_sampler())
+        {
+            return fail("sample sampler operand is not a sampler");
+        }
+        if (g.node(n.b).type.tex_shadow())
+        {
+            return fail("a comparison sampler requires tex_sample_cmp");
+        }
+        if (comps(n.c) != coord_comps(g.node(n.a).type))
+        {
+            return fail("sample uv width differs from the texture's coordinate count");
+        }
         return true;
     case KOp::SampleCmp:
-        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c) || !ok_id(n.d)) { return fail("compare sample names a missing operand"); }
-        if (!g.node(n.a).type.is_texture()) { return fail("compare-sample source is not a texture"); }
-        if (!g.node(n.b).type.is_sampler()) { return fail("compare-sample sampler operand is not a sampler"); }
-        if (!g.node(n.b).type.tex_shadow()) { return fail("tex_sample_cmp requires a comparison sampler"); }
-        if (comps(n.c) != coord_comps(g.node(n.a).type)) { return fail("compare-sample uv width differs from the texture's coordinate count"); }
-        if (comps(n.d) != 1) { return fail("compare-sample reference must be scalar"); }
+        if (!ok_id(n.a) || !ok_id(n.b) || !ok_id(n.c) || !ok_id(n.d))
+        {
+            return fail("compare sample names a missing operand");
+        }
+        if (!g.node(n.a).type.is_texture())
+        {
+            return fail("compare-sample source is not a texture");
+        }
+        if (!g.node(n.b).type.is_sampler())
+        {
+            return fail("compare-sample sampler operand is not a sampler");
+        }
+        if (!g.node(n.b).type.tex_shadow())
+        {
+            return fail("tex_sample_cmp requires a comparison sampler");
+        }
+        if (comps(n.c) != coord_comps(g.node(n.a).type))
+        {
+            return fail("compare-sample uv width differs from the texture's coordinate count");
+        }
+        if (comps(n.d) != 1)
+        {
+            return fail("compare-sample reference must be scalar");
+        }
         return true;
     default:
         return true; // ops with richer shape semantics own their rules in their builders + oracle coverage
@@ -216,37 +345,57 @@ namespace shape_detail
 {
     if (root < 0 || root >= g.size())
     {
-        if (issue != nullptr) { issue->node = root; issue->why = "root names no node"; }
+        if (issue != nullptr)
+        {
+            issue->node = root;
+            issue->why = "root names no node";
+        }
         return false;
     }
     crd::containers::Array<crd::u8> seen(alloc);
     seen.resize(static_cast<crd::usize>(g.size()));
-    for (crd::usize i = 0; i < seen.size(); ++i) { seen[i] = 0U; }
+    for (crd::usize i = 0; i < seen.size(); ++i)
+    {
+        seen[i] = 0U;
+    }
     crd::containers::Array<int> stack(alloc);
     stack.push_back(root);
     while (!stack.empty())
     {
         const int id = stack[stack.size() - 1U];
         stack.pop_back();
-        if (seen[static_cast<crd::usize>(id)] != 0U) { continue; }
+        if (seen[static_cast<crd::usize>(id)] != 0U)
+        {
+            continue;
+        }
         seen[static_cast<crd::usize>(id)] = 1U;
 
         const char* why = nullptr;
         if (!shape_detail::node_shape_ok(g, id, &why))
         {
-            if (issue != nullptr) { issue->node = id; issue->why = why; }
+            if (issue != nullptr)
+            {
+                issue->node = id;
+                issue->why = why;
+            }
             return false;
         }
         const KNode& n = g.node(id);
         const int    ops[4] = {n.a, n.b, n.c, n.d};
         for (const int o : ops)
         {
-            if (o >= 0 && o < g.size()) { stack.push_back(o); }
+            if (o >= 0 && o < g.size())
+            {
+                stack.push_back(o);
+            }
         }
         for (int k = 0; k < static_cast<int>(n.n_ext); ++k)
         {
             const int o = g.ext_operand(n, k);
-            if (o >= 0 && o < g.size()) { stack.push_back(o); }
+            if (o >= 0 && o < g.size())
+            {
+                stack.push_back(o);
+            }
         }
     }
     return true;
@@ -268,11 +417,17 @@ namespace shape_detail
     }
     for (int i = 0; i < e.n_out; ++i)
     {
-        if (!check_root(e.out[i].node)) { return false; }
+        if (!check_root(e.out[i].node))
+        {
+            return false;
+        }
     }
     for (crd::u32 i = 0; i < e.n_task_payload; ++i)
     {
-        if (!check_root(e.task_payload[i])) { return false; }
+        if (!check_root(e.task_payload[i]))
+        {
+            return false;
+        }
     }
     // The statement body. Nested For/If bodies are ranges into the same pool, so a worklist of ranges walks
     // the whole tree without recursion.
@@ -297,7 +452,10 @@ namespace shape_detail
                 }
                 for (int k = 0; k < static_cast<int>(st.n_ext); ++k)
                 {
-                    if (!check_root(g.stmt_ext_operand(st, k))) { return false; }
+                    if (!check_root(g.stmt_ext_operand(st, k)))
+                    {
+                        return false;
+                    }
                 }
                 if (st.body_count > 0)
                 {

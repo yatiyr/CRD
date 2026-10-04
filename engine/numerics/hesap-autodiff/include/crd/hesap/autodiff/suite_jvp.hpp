@@ -47,10 +47,16 @@ inline void dft_jvp(const std::complex<crd::f64>* dx, std::complex<crd::f64>* dy
 // Full convolution y = h⊛x, y length nh+nx−1.
 inline void conv(const crd::f64* h, int nh, const crd::f64* x, int nx, crd::f64* y) noexcept
 {
-    for (int i = 0; i < nh + nx - 1; ++i) { y[i] = 0.0; }
+    for (int i = 0; i < nh + nx - 1; ++i)
+    {
+        y[i] = 0.0;
+    }
     for (int i = 0; i < nh; ++i)
     {
-        for (int j = 0; j < nx; ++j) { y[i + j] += h[i] * x[j]; }
+        for (int j = 0; j < nx; ++j)
+        {
+            y[i + j] += h[i] * x[j];
+        }
     }
 }
 // Filtering JVP (bilinear product rule): dy = dh⊛x + h⊛dx.
@@ -59,7 +65,10 @@ inline void conv_jvp(const crd::f64* h, const crd::f64* dh, int nh, const crd::f
 {
     conv(dh, nh, x, nx, dy);
     conv(h, nh, dx, nx, scratch);
-    for (int i = 0; i < nh + nx - 1; ++i) { dy[i] += scratch[i]; }
+    for (int i = 0; i < nh + nx - 1; ++i)
+    {
+        dy[i] += scratch[i];
+    }
 }
 
 // Tridiagonal solve (Thomas) T·u = r, T = (sub a, diag b, super c), all length n (a[0], c[n-1] unused). u may alias r.
@@ -77,7 +86,10 @@ inline void thomas_solve(const crd::f64* a, const crd::f64* b, const crd::f64* c
         dp[i]               = (r[i] - a[i] * dp[i - 1]) / mden;
     }
     u[n - 1] = dp[n - 1];
-    for (int i = n - 2; i >= 0; --i) { u[i] = dp[i] - cp[i] * u[i + 1]; }
+    for (int i = n - 2; i >= 0; --i)
+    {
+        u[i] = dp[i] - cp[i] * u[i + 1];
+    }
 }
 
 } // namespace crd::hesap::autodiff::forward::suite

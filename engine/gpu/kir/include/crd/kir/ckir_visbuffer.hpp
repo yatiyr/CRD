@@ -293,7 +293,10 @@ struct HzbConfig
 [[nodiscard]] inline crd::u32 hzb_n_mips(crd::u32 base_size) noexcept
 {
     crd::u32 n = 0;
-    for (crd::u32 s = base_size; s >= 1U; s >>= 1U) { ++n; }
+    for (crd::u32 s = base_size; s >= 1U; s >>= 1U)
+    {
+        ++n;
+    }
     return n;
 }
 // The start index (in a single concatenated HZB buffer) of mip `level`: the sum of all lower mips' texel counts.

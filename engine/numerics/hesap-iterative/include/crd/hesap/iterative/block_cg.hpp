@@ -129,8 +129,14 @@ inline void block_spd_reg_solve(const T* m, crd::u32 s, T* rhs, crd::u32 nrhs, T
         dmax      = d > dmax ? d : dmax;
     }
     const R eps = dmax * std::sqrt(std::numeric_limits<R>::epsilon()) + detail::krylov_smlnum<R>();
-    for (crd::usize i = 0; i < static_cast<crd::usize>(s) * s; ++i) { scratch[i] = m[i]; }
-    for (crd::u32 i = 0; i < s; ++i) { scratch[static_cast<crd::usize>(i) * s + i] = scratch[static_cast<crd::usize>(i) * s + i] + T(eps); }
+    for (crd::usize i = 0; i < static_cast<crd::usize>(s) * s; ++i)
+    {
+        scratch[i] = m[i];
+    }
+    for (crd::u32 i = 0; i < s; ++i)
+    {
+        scratch[static_cast<crd::usize>(i) * s + i] = scratch[static_cast<crd::usize>(i) * s + i] + T(eps);
+    }
     (void)block_spd_solve<T>(scratch, s, rhs, nrhs); // M+εI is SPD ⇒ Cholesky succeeds
 }
 
@@ -158,7 +164,11 @@ inline void block_lu_solve(T* m, crd::u32 s, T* rhs, crd::u32 nrhs) noexcept
         for (crd::u32 r = c + 1; r < s; ++r)
         {
             const R mg = detail::krylov_mag<T>(m[static_cast<crd::usize>(r) * s + c]);
-            if (mg > best) { best = mg; piv = r; }
+            if (mg > best)
+            {
+                best = mg;
+                piv = r;
+            }
         }
         if (piv != c) // swap rows c, piv in m and rhs
         {
@@ -176,12 +186,18 @@ inline void block_lu_solve(T* m, crd::u32 s, T* rhs, crd::u32 nrhs) noexcept
             }
         }
         T pivot = m[static_cast<crd::usize>(c) * s + c];
-        if (detail::krylov_mag<T>(pivot) < eps) { pivot = T(eps); } // floor a collapsed pivot (graceful)
+        if (detail::krylov_mag<T>(pivot) < eps) // floor a collapsed pivot (graceful)
+        {
+            pivot = T(eps);
+        }
         const T inv = T(1) / pivot;
         for (crd::u32 r = c + 1; r < s; ++r)
         {
             const T f = m[static_cast<crd::usize>(r) * s + c] * inv;
-            if (detail::krylov_mag<T>(f) == R(0)) { continue; }
+            if (detail::krylov_mag<T>(f) == R(0))
+            {
+                continue;
+            }
             for (crd::u32 j = c; j < s; ++j)
             {
                 m[static_cast<crd::usize>(r) * s + j] = m[static_cast<crd::usize>(r) * s + j] - f * m[static_cast<crd::usize>(c) * s + j];
@@ -196,7 +212,10 @@ inline void block_lu_solve(T* m, crd::u32 s, T* rhs, crd::u32 nrhs) noexcept
     {
         const crd::u32 c = s - 1 - cc;
         T pivot = m[static_cast<crd::usize>(c) * s + c];
-        if (detail::krylov_mag<T>(pivot) < eps) { pivot = T(eps); }
+        if (detail::krylov_mag<T>(pivot) < eps)
+        {
+            pivot = T(eps);
+        }
         const T inv = T(1) / pivot;
         for (crd::u32 j = 0; j < nrhs; ++j)
         {
@@ -221,7 +240,10 @@ template <typename T>
 inline void block_gram(const T* bl1, const T* bl2, crd::usize n, crd::u32 s, T* g) noexcept
 {
     const crd::usize ss = static_cast<crd::usize>(s) * s;
-    for (crd::usize i = 0; i < ss; ++i) { g[i] = T{}; }
+    for (crd::usize i = 0; i < ss; ++i)
+    {
+        g[i] = T{};
+    }
     for (crd::usize r = 0; r < n; ++r)
     {
         const T* b1 = bl1 + r * s;
@@ -288,11 +310,17 @@ inline void block_qr(T* w, crd::usize n, crd::u32 s, T* cm, T* r) noexcept
     const R defl_tol = std::sqrt(std::numeric_limits<R>::epsilon());
     if (r != nullptr)
     {
-        for (crd::usize i = 0; i < static_cast<crd::usize>(s) * s; ++i) { r[i] = T{}; }
+        for (crd::usize i = 0; i < static_cast<crd::usize>(s) * s; ++i)
+        {
+            r[i] = T{};
+        }
     }
     for (crd::usize k = 0; k < n; ++k) // transpose row-major → column-contiguous
     {
-        for (crd::u32 j = 0; j < s; ++j) { cm[static_cast<crd::usize>(j) * n + k] = w[k * s + j]; }
+        for (crd::u32 j = 0; j < s; ++j)
+        {
+            cm[static_cast<crd::usize>(j) * n + k] = w[k * s + j];
+        }
     }
     for (crd::u32 j = 0; j < s; ++j)
     {
@@ -317,17 +345,26 @@ inline void block_qr(T* w, crd::usize n, crd::u32 s, T* cm, T* r) noexcept
         if (nrm > defl_tol * orig && nrm > detail::krylov_smlnum<R>())
         {
             scal<T>(T(R(1) / nrm), cjs);
-            if (r != nullptr) { r[static_cast<crd::usize>(j) * s + j] = T(nrm); }
+            if (r != nullptr)
+            {
+                r[static_cast<crd::usize>(j) * s + j] = T(nrm);
+            }
         }
         else
         {
-            for (crd::usize k = 0; k < n; ++k) { cj[k] = T{}; } // rank-deficient / happy-breakdown column ⇒ deflate
+            for (crd::usize k = 0; k < n; ++k) // rank-deficient / happy-breakdown column ⇒ deflate
+            {
+                cj[k] = T{};
+            }
             // R[j,j] stays 0
         }
     }
     for (crd::usize k = 0; k < n; ++k) // transpose back column-contiguous → row-major
     {
-        for (crd::u32 j = 0; j < s; ++j) { w[k * s + j] = cm[static_cast<crd::usize>(j) * n + k]; }
+        for (crd::u32 j = 0; j < s; ++j)
+        {
+            w[k * s + j] = cm[static_cast<crd::usize>(j) * n + k];
+        }
     }
 }
 
@@ -444,11 +481,17 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_pcg_impl(
     {
         (void)m_inv->apply_block(crd::containers::ConstSpan<T>{R_, n * s}, s, crd::containers::Span<T>{Z, n * s}, s, s);
     }
-    for (crd::usize i = 0; i < n * s; ++i) { P[i] = Z[i]; } // P₀ = Z₀ ...
+    for (crd::usize i = 0; i < n * s; ++i) // P₀ = Z₀ ...
+    {
+        P[i] = Z[i];
+    }
     detail::block_orthonormalize<T>(P, n, s, ws.cmblk.data()); // ... orthonormalized (breakdown-free)
 
     auto solve_block = [&](const T* m, T* rhs) {
-        for (crd::usize i = 0; i < ss; ++i) { ws.mcopy[i] = m[i]; }
+        for (crd::usize i = 0; i < ss; ++i)
+        {
+            ws.mcopy[i] = m[i];
+        }
         if (!detail::block_spd_solve<T>(ws.mcopy.data(), s, rhs, s))
         {
             detail::block_spd_reg_solve<T>(m, s, rhs, s, ws.mcopy.data()); // regularized deflated fallback
@@ -482,10 +525,16 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_pcg_impl(
         }
         detail::block_gram<T>(AP, Z, n, s, ws.del.data()); // del = (AP)ᴴZ
         solve_block(ws.ptap.data(), ws.del.data());        // del = (PᴴAP)⁺(PᴴAZ)
-        for (crd::usize i = 0; i < n * s; ++i) { Tw[i] = Z[i]; }
+        for (crd::usize i = 0; i < n * s; ++i)
+        {
+            Tw[i] = Z[i];
+        }
         detail::block_gemm_update<T>(P, ws.del.data(), n, s, Tw, -1); // Tw = Z - P·del = Z + P·δ (A-conjugate to P)
         detail::block_orthonormalize<T>(Tw, n, s, ws.cmblk.data()); // re-basis ⇒ PᴴAP well-conditioned
-        for (crd::usize i = 0; i < n * s; ++i) { P[i] = Tw[i]; }
+        for (crd::usize i = 0; i < n * s; ++i)
+        {
+            P[i] = Tw[i];
+        }
     }
 
     result.reason = StopReason::MaxIterations;

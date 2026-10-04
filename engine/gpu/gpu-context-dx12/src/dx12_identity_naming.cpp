@@ -14,10 +14,16 @@ namespace crd::gpu::detail
 
 void dx12_name_object(ID3D12Object* object, const ObjectIdentity& id, std::string_view site) noexcept
 {
-    if (object == nullptr) { return; }
+    if (object == nullptr)
+    {
+        return;
+    }
     char             narrow[kDebugNamePrefixChars + 96];
     const crd::usize n = format_debug_name(id, site, narrow, sizeof(narrow));
-    if (n == 0U) { return; }
+    if (n == 0U)
+    {
+        return;
+    }
     wchar_t wide[kDebugNamePrefixChars + 96];
     for (crd::usize i = 0; i < n; ++i)
     {

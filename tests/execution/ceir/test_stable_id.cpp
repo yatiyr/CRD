@@ -54,13 +54,19 @@ Module* mod_with_ops(Context& ctx, u32 n, Operation** out)
 // gather ops in body pre-order (the STID / assignment order).
 void gather(Region* r, Array<Operation*>& out)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             out.push_back(op);
-            for (u32 i = 0; i < op->num_regions(); ++i) { gather(op->region(i), out); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                gather(op->region(i), out);
+            }
         }
     }
 }
@@ -123,17 +129,29 @@ TEST_CASE("ceir 8d: a hostile STID chunk (zero id / duplicate id) is a graceful 
     // ZERO id: clobber the final u64 (op1's stable id) to 0 → the loader rejects an invalid id (not an assert).
     {
         ByteArray b(&root);
-        for (usize i = 0; i < blob.size(); ++i) { b.push_back(blob[i]); }
-        for (usize i = 0; i < 8U; ++i) { b[b.size() - 8U + i] = 0U; }
+        for (usize i = 0; i < blob.size(); ++i)
+        {
+            b.push_back(blob[i]);
+        }
+        for (usize i = 0; i < 8U; ++i)
+        {
+            b[b.size() - 8U + i] = 0U;
+        }
         Context c(&root);
         CHECK_FALSE(deserialize(c, span(b)).ok);
     }
     // DUPLICATE id: set op1's id equal to op0's id (1). The STID payload is [count=2][id0=1][id1=2]; the final u64 is id1.
     {
         ByteArray b(&root);
-        for (usize i = 0; i < blob.size(); ++i) { b.push_back(blob[i]); }
+        for (usize i = 0; i < blob.size(); ++i)
+        {
+            b.push_back(blob[i]);
+        }
         b[b.size() - 8U] = 1U; // low byte of id1 -> 1 (id0 is 1); the rest are already 0
-        for (usize i = 1; i < 8U; ++i) { b[b.size() - 8U + i] = 0U; }
+        for (usize i = 1; i < 8U; ++i)
+        {
+            b[b.size() - 8U + i] = 0U;
+        }
         Context c(&root);
         CHECK_FALSE(deserialize(c, span(b)).ok);
     }
@@ -190,8 +208,16 @@ TEST_CASE("ceir 8d: the state schema is reorder-invariant yet delete/re-add-sens
         m->body()->append(top);
         Operation* const c_f32 = ctx.create_operation(cell, {}, 1U, ctx.type_f32());
         Operation* const c_i32 = ctx.create_operation(cell, {}, 1U, ctx.type_i32());
-        if (!reversed) { top->append(c_f32); top->append(c_i32); }
-        else           { top->append(c_i32); top->append(c_f32); }
+        if (!reversed)
+        {
+            top->append(c_f32);
+            top->append(c_i32);
+        }
+        else
+        {
+            top->append(c_i32);
+            top->append(c_f32);
+        }
         ctx.set_stable_id(c_f32, StableId{id_first});
         ctx.set_stable_id(c_i32, StableId{id_second});
         return m;
@@ -264,7 +290,10 @@ TEST_CASE("ceir 8d: a genuine pre-8d blob (no STID chunk) decodes and re-seriali
     // watermark(8)+3*id(24)] = 8 + 36 = 44 bytes. Then patch chunk_count (the 3rd u32, offset 8) from 6 to 5.
     REQUIRE(full.size() > 44U);
     ByteArray pre(&root);
-    for (usize i = 0; i < full.size() - 44U; ++i) { pre.push_back(full[i]); }
+    for (usize i = 0; i < full.size() - 44U; ++i)
+    {
+        pre.push_back(full[i]);
+    }
     pre[8] = 5U; // chunk_count 6 -> 5 (little-endian low byte)
 
     Context           ctx2(&root);
@@ -273,7 +302,10 @@ TEST_CASE("ceir 8d: a genuine pre-8d blob (no STID chunk) decodes and re-seriali
     Array<Operation*> got(&root);
     gather(pr.module->body(), got);
     REQUIRE(got.size() == 3U);
-    for (usize i = 0; i < got.size(); ++i) { CHECK(got[i]->stable_id().value == 0U); } // no STID ⇒ ids unassigned
+    for (usize i = 0; i < got.size(); ++i) // no STID ⇒ ids unassigned
+    {
+        CHECK(got[i]->stable_id().value == 0U);
+    }
 
     // re-serialize: fresh ids re-seed pre-order 1,2,3 = exactly what `full` carried ⇒ BYTE-EXACT (the fixpoint) + same
     // content hash (stronger than hash-equal alone).
@@ -306,7 +338,10 @@ TEST_CASE("ceir 8d: a fresh module's text round-trip reproduces identical stable
     gather(m->body(), a);
     gather(pr.module->body(), b);
     REQUIRE(a.size() == b.size());
-    for (usize i = 0; i < a.size(); ++i) { CHECK(a[i]->stable_id() == b[i]->stable_id()); }
+    for (usize i = 0; i < a.size(); ++i)
+    {
+        CHECK(a[i]->stable_id() == b[i]->stable_id());
+    }
 }
 
 TEST_CASE("ceir 8d: single-byte corruption of a stable-id blob never crashes a loader", "[ceir][stable-id]")
@@ -322,7 +357,10 @@ TEST_CASE("ceir 8d: single-byte corruption of a stable-id blob never crashes a l
     for (usize i = 0; i < blob.size(); ++i)
     {
         ByteArray b(&root);
-        for (usize j = 0; j < blob.size(); ++j) { b.push_back(blob[j]); }
+        for (usize j = 0; j < blob.size(); ++j)
+        {
+            b.push_back(blob[j]);
+        }
         b[i] = static_cast<u8>(b[i] ^ 0xFFU);
         Context           c(&root);
         const ParseResult pr = deserialize(c, span(b));

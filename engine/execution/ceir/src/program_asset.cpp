@@ -43,13 +43,20 @@ void push_u64(containers::Array<u8>& out, u64 v)
 void push_str(containers::Array<u8>& out, containers::StringView s)
 {
     push_u32(out, static_cast<u32>(s.size()));
-    for (usize i = 0; i < s.size(); ++i) { out.push_back(static_cast<u8>(s[i])); }
+    for (usize i = 0; i < s.size(); ++i)
+    {
+        out.push_back(static_cast<u8>(s[i]));
+    }
 }
 // Structural type encoding — recurse into `members`, NEVER emit a Context-local TypeId int, so the projection is
 // cross-Context STABLE (identical structural types encode byte-equal regardless of intern history — like the 1f blob).
 void encode_type(const Context& ctx, TypeId id, containers::Array<u8>& out)
 {
-    if (!id.valid()) { out.push_back(0xFFU); return; } // an untyped/opaque value — a distinct, stable marker
+    if (!id.valid()) // an untyped/opaque value — a distinct, stable marker
+    {
+        out.push_back(0xFFU);
+        return;
+    }
     const Type t = ctx.type_of(id);
     out.push_back(static_cast<u8>(t.kind));
     out.push_back(t.is_signed ? 1U : 0U);
@@ -58,9 +65,15 @@ void encode_type(const Context& ctx, TypeId id, containers::Array<u8>& out)
     push_u32(out, t.cols);
     push_str(out, t.name);
     push_u32(out, static_cast<u32>(t.members.size()));
-    for (usize i = 0; i < t.members.size(); ++i) { encode_type(ctx, t.members[i], out); }
+    for (usize i = 0; i < t.members.size(); ++i)
+    {
+        encode_type(ctx, t.members[i], out);
+    }
     push_u32(out, static_cast<u32>(t.labels.size()));
-    for (usize i = 0; i < t.labels.size(); ++i) { push_str(out, t.labels[i]); }
+    for (usize i = 0; i < t.labels.size(); ++i)
+    {
+        push_str(out, t.labels[i]);
+    }
     // CEIR-8a (ADR-0111 §2.4 landmine): the type-class discriminates an Extern type — emit it CONDITIONALLY (only for
     // kind==Extern) so two custom types with identical param slots do NOT collide in the §107 interface hash (which would
     // silently break 7b's registry-drift discriminator), while EVERY existing (non-Extern) type hashes byte-identically
@@ -78,16 +91,25 @@ void encode_type(const Context& ctx, TypeId id, containers::Array<u8>& out)
     {
         const u8 ca = static_cast<u8>(a[i]);
         const u8 cb = static_cast<u8>(b[i]);
-        if (ca != cb) { return ca < cb; }
+        if (ca != cb)
+        {
+            return ca < cb;
+        }
     }
     return a.size() < b.size();
 }
 [[nodiscard]] containers::StringView op_string_attr(const Context& ctx, const Operation& op, containers::StringView key)
 {
     const AttrId id = op.attr(key);
-    if (!id.valid()) { return {}; }
+    if (!id.valid())
+    {
+        return {};
+    }
     const AttrValue v = ctx.attr_value(id);
-    if (v.kind != AttrKind::String && v.kind != AttrKind::SymbolRef) { return {}; }
+    if (v.kind != AttrKind::String && v.kind != AttrKind::SymbolRef)
+    {
+        return {};
+    }
     return v.s;
 }
 // Append every `func.func` op in the module body (top-level only — funcs are module-body children) to `out`.
@@ -95,12 +117,18 @@ void collect_funcs(Context& ctx, const Module& m, containers::Array<Operation*>&
 {
     const OpId func_kind = func::func_kind(ctx);
     Region* const body   = m.body();
-    if (body == nullptr) { return; }
+    if (body == nullptr)
+    {
+        return;
+    }
     for (Block* b = body->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (op->kind().value == func_kind.value) { out.push_back(op); }
+            if (op->kind().value == func_kind.value)
+            {
+                out.push_back(op);
+            }
         }
     }
 }
@@ -111,15 +139,24 @@ const Operation* find_return(Operation* func_op, OpId return_kind)
     {
         static const Operation* go(Region* r, OpId rk)
         {
-            if (r == nullptr) { return nullptr; }
+            if (r == nullptr)
+            {
+                return nullptr;
+            }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
             {
                 for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
                 {
-                    if (op->kind().value == rk.value) { return op; }
+                    if (op->kind().value == rk.value)
+                    {
+                        return op;
+                    }
                     for (u32 i = 0; i < op->num_regions(); ++i)
                     {
-                        if (const Operation* f = go(op->region(i), rk)) { return f; }
+                        if (const Operation* f = go(op->region(i), rk))
+                        {
+                            return f;
+                        }
                     }
                 }
             }
@@ -149,9 +186,15 @@ void push_funcs_projection(Context& ctx, const Module& module, containers::Array
         Visibility                   vis  = Visibility::Public; // absent from the table ⇒ conservatively exported
         if (syms != nullptr)
         {
-            if (const SymbolEntry* const e = syms->lookup(name)) { vis = e->visibility; }
+            if (const SymbolEntry* const e = syms->lookup(name))
+            {
+                vis = e->visibility;
+            }
         }
-        if (vis == Visibility::Public) { exported.push_back(funcs[i]); }
+        if (vis == Visibility::Public)
+        {
+            exported.push_back(funcs[i]);
+        }
     }
     for (u32 i = 1; i < static_cast<u32>(exported.size()); ++i) // insertion sort by sym_name (no std::sort)
     {
@@ -174,12 +217,18 @@ void push_funcs_projection(Context& ctx, const Module& module, containers::Array
         Block* const eb = f->region(0)->first_block();
         const u32    np = (eb != nullptr) ? eb->num_args() : 0U;
         push_u32(proj, np);
-        for (u32 a = 0; a < np; ++a) { encode_type(ctx, eb->arg(a)->type(), proj); }
+        for (u32 a = 0; a < np; ++a)
+        {
+            encode_type(ctx, eb->arg(a)->type(), proj);
+        }
         // result types = the func.return operands' types (the terminator carries the signature).
         const Operation* const ret = find_return(f, return_kind);
         const u32              nr  = (ret != nullptr) ? ret->num_operands() : 0U;
         push_u32(proj, nr);
-        for (u32 r = 0; r < nr; ++r) { encode_type(ctx, ret->operand(r)->type(), proj); }
+        for (u32 r = 0; r < nr; ++r)
+        {
+            encode_type(ctx, ret->operand(r)->type(), proj);
+        }
         // caller-visible effects = the 5c TRANSITIVE effective set over the body (fresh visited per func — a shared map
         // yields deterministic-but-WRONG masks). A body edit that adds an effect visible to callers IS an interface change.
         containers::HashMap<const Operation*, u8> visited(scratch);
@@ -200,7 +249,10 @@ void push_caps_projection(Context& ctx, const Module& module, containers::Array<
     containers::Array<CapabilityId> caps(scratch);
     ctx.program_capabilities(module, caps);
     push_u32(proj, static_cast<crd::u32>(caps.size()));
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(caps.size()); ++i) { push_u64(proj, caps[i].value); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(caps.size()); ++i)
+    {
+        push_u64(proj, caps[i].value);
+    }
 }
 
 // §20 STATE SCHEMA walk — MODULE-WIDE (every StateEdge cell), NOT per-exported-func: a PRIVATE callee's cells are live
@@ -217,7 +269,10 @@ void collect_state_cells(Context& ctx, const Module& module, containers::Array<S
     {
         static void go(Context& c, Region* r, containers::Array<StateCell>& out)
         {
-            if (r == nullptr) { return; }
+            if (r == nullptr)
+            {
+                return;
+            }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
             {
                 for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -229,11 +284,17 @@ void collect_state_cells(Context& ctx, const Module& module, containers::Array<S
                         if (depth_id.valid())
                         {
                             const AttrValue dv = c.attr_value(depth_id);
-                            if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
+                            if (dv.kind == AttrKind::Int && dv.i >= 1)
+                            {
+                                depth = static_cast<crd::u32>(dv.i);
+                            }
                         }
                         out.push_back(StateCell{op->stable_id().value, op->result(0)->type(), depth});
                     }
-                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), out); }
+                    for (crd::u32 i = 0; i < op->num_regions(); ++i)
+                    {
+                        go(c, op->region(i), out);
+                    }
                 }
             }
         }
@@ -295,10 +356,16 @@ namespace
 {
 void add_unique(containers::Array<containers::StringView>& list, containers::StringView s)
 {
-    if (s.empty()) { return; }
+    if (s.empty())
+    {
+        return;
+    }
     for (u32 i = 0; i < static_cast<u32>(list.size()); ++i)
     {
-        if (list[i] == s) { return; }
+        if (list[i] == s)
+        {
+            return;
+        }
     }
     list.push_back(s);
 }
@@ -320,10 +387,16 @@ void sort_svs(containers::Array<containers::StringView>& list)
 // per-dispatch contract check re-walks the module at cook), sorted by name (the sort_svs precedent).
 void add_unique_kref(containers::Array<KernelRefDep>& list, const KernelRefDep& k)
 {
-    if (k.name.empty()) { return; }
+    if (k.name.empty())
+    {
+        return;
+    }
     for (u32 i = 0; i < static_cast<u32>(list.size()); ++i)
     {
-        if (list[i].name == k.name) { return; }
+        if (list[i].name == k.name)
+        {
+            return;
+        }
     }
     list.push_back(k);
 }
@@ -353,7 +426,10 @@ DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory
     {
         static void go(Context& c, Region* r, OpId ck, const SymbolTable* s, DependencyRecord& out)
         {
-            if (r == nullptr) { return; }
+            if (r == nullptr)
+            {
+                return;
+            }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
             {
                 for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -411,7 +487,10 @@ DependencyRecord collect_dependencies(Context& ctx, const Module& module, memory
                             }
                         }
                     }
-                    for (u32 i = 0; i < op->num_regions(); ++i) { go(c, op->region(i), ck, s, out); }
+                    for (u32 i = 0; i < op->num_regions(); ++i)
+                    {
+                        go(c, op->region(i), ck, s, out);
+                    }
                 }
             }
         }
@@ -430,15 +509,24 @@ const Operation* find_unregistered_op(const Context& ctx, const Module& module) 
     {
         static const Operation* go(const Context& c, Region* r)
         {
-            if (r == nullptr) { return nullptr; }
+            if (r == nullptr)
+            {
+                return nullptr;
+            }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
             {
                 for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
                 {
-                    if (c.op_info(op->kind()) == nullptr) { return op; } // EMPTY≠UNKNOWN — an unregistered kind
+                    if (c.op_info(op->kind()) == nullptr) // EMPTY≠UNKNOWN — an unregistered kind
+                    {
+                        return op;
+                    }
                     for (u32 i = 0; i < op->num_regions(); ++i)
                     {
-                        if (const Operation* f = go(c, op->region(i))) { return f; }
+                        if (const Operation* f = go(c, op->region(i)))
+                        {
+                            return f;
+                        }
                     }
                 }
             }

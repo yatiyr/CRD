@@ -28,12 +28,24 @@ namespace
         const bool     negative = (se & 0x8000U) != 0;
         const crd::i32 exponent = static_cast<crd::i32>(se & 0x7FFFU);
         crd::u64       mantissa = 0;
-        for (int i = 0; i < 8; ++i) { mantissa = (mantissa << 8U) | p[2 + i]; }
-        if (negative || exponent == 0 || mantissa == 0) { return 0; }
+        for (int i = 0; i < 8; ++i)
+        {
+            mantissa = (mantissa << 8U) | p[2 + i];
+        }
+        if (negative || exponent == 0 || mantissa == 0)
+        {
+            return 0;
+        }
         const crd::i32 shift = exponent - 16383 - 63; // value = mantissa × 2^shift
-        if (shift > 0) { return shift >= 32 ? 0 : static_cast<crd::u32>(mantissa << static_cast<crd::u32>(shift)); }
+        if (shift > 0)
+        {
+            return shift >= 32 ? 0 : static_cast<crd::u32>(mantissa << static_cast<crd::u32>(shift));
+        }
         const crd::u32 down = static_cast<crd::u32>(-shift);
-        if (down >= 64) { return 0; }
+        if (down >= 64)
+        {
+            return 0;
+        }
         const crd::u64 v    = mantissa >> down;
         const crd::u64 rem  = mantissa & ((1ULL << down) - 1ULL);
         const crd::u64 half = 1ULL << (down - 1U);
@@ -54,7 +66,10 @@ namespace
     }
     void wr_tag(crd::containers::Array<crd::u8>& b, const char* t)
     {
-        for (int i = 0; i < 4; ++i) { b.push_back(static_cast<crd::u8>(t[i])); }
+        for (int i = 0; i < 4; ++i)
+        {
+            b.push_back(static_cast<crd::u8>(t[i]));
+        }
     }
 
     // u32 rate → 80-bit extended (exact for every integer rate)
@@ -62,7 +77,10 @@ namespace
     {
         if (rate == 0)
         {
-            for (int i = 0; i < 10; ++i) { b.push_back(0); }
+            for (int i = 0; i < 10; ++i)
+            {
+                b.push_back(0);
+            }
             return;
         }
         crd::i32 exponent = 16383 + 63;
@@ -73,7 +91,10 @@ namespace
             --exponent;
         }
         wr_be16(b, static_cast<crd::u16>(exponent));
-        for (int i = 7; i >= 0; --i) { b.push_back(static_cast<crd::u8>((mantissa >> (8U * i)) & 0xFFU)); }
+        for (int i = 7; i >= 0; --i)
+        {
+            b.push_back(static_cast<crd::u8>((mantissa >> (8U * i)) & 0xFFU));
+        }
     }
 } // namespace
 
@@ -81,9 +102,15 @@ AiffError aiff_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
 {
     out.isamples.clear();
     out.fsamples.clear();
-    if (bytes.size() < 12 || std::memcmp(bytes.data(), "FORM", 4) != 0) { return AiffError::NotAiff; }
+    if (bytes.size() < 12 || std::memcmp(bytes.data(), "FORM", 4) != 0)
+    {
+        return AiffError::NotAiff;
+    }
     const bool aifc = std::memcmp(bytes.data() + 8, "AIFC", 4) == 0;
-    if (!aifc && std::memcmp(bytes.data() + 8, "AIFF", 4) != 0) { return AiffError::NotAiff; }
+    if (!aifc && std::memcmp(bytes.data() + 8, "AIFF", 4) != 0)
+    {
+        return AiffError::NotAiff;
+    }
 
     bool       have_comm  = false;
     crd::u16   bits       = 0;
@@ -94,11 +121,17 @@ AiffError aiff_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
         const crd::u8* ch   = bytes.data() + pos;
         const crd::u32 size = rd_be32(ch + 4);
         const crd::u8* body = ch + 8;
-        if (pos + 8 + size > bytes.size()) { return AiffError::Malformed; }
+        if (pos + 8 + size > bytes.size())
+        {
+            return AiffError::Malformed;
+        }
 
         if (std::memcmp(ch, "COMM", 4) == 0)
         {
-            if (size < 18) { return AiffError::Malformed; }
+            if (size < 18)
+            {
+                return AiffError::Malformed;
+            }
             out.channels    = rd_be16(body);
             num_frames      = rd_be32(body + 2);
             bits            = rd_be16(body + 6);
@@ -106,22 +139,40 @@ AiffError aiff_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
             if (aifc && size >= 22)
             {
                 // AIFC compression type: only NONE / sowt (byte-swapped little-endian... refuse) survive
-                if (std::memcmp(body + 18, "NONE", 4) != 0) { return AiffError::UnsupportedFormat; }
+                if (std::memcmp(body + 18, "NONE", 4) != 0)
+                {
+                    return AiffError::UnsupportedFormat;
+                }
             }
-            if (out.channels == 0 || out.sample_rate == 0) { return AiffError::Malformed; }
-            if (bits != 8 && bits != 16 && bits != 24 && bits != 32) { return AiffError::UnsupportedFormat; }
+            if (out.channels == 0 || out.sample_rate == 0)
+            {
+                return AiffError::Malformed;
+            }
+            if (bits != 8 && bits != 16 && bits != 24 && bits != 32)
+            {
+                return AiffError::UnsupportedFormat;
+            }
             have_comm = true;
         }
         else if (std::memcmp(ch, "SSND", 4) == 0)
         {
-            if (!have_comm) { return AiffError::MissingComm; }
-            if (size < 8) { return AiffError::Malformed; }
+            if (!have_comm)
+            {
+                return AiffError::MissingComm;
+            }
+            if (size < 8)
+            {
+                return AiffError::Malformed;
+            }
             const crd::u32 offset = rd_be32(body);
             const crd::u8* data   = body + 8 + offset;
             const crd::u32 avail  = size - 8 - offset;
             const crd::u32 bytes_per = bits / 8U;
             const crd::usize count   = static_cast<crd::usize>(num_frames) * out.channels;
-            if (offset > size - 8 || count * bytes_per > avail) { return AiffError::Malformed; }
+            if (offset > size - 8 || count * bytes_per > avail)
+            {
+                return AiffError::Malformed;
+            }
             out.bits_per_sample = bits;
             out.isamples.reserve(count);
             for (crd::usize i = 0; i < count; ++i)
@@ -156,8 +207,14 @@ AiffError aiff_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
 crd::containers::Array<crd::u8> aiff_encode(const AudioPcm& pcm, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> out(alloc);
-    if (!pcm.valid() || pcm.is_float()) { return out; }
-    if (pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24) { return out; }
+    if (!pcm.valid() || pcm.is_float())
+    {
+        return out;
+    }
+    if (pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24)
+    {
+        return out;
+    }
 
     const crd::u32 bytes_per = pcm.bits_per_sample / 8U;
     const crd::u32 data_size = static_cast<crd::u32>(pcm.isamples.size() * bytes_per);
@@ -179,11 +236,17 @@ crd::containers::Array<crd::u8> aiff_encode(const AudioPcm& pcm, crd::memory::IA
     wr_be32(out, 0); // block size
     for (crd::i32 v : pcm.isamples)
     {
-        if (bytes_per == 3) { out.push_back(static_cast<crd::u8>((v >> 16) & 0xFF)); }
+        if (bytes_per == 3)
+        {
+            out.push_back(static_cast<crd::u8>((v >> 16) & 0xFF));
+        }
         out.push_back(static_cast<crd::u8>((v >> 8) & 0xFF));
         out.push_back(static_cast<crd::u8>(v & 0xFF));
     }
-    if ((ssnd_size & 1U) != 0) { out.push_back(0); }
+    if ((ssnd_size & 1U) != 0)
+    {
+        out.push_back(0);
+    }
     return out;
 }
 

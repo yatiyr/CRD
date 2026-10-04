@@ -56,28 +56,59 @@ rs_direct_interpolation(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sp
     }
 
     auto re = [](T v) -> R {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return v.re; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return v.re;
+        }
+        else
+        {
+            return v;
+        }
     };
 
     crd::hesap::sparse::TripletBuilder<T> tb(alloc, n, n_coarse);
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (cf[i] == CfTag::Coarse) { tb.add(i, cmap[i], T(R(1))); continue; } // injection
+        if (cf[i] == CfTag::Coarse) // injection
+        {
+            tb.add(i, cmap[i], T(R(1)));
+            continue;
+        }
 
-        for (crd::u32 q = so[i]; q < so[i + 1]; ++q) { strong[si[q]] = 1; } // mark i's strong deps
+        for (crd::u32 q = so[i]; q < so[i + 1]; ++q) // mark i's strong deps
+        {
+            strong[si[q]] = 1;
+        }
 
         T diag = T{};
         R off_neg = R(0), off_pos = R(0), c_neg = R(0), c_pos = R(0);
         for (crd::u32 q = ao[i]; q < ao[i + 1]; ++q)
         {
             const crd::u32 j = ai[q];
-            if (j == i) { diag = av[q]; continue; }
+            if (j == i)
+            {
+                diag = av[q];
+                continue;
+            }
             const R rj = re(av[q]);
-            if (rj < R(0)) { off_neg += rj; } else { off_pos += rj; }
+            if (rj < R(0))
+            {
+                off_neg += rj;
+            }
+            else
+            {
+                off_pos += rj;
+            }
             if (strong[j] && cf[j] == CfTag::Coarse) // strong C-dependency
             {
-                if (rj < R(0)) { c_neg += rj; } else { c_pos += rj; }
+                if (rj < R(0))
+                {
+                    c_neg += rj;
+                }
+                else
+                {
+                    c_pos += rj;
+                }
             }
         }
         const R alpha = (c_neg != R(0)) ? off_neg / c_neg : R(0);
@@ -85,13 +116,19 @@ rs_direct_interpolation(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sp
         for (crd::u32 q = ao[i]; q < ao[i + 1]; ++q)
         {
             const crd::u32 j = ai[q];
-            if (j == i || !strong[j] || cf[j] != CfTag::Coarse) { continue; }
+            if (j == i || !strong[j] || cf[j] != CfTag::Coarse)
+            {
+                continue;
+            }
             const R scale = (re(av[q]) < R(0)) ? alpha : beta; // sign-matched lumping factor
             const T w     = T(-scale) * av[q] / diag;          // −(α|β)·a_ij / a_ii
             tb.add(i, cmap[j], w);
         }
 
-        for (crd::u32 q = so[i]; q < so[i + 1]; ++q) { strong[si[q]] = 0; } // unmark
+        for (crd::u32 q = so[i]; q < so[i + 1]; ++q) // unmark
+        {
+            strong[si[q]] = 0;
+        }
     }
     return tb.compress();
 }

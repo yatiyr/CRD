@@ -33,7 +33,9 @@ namespace
 void append_bytes(cont::Array<crd::u8>& a, const void* src, crd::usize n) noexcept
 {
     if (n == 0)
+    {
         return;
+    }
     const crd::usize old = a.size();
     a.resize_uninitialized(old + n);
     std::memcpy(a.data() + old, src, n);
@@ -63,7 +65,9 @@ void append_hex_u32_min(cont::String& s, crd::u32 v) noexcept // uppercase, no l
         v >>= 4;
     }
     for (int i = n - 1; i >= 0; --i)
+    {
         s.push_back(tmp[i]);
+    }
 }
 
 // UTF-16LE (char_count code units at p) -> UTF-8 into a crd::String. Handles surrogate pairs.
@@ -206,14 +210,18 @@ cont::String read_md_string(cont::ConstSpan<crd::u8> dump, crd::u64 rva, crd::me
 {
     cont::String s(a);
     if (rva == 0 || rva + sizeof(crd::u32) > dump.size())
+    {
         return s;
+    }
     crd::u32 nbytes = 0;
     std::memcpy(&nbytes, dump.data() + rva, sizeof(nbytes));
     const crd::u64 soff  = rva + sizeof(crd::u32);
     crd::u64       avail = dump.size() - soff;
     crd::u64       want  = nbytes;
     if (want > avail)
+    {
         want = avail & ~static_cast<crd::u64>(1); // even byte count only
+    }
     return utf16le_to_utf8(dump.data() + soff, static_cast<crd::usize>(want / 2), a);
 }
 
@@ -257,9 +265,13 @@ cont::String blob_slice(cont::ConstSpan<crd::u8> payload, crd::u64 blob_off, crd
 {
     cont::String s(a);
     if (static_cast<crd::u64>(off) + len > blob_len) // out of the declared blob -> empty, never a read past end
+    {
         return s;
+    }
     if (len != 0)
+    {
         s.append(reinterpret_cast<const char*>(payload.data() + blob_off + off), static_cast<crd::usize>(len));
+    }
     return s;
 }
 } // namespace
@@ -271,26 +283,36 @@ cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump
 {
     cont::Array<ModuleIdentity> out(alloc);
     if (dump.size() < sizeof(MdHeader))
+    {
         return out;
+    }
 
     MdHeader hdr{};
     std::memcpy(&hdr, dump.data(), sizeof(hdr));
     if (hdr.signature != kMinidumpSignature)
+    {
         return out;
+    }
 
     for (crd::u32 i = 0; i < hdr.number_of_streams; ++i)
     {
         const crd::u64 doff = static_cast<crd::u64>(hdr.stream_directory_rva) + static_cast<crd::u64>(i) * sizeof(MdDirectory);
         if (doff + sizeof(MdDirectory) > dump.size())
+        {
             break;
+        }
         MdDirectory dir{};
         std::memcpy(&dir, dump.data() + doff, sizeof(dir));
         if (dir.stream_type != kModuleListStream)
+        {
             continue;
+        }
 
         const crd::u64 lrva = dir.location.rva;
         if (lrva + sizeof(crd::u32) > dump.size())
+        {
             break;
+        }
         crd::u32 count = 0;
         std::memcpy(&count, dump.data() + lrva, sizeof(count));
 
@@ -298,7 +320,9 @@ cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump
         {
             const crd::u64 moff = lrva + sizeof(crd::u32) + static_cast<crd::u64>(m) * sizeof(MdModule);
             if (moff + sizeof(MdModule) > dump.size())
+            {
                 break; // truncated module list -> partial index (stop, don't guess)
+            }
             MdModule mod{};
             std::memcpy(&mod, dump.data() + moff, sizeof(mod));
 
@@ -324,7 +348,9 @@ cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump
                         std::memcpy(&id.age, dump.data() + crva + 20U, sizeof(id.age));
                         crd::u64 pmax = crva + mod.cv_record.data_size;
                         if (pmax > dump.size())
+                        {
                             pmax = dump.size();
+                        }
                         id.debug_file = read_cstr(dump, crva + 24U, pmax, alloc);
                     }
                 }
@@ -341,43 +367,59 @@ cont::Array<ModuleIdentity> parse_minidump_unloaded_modules(cont::ConstSpan<crd:
 {
     cont::Array<ModuleIdentity> out(alloc);
     if (dump.size() < sizeof(MdHeader))
+    {
         return out;
+    }
 
     MdHeader hdr{};
     std::memcpy(&hdr, dump.data(), sizeof(hdr));
     if (hdr.signature != kMinidumpSignature)
+    {
         return out;
+    }
 
     for (crd::u32 i = 0; i < hdr.number_of_streams; ++i)
     {
         const crd::u64 doff =
             static_cast<crd::u64>(hdr.stream_directory_rva) + static_cast<crd::u64>(i) * sizeof(MdDirectory);
         if (doff + sizeof(MdDirectory) > dump.size())
+        {
             break;
+        }
         MdDirectory dir{};
         std::memcpy(&dir, dump.data() + doff, sizeof(dir));
         if (dir.stream_type != kUnloadedModuleListStream)
+        {
             continue;
+        }
 
         const crd::u64 lrva = dir.location.rva;
         if (lrva + sizeof(MdUnloadedModuleList) > dump.size())
+        {
             break;
+        }
         MdUnloadedModuleList ul{};
         std::memcpy(&ul, dump.data() + lrva, sizeof(ul));
         // Self-describing header: reject a header/entry smaller than v1 (refuse, don't guess), but accept a LARGER
         // size_of_entry (forward-compat) by striding with it while reading only the fields we know.
         if (ul.size_of_header < sizeof(MdUnloadedModuleList) || ul.size_of_entry < sizeof(MdUnloadedModule))
+        {
             break;
+        }
 
         crd::u64 entry_max = static_cast<crd::u64>(lrva) + dir.location.data_size; // bound by the declared stream...
         if (entry_max > dump.size())
+        {
             entry_max = dump.size();                                              // ...and by the buffer
+        }
 
         for (crd::u32 m = 0; m < ul.number_of_entries; ++m)
         {
             const crd::u64 eoff = lrva + ul.size_of_header + static_cast<crd::u64>(m) * ul.size_of_entry;
             if (eoff + sizeof(MdUnloadedModule) > entry_max)
+            {
                 break; // truncated / past the stream -> partial (bounded, no overrun)
+            }
             MdUnloadedModule em{};
             std::memcpy(&em, dump.data() + eoff, sizeof(em));
 
@@ -434,9 +476,13 @@ cont::Array<crd::u8> serialize_symbol_index(cont::ConstSpan<ModuleIdentity> modu
 
     append_bytes(out, &hdr, sizeof(hdr));
     if (!records.empty())
+    {
         append_bytes(out, records.data(), records.size() * sizeof(SymbolRecord));
+    }
     if (!blob.empty())
+    {
         append_bytes(out, blob.data(), blob.size());
+    }
     return out;
 }
 
@@ -445,19 +491,27 @@ cont::Array<ModuleIdentity> read_symbol_index(cont::ConstSpan<crd::u8> payload,
 {
     cont::Array<ModuleIdentity> out(alloc);
     if (payload.size() < sizeof(SymbolIndexHeader))
+    {
         return out;
+    }
     SymbolIndexHeader hdr{};
     std::memcpy(&hdr, payload.data(), sizeof(hdr));
     if (hdr.version != kSymbolIndexVersion)
+    {
         return out;
+    }
 
     const crd::u64 recs_off = sizeof(SymbolIndexHeader);
     const crd::u64 blob_off = recs_off + static_cast<crd::u64>(hdr.module_count) * sizeof(SymbolRecord);
     if (blob_off > payload.size())
+    {
         return out; // record table truncated
+    }
     crd::u64 blob_len = hdr.blob_bytes;
     if (blob_len > payload.size() - blob_off)
+    {
         blob_len = payload.size() - blob_off; // clamp a lying blob_bytes
+    }
 
     for (crd::u32 i = 0; i < hdr.module_count; ++i)
     {
@@ -489,7 +543,9 @@ cont::Array<crd::u8> build_symbol_index_from_minidump(cont::ConstSpan<crd::u8> d
     cont::Array<ModuleIdentity> mods     = parse_minidump_modules(dump, alloc);
     cont::Array<ModuleIdentity> unloaded = parse_minidump_unloaded_modules(dump, alloc);
     for (ModuleIdentity& u : unloaded) // loaded generations first, then the unloaded ones
+    {
         mods.push_back(std::move(u));
+    }
     return serialize_symbol_index(cont::ConstSpan<ModuleIdentity>{mods.data(), mods.size()}, alloc);
 }
 
@@ -498,9 +554,13 @@ cont::Array<crd::u8> build_symbol_index_from_minidump(cont::ConstSpan<crd::u8> d
 bool identity_matches(const ModuleIdentity& have, const ModuleIdentity& want) noexcept
 {
     if (have.id_kind == SymbolIdKind::None || want.id_kind == SymbolIdKind::None)
+    {
         return false; // never guess against an unknown identity
+    }
     if (have.id_kind != want.id_kind)
+    {
         return false;
+    }
 
     if (have.id_kind == SymbolIdKind::PeImage)
     {
@@ -511,13 +571,21 @@ bool identity_matches(const ModuleIdentity& have, const ModuleIdentity& want) no
 
     // Rsds / GnuBuildId: exact id bytes (plus age for Rsds).
     if (have.id_len != want.id_len || have.id_len == 0U)
+    {
         return false; // no identity bytes -> never a match (a zero-length record is not an identity)
+    }
     if (have.id_kind == SymbolIdKind::Rsds && have.id_len != 16U)
+    {
         return false; // a malformed RSDS record cannot certify a PDB
+    }
     if (std::memcmp(have.id, want.id, have.id_len) != 0)
+    {
         return false;
+    }
     if (have.id_kind == SymbolIdKind::Rsds && have.age != want.age)
+    {
         return false;
+    }
     return true;
 }
 
@@ -526,13 +594,17 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
 {
     cont::String s(alloc);
     if (m.id_kind == SymbolIdKind::None)
+    {
         return s; // nothing to look up -- no plausible guess
+    }
 
     if (m.id_kind == SymbolIdKind::Rsds)
     {
         const cont::StringView pdb = basename_view(m.debug_file);
         if (!basename_safe(pdb))
+        {
             return s; // traversal guard: empty / "." / ".." / embedded-NUL name -> no path (refuse, don't build one)
+        }
         // <root>/<pdb>/<GUID32-UPPER><AGE-UPPER>/<pdb>
         s.append(symstore_root);
         s.push_back('/');
@@ -548,7 +620,9 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
         append_hex_byte(s, m.id[7], kHexUpper);
         append_hex_byte(s, m.id[6], kHexUpper);
         for (int i = 8; i < 16; ++i)
+        {
             append_hex_byte(s, m.id[i], kHexUpper);
+        }
         append_hex_u32_min(s, m.age);
         s.push_back('/');
         s.append(pdb);
@@ -559,7 +633,9 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
     {
         const cont::StringView name = basename_view(m.name);
         if (!basename_safe(name))
+        {
             return s; // traversal guard (see Rsds branch)
+        }
         // <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name> -- the symsrv key for a PE binary (how a DLL's own
         // debug info is fetched by image identity, so an UNLOADED module's symbols are still findable after reload).
         s.append(symstore_root);
@@ -567,7 +643,9 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
         s.append(name);
         s.push_back('/');
         for (int shift = 28; shift >= 0; shift -= 4) // TimeDateStamp, 8 uppercase hex, zero-padded
+        {
             s.push_back(kHexUpper[(m.timestamp >> shift) & 0xFU]);
+        }
         append_hex_u32_min(s, static_cast<crd::u32>(m.size)); // SizeOfImage, uppercase hex, no leading zeros
         s.push_back('/');
         s.append(name);
@@ -582,7 +660,9 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
         append_hex_byte(s, m.id[0], kHexLower);
         s.push_back('/');
         for (crd::u8 i = 1U; i < m.id_len; ++i)
+        {
             append_hex_byte(s, m.id[i], kHexLower);
+        }
     }
     s.append(".debug");
     return s;

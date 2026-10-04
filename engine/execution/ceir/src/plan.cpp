@@ -49,16 +49,56 @@ namespace
 {
 bool parse_pred(containers::StringView s, CmpPred& out)
 {
-    if (s == containers::StringView("eq")) { out = CmpPred::Eq; return true; }
-    if (s == containers::StringView("ne")) { out = CmpPred::Ne; return true; }
-    if (s == containers::StringView("slt")) { out = CmpPred::Slt; return true; }
-    if (s == containers::StringView("sle")) { out = CmpPred::Sle; return true; }
-    if (s == containers::StringView("sgt")) { out = CmpPred::Sgt; return true; }
-    if (s == containers::StringView("sge")) { out = CmpPred::Sge; return true; }
-    if (s == containers::StringView("ult")) { out = CmpPred::Ult; return true; }
-    if (s == containers::StringView("ule")) { out = CmpPred::Ule; return true; }
-    if (s == containers::StringView("ugt")) { out = CmpPred::Ugt; return true; }
-    if (s == containers::StringView("uge")) { out = CmpPred::Uge; return true; }
+    if (s == containers::StringView("eq"))
+    {
+        out = CmpPred::Eq;
+        return true;
+    }
+    if (s == containers::StringView("ne"))
+    {
+        out = CmpPred::Ne;
+        return true;
+    }
+    if (s == containers::StringView("slt"))
+    {
+        out = CmpPred::Slt;
+        return true;
+    }
+    if (s == containers::StringView("sle"))
+    {
+        out = CmpPred::Sle;
+        return true;
+    }
+    if (s == containers::StringView("sgt"))
+    {
+        out = CmpPred::Sgt;
+        return true;
+    }
+    if (s == containers::StringView("sge"))
+    {
+        out = CmpPred::Sge;
+        return true;
+    }
+    if (s == containers::StringView("ult"))
+    {
+        out = CmpPred::Ult;
+        return true;
+    }
+    if (s == containers::StringView("ule"))
+    {
+        out = CmpPred::Ule;
+        return true;
+    }
+    if (s == containers::StringView("ugt"))
+    {
+        out = CmpPred::Ugt;
+        return true;
+    }
+    if (s == containers::StringView("uge"))
+    {
+        out = CmpPred::Uge;
+        return true;
+    }
     return false;
 }
 bool eval_pred(CmpPred p, crd::i64 l, crd::i64 r) noexcept // INDEPENDENT of eval_cmpi (matches the spec)
@@ -118,10 +158,22 @@ crd::u32 slot_of(CC& cc, const Value* v)
 // -Werror=switch would demand every arm). check_parallel_region only ever returns these four.
 CompileError preflight_error(exec::ExecError e)
 {
-    if (e == exec::ExecError::BadArity) { return CompileError::ParallelArity; }
-    if (e == exec::ExecError::ParallelYieldArity) { return CompileError::ParallelYield; }
-    if (e == exec::ExecError::ParallelBodyStateful) { return CompileError::ParallelStateful; }
-    if (e == exec::ExecError::UnresolvedCall) { return CompileError::UnresolvedCall; }
+    if (e == exec::ExecError::BadArity)
+    {
+        return CompileError::ParallelArity;
+    }
+    if (e == exec::ExecError::ParallelYieldArity)
+    {
+        return CompileError::ParallelYield;
+    }
+    if (e == exec::ExecError::ParallelBodyStateful)
+    {
+        return CompileError::ParallelStateful;
+    }
+    if (e == exec::ExecError::UnresolvedCall)
+    {
+        return CompileError::UnresolvedCall;
+    }
     return CompileError::UnsupportedOp;
 }
 crd::u32 fresh(CC& cc, const Value* v)
@@ -189,15 +241,24 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
     containers::Array<const Value*> pend_next(cc.alloc);
     for (crd::u32 a = 0; a < b->num_args(); ++a) // block-arg slots (child blocks; the entry's are the param slots)
     {
-        if (cc.slot.find(b->arg(a)) == nullptr) { (void)fresh(cc, b->arg(a)); }
+        if (cc.slot.find(b->arg(a)) == nullptr)
+        {
+            (void)fresh(cc, b->arg(a));
+        }
         seq.arg_slots.push_back(slot_of(cc, b->arg(a))); // 4b: a continuation binds the antecedent token's yields here
     }
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
         if (op->kind() == cc.cyield || op->kind() == cc.retk) // terminator → the seq's yield slots
         {
-            for (crd::u32 i = 0; i < op->num_operands(); ++i) { seq.yield_slots.push_back(slot_of(cc, op->operand(i))); }
-            if (cc.err != CompileError::Ok) { return 0U; }
+            for (crd::u32 i = 0; i < op->num_operands(); ++i)
+            {
+                seq.yield_slots.push_back(slot_of(cc, op->operand(i)));
+            }
+            if (cc.err != CompileError::Ok)
+            {
+                return 0U;
+            }
             continue;
         }
         const bool is_scope = op->kind() == cc.cscope || op->kind() == cc.ascope || op->kind() == cc.tgroup;
@@ -236,49 +297,93 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             for (crd::u32 r = 0; r < op->num_regions(); ++r)
             {
                 Block* const rb = op->region(r)->first_block();
-                if (rb == nullptr) { cc.err = CompileError::UnsupportedOp; return 0U; }
+                if (rb == nullptr)
+                {
+                    cc.err = CompileError::UnsupportedOp;
+                    return 0U;
+                }
                 const crd::u32 child = compile_seq(cc, rb); // may push NESTED children to child_pool
-                if (cc.err != CompileError::Ok) { return 0U; }
+                if (cc.err != CompileError::Ok)
+                {
+                    return 0U;
+                }
                 child_idx.push_back(child);
             }
             instr.children_off = static_cast<crd::u32>(cc.plan.child_pool.size()); // NOW — after all nested pushes
-            for (crd::u32 r = 0; r < static_cast<crd::u32>(child_idx.size()); ++r) { cc.plan.child_pool.push_back(child_idx[r]); }
+            for (crd::u32 r = 0; r < static_cast<crd::u32>(child_idx.size()); ++r)
+            {
+                cc.plan.child_pool.push_back(child_idx[r]);
+            }
             instr.children_cnt = op->num_regions();
         }
         // operands → slots. ⛔ a state op pushes ONLY operand(0) (the init, read at cell_read); operand(1) (`next`) is a
         // FEEDBACK edge defined LATER in the block → deferred to the latch (else slot_of would reject the forward ref).
         const crd::u32 n_ops = is_state ? 1U : op->num_operands();
         instr.operands_off   = static_cast<crd::u32>(cc.plan.operand_pool.size());
-        for (crd::u32 i = 0; i < n_ops; ++i) { cc.plan.operand_pool.push_back(slot_of(cc, op->operand(i))); }
-        if (cc.err != CompileError::Ok) { return 0U; }
+        for (crd::u32 i = 0; i < n_ops; ++i)
+        {
+            cc.plan.operand_pool.push_back(slot_of(cc, op->operand(i)));
+        }
+        if (cc.err != CompileError::Ok)
+        {
+            return 0U;
+        }
         instr.operands_cnt = n_ops;
         // results → fresh slots.
         instr.results_off = static_cast<crd::u32>(cc.plan.result_pool.size());
-        for (crd::u32 i = 0; i < op->num_results(); ++i) { cc.plan.result_pool.push_back(fresh(cc, op->result(i))); }
+        for (crd::u32 i = 0; i < op->num_results(); ++i)
+        {
+            cc.plan.result_pool.push_back(fresh(cc, op->result(i)));
+        }
         instr.results_cnt = op->num_results();
         // dense op-id + the compiled immediate.
         if (op->kind() == cc.cst)
         {
             instr.op         = Op::ConstI;
             const AttrId vid = op->attr("value");
-            if (!vid.valid()) { cc.err = CompileError::BadConst; return 0U; }
+            if (!vid.valid())
+            {
+                cc.err = CompileError::BadConst;
+                return 0U;
+            }
             const AttrValue v = cc.ctx.attr_value(vid);
-            if (v.kind != AttrKind::Int) { cc.err = CompileError::BadConst; return 0U; }
+            if (v.kind != AttrKind::Int)
+            {
+                cc.err = CompileError::BadConst;
+                return 0U;
+            }
             instr.imm = v.i;
         }
-        else if (op->kind() == cc.addi) { instr.op = Op::AddI; }
-        else if (op->kind() == cc.muli) { instr.op = Op::MulI; }
+        else if (op->kind() == cc.addi)
+        {
+            instr.op = Op::AddI;
+        }
+        else if (op->kind() == cc.muli)
+        {
+            instr.op = Op::MulI;
+        }
         else if (op->kind() == cc.cmpi)
         {
             instr.op         = Op::CmpI;
             const AttrId pid = op->attr("predicate");
-            if (!pid.valid()) { cc.err = CompileError::BadPredicate; return 0U; }
+            if (!pid.valid())
+            {
+                cc.err = CompileError::BadPredicate;
+                return 0U;
+            }
             const AttrValue pv = cc.ctx.attr_value(pid);
             CmpPred         pred{};
-            if (pv.kind != AttrKind::String || !parse_pred(pv.s, pred)) { cc.err = CompileError::BadPredicate; return 0U; }
+            if (pv.kind != AttrKind::String || !parse_pred(pv.s, pred))
+            {
+                cc.err = CompileError::BadPredicate;
+                return 0U;
+            }
             instr.imm = static_cast<crd::i64>(pred);
         }
-        else if (op->kind() == cc.cif) { instr.op = Op::If; }
+        else if (op->kind() == cc.cif)
+        {
+            instr.op = Op::If;
+        }
         else if (op->kind() == cc.cfor)
         {
             instr.op = Op::For;
@@ -287,15 +392,42 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             instr.imm = (body != nullptr && body->num_args() >= 1U) ? static_cast<crd::i64>(slot_of(cc, body->arg(0)))
                                                                     : static_cast<crd::i64>(-1);
         }
-        else if (op->kind() == cc.cwhile) { instr.op = Op::While; }
-        else if (op->kind() == cc.cswitch || op->kind() == cc.cmatch) { instr.op = Op::Switch; }
-        else if (is_scope) { instr.op = Op::Scope; }        // core.scope / async.scope / task.group — a structured boundary
-        else if (is_launch) { instr.op = Op::Launch; }       // async.launch / task.spawn/main_thread/worker
-        else if (is_await) { instr.op = Op::Await; }         // async.await / task.fiber_wait
-        else if (is_cont) { instr.op = Op::Continuation; }   // task.continuation
-        else if (is_join) { instr.op = Op::Join; }           // async.join
-        else if (is_race) { instr.op = Op::Race; }           // async.race
-        else if (is_cancel) { instr.op = Op::Cancel; }       // async.cancel
+        else if (op->kind() == cc.cwhile)
+        {
+            instr.op = Op::While;
+        }
+        else if (op->kind() == cc.cswitch || op->kind() == cc.cmatch)
+        {
+            instr.op = Op::Switch;
+        }
+        else if (is_scope) // core.scope / async.scope / task.group — a structured boundary
+        {
+            instr.op = Op::Scope;
+        }
+        else if (is_launch) // async.launch / task.spawn/main_thread/worker
+        {
+            instr.op = Op::Launch;
+        }
+        else if (is_await) // async.await / task.fiber_wait
+        {
+            instr.op = Op::Await;
+        }
+        else if (is_cont) // task.continuation
+        {
+            instr.op = Op::Continuation;
+        }
+        else if (is_join) // async.join
+        {
+            instr.op = Op::Join;
+        }
+        else if (is_race) // async.race
+        {
+            instr.op = Op::Race;
+        }
+        else if (is_cancel) // async.cancel
+        {
+            instr.op = Op::Cancel;
+        }
         else if (is_dp) // 4c task.parallel_for / map_reduce: shared preflight + ISOLATED body fns + a dense map-output index
         {
             const bool mr = op->kind() == cc.mreduce;
@@ -304,22 +436,39 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             // exactly this): the map region has 1 block-arg + yields 1 + is state-free (calls resolved). map_reduce also
             // checks the combine region (2 args, yields 1, state-free). A failure → the mapped CompileError (a §4 reject).
             const exec::PreflightResult p0 = exec::check_parallel_region(cc.ctx, *cc.syms, op, op->region(0), 1U);
-            if (p0.err != exec::ExecError::None) { cc.err = preflight_error(p0.err); return 0U; }
+            if (p0.err != exec::ExecError::None)
+            {
+                cc.err = preflight_error(p0.err);
+                return 0U;
+            }
             const crd::u32 map_fn = compile_fn_body(cc, op->region(0)->first_block(), /*isolated=*/true);
-            if (cc.err != CompileError::Ok) { return 0U; }
+            if (cc.err != CompileError::Ok)
+            {
+                return 0U;
+            }
             crd::u32 comb_fn = 0U;
             if (mr)
             {
                 const exec::PreflightResult p1 = exec::check_parallel_region(cc.ctx, *cc.syms, op, op->region(1), 2U);
-                if (p1.err != exec::ExecError::None) { cc.err = preflight_error(p1.err); return 0U; }
+                if (p1.err != exec::ExecError::None)
+                {
+                    cc.err = preflight_error(p1.err);
+                    return 0U;
+                }
                 comb_fn = compile_fn_body(cc, op->region(1)->first_block(), /*isolated=*/true);
-                if (cc.err != CompileError::Ok) { return 0U; }
+                if (cc.err != CompileError::Ok)
+                {
+                    return 0U;
+                }
             }
             // ⛔ child_pool here holds compiled-FUNCTION indices (the map fn, then the combine fn), NOT seq indices — the
             // ParallelFor/MapReduce thunks read them as fn indices (documented at the Instr field + both thunks).
             instr.children_off = static_cast<crd::u32>(cc.plan.child_pool.size());
             cc.plan.child_pool.push_back(map_fn);
-            if (mr) { cc.plan.child_pool.push_back(comb_fn); }
+            if (mr)
+            {
+                cc.plan.child_pool.push_back(comb_fn);
+            }
             instr.children_cnt = mr ? 2U : 1U;
             instr.imm          = static_cast<crd::i64>(cc.plan.num_maps++); // the dense map-output index
         }
@@ -327,14 +476,29 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         {
             instr.op                = Op::Call;
             Operation* const callee = func::resolve_call(cc.ctx, op, *cc.syms);
-            if (callee == nullptr) { cc.err = CompileError::UnresolvedCall; return 0U; }
+            if (callee == nullptr)
+            {
+                cc.err = CompileError::UnresolvedCall;
+                return 0U;
+            }
             Block* const ceb = func::func_body_block(callee);
-            if (ceb == nullptr) { cc.err = CompileError::UnresolvedCall; return 0U; }
+            if (ceb == nullptr)
+            {
+                cc.err = CompileError::UnresolvedCall;
+                return 0U;
+            }
             // structural arity (both counts are static) → a COMPILE reject, not the reference's runtime BadArity (§4).
-            if (op->num_operands() != ceb->num_args()) { cc.err = CompileError::CallArity; return 0U; }
+            if (op->num_operands() != ceb->num_args())
+            {
+                cc.err = CompileError::CallArity;
+                return 0U;
+            }
             const crd::u32* const existing = cc.fn_index.find(callee);
             crd::u32              cidx      = 0U;
-            if (existing != nullptr) { cidx = *existing; }
+            if (existing != nullptr)
+            {
+                cidx = *existing;
+            }
             else // first sighting of this callee: assign its index NOW (so a recursive call resolves) + enqueue its body
             {
                 cidx = static_cast<crd::u32>(cc.plan.funcs.size());
@@ -354,7 +518,10 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             if (did.valid())
             {
                 const AttrValue dv = cc.ctx.attr_value(did);
-                if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
+                if (dv.kind == AttrKind::Int && dv.i >= 1)
+                {
+                    depth = static_cast<crd::u32>(dv.i);
+                }
             }
             cc.plan.cell_depths.push_back(depth);
             // DEFER the latch: `next` = the LAST operand, a feedback edge (defined LATER in this block). Record it now;
@@ -368,7 +535,10 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
     for (crd::u32 i = 0; i < static_cast<crd::u32>(pend_cell.size()); ++i)
     {
         seq.latches.push_back(Latch{pend_cell[i], slot_of(cc, pend_next[i])});
-        if (cc.err != CompileError::Ok) { return 0U; }
+        if (cc.err != CompileError::Ok)
+        {
+            return 0U;
+        }
     }
     cc.plan.seqs.push_back(std::move(seq));
     return static_cast<crd::u32>(cc.plan.seqs.size() - 1U);
@@ -393,7 +563,11 @@ crd::u32 compile_fn_body(CC& parent, Block* body, bool isolated) // NOLINT(misc-
     CC cc = make_cc(parent.ctx, parent.plan, slot, next, parent.alloc, parent.syms, parent.fn_index, parent.worklist,
                     isolated);
     const crd::u32 eseq = compile_seq(cc, body);
-    if (cc.err != CompileError::Ok) { parent.err = cc.err; return 0U; }
+    if (cc.err != CompileError::Ok)
+    {
+        parent.err = cc.err;
+        return 0U;
+    }
     CompiledFn& fn = parent.plan.funcs[fn_idx]; // index FRESH — the placeholder may have moved during compile_seq
     fn.entry_seq   = eseq;
     fn.num_slots   = next;
@@ -447,7 +621,10 @@ RunError run_body(RS& rs, crd::u32 fn_idx, const crd::i64* args, crd::u32 argc, 
     {
         rs.stack[new_base + fn.param_slots[i]] = args[i];
     }
-    if (const RunError e = run_seq(rs, fn.entry_seq, new_base); e != RunError::None) { return e; }
+    if (const RunError e = run_seq(rs, fn.entry_seq, new_base); e != RunError::None)
+    {
+        return e;
+    }
     const Seq& cs = rs.plan.seqs[fn.entry_seq];
     out           = (cs.yield_slots.size() >= 1U) ? rs.stack[new_base + cs.yield_slots[0]] : 0; // preflight guarantees 1
     rs.stack.resize(new_base); // pop the body frame (capacity retained — amortized arena)
@@ -464,7 +641,10 @@ struct TokenScope
     containers::Array<containers::Array<crd::i64>> saved;
     explicit TokenScope(RS& r) : rs(r), saved(r.alloc)
     {
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(rs.tokens.size()); ++i) { saved.push_back(std::move(rs.tokens[i])); }
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(rs.tokens.size()); ++i)
+        {
+            saved.push_back(std::move(rs.tokens[i]));
+        }
         rs.tokens.clear(); // the body sees an EMPTY store, numbering from 0
     }
     TokenScope(const TokenScope&)            = delete;
@@ -472,14 +652,20 @@ struct TokenScope
     ~TokenScope()
     {
         rs.tokens.clear(); // discard the body's tokens (the sub is discarded — nothing migrates back)
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(saved.size()); ++i) { rs.tokens.push_back(std::move(saved[i])); }
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(saved.size()); ++i)
+        {
+            rs.tokens.push_back(std::move(saved[i]));
+        }
     }
 };
 // forward a child seq's yield slots into `dst` result slots (if / scope) — child shares the parent's frame `base`.
 RunError run_forward(RS& rs, crd::u32 child_seq, const crd::u32* results, crd::u32 results_cnt, crd::u32 base)
 {
     const RunError e = run_seq(rs, child_seq, base);
-    if (e != RunError::None) { return e; }
+    if (e != RunError::None)
+    {
+        return e;
+    }
     const Seq& cs = rs.plan.seqs[child_seq];
     for (crd::u32 j = 0; j < results_cnt && j < static_cast<crd::u32>(cs.yield_slots.size()); ++j)
     {
@@ -495,14 +681,20 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
     const crd::u32* const kids = rs.plan.child_pool.data();
     for (crd::u32 k = 0; k < static_cast<crd::u32>(seq.instrs.size()); ++k)
     {
-        if (rs.fuel == 0U) { return RunError::FuelExhausted; }
+        if (rs.fuel == 0U)
+        {
+            return RunError::FuelExhausted;
+        }
         --rs.fuel;
         const Instr&   in    = seq.instrs[k];
         const crd::u32 rslot = base + ((in.results_cnt > 0U) ? rez[in.results_off] : 0U);
         // CEIR-11c profiling seam: `pre` fires for EVERY dispatched instr (⛔ terminators/latches are NOT instrs — they
         // are captured at compile, so this counts exactly the dispatched Ops, matching the §112 semantics). Null-default →
         // one predicted branch. ⛔ receives only the dense op id (§153 — no Operation*).
-        if (rs.hooks.pre != nullptr) { rs.hooks.pre(static_cast<crd::u8>(in.op), rs.hooks.user); }
+        if (rs.hooks.pre != nullptr)
+        {
+            rs.hooks.pre(static_cast<crd::u8>(in.op), rs.hooks.user);
+        }
         switch (in.op) // a compile-time jump table (§153); every slot is `stack[base + slot]` (the current frame window)
         {
         case Op::ConstI: rs.stack[rslot] = in.imm; break;
@@ -543,15 +735,27 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 lo = rs.stack[base + ops[in.operands_off]];
             const crd::i64 hi = rs.stack[base + ops[in.operands_off + 1U]];
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
-            if (st <= 0) { return RunError::BadForStep; }
+            if (st <= 0)
+            {
+                return RunError::BadForStep;
+            }
             const crd::u32 body = kids[in.children_off];
             const crd::i64 ivslot = in.imm; // the body's induction slot (−1 if no arg)
             for (crd::i64 iv = lo; iv < hi; iv += st)
             {
-                if (rs.fuel == 0U) { return RunError::FuelExhausted; }
+                if (rs.fuel == 0U)
+                {
+                    return RunError::FuelExhausted;
+                }
                 --rs.fuel;
-                if (ivslot >= 0) { rs.stack[base + static_cast<crd::u32>(ivslot)] = iv; }
-                if (const RunError e = run_seq(rs, body, base); e != RunError::None) { return e; }
+                if (ivslot >= 0)
+                {
+                    rs.stack[base + static_cast<crd::u32>(ivslot)] = iv;
+                }
+                if (const RunError e = run_seq(rs, body, base); e != RunError::None)
+                {
+                    return e;
+                }
             }
             break;
         }
@@ -561,20 +765,38 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::u32 body = kids[in.children_off + 1U];
             for (;;)
             {
-                if (rs.fuel == 0U) { return RunError::FuelExhausted; }
+                if (rs.fuel == 0U)
+                {
+                    return RunError::FuelExhausted;
+                }
                 --rs.fuel;
-                if (const RunError e = run_seq(rs, cond, base); e != RunError::None) { return e; }
+                if (const RunError e = run_seq(rs, cond, base); e != RunError::None)
+                {
+                    return e;
+                }
                 const Seq& cs = rs.plan.seqs[cond];
-                if (cs.yield_slots.size() != 1U) { return RunError::CondArity; }
-                if (rs.stack[base + cs.yield_slots[0]] == 0) { break; }
-                if (const RunError e = run_seq(rs, body, base); e != RunError::None) { return e; }
+                if (cs.yield_slots.size() != 1U)
+                {
+                    return RunError::CondArity;
+                }
+                if (rs.stack[base + cs.yield_slots[0]] == 0)
+                {
+                    break;
+                }
+                if (const RunError e = run_seq(rs, body, base); e != RunError::None)
+                {
+                    return e;
+                }
             }
             break;
         }
         case Op::Switch:
         {
             const crd::i64 sel = rs.stack[base + ops[in.operands_off]];
-            if (sel < 0 || sel >= static_cast<crd::i64>(in.children_cnt)) { return RunError::SelectorOutOfRange; }
+            if (sel < 0 || sel >= static_cast<crd::i64>(in.children_cnt))
+            {
+                return RunError::SelectorOutOfRange;
+            }
             if (const RunError e = run_seq(rs, kids[in.children_off + static_cast<crd::u32>(sel)], base);
                 e != RunError::None)
             {
@@ -590,7 +812,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             {
                 const crd::u32 depth = rs.plan.cell_depths[cell];
                 const crd::i64 initv = rs.stack[base + ops[in.operands_off]]; // operand(0) = init
-                for (crd::u32 d = 0; d < depth; ++d) { c.ring.push_back(initv); }
+                for (crd::u32 d = 0; d < depth; ++d)
+                {
+                    c.ring.push_back(initv);
+                }
                 c.pos  = 0U;
                 c.init = true;
             }
@@ -607,7 +832,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             {
                 rs.stack[new_base + fn.param_slots[i]] = rs.stack[base + ops[in.operands_off + i]];
             }
-            if (const RunError e = run_seq(rs, fn.entry_seq, new_base); e != RunError::None) { return e; }
+            if (const RunError e = run_seq(rs, fn.entry_seq, new_base); e != RunError::None)
+            {
+                return e;
+            }
             // min-copy the callee's yields → the call's results (caller frame), read BEFORE popping. The COPY COUNT
             // matches the reference; the RESIDUE differs — the reference leaves extra results UNSET (an UndefinedValue
             // error if one is ever read), our zero-filled frame yields 0. ⛔ NOT an arity error (never reject what the
@@ -623,7 +851,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
         case Op::Launch: // 4b: run the body NOW in the CURRENT frame (captures resolve), store its yields → a token handle
         {
             const crd::u32 body = kids[in.children_off];
-            if (const RunError e = run_seq(rs, body, base); e != RunError::None) { return e; }
+            if (const RunError e = run_seq(rs, body, base); e != RunError::None)
+            {
+                return e;
+            }
             rs.stack[rslot] = static_cast<crd::i64>(store_token(rs, rs.plan.seqs[body], base));
             break;
         }
@@ -655,14 +886,23 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             containers::Array<crd::i64> ante(rs.alloc);
             {
                 const containers::Array<crd::i64>& src = rs.tokens[static_cast<crd::u32>(tok)];
-                for (crd::u32 i = 0; i < static_cast<crd::u32>(src.size()); ++i) { ante.push_back(src[i]); }
+                for (crd::u32 i = 0; i < static_cast<crd::u32>(src.size()); ++i)
+                {
+                    ante.push_back(src[i]);
+                }
             }
-            if (bs.arg_slots.size() != ante.size()) { return RunError::ContinuationArity; } // dynamic → runtime (BadArity)
+            if (bs.arg_slots.size() != ante.size()) // dynamic → runtime (BadArity)
+            {
+                return RunError::ContinuationArity;
+            }
             for (crd::u32 i = 0; i < static_cast<crd::u32>(bs.arg_slots.size()); ++i)
             {
                 rs.stack[base + bs.arg_slots[i]] = ante[i];
             }
-            if (const RunError e = run_seq(rs, body, base); e != RunError::None) { return e; }
+            if (const RunError e = run_seq(rs, body, base); e != RunError::None)
+            {
+                return e;
+            }
             rs.stack[rslot] = static_cast<crd::i64>(store_token(rs, rs.plan.seqs[body], base));
             break;
         }
@@ -677,14 +917,23 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                     return RunError::BadToken; // ⛔ u32-truncate like the reference (identical wrap in both tiers)
                 }
                 const containers::Array<crd::i64>& ys = rs.tokens[static_cast<crd::u32>(tok)]; // store not grown in-loop
-                for (crd::u32 w = 0; w < static_cast<crd::u32>(ys.size()); ++w) { merged.push_back(ys[w]); }
+                for (crd::u32 w = 0; w < static_cast<crd::u32>(ys.size()); ++w)
+                {
+                    merged.push_back(ys[w]);
+                }
             }
             rs.tokens.push_back(std::move(merged)); // ONE store after reading all spans (the reference order)
-            if (in.results_cnt > 0U) { rs.stack[rslot] = static_cast<crd::i64>(rs.tokens.size() - 1U); }
+            if (in.results_cnt > 0U)
+            {
+                rs.stack[rslot] = static_cast<crd::i64>(rs.tokens.size() - 1U);
+            }
             break;
         }
         case Op::Race: // 4b: the sequential winner is index 0 (deterministic). ⛔ validates NO handle (the reference does
-            if (in.results_cnt > 0U) { rs.stack[rslot] = 0; }             // value_of only — never valid_yield_handle here).
+            if (in.results_cnt > 0U) // value_of only — never valid_yield_handle here).
+            {
+                rs.stack[rslot] = 0;
+            }
             break;
         case Op::Cancel: break; // 4b: consume op0, no-op (real cancellation is CEIR-6c). ⛔ validates NO handle.
         case Op::ParallelFor: // 4c: map the range → map_outputs[imm] (a statement — no SSA result). ⛔ imm = dense map index;
@@ -692,7 +941,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 lo = rs.stack[base + ops[in.operands_off]];
             const crd::i64 hi = rs.stack[base + ops[in.operands_off + 1U]];
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
-            if (st <= 0) { return RunError::BadForStep; }
+            if (st <= 0)
+            {
+                return RunError::BadForStep;
+            }
             const crd::u32 map_fn = kids[in.children_off];
             const crd::u32 mapidx = static_cast<crd::u32>(in.imm);
             const crd::u32 count  = (hi > lo) ? static_cast<crd::u32>((hi - lo + st - 1) / st) : 0U; // verbatim reference
@@ -705,7 +957,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                     const crd::i64 iv     = lo + static_cast<crd::i64>(i) * st;
                     const crd::i64 arg[1] = {iv};
                     crd::i64       y      = 0;
-                    if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None) { return e; } // ts restores
+                    if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None) // ts restores
+                    {
+                        return e;
+                    }
                     rs.map_outputs[mapidx].push_back(y);
                 }
             }
@@ -717,7 +972,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 lo = rs.stack[base + ops[in.operands_off]];
             const crd::i64 hi = rs.stack[base + ops[in.operands_off + 1U]];
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
-            if (st <= 0) { return RunError::BadForStep; }
+            if (st <= 0)
+            {
+                return RunError::BadForStep;
+            }
             const crd::u32 map_fn  = kids[in.children_off];      // ⛔ FN indices, not seq indices
             const crd::u32 comb_fn = kids[in.children_off + 1U];
             const crd::u32 mapidx  = static_cast<crd::u32>(in.imm);
@@ -731,7 +989,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                     const crd::i64 iv     = lo + static_cast<crd::i64>(i) * st;
                     const crd::i64 arg[1] = {iv};
                     crd::i64       y      = 0;
-                    if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None) { return e; }
+                    if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None)
+                    {
+                        return e;
+                    }
                     rs.map_outputs[mapidx].push_back(y);
                 }
             }
@@ -744,7 +1005,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 {
                     const crd::i64 ba[2] = {acc, rs.map_outputs[mapidx][i]};
                     crd::i64       y     = 0;
-                    if (const RunError e = run_body(rs, comb_fn, ba, 2U, y); e != RunError::None) { return e; }
+                    if (const RunError e = run_body(rs, comb_fn, ba, 2U, y); e != RunError::None)
+                    {
+                        return e;
+                    }
                     acc = y;
                 }
             }
@@ -755,7 +1019,10 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
         }
         // CEIR-11c: `post` fires only after a SUCCESSFUL dispatch — an erroring case `return`s above, so the pre/post
         // stream is UNBALANCED (pre>post) on an error; the consumer resets per run + tolerates it.
-        if (rs.hooks.post != nullptr) { rs.hooks.post(static_cast<crd::u8>(in.op), rs.hooks.user); }
+        if (rs.hooks.post != nullptr)
+        {
+            rs.hooks.post(static_cast<crd::u8>(in.op), rs.hooks.user);
+        }
     }
     // §20: LATCH every cell read this block at block-eval end (read-all-then-latch — the pre-baked list, no trait scan).
     for (crd::u32 i = 0; i < static_cast<crd::u32>(seq.latches.size()); ++i)
@@ -776,10 +1043,22 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
 {
     CompileResult res(alloc);
     const SymbolTable* const syms = module.symbols();
-    if (syms == nullptr) { res.error = CompileError::NoEntry; return res; }
+    if (syms == nullptr)
+    {
+        res.error = CompileError::NoEntry;
+        return res;
+    }
     const SymbolEntry* const se = syms->lookup(entry);
-    if (se == nullptr || se->op == nullptr) { res.error = CompileError::NoEntry; return res; }
-    if (func::func_body_block(se->op) == nullptr) { res.error = CompileError::NoModuleBody; return res; }
+    if (se == nullptr || se->op == nullptr)
+    {
+        res.error = CompileError::NoEntry;
+        return res;
+    }
+    if (func::func_body_block(se->op) == nullptr)
+    {
+        res.error = CompileError::NoModuleBody;
+        return res;
+    }
 
     // 4a: compile @entry + every callee reachable through func.call — a WORK-LIST over the call graph. The callee's index
     // is assigned at the call site (BEFORE its body compiles), so a recursive/mutually-recursive call resolves. ⛔ Each
@@ -795,7 +1074,11 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
     {
         Operation* const fn_op = worklist[wi];
         Block* const     fb    = func::func_body_block(fn_op);
-        if (fb == nullptr) { res.error = CompileError::UnresolvedCall; return res; } // bodyless callee (entry checked above)
+        if (fb == nullptr) // bodyless callee (entry checked above)
+        {
+            res.error = CompileError::UnresolvedCall;
+            return res;
+        }
 
         containers::HashMap<const Value*, crd::u32> slot(alloc); // ⛔ FRESH per function — slots are frame-relative
         crd::u32                                    next = 0U;
@@ -808,7 +1091,11 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
         }
         CC cc = make_cc(ctx, res.plan, slot, next, alloc, syms, fn_index, worklist, /*isolated=*/false);
         const crd::u32 eseq = compile_seq(cc, fb);
-        if (cc.err != CompileError::Ok) { res.error = cc.err; return res; }
+        if (cc.err != CompileError::Ok)
+        {
+            res.error = cc.err;
+            return res;
+        }
         const crd::u32* const idx = fn_index.find(fn_op); // stable — assigned before this function was dequeued
         CompiledFn&           cf  = res.plan.funcs[*idx];
         cf.entry_seq   = eseq;
@@ -830,7 +1117,10 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
 RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc, RunHooks hooks)
 {
     RunResult r(alloc);
-    if (plan.entry_fn >= static_cast<crd::u32>(plan.funcs.size())) { return r; } // an empty/failed compile — no entry
+    if (plan.entry_fn >= static_cast<crd::u32>(plan.funcs.size())) // an empty/failed compile — no entry
+    {
+        return r;
+    }
     const CompiledFn& entry = plan.funcs[plan.entry_fn];
     // the @entry frame occupies base 0 of the slot stack; nested calls push windows above it (LIFO), pop on return.
     containers::Array<crd::i64> stack(alloc);
@@ -840,19 +1130,37 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
         stack[entry.param_slots[i]] = (i < static_cast<crd::u32>(args.size())) ? args[i] : 0;
     }
     containers::Array<Ring> cells(alloc); // §20 per-run cell rings (dense; plan-owned depth; PER-OP GLOBAL, not per-frame)
-    for (crd::u32 i = 0; i < plan.num_cells; ++i) { cells.push_back(Ring(alloc)); }
+    for (crd::u32 i = 0; i < plan.num_cells; ++i)
+    {
+        cells.push_back(Ring(alloc));
+    }
     containers::Array<containers::Array<crd::i64>> tokens(alloc); // 4b async/task token store (run-global, grows per launch)
     containers::Array<containers::Array<crd::i64>> map_outputs(alloc); // 4c: pre-sized to num_maps (dense index; never grown)
-    for (crd::u32 i = 0; i < plan.num_maps; ++i) { map_outputs.push_back(containers::Array<crd::i64>(alloc)); }
+    for (crd::u32 i = 0; i < plan.num_maps; ++i)
+    {
+        map_outputs.push_back(containers::Array<crd::i64>(alloc));
+    }
     RS rs{plan, stack, cells, tokens, map_outputs, alloc, crd::u64{1} << 24U, hooks}; // reference's step budget + the 11c seam
     r.error = run_seq(rs, entry.entry_seq, 0U);
     // §118 inspection parity: the current value per cell (ring[pos] if read; 0 if never read — matches "never evaluated").
-    for (crd::u32 i = 0; i < plan.num_cells; ++i) { r.cells.push_back(cells[i].init ? cells[i].ring[cells[i].pos] : 0); }
-    if (r.error != RunError::None) { return r; }
+    for (crd::u32 i = 0; i < plan.num_cells; ++i)
+    {
+        r.cells.push_back(cells[i].init ? cells[i].ring[cells[i].pos] : 0);
+    }
+    if (r.error != RunError::None)
+    {
+        return r;
+    }
     // 4c §118 parity: the per-index map per dense map index (the reference stores map_output per dp op on SUCCESS only).
-    for (crd::u32 i = 0; i < plan.num_maps; ++i) { r.map_outputs.push_back(std::move(map_outputs[i])); }
+    for (crd::u32 i = 0; i < plan.num_maps; ++i)
+    {
+        r.map_outputs.push_back(std::move(map_outputs[i]));
+    }
     const Seq& es = plan.seqs[entry.entry_seq]; // the entry's yield = func.return operands (read at base 0)
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(es.yield_slots.size()); ++i) { r.values.push_back(stack[es.yield_slots[i]]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(es.yield_slots.size()); ++i)
+    {
+        r.values.push_back(stack[es.yield_slots[i]]);
+    }
     return r;
 }
 } // namespace crd::ceir::plan

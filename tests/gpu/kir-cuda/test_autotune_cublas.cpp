@@ -34,11 +34,17 @@ double sampled_relerr(const float* c, int m, int n, int k)
         const int i   = (s * 977) % m;
         const int j   = (s * 1471) % n;
         double    acc = 0.0;
-        for (int kk = 0; kk < k; ++kk) { acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j)); }
+        for (int kk = 0; kk < k; ++kk)
+        {
+            acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j));
+        }
         const double got = static_cast<double>(c[static_cast<crd::usize>(i) * n + j]);
         const double rel = (got - acc) / (1.0 + (acc < 0.0 ? -acc : acc));
         const double ar  = rel < 0.0 ? -rel : rel;
-        if (ar > maxrel) { maxrel = ar; }
+        if (ar > maxrel)
+        {
+            maxrel = ar;
+        }
     }
     return maxrel;
 }
@@ -48,7 +54,10 @@ double sampled_relerr(const float* c, int m, int n, int k)
 double time_cublas(int m, int n, int k, const float* h_a, const float* h_b, float* h_c, int iters)
 {
     cublasHandle_t h = nullptr;
-    if (cublasCreate(&h) != CUBLAS_STATUS_SUCCESS) { return -1.0; }
+    if (cublasCreate(&h) != CUBLAS_STATUS_SUCCESS)
+    {
+        return -1.0;
+    }
     float* d_a = nullptr;
     float* d_b = nullptr;
     float* d_c = nullptr;
@@ -62,7 +71,10 @@ double time_cublas(int m, int n, int k, const float* h_a, const float* h_b, floa
     const auto  gemm  = [&]() {
         cublasSgemm(h, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, d_b, n, d_a, k, &beta, d_c, n);
     };
-    for (int w = 0; w < 3; ++w) { gemm(); }
+    for (int w = 0; w < 3; ++w)
+    {
+        gemm();
+    }
     cudaDeviceSynchronize();
     cudaEvent_t e0 = nullptr;
     cudaEvent_t e1 = nullptr;
@@ -77,7 +89,10 @@ double time_cublas(int m, int n, int k, const float* h_a, const float* h_b, floa
         cudaEventSynchronize(e1);
         float ms = 0.0F;
         cudaEventElapsedTime(&ms, e0, e1);
-        if (ms > 0.0F && static_cast<double>(ms) < best) { best = static_cast<double>(ms); }
+        if (ms > 0.0F && static_cast<double>(ms) < best)
+        {
+            best = static_cast<double>(ms);
+        }
     }
     cudaMemcpy(h_c, d_c, static_cast<size_t>(m) * n * sizeof(float), cudaMemcpyDeviceToHost);
     cudaEventDestroy(e0);
@@ -94,7 +109,11 @@ TEST_CASE("AS-4: CKIR auto-tuned GEMM vs cuBLAS Sgemm (matched f32) -- the vendo
 {
     crd::memory::TlsfAllocator alloc(1024U << 20U);
     crd::kir::KirBackendCuda   cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
 
     const int sizes[] = {1024, 2048, 4096};
     std::printf("\n[AS-4] CKIR auto-tuned GEMM vs cuBLAS Sgemm (f32, RTX 4070 Ti SUPER) -- min-of-iters GPU-timed\n");
@@ -106,7 +125,10 @@ TEST_CASE("AS-4: CKIR auto-tuned GEMM vs cuBLAS Sgemm (matched f32) -- the vendo
     for (int s : sizes)
     {
         const crd::kir::AutotuneResult r = crd::kir::autotune_contract(cu, s, s, s, 16, false, &alloc);
-        if (!r.ok) { continue; }
+        if (!r.ok)
+        {
+            continue;
+        }
 
         crd::containers::Array<float> h_a(&alloc);
         crd::containers::Array<float> h_b(&alloc);
@@ -114,10 +136,25 @@ TEST_CASE("AS-4: CKIR auto-tuned GEMM vs cuBLAS Sgemm (matched f32) -- the vendo
         h_a.resize(static_cast<crd::usize>(s) * s);
         h_b.resize(static_cast<crd::usize>(s) * s);
         h_c.resize(static_cast<crd::usize>(s) * s);
-        for (int i = 0; i < s; ++i) { for (int k = 0; k < s; ++k) { h_a[static_cast<crd::usize>(i) * s + k] = av_at(i, k); } }
-        for (int k = 0; k < s; ++k) { for (int j = 0; j < s; ++j) { h_b[static_cast<crd::usize>(k) * s + j] = bv_at(k, j); } }
+        for (int i = 0; i < s; ++i)
+        {
+            for (int k = 0; k < s; ++k)
+            {
+                h_a[static_cast<crd::usize>(i) * s + k] = av_at(i, k);
+            }
+        }
+        for (int k = 0; k < s; ++k)
+        {
+            for (int j = 0; j < s; ++j)
+            {
+                h_b[static_cast<crd::usize>(k) * s + j] = bv_at(k, j);
+            }
+        }
         const double vb_ms = time_cublas(s, s, s, h_a.data(), h_b.data(), h_c.data(), 20);
-        if (vb_ms <= 0.0) { continue; }
+        if (vb_ms <= 0.0)
+        {
+            continue;
+        }
 
         const double flops     = 2.0 * s * s * s;
         const double ckir_gf   = flops / (r.ms * 1.0e6);
@@ -129,9 +166,18 @@ TEST_CASE("AS-4: CKIR auto-tuned GEMM vs cuBLAS Sgemm (matched f32) -- the vendo
         std::printf("  %-14s %12.0f %12.0f %8.3f   %-11s %-11.2e  CKIR %.3f ms / cuBLAS %.3f ms -> %s\n", shape, ckir_gf,
                     vb_gf, ratio, "(oracle)", vb_relerr, r.ms, vb_ms, ratio >= 1.0 ? "CKIR FASTER" : "slower");
         ++boards;
-        if (ratio >= 1.0) { ++wins; }
-        if (ratio > best_ratio) { best_ratio = ratio; }
-        if (ckir_gf > best_ckir) { best_ckir = ckir_gf; }
+        if (ratio >= 1.0)
+        {
+            ++wins;
+        }
+        if (ratio > best_ratio)
+        {
+            best_ratio = ratio;
+        }
+        if (ckir_gf > best_ckir)
+        {
+            best_ckir = ckir_gf;
+        }
         CHECK(vb_relerr < 2e-3);       // cuBLAS is f32-accurate (matched-precision fight — apples to apples)
         CHECK(r.correct == r.measured); // CKIR every candidate oracle-correct
     }
@@ -160,13 +206,19 @@ double sampled_fused_relerr(const float* c, int m, int n, int k)
         const int i   = (s * 977) % m;
         const int j   = (s * 1471) % n;
         double    acc = 0.0;
-        for (int kk = 0; kk < k; ++kk) { acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j)); }
+        for (int kk = 0; kk < k; ++kk)
+        {
+            acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j));
+        }
         const double z    = acc + static_cast<double>(bias_at(j));
         const double silu = z / (1.0 + std::exp(-z));
         const double got  = static_cast<double>(c[static_cast<crd::usize>(i) * n + j]);
         const double rel  = (got - silu) / (1.0 + (silu < 0.0 ? -silu : silu));
         const double ar   = rel < 0.0 ? -rel : rel;
-        if (ar > maxrel) { maxrel = ar; }
+        if (ar > maxrel)
+        {
+            maxrel = ar;
+        }
     }
     return maxrel;
 }
@@ -181,7 +233,11 @@ TEST_CASE("AS-4: CKIR FUSED GEMM+bias+SiLU CRUSHES cuBLAS Sgemm + separate epilo
 {
     crd::memory::TlsfAllocator alloc(1024U << 20U);
     crd::kir::KirBackendCuda   cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
 
     constexpr double bw_gbps = 672.0; // RTX 4070 Ti SUPER DRAM bandwidth (for the epilogue lower bound)
     struct Shape { int m; int n; int k; };
@@ -220,9 +276,24 @@ TEST_CASE("AS-4: CKIR FUSED GEMM+bias+SiLU CRUSHES cuBLAS Sgemm + separate epilo
         h_bias.resize(static_cast<crd::usize>(n));
         h_out.resize(static_cast<crd::usize>(m) * n);
         h_c.resize(static_cast<crd::usize>(m) * n);
-        for (int i = 0; i < m; ++i) { for (int kk = 0; kk < k; ++kk) { h_a[static_cast<crd::usize>(i) * k + kk] = av_at(i, kk); } }
-        for (int kk = 0; kk < k; ++kk) { for (int j = 0; j < n; ++j) { h_b[static_cast<crd::usize>(kk) * n + j] = bv_at(kk, j); } }
-        for (int j = 0; j < n; ++j) { h_bias[static_cast<crd::usize>(j)] = bias_at(j); }
+        for (int i = 0; i < m; ++i)
+        {
+            for (int kk = 0; kk < k; ++kk)
+            {
+                h_a[static_cast<crd::usize>(i) * k + kk] = av_at(i, kk);
+            }
+        }
+        for (int kk = 0; kk < k; ++kk)
+        {
+            for (int j = 0; j < n; ++j)
+            {
+                h_b[static_cast<crd::usize>(kk) * n + j] = bv_at(kk, j);
+            }
+        }
+        for (int j = 0; j < n; ++j)
+        {
+            h_bias[static_cast<crd::usize>(j)] = bias_at(j);
+        }
         const float* inputs[] = {h_a.data(), h_b.data(), h_bias.data()};
 
         const crd::kir::ContractTiming fr = cu.time_fused_contract(g, out, inputs, 3, h_out.data(), 5, 20);
@@ -237,8 +308,14 @@ TEST_CASE("AS-4: CKIR FUSED GEMM+bias+SiLU CRUSHES cuBLAS Sgemm + separate epilo
         std::printf("  %dx%dx%d  CKIR fused %.3f ms  vs  cuBLAS gemm %.3f + epilogue %.3f = %.3f ms  ->  CKIR %.2fx %s\n", m, n, k,
                     fr.min_ms, gemm_ms, epilogue_ms, cublas_ms, speedup, speedup >= 1.0 ? "CRUSH" : "slower");
         ++boards;
-        if (speedup >= 1.0) { ++crushes; }
-        if (speedup > best_speedup) { best_speedup = speedup; }
+        if (speedup >= 1.0)
+        {
+            ++crushes;
+        }
+        if (speedup > best_speedup)
+        {
+            best_speedup = speedup;
+        }
     }
     REQUIRE(boards > 0);
     std::printf("[AS-4 FUSED] CKIR crushed cuBLAS+epilogue on %d/%d memory-bound MLP shapes; best %.2fx (the fusion moat).\n",

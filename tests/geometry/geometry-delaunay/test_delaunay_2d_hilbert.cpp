@@ -61,12 +61,21 @@ bool verify_delaunay(const crd::containers::Array<Vec2<T>>& pts,
         const u32 b = tris[3U * t + 1U];
         const u32 c = tris[3U * t + 2U];
         const T o = crd::geometry::primitives::orient2d(pts[a], pts[b], pts[c]);
-        if (o <= static_cast<T>(0)) { return false; }
+        if (o <= static_cast<T>(0))
+        {
+            return false;
+        }
         for (u32 p = 0; p < pts.size(); ++p)
         {
-            if (p == a || p == b || p == c) { continue; }
+            if (p == a || p == b || p == c)
+            {
+                continue;
+            }
             const T s = crd::geometry::primitives::incircle(pts[a], pts[b], pts[c], pts[p]);
-            if (s > static_cast<T>(0)) { return false; }
+            if (s > static_cast<T>(0))
+            {
+                return false;
+            }
         }
     }
     return true;
@@ -99,8 +108,14 @@ canonicalize(const crd::containers::Array<Vec2<T>>& pts,
               [&](const crd::containers::FixedArray<Vec2<T>, 3>& a, const crd::containers::FixedArray<Vec2<T>, 3>& b) {
                   for (int i = 0; i < 3; ++i)
                   {
-                      if (a[i].x != b[i].x) { return a[i].x < b[i].x; }
-                      if (a[i].y != b[i].y) { return a[i].y < b[i].y; }
+                      if (a[i].x != b[i].x)
+                      {
+                          return a[i].x < b[i].x;
+                      }
+                      if (a[i].y != b[i].y)
+                      {
+                          return a[i].y < b[i].y;
+                      }
                   }
                   return false;
               });

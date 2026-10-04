@@ -15,8 +15,10 @@ Application::Application(const ApplicationDesc& desc)
         const crd::crash::InstallResult ir = crd::crash::install(m_desc.crash_dir);
         if (ir != crd::crash::InstallResult::Ok && ir != crd::crash::InstallResult::OkReinstalled &&
             ir != crd::crash::InstallResult::OkReplacedForeignFilter)
+        {
             std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
                          static_cast<unsigned>(ir)); // a fuller host diagnostics lifecycle comes later
+        }
     }
 
     if (!m_context.is_valid())
@@ -44,13 +46,17 @@ Application::~Application() noexcept
     }
 
     if (m_desc.install_crash_handler)
+    {
         crd::crash::uninstall();
+    }
 }
 
 void Application::run()
 {
     if (!m_valid)
+    {
         return;
+    }
     crd::jobs::init(m_desc.jobs_config);
     while (tick())
     {

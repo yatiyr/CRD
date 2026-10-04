@@ -141,7 +141,10 @@ TEST_CASE("B18-d: hair-mesh strands interpolate the bundle corners and stay insi
     for (int i = 4; i < kStrands; ++i)
     {
         const double d = crd::math::abs(p(i, 0, 0) - p(4, 0, 0)) + crd::math::abs(p(i, 0, 1) - p(4, 0, 1));
-        if (d > maxsep) { maxsep = d; }
+        if (d > maxsep)
+        {
+            maxsep = d;
+        }
     }
     INFO("max root separation across random (u,v) = " << maxsep);
     CHECK(maxsep > 0.5);
@@ -195,7 +198,10 @@ TEST_CASE("B18-d: strand styling perturbs without destroying the base curve", "[
         }
         const double d = crd::math::sqrt(sq(p(curled, j, 0) - p(base, j, 0)) + sq(p(curled, j, 1) - p(base, j, 1))
                                          + sq(p(curled, j, 2) - p(base, j, 2)));
-        if (d > maxcurl) { maxcurl = d; }
+        if (d > maxcurl)
+        {
+            maxcurl = d;
+        }
     }
     INFO("zero-amplitude deviation = " << maxdiff << " (must be 0)  |  max curl displacement = " << maxcurl
                                        << " (requested amplitude 0.15)");
@@ -270,14 +276,23 @@ TEST_CASE("B18-d: the 64-bit strand G-buffer round-trips within budget and order
         const double d   = out_at(i, 1) * tx[static_cast<crd::usize>(i)] + out_at(i, 2) * ty[static_cast<crd::usize>(i)]
                          + out_at(i, 3) * tz[static_cast<crd::usize>(i)];
         const double ang = crd::math::acos(crd::math::clamp(d, -1.0, 1.0));
-        if (ang > worst_ang) { worst_ang = ang; }
+        if (ang > worst_ang)
+        {
+            worst_ang = ang;
+        }
         for (int c = 0; c < 3; ++c)
         {
             const double e2 = crd::math::abs(out_at(i, 4 + c) - in[o + 4U + static_cast<crd::usize>(c)]);
-            if (e2 > worst_uvw) { worst_uvw = e2; }
+            if (e2 > worst_uvw)
+            {
+                worst_uvw = e2;
+            }
         }
         const double ea = crd::math::abs(out_at(i, 7) - in[o + 7U]);
-        if (ea > worst_ao) { worst_ao = ea; }
+        if (ea > worst_ao)
+        {
+            worst_ao = ea;
+        }
         // ⭐ depth bits must be strictly monotone — this is what makes an integer atomicMin a valid depth test
         CHECK(out_at(i, 8) > prev_bits);
         prev_bits = out_at(i, 8);

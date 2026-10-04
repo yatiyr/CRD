@@ -61,21 +61,30 @@ namespace detail
 [[nodiscard]] inline containers::StringView entry_str(const Context& ctx, const Operation& op, containers::StringView name) noexcept
 {
     const AttrId a = op.attr(name);
-    if (!a.valid()) { return {}; }
+    if (!a.valid())
+    {
+        return {};
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::String ? v.s : containers::StringView();
 }
 [[nodiscard]] inline u64 entry_u64(const Context& ctx, const Operation& op, containers::StringView name) noexcept
 {
     const AttrId a = op.attr(name);
-    if (!a.valid()) { return 0U; }
+    if (!a.valid())
+    {
+        return 0U;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::Int ? static_cast<u64>(v.i) : 0U; // i64 storage read as an opaque u64 KEY (no truncation)
 }
 [[nodiscard]] inline bool entry_bool(const Context& ctx, const Operation& op, containers::StringView name) noexcept
 {
     const AttrId a = op.attr(name);
-    if (!a.valid()) { return false; }
+    if (!a.valid())
+    {
+        return false;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::Bool && v.b;
 }
@@ -99,13 +108,22 @@ namespace detail
 // the misuse walk (not missed by a per-block check while load loads both -- the silent find/load disagreement, advisor 28a).
 inline void collect_tune_entries(const Context& ctx, const Region* r, containers::Array<const Operation*>& out) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == containers::StringView("tune.entry")) { out.push_back(op); }
-            for (u32 i = 0; i < op->num_regions(); ++i) { collect_tune_entries(ctx, op->region(i), out); }
+            if (ctx.op_name(op->kind()) == containers::StringView("tune.entry"))
+            {
+                out.push_back(op);
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_tune_entries(ctx, op->region(i), out);
+            }
         }
     }
 }
@@ -123,7 +141,10 @@ inline void collect_tune_entries(const Context& ctx, const Region* r, containers
         const TuneEntry ei = detail::read_entry(ctx, *ents[i]);
         for (usize j = 0; j < i; ++j)
         {
-            if (detail::key_eq(detail::read_entry(ctx, *ents[j]), ei)) { return {ents[i], TuneMisuseKind::DuplicateKey}; }
+            if (detail::key_eq(detail::read_entry(ctx, *ents[j]), ei))
+            {
+                return {ents[i], TuneMisuseKind::DuplicateKey};
+            }
         }
     }
     return {};
@@ -135,7 +156,10 @@ inline void collect_tune_entries(const Context& ctx, const Region* r, containers
 {
     containers::Array<const Operation*> ents(ctx.allocator());
     detail::collect_tune_entries(ctx, cache_mod.body(), ents);
-    for (usize i = 0; i < ents.size(); ++i) { out.push_back(detail::read_entry(ctx, *ents[i])); }
+    for (usize i = 0; i < ents.size(); ++i)
+    {
+        out.push_back(detail::read_entry(ctx, *ents[i]));
+    }
     return static_cast<u32>(ents.size());
 }
 

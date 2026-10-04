@@ -34,9 +34,15 @@ struct EVBlobLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (chunk == nullptr || chunk->payload.size() < 4U) { return nullptr; }
+        if (chunk == nullptr || chunk->payload.size() < 4U)
+        {
+            return nullptr;
+        }
 
         void* raw = m_alloc.allocate(sizeof(EVBlobResource), alignof(EVBlobResource));
         auto* res = new (raw) EVBlobResource();
@@ -46,7 +52,10 @@ struct EVBlobLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (payload == nullptr) { return; }
+        if (payload == nullptr)
+        {
+            return;
+        }
         auto* res = static_cast<EVBlobResource*>(payload);
         res->~EVBlobResource();
         m_alloc.deallocate(res);
@@ -75,7 +84,10 @@ static void ev_write_blob_pack(const crd::platform::fs::Path& path,
 
     crd::containers::Array<crd::u8> pool(&s_ev_alloc);
     const char name[] = "ev_blob";
-    for (const char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
+    for (const char c : name)
+    {
+        pool.push_back(static_cast<crd::u8>(c));
+    }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&s_ev_alloc);
@@ -102,7 +114,10 @@ static void ev_write_blob_pack(const crd::platform::fs::Path& path,
     manifest_write(p2, crd::containers::as_const_span(entries),
                    crd::containers::as_const_span(pool));
     auto pack_bytes = p2.finish();
-    for (crd::u8 b : art_bytes) { pack_bytes.push_back(b); }
+    for (crd::u8 b : art_bytes)
+    {
+        pack_bytes.push_back(b);
+    }
 
     REQUIRE(crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack_bytes)));
 }

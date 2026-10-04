@@ -22,8 +22,15 @@ namespace
 void mbb(const topo::Problem& p, u8* freem, f64* f)
 {
     const int nd = p.ndof();
-    for (int d = 0; d < nd; ++d) { freem[d] = 1; f[d] = 0.0; }
-    for (int iy = 0; iy <= p.nely; ++iy) { freem[2 * (0 * (p.nely + 1) + iy)] = 0; }
+    for (int d = 0; d < nd; ++d)
+    {
+        freem[d] = 1;
+        f[d] = 0.0;
+    }
+    for (int iy = 0; iy <= p.nely; ++iy)
+    {
+        freem[2 * (0 * (p.nely + 1) + iy)] = 0;
+    }
     freem[2 * (p.nelx * (p.nely + 1) + p.nely) + 1] = 0;
     f[2 * (0 * (p.nely + 1) + 0) + 1]               = -1.0;
 }
@@ -52,12 +59,18 @@ TEST_CASE("v16-j: adjoint compliance sensitivity passes Taylor-remainder (2nd or
     topo::solve(p, rho, ke, freem, f, u, band, y);
     const f64 c0 = topo::compliance(p, rho, ke, f, u, dc); // dc = the raw adjoint sensitivity
     f64       gd = 0.0;
-    for (int i = 0; i < n; ++i) { gd += dc[i] * delta[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        gd += dc[i] * delta[i];
+    }
 
     const auto cval = [&](f64 eps) -> f64
     {
         f64 rp[320];
-        for (int i = 0; i < n; ++i) { rp[i] = rho[i] + eps * delta[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            rp[i] = rho[i] + eps * delta[i];
+        }
         f64 uu[720];
         f64 bb[1400];
         f64 yy[720];
@@ -94,19 +107,31 @@ TEST_CASE("v16-j: SIMP topopt reduces compliance, meets volume, bit-deterministi
 
     // initial (uniform volfrac) compliance
     f64 rho0[320];
-    for (int i = 0; i < n; ++i) { rho0[i] = 0.5; }
+    for (int i = 0; i < n; ++i)
+    {
+        rho0[i] = 0.5;
+    }
     topo::solve(p, rho0, ke, freem, f, u, band, y);
     const f64 c_init = topo::compliance(p, rho0, ke, f, u, nullptr);
     CHECK(c_final < c_init); // optimization strictly reduced compliance
 
     f64 vol = 0.0;
-    for (int i = 0; i < n; ++i) { vol += rho[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        vol += rho[i];
+    }
     CHECK_THAT(vol / n, WithinAbs(0.5, 0.02)); // volume constraint held
 
     // determinism: a second identical run yields bit-identical design + compliance
     f64 rho_a[320];
-    for (int i = 0; i < n; ++i) { rho_a[i] = rho[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        rho_a[i] = rho[i];
+    }
     const f64 c2 = topo::optimize(p, 0.5, 1.5, 80, ke, freem, f, rho, u, band, y, dc, dcf, rn);
     CHECK(c2 == c_final);
-    for (int i = 0; i < n; ++i) { CHECK(rho[i] == rho_a[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK(rho[i] == rho_a[i]);
+    }
 }

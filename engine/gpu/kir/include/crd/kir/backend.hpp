@@ -62,10 +62,16 @@ public:
         for (int i = 0; i < g.size(); ++i)
         {
             const KNode& nd = g.node(i);
-            if (nd.op == KOp::Input && nd.iidx < n_inputs) { inum[static_cast<crd::usize>(nd.iidx)] = nd.shape.numel() * nd.comps(); }
+            if (nd.op == KOp::Input && nd.iidx < n_inputs)
+            {
+                inum[static_cast<crd::usize>(nd.iidx)] = nd.shape.numel() * nd.comps();
+            }
         }
         crd::i64 total = 0;
-        for (int k = 0; k < n_inputs; ++k) { total += inum[static_cast<crd::usize>(k)]; }
+        for (int k = 0; k < n_inputs; ++k)
+        {
+            total += inum[static_cast<crd::usize>(k)];
+        }
         crd::containers::Array<crd::f64>  buf(m_alloc);
         crd::containers::Array<crd::f64*> ptrs(m_alloc);
         crd::containers::Array<crd::f64>  fout(m_alloc);
@@ -76,12 +82,18 @@ public:
         for (int k = 0; k < n_inputs; ++k)
         {
             crd::f64* dst = buf.data() + off;
-            for (crd::i64 i = 0; i < inum[static_cast<crd::usize>(k)]; ++i) { dst[i] = static_cast<crd::f64>(inputs[k][i]); }
+            for (crd::i64 i = 0; i < inum[static_cast<crd::usize>(k)]; ++i)
+            {
+                dst[i] = static_cast<crd::f64>(inputs[k][i]);
+            }
             ptrs.push_back(dst);
             off += inum[static_cast<crd::usize>(k)];
         }
         eval_cpu(g, ptrs.data(), m_alloc, output, fout.data());
-        for (crd::i64 i = 0; i < on; ++i) { out[i] = static_cast<float>(fout[i]); }
+        for (crd::i64 i = 0; i < on; ++i)
+        {
+            out[i] = static_cast<float>(fout[i]);
+        }
         return true;
     }
 

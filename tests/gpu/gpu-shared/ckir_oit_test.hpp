@@ -54,7 +54,10 @@ struct WboitScene
     std::memcpy(&u, &x, sizeof(u));
     const crd::u32 low = u & 0x00001FFFU;                                  // low 13 mantissa bits dropped by f16
     crd::u32       t   = u & 0xFFFFE000U;                                  // keep sign + exponent + top 10 mantissa bits
-    if (low > 0x00001000U || (low == 0x00001000U && (u & 0x00002000U) != 0U)) { t += 0x00002000U; } // RNE
+    if (low > 0x00001000U || (low == 0x00001000U && (u & 0x00002000U) != 0U)) // RNE
+    {
+        t += 0x00002000U;
+    }
     float r = 0.0F;
     std::memcpy(&r, &t, sizeof(r));
     return r;
@@ -85,7 +88,10 @@ inline void build_wboit_transparent_vs(kir::KGraph& g, kir::KEntry& ve, const Wb
     const auto sel = [&](const auto& pick) {
         const crd::u32 n   = scene.count;
         int            acc = f(pick(n - 1U));
-        for (crd::u32 q = n - 1U; q-- > 0U;) { acc = g.select(eqq(static_cast<int>(q)), f(pick(q)), acc); }
+        for (crd::u32 q = n - 1U; q-- > 0U;)
+        {
+            acc = g.select(eqq(static_cast<int>(q)), f(pick(q)), acc);
+        }
         return acc;
     };
     const int cr    = sel([&](crd::u32 q) { return scene.color[q][0]; });
@@ -197,8 +203,14 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
         const float avg  = accum[c] / denom;
         const float bg_q = static_cast<float>(std::lround(scene.background[c] * 255.0F)) / 255.0F; // dequantised clear
         float       v    = avg * (1.0F - reveal) + bg_q * reveal;
-        if (v < 0.0F) { v = 0.0F; }
-        if (v > 1.0F) { v = 1.0F; }
+        if (v < 0.0F)
+        {
+            v = 0.0F;
+        }
+        if (v > 1.0F)
+        {
+            v = 1.0F;
+        }
         out |= static_cast<crd::u32>(std::lround(v * 255.0F)) << (8 * c);
     }
     return out;
@@ -209,7 +221,10 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
 [[nodiscard]] inline crd::u32 oit_exact_composite_rgba8(const WboitScene& scene)
 {
     crd::u32 order[kMaxWboitQuads];
-    for (crd::u32 i = 0; i < scene.count; ++i) { order[i] = i; }
+    for (crd::u32 i = 0; i < scene.count; ++i)
+    {
+        order[i] = i;
+    }
     for (crd::u32 i = 0; i + 1U < scene.count; ++i) // sort ascending by depth (front-to-back)
     {
         for (crd::u32 j = 0; j + 1U + i < scene.count; ++j)
@@ -228,15 +243,24 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
     {
         const crd::u32 q  = order[k];
         const float    ta = t * scene.alpha[q];
-        for (int ch = 0; ch < 3; ++ch) { c[ch] = c[ch] + ta * scene.color[q][ch]; }
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            c[ch] = c[ch] + ta * scene.color[q][ch];
+        }
         t = t * (1.0F - scene.alpha[q]);
     }
     crd::u32 out = 0xFF000000U;
     for (int ch = 0; ch < 3; ++ch)
     {
         float v = c[ch] + t * scene.background[ch];
-        if (v < 0.0F) { v = 0.0F; }
-        if (v > 1.0F) { v = 1.0F; }
+        if (v < 0.0F)
+        {
+            v = 0.0F;
+        }
+        if (v > 1.0F)
+        {
+            v = 1.0F;
+        }
         out |= static_cast<crd::u32>(std::lround(v * 255.0F)) << (8 * ch);
     }
     return out;
@@ -251,7 +275,10 @@ inline void build_wboit_composite_fs(kir::KGraph& g, kir::KEntry& fe)
         const int ca = static_cast<int>((a >> (8 * c)) & 0xFFU);
         const int cb = static_cast<int>((b >> (8 * c)) & 0xFFU);
         const int dd = ca > cb ? ca - cb : cb - ca;
-        if (static_cast<crd::u32>(dd) > m) { m = static_cast<crd::u32>(dd); }
+        if (static_cast<crd::u32>(dd) > m)
+        {
+            m = static_cast<crd::u32>(dd);
+        }
     }
     return m;
 }

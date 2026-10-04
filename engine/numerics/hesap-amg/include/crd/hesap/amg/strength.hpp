@@ -40,8 +40,14 @@ strength_matrix(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sp
     const T*       vals  = a.values().values.data();
 
     auto mag = [](T v) -> R {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     };
 
     // |a_ii| per node.
@@ -50,7 +56,14 @@ strength_matrix(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sp
     for (crd::u32 i = 0; i < n; ++i)
     {
         R d = R(0);
-        for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q) { if (inner[q] == i) { d = mag(vals[q]); break; } }
+        for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
+        {
+            if (inner[q] == i)
+            {
+                d = mag(vals[q]);
+                break;
+            }
+        }
         diag[i] = d;
     }
 
@@ -61,7 +74,10 @@ strength_matrix(const crd::hesap::sparse::SparseMatrix<T, crd::hesap::sparse::Sp
         for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
         {
             const crd::u32 j = inner[q];
-            if (j == i) { continue; }
+            if (j == i)
+            {
+                continue;
+            }
             const R thr = theta * std::sqrt(diag[i] * diag[j]);
             if (mag(vals[q]) >= thr && thr > R(0))
             {

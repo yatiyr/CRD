@@ -14,8 +14,14 @@ usize lower_bound_id(const Array<AssetId>& a, AssetId id) noexcept
     while (lo < hi)
     {
         const usize mid = lo + (hi - lo) / 2;
-        if (a[mid] < id) { lo = mid + 1; }
-        else { hi = mid; }
+        if (a[mid] < id)
+        {
+            lo = mid + 1;
+        }
+        else
+        {
+            hi = mid;
+        }
     }
     return lo;
 }
@@ -23,9 +29,15 @@ usize lower_bound_id(const Array<AssetId>& a, AssetId id) noexcept
 void insert_sorted_unique(Array<AssetId>& a, AssetId id)
 {
     const usize idx = lower_bound_id(a, id);
-    if (idx < a.size() && a[idx] == id) { return; } // already present
+    if (idx < a.size() && a[idx] == id) // already present
+    {
+        return;
+    }
     a.push_back(id);
-    for (usize j = a.size() - 1; j > idx; --j) { std::swap(a[j], a[j - 1]); }
+    for (usize j = a.size() - 1; j > idx; --j)
+    {
+        std::swap(a[j], a[j - 1]);
+    }
 }
 
 // "0x" + 16 lowercase hex digits into buf[19]; returns a view over it.
@@ -44,7 +56,10 @@ StringView id_hex(u64 v, char (&buf)[19]) noexcept
 
 void DependencyRecord::add(AssetId dep)
 {
-    if (!dep.valid() || dep == m_owner) { return; }
+    if (!dep.valid() || dep == m_owner)
+    {
+        return;
+    }
     insert_sorted_unique(m_deps, dep);
 }
 
@@ -63,7 +78,10 @@ bool DependencyGraph::topo_order(Array<AssetId>& out, DiagnosticList& diags) con
         diags.error(DiagCode::CyclicDependency, "dependency graph contains a cycle");
         return false;
     }
-    for (usize i = 0; i < ids.size(); ++i) { out.push_back(AssetId{ids[i]}); }
+    for (usize i = 0; i < ids.size(); ++i)
+    {
+        out.push_back(AssetId{ids[i]});
+    }
     return true;
 }
 
@@ -76,7 +94,10 @@ bool DependencyGraph::affected_by(AssetId changed, Array<AssetId>& out, Diagnost
         diags.error(DiagCode::CyclicDependency, "dependency graph contains a cycle");
         return false;
     }
-    for (usize i = 0; i < ids.size(); ++i) { out.push_back(AssetId{ids[i]}); }
+    for (usize i = 0; i < ids.size(); ++i)
+    {
+        out.push_back(AssetId{ids[i]});
+    }
     return true;
 }
 

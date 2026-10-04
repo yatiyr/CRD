@@ -60,7 +60,10 @@ void write_v3(crd::u8* rec, crd::u32 off, const V3& v) noexcept
         const crd::u32 a = idx[t];
         const crd::u32 b = idx[t + 1U];
         const crd::u32 c = idx[t + 2U];
-        if (a >= pos.size() || b >= pos.size() || c >= pos.size()) { continue; }
+        if (a >= pos.size() || b >= pos.size() || c >= pos.size())
+        {
+            continue;
+        }
         const V3 e1{pos[b].x - pos[a].x, pos[b].y - pos[a].y, pos[b].z - pos[a].z};
         const V3 e2{pos[c].x - pos[a].x, pos[c].y - pos[a].y, pos[c].z - pos[a].z};
         const V3 fn = crd::math::cross(e1, e2); // area-weighted by construction
@@ -94,7 +97,10 @@ void build_weld_groups(const crd::containers::Array<V3>& pos, crd::containers::A
 {
     group_of.clear();
     group_of.resize(pos.size(), 0U);
-    if (pos.empty()) { return; }
+    if (pos.empty())
+    {
+        return;
+    }
     V3 lo = pos[0];
     V3 hi = pos[0];
     for (crd::usize v = 1; v < pos.size(); ++v)
@@ -116,7 +122,10 @@ void build_weld_groups(const crd::containers::Array<V3>& pos, crd::containers::A
 
     // open-addressed integer hash; sized to a power of two above the vertex count
     crd::usize cap = 16U;
-    while (cap < (pos.size() * 2U)) { cap <<= 1U; }
+    while (cap < (pos.size() * 2U))
+    {
+        cap <<= 1U;
+    }
     crd::containers::Array<crd::u32> slot(group_of.allocator());
     slot.resize(cap, 0xFFFFFFFFU);
     const auto key_of = [&](const V3& p, crd::i32 (&k)[3]) {
@@ -175,7 +184,10 @@ void derive_normals(const crd::containers::Array<V3>& pos, const crd::containers
         const crd::u32 a = idx[t];
         const crd::u32 b = idx[t + 1U];
         const crd::u32 c = idx[t + 2U];
-        if (a >= pos.size() || b >= pos.size() || c >= pos.size()) { continue; }
+        if (a >= pos.size() || b >= pos.size() || c >= pos.size())
+        {
+            continue;
+        }
         const V3 e1{pos[b].x - pos[a].x, pos[b].y - pos[a].y, pos[b].z - pos[a].z};
         const V3 e2{pos[c].x - pos[a].x, pos[c].y - pos[a].y, pos[c].z - pos[a].z};
         // the un-normalised cross product IS twice the area times the unit normal,
@@ -194,7 +206,10 @@ void derive_normals(const crd::containers::Array<V3>& pos, const crd::containers
     // normalise the representatives, then hand the result to every member
     for (crd::usize v = 0; v < out.size(); ++v)
     {
-        if (group_of[v] != v) { continue; }
+        if (group_of[v] != v)
+        {
+            continue;
+        }
         const crd::f32 len = crd::math::length(out[v]);
         // a vertex with no surviving area keeps a unit +Y rather than a NaN: it
         // cannot be shaded meaningfully either way, and a NaN normal poisons every
@@ -203,7 +218,10 @@ void derive_normals(const crd::containers::Array<V3>& pos, const crd::containers
     }
     for (crd::usize v = 0; v < out.size(); ++v)
     {
-        if (group_of[v] != v) { out[v] = out[group_of[v]]; }
+        if (group_of[v] != v)
+        {
+            out[v] = out[group_of[v]];
+        }
     }
 }
 
@@ -227,7 +245,10 @@ void derive_tangents(const crd::containers::Array<V3>& pos, const crd::container
         const crd::u32 a = idx[t];
         const crd::u32 b = idx[t + 1U];
         const crd::u32 c = idx[t + 2U];
-        if (a >= pos.size() || b >= pos.size() || c >= pos.size()) { continue; }
+        if (a >= pos.size() || b >= pos.size() || c >= pos.size())
+        {
+            continue;
+        }
         const V3       e1{pos[b].x - pos[a].x, pos[b].y - pos[a].y, pos[b].z - pos[a].z};
         const V3       e2{pos[c].x - pos[a].x, pos[c].y - pos[a].y, pos[c].z - pos[a].z};
         const crd::f32 du1 = uv[(b * 2U) + 0U] - uv[(a * 2U) + 0U];
@@ -237,7 +258,10 @@ void derive_tangents(const crd::containers::Array<V3>& pos, const crd::container
         const crd::f32 det = (du1 * dv2) - (du2 * dv1);
         // a degenerate UV triangle contributes NOTHING rather than an infinity —
         // one such face would otherwise dominate the accumulation for its vertices
-        if (crd::math::abs(det) < 1.0e-20F) { continue; }
+        if (crd::math::abs(det) < 1.0e-20F)
+        {
+            continue;
+        }
         const crd::f32 r = 1.0F / det;
         const V3       tv{((e1.x * dv2) - (e2.x * dv1)) * r, ((e1.y * dv2) - (e2.y * dv1)) * r,
                     ((e1.z * dv2) - (e2.z * dv1)) * r};
@@ -261,7 +285,10 @@ void derive_tangents(const crd::containers::Array<V3>& pos, const crd::container
         const crd::f32 ndt = (n.x * t.x) + (n.y * t.y) + (n.z * t.z);
         V3             o{t.x - (n.x * ndt), t.y - (n.y * ndt), t.z - (n.z * ndt)};
         const crd::f32 len = crd::math::length(o);
-        if (len > 1.0e-20F) { o = V3{o.x / len, o.y / len, o.z / len}; }
+        if (len > 1.0e-20F)
+        {
+            o = V3{o.x / len, o.y / len, o.z / len};
+        }
         else
         {
             // no usable tangent here: build ANY frame orthogonal to the normal
@@ -405,7 +432,10 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
         double sum = 0.0;
         for (crd::usize t = 0; t + 2U < ix.size(); t += 3U)
         {
-            if (ix[t] >= vp.size() || ix[t + 1U] >= vp.size() || ix[t + 2U] >= vp.size()) { continue; }
+            if (ix[t] >= vp.size() || ix[t + 1U] >= vp.size() || ix[t + 2U] >= vp.size())
+            {
+                continue;
+            }
             const V3& a = vp[ix[t]];
             const V3& b = vp[ix[t + 1U]];
             const V3& c = vp[ix[t + 2U]];
@@ -423,11 +453,20 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
         // ⛔ Ratios are of the SOURCE, so the chain does not compound rounding
         const crd::f32 ratio  = policy.ratio[l] > 0.0F ? policy.ratio[l] : 0.5F;
         auto           target = static_cast<crd::u32>(static_cast<crd::f32>(source_faces) * ratio);
-        if (target < 4U) { break; } // below a tetrahedron there is nothing to keep
-        if (target < floor_tris) { target = floor_tris; } // clamp INTO the floor rather than through it
+        if (target < 4U) // below a tetrahedron there is nothing to keep
+        {
+            break;
+        }
+        if (target < floor_tris) // clamp INTO the floor rather than through it
+        {
+            target = floor_tris;
+        }
         // ⛔ A level that does not actually REDUCE is not a level: it is a second copy of its predecessor with
         // its own draw call, its own indirect command and its own visible list. Stop the chain here instead.
-        if (target >= prev_faces) { break; }
+        if (target >= prev_faces)
+        {
+            break;
+        }
 
         mp::QemDecimateOptions<crd::f32> opts{};
         opts.target_face_count = target;
@@ -441,12 +480,18 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
         // would carry level 1's mistakes amplified twice.
         mp::HalfEdgeMesh<crd::f32> out =
             mp::qem_decimate_attr<crd::f32, 2U>(source, uv.data(), opts, &uv_out, &dec);
-        if (dec.status == mp::QemDecimateStatus::TargetUnreachable) { ++report.levels_short_of_target; }
+        if (dec.status == mp::QemDecimateStatus::TargetUnreachable)
+        {
+            ++report.levels_short_of_target;
+        }
 
         crd::containers::Array<V3>       lpos(scratch);
         crd::containers::Array<crd::u32> lidx(scratch);
         out.to_indexed(lpos, lidx);
-        if (lpos.empty() || lidx.empty()) { break; }
+        if (lpos.empty() || lidx.empty())
+        {
+            break;
+        }
         // ⛔⛔ THE SHAPE TEST — a triangle count is not a quality bar, and this is the measurement that says so.
         // Measured on the LOD showcase: the 6,036-triangle source decimated to 104 triangles cleared
         // `min_triangles` comfortably and rendered as a flat SLIVER — every instance in the line collapsed. The
@@ -474,11 +519,17 @@ LodBuildReport build_lod_chain(crd::resources::MeshResource& mesh, const LodPoli
                 if (se[ax] > 1.0e-6F)
                 {
                     const crd::f32 r_ax = le[ax] / se[ax];
-                    if (r_ax < worst) { worst = r_ax; }
+                    if (r_ax < worst)
+                    {
+                        worst = r_ax;
+                    }
                 }
                 // ⛔ A degenerate SOURCE axis (a flat plane) is not a failure — only a level that lost extent
                 // the source HAD is.
-                if (se[ax] > 1.0e-6F && le[ax] < se[ax] * policy.min_extent_ratio) { kept = false; }
+                if (se[ax] > 1.0e-6F && le[ax] < se[ax] * policy.min_extent_ratio)
+                {
+                    kept = false;
+                }
             }
             // ⛔⛔ AND THE AREA. The extent test alone is NOT sufficient — the 104-triangle level that rendered
             // as slivers PASSED it, because a few surviving vertices still sat at the source's extremes while

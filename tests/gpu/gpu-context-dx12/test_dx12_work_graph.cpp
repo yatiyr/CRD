@@ -37,9 +37,15 @@ namespace
 bool load_ckir(const char* path, kir::KGraph& g, kir::KEntry& e, crd::memory::IAllocator* a)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
-    if (sz <= 0) { return false; }
+    if (sz <= 0)
+    {
+        return false;
+    }
     f.seekg(0);
     crd::containers::Array<char> src(a);
     src.resize(static_cast<crd::usize>(sz), '\0');
@@ -52,7 +58,10 @@ TEST_CASE("CEIR-20c-1: the authored ceir.work smoke runs as a D3D12 WORK GRAPH -
           "[gpu-context][dx12][gpu][work][ceir20c]")
 {
     gpu::Dx12WorkGraphContext wg;
-    if (!wg.valid()) { SKIP("no D3D12 Work Graphs (WorkGraphsTier 1.0) adapter"); }
+    if (!wg.valid())
+    {
+        SKIP("no D3D12 Work Graphs (WorkGraphsTier 1.0) adapter");
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
     kir::KGraph pg(&alloc);

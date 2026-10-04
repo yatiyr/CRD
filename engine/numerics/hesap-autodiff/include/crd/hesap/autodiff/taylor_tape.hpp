@@ -145,7 +145,10 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
             const crd::f64* a = T.c[T.ain[i]];
             const crd::f64* b = T.c[T.bin[i]];
             crd::f64        acc = 0.0;
-            for (int j = 0; j <= m; ++j) { acc += a[j] * b[m - j]; }
+            for (int j = 0; j <= m; ++j)
+            {
+                acc += a[j] * b[m - j];
+            }
             ci[m] = acc;
             break;
         }
@@ -154,18 +157,27 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
             const crd::f64* a = T.c[T.ain[i]];
             const crd::f64* b = T.c[T.bin[i]];
             crd::f64        acc = a[m];
-            for (int j = 0; j < m; ++j) { acc -= ci[j] * b[m - j]; }
+            for (int j = 0; j < m; ++j)
+            {
+                acc -= ci[j] * b[m - j];
+            }
             ci[m] = acc / b[0];
             break;
         }
         case TapeOp::exp_:
         {
             const crd::f64* a = T.c[T.ain[i]];
-            if (m == 0) { ci[0] = crd::math::exp(a[0]); }
+            if (m == 0)
+            {
+                ci[0] = crd::math::exp(a[0]);
+            }
             else
             {
                 crd::f64 acc = 0.0;
-                for (int j = 0; j < m; ++j) { acc += static_cast<crd::f64>(m - j) * a[m - j] * ci[j]; }
+                for (int j = 0; j < m; ++j)
+                {
+                    acc += static_cast<crd::f64>(m - j) * a[m - j] * ci[j];
+                }
                 ci[m] = acc / static_cast<crd::f64>(m);
             }
             break;
@@ -173,11 +185,17 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
         case TapeOp::log_:
         {
             const crd::f64* a = T.c[T.ain[i]];
-            if (m == 0) { ci[0] = crd::math::log(a[0]); }
+            if (m == 0)
+            {
+                ci[0] = crd::math::log(a[0]);
+            }
             else
             {
                 crd::f64 acc = 0.0;
-                for (int j = 1; j < m; ++j) { acc += static_cast<crd::f64>(j) * a[m - j] * ci[j]; }
+                for (int j = 1; j < m; ++j)
+                {
+                    acc += static_cast<crd::f64>(j) * a[m - j] * ci[j];
+                }
                 ci[m] = (a[m] - acc / static_cast<crd::f64>(m)) / a[0];
             }
             break;
@@ -185,11 +203,17 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
         case TapeOp::sqrt_:
         {
             const crd::f64* a = T.c[T.ain[i]];
-            if (m == 0) { ci[0] = crd::math::sqrt(a[0]); }
+            if (m == 0)
+            {
+                ci[0] = crd::math::sqrt(a[0]);
+            }
             else
             {
                 crd::f64 acc = a[m];
-                for (int j = 1; j < m; ++j) { acc -= ci[j] * ci[m - j]; }
+                for (int j = 1; j < m; ++j)
+                {
+                    acc -= ci[j] * ci[m - j];
+                }
                 ci[m] = acc / (2.0 * ci[0]);
             }
             break;
@@ -198,7 +222,10 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
         {
             const crd::f64* a  = T.c[T.ain[i]];
             crd::f64*       co = T.c[T.aux[i]];
-            if (m == 0) { crd::math::sincos(a[0], ci[0], co[0]); }
+            if (m == 0)
+            {
+                crd::math::sincos(a[0], ci[0], co[0]);
+            }
             else
             {
                 crd::f64 sacc = 0.0;
@@ -218,7 +245,10 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
         {
             const crd::f64* a  = T.c[T.ain[i]];
             crd::f64*       si = T.c[T.aux[i]];
-            if (m == 0) { crd::math::sincos(a[0], si[0], ci[0]); }
+            if (m == 0)
+            {
+                crd::math::sincos(a[0], si[0], ci[0]);
+            }
             else
             {
                 crd::f64 sacc = 0.0;
@@ -246,10 +276,16 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
             else
             {
                 crd::f64 acc = 0.0;
-                for (int j = 0; j < m; ++j) { acc += static_cast<crd::f64>(m - j) * a[m - j] * w[j]; }
+                for (int j = 0; j < m; ++j)
+                {
+                    acc += static_cast<crd::f64>(m - j) * a[m - j] * w[j];
+                }
                 ci[m]     = acc / static_cast<crd::f64>(m);
                 crd::f64 q = 0.0;
-                for (int j = 0; j <= m; ++j) { q += ci[j] * ci[m - j]; }
+                for (int j = 0; j <= m; ++j)
+                {
+                    q += ci[j] * ci[m - j];
+                }
                 w[m] = -q;
             }
             break;
@@ -258,7 +294,10 @@ inline void tape_eval_order(TaylorTape<K, MaxN>& T, int m) noexcept
         {
             const crd::f64* a = T.c[T.ain[i]];
             const crd::f64  p = T.s[i];
-            if (m == 0) { ci[0] = crd::math::pow(a[0], p); }
+            if (m == 0)
+            {
+                ci[0] = crd::math::pow(a[0], p);
+            }
             else
             {
                 crd::f64 acc = 0.0;
@@ -296,8 +335,14 @@ template <int K, int MaxN = 64, class F>
     {
         // leaf coefficients for this step: t = {t,1,0,…}; y filled in progressively below.
         tape.c[tape.tn][0] = t;
-        if constexpr (K >= 1) { tape.c[tape.tn][1] = 1.0; }
-        for (int i = 2; i <= K; ++i) { tape.c[tape.tn][i] = 0.0; }
+        if constexpr (K >= 1)
+        {
+            tape.c[tape.tn][1] = 1.0;
+        }
+        for (int i = 2; i <= K; ++i)
+        {
+            tape.c[tape.tn][i] = 0.0;
+        }
         tape.c[tape.yn][0] = y;
         yc[0]              = y;
         for (int m = 0; m < K; ++m)
@@ -308,15 +353,24 @@ template <int K, int MaxN = 64, class F>
             tape.c[tape.yn][m + 1] = yc[m + 1];
         }
         crd::f64 h = taylor_step_size<K>(yc, tol, h_prev);
-        if (t + h > t_end) { h = t_end - t; }
+        if (t + h > t_end)
+        {
+            h = t_end - t;
+        }
         crd::f64 yn = yc[K];
-        for (int k = K - 1; k >= 0; --k) { yn = yn * h + yc[k]; }
+        for (int k = K - 1; k >= 0; --k)
+        {
+            yn = yn * h + yc[k];
+        }
         t += h;
         y      = yn;
         h_prev = h;
         ++steps;
     }
-    if (nsteps != nullptr) { *nsteps = steps; }
+    if (nsteps != nullptr)
+    {
+        *nsteps = steps;
+    }
     return y;
 }
 
@@ -324,10 +378,22 @@ template <class F>
 [[nodiscard]] inline crd::f64 taylor_solve_taped_auto(const F& rhs, crd::f64 t0, crd::f64 y0, crd::f64 t_end,
                                                       crd::f64 tol, int* nsteps = nullptr) noexcept
 {
-    if (tol >= 1e-4) { return taylor_solve_taped<6>(rhs, t0, y0, t_end, tol, nsteps); }
-    if (tol >= 1e-7) { return taylor_solve_taped<10>(rhs, t0, y0, t_end, tol, nsteps); }
-    if (tol >= 1e-10) { return taylor_solve_taped<14>(rhs, t0, y0, t_end, tol, nsteps); }
-    if (tol >= 1e-13) { return taylor_solve_taped<18>(rhs, t0, y0, t_end, tol, nsteps); }
+    if (tol >= 1e-4)
+    {
+        return taylor_solve_taped<6>(rhs, t0, y0, t_end, tol, nsteps);
+    }
+    if (tol >= 1e-7)
+    {
+        return taylor_solve_taped<10>(rhs, t0, y0, t_end, tol, nsteps);
+    }
+    if (tol >= 1e-10)
+    {
+        return taylor_solve_taped<14>(rhs, t0, y0, t_end, tol, nsteps);
+    }
+    if (tol >= 1e-13)
+    {
+        return taylor_solve_taped<18>(rhs, t0, y0, t_end, tol, nsteps);
+    }
     return taylor_solve_taped<24>(rhs, t0, y0, t_end, tol, nsteps);
 }
 

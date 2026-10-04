@@ -41,13 +41,19 @@ Interpreter::Interpreter(const Interpreter& proto, memory::IAllocator* scratch, 
       m_map_output(scratch) // fresh (per-session, like cells/yields — NOT copied from proto)
 {
     // copy the installed semantics (intern-free — the keys are already OpId.value); env / cells / fuel start FRESH.
-    for (auto it = proto.m_sem.begin(); it != proto.m_sem.end(); ++it) { m_sem.insert(it.key(), it.value()); }
+    for (auto it = proto.m_sem.begin(); it != proto.m_sem.end(); ++it)
+    {
+        m_sem.insert(it.key(), it.value());
+    }
 }
 
 crd::u32 Interpreter::store_yields(containers::ConstSpan<crd::i64> ys)
 {
     containers::Array<crd::i64> copy(m_scratch);
-    for (crd::usize i = 0; i < ys.size(); ++i) { copy.push_back(ys[i]); }
+    for (crd::usize i = 0; i < ys.size(); ++i)
+    {
+        copy.push_back(ys[i]);
+    }
     const auto handle = static_cast<crd::u32>(m_yield_store.size());
     m_yield_store.push_back(std::move(copy));
     return handle;
@@ -60,36 +66,60 @@ bool Interpreter::valid_yield_handle(crd::u32 handle) const noexcept
 
 containers::ConstSpan<crd::i64> Interpreter::stored_yields(crd::u32 handle) const noexcept
 {
-    if (handle >= static_cast<crd::u32>(m_yield_store.size())) { return {}; }
+    if (handle >= static_cast<crd::u32>(m_yield_store.size()))
+    {
+        return {};
+    }
     const containers::Array<crd::i64>& ys = m_yield_store[handle];
     return containers::ConstSpan<crd::i64>(ys.data(), ys.size());
 }
 
 void Interpreter::store_map_output(const Operation* op, containers::Array<crd::i64>&& out)
 {
-    if (containers::Array<crd::i64>* const slot = m_map_output.find(op); slot != nullptr) { *slot = std::move(out); }
-    else { m_map_output.insert(op, std::move(out)); }
+    if (containers::Array<crd::i64>* const slot = m_map_output.find(op); slot != nullptr)
+    {
+        *slot = std::move(out);
+    }
+    else
+    {
+        m_map_output.insert(op, std::move(out));
+    }
 }
 
 containers::ConstSpan<crd::i64> Interpreter::map_output(const Operation* op) const noexcept
 {
     const containers::Array<crd::i64>* const slot = m_map_output.find(op);
-    if (slot == nullptr) { return {}; }
+    if (slot == nullptr)
+    {
+        return {};
+    }
     return containers::ConstSpan<crd::i64>(slot->data(), slot->size());
 }
 
 void Interpreter::install(OpId kind, EvalFn fn)
 {
     EvalFn* const existing = m_sem.find(kind.value);
-    if (existing != nullptr) { *existing = fn; } // last install wins (open-world override)
-    else { m_sem.insert(kind.value, fn); }
+    if (existing != nullptr) // last install wins (open-world override)
+    {
+        *existing = fn;
+    }
+    else
+    {
+        m_sem.insert(kind.value, fn);
+    }
 }
 
 bool Interpreter::value_of(const Value* v, crd::i64& out) const noexcept
 {
-    if (m_env == nullptr) { return false; }
+    if (m_env == nullptr)
+    {
+        return false;
+    }
     const crd::i64* const p = m_env->find(v);
-    if (p == nullptr) { return false; }
+    if (p == nullptr)
+    {
+        return false;
+    }
     out = *p;
     return true;
 }
@@ -97,13 +127,22 @@ bool Interpreter::value_of(const Value* v, crd::i64& out) const noexcept
 void Interpreter::set_value(const Value* v, crd::i64 x)
 {
     crd::i64* const p = m_env->find(v); // UPSERT: HashMap::insert does not overwrite, but a loop re-binds the same Value*
-    if (p != nullptr) { *p = x; }
-    else { m_env->insert(v, x); }
+    if (p != nullptr)
+    {
+        *p = x;
+    }
+    else
+    {
+        m_env->insert(v, x);
+    }
 }
 
 bool Interpreter::spend_fuel() noexcept
 {
-    if (m_fuel == 0U) { return false; }
+    if (m_fuel == 0U)
+    {
+        return false;
+    }
     --m_fuel;
     return true;
 }
@@ -128,12 +167,18 @@ crd::i64 Interpreter::cell_read(const Operation& state_op)
         if (d.valid())
         {
             const AttrValue dv = m_ctx.attr_value(d);
-            if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
+            if (dv.kind == AttrKind::Int && dv.i >= 1)
+            {
+                depth = static_cast<crd::u32>(dv.i);
+            }
         }
         crd::i64 init = 0; // the first operand; the 5d verifier guarantees it dominates, so this read succeeds
         (void)value_of(state_op.operand(0), init);
         Cell cell{containers::Array<crd::i64>(m_scratch), 0U};
-        for (crd::u32 i = 0; i < depth; ++i) { cell.ring.push_back(init); }
+        for (crd::u32 i = 0; i < depth; ++i)
+        {
+            cell.ring.push_back(init);
+        }
         m_cells.insert(&state_op, std::move(cell));
         c = m_cells.find(&state_op);
     }
@@ -143,7 +188,10 @@ crd::i64 Interpreter::cell_read(const Operation& state_op)
 ExecError Interpreter::cell_latch(const Operation& op)
 {
     Cell* const c = m_cells.find(&op);
-    if (c == nullptr) { return ExecError::None; } // not read this block (a conditional/untaken cell) ⇒ nothing to latch
+    if (c == nullptr) // not read this block (a conditional/untaken cell) ⇒ nothing to latch
+    {
+        return ExecError::None;
+    }
     crd::i64 nx = 0;
     if (op.num_operands() == 0U || !value_of(op.operand(op.num_operands() - 1U), nx))
     {
@@ -157,7 +205,10 @@ ExecError Interpreter::cell_latch(const Operation& op)
 bool Interpreter::cell_value(const Operation* state_op, crd::i64& out) const noexcept
 {
     const Cell* const c = m_cells.find(state_op);
-    if (c == nullptr) { return false; }
+    if (c == nullptr)
+    {
+        return false;
+    }
     out = c->ring[c->pos];
     return true;
 }
@@ -168,13 +219,22 @@ namespace
 // program_asset state walk, but returns OPS (not the schema) because restore keys m_cells by the op pointer.
 void collect_state_ops(Context& c, Region* r, containers::Array<const Operation*>& out)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (c.has_trait(op->kind(), OpTrait::StateEdge) && op->num_results() >= 1U) { out.push_back(op); }
-            for (crd::u32 i = 0; i < op->num_regions(); ++i) { collect_state_ops(c, op->region(i), out); }
+            if (c.has_trait(op->kind(), OpTrait::StateEdge) && op->num_results() >= 1U)
+            {
+                out.push_back(op);
+            }
+            for (crd::u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_state_ops(c, op->region(i), out);
+            }
         }
     }
 }
@@ -186,7 +246,10 @@ crd::u32 state_depth(Context& c, const Operation& op)
     if (d.valid())
     {
         const AttrValue dv = c.attr_value(d);
-        if (dv.kind == AttrKind::Int && dv.i >= 1) { depth = static_cast<crd::u32>(dv.i); }
+        if (dv.kind == AttrKind::Int && dv.i >= 1)
+        {
+            depth = static_cast<crd::u32>(dv.i);
+        }
     }
     return depth;
 }
@@ -201,7 +264,10 @@ void Interpreter::snapshot_state_by_id(containers::Array<StateSnapshot>& out, me
         StateSnapshot          s(alloc);
         s.id  = op->stable_id().value;
         s.pos = cl.pos;
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(cl.ring.size()); ++i) { s.ring.push_back(cl.ring[i]); }
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(cl.ring.size()); ++i)
+        {
+            s.ring.push_back(cl.ring[i]);
+        }
         out.push_back(std::move(s));
     }
 }
@@ -219,11 +285,20 @@ crd::u32 Interpreter::restore_state_by_id(const Module& new_module, containers::
         const crd::u32         depth = state_depth(m_ctx, *op);
         for (crd::u32 s = 0; s < static_cast<crd::u32>(snap.size()); ++s)
         {
-            if (snap[s].id != id) { continue; }
+            if (snap[s].id != id)
+            {
+                continue;
+            }
             // a matching depth (ring size) is required — else the new cell has a different §20 shape; skip → init-fill.
-            if (static_cast<crd::u32>(snap[s].ring.size()) != depth) { break; }
+            if (static_cast<crd::u32>(snap[s].ring.size()) != depth)
+            {
+                break;
+            }
             Cell cell{containers::Array<crd::i64>(m_scratch), snap[s].pos};
-            for (crd::u32 i = 0; i < static_cast<crd::u32>(snap[s].ring.size()); ++i) { cell.ring.push_back(snap[s].ring[i]); }
+            for (crd::u32 i = 0; i < static_cast<crd::u32>(snap[s].ring.size()); ++i)
+            {
+                cell.ring.push_back(snap[s].ring[i]);
+            }
             m_cells.insert(op, std::move(cell));
             ++restored;
             break;
@@ -235,10 +310,19 @@ crd::u32 Interpreter::restore_state_by_id(const Module& new_module, containers::
 ExecError Interpreter::eval_op(const Operation& op)
 {
     EvalFn* const fn = m_sem.find(op.kind().value);
-    if (fn == nullptr) { return fail(ExecError::NoSemantics, &op); }
-    if (m_pre_hook != nullptr) { m_pre_hook(op, m_hook_user); } // §112: fires before EVERY dispatched op
+    if (fn == nullptr)
+    {
+        return fail(ExecError::NoSemantics, &op);
+    }
+    if (m_pre_hook != nullptr) // §112: fires before EVERY dispatched op
+    {
+        m_pre_hook(op, m_hook_user);
+    }
     const ExecError e = (*fn)(*this, op);
-    if (e == ExecError::None && m_post_hook != nullptr) { m_post_hook(op, m_hook_user); } // post: successful dispatch only
+    if (e == ExecError::None && m_post_hook != nullptr) // post: successful dispatch only
+    {
+        m_post_hook(op, m_hook_user);
+    }
     return e;
 }
 
@@ -246,10 +330,19 @@ ExecError Interpreter::eval_block(const Block& b)
 {
     for (Operation* op = b.first_op(); op != nullptr; op = op->next_in_block()) // list order (4d hazards / 5d canonical)
     {
-        if (cancelled()) { return fail(ExecError::Cancelled, op); }      // §30 cooperative cancel — checked before fuel
-        if (!spend_fuel()) { return fail(ExecError::FuelExhausted, op); }
+        if (cancelled()) // §30 cooperative cancel — checked before fuel
+        {
+            return fail(ExecError::Cancelled, op);
+        }
+        if (!spend_fuel())
+        {
+            return fail(ExecError::FuelExhausted, op);
+        }
         const ExecError e = eval_op(*op);
-        if (e != ExecError::None) { return e; }
+        if (e != ExecError::None)
+        {
+            return e;
+        }
     }
     // §20: LATCH every StateEdge cell at block-eval end — read-all-then-latch (env fully populated). Register timing.
     for (Operation* op = b.first_op(); op != nullptr; op = op->next_in_block())
@@ -257,7 +350,10 @@ ExecError Interpreter::eval_block(const Block& b)
         if (m_ctx.has_trait(op->kind(), OpTrait::StateEdge))
         {
             const ExecError e = cell_latch(*op);
-            if (e != ExecError::None) { return e; }
+            if (e != ExecError::None)
+            {
+                return e;
+            }
         }
     }
     return ExecError::None;
@@ -268,7 +364,10 @@ ExecError Interpreter::run_region(const Region& r, containers::Array<crd::i64>* 
     for (Block* b = r.first_block(); b != nullptr; b = b->next_in_region())
     {
         const ExecError e = eval_block(*b);
-        if (e != ExecError::None) { return e; }
+        if (e != ExecError::None)
+        {
+            return e;
+        }
     }
     if (out_yield != nullptr) // the region's value = its terminator's (core.yield / func.return) operands
     {
@@ -279,7 +378,10 @@ ExecError Interpreter::run_region(const Region& r, containers::Array<crd::i64>* 
             for (crd::u32 i = 0; i < term->num_operands(); ++i)
             {
                 crd::i64 v = 0;
-                if (!value_of(term->operand(i), v)) { return fail(ExecError::UndefinedValue, term); }
+                if (!value_of(term->operand(i), v))
+                {
+                    return fail(ExecError::UndefinedValue, term);
+                }
                 out_yield->push_back(v);
             }
         }
@@ -289,24 +391,42 @@ ExecError Interpreter::run_region(const Region& r, containers::Array<crd::i64>* 
 
 ExecError Interpreter::call(const Operation& call_op, containers::Array<crd::i64>& out_results)
 {
-    if (m_symbols == nullptr) { return fail(ExecError::UnresolvedCall, &call_op); }
+    if (m_symbols == nullptr)
+    {
+        return fail(ExecError::UnresolvedCall, &call_op);
+    }
     Operation* const callee = func::resolve_call(m_ctx, &call_op, *m_symbols);
-    if (callee == nullptr) { return fail(ExecError::UnresolvedCall, &call_op); }
+    if (callee == nullptr)
+    {
+        return fail(ExecError::UnresolvedCall, &call_op);
+    }
     Block* const eb = func::func_body_block(callee);
-    if (eb == nullptr) { return fail(ExecError::UnresolvedCall, &call_op); }
-    if (call_op.num_operands() != eb->num_args()) { return fail(ExecError::BadArity, &call_op); }
+    if (eb == nullptr)
+    {
+        return fail(ExecError::UnresolvedCall, &call_op);
+    }
+    if (call_op.num_operands() != eb->num_args())
+    {
+        return fail(ExecError::BadArity, &call_op);
+    }
     // gather the argument values from the CURRENT frame BEFORE switching frames.
     containers::Array<crd::i64> argv(m_scratch);
     for (crd::u32 i = 0; i < call_op.num_operands(); ++i)
     {
         crd::i64 a = 0;
-        if (!value_of(call_op.operand(i), a)) { return fail(ExecError::UndefinedValue, &call_op); }
+        if (!value_of(call_op.operand(i), a))
+        {
+            return fail(ExecError::UndefinedValue, &call_op);
+        }
         argv.push_back(a);
     }
     Env        frame(m_scratch); // a fresh frame — a func body is its own scope (supports recursion)
     Env* const saved = m_env;
     m_env            = &frame;
-    for (crd::u32 i = 0; i < eb->num_args(); ++i) { set_value(eb->arg(i), argv[i]); }
+    for (crd::u32 i = 0; i < eb->num_args(); ++i)
+    {
+        set_value(eb->arg(i), argv[i]);
+    }
     const ExecError e = run_region(*callee->region(0), &out_results);
     m_env             = saved; // restore the caller's frame
     return e;
@@ -346,7 +466,10 @@ ExecResult Interpreter::invoke(const Module& m, containers::StringView entry, co
     }
     Env frame(m_scratch);
     m_env = &frame;
-    for (crd::u32 i = 0; i < eb->num_args(); ++i) { set_value(eb->arg(i), args[static_cast<crd::usize>(i)]); }
+    for (crd::u32 i = 0; i < eb->num_args(); ++i)
+    {
+        set_value(eb->arg(i), args[static_cast<crd::usize>(i)]);
+    }
     const ExecError ee = run_region(*fn->region(0), &r.values);
     m_env              = nullptr;
     if (ee != ExecError::None)
@@ -366,11 +489,20 @@ ExecError Interpreter::invoke_region(const Module& m, const Region& body, contai
     m_err     = ExecError::None;
     m_err_op  = nullptr;
     Block* const eb = body.first_block();
-    if (eb == nullptr) { return fail(ExecError::NoEntry, nullptr); }
-    if (block_args.size() != eb->num_args()) { return fail(ExecError::BadArity, nullptr); }
+    if (eb == nullptr)
+    {
+        return fail(ExecError::NoEntry, nullptr);
+    }
+    if (block_args.size() != eb->num_args())
+    {
+        return fail(ExecError::BadArity, nullptr);
+    }
     Env frame(m_scratch);
     m_env = &frame;
-    for (crd::u32 i = 0; i < eb->num_args(); ++i) { set_value(eb->arg(i), block_args[static_cast<crd::usize>(i)]); }
+    for (crd::u32 i = 0; i < eb->num_args(); ++i)
+    {
+        set_value(eb->arg(i), block_args[static_cast<crd::usize>(i)]);
+    }
     const ExecError e = run_region(body, &out_yield);
     m_env             = nullptr;
     return e;
@@ -381,17 +513,29 @@ namespace
 {
 [[nodiscard]] ExecError bin_ops(Interpreter& in, const Operation& op, crd::i64& l, crd::i64& r)
 {
-    if (!in.value_of(op.operand(0), l)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (!in.value_of(op.operand(1), r)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!in.value_of(op.operand(0), l))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (!in.value_of(op.operand(1), r))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     return ExecError::None;
 }
 
 ExecError eval_const(Interpreter& in, const Operation& op)
 {
     const AttrId a = op.attr("value");
-    if (!a.valid()) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!a.valid())
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     const AttrValue v = in.ctx().attr_value(a);
-    if (v.kind != AttrKind::Int) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (v.kind != AttrKind::Int)
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     in.set_value(op.result(0), v.i);
     return ExecError::None;
 }
@@ -399,7 +543,10 @@ ExecError eval_addi(Interpreter& in, const Operation& op)
 {
     crd::i64 l = 0;
     crd::i64 r = 0;
-    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None) { return e; }
+    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None)
+    {
+        return e;
+    }
     // ⛔ wrap through u64 — signed overflow is UB (don't hand gcc/asan a signed overflow). Reference = wrapping i64.
     in.set_value(op.result(0), static_cast<crd::i64>(static_cast<crd::u64>(l) + static_cast<crd::u64>(r)));
     return ExecError::None;
@@ -408,7 +555,10 @@ ExecError eval_muli(Interpreter& in, const Operation& op)
 {
     crd::i64 l = 0;
     crd::i64 r = 0;
-    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None) { return e; }
+    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None)
+    {
+        return e;
+    }
     in.set_value(op.result(0), static_cast<crd::i64>(static_cast<crd::u64>(l) * static_cast<crd::u64>(r)));
     return ExecError::None;
 }
@@ -416,26 +566,68 @@ ExecError eval_cmpi(Interpreter& in, const Operation& op)
 {
     crd::i64 l = 0;
     crd::i64 r = 0;
-    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None) { return e; }
+    if (const ExecError e = bin_ops(in, op, l, r); e != ExecError::None)
+    {
+        return e;
+    }
     const AttrId p = op.attr("predicate");
-    if (!p.valid()) { return in.fail(ExecError::UnknownPredicate, &op); }
+    if (!p.valid())
+    {
+        return in.fail(ExecError::UnknownPredicate, &op);
+    }
     const AttrValue pv = in.ctx().attr_value(p);
-    if (pv.kind != AttrKind::String) { return in.fail(ExecError::UnknownPredicate, &op); }
+    if (pv.kind != AttrKind::String)
+    {
+        return in.fail(ExecError::UnknownPredicate, &op);
+    }
     const containers::StringView s  = pv.s;
     const auto                   ul = static_cast<crd::u64>(l);
     const auto                   ur = static_cast<crd::u64>(r);
     bool                         res = false;
-    if (s == containers::StringView("eq")) { res = l == r; }
-    else if (s == containers::StringView("ne")) { res = l != r; }
-    else if (s == containers::StringView("slt")) { res = l < r; }
-    else if (s == containers::StringView("sle")) { res = l <= r; }
-    else if (s == containers::StringView("sgt")) { res = l > r; }
-    else if (s == containers::StringView("sge")) { res = l >= r; }
-    else if (s == containers::StringView("ult")) { res = ul < ur; }
-    else if (s == containers::StringView("ule")) { res = ul <= ur; }
-    else if (s == containers::StringView("ugt")) { res = ul > ur; }
-    else if (s == containers::StringView("uge")) { res = ul >= ur; }
-    else { return in.fail(ExecError::UnknownPredicate, &op); }
+    if (s == containers::StringView("eq"))
+    {
+        res = l == r;
+    }
+    else if (s == containers::StringView("ne"))
+    {
+        res = l != r;
+    }
+    else if (s == containers::StringView("slt"))
+    {
+        res = l < r;
+    }
+    else if (s == containers::StringView("sle"))
+    {
+        res = l <= r;
+    }
+    else if (s == containers::StringView("sgt"))
+    {
+        res = l > r;
+    }
+    else if (s == containers::StringView("sge"))
+    {
+        res = l >= r;
+    }
+    else if (s == containers::StringView("ult"))
+    {
+        res = ul < ur;
+    }
+    else if (s == containers::StringView("ule"))
+    {
+        res = ul <= ur;
+    }
+    else if (s == containers::StringView("ugt"))
+    {
+        res = ul > ur;
+    }
+    else if (s == containers::StringView("uge"))
+    {
+        res = ul >= ur;
+    }
+    else
+    {
+        return in.fail(ExecError::UnknownPredicate, &op);
+    }
     in.set_value(op.result(0), res ? 1 : 0);
     return ExecError::None;
 }
@@ -444,7 +636,10 @@ ExecError eval_cmpi(Interpreter& in, const Operation& op)
 [[nodiscard]] ExecError forward_yield(Interpreter& in, const Operation& op, const Region& reg)
 {
     containers::Array<crd::i64> y(in.allocator());
-    if (const ExecError e = in.run_region(reg, &y); e != ExecError::None) { return e; }
+    if (const ExecError e = in.run_region(reg, &y); e != ExecError::None)
+    {
+        return e;
+    }
     for (crd::u32 j = 0; j < op.num_results() && j < static_cast<crd::u32>(y.size()); ++j)
     {
         in.set_value(op.result(j), y[static_cast<crd::usize>(j)]);
@@ -455,7 +650,10 @@ ExecError eval_scope(Interpreter& in, const Operation& op) { return forward_yiel
 ExecError eval_if(Interpreter& in, const Operation& op)
 {
     crd::i64 c = 0;
-    if (!in.value_of(op.operand(0), c)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!in.value_of(op.operand(0), c))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     return forward_yield(in, op, *op.region(c != 0 ? 0U : 1U)); // nonzero selects THEN (region 0)
 }
 ExecError eval_for(Interpreter& in, const Operation& op)
@@ -463,18 +661,42 @@ ExecError eval_for(Interpreter& in, const Operation& op)
     crd::i64 lo = 0;
     crd::i64 hi = 0;
     crd::i64 st = 0;
-    if (!in.value_of(op.operand(0), lo)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (!in.value_of(op.operand(1), hi)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (!in.value_of(op.operand(2), st)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (st <= 0) { return in.fail(ExecError::BadForStep, &op); } // a backwards / zero step never terminates
+    if (!in.value_of(op.operand(0), lo))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (!in.value_of(op.operand(1), hi))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (!in.value_of(op.operand(2), st))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (st <= 0) // a backwards / zero step never terminates
+    {
+        return in.fail(ExecError::BadForStep, &op);
+    }
     const Region* const body = op.region(0);
     Block* const        eb   = body->first_block();
     for (crd::i64 iv = lo; iv < hi; iv += st)
     {
-        if (in.cancelled()) { return in.fail(ExecError::Cancelled, &op); }
-        if (!in.spend_fuel()) { return in.fail(ExecError::FuelExhausted, &op); }
-        if (eb != nullptr && eb->num_args() >= 1U) { in.set_value(eb->arg(0), iv); } // bind the induction variable
-        if (const ExecError e = in.run_region(*body, nullptr); e != ExecError::None) { return e; }
+        if (in.cancelled())
+        {
+            return in.fail(ExecError::Cancelled, &op);
+        }
+        if (!in.spend_fuel())
+        {
+            return in.fail(ExecError::FuelExhausted, &op);
+        }
+        if (eb != nullptr && eb->num_args() >= 1U) // bind the induction variable
+        {
+            in.set_value(eb->arg(0), iv);
+        }
+        if (const ExecError e = in.run_region(*body, nullptr); e != ExecError::None)
+        {
+            return e;
+        }
     }
     return ExecError::None;
 }
@@ -484,21 +706,45 @@ ExecError eval_while(Interpreter& in, const Operation& op)
     const Region* const body = op.region(1);
     for (;;)
     {
-        if (in.cancelled()) { return in.fail(ExecError::Cancelled, &op); }
-        if (!in.spend_fuel()) { return in.fail(ExecError::FuelExhausted, &op); }
+        if (in.cancelled())
+        {
+            return in.fail(ExecError::Cancelled, &op);
+        }
+        if (!in.spend_fuel())
+        {
+            return in.fail(ExecError::FuelExhausted, &op);
+        }
         containers::Array<crd::i64> cv(in.allocator());
-        if (const ExecError e = in.run_region(*cond, &cv); e != ExecError::None) { return e; }
-        if (cv.size() != 1U) { return in.fail(ExecError::CondArity, &op); } // the cond region yields exactly one bool
-        if (cv[0] == 0) { break; }
-        if (const ExecError e = in.run_region(*body, nullptr); e != ExecError::None) { return e; }
+        if (const ExecError e = in.run_region(*cond, &cv); e != ExecError::None)
+        {
+            return e;
+        }
+        if (cv.size() != 1U) // the cond region yields exactly one bool
+        {
+            return in.fail(ExecError::CondArity, &op);
+        }
+        if (cv[0] == 0)
+        {
+            break;
+        }
+        if (const ExecError e = in.run_region(*body, nullptr); e != ExecError::None)
+        {
+            return e;
+        }
     }
     return ExecError::None;
 }
 ExecError eval_switch(Interpreter& in, const Operation& op) // match ≡ switch under reference behavior (selector = index)
 {
     crd::i64 sel = 0;
-    if (!in.value_of(op.operand(0), sel)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (sel < 0 || sel >= static_cast<crd::i64>(op.num_regions())) { return in.fail(ExecError::SelectorOutOfRange, &op); }
+    if (!in.value_of(op.operand(0), sel))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (sel < 0 || sel >= static_cast<crd::i64>(op.num_regions()))
+    {
+        return in.fail(ExecError::SelectorOutOfRange, &op);
+    }
     return in.run_region(*op.region(static_cast<crd::u32>(sel)), nullptr);
 }
 ExecError eval_state(Interpreter& in, const Operation& op) // core.state / delay / history — one register mechanism
@@ -509,7 +755,10 @@ ExecError eval_state(Interpreter& in, const Operation& op) // core.state / delay
 ExecError eval_call(Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> results(in.allocator());
-    if (const ExecError e = in.call(op, results); e != ExecError::None) { return e; }
+    if (const ExecError e = in.call(op, results); e != ExecError::None)
+    {
+        return e;
+    }
     for (crd::u32 j = 0; j < op.num_results() && j < static_cast<crd::u32>(results.size()); ++j)
     {
         in.set_value(op.result(j), results[static_cast<crd::usize>(j)]);
@@ -526,7 +775,10 @@ ExecError eval_noop(Interpreter& /*in*/, const Operation& /*op*/) { return ExecE
 ExecError eval_launch(Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> ys(in.allocator());
-    if (const ExecError e = in.run_region(*op.region(0), &ys); e != ExecError::None) { return e; }
+    if (const ExecError e = in.run_region(*op.region(0), &ys); e != ExecError::None)
+    {
+        return e;
+    }
     const crd::u32 handle = in.store_yields(containers::ConstSpan<crd::i64>(ys.data(), ys.size()));
     in.set_value(op.result(0), static_cast<crd::i64>(handle)); // the token IS the store handle
     return ExecError::None;
@@ -534,8 +786,14 @@ ExecError eval_launch(Interpreter& in, const Operation& op)
 ExecError eval_await(Interpreter& in, const Operation& op)
 {
     crd::i64 tok = 0;
-    if (!in.value_of(op.operand(0), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return in.fail(ExecError::BadToken, &op); }
+    if (!in.value_of(op.operand(0), tok))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok)))
+    {
+        return in.fail(ExecError::BadToken, &op);
+    }
     const containers::ConstSpan<crd::i64> ys = in.stored_yields(static_cast<crd::u32>(tok));
     for (crd::u32 j = 0; j < op.num_results() && j < static_cast<crd::u32>(ys.size()); ++j)
     {
@@ -549,18 +807,33 @@ ExecError eval_await(Interpreter& in, const Operation& op)
 ExecError eval_continuation(Interpreter& in, const Operation& op)
 {
     crd::i64 tok = 0;
-    if (!in.value_of(op.operand(0), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return in.fail(ExecError::BadToken, &op); }
+    if (!in.value_of(op.operand(0), tok))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok)))
+    {
+        return in.fail(ExecError::BadToken, &op);
+    }
     const containers::ConstSpan<crd::i64> vals = in.stored_yields(static_cast<crd::u32>(tok));
     const Region* const                   body = op.region(0);
     Block* const                          eb   = body->first_block();
     if (eb != nullptr) // bind the antecedent's yields as the body's block-args (arity-checked — the invoke_region contract)
     {
-        if (eb->num_args() != static_cast<crd::u32>(vals.size())) { return in.fail(ExecError::BadArity, &op); }
-        for (crd::u32 i = 0; i < eb->num_args(); ++i) { in.set_value(eb->arg(i), vals[static_cast<crd::usize>(i)]); }
+        if (eb->num_args() != static_cast<crd::u32>(vals.size()))
+        {
+            return in.fail(ExecError::BadArity, &op);
+        }
+        for (crd::u32 i = 0; i < eb->num_args(); ++i)
+        {
+            in.set_value(eb->arg(i), vals[static_cast<crd::usize>(i)]);
+        }
     }
     containers::Array<crd::i64> ys(in.allocator());
-    if (const ExecError e = in.run_region(*body, &ys); e != ExecError::None) { return e; }
+    if (const ExecError e = in.run_region(*body, &ys); e != ExecError::None)
+    {
+        return e;
+    }
     const crd::u32 handle = in.store_yields(containers::ConstSpan<crd::i64>(ys.data(), ys.size()));
     in.set_value(op.result(0), static_cast<crd::i64>(handle)); // the new token IS the store handle
     return ExecError::None;
@@ -571,10 +844,19 @@ ExecError eval_join(Interpreter& in, const Operation& op)
     for (crd::u32 i = 0; i < op.num_operands(); ++i)
     {
         crd::i64 tok = 0;
-        if (!in.value_of(op.operand(i), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
-        if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return in.fail(ExecError::BadToken, &op); }
+        if (!in.value_of(op.operand(i), tok))
+        {
+            return in.fail(ExecError::UndefinedValue, &op);
+        }
+        if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok)))
+        {
+            return in.fail(ExecError::BadToken, &op);
+        }
         const containers::ConstSpan<crd::i64> ys = in.stored_yields(static_cast<crd::u32>(tok));
-        for (crd::usize k = 0; k < ys.size(); ++k) { merged.push_back(ys[k]); }
+        for (crd::usize k = 0; k < ys.size(); ++k)
+        {
+            merged.push_back(ys[k]);
+        }
     }
     in.set_value(op.result(0), static_cast<crd::i64>(in.store_yields(containers::ConstSpan<crd::i64>(merged.data(),
                                                                                                      merged.size()))));
@@ -585,15 +867,24 @@ ExecError eval_race(Interpreter& in, const Operation& op)
     for (crd::u32 i = 0; i < op.num_operands(); ++i)
     {
         crd::i64 t = 0;
-        if (!in.value_of(op.operand(i), t)) { return in.fail(ExecError::UndefinedValue, &op); }
+        if (!in.value_of(op.operand(i), t))
+        {
+            return in.fail(ExecError::UndefinedValue, &op);
+        }
     }
-    if (op.num_results() > 0U) { in.set_value(op.result(0), 0); } // the winning index (0, deterministically)
+    if (op.num_results() > 0U) // the winning index (0, deterministically)
+    {
+        in.set_value(op.result(0), 0);
+    }
     return ExecError::None;
 }
 ExecError eval_cancel(Interpreter& in, const Operation& op)
 {
     crd::i64 t = 0;
-    if (!in.value_of(op.operand(0), t)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!in.value_of(op.operand(0), t))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     return ExecError::None; // consume + no-op; real cancellation is CEIR-6c
 }
 
@@ -612,9 +903,15 @@ ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<cr
     {
         return in.fail(ExecError::UndefinedValue, &op);
     }
-    if (step <= 0) { return in.fail(ExecError::BadForStep, &op); }
+    if (step <= 0)
+    {
+        return in.fail(ExecError::BadForStep, &op);
+    }
     const Module* const m = in.module();
-    if (m == nullptr || m->symbols() == nullptr) { return in.fail(ExecError::NoEntry, &op); }
+    if (m == nullptr || m->symbols() == nullptr)
+    {
+        return in.fail(ExecError::NoEntry, &op);
+    }
     // legality AT the op (the SHARED core pre-flight — the map region: 1 block-arg, yields 1, state-free).
     if (const PreflightResult pf = check_parallel_region(in.ctx(), *m->symbols(), &op, op.region(0), 1U);
         pf.err != ExecError::None)
@@ -622,17 +919,29 @@ ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<cr
         return in.fail(pf.err, pf.op);
     }
     const crd::u32 count = (hi > lo) ? static_cast<crd::u32>((hi - lo + step - 1) / step) : 0U; // == the provider's count
-    for (crd::u32 i = 0; i < count; ++i) { out.push_back(0); }
-    if (count == 0U) { return ExecError::None; } // empty range: an empty map (matches the provider's empty store)
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        out.push_back(0);
+    }
+    if (count == 0U) // empty range: an empty map (matches the provider's empty store)
+    {
+        return ExecError::None;
+    }
     Interpreter sub(in, in.allocator(), in.fuel()); // ONE fresh sub (semantics copied; fresh env/cells/fuel)
     for (crd::u32 i = 0; i < count; ++i)
     {
-        if (in.cancelled()) { return in.fail(ExecError::Cancelled, &op); } // per-index (eval_for granularity)
+        if (in.cancelled()) // per-index (eval_for granularity)
+        {
+            return in.fail(ExecError::Cancelled, &op);
+        }
         const crd::i64              iv     = lo + static_cast<crd::i64>(i) * step;
         const crd::i64              iva[1] = {iv};
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(0), containers::ConstSpan<crd::i64>(iva, 1U), yield);
-        if (e != ExecError::None) { return in.fail(e, &op); }
+        if (e != ExecError::None)
+        {
+            return in.fail(e, &op);
+        }
         out[i] = (yield.size() >= 1U) ? yield[0] : 0; // pre-flight guarantees yield == 1
     }
     return ExecError::None;
@@ -640,14 +949,20 @@ ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<cr
 ExecError eval_parallel_for_seq(Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> out(in.allocator());
-    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None) { return e; }
+    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None)
+    {
+        return e;
+    }
     in.store_map_output(&op, std::move(out)); // statement op — no SSA result; the map is the map_output inspection
     return ExecError::None;
 }
 ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> out(in.allocator());
-    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None) { return e; } // region(0) = map
+    if (const ExecError e = run_seq_map(in, op, out); e != ExecError::None) // region(0) = map
+    {
+        return e;
+    }
     const Module* const m = in.module(); // (run_seq_map already validated m + symbols)
     // legality of the COMBINE region (2 block-args, yields 1, state-free).
     if (const PreflightResult pf = check_parallel_region(in.ctx(), *m->symbols(), &op, op.region(1), 2U);
@@ -656,14 +971,20 @@ ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
         return in.fail(pf.err, pf.op);
     }
     crd::i64 acc = 0;
-    if (!in.value_of(op.operand(3), acc)) { return in.fail(ExecError::UndefinedValue, &op); } // the init operand
+    if (!in.value_of(op.operand(3), acc)) // the init operand
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     Interpreter sub(in, in.allocator(), in.fuel());
     for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i) // SEQUENTIAL fold in INDEX order (the fixed order)
     {
         const crd::i64              ba[2] = {acc, out[i]}; // (acc, elem) in index order
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(1), containers::ConstSpan<crd::i64>(ba, 2U), yield);
-        if (e != ExecError::None) { return in.fail(e, &op); } // a fold-step error → the map_reduce op
+        if (e != ExecError::None) // a fold-step error → the map_reduce op
+        {
+            return in.fail(e, &op);
+        }
         acc = (yield.size() >= 1U) ? yield[0] : 0;
     }
     in.set_value(op.result(0U), acc);           // expression op — the reduced value is its SSA result
@@ -750,27 +1071,42 @@ namespace
 PreflightResult preflight_region_walk(const Context& ctx, const SymbolTable& syms, OpId call_kind, Region* r,
                                       containers::HashMap<const Operation*, crd::u8>& visited)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.has_trait(op->kind(), OpTrait::StateEdge)) { return {ExecError::ParallelBodyStateful, op}; }
+            if (ctx.has_trait(op->kind(), OpTrait::StateEdge))
+            {
+                return {ExecError::ParallelBodyStateful, op};
+            }
             if (op->kind() == call_kind) // interned-id compare (was a bridge-era "func.call" string match)
             {
                 Operation* const callee = func::resolve_call(ctx, op, syms);
-                if (callee == nullptr) { return {ExecError::UnresolvedCall, op}; }
+                if (callee == nullptr)
+                {
+                    return {ExecError::UnresolvedCall, op};
+                }
                 if (!visited.contains(callee))
                 {
                     visited.insert(callee, static_cast<crd::u8>(1));
                     const PreflightResult e = preflight_region_walk(ctx, syms, call_kind, callee->region(0), visited);
-                    if (e.err != ExecError::None) { return e; }
+                    if (e.err != ExecError::None)
+                    {
+                        return e;
+                    }
                 }
             }
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const PreflightResult e = preflight_region_walk(ctx, syms, call_kind, op->region(i), visited);
-                if (e.err != ExecError::None) { return e; }
+                if (e.err != ExecError::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -788,7 +1124,10 @@ PreflightResult check_parallel_region(Context& ctx, const SymbolTable& syms, con
                                       crd::u32 expect_args)
 {
     Block* const bb = (r != nullptr) ? r->first_block() : nullptr;
-    if (bb == nullptr || bb->num_args() != expect_args) { return {ExecError::BadArity, owner}; }
+    if (bb == nullptr || bb->num_args() != expect_args)
+    {
+        return {ExecError::BadArity, owner};
+    }
     Operation* const term = bb->last_op();
     if (term == nullptr || !ctx.has_trait(term->kind(), OpTrait::Terminator) || term->num_operands() != 1U)
     {
@@ -800,7 +1139,10 @@ PreflightResult check_parallel_region(Context& ctx, const SymbolTable& syms, con
 PreflightResult preflight_parallel(Context& ctx, const Module& module)
 {
     const SymbolTable* const syms = module.symbols();
-    if (syms == nullptr) { return {}; }
+    if (syms == nullptr)
+    {
+        return {};
+    }
     const OpId pf_kind = ctx.intern_op("task", "parallel_for");
     const OpId mr_kind = ctx.intern_op("task", "map_reduce");
     // collect every task.parallel_for + task.map_reduce (pre-order over the module body).
@@ -809,13 +1151,22 @@ PreflightResult preflight_parallel(Context& ctx, const Module& module)
     {
         static void go(Region* r, OpId pf, OpId mr, containers::Array<Operation*>& out)
         {
-            if (r == nullptr) { return; }
+            if (r == nullptr)
+            {
+                return;
+            }
             for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
             {
                 for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
                 {
-                    if (op->kind() == pf || op->kind() == mr) { out.push_back(op); }
-                    for (crd::u32 i = 0; i < op->num_regions(); ++i) { go(op->region(i), pf, mr, out); }
+                    if (op->kind() == pf || op->kind() == mr)
+                    {
+                        out.push_back(op);
+                    }
+                    for (crd::u32 i = 0; i < op->num_regions(); ++i)
+                    {
+                        go(op->region(i), pf, mr, out);
+                    }
                 }
             }
         }
@@ -846,7 +1197,10 @@ containers::Array<crd::u8> pin_values(containers::ConstSpan<crd::i64> values, me
     for (crd::usize k = 0; k < values.size(); ++k)
     {
         const auto u = static_cast<crd::u64>(values[k]);
-        for (crd::u32 b = 0; b < 8U; ++b) { out.push_back(static_cast<crd::u8>((u >> (8U * b)) & 0xFFU)); } // little-endian
+        for (crd::u32 b = 0; b < 8U; ++b) // little-endian
+        {
+            out.push_back(static_cast<crd::u8>((u >> (8U * b)) & 0xFFU));
+        }
     }
     return out;
 }

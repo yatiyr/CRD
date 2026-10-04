@@ -347,8 +347,14 @@ concavity_of_subset(const VoxelGrid&                                  grid,
     crd::u32 subset_count  = 0U;
 
     auto in_subset = [&](crd::u32 linear) noexcept -> bool {
-        if (linear >= parent_sidecar.size())            { return false; }
-        if (parent_sidecar[linear] != parent_id)         { return false; }
+        if (linear >= parent_sidecar.size())
+        {
+            return false;
+        }
+        if (parent_sidecar[linear] != parent_id)
+        {
+            return false;
+        }
         return left_side
             ? (axis_component(grid, linear, axis) <  position)
             : (axis_component(grid, linear, axis) >= position);
@@ -356,7 +362,10 @@ concavity_of_subset(const VoxelGrid&                                  grid,
 
     for (const crd::u32 linear : parent.voxel_indices)
     {
-        if (!in_subset(linear)) { continue; }
+        if (!in_subset(linear))
+        {
+            continue;
+        }
         ++subset_count;
 
         crd::u32 ix = 0U;
@@ -458,14 +467,20 @@ find_best_split(const VoxelGrid&                                  grid,
     {
         const crd::u32 lo = axis_min[a];
         const crd::u32 hi = axis_max[a]; // exclusive
-        if (hi <= lo + 1U) { continue; } // axis too thin to split
+        if (hi <= lo + 1U) // axis too thin to split
+        {
+            continue;
+        }
 
         for (crd::u32 s = 1U; s <= splits_per_axis; ++s)
         {
             // Position = lo + s*(hi-lo)/(splits_per_axis+1). Skips the
             // endpoints (which would produce an empty side).
             const crd::u32 position = lo + (s * (hi - lo)) / (splits_per_axis + 1U);
-            if (position <= lo || position >= hi) { continue; }
+            if (position <= lo || position >= hi)
+            {
+                continue;
+            }
 
             SplitPlane plane{};
             plane.axis     = static_cast<SplitAxis>(a);
@@ -482,7 +497,10 @@ find_best_split(const VoxelGrid&                                  grid,
                 plane.axis, plane.position, /*left_side*/ false,
                 grid_aabb, voxel_size_world, alloc, right_count);
 
-            if (left_count == 0U || right_count == 0U) { continue; }
+            if (left_count == 0U || right_count == 0U)
+            {
+                continue;
+            }
 
             const crd::f32 total = static_cast<crd::f32>(left_count + right_count);
             const crd::f32 imbalance =

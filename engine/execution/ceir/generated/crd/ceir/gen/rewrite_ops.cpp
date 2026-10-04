@@ -17,19 +17,53 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_rule(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("root");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
-    { const AttrId a = op.attr("constraint");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
-    { const AttrId a = op.attr("action");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
-    { const AttrId a = op.attr("result");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("operand");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("root");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("constraint");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("action");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("result");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("operand");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

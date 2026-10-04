@@ -160,7 +160,17 @@ TEST_CASE("SpatialBVHIndex overlap query returns matching entities",
     // Order isn't guaranteed by the API; check membership.
     bool saw_near = false;
     bool saw_other = false;
-    for (auto id : hits) { if (id == e_near) saw_near = true; if (id == e_other) saw_other = true; }
+    for (auto id : hits)
+    {
+        if (id == e_near)
+        {
+            saw_near = true;
+        }
+        if (id == e_other)
+        {
+            saw_other = true;
+        }
+    }
     REQUIRE(saw_near);
     REQUIRE(saw_other);
 
@@ -348,10 +358,17 @@ TEST_CASE("SpatialBVHIndex concurrent overlap queries via crd-jobs (proves natur
                 {
                     for (usize i = 0; i < got.size(); ++i)
                     {
-                        if (got[i].raw != corpus_ptr->ref[q][i].raw) { ok = false; break; }
+                        if (got[i].raw != corpus_ptr->ref[q][i].raw)
+                        {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);

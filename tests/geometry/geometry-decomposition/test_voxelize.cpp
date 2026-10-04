@@ -114,7 +114,10 @@ OwnedMesh build_unit_cube(crd::memory::IAllocator* alloc, Vec3<crd::f32> lo = {0
         3,7,6, 3,6,2,
     };
     m.indices.reserve(36);
-    for (const auto i : tri) { m.indices.push_back(i); }
+    for (const auto i : tri)
+    {
+        m.indices.push_back(i);
+    }
     return m;
 }
 
@@ -141,7 +144,10 @@ OwnedMesh build_octahedron(crd::memory::IAllocator* alloc, Vec3<crd::f32> centre
         2,0,5,  1,2,5,  3,1,5,  0,3,5,
     };
     m.indices.reserve(24);
-    for (const auto i : tri) { m.indices.push_back(i); }
+    for (const auto i : tri)
+    {
+        m.indices.push_back(i);
+    }
     return m;
 }
 

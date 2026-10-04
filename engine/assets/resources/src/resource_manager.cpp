@@ -515,7 +515,10 @@ CRD_NOINLINE void ResourceManager::try_evict_to_budget()
         {
             const ResourceId rid = m_a1in[i];
             ResourceControlBlock** pp = m_handles.find(rid);
-            if (pp == nullptr) { continue; }
+            if (pp == nullptr)
+            {
+                continue;
+            }
             ResourceControlBlock* b = *pp;
             if (b->state.load(std::memory_order_acquire) == LoadState::Ready
                 && b->use_count() == 0U
@@ -535,7 +538,10 @@ CRD_NOINLINE void ResourceManager::try_evict_to_budget()
             {
                 const ResourceId rid = m_am[i];
                 ResourceControlBlock** pp = m_handles.find(rid);
-                if (pp == nullptr) { continue; }
+                if (pp == nullptr)
+                {
+                    continue;
+                }
                 ResourceControlBlock* b = *pp;
                 if (b->state.load(std::memory_order_acquire) == LoadState::Ready
                     && b->use_count() == 0U

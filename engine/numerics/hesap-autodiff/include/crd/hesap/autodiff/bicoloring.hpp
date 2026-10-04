@@ -36,7 +36,10 @@ template <int W>
 [[nodiscard]] inline int pattern_degree(const JacPattern<W>& p) noexcept
 {
     int d = 0;
-    for (int w = 0; w < W; ++w) { d += std::popcount(p.bits[w]); }
+    for (int w = 0; w < W; ++w)
+    {
+        d += std::popcount(p.bits[w]);
+    }
     return d;
 }
 // do two row-patterns share a column? (dense-row conflict test)
@@ -45,7 +48,10 @@ template <int W>
 {
     for (int w = 0; w < W; ++w)
     {
-        if ((a.bits[w] & b.bits[w]) != 0U) { return true; }
+        if ((a.bits[w] & b.bits[w]) != 0U)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -57,10 +63,16 @@ template <int W>
 inline void bicolor_partition(const JacPattern<W>* rows, int m, int n, int tau, bool* is_dense, int* row_color,
                               int* col_color, int& ncol, int& nrow) noexcept
 {
-    for (int i = 0; i < m; ++i) { is_dense[i] = pattern_degree(rows[i]) >= tau; }
+    for (int i = 0; i < m; ++i)
+    {
+        is_dense[i] = pattern_degree(rows[i]) >= tau;
+    }
 
     // ---- forward side: distance-2 column coloring over the SPARSE rows only ----
-    for (int j = 0; j < n; ++j) { col_color[j] = -1; }
+    for (int j = 0; j < n; ++j)
+    {
+        col_color[j] = -1;
+    }
     ncol = 0;
     for (int j = 0; j < n; ++j)
     {
@@ -74,7 +86,10 @@ inline void bicolor_partition(const JacPattern<W>* rows, int m, int n, int tau, 
                 present = true;
             }
         }
-        if (!present) { continue; } // column j has no forward-recovered entry (only dense-row nonzeros, or none)
+        if (!present) // column j has no forward-recovered entry (only dense-row nonzeros, or none)
+        {
+            continue;
+        }
         JacPattern<W> forbidden{};
         for (int k = 0; k < n; ++k)
         {
@@ -84,17 +99,29 @@ inline void bicolor_partition(const JacPattern<W>* rows, int m, int n, int tau, 
             }
         }
         int c = 0;
-        while ((forbidden.bits[c >> 6] >> (c & 63)) & crd::u64{1}) { ++c; }
+        while ((forbidden.bits[c >> 6] >> (c & 63)) & crd::u64{1})
+        {
+            ++c;
+        }
         col_color[j] = c;
-        if (c + 1 > ncol) { ncol = c + 1; }
+        if (c + 1 > ncol)
+        {
+            ncol = c + 1;
+        }
     }
 
     // ---- reverse side: distance-2 row coloring over the DENSE rows (conflict iff two dense rows share a column) ----
-    for (int i = 0; i < m; ++i) { row_color[i] = -1; }
+    for (int i = 0; i < m; ++i)
+    {
+        row_color[i] = -1;
+    }
     nrow = 0;
     for (int i = 0; i < m; ++i)
     {
-        if (!is_dense[i]) { continue; }
+        if (!is_dense[i])
+        {
+            continue;
+        }
         JacPattern<W> forbidden{};
         for (int i2 = 0; i2 < m; ++i2)
         {
@@ -104,9 +131,15 @@ inline void bicolor_partition(const JacPattern<W>* rows, int m, int n, int tau, 
             }
         }
         int c = 0;
-        while ((forbidden.bits[c >> 6] >> (c & 63)) & crd::u64{1}) { ++c; }
+        while ((forbidden.bits[c >> 6] >> (c & 63)) & crd::u64{1})
+        {
+            ++c;
+        }
         row_color[i] = c;
-        if (c + 1 > nrow) { nrow = c + 1; }
+        if (c + 1 > nrow)
+        {
+            nrow = c + 1;
+        }
     }
 }
 
@@ -121,7 +154,10 @@ inline int bicolor_auto(const JacPattern<W>* rows, int m, int n, bool* is_dense,
     for (int i = 0; i < m; ++i)
     {
         const int d = pattern_degree(rows[i]);
-        if (d > maxdeg) { maxdeg = d; }
+        if (d > maxdeg)
+        {
+            maxdeg = d;
+        }
     }
     int best_total = n + m + 1;
     int best_tau   = maxdeg + 1;
@@ -157,25 +193,40 @@ inline void bicolor_recover(const F& f, ConstSpan<crd::f64> x, int m, const JacP
     // forward: ncol JVP sweeps -> B_fwd (m x ncol)
     for (int c = 0; c < ncol; ++c)
     {
-        for (int j = 0; j < n; ++j) { v[j] = (col_color[j] == c) ? 1.0 : 0.0; }
+        for (int j = 0; j < n; ++j)
+        {
+            v[j] = (col_color[j] == c) ? 1.0 : 0.0;
+        }
         forward::jvp(f, x, ConstSpan<crd::f64>(v.data(), n), m, bcol, ds, dy);
-        for (int i = 0; i < m; ++i) { bmat_f[i * ncol + c] = bcol[i]; }
+        for (int i = 0; i < m; ++i)
+        {
+            bmat_f[i * ncol + c] = bcol[i];
+        }
     }
     // reverse: build the Var graph ONCE, then nrow backward sweeps -> B_rev (n x nrow)
     if (nrow > 0)
     {
         tape.reset();
-        for (int i = 0; i < n; ++i) { xs[i] = make_leaf(tape, x[i]); }
+        for (int i = 0; i < n; ++i)
+        {
+            xs[i] = make_leaf(tape, x[i]);
+        }
         f(xs.data(), n, ys.data(), m);
         for (int g = 0; g < nrow; ++g)
         {
             tape.zero_adjoints();
             for (int i = 0; i < m; ++i)
             {
-                if (is_dense[i] && row_color[i] == g) { tape.seed(ys[i].node, 1.0); }
+                if (is_dense[i] && row_color[i] == g)
+                {
+                    tape.seed(ys[i].node, 1.0);
+                }
             }
             tape.backward();
-            for (int j = 0; j < n; ++j) { bmat_r[j * nrow + g] = tape.grad(xs[j].node); }
+            for (int j = 0; j < n; ++j)
+            {
+                bmat_r[j * nrow + g] = tape.grad(xs[j].node);
+            }
         }
     }
     // direct recovery: each nonzero reads its side's compressed entry; structural zeros stay 0.
@@ -183,9 +234,18 @@ inline void bicolor_recover(const F& f, ConstSpan<crd::f64> x, int m, const JacP
     {
         for (int k = 0; k < n; ++k)
         {
-            if (!rows[i].has(k)) { jac[i * n + k] = 0.0; }
-            else if (is_dense[i]) { jac[i * n + k] = bmat_r[k * nrow + row_color[i]]; }
-            else { jac[i * n + k] = bmat_f[i * ncol + col_color[k]]; }
+            if (!rows[i].has(k))
+            {
+                jac[i * n + k] = 0.0;
+            }
+            else if (is_dense[i])
+            {
+                jac[i * n + k] = bmat_r[k * nrow + row_color[i]];
+            }
+            else
+            {
+                jac[i * n + k] = bmat_f[i * ncol + col_color[k]];
+            }
         }
     }
 }

@@ -58,7 +58,10 @@ crd::containers::Array<u32> collect_sorted_payloads(const KdTree<f32>& tree,
     crd::containers::Array<u32> all(a);
     all.reserve(tree.point_count());
     const auto pt_idx = tree.point_indices();
-    for (usize i = 0; i < pt_idx.size(); ++i) { all.push_back(pt_idx[i]); }
+    for (usize i = 0; i < pt_idx.size(); ++i)
+    {
+        all.push_back(pt_idx[i]);
+    }
     std::sort(all.data(), all.data() + all.size());
     return all;
 }
@@ -94,7 +97,10 @@ TEST_CASE("kd_build coincident points all land in one leaf", "[geometry-spatial]
 {
     AllocFixture f{};
     crd::containers::Array<Vec3f> pts(&f.alloc);
-    for (int i = 0; i < 16; ++i) { pts.push_back(Vec3f{0.5F, 0.5F, 0.5F}); }
+    for (int i = 0; i < 16; ++i)
+    {
+        pts.push_back(Vec3f{0.5F, 0.5F, 0.5F});
+    }
     auto tree = kd_build<f32>(crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()},
                                &f.alloc, KdBuildOptions{8U});
     // 16 coincident points / leaf=8 → splits, but since all coords are equal,
@@ -102,7 +108,10 @@ TEST_CASE("kd_build coincident points all land in one leaf", "[geometry-spatial]
     // contain every point exactly once.
     REQUIRE(tree.point_count() == 16U);
     auto sorted = collect_sorted_payloads(tree, &f.alloc);
-    for (u32 i = 0; i < 16U; ++i) { REQUIRE(sorted[i] == i); }
+    for (u32 i = 0; i < 16U; ++i)
+    {
+        REQUIRE(sorted[i] == i);
+    }
 }
 
 TEST_CASE("kd_build colinear points along X axis", "[geometry-spatial][kd][build]")
@@ -157,7 +166,10 @@ TEST_CASE("kd_build permutation determinism", "[geometry-spatial][kd][build][det
     {
         crd::containers::Array<Vec3f> shuffled(&f.alloc);
         shuffled.reserve(k_n);
-        for (u32 i = 0; i < k_n; ++i) { shuffled.push_back(base[i]); }
+        for (u32 i = 0; i < k_n; ++i)
+        {
+            shuffled.push_back(base[i]);
+        }
         std::mt19937 r(seed * 1000U);
         std::shuffle(shuffled.data(), shuffled.data() + shuffled.size(), r);
 
@@ -173,18 +185,33 @@ TEST_CASE("kd_build permutation determinism", "[geometry-spatial][kd][build][det
         crd::containers::Array<Vec3f> shuf_pos(&f.alloc);
         const auto pi_b = tree_base.point_indices();
         const auto pi_s = tree_s.point_indices();
-        for (usize i = 0; i < pi_b.size(); ++i) { base_pos.push_back(base[pi_b[i]]); }
-        for (usize i = 0; i < pi_s.size(); ++i) { shuf_pos.push_back(shuffled[pi_s[i]]); }
+        for (usize i = 0; i < pi_b.size(); ++i)
+        {
+            base_pos.push_back(base[pi_b[i]]);
+        }
+        for (usize i = 0; i < pi_s.size(); ++i)
+        {
+            shuf_pos.push_back(shuffled[pi_s[i]]);
+        }
 
         // Sort both by lex order and compare — set equality on positions.
         auto lex = [](const Vec3f& a, const Vec3f& b) {
-            if (a.x != b.x) return a.x < b.x;
-            if (a.y != b.y) return a.y < b.y;
+            if (a.x != b.x)
+            {
+                return a.x < b.x;
+            }
+            if (a.y != b.y)
+            {
+                return a.y < b.y;
+            }
             return a.z < b.z;
         };
         std::sort(base_pos.data(), base_pos.data() + base_pos.size(), lex);
         std::sort(shuf_pos.data(), shuf_pos.data() + shuf_pos.size(), lex);
-        for (usize i = 0; i < k_n; ++i) { REQUIRE(base_pos[i] == shuf_pos[i]); }
+        for (usize i = 0; i < k_n; ++i)
+        {
+            REQUIRE(base_pos[i] == shuf_pos[i]);
+        }
     }
 }
 

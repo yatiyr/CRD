@@ -29,8 +29,14 @@ struct EdgeRec
 
 inline bool edge_less(const EdgeRec& a, const EdgeRec& b) noexcept
 {
-    if (a.v_lo != b.v_lo) return a.v_lo < b.v_lo;
-    if (a.v_hi != b.v_hi) return a.v_hi < b.v_hi;
+    if (a.v_lo != b.v_lo)
+    {
+        return a.v_lo < b.v_lo;
+    }
+    if (a.v_hi != b.v_hi)
+    {
+        return a.v_hi < b.v_hi;
+    }
     return a.tri < b.tri;
 }
 
@@ -74,8 +80,14 @@ validate_triangle_mesh(const TriangleMeshViewf&        view,
         if (i0 >= vcount || i1 >= vcount || i2 >= vcount)
         {
             crd::u32 bad = i2;
-            if (i0 >= vcount)      { bad = i0; }
-            else if (i1 >= vcount) { bad = i1; }
+            if (i0 >= vcount)
+            {
+                bad = i0;
+            }
+            else if (i1 >= vcount)
+            {
+                bad = i1;
+            }
             report.defects.push_back(MeshDefect{MeshDefectKind::OutOfBoundsIndex, ti, bad});
             critical_defect = true;
             continue; // skip the rest of this tri's checks — its vertex reads are unsafe
@@ -108,8 +120,14 @@ validate_triangle_mesh(const TriangleMeshViewf&        view,
         const crd::u32 i0 = view.indices[ti * 3U + 0U];
         const crd::u32 i1 = view.indices[ti * 3U + 1U];
         const crd::u32 i2 = view.indices[ti * 3U + 2U];
-        if (i0 >= vcount || i1 >= vcount || i2 >= vcount) { continue; }
-        if (i0 == i1 || i1 == i2 || i2 == i0)            { continue; }
+        if (i0 >= vcount || i1 >= vcount || i2 >= vcount)
+        {
+            continue;
+        }
+        if (i0 == i1 || i1 == i2 || i2 == i0)
+        {
+            continue;
+        }
         const crd::u32 e[3][2] = {{i0, i1}, {i1, i2}, {i2, i0}};
         for (int k = 0; k < 3; ++k)
         {

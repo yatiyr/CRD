@@ -32,10 +32,16 @@ bool obek_file_resolver(crd::containers::StringView path,
                         void*                       ud_void)
 {
     auto* io = static_cast<CookIO*>(ud_void);
-    if (io == nullptr) { return false; }
+    if (io == nullptr)
+    {
+        return false;
+    }
 
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (!io->read_input(path, bytes)) { return false; }
+    if (!io->read_input(path, bytes))
+    {
+        return false;
+    }
     out_text.clear();
     out_text.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return true;
@@ -47,7 +53,9 @@ CookResult obek_handler(const CookContext& ctx)
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
     if (!ctx.io->read_source(src_bytes))
+    {
         return result;
+    }
     crd::containers::String text(ctx.allocator);
     text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 

@@ -62,8 +62,14 @@ Block* mkmain(Context& ctx, Module& m)
 Operation* decl_res(Context& ctx, const Kit& k, Block* b, const char* lifetime, i64 size_class, TypeId ty)
 {
     Operation* const d = ctx.create_operation(k.decl, {}, 1U, ty);
-    if (lifetime != nullptr) { ctx.set_attr(d, "lifetime", ctx.attr_string(containers::StringView(lifetime))); }
-    if (size_class != 0) { ctx.set_attr(d, "size_class", ctx.attr_int(size_class)); }
+    if (lifetime != nullptr)
+    {
+        ctx.set_attr(d, "lifetime", ctx.attr_string(containers::StringView(lifetime)));
+    }
+    if (size_class != 0)
+    {
+        ctx.set_attr(d, "size_class", ctx.attr_int(size_class));
+    }
     b->append(d);
     return d;
 }
@@ -79,7 +85,10 @@ const ResourceLifetime* find_lt(const Array<ResourceLifetime>& lts, const Operat
 {
     for (usize i = 0; i < lts.size(); ++i)
     {
-        if (lts[i].declare == d) { return &lts[i]; }
+        if (lts[i].declare == d)
+        {
+            return &lts[i];
+        }
     }
     return nullptr;
 }

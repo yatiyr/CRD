@@ -125,9 +125,18 @@ TEST_CASE("viz::draw_overlap_pairs_with: one line per overlapping pair", "[geome
     (void)dt.insert(AABB3<f32>(Vec3f(50, 0, 0), Vec3f(52, 2, 2)), 30U);
     // user_data → position lookup table; matches the values we inserted.
     auto lookup = [](u32 ud) -> Vec3f {
-        if (ud == 10U) return Vec3f(0, 0, 0);
-        if (ud == 20U) return Vec3f(1, 1, 1);
-        if (ud == 30U) return Vec3f(51, 1, 1);
+        if (ud == 10U)
+        {
+            return Vec3f(0, 0, 0);
+        }
+        if (ud == 20U)
+        {
+            return Vec3f(1, 1, 1);
+        }
+        if (ud == 30U)
+        {
+            return Vec3f(51, 1, 1);
+        }
         return Vec3f(0, 0, 0);
     };
     RenderBuffer buf(&alloc);

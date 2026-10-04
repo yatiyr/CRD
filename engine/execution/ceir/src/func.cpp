@@ -9,8 +9,14 @@ namespace
 // The `sym_visibility` keyword MLIR uses; Public is the default and carries NO attribute (its absence == public).
 [[nodiscard]] containers::StringView visibility_keyword(Visibility vis) noexcept
 {
-    if (vis == Visibility::Private) { return containers::StringView("private"); }
-    if (vis == Visibility::Nested) { return containers::StringView("nested"); }
+    if (vis == Visibility::Private)
+    {
+        return containers::StringView("private");
+    }
+    if (vis == Visibility::Nested)
+    {
+        return containers::StringView("nested");
+    }
     return {}; // Public
 }
 } // namespace
@@ -20,7 +26,10 @@ Operation* create_func(Context& ctx, Module& module, containers::StringView name
 {
     SymbolTable* const symbols = module.symbols();
     CRD_ASSERT_MSG(symbols != nullptr, "module has no symbol table");
-    if (name.empty() || symbols->contains(name)) { return nullptr; } // no anonymous funcs; no silent redefinition
+    if (name.empty() || symbols->contains(name)) // no anonymous funcs; no silent redefinition
+    {
+        return nullptr;
+    }
     Operation* const op    = ctx.create_operation(func_kind(ctx), {}, 0U, {}, 1U); // no results; one body region
     Block* const     entry = ctx.create_block(num_params, param_type);             // params = the entry block's args
     op->region(0)->append(entry);
@@ -29,7 +38,10 @@ Operation* create_func(Context& ctx, Module& module, containers::StringView name
     // and round-trips through the generic attribute machinery — the parser rebuilds the table from these attrs.
     ctx.set_attr(op, "sym_name", ctx.attr_string(name));
     const containers::StringView vis_kw = visibility_keyword(vis);
-    if (!vis_kw.empty()) { ctx.set_attr(op, "sym_visibility", ctx.attr_string(vis_kw)); }
+    if (!vis_kw.empty())
+    {
+        ctx.set_attr(op, "sym_visibility", ctx.attr_string(vis_kw));
+    }
     const bool ok = symbols->define(ctx.intern_symbol(name), op, vis);
     CRD_ASSERT_MSG(ok, "define after a passing contains() check must succeed");
     (void)ok;
@@ -38,7 +50,10 @@ Operation* create_func(Context& ctx, Module& module, containers::StringView name
 
 Block* func_body_block(Operation* func_op) noexcept
 {
-    if (func_op == nullptr || func_op->num_regions() == 0U) { return nullptr; }
+    if (func_op == nullptr || func_op->num_regions() == 0U)
+    {
+        return nullptr;
+    }
     Region* const body = func_op->region(0);
     return body != nullptr ? body->first_block() : nullptr;
 }
@@ -59,9 +74,15 @@ Operation* create_call(Context& ctx, containers::StringView callee, containers::
 Operation* resolve_call(const Context& ctx, const Operation* call, const SymbolTable& table)
 {
     const AttrId id = call->attr("callee");
-    if (!id.valid()) { return nullptr; }
+    if (!id.valid())
+    {
+        return nullptr;
+    }
     const AttrValue v = ctx.attr_value(id);
-    if (v.kind != AttrKind::SymbolRef) { return nullptr; }
+    if (v.kind != AttrKind::SymbolRef)
+    {
+        return nullptr;
+    }
     const SymbolEntry* const e = table.lookup(v.s);
     return e != nullptr ? e->op : nullptr;
 }
@@ -80,7 +101,10 @@ bool verify_func_return(const Context& /*ctx*/, const Operation& op) noexcept { 
 // `ExternalCall` fallback stands (the conservative no-table baseline).
 bool call_effects_fn(const Context& ctx, const Operation& call, const EffectQuery& q, u64& mask) // u64 mask (CEIR-8c)
 {
-    if (q.symbols == nullptr) { return false; } // no resolver ⇒ decline ⇒ the registered static ExternalCall stands
+    if (q.symbols == nullptr) // no resolver ⇒ decline ⇒ the registered static ExternalCall stands
+    {
+        return false;
+    }
     Operation* const callee = resolve_call(ctx, &call, *q.symbols);
     if (callee == nullptr)
     {
@@ -89,11 +113,17 @@ bool call_effects_fn(const Context& ctx, const Operation& call, const EffectQuer
     }
     if (q.visited != nullptr)
     {
-        if (q.visited->contains(callee)) { return true; }   // recursion: this callee is already a union member up-stack
+        if (q.visited->contains(callee)) // recursion: this callee is already a union member up-stack
+        {
+            return true;
+        }
         q.visited->insert(callee, static_cast<u8>(1));
     }
     Region* const body = callee->num_regions() > 0U ? callee->region(0) : nullptr;
-    if (body != nullptr) { ctx.collect_region_effective_mask(*body, q, mask); }
+    if (body != nullptr)
+    {
+        ctx.collect_region_effective_mask(*body, q, mask);
+    }
     return true;
 }
 } // namespace
@@ -157,7 +187,10 @@ bool recursion_policy_of(const Context& ctx, const Operation& func_op, Recursion
         return true;
     }
     const AttrValue v = ctx.attr_value(id);
-    if (v.kind != AttrKind::Int || v.i < 0 || v.i > static_cast<i64>(RecursionPolicy::Unbounded)) { return false; }
+    if (v.kind != AttrKind::Int || v.i < 0 || v.i > static_cast<i64>(RecursionPolicy::Unbounded))
+    {
+        return false;
+    }
     out = static_cast<RecursionPolicy>(v.i);
     return true;
 }
@@ -165,9 +198,15 @@ bool recursion_policy_of(const Context& ctx, const Operation& func_op, Recursion
 u32 recursion_max_depth_of(const Context& ctx, const Operation& func_op) noexcept
 {
     const AttrId id = func_op.attr("recursion_max_depth");
-    if (!id.valid()) { return 0U; }
+    if (!id.valid())
+    {
+        return 0U;
+    }
     const AttrValue v = ctx.attr_value(id);
-    if (v.kind != AttrKind::Int || v.i < 0) { return 0U; }
+    if (v.kind != AttrKind::Int || v.i < 0)
+    {
+        return 0U;
+    }
     return static_cast<u32>(v.i);
 }
 
@@ -177,7 +216,10 @@ namespace
 // `func.call` ops and resolves each against `table`. Unresolved calls are skipped (an unverifiable edge — single-module).
 void collect_callees(const Context& ctx, Region* r, const SymbolTable& table, containers::Array<Operation*>& out)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -185,9 +227,15 @@ void collect_callees(const Context& ctx, Region* r, const SymbolTable& table, co
             if (ctx.op_name(op->kind()) == containers::StringView("func.call"))
             {
                 Operation* const callee = resolve_call(ctx, op, table);
-                if (callee != nullptr) { out.push_back(callee); }
+                if (callee != nullptr)
+                {
+                    out.push_back(callee);
+                }
             }
-            for (u32 i = 0; i < op->num_regions(); ++i) { collect_callees(ctx, op->region(i), table, out); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_callees(ctx, op->region(i), table, out);
+            }
         }
     }
 }
@@ -203,10 +251,19 @@ bool call_reaches(const Context& ctx, Operation* cur, Operation* target, const S
     for (u32 i = 0; i < static_cast<u32>(callees.size()); ++i)
     {
         Operation* const c = callees[i];
-        if (c == target) { return true; }
-        if (seen.contains(c)) { continue; }
+        if (c == target)
+        {
+            return true;
+        }
+        if (seen.contains(c))
+        {
+            continue;
+        }
         seen.insert(c, static_cast<u8>(1));
-        if (call_reaches(ctx, c, target, table, seen)) { return true; }
+        if (call_reaches(ctx, c, target, table, seen))
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -214,13 +271,22 @@ bool call_reaches(const Context& ctx, Operation* cur, Operation* target, const S
 // Collect the Symbol-defining ops (func.func) under region `r` in PRE-ORDER (the printer's deterministic walk).
 void collect_symbol_ops(const Context& ctx, Region* r, containers::Array<Operation*>& out)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.has_trait(op->kind(), OpTrait::Symbol)) { out.push_back(op); }
-            for (u32 i = 0; i < op->num_regions(); ++i) { collect_symbol_ops(ctx, op->region(i), out); }
+            if (ctx.has_trait(op->kind(), OpTrait::Symbol))
+            {
+                out.push_back(op);
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_symbol_ops(ctx, op->region(i), out);
+            }
         }
     }
 }
@@ -234,7 +300,10 @@ RecursionViolation find_recursion_violation(const Context& ctx, const Module& m,
     {
         Operation* const f = funcs[i];
         RecursionPolicy  p = RecursionPolicy::Unspecified;
-        if (!recursion_policy_of(ctx, *f, p)) { return {f, RecursionViolationKind::InvalidPolicyAttr}; }
+        if (!recursion_policy_of(ctx, *f, p))
+        {
+            return {f, RecursionViolationKind::InvalidPolicyAttr};
+        }
         if (p == RecursionPolicy::Bounded && recursion_max_depth_of(ctx, *f) < 1U)
         {
             return {f, RecursionViolationKind::BoundedMissingDepth}; // ⛔ declared words must be validated
@@ -242,7 +311,10 @@ RecursionViolation find_recursion_violation(const Context& ctx, const Module& m,
         if (p == RecursionPolicy::None)
         {
             containers::HashMap<const Operation*, u8> seen(ctx.allocator());
-            if (call_reaches(ctx, f, f, table, seen)) { return {f, RecursionViolationKind::DeclaredNoneRecurses}; }
+            if (call_reaches(ctx, f, f, table, seen))
+            {
+                return {f, RecursionViolationKind::DeclaredNoneRecurses};
+            }
         }
     }
     return {};

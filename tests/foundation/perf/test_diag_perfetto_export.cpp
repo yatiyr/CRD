@@ -172,7 +172,9 @@ namespace
 void append_us(crd::containers::String& s, crd::i64 ns)
 {
     if (ns < 0)
+    {
         ns = 0;
+    }
     const crd::u64 whole = static_cast<crd::u64>(ns) / 1000ULL;
     const crd::u64 frac  = static_cast<crd::u64>(ns) % 1000ULL;
     char           buf[20];
@@ -190,7 +192,9 @@ void append_us(crd::containers::String& s, crd::i64 ns)
             w /= 10U;
         }
         while (n-- > 0)
+        {
             s.push_back(buf[n]);
+        }
     }
     s.push_back('.');
     s.push_back(static_cast<char>('0' + (frac / 100ULL) % 10ULL));
@@ -231,24 +235,38 @@ void append_us(crd::containers::String& s, crd::i64 ns)
         if (in_string)
         {
             if (escaped)
+            {
                 escaped = false;
+            }
             else if (c == '\\')
+            {
                 escaped = true;
+            }
             else if (c == '"')
+            {
                 in_string = false;
+            }
             else if (static_cast<unsigned char>(c) < 0x20U)
+            {
                 return false; // unescaped control byte in a string
+            }
         }
         else
         {
             if (c == '"')
+            {
                 in_string = true;
+            }
             else if (c == '{' || c == '[')
+            {
                 ++depth;
+            }
             else if (c == '}' || c == ']')
             {
                 if (--depth < 0)
+                {
                     return false;
+                }
             }
         }
     }
@@ -343,7 +361,9 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
         int  dn = 0;
         crd::u32 dv = hot.depth;
         if (dv == 0U)
+        {
             depthfrag.push_back('0');
+        }
         else
         {
             while (dv > 0U)
@@ -352,7 +372,9 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
                 dv /= 10U;
             }
             while (dn-- > 0)
+            {
                 depthfrag.push_back(db[dn]);
+            }
         }
         CHECK(contains(out, depthfrag.c_str()));
     }

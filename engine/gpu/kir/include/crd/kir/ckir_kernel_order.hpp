@@ -44,19 +44,37 @@ public:
 
     [[nodiscard]] bool must_defer(int node)
     {
-        if (node < 0) { return false; }
+        if (node < 0)
+        {
+            return false;
+        }
         const auto index = static_cast<crd::usize>(node);
-        if (m_deferred[index] >= 0) { return m_deferred[index] != 0; }
+        if (m_deferred[index] >= 0)
+        {
+            return m_deferred[index] != 0;
+        }
         const KNode& value = m_graph.node(node);
         bool deferred = m_materialized[index] != 0U;
         if (!deferred && (value.op == KOp::BufferLoad || value.op == KOp::SharedLoad) && value.a >= 0)
         {
             deferred = m_written[static_cast<crd::usize>(value.a)] != 0U;
         }
-        if (!deferred) { deferred = must_defer(value.a); }
-        if (!deferred) { deferred = must_defer(value.b); }
-        if (!deferred) { deferred = must_defer(value.c); }
-        if (!deferred) { deferred = must_defer(value.d); }
+        if (!deferred)
+        {
+            deferred = must_defer(value.a);
+        }
+        if (!deferred)
+        {
+            deferred = must_defer(value.b);
+        }
+        if (!deferred)
+        {
+            deferred = must_defer(value.c);
+        }
+        if (!deferred)
+        {
+            deferred = must_defer(value.d);
+        }
         for (int operand = 0; !deferred && operand < static_cast<int>(value.n_ext); ++operand)
         {
             deferred = must_defer(m_graph.ext_operand(value, operand));

@@ -24,8 +24,14 @@ namespace hi = crd::hesap::interp;
         const crd::usize base = k * span + (interp == hi::KeyInterp::CubicHermite ? 4U : 0U);
         return {values[base + 0U], values[base + 1U], values[base + 2U], values[base + 3U]};
     };
-    if (n == 1U || t <= times[0]) { return crd::math::normalized(key_quat(t <= times[0] ? 0U : n - 1U)); }
-    if (t >= times[n - 1U]) { return crd::math::normalized(key_quat(n - 1U)); }
+    if (n == 1U || t <= times[0])
+    {
+        return crd::math::normalized(key_quat(t <= times[0] ? 0U : n - 1U));
+    }
+    if (t >= times[n - 1U])
+    {
+        return crd::math::normalized(key_quat(n - 1U));
+    }
 
     if (interp == hi::KeyInterp::CubicHermite)
     {
@@ -40,7 +46,10 @@ namespace hi = crd::hesap::interp;
 
     crd::usize       cache = 0;
     const crd::usize i     = hi::find_segment(times, t, cache);
-    if (interp == hi::KeyInterp::Step) { return crd::math::normalized(key_quat(i)); }
+    if (interp == hi::KeyInterp::Step)
+    {
+        return crd::math::normalized(key_quat(i));
+    }
     const crd::f32 u = (t - times[i]) / (times[i + 1U] - times[i]);
     return crd::math::slerp(crd::math::normalized(key_quat(i)), crd::math::normalized(key_quat(i + 1U)), u);
 }
@@ -51,7 +60,10 @@ void sample_clip(const AnimClipResource& clip, const SkeletonResource& skeleton,
                  crd::containers::Span<JointPose> out_poses, crd::containers::Span<crd::f32> out_floats) noexcept
 {
     const crd::u32 n = skeleton.joint_count();
-    if (out_poses.size() < n) { return; }
+    if (out_poses.size() < n)
+    {
+        return;
+    }
 
     // rest pose first — untracked joints (and untracked channels of tracked joints) hold it
     for (crd::u32 j = 0; j < n; ++j)
@@ -83,7 +95,10 @@ void sample_clip(const AnimClipResource& clip, const SkeletonResource& skeleton,
             float_cursor += track.components;
             continue;
         }
-        if (track.target >= n) { continue; } // a foreign track never writes out of range
+        if (track.target >= n) // a foreign track never writes out of range
+        {
+            continue;
+        }
 
         JointPose& pose = out_poses[track.target];
         switch (static_cast<AnimChannel>(track.channel))
@@ -115,7 +130,10 @@ void compute_pose_matrices(const SkeletonResource& skeleton, crd::containers::Co
                            crd::containers::Span<crd::math::Mat4f> out_world) noexcept
 {
     const crd::u32 n = skeleton.joint_count();
-    if (poses.size() < n || out_world.size() < n) { return; }
+    if (poses.size() < n || out_world.size() < n)
+    {
+        return;
+    }
     for (crd::u32 j = 0; j < n; ++j) // parents[j] < j — one forward pass, the cook's topological contract
     {
         const crd::math::Mat4f local =
@@ -129,7 +147,10 @@ void compute_skin_palette(const SkeletonResource& skeleton, crd::containers::Con
                           crd::containers::Span<crd::math::Mat4f> out_palette) noexcept
 {
     const crd::u32 n = skeleton.joint_count();
-    if (world.size() < n || out_palette.size() < n) { return; }
+    if (world.size() < n || out_palette.size() < n)
+    {
+        return;
+    }
     for (crd::u32 j = 0; j < n; ++j)
     {
         crd::math::Mat4f ibm;

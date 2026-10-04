@@ -73,8 +73,16 @@ inline CanonSeg<T> canonicalise(const BOSegment<T>& s) noexcept
     const auto& a = s.a;
     const auto& b = s.b;
     const bool a_lower = (a.y < b.y) || (a.y == b.y && a.x <= b.x);
-    if (a_lower) { c.lo = a; c.hi = b; }
-    else         { c.lo = b; c.hi = a; }
+    if (a_lower)
+    {
+        c.lo = a;
+        c.hi = b;
+    }
+    else
+    {
+        c.lo = b;
+        c.hi = a;
+    }
     return c;
 }
 
@@ -109,7 +117,10 @@ SSHit<T> segment_segment_intersect_full(const crd::math::Vec2<T>& a1,
         const T dbx = b2.x - b1.x;
         const T dby = b2.y - b1.y;
         const T denom = dax * dby - day * dbx;
-        if (denom == T{0}) { return {}; }
+        if (denom == T{0})
+        {
+            return {};
+        }
         const T ta = ((b1.x - a1.x) * dby - (b1.y - a1.y) * dbx) / denom;
         SSHit<T> h;
         h.hit   = true;
@@ -127,10 +138,22 @@ SSHit<T> segment_segment_intersect_full(const crd::math::Vec2<T>& a1,
     };
 
     // Endpoint-on-other-segment cases. orient == 0 + on_segment_closed.
-    if (o1 == T{0} && on_seg_closed(a1, a2, b1)) { return SSHit<T>{true, b1}; }
-    if (o2 == T{0} && on_seg_closed(a1, a2, b2)) { return SSHit<T>{true, b2}; }
-    if (o3 == T{0} && on_seg_closed(b1, b2, a1)) { return SSHit<T>{true, a1}; }
-    if (o4 == T{0} && on_seg_closed(b1, b2, a2)) { return SSHit<T>{true, a2}; }
+    if (o1 == T{0} && on_seg_closed(a1, a2, b1))
+    {
+        return SSHit<T>{true, b1};
+    }
+    if (o2 == T{0} && on_seg_closed(a1, a2, b2))
+    {
+        return SSHit<T>{true, b2};
+    }
+    if (o3 == T{0} && on_seg_closed(b1, b2, a1))
+    {
+        return SSHit<T>{true, a1};
+    }
+    if (o4 == T{0} && on_seg_closed(b1, b2, a2))
+    {
+        return SSHit<T>{true, a2};
+    }
 
     return {};
 }
@@ -163,13 +186,22 @@ struct Event
 template <crd::math::MathScalar T>
 inline bool event_lex_less(const Event<T>& l, const Event<T>& r) noexcept
 {
-    if (l.y != r.y) { return l.y < r.y; }
-    if (l.x != r.x) { return l.x < r.x; }
+    if (l.y != r.y)
+    {
+        return l.y < r.y;
+    }
+    if (l.x != r.x)
+    {
+        return l.x < r.x;
+    }
     if (l.kind != r.kind)
     {
         return static_cast<crd::u8>(l.kind) < static_cast<crd::u8>(r.kind);
     }
-    if (l.seg_a != r.seg_a) { return l.seg_a < r.seg_a; }
+    if (l.seg_a != r.seg_a)
+    {
+        return l.seg_a < r.seg_a;
+    }
     return l.seg_b < r.seg_b;
 }
 
@@ -192,7 +224,10 @@ inline T x_at_y(const CanonSeg<T>& s, T sweep_y) noexcept
     // ordering, lo.y <= hi.y. For a non-horizontal segment, x_at_y is well-
     // defined for sweep_y in [lo.y, hi.y].
     const T dy = s.hi.y - s.lo.y;
-    if (dy == T{0}) { return s.lo.x; } // horizontal — caller shouldn't call here
+    if (dy == T{0}) // horizontal — caller shouldn't call here
+    {
+        return s.lo.x;
+    }
     const T dx = s.hi.x - s.lo.x;
     const T t  = (sweep_y - s.lo.y) / dy;
     return s.lo.x + t * dx;
@@ -240,8 +275,14 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
     crd::containers::Array<crd::u32> nonhoriz_idx(alloc);
     for (crd::u32 i = 0; i < segs.size(); ++i)
     {
-        if (segs[i].lo.y == segs[i].hi.y) { horiz_idx.push_back(i); }
-        else { nonhoriz_idx.push_back(i); }
+        if (segs[i].lo.y == segs[i].hi.y)
+        {
+            horiz_idx.push_back(i);
+        }
+        else
+        {
+            nonhoriz_idx.push_back(i);
+        }
     }
 
     // -- Initialise event queue with Start/End for every non-horizontal --
@@ -282,7 +323,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         const crd::u64 k = pair_key(a, b);
         for (crd::usize i = 0; i < reported.size(); ++i)
         {
-            if (reported[i] == k) { return true; }
+            if (reported[i] == k)
+            {
+                return true;
+            }
         }
         return false;
     };
@@ -290,7 +334,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         reported.push_back(pair_key(a, b));
     };
     auto emit = [&](crd::u32 a, crd::u32 b, const crd::math::Vec2<T>& p) noexcept {
-        if (already_reported(a, b)) { return; }
+        if (already_reported(a, b))
+        {
+            return;
+        }
         mark_reported(a, b);
         BOIntersection<T> rec{};
         rec.segment_a = a;
@@ -303,15 +350,27 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         // Test segments a and b for intersection AT OR ABOVE sweep_y. If
         // they intersect at a point above the sweep line, enqueue an
         // Intersection event (so it gets processed at the proper time).
-        if (a == b) { return; }
+        if (a == b)
+        {
+            return;
+        }
         const auto& sa = segs[a];
         const auto& sb = segs[b];
         const auto  hit = segment_segment_intersect_full<T>(sa.lo, sa.hi, sb.lo, sb.hi);
-        if (!hit.hit) { return; }
-        if (hit.point.y < sweep_y) { return; }
+        if (!hit.hit)
+        {
+            return;
+        }
+        if (hit.point.y < sweep_y)
+        {
+            return;
+        }
         // Skip the event if we've already reported this pair (avoid re-
         // enqueueing the same intersection many times).
-        if (already_reported(a, b)) { return; }
+        if (already_reported(a, b))
+        {
+            return;
+        }
         Event<T> e{};
         e.y     = hit.point.y;
         e.x     = hit.point.x;
@@ -333,8 +392,14 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         {
             const crd::u32 mid = (lo + hi) / 2U;
             const T        xm  = x_at_y(segs[status[mid]], sweep_y);
-            if (xm < xn || (xm == xn && status[mid] < seg_id)) { lo = mid + 1U; }
-            else { hi = mid; }
+            if (xm < xn || (xm == xn && status[mid] < seg_id))
+            {
+                lo = mid + 1U;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
         return lo;
     };
@@ -342,7 +407,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
     auto status_find = [&](crd::u32 seg_id) noexcept {
         for (crd::u32 i = 0; i < status.size(); ++i)
         {
-            if (status[i] == seg_id) { return i; }
+            if (status[i] == seg_id)
+            {
+                return i;
+            }
         }
         return kNullIdx;
     };
@@ -358,7 +426,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
 
     auto status_erase_at = [&](crd::u32 pos) noexcept {
         const crd::u32 last = static_cast<crd::u32>(status.size()) - 1U;
-        for (crd::u32 i = pos; i < last; ++i) { status[i] = status[i + 1U]; }
+        for (crd::u32 i = pos; i < last; ++i)
+        {
+            status[i] = status[i + 1U];
+        }
         status.pop_back();
     };
 
@@ -374,7 +445,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         {
             const crd::u32 pos = status_insert_position(e.seg_a, e.y);
             status_insert_at(pos, e.seg_a);
-            if (pos > 0U) { enqueue_intersection(status[pos - 1U], status[pos], e.y); }
+            if (pos > 0U)
+            {
+                enqueue_intersection(status[pos - 1U], status[pos], e.y);
+            }
             if (pos + 1U < status.size())
             {
                 enqueue_intersection(status[pos], status[pos + 1U], e.y);
@@ -383,7 +457,10 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         else if (e.kind == EvKind::End)
         {
             const crd::u32 pos = status_find(e.seg_a);
-            if (pos == kNullIdx) { continue; }
+            if (pos == kNullIdx)
+            {
+                continue;
+            }
             // Neighbours that become adjacent after removal.
             crd::u32 left  = (pos > 0U) ? status[pos - 1U] : kNullIdx;
             crd::u32 right = (pos + 1U < status.size()) ? status[pos + 1U] : kNullIdx;
@@ -399,25 +476,37 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
             emit(e.seg_a, e.seg_b, e.point);
             if (short_circuit)
             {
-                if (out_first != nullptr) { *out_first = result.intersections[0]; }
+                if (out_first != nullptr)
+                {
+                    *out_first = result.intersections[0];
+                }
                 return result;
             }
             // Swap the two segments in status. Find them.
             const crd::u32 pa = status_find(e.seg_a);
             const crd::u32 pb = status_find(e.seg_b);
-            if (pa == kNullIdx || pb == kNullIdx) { continue; }
+            if (pa == kNullIdx || pb == kNullIdx)
+            {
+                continue;
+            }
             // They must be adjacent at this point (BO invariant). If not,
             // skip — the swap doesn't apply (defensive guard against the
             // dedup logic firing twice on the same intersection).
             const crd::u32 lo_p = pa < pb ? pa : pb;
             const crd::u32 hi_p = pa < pb ? pb : pa;
-            if (hi_p - lo_p != 1U) { continue; }
+            if (hi_p - lo_p != 1U)
+            {
+                continue;
+            }
             // Swap.
             const crd::u32 tmp = status[lo_p];
             status[lo_p] = status[hi_p];
             status[hi_p] = tmp;
             // Test new neighbours of the swapped pair.
-            if (lo_p > 0U) { enqueue_intersection(status[lo_p - 1U], status[lo_p], e.y); }
+            if (lo_p > 0U)
+            {
+                enqueue_intersection(status[lo_p - 1U], status[lo_p], e.y);
+            }
             if (hi_p + 1U < status.size())
             {
                 enqueue_intersection(status[hi_p], status[hi_p + 1U], e.y);
@@ -431,16 +520,28 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
         const crd::u32 i = horiz_idx[hi];
         for (crd::u32 j = 0; j < segs.size(); ++j)
         {
-            if (j == i) { continue; }
-            if (already_reported(i, j)) { continue; }
+            if (j == i)
+            {
+                continue;
+            }
+            if (already_reported(i, j))
+            {
+                continue;
+            }
             const auto& sa = segs[i];
             const auto& sb = segs[j];
             const auto  hit = segment_segment_intersect_full<T>(sa.lo, sa.hi, sb.lo, sb.hi);
-            if (!hit.hit) { continue; }
+            if (!hit.hit)
+            {
+                continue;
+            }
             emit(i, j, hit.point);
             if (short_circuit)
             {
-                if (out_first != nullptr) { *out_first = result.intersections[0]; }
+                if (out_first != nullptr)
+                {
+                    *out_first = result.intersections[0];
+                }
                 return result;
             }
         }
@@ -450,9 +551,18 @@ BOResult<T> bentley_ottmann_impl(crd::containers::ConstSpan<BOSegment<T>> segmen
     crd::containers::sort(result.intersections.data(),
                           result.intersections.data() + result.intersections.size(),
                           [](const BOIntersection<T>& l, const BOIntersection<T>& r) noexcept {
-                              if (l.point.y != r.point.y) { return l.point.y < r.point.y; }
-                              if (l.point.x != r.point.x) { return l.point.x < r.point.x; }
-                              if (l.segment_a != r.segment_a) { return l.segment_a < r.segment_a; }
+                              if (l.point.y != r.point.y)
+                              {
+                                  return l.point.y < r.point.y;
+                              }
+                              if (l.point.x != r.point.x)
+                              {
+                                  return l.point.x < r.point.x;
+                              }
+                              if (l.segment_a != r.segment_a)
+                              {
+                                  return l.segment_a < r.segment_a;
+                              }
                               return l.segment_b < r.segment_b;
                           });
     return result;

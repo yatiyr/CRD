@@ -19,8 +19,14 @@ constexpr crd::usize kMaxRecordedMessages = 256;
 
 [[nodiscard]] ValidationSeverity to_severity(VkDebugUtilsMessageSeverityFlagBitsEXT s) noexcept
 {
-    if ((s & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) { return ValidationSeverity::Error; }
-    if ((s & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) { return ValidationSeverity::Warning; }
+    if ((s & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0)
+    {
+        return ValidationSeverity::Error;
+    }
+    if ((s & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0)
+    {
+        return ValidationSeverity::Warning;
+    }
     return ValidationSeverity::Info;
 }
 
@@ -50,7 +56,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
                                                 const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
                                                 void*                                       user_data)
 {
-    if (user_data == nullptr || callback_data == nullptr) { return VK_FALSE; }
+    if (user_data == nullptr || callback_data == nullptr)
+    {
+        return VK_FALSE;
+    }
     auto* impl = static_cast<ValidationCapture::Impl*>(user_data);
 
     const crd::i32 msg_id      = callback_data->messageIdNumber;
@@ -134,7 +143,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
             }
             impl->records.push_back(std::move(rec));
         }
-        else { ++impl->records_dropped; }
+        else
+        {
+            ++impl->records_dropped;
+        }
     }
 
     return VK_FALSE; // per the Vulkan spec: a capture messenger must return VK_FALSE
@@ -145,13 +157,19 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
 ValidationCapture::ValidationCapture(VulkanGpuContext& ctx) : m_impl(std::make_unique<Impl>())
 {
     m_impl->instance = ctx.vk_instance();
-    if (m_impl->instance == VK_NULL_HANDLE) { return; }
+    if (m_impl->instance == VK_NULL_HANDLE)
+    {
+        return;
+    }
 
     const auto create_fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
         vkGetInstanceProcAddr(m_impl->instance, "vkCreateDebugUtilsMessengerEXT"));
     m_impl->destroy_fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
         vkGetInstanceProcAddr(m_impl->instance, "vkDestroyDebugUtilsMessengerEXT"));
-    if (create_fn == nullptr || m_impl->destroy_fn == nullptr) { return; } // debug_utils unavailable — capture silent
+    if (create_fn == nullptr || m_impl->destroy_fn == nullptr) // debug_utils unavailable — capture silent
+    {
+        return;
+    }
 
     VkDebugUtilsMessengerCreateInfoEXT info{};
     info.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -166,7 +184,10 @@ ValidationCapture::ValidationCapture(VulkanGpuContext& ctx) : m_impl(std::make_u
 
 ValidationCapture::~ValidationCapture()
 {
-    if (m_impl == nullptr) { return; }
+    if (m_impl == nullptr)
+    {
+        return;
+    }
     if (m_impl->messenger != VK_NULL_HANDLE && m_impl->destroy_fn != nullptr)
     {
         m_impl->destroy_fn(m_impl->instance, m_impl->messenger, nullptr);
@@ -191,7 +212,10 @@ crd::u32 ValidationCapture::info_count() const noexcept
 
 crd::u32 ValidationCapture::dropped_count() const noexcept
 {
-    if (m_impl == nullptr) { return 0U; }
+    if (m_impl == nullptr)
+    {
+        return 0U;
+    }
     std::lock_guard<std::mutex> lk(m_impl->records_mu); // records_dropped is written under this lock in the callback
     return m_impl->records_dropped;
 }
@@ -199,7 +223,10 @@ crd::u32 ValidationCapture::dropped_count() const noexcept
 ValidationReport ValidationCapture::report() const noexcept
 {
     ValidationReport r;
-    if (m_impl == nullptr) { return r; }
+    if (m_impl == nullptr)
+    {
+        return r;
+    }
     r.info    = m_impl->infos.load(std::memory_order_relaxed);
     r.warning = m_impl->warnings.load(std::memory_order_relaxed);
     r.error   = m_impl->errors.load(std::memory_order_relaxed);
@@ -212,21 +239,30 @@ ValidationReport ValidationCapture::report() const noexcept
 
 crd::containers::ConstSpan<ValidationMessage> ValidationCapture::messages() const noexcept
 {
-    if (m_impl == nullptr) { return {}; }
+    if (m_impl == nullptr)
+    {
+        return {};
+    }
     std::lock_guard<std::mutex> lk(m_impl->records_mu);
     return crd::containers::make_span(m_impl->records.data(), m_impl->records.size());
 }
 
 void ValidationCapture::whitelist(crd::i32 message_id_number)
 {
-    if (m_impl == nullptr) { return; }
+    if (m_impl == nullptr)
+    {
+        return;
+    }
     std::lock_guard<std::mutex> lk(m_impl->records_mu);
     m_impl->whitelisted.push_back(message_id_number);
 }
 
 void ValidationCapture::reset() noexcept
 {
-    if (m_impl == nullptr) { return; }
+    if (m_impl == nullptr)
+    {
+        return;
+    }
     m_impl->errors.store(0, std::memory_order_relaxed);
     m_impl->warnings.store(0, std::memory_order_relaxed);
     m_impl->infos.store(0, std::memory_order_relaxed);
@@ -241,15 +277,27 @@ crd::u32 validation_layer_spec_version() noexcept
     // allocator here (no hidden malloc); 64 covers any real machine's instance-layer count, and if the loader reports
     // more (VK_INCOMPLETE) the validation layer sorts early, so scanning the first 64 still finds it.
     crd::u32 count = 0U;
-    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS || count == 0U) { return 0U; }
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS || count == 0U)
+    {
+        return 0U;
+    }
     constexpr crd::u32 max_layers = 64U;
-    if (count > max_layers) { count = max_layers; }
+    if (count > max_layers)
+    {
+        count = max_layers;
+    }
     VkLayerProperties props[max_layers];
     const VkResult    r = vkEnumerateInstanceLayerProperties(&count, props);
-    if (r != VK_SUCCESS && r != VK_INCOMPLETE) { return 0U; }
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE)
+    {
+        return 0U;
+    }
     for (crd::u32 i = 0U; i < count; ++i)
     {
-        if (std::strcmp(props[i].layerName, "VK_LAYER_KHRONOS_validation") == 0) { return props[i].specVersion; }
+        if (std::strcmp(props[i].layerName, "VK_LAYER_KHRONOS_validation") == 0)
+        {
+            return props[i].specVersion;
+        }
     }
     return 0U;
 }

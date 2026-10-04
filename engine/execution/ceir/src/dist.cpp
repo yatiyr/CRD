@@ -17,7 +17,10 @@ using containers::StringView;
 [[nodiscard]] usize tensor_rank(const Context& ctx, TypeId tensor_type) noexcept
 {
     const Type tt = ctx.type_of(tensor_type);
-    if (tt.members.size() < 2U) { return 0U; }
+    if (tt.members.size() < 2U)
+    {
+        return 0U;
+    }
     return ctx.type_of(tt.members[1]).members.size();
 }
 
@@ -26,21 +29,36 @@ using containers::StringView;
 [[nodiscard]] bool parse_mesh_shape(StringView s, u32& count) noexcept
 {
     count = 0U;
-    if (s.size() == 0U) { return false; } // a mesh needs >=1 axis
+    if (s.size() == 0U) // a mesh needs >=1 axis
+    {
+        return false;
+    }
     usize start = 0U;
     for (usize i = 0; i <= s.size(); ++i)
     {
         if (i == s.size() || s[i] == ',')
         {
-            if (i == start) { count = 0U; return false; } // empty field (leading/trailing/double comma)
+            if (i == start) // empty field (leading/trailing/double comma)
+            {
+                count = 0U;
+                return false;
+            }
             i64 v = 0;
             for (usize j = start; j < i; ++j)
             {
                 const char c = s[j];
-                if (c < '0' || c > '9') { count = 0U; return false; }
+                if (c < '0' || c > '9')
+                {
+                    count = 0U;
+                    return false;
+                }
                 v = v * 10 + (c - '0');
             }
-            if (v <= 0) { count = 0U; return false; } // a mesh dim is POSITIVE
+            if (v <= 0) // a mesh dim is POSITIVE
+            {
+                count = 0U;
+                return false;
+            }
             ++count;
             start = i + 1U;
         }
@@ -65,7 +83,10 @@ using containers::StringView;
 // The FIRST dist.mesh (pre-order, region-recursive) whose `name` == `name`; nullptr if none. ⛔ I6 — op NAME.
 const Operation* find_mesh(const Context& ctx, const Region* r, StringView name) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr || name.size() == 0U) { return nullptr; }
+    if (r == nullptr || name.size() == 0U)
+    {
+        return nullptr;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -77,7 +98,10 @@ const Operation* find_mesh(const Context& ctx, const Region* r, StringView name)
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const Operation* const m = find_mesh(ctx, op->region(i), name);
-                if (m != nullptr) { return m; }
+                if (m != nullptr)
+                {
+                    return m;
+                }
             }
         }
     }
@@ -105,15 +129,33 @@ DistMisuse check_op(const Context& ctx, const Region* root, const Operation* op)
     }
     const bool is_shard = nm == StringView("dist.shard");
     const bool is_ar    = nm == StringView("dist.all_reduce");
-    if (!is_shard && !is_ar) { return {}; }
-    if (op->num_operands() < 1U || op->num_results() < 1U) { return {}; } // structural — the generated verifier owns it
+    if (!is_shard && !is_ar)
+    {
+        return {};
+    }
+    if (op->num_operands() < 1U || op->num_results() < 1U) // structural — the generated verifier owns it
+    {
+        return {};
+    }
     const Value* const in  = op->operand(0U);
     const Value* const res = op->result(0U);
-    if (!is_tensor_type(ctx, in->type())) { return {in, op, DistMisuseKind::OperandNotTensor}; }
-    if (!is_tensor_type(ctx, res->type())) { return {res, op, DistMisuseKind::OperandNotTensor}; }
-    if (res->type() != in->type()) { return {res, op, DistMisuseKind::ResultTypeMismatch}; } // placement PRESERVES the tensor
+    if (!is_tensor_type(ctx, in->type()))
+    {
+        return {in, op, DistMisuseKind::OperandNotTensor};
+    }
+    if (!is_tensor_type(ctx, res->type()))
+    {
+        return {res, op, DistMisuseKind::OperandNotTensor};
+    }
+    if (res->type() != in->type()) // placement PRESERVES the tensor
+    {
+        return {res, op, DistMisuseKind::ResultTypeMismatch};
+    }
     const Operation* const mesh = find_mesh(ctx, root, symbol_name(ctx, op->attr("mesh")));
-    if (mesh == nullptr) { return {nullptr, op, DistMisuseKind::UnknownMesh}; }
+    if (mesh == nullptr)
+    {
+        return {nullptr, op, DistMisuseKind::UnknownMesh};
+    }
     if (is_shard)
     {
         const AttrValue ax   = ctx.attr_value(op->attr("axis"));
@@ -125,7 +167,10 @@ DistMisuse check_op(const Context& ctx, const Region* root, const Operation* op)
         const AttrValue mshp      = ctx.attr_value(mesh->attr("shape"));
         u32             mesh_rank = 0U;
         const bool      mesh_ok   = mshp.kind == AttrKind::String && parse_mesh_shape(mshp.s, mesh_rank);
-        if (!mesh_ok) { mesh_rank = 0U; } // an invalid mesh shape is the mesh's own MeshShapeInvalid; no valid axis here
+        if (!mesh_ok) // an invalid mesh shape is the mesh's own MeshShapeInvalid; no valid axis here
+        {
+            mesh_rank = 0U;
+        }
         const AttrValue ma        = ctx.attr_value(op->attr("mesh_axis"));
         const i64       mesh_axis = (ma.kind == AttrKind::Int) ? ma.i : -1;
         if (mesh_axis < 0 || mesh_axis >= static_cast<i64>(mesh_rank))
@@ -135,23 +180,35 @@ DistMisuse check_op(const Context& ctx, const Region* root, const Operation* op)
         return {};
     }
     const AttrValue fn = ctx.attr_value(op->attr("fn")); // all_reduce
-    if (fn.kind != AttrKind::String || !collective_fn_in(fn.s)) { return {nullptr, op, DistMisuseKind::FnInvalid}; }
+    if (fn.kind != AttrKind::String || !collective_fn_in(fn.s))
+    {
+        return {nullptr, op, DistMisuseKind::FnInvalid};
+    }
     return {};
 }
 
 DistMisuse scan_dist_region(const Context& ctx, const Region* root, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             const DistMisuse e = check_op(ctx, root, op);
-            if (e.kind != DistMisuseKind::None) { return e; }
+            if (e.kind != DistMisuseKind::None)
+            {
+                return e;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const DistMisuse ce = scan_dist_region(ctx, root, op->region(i));
-                if (ce.kind != DistMisuseKind::None) { return ce; }
+                if (ce.kind != DistMisuseKind::None)
+                {
+                    return ce;
+                }
             }
         }
     }

@@ -28,7 +28,10 @@ struct SumGemmAA
             for (int j = 0; j < side; ++j)
             {
                 S c = S(0);
-                for (int p = 0; p < side; ++p) { c += x[i * side + p] * x[p * side + j]; }
+                for (int p = 0; p < side; ++p)
+                {
+                    c += x[i * side + p] * x[p * side + j];
+                }
                 acc += c;
             }
         }
@@ -52,7 +55,10 @@ struct MlpLoss
     double operator()(const double* w, int /*n*/) const
     {
         namespace nnr = crd::hesap::autodiff::reverse::nn;
-        if (m * d1 > kCap || m * d2 > kCap) { return 0.0; } // out-of-cap ⇒ deliberately wrong (fails the FD gate loudly)
+        if (m * d1 > kCap || m * d2 > kCap) // out-of-cap ⇒ deliberately wrong (fails the FD gate loudly)
+        {
+            return 0.0;
+        }
         const double* w1 = w;                                    // [d0*d1]
         const double* w2 = w + static_cast<crd::usize>(d0 * d1); // [d1*d2]
         double        z1[kCap];
@@ -62,7 +68,10 @@ struct MlpLoss
         nnr::relu(z1, h1, m * d1);          // h1 = relu(z1)
         nnr::matmul(h1, w2, z2, m, d1, d2); // z2 = h1 · W2  [m,d2]  (no final activation)
         double acc = 0.0;
-        for (int i = 0; i < m * d2; ++i) { acc += mask[i] * z2[i]; } // L = <M, out>
+        for (int i = 0; i < m * d2; ++i) // L = <M, out>
+        {
+            acc += mask[i] * z2[i];
+        }
         return acc;
     }
 };

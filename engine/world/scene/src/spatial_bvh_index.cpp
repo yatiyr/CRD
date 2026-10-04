@@ -38,13 +38,19 @@ void SpatialBVHIndex::configure(IAabbExtractor*                                 
 
 void SpatialBVHIndex::on_insert(EntityId e, ComponentId c, const void* data)
 {
-    if (m_octree == nullptr) { return; }
+    if (m_octree == nullptr)
+    {
+        return;
+    }
     index_insert_or_update(e, c, data);
 }
 
 void SpatialBVHIndex::on_update(EntityId e, ComponentId c, const void* /*old_data*/, const void* new_data)
 {
-    if (m_octree == nullptr) { return; }
+    if (m_octree == nullptr)
+    {
+        return;
+    }
     index_insert_or_update(e, c, new_data);
 }
 
@@ -60,7 +66,10 @@ void SpatialBVHIndex::on_remove(EntityId /*e*/, ComponentId /*c*/, const void* /
 
 void SpatialBVHIndex::on_entity_destroyed(EntityId e)
 {
-    if (m_octree == nullptr) { return; }
+    if (m_octree == nullptr)
+    {
+        return;
+    }
     index_remove(e);
 }
 
@@ -113,7 +122,10 @@ void SpatialBVHIndex::overlap(const crd::geometry::primitives::AABB3<crd::f32>& 
                                 crd::containers::Array<EntityId>&                 out) const
 {
     out.clear();
-    if (m_octree == nullptr) { return; }
+    if (m_octree == nullptr)
+    {
+        return;
+    }
 
     crd::containers::Array<crd::u32> raw_payloads(out.allocator());
     m_octree->overlap(query, raw_payloads);
@@ -135,12 +147,21 @@ void SpatialBVHIndex::overlap(const crd::geometry::primitives::AABB3<crd::f32>& 
 std::optional<crd::geometry::RayHit<EntityId>>
 SpatialBVHIndex::raycast(const crd::geometry::primitives::Ray3<crd::f32>& ray, crd::f32 tmax) const noexcept
 {
-    if (m_octree == nullptr) { return std::nullopt; }
+    if (m_octree == nullptr)
+    {
+        return std::nullopt;
+    }
     const auto raw_hit = m_octree->raycast(ray, tmax);
-    if (!raw_hit.has_value()) { return std::nullopt; }
+    if (!raw_hit.has_value())
+    {
+        return std::nullopt;
+    }
 
     const EntityId* full = m_index_to_entity.find(raw_hit->payload);
-    if (full == nullptr) { return std::nullopt; }
+    if (full == nullptr)
+    {
+        return std::nullopt;
+    }
     return crd::geometry::RayHit<EntityId>{raw_hit->t, *full};
 }
 

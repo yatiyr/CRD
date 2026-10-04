@@ -42,7 +42,11 @@ public:
                 constexpr crd::i64 inf_cost = static_cast<crd::i64>(1) << 60;
                 crd::i64           c    = 0;
                 int                d    = 0;
-                if (len <= 1) { c = 0; d = 0; }
+                if (len <= 1)
+                {
+                    c = 0;
+                    d = 0;
+                }
                 else if (s == 0)
                 {
                     // INFEASIBLE: with no checkpoint, once we advance past `lo` its state is lost — a len>1 range can
@@ -56,9 +60,16 @@ public:
                     for (int dd = 1; dd < len; ++dd) // advance dd, right=[dd..len) with s−1, left=[0..dd) with s
                     {
                         const crd::i64 right = m_cost[(len - dd) * stride + (s - 1)];
-                        if (right >= inf_cost) { continue; } // right sub-range not reversible with s−1 snaps
+                        if (right >= inf_cost) // right sub-range not reversible with s−1 snaps
+                        {
+                            continue;
+                        }
                         const crd::i64 cc = static_cast<crd::i64>(dd) + right + m_cost[dd * stride + s];
-                        if (cc < best) { best = cc; d = dd; } // dd=len−1 (right length 1) is always feasible
+                        if (cc < best) // dd=len−1 (right length 1) is always feasible
+                        {
+                            best = cc;
+                            d = dd;
+                        }
                     }
                     c = best;
                 }
@@ -105,7 +116,10 @@ template <class Adv, class Store, class Restore, class Rev>
 inline void revolve(const RevolvePlan& plan, int T, int snaps, const Adv& advance, const Store& store,
                     const Restore& restore, const Rev& reverse) noexcept
 {
-    if (T <= 0) { return; }
+    if (T <= 0)
+    {
+        return;
+    }
     detail::treeverse(plan, 0, T, snaps, 0, advance, store, restore, reverse);
 }
 

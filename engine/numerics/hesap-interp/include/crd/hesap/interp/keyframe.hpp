@@ -45,7 +45,10 @@ template <Real T>
                              crd::usize& cache) noexcept
 {
     const crd::usize n = times.size();
-    if (n == 0U) { return static_cast<T>(0); }
+    if (n == 0U)
+    {
+        return static_cast<T>(0);
+    }
     const crd::usize span = static_cast<crd::usize>(key_elements(interp)) * components;
 
     // the value of key k (CubicHermite: the middle element of the [in, value, out] triple)
@@ -54,8 +57,14 @@ template <Real T>
         return interp == KeyInterp::CubicHermite ? values[base + components + lane] : values[base + lane];
     };
 
-    if (n == 1U || t <= times[0]) { return key_value(t <= times[0] ? 0U : n - 1U); }
-    if (t >= times[n - 1U]) { return key_value(n - 1U); }
+    if (n == 1U || t <= times[0])
+    {
+        return key_value(t <= times[0] ? 0U : n - 1U);
+    }
+    if (t >= times[n - 1U])
+    {
+        return key_value(n - 1U);
+    }
 
     const crd::usize i = find_segment(times, t, cache);
     switch (interp)
@@ -90,7 +99,10 @@ template <Real T>
                                           crd::containers::ConstSpan<T> values, crd::u32 components,
                                           KeyInterp interp) noexcept
 {
-    if (times.size() == 0U || components == 0U) { return InterpStatus::BadInput; }
+    if (times.size() == 0U || components == 0U)
+    {
+        return InterpStatus::BadInput;
+    }
     if (values.size()
         != times.size() * static_cast<crd::usize>(key_elements(interp)) * static_cast<crd::usize>(components))
     {
@@ -98,12 +110,21 @@ template <Real T>
     }
     for (crd::usize i = 0; i < times.size(); ++i)
     {
-        if (!detail::is_finite(times[i])) { return InterpStatus::BadInput; }
-        if (i > 0U && !(times[i] > times[i - 1U])) { return InterpStatus::NotIncreasing; }
+        if (!detail::is_finite(times[i]))
+        {
+            return InterpStatus::BadInput;
+        }
+        if (i > 0U && !(times[i] > times[i - 1U]))
+        {
+            return InterpStatus::NotIncreasing;
+        }
     }
     for (crd::usize i = 0; i < values.size(); ++i)
     {
-        if (!detail::is_finite(values[i])) { return InterpStatus::BadInput; }
+        if (!detail::is_finite(values[i]))
+        {
+            return InterpStatus::BadInput;
+        }
     }
     return InterpStatus::Ok;
 }

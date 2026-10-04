@@ -240,11 +240,17 @@ TEST_CASE("CLI: hesap.direct.lu_gp.f64 solves a general unsymmetric system", "[h
     auto aij = [](crd::u32 i, crd::u32 j) -> crd::f64 // n is a constant expression — no capture
     {
         if (i == j)
+        {
             return static_cast<crd::f64>(n + 2);
+        }
         if (j == i + 1)
+        {
             return 1.0;
+        }
         if (i == j + 1)
+        {
             return -2.0;
+        }
         return 0.0;
     };
     crd::containers::Array<crd::i64> tr(&alloc);
@@ -327,13 +333,21 @@ TEST_CASE("CLI: hesap.direct.lu.f64 solves a general unsymmetric system (multifr
     auto aij = [](crd::u32 i, crd::u32 j) -> crd::f64
     {
         if (i == j)
+        {
             return static_cast<crd::f64>(n + 3);
+        }
         if (j == i + 1)
+        {
             return 1.0;
+        }
         if (i == j + 1)
+        {
             return -2.0;
+        }
         if (j == i + 2)
+        {
             return 0.5;
+        }
         return 0.0;
     };
     crd::containers::Array<crd::i64> tr(&alloc);
@@ -402,11 +416,17 @@ TEST_CASE("CLI: hesap.direct.lu.c64 solves a complex unsymmetric system", "[hesa
     auto aij = [](crd::u32 i, crd::u32 j) -> crd::hesap::Complex<crd::f64>
     {
         if (i == j)
+        {
             return {static_cast<crd::f64>(n + 4), 1.0};
+        }
         if (j == i + 1)
+        {
             return {1.0, 0.5};
+        }
         if (i == j + 1)
+        {
             return {-2.0, 0.25};
+        }
         return {0.0, 0.0};
     };
     crd::containers::Array<crd::i64> tr(&alloc);
@@ -639,11 +659,17 @@ TEST_CASE("CLI: hesap.direct.qr.c64 solves a complex square system", "[hesap][di
     auto aij = [](crd::u32 i, crd::u32 j) -> C
     {
         if (i == j)
+        {
             return C{static_cast<crd::f64>(n + 3), 0.5};
+        }
         if (j == i + 1)
+        {
             return C{1.0, 0.3};
+        }
         if (i == j + 1)
+        {
             return C{-1.0, 0.2};
+        }
         return C{0.0, 0.0};
     };
     crd::containers::Array<crd::i64> tr(&alloc);

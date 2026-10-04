@@ -104,7 +104,10 @@ void collect_pack_meshes(const crd::platform::fs::Path& pack_path, crd::memory::
                          crd::containers::Array<crd::resources::ResourceId>& out)
 {
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (!crd::platform::fs::read_file_binary(pack_path, bytes)) { return; }
+    if (!crd::platform::fs::read_file_binary(pack_path, bytes))
+    {
+        return;
+    }
     crd::resources::CrdrFile file(alloc);
     if (crd::resources::crdr_read(crd::containers::as_const_span(bytes), file, alloc)
         != crd::resources::CrdrError::Ok)
@@ -112,12 +115,21 @@ void collect_pack_meshes(const crd::platform::fs::Path& pack_path, crd::memory::
         return;
     }
     const crd::resources::CrdrChunk* mfst = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_MFST);
-    if (mfst == nullptr) { return; }
+    if (mfst == nullptr)
+    {
+        return;
+    }
     crd::containers::Array<crd::resources::ManifestEntry> entries(alloc);
-    if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc)) { return; }
+    if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc))
+    {
+        return;
+    }
     for (const auto& e : entries)
     {
-        if (e.type_fourcc == crd::resources::kFourCC_MESH) { out.push_back(e.id); }
+        if (e.type_fourcc == crd::resources::kFourCC_MESH)
+        {
+            out.push_back(e.id);
+        }
     }
 }
 
@@ -130,7 +142,10 @@ void write_bmp(const char* path, crd::gpu::IRasterTarget& target)
     crd::containers::Array<unsigned char> bmp(crd::memory::default_allocator());
     bmp.resize(54U + static_cast<crd::usize>(row) * h, static_cast<unsigned char>(0));
     const auto p4 = [&](crd::u32 o, crd::u32 v) {
-        for (crd::u32 k = 0; k < 4U; ++k) { bmp[o + k] = static_cast<unsigned char>((v >> (8U * k)) & 0xFFU); }
+        for (crd::u32 k = 0; k < 4U; ++k)
+        {
+            bmp[o + k] = static_cast<unsigned char>((v >> (8U * k)) & 0xFFU);
+        }
     };
     bmp[0] = 'B';
     bmp[1] = 'M';
@@ -226,49 +241,115 @@ int main(int argc, char** argv)
             {
                 char*          end = nullptr;
                 const crd::f64 v   = std::strtod(argv[i + 1], &end);
-                if (end != argv[i + 1]) { dst = static_cast<crd::f32>(v); }
+                if (end != argv[i + 1])
+                {
+                    dst = static_cast<crd::f32>(v);
+                }
                 ++i;
             }
         };
         if (std::strcmp(argv[i], "--shapes") == 0 && i + 1 < argc)
         {
             ++i;
-            if (std::strcmp(argv[i], "stem") == 0) { shapes = Shapes::Stem; }
-            else if (std::strcmp(argv[i], "arrow") == 0) { shapes = Shapes::Arrow; }
-            else if (std::strcmp(argv[i], "all") == 0) { shapes = Shapes::All; }
-            else if (std::strcmp(argv[i], "none") == 0) { shapes = Shapes::None; }
-            else { shapes = Shapes::Triad; }
+            if (std::strcmp(argv[i], "stem") == 0)
+            {
+                shapes = Shapes::Stem;
+            }
+            else if (std::strcmp(argv[i], "arrow") == 0)
+            {
+                shapes = Shapes::Arrow;
+            }
+            else if (std::strcmp(argv[i], "all") == 0)
+            {
+                shapes = Shapes::All;
+            }
+            else if (std::strcmp(argv[i], "none") == 0)
+            {
+                shapes = Shapes::None;
+            }
+            else
+            {
+                shapes = Shapes::Triad;
+            }
         }
-        else if (std::strcmp(argv[i], "--width") == 0) { next_f32(line_width_px); }
-        else if (std::strcmp(argv[i], "--radius") == 0) { next_f32(cam_radius); }
-        else if (std::strcmp(argv[i], "--height") == 0) { next_f32(cam_height); }
-        else if (std::strcmp(argv[i], "--freeze") == 0) { freeze = true; }
-        else if (std::strcmp(argv[i], "--pull-draws") == 0) { want_pull_draws = true; }
-        else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
-        else if (std::strcmp(argv[i], "--no-grid") == 0) { want_grid = false; }
-        else if (std::strcmp(argv[i], "--no-backdrop") == 0) { want_backdrop = false; }
-        else if (std::strcmp(argv[i], "--no-validation") == 0) { want_validation = false; }
-        else if (std::strcmp(argv[i], "--frame") == 0 && i + 1 < argc) { frame_asset = argv[++i]; }
-        else if (std::strcmp(argv[i], "--technique") == 0 && i + 1 < argc) { forward_tech = argv[++i]; }
+        else if (std::strcmp(argv[i], "--width") == 0)
+        {
+            next_f32(line_width_px);
+        }
+        else if (std::strcmp(argv[i], "--radius") == 0)
+        {
+            next_f32(cam_radius);
+        }
+        else if (std::strcmp(argv[i], "--height") == 0)
+        {
+            next_f32(cam_height);
+        }
+        else if (std::strcmp(argv[i], "--freeze") == 0)
+        {
+            freeze = true;
+        }
+        else if (std::strcmp(argv[i], "--pull-draws") == 0)
+        {
+            want_pull_draws = true;
+        }
+        else if (std::strcmp(argv[i], "--no-shadows") == 0)
+        {
+            want_shadows = false;
+        }
+        else if (std::strcmp(argv[i], "--no-grid") == 0)
+        {
+            want_grid = false;
+        }
+        else if (std::strcmp(argv[i], "--no-backdrop") == 0)
+        {
+            want_backdrop = false;
+        }
+        else if (std::strcmp(argv[i], "--no-validation") == 0)
+        {
+            want_validation = false;
+        }
+        else if (std::strcmp(argv[i], "--frame") == 0 && i + 1 < argc)
+        {
+            frame_asset = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--technique") == 0 && i + 1 < argc)
+        {
+            forward_tech = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
         {
             ++i;
             want_dx12 = std::strcmp(argv[i], "dx12") == 0;
         }
-        else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) { screenshot_path = argv[++i]; }
+        else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
+        {
+            screenshot_path = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--screenshot-at") == 0 && i + 1 < argc)
         {
             char*          end = nullptr;
             const crd::f64 v   = std::strtod(argv[i + 1], &end);
-            if (end != argv[i + 1] && v > 0.0) { screenshot_at_s = v; }
+            if (end != argv[i + 1] && v > 0.0)
+            {
+                screenshot_at_s = v;
+            }
             ++i;
         }
         else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
         {
             ++i;
-            if (std::strcmp(argv[i], "immediate") == 0) { present_mode = crd::gpu::PresentMode::Immediate; }
-            else if (std::strcmp(argv[i], "mailbox") == 0) { present_mode = crd::gpu::PresentMode::Mailbox; }
-            else { present_mode = crd::gpu::PresentMode::Fifo; }
+            if (std::strcmp(argv[i], "immediate") == 0)
+            {
+                present_mode = crd::gpu::PresentMode::Immediate;
+            }
+            else if (std::strcmp(argv[i], "mailbox") == 0)
+            {
+                present_mode = crd::gpu::PresentMode::Mailbox;
+            }
+            else
+            {
+                present_mode = crd::gpu::PresentMode::Fifo;
+            }
         }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
@@ -415,15 +496,24 @@ int main(int argc, char** argv)
                     const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
                     crd::f32       mx = ex > ey ? ex : ey;
                     mx                = mx > ez ? mx : ez;
-                    if (mx > 1.0e-6F) { scale = 1.2F / mx; }
+                    if (mx > 1.0e-6F)
+                    {
+                        scale = 1.2F / mx;
+                    }
                 }
                 crd::resources::ResourceId material{};
-                if (mesh != nullptr && mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+                if (mesh != nullptr && mesh->primitives.size() > 0U)
+                {
+                    material = mesh->primitives[0].material_id;
+                }
 
                 const crd::f32 x = (static_cast<crd::f32>(ix) - static_cast<crd::f32>(side - 1U) * 0.5F) * 2.5F;
                 const crd::f32 z = (static_cast<crd::f32>(iz) - static_cast<crd::f32>(side - 1U) * 0.5F) * 2.5F;
                 // ⛔ the CENTRE cell is left empty: the triad's origin must not be inside a mesh
-                if (side > 1U && ix == side / 2U && iz == side / 2U) { continue; }
+                if (side > 1U && ix == side / 2U && iz == side / 2U)
+                {
+                    continue;
+                }
 
                 const crd::scene::EntityId e = world.spawn();
                 crd::scene::Transform      t;
@@ -455,7 +545,10 @@ int main(int argc, char** argv)
     // ⭐ the bisector: `--technique unlit` shades from base_color + emissive ALONE — no normal, no view vector,
     // no light. If a backend renders black under the full BRDF but correct under `unlit`, the defect is in the
     // LIGHTING INPUTS (the varyings feeding it), not in the material or the geometry.
-    if (forward_tech != nullptr) { renderer.set_forward_technique(forward_tech); }
+    if (forward_tech != nullptr)
+    {
+        renderer.set_forward_technique(forward_tech);
+    }
     const bool scene_ready = renderer.init(*raster, rm) && renderer.init_programs(*gpu_context);
     if (!scene_ready)
     {
@@ -466,7 +559,10 @@ int main(int argc, char** argv)
     renderer.set_readback_enabled(screenshot_path != nullptr);
     // the REN-39 A/B: indexed pull binds the storage buffer to the FS through a READ-ONLY view (t0 on DX12,
     // a separate root table); the classic path leaves the FS on the same u0 the VS uses.
-    if (want_pull_draws) { renderer.set_indexed_pull(false); }
+    if (want_pull_draws)
+    {
+        renderer.set_indexed_pull(false);
+    }
     {
         crd::scenerender::CsmConfig ccfg;
         ccfg.cascade_count = 4;
@@ -538,7 +634,10 @@ int main(int argc, char** argv)
         [](crd::gpu::IFrameContext& ctx, void* user) {
             auto*                    o = static_cast<OverlayCtx*>(user);
             crd::gpu::IRasterTarget* t = o->renderer != nullptr ? o->renderer->overlay_target(ctx) : nullptr;
-            if (t == nullptr) { t = o->target; }
+            if (t == nullptr)
+            {
+                t = o->target;
+            }
             if (!crd::draw::submit_overlay(*t, *o->buf, o->cfg))
             {
                 CRD_LOG_WARN(g_log_gizmo, "draw overlay submission refused");
@@ -557,7 +656,10 @@ int main(int argc, char** argv)
     const auto     t_start             = std::chrono::steady_clock::now();
     while (app.is_running())
     {
-        if (!app.tick()) { break; }
+        if (!app.tick())
+        {
+            break;
+        }
 
         const auto     cur   = app.window().framebuffer_size();
         const crd::u32 cur_w = cur.width > 0 ? static_cast<crd::u32>(cur.width) : 0U;
@@ -569,7 +671,10 @@ int main(int argc, char** argv)
             if (surface->resize(win_w, win_h))
             {
                 canvas = raster->create_color_depth_target(surface->width(), surface->height());
-                if (canvas == nullptr) { break; }
+                if (canvas == nullptr)
+                {
+                    break;
+                }
             }
         }
 
@@ -612,7 +717,10 @@ int main(int argc, char** argv)
                          stats.draws, stats.drawn_instances, stats.gpu_ms, stats.timed_passes);
         }
 
-        if (surface->present(*canvas)) { ++frames_with_present; }
+        if (surface->present(*canvas))
+        {
+            ++frames_with_present;
+        }
         ++frame;
 
         if (smoke_test && tsec >= smoke_duration_s)
@@ -628,7 +736,10 @@ int main(int argc, char** argv)
                          tsec, static_cast<crd::f64>(frames_with_present) / tsec);
             app.close();
         }
-        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape)) { app.close(); }
+        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape))
+        {
+            app.close();
+        }
     }
 
     // teardown order mirrors the sandbox: surface (drains frames in flight) → renderer → draw

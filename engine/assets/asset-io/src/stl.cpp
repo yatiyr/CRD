@@ -30,7 +30,10 @@ namespace
     if (finite3(file_n))
     {
         const crd::f32 l2 = file_n.x * file_n.x + file_n.y * file_n.y + file_n.z * file_n.z;
-        if (l2 > len_eps_sq) { return file_n; }
+        if (l2 > len_eps_sq)
+        {
+            return file_n;
+        }
     }
     const crd::math::Vec3<crd::f32> e1{b.x - a.x, b.y - a.y, b.z - a.z};
     const crd::math::Vec3<crd::f32> e2{c.x - a.x, c.y - a.y, c.z - a.z};
@@ -89,7 +92,10 @@ constexpr crd::usize kBinTriangleBytes = 50;
         const crd::math::Vec3<crd::f32> a{f[3], f[4], f[5]};
         const crd::math::Vec3<crd::f32> b{f[6], f[7], f[8]};
         const crd::math::Vec3<crd::f32> c{f[9], f[10], f[11]};
-        if (!finite3(a) || !finite3(b) || !finite3(c)) { return ImportStatus::NonFiniteData; }
+        if (!finite3(a) || !finite3(b) || !finite3(c))
+        {
+            return ImportStatus::NonFiniteData;
+        }
         push_triangle(mesh, n, a, b, c); // the 2-byte attribute word is ignored (no portable meaning)
     }
     return ImportStatus::Ok;
@@ -107,19 +113,31 @@ struct Tok
     [[nodiscard]] bool at_end() const noexcept
     {
         const crd::u8* q = p;
-        while (q < end && (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')) { ++q; }
+        while (q < end && (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n'))
+        {
+            ++q;
+        }
         return q == end;
     }
 
     // Next whitespace-delimited token into `buf` (truncated to cap-1, NUL-terminated). False at end of input.
     bool next(char* buf, crd::usize cap) noexcept
     {
-        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) { ++p; }
-        if (p == end) { return false; }
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+        {
+            ++p;
+        }
+        if (p == end)
+        {
+            return false;
+        }
         crd::usize n = 0;
         while (p < end && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
         {
-            if (n + 1 < cap) { buf[n++] = static_cast<char>(*p); }
+            if (n + 1 < cap)
+            {
+                buf[n++] = static_cast<char>(*p);
+            }
             ++p;
         }
         buf[n] = '\0';
@@ -129,11 +147,17 @@ struct Tok
     // Rest of the current line (for solid names, which may contain spaces). Leading whitespace skipped; trailing CR trimmed.
     void rest_of_line(char* buf, crd::usize cap) noexcept
     {
-        while (p < end && (*p == ' ' || *p == '\t')) { ++p; }
+        while (p < end && (*p == ' ' || *p == '\t'))
+        {
+            ++p;
+        }
         crd::usize n = 0;
         while (p < end && *p != '\n')
         {
-            if (*p != '\r' && n + 1 < cap) { buf[n++] = static_cast<char>(*p); }
+            if (*p != '\r' && n + 1 < cap)
+            {
+                buf[n++] = static_cast<char>(*p);
+            }
             ++p;
         }
         buf[n] = '\0';
@@ -146,7 +170,10 @@ struct Tok
     while (*tok != '\0' && *kw != '\0')
     {
         const char a = (*tok >= 'A' && *tok <= 'Z') ? static_cast<char>(*tok + 32) : *tok;
-        if (a != *kw) { return false; }
+        if (a != *kw)
+        {
+            return false;
+        }
         ++tok;
         ++kw;
     }
@@ -157,7 +184,10 @@ struct Tok
 {
     char*        endp = nullptr;
     const double v    = std::strtod(tok, &endp);
-    if (endp == tok || *endp != '\0') { return false; }
+    if (endp == tok || *endp != '\0')
+    {
+        return false;
+    }
     out = static_cast<crd::f32>(v);
     return true;
 }
@@ -169,8 +199,14 @@ struct Tok
     crd::f32* comp[3] = {&v.x, &v.y, &v.z};
     for (int i = 0; i < 3; ++i)
     {
-        if (!tk.next(buf, sizeof(buf))) { return ImportStatus::Truncated; }
-        if (!parse_f32(buf, *comp[i])) { return ImportStatus::Malformed; }
+        if (!tk.next(buf, sizeof(buf)))
+        {
+            return ImportStatus::Truncated;
+        }
+        if (!parse_f32(buf, *comp[i]))
+        {
+            return ImportStatus::Malformed;
+        }
     }
     return ImportStatus::Ok;
 }
@@ -179,39 +215,81 @@ struct Tok
 {
     Tok  tk{bytes.data(), bytes.data() + bytes.size()};
     char buf[64];
-    if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "solid")) { return ImportStatus::NotRecognized; }
+    if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "solid"))
+    {
+        return ImportStatus::NotRecognized;
+    }
     char name[256];
     tk.rest_of_line(name, sizeof(name));
     mesh.name.append(name);
 
     for (;;)
     {
-        if (!tk.next(buf, sizeof(buf))) { return ImportStatus::Truncated; } // must reach endsolid
+        if (!tk.next(buf, sizeof(buf))) // must reach endsolid
+        {
+            return ImportStatus::Truncated;
+        }
         if (tok_eq(buf, "endsolid"))
         {
             char tail[256];
             tk.rest_of_line(tail, sizeof(tail)); // optional trailing name — ignored
             return ImportStatus::Ok;
         }
-        if (!tok_eq(buf, "facet")) { return ImportStatus::Malformed; }
-        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "normal")) { return ImportStatus::Malformed; }
+        if (!tok_eq(buf, "facet"))
+        {
+            return ImportStatus::Malformed;
+        }
+        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "normal"))
+        {
+            return ImportStatus::Malformed;
+        }
         crd::math::Vec3<crd::f32> n;
         ImportStatus              st = read_vec3(tk, n);
-        if (st != ImportStatus::Ok) { return st; }
-        if (!tk.next(buf, sizeof(buf))) { return ImportStatus::Truncated; }
-        if (!tok_eq(buf, "outer")) { return ImportStatus::Malformed; }
-        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "loop")) { return ImportStatus::Malformed; }
+        if (st != ImportStatus::Ok)
+        {
+            return st;
+        }
+        if (!tk.next(buf, sizeof(buf)))
+        {
+            return ImportStatus::Truncated;
+        }
+        if (!tok_eq(buf, "outer"))
+        {
+            return ImportStatus::Malformed;
+        }
+        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "loop"))
+        {
+            return ImportStatus::Malformed;
+        }
         crd::math::Vec3<crd::f32> v[3];
         for (int i = 0; i < 3; ++i)
         {
-            if (!tk.next(buf, sizeof(buf))) { return ImportStatus::Truncated; }
-            if (!tok_eq(buf, "vertex")) { return ImportStatus::Malformed; }
+            if (!tk.next(buf, sizeof(buf)))
+            {
+                return ImportStatus::Truncated;
+            }
+            if (!tok_eq(buf, "vertex"))
+            {
+                return ImportStatus::Malformed;
+            }
             st = read_vec3(tk, v[i]);
-            if (st != ImportStatus::Ok) { return st; }
-            if (!finite3(v[i])) { return ImportStatus::NonFiniteData; }
+            if (st != ImportStatus::Ok)
+            {
+                return st;
+            }
+            if (!finite3(v[i]))
+            {
+                return ImportStatus::NonFiniteData;
+            }
         }
-        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "endloop")) { return ImportStatus::Malformed; }
-        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "endfacet")) { return ImportStatus::Malformed; }
+        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "endloop"))
+        {
+            return ImportStatus::Malformed;
+        }
+        if (!tk.next(buf, sizeof(buf)) || !tok_eq(buf, "endfacet"))
+        {
+            return ImportStatus::Malformed;
+        }
         push_triangle(mesh, n, v[0], v[1], v[2]);
     }
 }
@@ -230,8 +308,14 @@ ImportStatus parse_stl(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
         if (binary_size_matches(bytes.size(), count))
         {
             const ImportStatus st = parse_stl_binary(bytes, count, mesh);
-            if (st != ImportStatus::Ok) { return st; }
-            if (!mesh.is_consistent()) { return ImportStatus::Malformed; } // defensive: the parser contract
+            if (st != ImportStatus::Ok)
+            {
+                return st;
+            }
+            if (!mesh.is_consistent()) // defensive: the parser contract
+            {
+                return ImportStatus::Malformed;
+            }
             out.meshes.push_back(static_cast<ImportedMesh&&>(mesh));
             return ImportStatus::Ok;
         }
@@ -241,8 +325,14 @@ ImportStatus parse_stl(crd::containers::ConstSpan<crd::u8> bytes, crd::memory::I
     //    truncated/padded binary; the ASCII grammar decides (a binary body is not valid ASCII tokens → Malformed, which
     //    is the honest answer for a corrupt binary too).
     const ImportStatus st = parse_stl_ascii(bytes, mesh);
-    if (st != ImportStatus::Ok) { return st; }
-    if (!mesh.is_consistent()) { return ImportStatus::Malformed; }
+    if (st != ImportStatus::Ok)
+    {
+        return st;
+    }
+    if (!mesh.is_consistent())
+    {
+        return ImportStatus::Malformed;
+    }
     out.meshes.push_back(static_cast<ImportedMesh&&>(mesh));
     return ImportStatus::Ok;
 }

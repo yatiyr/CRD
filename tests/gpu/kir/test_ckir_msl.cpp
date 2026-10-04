@@ -26,27 +26,56 @@ bool has(const kir::GlslKernel& k, const char* needle) { return std::strstr(k.so
 bool temps_well_formed(const kir::GlslKernel& k)
 {
     const char* p = k.source.c_str();
-    if (std::strstr(p, "t-1") != nullptr) { return false; } // a negative operand id reached the emitter
+    if (std::strstr(p, "t-1") != nullptr) // a negative operand id reached the emitter
+    {
+        return false;
+    }
     bool declared[4096] = {};
     // pass 1: declarations are the only place a temp is followed by " = "
     for (crd::usize i = 0; p[i] != '\0'; ++i)
     {
-        if (p[i] != 't' || (i > 0 && (std::isalnum(static_cast<unsigned char>(p[i - 1])) != 0 || p[i - 1] == '_'))) { continue; }
+        if (p[i] != 't' || (i > 0 && (std::isalnum(static_cast<unsigned char>(p[i - 1])) != 0 || p[i - 1] == '_')))
+        {
+            continue;
+        }
         crd::usize j = i + 1;
         int        id = 0;
-        while (std::isdigit(static_cast<unsigned char>(p[j])) != 0) { id = id * 10 + (p[j] - '0'); ++j; }
-        if (j == i + 1 || id >= 4096) { continue; }
-        if (p[j] == ' ' && p[j + 1] == '=' && p[j + 2] == ' ') { declared[id] = true; }
+        while (std::isdigit(static_cast<unsigned char>(p[j])) != 0)
+        {
+            id = id * 10 + (p[j] - '0');
+            ++j;
+        }
+        if (j == i + 1 || id >= 4096)
+        {
+            continue;
+        }
+        if (p[j] == ' ' && p[j + 1] == '=' && p[j + 2] == ' ')
+        {
+            declared[id] = true;
+        }
     }
     // pass 2: every reference must resolve to a declaration
     for (crd::usize i = 0; p[i] != '\0'; ++i)
     {
-        if (p[i] != 't' || (i > 0 && (std::isalnum(static_cast<unsigned char>(p[i - 1])) != 0 || p[i - 1] == '_'))) { continue; }
+        if (p[i] != 't' || (i > 0 && (std::isalnum(static_cast<unsigned char>(p[i - 1])) != 0 || p[i - 1] == '_')))
+        {
+            continue;
+        }
         crd::usize j = i + 1;
         int        id = 0;
-        while (std::isdigit(static_cast<unsigned char>(p[j])) != 0) { id = id * 10 + (p[j] - '0'); ++j; }
-        if (j == i + 1 || id >= 4096) { continue; }
-        if (!declared[id]) { return false; }
+        while (std::isdigit(static_cast<unsigned char>(p[j])) != 0)
+        {
+            id = id * 10 + (p[j] - '0');
+            ++j;
+        }
+        if (j == i + 1 || id >= 4096)
+        {
+            continue;
+        }
+        if (!declared[id])
+        {
+            return false;
+        }
     }
     return true;
 }

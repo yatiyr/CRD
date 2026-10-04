@@ -59,9 +59,18 @@ const Material& MaterialPool::get(MaterialId id) const noexcept
 
 bool MaterialPool::contains(MaterialId id) const noexcept
 {
-    if (id.is_null())                     return false;
-    if (id.index() == 0U)                 return false; // slot 0 is reserved null
-    if (id.index() >= m_materials.size()) return false;
+    if (id.is_null())
+    {
+        return false;
+    }
+    if (id.index() == 0U) // slot 0 is reserved null
+    {
+        return false;
+    }
+    if (id.index() >= m_materials.size())
+    {
+        return false;
+    }
     // v1: every live slot has generation == 1. v9+ remove path bumps.
     return id.generation() == 1U;
 }

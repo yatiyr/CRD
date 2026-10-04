@@ -20,15 +20,30 @@ using containers::StringView;
 [[nodiscard]] AudioMisuseKind audio_shape_kind(const Context& ctx, TypeId t) noexcept
 {
     const Type tt = ctx.type_of(t);
-    if (tt.members.size() < 2U) { return AudioMisuseKind::TensorRankInvalid; } // a Tensor missing its element+shape pair
+    if (tt.members.size() < 2U) // a Tensor missing its element+shape pair
+    {
+        return AudioMisuseKind::TensorRankInvalid;
+    }
     const Type sh = ctx.type_of(tt.members[1U]);                               // members[0] = element, members[1] = shape
-    if (sh.members.size() != 2U) { return AudioMisuseKind::TensorRankInvalid; }
+    if (sh.members.size() != 2U)
+    {
+        return AudioMisuseKind::TensorRankInvalid;
+    }
     const Type d1 = ctx.type_of(sh.members[1U]); // dim1 = channels
-    if (static_cast<DimKind>(d1.cols) != DimKind::Static || d1.count != 2U) { return AudioMisuseKind::ChannelCountInvalid; }
+    if (static_cast<DimKind>(d1.cols) != DimKind::Static || d1.count != 2U)
+    {
+        return AudioMisuseKind::ChannelCountInvalid;
+    }
     const Type    d0 = ctx.type_of(sh.members[0U]); // dim0 = frames (the runtime block size)
     const DimKind k0 = static_cast<DimKind>(d0.cols);
-    if (k0 == DimKind::Dynamic) { return AudioMisuseKind::None; }
-    if (k0 == DimKind::Static && d0.count >= 1U) { return AudioMisuseKind::None; }
+    if (k0 == DimKind::Dynamic)
+    {
+        return AudioMisuseKind::None;
+    }
+    if (k0 == DimKind::Static && d0.count >= 1U)
+    {
+        return AudioMisuseKind::None;
+    }
     return AudioMisuseKind::FrameDimInvalid; // Symbolic, or Static 0
 }
 
@@ -43,23 +58,44 @@ AudioMisuse check_op(const Context& ctx, const Operation* op)
         // the GRAPH not the exec call -- the AudioGraphResource.sample_rate precedent, the recursion-policy func-attr idiom).
         // ABSENT -> defaults to 48000 (NOT a misuse); present-but-non-Int-or-<=0 -> SampleRateInvalid (check .valid() first).
         const AttrId sra = op->attr("sample_rate");
-        if (!sra.valid()) { return {}; }
+        if (!sra.valid())
+        {
+            return {};
+        }
         const AttrValue sr = ctx.attr_value(sra);
-        if (sr.kind != AttrKind::Int || sr.i <= 0) { return {nullptr, op, AudioMisuseKind::SampleRateInvalid}; }
+        if (sr.kind != AttrKind::Int || sr.i <= 0)
+        {
+            return {nullptr, op, AudioMisuseKind::SampleRateInvalid};
+        }
         return {};
     }
 
     if (nm == StringView("audio.source"))
     {
-        if (op->num_results() < 1U) { return {}; } // structural — the generated verify_source owns it
+        if (op->num_results() < 1U) // structural — the generated verify_source owns it
+        {
+            return {};
+        }
         const Value* const res = op->result(0U);
-        if (!is_tensor_type(ctx, res->type())) { return {res, op, AudioMisuseKind::OperandNotTensor}; }
+        if (!is_tensor_type(ctx, res->type()))
+        {
+            return {res, op, AudioMisuseKind::OperandNotTensor};
+        }
         const AudioMisuseKind ssk = audio_shape_kind(ctx, res->type()); // ⛔ 31z (5): [frames, 2] shape
-        if (ssk != AudioMisuseKind::None) { return {res, op, ssk}; }
+        if (ssk != AudioMisuseKind::None)
+        {
+            return {res, op, ssk};
+        }
         const AttrId sfa = op->attr("start_frame");
-        if (!sfa.valid()) { return {}; } // ABSENT -> generated verify_source owns PRESENCE (absent reads as Int 0)
+        if (!sfa.valid()) // ABSENT -> generated verify_source owns PRESENCE (absent reads as Int 0)
+        {
+            return {};
+        }
         const AttrValue sf = ctx.attr_value(sfa);
-        if (sf.kind != AttrKind::Int || sf.i < 0) { return {nullptr, op, AudioMisuseKind::SourceStartFrameInvalid}; }
+        if (sf.kind != AttrKind::Int || sf.i < 0)
+        {
+            return {nullptr, op, AudioMisuseKind::SourceStartFrameInvalid};
+        }
         return {};
     }
 
@@ -69,52 +105,91 @@ AudioMisuse check_op(const Context& ctx, const Operation* op)
     const bool is_mix        = nm == StringView("audio.mix");
     const bool is_delay      = nm == StringView("audio.delay");
     const bool is_compressor = nm == StringView("audio.compressor");
-    if (!is_gain && !is_send && !is_biquad && !is_mix && !is_delay && !is_compressor) { return {}; }
-    if (op->num_operands() < 1U || op->num_results() < 1U) { return {}; } // structural — the generated verifier owns it
+    if (!is_gain && !is_send && !is_biquad && !is_mix && !is_delay && !is_compressor)
+    {
+        return {};
+    }
+    if (op->num_operands() < 1U || op->num_results() < 1U) // structural — the generated verifier owns it
+    {
+        return {};
+    }
 
     // operand(s) Tensor-kinded, then result Tensor-kinded, then result type == each operand type (an audio op PRESERVES the
     // buffer shape; for mix the variadic tail must all match — the same-shape sum contract). The find_dist_misuse order.
     const Value* const res = op->result(0U);
     for (u32 i = 0; i < op->num_operands(); ++i)
     {
-        if (!is_tensor_type(ctx, op->operand(i)->type())) { return {op->operand(i), op, AudioMisuseKind::OperandNotTensor}; }
+        if (!is_tensor_type(ctx, op->operand(i)->type()))
+        {
+            return {op->operand(i), op, AudioMisuseKind::OperandNotTensor};
+        }
     }
-    if (!is_tensor_type(ctx, res->type())) { return {res, op, AudioMisuseKind::OperandNotTensor}; }
+    if (!is_tensor_type(ctx, res->type()))
+    {
+        return {res, op, AudioMisuseKind::OperandNotTensor};
+    }
     for (u32 i = 0; i < op->num_operands(); ++i)
     {
-        if (res->type() != op->operand(i)->type()) { return {res, op, AudioMisuseKind::ResultTypeMismatch}; }
+        if (res->type() != op->operand(i)->type())
+        {
+            return {res, op, AudioMisuseKind::ResultTypeMismatch};
+        }
     }
     // ⛔ 31z (5): the buffer SHAPE ([frames, 2]). res == every operand (enforced just above), so res covers the operands.
     const AudioMisuseKind shk = audio_shape_kind(ctx, res->type());
-    if (shk != AudioMisuseKind::None) { return {res, op, shk}; }
+    if (shk != AudioMisuseKind::None)
+    {
+        return {res, op, shk};
+    }
 
     if (is_biquad)
     {
         // ABSENT attr -> generated verify_biquad owns PRESENCE; check .valid() first so the KIND branch fires only on a
         // present-but-wrong-kind attr (absent reads as Int 0 -- the attr-reader-check-valid scar).
         const AttrId fla = op->attr("filter");
-        if (!fla.valid()) { return {}; }
+        if (!fla.valid())
+        {
+            return {};
+        }
         const AttrValue fl = ctx.attr_value(fla);
-        if (fl.kind != AttrKind::Int || fl.i < 0 || fl.i > 3) { return {nullptr, op, AudioMisuseKind::BiquadFilterInvalid}; }
+        if (fl.kind != AttrKind::Int || fl.i < 0 || fl.i > 3)
+        {
+            return {nullptr, op, AudioMisuseKind::BiquadFilterInvalid};
+        }
         const AttrId cuta = op->attr("cutoff");
-        if (!cuta.valid()) { return {}; }
+        if (!cuta.valid())
+        {
+            return {};
+        }
         const AttrValue cut = ctx.attr_value(cuta);
         if (cut.kind != AttrKind::Float || !(cut.as_float() > 0.0) || !(cut.as_float() < 1.0))
         {
             return {nullptr, op, AudioMisuseKind::BiquadCutoffInvalid};
         }
         const AttrId qa = op->attr("q");
-        if (!qa.valid()) { return {}; }
+        if (!qa.valid())
+        {
+            return {};
+        }
         const AttrValue qq = ctx.attr_value(qa);
-        if (qq.kind != AttrKind::Float || !(qq.as_float() > 0.0)) { return {nullptr, op, AudioMisuseKind::BiquadQInvalid}; }
+        if (qq.kind != AttrKind::Float || !(qq.as_float() > 0.0))
+        {
+            return {nullptr, op, AudioMisuseKind::BiquadQInvalid};
+        }
     }
 
     if (is_delay)
     {
         const AttrId dfa = op->attr("delay_frames"); // ABSENT -> generated verify_delay owns PRESENCE (check .valid() first)
-        if (!dfa.valid()) { return {}; }
+        if (!dfa.valid())
+        {
+            return {};
+        }
         const AttrValue df = ctx.attr_value(dfa);
-        if (df.kind != AttrKind::Int || df.i < 0) { return {nullptr, op, AudioMisuseKind::DelayFramesInvalid}; }
+        if (df.kind != AttrKind::Int || df.i < 0)
+        {
+            return {nullptr, op, AudioMisuseKind::DelayFramesInvalid};
+        }
     }
 
     if (is_compressor)
@@ -122,34 +197,61 @@ AudioMisuse check_op(const Context& ctx, const Operation* op)
         // ABSENT attr -> generated verify_compressor owns PRESENCE; check .valid() first so the KIND branch fires only on a
         // present-but-wrong-kind attr (absent reads as Int 0 -- the attr-reader-check-valid scar). threshold_db unrestricted.
         const AttrId ra = op->attr("ratio");
-        if (!ra.valid()) { return {}; }
+        if (!ra.valid())
+        {
+            return {};
+        }
         const AttrValue rv = ctx.attr_value(ra);
-        if (rv.kind != AttrKind::Float || !(rv.as_float() >= 1.0)) { return {nullptr, op, AudioMisuseKind::CompressorRatioInvalid}; }
+        if (rv.kind != AttrKind::Float || !(rv.as_float() >= 1.0))
+        {
+            return {nullptr, op, AudioMisuseKind::CompressorRatioInvalid};
+        }
         const AttrId aa = op->attr("attack_ms");
-        if (!aa.valid()) { return {}; }
+        if (!aa.valid())
+        {
+            return {};
+        }
         const AttrValue av = ctx.attr_value(aa);
-        if (av.kind != AttrKind::Float || !(av.as_float() > 0.0)) { return {nullptr, op, AudioMisuseKind::CompressorAttackInvalid}; }
+        if (av.kind != AttrKind::Float || !(av.as_float() > 0.0))
+        {
+            return {nullptr, op, AudioMisuseKind::CompressorAttackInvalid};
+        }
         const AttrId rla = op->attr("release_ms");
-        if (!rla.valid()) { return {}; }
+        if (!rla.valid())
+        {
+            return {};
+        }
         const AttrValue rlv = ctx.attr_value(rla);
-        if (rlv.kind != AttrKind::Float || !(rlv.as_float() > 0.0)) { return {nullptr, op, AudioMisuseKind::CompressorReleaseInvalid}; }
+        if (rlv.kind != AttrKind::Float || !(rlv.as_float() > 0.0))
+        {
+            return {nullptr, op, AudioMisuseKind::CompressorReleaseInvalid};
+        }
     }
     return {};
 }
 
 AudioMisuse scan_audio_region(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             const AudioMisuse e = check_op(ctx, op);
-            if (e.kind != AudioMisuseKind::None) { return e; }
+            if (e.kind != AudioMisuseKind::None)
+            {
+                return e;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const AudioMisuse ce = scan_audio_region(ctx, op->region(i));
-                if (ce.kind != AudioMisuseKind::None) { return ce; }
+                if (ce.kind != AudioMisuseKind::None)
+                {
+                    return ce;
+                }
             }
         }
     }

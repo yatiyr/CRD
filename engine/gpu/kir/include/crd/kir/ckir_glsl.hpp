@@ -45,8 +45,18 @@ inline void app_flit(crd::containers::String& s, crd::f64 v) // a GLSL float lit
     std::snprintf(b, sizeof(b), "%.9g", v);
     s.append(b);
     bool dotless = true;
-    for (const char* p = b; *p != '\0'; ++p) { if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i') { dotless = false; break; } }
-    if (dotless) { s.append(".0"); }
+    for (const char* p = b; *p != '\0'; ++p)
+    {
+        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i')
+        {
+            dotless = false;
+            break;
+        }
+    }
+    if (dotless)
+    {
+        s.append(".0");
+    }
 }
 // Integer dtypes lower to `int` (bit ops, morton/radix); float dtypes to `float`. GLSL `int` is 32-bit; morton stays
 // within 30 bits (positive) so signed `int` agrees bit-for-bit with the i64 CPU reference.
@@ -55,8 +65,14 @@ inline void app_flit(crd::containers::String& s, crd::f64 v) // a GLSL float lit
 [[nodiscard]] inline bool        is_float_dtype(DType d) noexcept { return !dt_is_int(d) && !dt_is_uint(d) && d != DType::Bool; }
 [[nodiscard]] inline const char* ctype(DType d) noexcept
 {
-    if (d == DType::Bool) { return "bool"; }
-    if (dt_is_uint(d)) { return "uint"; }
+    if (d == DType::Bool)
+    {
+        return "bool";
+    }
+    if (dt_is_uint(d))
+    {
+        return "uint";
+    }
     return dt_is_int(d) ? "int" : "float";
 }
 // The element type of a storage BUFFER. std430 has no `bool` (its size is undefined), so a bool-typed value is stored
@@ -66,7 +82,14 @@ inline void app_ilit(crd::containers::String& s, crd::f64 v) { char b[24]; std::
 // An integer Const literal, dtype-aware: UNSIGNED dtypes get the `u` suffix so (a) a value > INT_MAX (32-bit masks / hash
 // seeds — B6-b noise) is a valid `uint` literal rather than an out-of-range `int`, and (b) a `uint <op> literal` stays
 // uint-vs-uint (type-strict GLSL rejects mixing `uint` with a bare `int` literal).
-inline void app_int_const(crd::containers::String& s, crd::f64 v, DType dt) { app_ilit(s, v); if (dt_is_uint(dt)) { s.append("u"); } }
+inline void app_int_const(crd::containers::String& s, crd::f64 v, DType dt)
+{
+    app_ilit(s, v);
+    if (dt_is_uint(dt))
+    {
+        s.append("u");
+    }
+}
 [[nodiscard]] inline bool is_fusable(KOp op) noexcept
 {
     switch (op)
@@ -95,16 +118,51 @@ inline void app_int_const(crd::containers::String& s, crd::f64 v, DType dt) { ap
 // language's max/min builtins; `fast_init` is a lone lane's identity. Sum/Prod reassociate (RFA); Max/Min stay bit-exact.
 inline void fast_comb(crd::containers::String& s, KOp op, const char* x, const char* y, const char* maxfn, const char* minfn)
 {
-    if (op == KOp::ReduceSum) { s.append(x); s.append(" + "); s.append(y); }
-    else if (op == KOp::ReduceProd) { s.append(x); s.append(" * "); s.append(y); }
-    else if (op == KOp::ReduceMax) { s.append(maxfn); s.append("("); s.append(x); s.append(", "); s.append(y); s.append(")"); }
-    else { s.append(minfn); s.append("("); s.append(x); s.append(", "); s.append(y); s.append(")"); }
+    if (op == KOp::ReduceSum)
+    {
+        s.append(x);
+        s.append(" + ");
+        s.append(y);
+    }
+    else if (op == KOp::ReduceProd)
+    {
+        s.append(x);
+        s.append(" * ");
+        s.append(y);
+    }
+    else if (op == KOp::ReduceMax)
+    {
+        s.append(maxfn);
+        s.append("(");
+        s.append(x);
+        s.append(", ");
+        s.append(y);
+        s.append(")");
+    }
+    else
+    {
+        s.append(minfn);
+        s.append("(");
+        s.append(x);
+        s.append(", ");
+        s.append(y);
+        s.append(")");
+    }
 }
 [[nodiscard]] inline const char* fast_init(KOp op, bool fsfx)
 {
-    if (op == KOp::ReduceProd) { return fsfx ? "1.0f" : "1.0"; }
-    if (op == KOp::ReduceMax) { return fsfx ? "-3.402823466e38f" : "-3.402823466e38"; }
-    if (op == KOp::ReduceMin) { return fsfx ? "3.402823466e38f" : "3.402823466e38"; }
+    if (op == KOp::ReduceProd)
+    {
+        return fsfx ? "1.0f" : "1.0";
+    }
+    if (op == KOp::ReduceMax)
+    {
+        return fsfx ? "-3.402823466e38f" : "-3.402823466e38";
+    }
+    if (op == KOp::ReduceMin)
+    {
+        return fsfx ? "3.402823466e38f" : "3.402823466e38";
+    }
     return fsfx ? "0.0f" : "0.0";
 }
 
@@ -120,13 +178,29 @@ inline void emit_gather_index_body(crd::containers::String& s, const Shape& out,
     s.append("  uint iidx = 0u;\n");
     for (int k = 0; k < rank; ++k)
     {
-        if (coef[k] == 0U) { continue; } // a size-1 (broadcast) axis: contributes nothing
+        if (coef[k] == 0U) // a size-1 (broadcast) axis: contributes nothing
+        {
+            continue;
+        }
         crd::u32 os = 1U;                 // out stride of axis k = product of the trailing out dims
-        for (int j = k + 1; j < rank; ++j) { os *= static_cast<crd::u32>(out.dims[j]); }
+        for (int j = k + 1; j < rank; ++j)
+        {
+            os *= static_cast<crd::u32>(out.dims[j]);
+        }
         s.append("  iidx += ((gid");
-        if (os != 1U) { s.append(" / "); app_uint(s, os); s.append("u"); }
+        if (os != 1U)
+        {
+            s.append(" / ");
+            app_uint(s, os);
+            s.append("u");
+        }
         s.append(") % "); app_uint(s, static_cast<crd::u32>(out.dims[k])); s.append("u)");
-        if (coef[k] != 1U) { s.append(" * "); app_uint(s, coef[k]); s.append("u"); }
+        if (coef[k] != 1U)
+        {
+            s.append(" * ");
+            app_uint(s, coef[k]);
+            s.append("u");
+        }
         s.append(";\n");
     }
     s.append("  O[gid] = A[iidx];\n");
@@ -136,15 +210,24 @@ inline void emit_gather_index_body(crd::containers::String& s, const Shape& out,
 [[nodiscard]] inline bool broadcast_coef(const KGraph& g, int output, Shape& out, crd::u32* coef, int& rank) noexcept
 {
     const KNode& bn = g.node(output);
-    if (bn.op != KOp::Broadcast || g.node(bn.a).op != KOp::Input) { return false; }
+    if (bn.op != KOp::Broadcast || g.node(bn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& in = g.node(bn.a).shape;
     out  = bn.shape;
     rank = out.rank;
-    if (in.rank != rank || rank < 1 || rank > kMaxRank) { return false; }
+    if (in.rank != rank || rank < 1 || rank > kMaxRank)
+    {
+        return false;
+    }
     for (int k = 0; k < rank; ++k)
     {
         crd::u32 is = 1U;
-        for (int j = k + 1; j < rank; ++j) { is *= static_cast<crd::u32>(in.dims[j]); }
+        for (int j = k + 1; j < rank; ++j)
+        {
+            is *= static_cast<crd::u32>(in.dims[j]);
+        }
         coef[k] = (in.dims[k] == 1) ? 0U : is;
     }
     return true;
@@ -154,17 +237,29 @@ inline void emit_gather_index_body(crd::containers::String& s, const Shape& out,
 [[nodiscard]] inline bool permute_coef(const KGraph& g, int output, Shape& out, crd::u32* coef, int& rank) noexcept
 {
     const KNode& pn = g.node(output);
-    if (pn.op != KOp::Permute || g.node(pn.a).op != KOp::Input) { return false; }
+    if (pn.op != KOp::Permute || g.node(pn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& in = g.node(pn.a).shape;
     out  = pn.shape;
     rank = out.rank;
-    if (rank < 1 || rank > kMaxRank || in.rank != rank) { return false; }
+    if (rank < 1 || rank > kMaxRank || in.rank != rank)
+    {
+        return false;
+    }
     for (int k = 0; k < rank; ++k)
     {
         const int src = pn.perm[k];
-        if (src < 0 || src >= in.rank) { return false; }
+        if (src < 0 || src >= in.rank)
+        {
+            return false;
+        }
         crd::u32 is = 1U;
-        for (int j = src + 1; j < in.rank; ++j) { is *= static_cast<crd::u32>(in.dims[j]); }
+        for (int j = src + 1; j < in.rank; ++j)
+        {
+            is *= static_cast<crd::u32>(in.dims[j]);
+        }
         coef[k] = is;
     }
     return true;
@@ -185,14 +280,32 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_fusable(nd.op)) { return false; } // a non-elementwise node in the cone ⇒ not a single elementwise kernel
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
+        if (!is_fusable(nd.op)) // a non-elementwise node in the cone ⇒ not a single elementwise kernel
+        {
+            return false;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
     }
 
     // binding map: distinct input iidx -> binding index (in first-seen id order)
@@ -202,7 +315,10 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
     out.n_inputs                     = 0;
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         if (g.node(i).op == KOp::Input)
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
@@ -226,17 +342,35 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         const bool ii = dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype());
-        if (nd.dtype() == DType::Bool) { s.append("  bool t"); }
-        else { s.append(ii ? "  int t" : "  precise float t"); }
+        if (nd.dtype() == DType::Bool)
+        {
+            s.append("  bool t");
+        }
+        else
+        {
+            s.append(ii ? "  int t" : "  precise float t");
+        }
         app_uint(s, i); s.append(" = ");
         const auto ta = [&](int id) { s.append("t"); app_uint(s, id); };
         switch (nd.op)
         {
         case KOp::Input: s.append("in"); app_uint(s, binding_of[static_cast<crd::usize>(i)]); s.append("[gid]"); break;
-        case KOp::Const: if (ii) { app_int_const(s, nd.cval, nd.dtype()); } else { app_flit(s, nd.cval); } break;
+        case KOp::Const:
+                if (ii)
+                {
+                    app_int_const(s, nd.cval, nd.dtype());
+                }
+                else
+                {
+                    app_flit(s, nd.cval);
+                }
+                break;
         case KOp::Cast: s.append(ii ? "int(" : "float("); ta(nd.a); s.append(")"); break;
         case KOp::Neg: s.append("-"); ta(nd.a); break;
         case KOp::Recip: s.append("1.0/"); ta(nd.a); break;
@@ -301,15 +435,35 @@ inline bool emit_elementwise_glsl(const KGraph& g, int output, crd::memory::IAll
         case KOp::Mod: s.append("("); ta(nd.a); s.append(" - "); ta(nd.b); s.append(" * trunc("); ta(nd.a); s.append(" / "); ta(nd.b); s.append("))"); break; // C fmod
         case KOp::Fma: s.append("fma("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
         // a Bool condition tests directly; a numeric one (bit-extraction flags) still compares against zero.
-        case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+        case KOp::Select: s.append("(");
+                if (g.node(nd.c).dtype() == DType::Bool)
+                {
+                    ta(nd.c);
+                }
+                else
+                {
+                    s.append("(");
+                    ta(nd.c);
+                    s.append(" != 0.0)");
+                }
+                s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
         default: return false;
         }
         s.append(";\n");
     }
     // std430 cannot hold a `bool`, so a bool result is written as float 0.0/1.0 (matches the oracle's materialization).
     s.append("  outb[gid] = ");
-    if (g.node(output).dtype() == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); }
-    else { s.append("t"); app_uint(s, output); }
+    if (g.node(output).dtype() == DType::Bool)
+    {
+        s.append("float(t");
+        app_uint(s, output);
+        s.append(")");
+    }
+    else
+    {
+        s.append("t");
+        app_uint(s, output);
+    }
     s.append(";\n}\n");
     return true;
 }
@@ -323,7 +477,20 @@ inline const char* vtype(KType t) noexcept
 {
     if (t.kind == TKind::Mat)
     {
-        if (t.rows == t.cols) { switch (t.rows) { case 2: return "mat2"; case 3: return "mat3"; case 4: return "mat4"; default: return "float"; } }
+        if (t.rows == t.cols)
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "mat2";
+                case 3:
+                    return "mat3";
+                case 4:
+                    return "mat4";
+                default:
+                    return "float";
+            }
+        }
         switch (static_cast<int>(t.cols) * 10 + static_cast<int>(t.rows))
         {
         case 23: return "mat2x3"; case 24: return "mat2x4";
@@ -335,10 +502,62 @@ inline const char* vtype(KType t) noexcept
     // vecN / ivecN / uvecN / bvecN -- the component scalar picks the prefix. (Matrices are float-only in GLSL.)
     if (t.kind == TKind::Vec)
     {
-        if (t.scalar == DType::Bool) { switch (t.rows) { case 2: return "bvec2"; case 3: return "bvec3"; case 4: return "bvec4"; default: break; } }
-        else if (glsl_detail::dt_is_uint(t.scalar)) { switch (t.rows) { case 2: return "uvec2"; case 3: return "uvec3"; case 4: return "uvec4"; default: break; } }
-        else if (glsl_detail::dt_is_int(t.scalar)) { switch (t.rows) { case 2: return "ivec2"; case 3: return "ivec3"; case 4: return "ivec4"; default: break; } }
-        else { switch (t.rows) { case 2: return "vec2"; case 3: return "vec3"; case 4: return "vec4"; default: break; } }
+        if (t.scalar == DType::Bool)
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "bvec2";
+                case 3:
+                    return "bvec3";
+                case 4:
+                    return "bvec4";
+                default:
+                    break;
+            }
+        }
+        else if (glsl_detail::dt_is_uint(t.scalar))
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "uvec2";
+                case 3:
+                    return "uvec3";
+                case 4:
+                    return "uvec4";
+                default:
+                    break;
+            }
+        }
+        else if (glsl_detail::dt_is_int(t.scalar))
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "ivec2";
+                case 3:
+                    return "ivec3";
+                case 4:
+                    return "ivec4";
+                default:
+                    break;
+            }
+        }
+        else
+        {
+            switch (t.rows)
+            {
+                case 2:
+                    return "vec2";
+                case 3:
+                    return "vec3";
+                case 4:
+                    return "vec4";
+                default:
+                    break;
+            }
+        }
     }
     return glsl_detail::ctype(t.scalar);
 }
@@ -347,8 +566,14 @@ inline const char* vtype(KType t) noexcept
 // separable DECLARATION is `<prefix>texture<suffix>`; the COMBINED type at the sample site is `<prefix>sampler<suffix>`.
 inline const char* glsl_tex_scalar_prefix(DType d) noexcept
 {
-    if (glsl_detail::dt_is_uint(d)) { return "u"; }
-    if (glsl_detail::dt_is_int(d)) { return "i"; }
+    if (glsl_detail::dt_is_uint(d))
+    {
+        return "u";
+    }
+    if (glsl_detail::dt_is_int(d))
+    {
+        return "i";
+    }
     return "";
 }
 inline const char* glsl_tex_dim_suffix(const KType& t) noexcept
@@ -356,7 +581,12 @@ inline const char* glsl_tex_dim_suffix(const KType& t) noexcept
     switch (t.tex_dim())
     {
     case TexDim::Tex1D:   return t.tex_arrayed() ? "1DArray" : "1D";
-    case TexDim::Tex2D:   if (t.tex_ms()) { return "2DMS"; } return t.tex_arrayed() ? "2DArray" : "2D";
+    case TexDim::Tex2D:
+            if (t.tex_ms())
+            {
+                return "2DMS";
+            }
+            return t.tex_arrayed() ? "2DArray" : "2D";
     case TexDim::Tex3D:   return "3D";
     case TexDim::TexCube: return t.tex_arrayed() ? "CubeArray" : "Cube";
     }
@@ -366,7 +596,10 @@ inline const char* glsl_tex_dim_suffix(const KType& t) noexcept
 // ops the vec/mat emitter fuses into one per-element kernel (scalar-fusable + the vec/mat value ops backed by GLSL builtins).
 inline bool is_vec_fusable(KOp op) noexcept
 {
-    if (glsl_detail::is_fusable(op)) { return true; }
+    if (glsl_detail::is_fusable(op))
+    {
+        return true;
+    }
     switch (op)
     {
     case KOp::Vec2: case KOp::Vec3: case KOp::VecConcat: case KOp::VecComp: case KOp::Swizzle: case KOp::Splat:
@@ -395,16 +628,40 @@ inline bool is_vec_fusable(KOp op) noexcept
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.comps() > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return true; }
-        if (is_aggregate(nd.op)) { return true; } // a struct of one scalar has comps == 1, so route by OP
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); }
+        if (nd.comps() > 1 || nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc)
+        {
+            return true;
+        }
+        if (is_aggregate(nd.op)) // a struct of one scalar has comps == 1, so route by OP
+        {
+            return true;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k)
+        {
+            stk.push_back(g.ext_operand(nd, k));
+        }
     }
     return false;
 }
@@ -442,13 +699,19 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
         const KNode& tx = g.node(nd.a);
         const KNode& sm = g.node(nd.b);
         s.append(glsl_tex_scalar_prefix(tx.type.scalar)); s.append("sampler"); s.append(glsl_tex_dim_suffix(tx.type));
-        if (sm.type.tex_shadow()) { s.append("Shadow"); }
+        if (sm.type.tex_shadow())
+        {
+            s.append("Shadow");
+        }
         s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
         s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); s.append(")");
     };
 
     // B0-4 SROA: an aggregate is never materialized on the GPU. StructMake/ArrayMake emit nothing.
-    if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake) { return true; }
+    if (nd.op == KOp::StructMake || nd.op == KOp::ArrayMake)
+    {
+        return true;
+    }
     // FieldGet/ArrayGet: a value aggregate (from a Make) resolves to its operand temp — what Slang/DXC do. A NON-Make
     // aggregate is a UniformBlock (raster): the stage leaf reads `ubo.member`. A struct produced by a `Select` would need
     // a real GLSL struct type; refuse it loudly (compute's leaf returns false ⇒ this is a no-op there, matching the old code).
@@ -466,14 +729,31 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     }
 
     // Stage-specific leaves (Input / StageIn / Builtin) — the leaf emits the WHOLE statement (prefix + RHS + `;\n`).
-    if (leaf(g, i, s)) { return true; }
+    if (leaf(g, i, s))
+    {
+        return true;
+    }
 
     emit_stmt_prefix(g, i, s);
     switch (nd.op)
     {
     // Int/uint constants MUST emit an integer literal — type-strict GLSL rejects `int t = 0.0` (HLSL would coerce it).
     // D12: a spec constant references its module-scope `layout(constant_id=N)` name (declared in the stage prologue).
-    case KOp::Const: if (is_spec_const(nd)) { s.append("_spec"); app_uint(s, static_cast<int>(spec_const_id(nd))); } else if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); } else { app_flit(s, nd.cval); } break;
+    case KOp::Const:
+            if (is_spec_const(nd))
+            {
+                s.append("_spec");
+                app_uint(s, static_cast<int>(spec_const_id(nd)));
+            }
+            else if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype()))
+            {
+                app_int_const(s, nd.cval, nd.dtype());
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+            }
+            break;
     case KOp::Cast: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
     case KOp::Neg: s.append("-"); ta(nd.a); break;
     case KOp::Recip: s.append("(1.0 / "); ta(nd.a); s.append(")"); break;
@@ -508,8 +788,18 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
         s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
         // A UNIFORM (compile-time constant) index needs no `nonuniformEXT` — and some drivers reject/return-zero for nonuniform
         // bindless in a MESH shader. Only a dynamic index gets the qualifier.
-        if (g.node(nd.d).op == KOp::Const) { s.append("["); ta(nd.d); s.append("]"); }
-        else { s.append("[nonuniformEXT("); ta(nd.d); s.append(")]"); }
+        if (g.node(nd.d).op == KOp::Const)
+        {
+            s.append("[");
+            ta(nd.d);
+            s.append("]");
+        }
+        else
+        {
+            s.append("[nonuniformEXT(");
+            ta(nd.d);
+            s.append(")]");
+        }
         s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx));
         s.append("), "); ta(nd.c); s.append(")");
         break;
@@ -522,8 +812,18 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
         s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
         // A UNIFORM (compile-time constant) index needs no `nonuniformEXT` — and some drivers reject/return-zero for nonuniform
         // bindless in a MESH shader. Only a dynamic index gets the qualifier.
-        if (g.node(nd.d).op == KOp::Const) { s.append("["); ta(nd.d); s.append("]"); }
-        else { s.append("[nonuniformEXT("); ta(nd.d); s.append(")]"); }
+        if (g.node(nd.d).op == KOp::Const)
+        {
+            s.append("[");
+            ta(nd.d);
+            s.append("]");
+        }
+        else
+        {
+            s.append("[nonuniformEXT(");
+            ta(nd.d);
+            s.append(")]");
+        }
         s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx));
         s.append("), "); ta(nd.c); s.append(", "); ta(g.ext_operand(nd, 0)); s.append(")");
         break;
@@ -550,7 +850,13 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::Vec3: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::VecConcat: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::VecComp: ta(nd.a); s.append("."); { const char sw[2] = {xyzw[nd.iidx], '\0'}; s.append(sw); } break;
-    case KOp::Swizzle: ta(nd.a); s.append("."); for (int k = 0; k < c; ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } break;
+    case KOp::Swizzle: ta(nd.a); s.append(".");
+            for (int k = 0; k < c; ++k)
+            {
+                const char sw[2] = {xyzw[nd.perm[k]], '\0'};
+                s.append(sw);
+            }
+            break;
     case KOp::Splat: s.append(vtype(nd.type)); s.append("("); ta(nd.a); s.append(")"); break;
     case KOp::Dot: s.append("dot("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::Cross: s.append("cross("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
@@ -565,9 +871,50 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
     case KOp::Determinant: s.append("determinant("); ta(nd.a); s.append(")"); break;
     case KOp::MatInverse: s.append("inverse("); ta(nd.a); s.append(")"); break;
     case KOp::OuterProduct: s.append("outerProduct("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
-    case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } ta(operand[k]); } s.append(")"); break; }
-    case KOp::VecAny: if (g.node(nd.a).dtype() == DType::Bool) { s.append("any("); ta(nd.a); s.append(")"); } else { s.append("any(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
-    case KOp::VecAll: if (g.node(nd.a).dtype() == DType::Bool) { s.append("all("); ta(nd.a); s.append(")"); } else { s.append("all(notEqual("); ta(nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+    case KOp::MatFromCols:
+    {
+        const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("(");
+        for (int k = 0; k < mcols; ++k)
+        {
+            if (k)
+            {
+                s.append(", ");
+            }
+            ta(operand[k]);
+        }
+        s.append(")"); break; }
+    case KOp::VecAny:
+            if (g.node(nd.a).dtype() == DType::Bool)
+            {
+                s.append("any(");
+                ta(nd.a);
+                s.append(")");
+            }
+            else
+            {
+                s.append("any(notEqual(");
+                ta(nd.a);
+                s.append(", ");
+                s.append(vtype(g.node(nd.a).type));
+                s.append("(0.0)))");
+            }
+            break;
+    case KOp::VecAll:
+            if (g.node(nd.a).dtype() == DType::Bool)
+            {
+                s.append("all(");
+                ta(nd.a);
+                s.append(")");
+            }
+            else
+            {
+                s.append("all(notEqual(");
+                ta(nd.a);
+                s.append(", ");
+                s.append(vtype(g.node(nd.a).type));
+                s.append("(0.0)))");
+            }
+            break;
     case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
     {
         const bool  vecop = g.node(nd.a).type.kind == TKind::Vec;
@@ -582,11 +929,36 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
         case KOp::CmpEq: fn = "equal("; sym = " == "; break;
         default: fn = "notEqual("; sym = " != "; break;
         }
-        if (vecop) { s.append(fn); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); }
-        else { s.append("("); ta(nd.a); s.append(sym); ta(nd.b); s.append(")"); }
+        if (vecop)
+        {
+            s.append(fn);
+            ta(nd.a);
+            s.append(", ");
+            ta(nd.b);
+            s.append(")");
+        }
+        else
+        {
+            s.append("(");
+            ta(nd.a);
+            s.append(sym);
+            ta(nd.b);
+            s.append(")");
+        }
         break;
     }
-    case KOp::Select: s.append("("); if (g.node(nd.c).dtype() == DType::Bool) { ta(nd.c); } else { s.append("("); ta(nd.c); s.append(" != 0.0)"); } s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
+    case KOp::Select: s.append("(");
+            if (g.node(nd.c).dtype() == DType::Bool)
+            {
+                ta(nd.c);
+            }
+            else
+            {
+                s.append("(");
+                ta(nd.c);
+                s.append(" != 0.0)");
+            }
+            s.append(" ? "); ta(nd.a); s.append(" : "); ta(nd.b); s.append(")"); break;
     case KOp::Slerp: s.append("crd_slerp("); ta(nd.a); s.append(", "); ta(nd.b); s.append(", "); ta(nd.c); s.append(")"); break;
     case KOp::QuatMul: s.append("crd_qmul("); ta(nd.a); s.append(", "); ta(nd.b); s.append(")"); break;
     case KOp::QuatConj: s.append("crd_qconj("); ta(nd.a); s.append(")"); break;
@@ -707,8 +1079,14 @@ inline bool emit_value_stmt(const KGraph& g, int i, crd::containers::String& s, 
 inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (!entry.is_kernel()) { return false; }
-    if (entry.local_size[0] == 0U) { return false; } // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    if (!entry.is_kernel())
+    {
+        return false;
+    }
+    if (entry.local_size[0] == 0U) // CEIR-26d: an UNBOUND shape-sentinel (local_size=0) must be cook-bound by
+    {
+        return false;
+    }
     // the resolver (bind_authored_local_size) BEFORE emit — refuse loudly rather than emit `local_size_x = 0` (opaque glslang
     // reject) or a silent 1-thread kernel; the caller surfaces this as an unresolved stage (UnresolvedKernel).
     const int                n = g.size();
@@ -716,7 +1094,14 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     s.clear();
     out.n_inputs = 0;
     bool uses_rayquery = false; // B9/RT-1: inline ray query needs GLSL 4.60 + GL_EXT_ray_query when an AccelStructDecl is present
-    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::AccelStructDecl) { uses_rayquery = true; break; } }
+    for (int i = 0; i < n; ++i)
+    {
+        if (g.node(i).op == KOp::AccelStructDecl)
+        {
+            uses_rayquery = true;
+            break;
+        }
+    }
     s.append(uses_rayquery ? "#version 460\n" : "#version 450\n"); // GL_EXT_ray_query's rayQueryEXT type requires #version 460
     s.append("#extension GL_KHR_shader_subgroup_basic : require\n");  // B-cmp: subgroup (wave) ops — the cheap deterministic
     s.append("#extension GL_KHR_shader_subgroup_ballot : require\n"); // radix rank; bit-exact under a forced 32-lane subgroup
@@ -724,7 +1109,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     s.append("#extension GL_KHR_shader_subgroup_shuffle : require\n"); // B11: subgroupShuffle (broadcastFirst is in _ballot)
     s.append("#extension GL_KHR_shader_subgroup_quad : require\n"); // B11: subgroupQuadBroadcast / subgroupQuadSwap{Horizontal,Vertical,Diagonal}
     s.append("#extension GL_NV_shader_subgroup_partitioned : enable\n"); // hardware match_any (SubgroupMatch); SPIR-V cap emitted only when used
-    if (uses_rayquery) { s.append("#extension GL_EXT_ray_query : require\n"); }
+    if (uses_rayquery)
+    {
+        s.append("#extension GL_EXT_ray_query : require\n");
+    }
     s.append("layout(local_size_x = "); app_uint(s, entry.local_size[0]);
     s.append(", local_size_y = ");      app_uint(s, entry.local_size[1]);
     s.append(", local_size_z = ");      app_uint(s, entry.local_size[2]); s.append(") in;\n");
@@ -735,7 +1123,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         if (nd.op == KOp::BufferDecl && !is_spec_const(nd))
         {
             s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") ");
-            if ((nd.axes & 2U) != 0U) { s.append("coherent volatile "); } // cross-workgroup visible (spin-wait publish/read)
+            if ((nd.axes & 2U) != 0U) // cross-workgroup visible (spin-wait publish/read)
+            {
+                s.append("coherent volatile ");
+            }
             s.append(nd.axes != 0U ? "" : "readonly "); s.append("buffer B"); app_uint(s, nd.iidx);
             s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n");
         }
@@ -747,14 +1138,32 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
                 spec_declared[id] = true;
                 s.append("layout(constant_id = "); app_uint(s, static_cast<int>(id)); s.append(") const ");
                 const char* spec_ctype = "float";
-                if (nd.dtype() == DType::Bool) { spec_ctype = "bool"; }
-                else if (dt_is_uint(nd.dtype())) { spec_ctype = "uint"; }
-                else if (dt_is_int(nd.dtype())) { spec_ctype = "int"; }
+                if (nd.dtype() == DType::Bool)
+                {
+                    spec_ctype = "bool";
+                }
+                else if (dt_is_uint(nd.dtype()))
+                {
+                    spec_ctype = "uint";
+                }
+                else if (dt_is_int(nd.dtype()))
+                {
+                    spec_ctype = "int";
+                }
                 s.append(spec_ctype);
                 s.append(" _spec"); app_uint(s, static_cast<int>(id)); s.append(" = ");
-                if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
-                else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
-                else { app_flit(s, nd.cval); }
+                if (nd.dtype() == DType::Bool)
+                {
+                    s.append(nd.cval != 0.0 ? "true" : "false");
+                }
+                else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype()))
+                {
+                    app_int_const(s, nd.cval, nd.dtype());
+                }
+                else
+                {
+                    app_flit(s, nd.cval);
+                }
                 s.append(";\n");
             }
         }
@@ -772,13 +1181,22 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
             s.append(") uniform "); s.append(glsl_tex_scalar_prefix(nd.type.scalar)); s.append("texture"); s.append(glsl_tex_dim_suffix(nd.type));
             s.append(" tex_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); }
+            if (nd.type.count > 1U)
+            {
+                s.append("[");
+                app_uint(s, static_cast<crd::u32>(nd.type.count));
+                s.append("]");
+            }
             s.append(";\n");
         }
         else if (nd.op == KOp::Sampler)
         {
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            s.append(") uniform sampler"); if (nd.type.tex_shadow()) { s.append("Shadow"); }
+            s.append(") uniform sampler");
+            if (nd.type.tex_shadow())
+            {
+                s.append("Shadow");
+            }
             s.append(" samp_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
         }
     }
@@ -790,13 +1208,56 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         bool qa = false;
         bool qt = false;
         bool sl = false;
-        for (int i = 0; i < n; ++i) { switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
-        if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n"); }
-        if (qt) { s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n"); }
-        if (sl) { s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n");
+        }
+        if (qt)
+        {
+            s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (sl)
+        {
+            s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
     }
     s.append("void main() {\n");
 
@@ -829,7 +1290,12 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     };
     // pv: print a node's VALUE — a temp reference if it was materialized, else its inline expression (children via pv).
     const auto pv = [&](auto&& self, int node) -> void {
-        if (temped[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        if (temped[static_cast<crd::usize>(node)] != 0U)
+        {
+            s.append("t");
+            app_uint(s, static_cast<crd::u32>(node));
+            return;
+        }
         const KNode& nd  = g.node(node);
         const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
         // AND/OR/XOR of BOOL operands (e.g. Perlin gradient3's `(h==12) | (h==14)`) must be LOGICAL in GLSL (`bool | bool` is a
@@ -838,23 +1304,60 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         switch (nd.op)
         {
         case KOp::Const:
-            if (is_spec_const(nd)) { s.append("_spec"); app_uint(s, static_cast<int>(spec_const_id(nd))); } // D12: the pipeline-time spec constant
-            else if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
+            if (is_spec_const(nd)) // D12: the pipeline-time spec constant
+            {
+                s.append("_spec");
+                app_uint(s, static_cast<int>(spec_const_id(nd)));
+            }
+            else if (nd.dtype() == DType::Bool)
+            {
+                s.append(nd.cval != 0.0 ? "true" : "false");
+            }
             // app_int_const uses %lld (full 64-bit) + a `u` suffix for uint — a u32 const > INT_MAX (hash seeds like
             // 2654435761) must NOT go through static_cast<int> (MSVC clamps out-of-range double→int to INT_MIN, mangling it).
-            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
-            else { app_flit(s, nd.cval); }
+            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype()))
+            {
+                app_int_const(s, nd.cval, nd.dtype());
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+            }
             break;
         case KOp::Builtin:
-            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("gl_LocalInvocationIndex"); }
-            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("gl_WorkGroupID.x"); }
-            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId) { s.append("gl_GlobalInvocationID"); }
-            else { ok = false; s.append("0u"); }
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex)
+            {
+                s.append("gl_LocalInvocationIndex");
+            }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex)
+            {
+                s.append("gl_WorkGroupID.x");
+            }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::GlobalInvocationId)
+            {
+                s.append("gl_GlobalInvocationID");
+            }
+            else
+            {
+                ok = false;
+                s.append("0u");
+            }
             break;
         case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
         case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
         case KOp::SharedLoad: s.append("sh"); app_uint(s, nd.a); s.append("["); self(self, nd.b); s.append("]"); break;
-        case KOp::Cast: { const char* ct = "float("; if (dt_is_uint(nd.dtype())) { ct = "uint("; } else if (dt_is_int(nd.dtype())) { ct = "int("; } s.append(ct); self(self, nd.a); s.append(")"); break; }
+        case KOp::Cast:
+        {
+            const char* ct = "float(";
+            if (dt_is_uint(nd.dtype()))
+            {
+                ct = "uint(";
+            }
+            else if (dt_is_int(nd.dtype()))
+            {
+                ct = "int(";
+            }
+            s.append(ct); self(self, nd.a); s.append(")"); break; }
         case KOp::CmpLt: bin(" < "); break;
         case KOp::CmpLe: bin(" <= "); break;
         case KOp::CmpGt: bin(" > "); break;
@@ -949,7 +1452,16 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Min: f2("min"); break;
         case KOp::Max: f2("max"); break;
         case KOp::Clamp: s.append("min(max("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append("), "); pv(pv, nd.c); s.append(")"); break; // B4-vis: bbox clamp (matches oracle + HLSL)
-        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { b2(" % "); } else { f2("mod"); } break; // GLSL mod() is float-only
+        case KOp::Mod:
+                if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype()))
+                {
+                    b2(" % ");
+                }
+                else
+                {
+                    f2("mod");
+                }
+                break; // GLSL mod() is float-only
         case KOp::Fma: s.append("fma("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::BitNot: s.append("(~"); pv(pv, nd.a); s.append(")"); break;
         case KOp::BitCount: s.append("bitCount("); pv(pv, nd.a); s.append(")"); break;
@@ -976,7 +1488,16 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Vec3: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::VecConcat: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::VecComp: pv(pv, nd.a); s.append("."); { const char sw[2] = {"xyzw"[nd.iidx], '\0'}; s.append(sw); } break;
-        case KOp::Swizzle: pv(pv, nd.a); s.append("."); { const char xyzw[4] = {'x','y','z','w'}; for (int k = 0; k < nd.comps(); ++k) { const char sw[2] = {xyzw[nd.perm[k]], '\0'}; s.append(sw); } } break;
+        case KOp::Swizzle: pv(pv, nd.a); s.append(".");
+        {
+            const char xyzw[4] = {'x','y','z','w'};
+            for (int k = 0; k < nd.comps(); ++k)
+            {
+                const char sw[2] = {xyzw[nd.perm[k]], '\0'};
+                s.append(sw);
+            }
+        }
+        break;
         case KOp::Splat: s.append(vtype(nd.type)); s.append("("); pv(pv, nd.a); s.append(")"); break;
         case KOp::Dot: s.append("dot("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::Cross: s.append("cross("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
@@ -991,9 +1512,50 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
         case KOp::Determinant: s.append("determinant("); pv(pv, nd.a); s.append(")"); break;
         case KOp::MatInverse: s.append("inverse("); pv(pv, nd.a); s.append(")"); break;
         case KOp::OuterProduct: s.append("outerProduct("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
-        case KOp::MatFromCols: { const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("("); for (int k = 0; k < mcols; ++k) { if (k) { s.append(", "); } pv(pv, operand[k]); } s.append(")"); break; }
-        case KOp::VecAny: if (g.node(nd.a).dtype() == DType::Bool) { s.append("any("); pv(pv, nd.a); s.append(")"); } else { s.append("any(notEqual("); pv(pv, nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
-        case KOp::VecAll: if (g.node(nd.a).dtype() == DType::Bool) { s.append("all("); pv(pv, nd.a); s.append(")"); } else { s.append("all(notEqual("); pv(pv, nd.a); s.append(", "); s.append(vtype(g.node(nd.a).type)); s.append("(0.0)))"); } break;
+        case KOp::MatFromCols:
+        {
+            const int mcols = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; s.append(vtype(nd.type)); s.append("(");
+            for (int k = 0; k < mcols; ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                pv(pv, operand[k]);
+            }
+            s.append(")"); break; }
+        case KOp::VecAny:
+                if (g.node(nd.a).dtype() == DType::Bool)
+                {
+                    s.append("any(");
+                    pv(pv, nd.a);
+                    s.append(")");
+                }
+                else
+                {
+                    s.append("any(notEqual(");
+                    pv(pv, nd.a);
+                    s.append(", ");
+                    s.append(vtype(g.node(nd.a).type));
+                    s.append("(0.0)))");
+                }
+                break;
+        case KOp::VecAll:
+                if (g.node(nd.a).dtype() == DType::Bool)
+                {
+                    s.append("all(");
+                    pv(pv, nd.a);
+                    s.append(")");
+                }
+                else
+                {
+                    s.append("all(notEqual(");
+                    pv(pv, nd.a);
+                    s.append(", ");
+                    s.append(vtype(g.node(nd.a).type));
+                    s.append("(0.0)))");
+                }
+                break;
         case KOp::Slerp: s.append("crd_slerp("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(", "); pv(pv, nd.c); s.append(")"); break;
         case KOp::QuatMul: s.append("crd_qmul("); pv(pv, nd.a); s.append(", "); pv(pv, nd.b); s.append(")"); break;
         case KOp::QuatConj: s.append("crd_qconj("); pv(pv, nd.a); s.append(")"); break;
@@ -1012,11 +1574,15 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             const KNode& sm = g.node(nd.b);
             const auto samp = [&]() {
                 s.append(glsl_tex_scalar_prefix(tx.type.scalar)); s.append("sampler"); s.append(glsl_tex_dim_suffix(tx.type));
-                if (sm.type.tex_shadow()) { s.append("Shadow"); }
+                if (sm.type.tex_shadow())
+                {
+                    s.append("Shadow");
+                }
                 s.append("(tex_"); app_uint(s, static_cast<crd::u32>(tx.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(tx.iidx));
                 s.append(", samp_"); app_uint(s, static_cast<crd::u32>(sm.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(sm.iidx)); s.append(")");
             };
-            switch (nd.op) {
+            switch (nd.op)
+            {
             case KOp::TexSample:  s.append("texture(");     samp(); s.append(", "); pv(pv, nd.c); s.append(")"); break;
             case KOp::SampleLod:  s.append("textureLod(");  samp(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(")"); break;
             case KOp::SampleGrad: s.append("textureGrad("); samp(); s.append(", "); pv(pv, nd.c); s.append(", "); pv(pv, nd.d); s.append(", "); pv(pv, g.ext_operand(nd, 0)); s.append(")"); break;
@@ -1037,17 +1603,39 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     };
     // decl: materialize temps for the arithmetic nodes in a subtree (children first, CSE by node id).
     const auto decl = [&](auto&& self, int node) -> void {
-        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; } // DAG memo — see declseen above
+        if (declseen[static_cast<crd::usize>(node)] != 0U) // DAG memo — see declseen above
+        {
+            return;
+        }
         // ⛔⛔ B18-e / IB-1: during the hoist pre-pass, DEFER a node that reads produced-in-order state (a materialized
         // value or a written buffer) to its in-order emission — hoisting would read the buffer before its writes.
-        if (in_hoist && order.must_defer(node)) { return; }
+        if (in_hoist && order.must_defer(node))
+        {
+            return;
+        }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
-        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
-        if (nd.a >= 0) { self(self, nd.a); }
-        if (nd.b >= 0) { self(self, nd.b); }
-        if (nd.c >= 0) { self(self, nd.c); }
-        if (nd.d >= 0) { self(self, nd.d); }
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) // resource leaf: only the index carries temps
+        {
+            self(self, nd.b);
+            return;
+        }
+        if (nd.a >= 0)
+        {
+            self(self, nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            self(self, nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            self(self, nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            self(self, nd.d);
+        }
         if (!is_inline_op(nd.op) && temped[static_cast<crd::usize>(node)] == 0U)
         {
             temped[static_cast<crd::usize>(node)] = 1U;
@@ -1080,7 +1668,12 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::For: i = st.body_begin + st.body_count; break;
             case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
-            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            case KStmtKind::TraceRayCurves:
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        decl(decl, g.stmt_ext_operand(st, k));
+                    }
+                    ++i; break;
             default: ++i; break;
             }
         }
@@ -1117,7 +1710,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::BufferAtomicExchange: decl(decl, st.index); decl(decl, st.value); s.append("  "); s.append(buf_ctype(g.node(st.result).dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(st.result)); s.append(" = atomicExchange(buf"); app_uint(s, g.node(st.target).iidx); s.append("["); pv(pv, st.index); s.append("], "); pv(pv, st.value); s.append(");\n"); temped[static_cast<crd::usize>(st.result)] = 1U; ++i; break; // B17: linked-list head push
             case KStmtKind::TraceRayCurves: // B18-f: procedural curve BLAS — the shader intersects each candidate AABB's
             {                               // linear swept sphere and COMMITS it; hardware cannot resolve this itself.
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < 8; ++k)
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd  = g.node(st.target).iidx;
                 const crd::u32 sbuf = g.node(g.stmt_ext_operand(st, 8)).iidx;
@@ -1199,7 +1795,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             }
             case KStmtKind::TraceRayClosest: // B9/RT-1: inline ray query — closest-hit distance `t` (or tmax on miss)
             {
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } // materialize ox..dz, tmin, tmax
+                for (int k = 0; k < 8; ++k) // materialize ox..dz, tmin, tmax
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd = g.node(st.target).iidx;
                 const crd::u32 res = static_cast<crd::u32>(st.result);
@@ -1217,7 +1816,10 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
             }
             case KStmtKind::TraceRayHit: // B9/RT-2: inline ray query — closest-hit distance `t` + PRIMITIVE INDEX (for shading)
             {
-                for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); }
+                for (int k = 0; k < 8; ++k)
+                {
+                    decl(decl, g.stmt_ext_operand(st, k));
+                }
                 const auto op = [&](int k) { pv(pv, g.stmt_ext_operand(st, k)); };
                 const crd::u32 bnd  = g.node(st.target).iidx;
                 const crd::u32 res  = static_cast<crd::u32>(st.result);
@@ -1279,38 +1881,103 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
 
     int payload_n  = 1;
     int callable_n = 0; // REN-38-F13: components of the callable-data block (0 = none in this graph)
-    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::RayPayloadDecl) { payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
-    for (int i = 0; i < n; ++i) { if (g.node(i).op == KOp::CallableDataDecl) { callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        if (g.node(i).op == KOp::RayPayloadDecl)
+        {
+            payload_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1;
+        }
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        if (g.node(i).op == KOp::CallableDataDecl)
+        {
+            callable_n = g.node(i).iidx > 0 ? g.node(i).iidx : 1;
+        }
+    }
     const int b0 = entry.kernel_body_begin;
     const int bn = entry.kernel_body_count;
     bool      has_reorder = false;
-    for (int i = 0; i < bn; ++i) { if (g.stmt(b0 + i).kind == KStmtKind::ReorderThread) { has_reorder = true; } }
+    for (int i = 0; i < bn; ++i)
+    {
+        if (g.stmt(b0 + i).kind == KStmtKind::ReorderThread)
+        {
+            has_reorder = true;
+        }
+    }
     const bool use_ser = ser && has_reorder && st == KStage::RayGen;
 
     s.append("#version 460\n#extension GL_EXT_ray_tracing : require\n");
-    if (use_ser) { s.append("#extension GL_NV_shader_invocation_reorder : require\n"); }
+    if (use_ser)
+    {
+        s.append("#extension GL_NV_shader_invocation_reorder : require\n");
+    }
     s.append("struct RtPayload { ");
-    for (int c = 0; c < payload_n; ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+    for (int c = 0; c < payload_n; ++c)
+    {
+        s.append("float m");
+        app_uint(s, c);
+        s.append("; ");
+    }
     s.append("};\n");
     if (callable_n > 0 || st == KStage::Callable)
     {
         s.append("struct CallData { ");
-        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c) { s.append("float m"); app_uint(s, c); s.append("; "); }
+        for (int c = 0; c < (callable_n > 0 ? callable_n : 1); ++c)
+        {
+            s.append("float m");
+            app_uint(s, c);
+            s.append("; ");
+        }
         s.append("};\n");
     }
     for (int i = 0; i < n; ++i) // resource decls: AS + storage buffers
     {
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::AccelStructDecl) { s.append("layout(set = 0, binding = "); app_uint(s, nd.iidx); s.append(") uniform accelerationStructureEXT as"); app_uint(s, nd.iidx); s.append(";\n"); }
-        else if (nd.op == KOp::BufferDecl) { s.append("layout(std430, binding = "); app_uint(s, nd.iidx); s.append(") buffer B"); app_uint(s, nd.iidx); s.append(" { "); s.append(buf_ctype(nd.dtype())); s.append(" buf"); app_uint(s, nd.iidx); s.append("[]; };\n"); }
+        if (nd.op == KOp::AccelStructDecl)
+        {
+            s.append("layout(set = 0, binding = ");
+            app_uint(s, nd.iidx);
+            s.append(") uniform accelerationStructureEXT as");
+            app_uint(s, nd.iidx);
+            s.append(";\n");
+        }
+        else if (nd.op == KOp::BufferDecl)
+        {
+            s.append("layout(std430, binding = ");
+            app_uint(s, nd.iidx);
+            s.append(") buffer B");
+            app_uint(s, nd.iidx);
+            s.append(" { ");
+            s.append(buf_ctype(nd.dtype()));
+            s.append(" buf");
+            app_uint(s, nd.iidx);
+            s.append("[]; };\n");
+        }
     }
     // REN-38-F13: an INTERSECTION shader has NO payload access at all, and a CALLABLE sees only its data block.
-    if (st == KStage::Callable) { s.append("layout(location = 0) callableDataInEXT CallData cd;\n"); }
+    if (st == KStage::Callable)
+    {
+        s.append("layout(location = 0) callableDataInEXT CallData cd;\n");
+    }
     else if (st != KStage::Intersection)
     {
-        if (st == KStage::RayGen) { s.append("layout(location = 0) rayPayloadEXT RtPayload pl;\n"); }
-        else { s.append("layout(location = 0) rayPayloadInEXT RtPayload pl;\n"); if (st != KStage::Miss) { s.append("hitAttributeEXT vec2 hattr;\n"); } }
-        if (callable_n > 0) { s.append("layout(location = 0) callableDataEXT CallData cd;\n"); }
+        if (st == KStage::RayGen)
+        {
+            s.append("layout(location = 0) rayPayloadEXT RtPayload pl;\n");
+        }
+        else
+        {
+            s.append("layout(location = 0) rayPayloadInEXT RtPayload pl;\n");
+            if (st != KStage::Miss)
+            {
+                s.append("hitAttributeEXT vec2 hattr;\n");
+            }
+        }
+        if (callable_n > 0)
+        {
+            s.append("layout(location = 0) callableDataEXT CallData cd;\n");
+        }
     }
     s.append("void main() {\n");
 
@@ -1322,10 +1989,32 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
         switch (nd.op)
         {
         case KOp::Const:
-            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
-            else if (nd.dtype() == DType::U32) { char b[32]; std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval))); s.append(b); }
-            else if (nd.dtype() == DType::I32) { char b[32]; std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval))); s.append(b); }
-            else { char b[40]; std::snprintf(b, sizeof(b), "%.9g", nd.cval); s.append(b); if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr) { s.append(".0"); } }
+            if (nd.dtype() == DType::Bool)
+            {
+                s.append(nd.cval != 0.0 ? "true" : "false");
+            }
+            else if (nd.dtype() == DType::U32)
+            {
+                char b[32];
+                std::snprintf(b, sizeof(b), "%uu", static_cast<unsigned>(static_cast<crd::i64>(nd.cval)));
+                s.append(b);
+            }
+            else if (nd.dtype() == DType::I32)
+            {
+                char b[32];
+                std::snprintf(b, sizeof(b), "%d", static_cast<int>(static_cast<crd::i64>(nd.cval)));
+                s.append(b);
+            }
+            else
+            {
+                char b[40];
+                std::snprintf(b, sizeof(b), "%.9g", nd.cval);
+                s.append(b);
+                if (std::strchr(b, '.') == nullptr && std::strchr(b, 'e') == nullptr && std::strchr(b, 'n') == nullptr)
+                {
+                    s.append(".0");
+                }
+            }
             break;
         case KOp::Builtin:
             switch (static_cast<KBuiltin>(nd.iidx))
@@ -1393,7 +2082,11 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
     int if_depth = 0;
     for (int i = 0; i < bn; ++i) // emit the body statements
     {
-        while (if_depth > 0 && i == if_end[if_depth - 1]) { s.append("  }\n"); --if_depth; }
+        while (if_depth > 0 && i == if_end[if_depth - 1])
+        {
+            s.append("  }\n");
+            --if_depth;
+        }
         const KStmt& stm = g.stmt(b0 + i);
         switch (stm.kind)
         {
@@ -1401,7 +2094,10 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
             s.append("  if (");
             vv(stm.value);
             s.append(") {\n");
-            if (if_depth < 8) { if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count; }
+            if (if_depth < 8)
+            {
+                if_end[if_depth++] = (stm.body_begin - b0) + stm.body_count;
+            }
             break;
         case KStmtKind::TraceRayPipeline:
         {
@@ -1438,7 +2134,11 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
         default: break;
         }
     }
-    while (if_depth > 0) { s.append("  }\n"); --if_depth; }
+    while (if_depth > 0)
+    {
+        s.append("  }\n");
+        --if_depth;
+    }
     s.append("}\n");
     return true;
 }
@@ -1452,40 +2152,76 @@ inline bool emit_rt_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory
 inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment) { return false; } // B3-c lowers VS/FS only
+    if (entry.stage != KStage::Vertex && entry.stage != KStage::Fragment) // B3-c lowers VS/FS only
+    {
+        return false;
+    }
     const bool is_vertex = (entry.stage == KStage::Vertex);
-    if (is_vertex && entry.position < 0) { return false; } // a vertex entry must write clip position
+    if (is_vertex && entry.position < 0) // a vertex entry must write clip position
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
     push_root(entry.frag_depth);
     push_root(entry.discard_cond); // B1-b: the alpha-test condition must be reachable so its temp is emitted
     push_root(entry.shading_rate); // B1-e: per-primitive VRS rate node must be reachable
     push_root(entry.storage_write_index); // B1-f: the storage write's index + value must be reachable
     push_root(entry.storage_write_value);
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 450\n");
-    if (is_vertex && entry.shading_rate >= 0) { s.append("#extension GL_EXT_fragment_shading_rate : require\n"); } // B1-e
+    if (is_vertex && entry.shading_rate >= 0) // B1-e
+    {
+        s.append("#extension GL_EXT_fragment_shading_rate : require\n");
+    }
     for (int i = 0; i < n; ++i) // REN-38: DrawIndex needs gl_DrawID (draw-parameters ext at 450) + the push block
     {
         if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::Builtin
@@ -1519,30 +2255,54 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     // B1-f (FS) + GEO-1 (VS vertex pulling): does this stage touch the storage buffer? The FS may read AND write (+ROV);
     // a VERTEX stage may READ (StorageLoad by VertexIndex — the bindless vertex-feeding path). Writes stay FS-only.
     bool fs_uses_storage = false;
-    if (!is_vertex && entry.storage_write_index >= 0) { fs_uses_storage = true; }
+    if (!is_vertex && entry.storage_write_index >= 0)
+    {
+        fs_uses_storage = true;
+    }
     for (int i = 0; !fs_uses_storage && i < n; ++i)
     {
-        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad) { fs_uses_storage = true; }
+        if (reach[static_cast<crd::usize>(i)] && g.node(i).op == KOp::StorageLoad)
+        {
+            fs_uses_storage = true;
+        }
     }
     // Rasterizer-ordered access (ROV) — the whole main() body serialises per pixel between begin/endInvocationInterlockARB.
-    if (!is_vertex && fs_uses_storage && entry.interlock) { s.append("#extension GL_ARB_fragment_shader_interlock : require\n"); }
+    if (!is_vertex && fs_uses_storage && entry.interlock)
+    {
+        s.append("#extension GL_ARB_fragment_shader_interlock : require\n");
+    }
     for (int i = 0; i < n; ++i) // stage inputs: StageIn at (location) — VS attribute / FS interpolant
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::StageIn)
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(") ");
-        if (!is_vertex) { s.append(glsl_interp(static_cast<Interp>(nd.dset))); } // B1-c: interp on FS interpolant inputs
+        if (!is_vertex) // B1-c: interp on FS interpolant inputs
+        {
+            s.append(glsl_interp(static_cast<Interp>(nd.dset)));
+        }
         s.append("in "); s.append(vtype(nd.type)); s.append(" a_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
     for (int k = 0; k < entry.n_out; ++k) // stage outputs: VS interpolants / FS colour attachments, at (location)
     {
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(") ");
-        if (is_vertex) { s.append(glsl_interp(entry.out[k].interp)); } // B1-c: interp on VS interpolant outputs (matches FS)
+        if (is_vertex) // B1-c: interp on VS interpolant outputs (matches FS)
+        {
+            s.append(glsl_interp(entry.out[k].interp));
+        }
         s.append("out "); s.append(vtype(g.node(nid).type)); s.append(" o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
     }
-    if (!is_vertex && entry.early_fragment_tests) { s.append("layout(early_fragment_tests) in;\n"); } // B1-d: force early-Z
+    if (!is_vertex && entry.early_fragment_tests) // B1-d: force early-Z
+    {
+        s.append("layout(early_fragment_tests) in;\n");
+    }
     if (!is_vertex && entry.frag_depth >= 0 && entry.depth_mode != DepthMode::Any) // B1-d: conservative depth on gl_FragDepth
     {
         s.append("layout(depth_"); s.append(entry.depth_mode == DepthMode::Greater ? "greater" : "less");
@@ -1551,7 +2311,10 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     if (fs_uses_storage) // B1-f: the storage buffer at set 0 / binding 0 (matches draw_storage's descriptor). FS: `coherent`
     {                    // (writes visible cross-invocation) + `pixel_interlock_ordered` when ROV. VS (GEO-1 vertex
                          // pulling): READONLY — the vertex stage only ever fetches.
-        if (!is_vertex && entry.interlock) { s.append("layout(pixel_interlock_ordered) in;\n"); }
+        if (!is_vertex && entry.interlock)
+        {
+            s.append("layout(pixel_interlock_ordered) in;\n");
+        }
         // ⭐⭐ REN-39-C1: an INDEXED program pair binds storage READ-ONLY on both halves — the FS keeps the
         // promise the DX12 twin's t0 SRV enforces structurally (and the SPIR-V carries NonWritable).
         s.append(is_vertex || entry.storage_read_only
@@ -1560,53 +2323,102 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
     }
     for (int i = 0; i < n; ++i) // B2: separable texture + sampler bindings — `uniform texture2D tex_S_B` / `uniform sampler samp_S_B`
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::Texture)
         {
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
             s.append(") uniform "); s.append(glsl_tex_scalar_prefix(nd.type.scalar)); s.append("texture"); s.append(glsl_tex_dim_suffix(nd.type));
             s.append(" tex_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); } // B2-d: bindless array
+            if (nd.type.count > 1U) // B2-d: bindless array
+            {
+                s.append("[");
+                app_uint(s, static_cast<crd::u32>(nd.type.count));
+                s.append("]");
+            }
             s.append(";\n");
         }
         else if (nd.op == KOp::Sampler)
         {
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            s.append(") uniform sampler"); if (nd.type.tex_shadow()) { s.append("Shadow"); } // B2-b: comparison sampler
+            s.append(") uniform sampler");
+            if (nd.type.tex_shadow()) // B2-b: comparison sampler
+            {
+                s.append("Shadow");
+            }
             s.append(" samp_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
         }
     }
     for (int i = 0; i < n; ++i) // uniform blocks: UniformBlock at (set = ADR-0102 frequency slot, binding), std140 members
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(vtype(g.struct_field(sid, f)));
+            s.append(" f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
     { // D12: specialization constants — module-scope `layout(constant_id=N) const t _specN = default;` (pipeline-time overridable)
         bool spec_declared[256] = {};
         for (int i = 0; i < n; ++i)
         {
-            if (!reach[static_cast<crd::usize>(i)]) { continue; }
+            if (!reach[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
             const KNode& nd = g.node(i);
-            if (!is_spec_const(nd)) { continue; }
+            if (!is_spec_const(nd))
+            {
+                continue;
+            }
             const crd::u32 id = spec_const_id(nd);
-            if (id >= 256U || spec_declared[id]) { continue; }
+            if (id >= 256U || spec_declared[id])
+            {
+                continue;
+            }
             spec_declared[id] = true;
             s.append("layout(constant_id = "); app_uint(s, static_cast<crd::u32>(id)); s.append(") const ");
             const char* spec_ctype = "float";
-            if (nd.dtype() == DType::Bool) { spec_ctype = "bool"; }
-            else if (dt_is_uint(nd.dtype())) { spec_ctype = "uint"; }
-            else if (dt_is_int(nd.dtype())) { spec_ctype = "int"; }
+            if (nd.dtype() == DType::Bool)
+            {
+                spec_ctype = "bool";
+            }
+            else if (dt_is_uint(nd.dtype()))
+            {
+                spec_ctype = "uint";
+            }
+            else if (dt_is_int(nd.dtype()))
+            {
+                spec_ctype = "int";
+            }
             s.append(spec_ctype);
             s.append(" _spec"); app_uint(s, static_cast<crd::u32>(id)); s.append(" = ");
-            if (nd.dtype() == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); }
-            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
-            else { app_flit(s, nd.cval); }
+            if (nd.dtype() == DType::Bool)
+            {
+                s.append(nd.cval != 0.0 ? "true" : "false");
+            }
+            else if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype()))
+            {
+                app_int_const(s, nd.cval, nd.dtype());
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+            }
             s.append(";\n");
         }
     }
@@ -1617,48 +2429,160 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
         bool qa = false;
         bool qt = false;
         bool sl = false;
-        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
-        if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n"); }
-        if (qt) { s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n"); }
-        if (sl) { s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n");
+        }
+        if (qt)
+        {
+            s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (sl)
+        {
+            s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
     }
     s.append("void main() {\n");
-    if (!is_vertex && entry.interlock) { s.append("  beginInvocationInterlockARB();\n"); } // B1-f: rasterizer-ordered access
+    if (!is_vertex && entry.interlock) // B1-f: rasterizer-ordered access
+    {
+        s.append("  beginInvocationInterlockARB();\n");
+    }
 
     // A4 tier-2 body-scoping (shared with the compute path): loop-varying nodes emit INSIDE their owning `for`.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& v = g.node(i);
+        if (v.op == KOp::For)
+        {
+            continue;
+        }
+        const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc;
+        const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]);
+        if (loop_leaf || from_operand)
+        {
+            varying[static_cast<crd::usize>(i)] = 1;
+        }
+    }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
-    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+    for (int fi = 0; fi < n; ++fi)
+    {
+        if (g.node(fi).op != KOp::For)
+        {
+            continue;
+        }
+        rstk.push_back(g.node(fi).c);
+        while (rstk.size() > 0)
+        {
+            const int bid = rstk[rstk.size() - 1];
+            rstk.resize(rstk.size() - 1);
+            if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1)
+            {
+                continue;
+            }
+            body_of[static_cast<crd::usize>(bid)] = fi;
+            const KNode& bn = g.node(bid);
+            rstk.push_back(bn.a);
+            rstk.push_back(bn.b);
+            rstk.push_back(bn.c);
+            rstk.push_back(bn.d);
+        }
+    }
 
     const auto raster_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; } // the block materializes nothing; only its FieldGets read members
-        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; } // B2: opaque binding leaves — declared in the prologue
-        if (lnd.op == KOp::StageIn) { emit_stmt_prefix(gg, li, ss); ss.append("a_"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n"); return true; }
+        if (lnd.op == KOp::UniformBlock) // the block materializes nothing; only its FieldGets read members
+        {
+            return true;
+        }
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) // B2: opaque binding leaves — declared in the prologue
+        {
+            return true;
+        }
+        if (lnd.op == KOp::StageIn)
+        {
+            emit_stmt_prefix(gg, li, ss);
+            ss.append("a_");
+            app_uint(ss, static_cast<crd::u32>(lnd.iidx));
+            ss.append(";\n");
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
             const char*    bn = glsl_vsfs_builtin_name(bi);
-            if (bn == nullptr) { return false; } // a builtin this VS/FS emitter cannot lower -> refuse loudly
+            if (bn == nullptr) // a builtin this VS/FS emitter cannot lower -> refuse loudly
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss);
             // B1-f: gl_FragFullyCoveredNV is a bool; the IR builtin is uint ⇒ convert on read.
-            if (bi == KBuiltin::InnerCoverage) { ss.append("uint("); ss.append(bn); ss.append(")"); }
-            else { ss.append(bn); }
+            if (bi == KBuiltin::InnerCoverage)
+            {
+                ss.append("uint(");
+                ss.append(bn);
+                ss.append(")");
+            }
+            else
+            {
+                ss.append(bn);
+            }
             ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet) // a UBO member read (agg is a UniformBlock; the SROA-on-Make case is handled in emit_value_stmt)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1667,7 +2591,10 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For)
         {
@@ -1675,15 +2602,40 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
-                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                if (body_of[static_cast<crd::usize>(bid)] != i)
+                {
+                    continue;
+                }
                 const KNode& bn = g.node(bid);
-                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
-                else if (!emit_value_stmt(g, bid, s, raster_leaf)) { return false; }
+                if (bn.op == KOp::LoopIndex)
+                {
+                    s.append("  precise float t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = float(li_");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(");\n");
+                }
+                else if (bn.op == KOp::LoopAcc)
+                {
+                    s.append("  precise ");
+                    s.append(vtype(bn.type));
+                    s.append(" t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = t");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(";\n");
+                }
+                else if (!emit_value_stmt(g, bid, s, raster_leaf))
+                {
+                    return false;
+                }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
-        else if (!emit_value_stmt(g, i, s, raster_leaf)) { return false; }
+        else if (!emit_value_stmt(g, i, s, raster_leaf))
+        {
+            return false;
+        }
     }
 
     if (!is_vertex && entry.storage_write_index >= 0) // B1-f: the storage-buffer write (inside the interlock region)
@@ -1691,16 +2643,46 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
         s.append("  sbuf.data[t"); app_uint(s, static_cast<crd::u32>(entry.storage_write_index));
         s.append("] = t"); app_uint(s, static_cast<crd::u32>(entry.storage_write_value)); s.append(";\n");
     }
-    if (!is_vertex && entry.interlock) { s.append("  endInvocationInterlockARB();\n"); } // B1-f
+    if (!is_vertex && entry.interlock) // B1-f
+    {
+        s.append("  endInvocationInterlockARB();\n");
+    }
 
     if (!is_vertex && entry.discard_cond >= 0) // B1-b: alpha-test / cutout — kill the fragment before writing outputs
     {
         s.append("  if (t"); app_uint(s, static_cast<crd::u32>(entry.discard_cond)); s.append(") { discard; }\n");
     }
-    if (is_vertex) { s.append("  gl_Position = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n"); }
-    if (is_vertex && entry.shading_rate >= 0) { s.append("  gl_PrimitiveShadingRateEXT = t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B1-e
-    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("  o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
-    if (!is_vertex && entry.frag_depth >= 0) { s.append("  gl_FragDepth = t"); app_uint(s, static_cast<crd::u32>(entry.frag_depth)); s.append(";\n"); }
+    if (is_vertex)
+    {
+        s.append("  gl_Position = t");
+        app_uint(s, static_cast<crd::u32>(entry.position));
+        s.append(";\n");
+    }
+    if (is_vertex && entry.shading_rate >= 0) // B1-e
+    {
+        s.append("  gl_PrimitiveShadingRateEXT = t");
+        app_uint(s, static_cast<crd::u32>(entry.shading_rate));
+        s.append(";\n");
+    }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0)
+        {
+            continue;
+        }
+        s.append("  o_");
+        app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+        s.append(" = t");
+        app_uint(s, static_cast<crd::u32>(nid));
+        s.append(";\n");
+    }
+    if (!is_vertex && entry.frag_depth >= 0)
+    {
+        s.append("  gl_FragDepth = t");
+        app_uint(s, static_cast<crd::u32>(entry.frag_depth));
+        s.append(";\n");
+    }
     s.append("}\n");
     return true;
 }
@@ -1713,26 +2695,50 @@ inline bool emit_stage_glsl(const KGraph& g, const KEntry& entry, crd::memory::I
 inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (entry.stage != KStage::Task || entry.task_emit < 0) { return false; }
+    if (entry.stage != KStage::Task || entry.task_emit < 0)
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
     stk.push_back(entry.task_emit);
-    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) { stk.push_back(entry.task_payload[pf]); }
+    for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf)
+    {
+        stk.push_back(entry.task_payload[pf]);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -1742,12 +2748,22 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     s.append("layout(local_size_x = "); app_uint(s, ls); s.append(") in;\n");
     for (int i = 0; i < n; ++i) // uniform blocks (a task may read uniforms to compute the count)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(vtype(g.struct_field(sid, f)));
+            s.append(" f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
     for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
@@ -1758,25 +2774,37 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             break;
         }
     }
-    if (entry.n_task_payload > 0U) { s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n"); } // B4: FIXED 4-field payload (task + mesh layouts always match)
+    if (entry.n_task_payload > 0U) // B4: FIXED 4-field payload (task + mesh layouts always match)
+    {
+        s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n");
+    }
 
     s.append("void main() {\n");
     const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::UniformBlock)
+        {
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
             const char*    bn = glsl_vsfs_builtin_name(bi);
-            if (bn == nullptr) { return false; }
+            if (bn == nullptr)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1784,9 +2812,18 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     };
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; } // a task's amplification count is a scalar expr — no loops
-        if (!emit_value_stmt(g, i, s, task_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For) // a task's amplification count is a scalar expr — no loops
+        {
+            return false;
+        }
+        if (!emit_value_stmt(g, i, s, task_leaf))
+        {
+            return false;
+        }
     }
     for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) // write each active payload field
     {
@@ -1804,7 +2841,10 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0) { return false; }
+    if (entry.stage != KStage::Mesh || entry.mesh_vertices == 0U || entry.position < 0 || entry.mesh_prim < 0)
+    {
+        return false;
+    }
     const crd::u32 n_verts    = entry.mesh_vertices;
     const crd::u32 n_prims    = entry.mesh_primitives;
     const crd::u32 local_size = n_verts > n_prims ? n_verts : n_prims; // one thread per output slot; write guarded by count
@@ -1813,29 +2853,59 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
     push_root(entry.mesh_prim);
     push_root(entry.shading_rate); // B4: per-primitive VRS rate from the mesh (gl_MeshPrimitivesEXT[].gl_PrimitiveShadingRateEXT)
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 460\n#extension GL_EXT_mesh_shader : require\n");
-    if (entry.shading_rate >= 0) { s.append("#extension GL_EXT_fragment_shading_rate : require\n"); } // B4: per-primitive VRS
+    if (entry.shading_rate >= 0) // B4: per-primitive VRS
+    {
+        s.append("#extension GL_EXT_fragment_shading_rate : require\n");
+    }
     for (int i = 0; i < n; ++i)
     {
         if (reach[static_cast<crd::usize>(i)] && (g.node(i).op == KOp::SampleIndexed || g.node(i).op == KOp::SampleIndexedLod))
@@ -1849,38 +2919,63 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     for (int k = 0; k < entry.n_out; ++k) // per-VERTEX output arrays (unsized ⇒ max_vertices)
     {
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(") ");
         s.append(glsl_interp(entry.out[k].interp));
         s.append("out "); s.append(vtype(g.node(nid).type)); s.append(" o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append("[];\n");
     }
     for (int i = 0; i < n; ++i) // B2: texture + sampler binding leaves (same as the raster prologue)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::Texture)
         {
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
             s.append(") uniform "); s.append(glsl_tex_scalar_prefix(nd.type.scalar)); s.append("texture"); s.append(glsl_tex_dim_suffix(nd.type));
             s.append(" tex_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            if (nd.type.count > 1U) { s.append("["); app_uint(s, static_cast<crd::u32>(nd.type.count)); s.append("]"); }
+            if (nd.type.count > 1U)
+            {
+                s.append("[");
+                app_uint(s, static_cast<crd::u32>(nd.type.count));
+                s.append("]");
+            }
             s.append(";\n");
         }
         else if (nd.op == KOp::Sampler)
         {
             s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx));
-            s.append(") uniform sampler"); if (nd.type.tex_shadow()) { s.append("Shadow"); }
+            s.append(") uniform sampler");
+            if (nd.type.tex_shadow())
+            {
+                s.append("Shadow");
+            }
             s.append(" samp_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
         }
     }
     for (int i = 0; i < n; ++i) // uniform blocks (same as raster)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(vtype(g.struct_field(sid, f)));
+            s.append(" f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
     for (int i = 0; i < n; ++i) // REN-38-F6+ (GEO-1): a reachable StorageLoad makes this a PULLING stage
@@ -1913,29 +3008,76 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     // A4 tier-2 body-scoping (identical to the raster path): loop-varying nodes emit INSIDE their owning `for`.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& v = g.node(i);
+        if (v.op == KOp::For)
+        {
+            continue;
+        }
+        const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc;
+        const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]);
+        if (loop_leaf || from_operand)
+        {
+            varying[static_cast<crd::usize>(i)] = 1;
+        }
+    }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
-    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+    for (int fi = 0; fi < n; ++fi)
+    {
+        if (g.node(fi).op != KOp::For)
+        {
+            continue;
+        }
+        rstk.push_back(g.node(fi).c);
+        while (rstk.size() > 0)
+        {
+            const int bid = rstk[rstk.size() - 1];
+            rstk.resize(rstk.size() - 1);
+            if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1)
+            {
+                continue;
+            }
+            body_of[static_cast<crd::usize>(bid)] = fi;
+            const KNode& bn = g.node(bid);
+            rstk.push_back(bn.a);
+            rstk.push_back(bn.b);
+            rstk.push_back(bn.c);
+            rstk.push_back(bn.d);
+        }
+    }
 
     const auto raster_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; }
-        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler) { return true; }
+        if (lnd.op == KOp::UniformBlock)
+        {
+            return true;
+        }
+        if (lnd.op == KOp::Texture || lnd.op == KOp::Sampler)
+        {
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const KBuiltin bi = static_cast<KBuiltin>(lnd.iidx);
             const char*    bn = glsl_vsfs_builtin_name(bi);
-            if (bn == nullptr) { return false; }
+            if (bn == nullptr)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -1944,7 +3086,10 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For)
         {
@@ -1952,25 +3097,67 @@ inline bool emit_mesh_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
-                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                if (body_of[static_cast<crd::usize>(bid)] != i)
+                {
+                    continue;
+                }
                 const KNode& bn = g.node(bid);
-                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
-                else if (!emit_value_stmt(g, bid, s, raster_leaf)) { return false; }
+                if (bn.op == KOp::LoopIndex)
+                {
+                    s.append("  precise float t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = float(li_");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(");\n");
+                }
+                else if (bn.op == KOp::LoopAcc)
+                {
+                    s.append("  precise ");
+                    s.append(vtype(bn.type));
+                    s.append(" t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = t");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(";\n");
+                }
+                else if (!emit_value_stmt(g, bid, s, raster_leaf))
+                {
+                    return false;
+                }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
-        else if (!emit_value_stmt(g, i, s, raster_leaf)) { return false; }
+        else if (!emit_value_stmt(g, i, s, raster_leaf))
+        {
+            return false;
+        }
     }
 
     // per-vertex writes (guarded by max_vertices), then the per-primitive triangle indices (guarded by max_primitives).
     s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_verts); s.append("u) {\n");
     s.append("    gl_MeshVerticesEXT[gl_LocalInvocationIndex].gl_Position = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
-    for (int k = 0; k < entry.n_out; ++k) { const int nid = entry.out[k].node; if (nid < 0) { continue; } s.append("    o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append("[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n"); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        const int nid = entry.out[k].node;
+        if (nid < 0)
+        {
+            continue;
+        }
+        s.append("    o_");
+        app_uint(s, static_cast<crd::u32>(entry.out[k].location));
+        s.append("[gl_LocalInvocationIndex] = t");
+        app_uint(s, static_cast<crd::u32>(nid));
+        s.append(";\n");
+    }
     s.append("  }\n");
     s.append("  if (gl_LocalInvocationIndex < "); app_uint(s, n_prims); s.append("u) {\n");
     s.append("    gl_PrimitiveTriangleIndicesEXT[gl_LocalInvocationIndex] = t"); app_uint(s, static_cast<crd::u32>(entry.mesh_prim)); s.append(";\n");
-    if (entry.shading_rate >= 0) { s.append("    gl_MeshPrimitivesEXT[gl_LocalInvocationIndex].gl_PrimitiveShadingRateEXT = t"); app_uint(s, static_cast<crd::u32>(entry.shading_rate)); s.append(";\n"); } // B4: per-primitive VRS
+    if (entry.shading_rate >= 0) // B4: per-primitive VRS
+    {
+        s.append("    gl_MeshPrimitivesEXT[gl_LocalInvocationIndex].gl_PrimitiveShadingRateEXT = t");
+        app_uint(s, static_cast<crd::u32>(entry.shading_rate));
+        s.append(";\n");
+    }
     s.append("  }\n}\n");
     return true;
 }
@@ -1995,14 +3182,32 @@ inline bool emit_tesc_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -2016,7 +3221,10 @@ inline bool emit_tesc_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
         if (lnd.op == KOp::Builtin)
         {
             const char* bn = glsl_vsfs_builtin_name(static_cast<KBuiltin>(lnd.iidx));
-            if (bn == nullptr) { return false; }
+            if (bn == nullptr)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
             return true;
         }
@@ -2024,9 +3232,18 @@ inline bool emit_tesc_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     };
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; }
-        if (!emit_value_stmt(g, i, s, leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For)
+        {
+            return false;
+        }
+        if (!emit_value_stmt(g, i, s, leaf))
+        {
+            return false;
+        }
     }
     s.append("  if (gl_InvocationID == 0) {\n");
     s.append("    gl_TessLevelInner[0] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append("; gl_TessLevelInner[1] = t"); app_uint(s, static_cast<crd::u32>(entry.tess_inner)); s.append(";\n");
@@ -2042,29 +3259,62 @@ inline bool emit_tesc_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
 inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0) { return false; }
+    if (entry.stage != KStage::TessEval || entry.tess_patch_size == 0U || entry.position < 0)
+    {
+        return false;
+    }
 
     const int                       n = g.size();
     crd::containers::Array<crd::u8> reach(scratch);
     crd::containers::Array<int>     stk(scratch);
     reach.resize(static_cast<crd::usize>(n), 0);
-    const auto push_root = [&](int r) { if (r >= 0) { stk.push_back(r); } };
+    const auto push_root = [&](int r)
+    {
+        if (r >= 0)
+        {
+            stk.push_back(r);
+        }
+    };
     push_root(entry.position);
-    for (int k = 0; k < entry.n_out; ++k) { push_root(entry.out[k].node); }
+    for (int k = 0; k < entry.n_out; ++k)
+    {
+        push_root(entry.out[k].node);
+    }
     bool needs_patch = false;
     while (stk.size() > 0)
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition) { needs_patch = true; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e) { stk.push_back(g.ext_operand(nd, e)); }
+        if (nd.op == KOp::Builtin && static_cast<KBuiltin>(nd.iidx) == KBuiltin::TessPatchPosition)
+        {
+            needs_patch = true;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int e = 0; e < static_cast<int>(nd.n_ext); ++e)
+        {
+            stk.push_back(g.ext_operand(nd, e));
+        }
     }
 
     crd::containers::String& s = out.source;
@@ -2073,18 +3323,31 @@ inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     for (int k = 0; k < entry.n_out; ++k) // per-vertex interpolants to the FS
     {
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("layout(location = "); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(") ");
         s.append(glsl_interp(entry.out[k].interp)); s.append("out "); s.append(vtype(g.node(nid).type)); s.append(" o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(";\n");
     }
     for (int i = 0; i < n; ++i) // uniform blocks (a displacement may read a uniform amplitude/time)
     {
-        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || g.node(i).op != KOp::UniformBlock)
+        {
+            continue;
+        }
         const KNode& nd  = g.node(i);
         const int    sid = nd.type.struct_id;
         s.append("layout(set = "); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append(", binding = "); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(", std140) uniform U_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(" {\n");
         const int fc = g.struct_field_count(sid);
-        for (int f = 0; f < fc; ++f) { s.append("  "); s.append(vtype(g.struct_field(sid, f))); s.append(" f"); app_uint(s, static_cast<crd::u32>(f)); s.append(";\n"); }
+        for (int f = 0; f < fc; ++f)
+        {
+            s.append("  ");
+            s.append(vtype(g.struct_field(sid, f)));
+            s.append(" f");
+            app_uint(s, static_cast<crd::u32>(f));
+            s.append(";\n");
+        }
         s.append("} ubo_"); app_uint(s, static_cast<crd::u32>(nd.dset)); s.append("_"); app_uint(s, static_cast<crd::u32>(nd.iidx)); s.append(";\n");
     }
 
@@ -2106,18 +3369,27 @@ inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     const auto tese_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op == KOp::UniformBlock) { return true; }
+        if (lnd.op == KOp::UniformBlock)
+        {
+            return true;
+        }
         if (lnd.op == KOp::Builtin)
         {
             const char* bn = glsl_vsfs_builtin_name(static_cast<KBuiltin>(lnd.iidx)); // TessCoord / TessPatchPosition handled
-            if (bn == nullptr) { return false; }
+            if (bn == nullptr)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append(bn); ss.append(";\n");
             return true;
         }
         if (lnd.op == KOp::FieldGet)
         {
             const KNode& agg = gg.node(lnd.a);
-            if (agg.op != KOp::UniformBlock) { return false; }
+            if (agg.op != KOp::UniformBlock)
+            {
+                return false;
+            }
             emit_stmt_prefix(gg, li, ss); ss.append("ubo_"); app_uint(ss, static_cast<crd::u32>(agg.dset)); ss.append("_"); app_uint(ss, static_cast<crd::u32>(agg.iidx)); ss.append(".f"); app_uint(ss, static_cast<crd::u32>(lnd.iidx)); ss.append(";\n");
             return true;
         }
@@ -2125,15 +3397,27 @@ inline bool emit_tese_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     };
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
-        if (g.node(i).op == KOp::For) { return false; }
-        if (!emit_value_stmt(g, i, s, tese_leaf)) { return false; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
+        if (g.node(i).op == KOp::For)
+        {
+            return false;
+        }
+        if (!emit_value_stmt(g, i, s, tese_leaf))
+        {
+            return false;
+        }
     }
     s.append("  gl_Position = t"); app_uint(s, static_cast<crd::u32>(entry.position)); s.append(";\n");
     for (int k = 0; k < entry.n_out; ++k)
     {
         const int nid = entry.out[k].node;
-        if (nid < 0) { continue; }
+        if (nid < 0)
+        {
+            continue;
+        }
         s.append("  o_"); app_uint(s, static_cast<crd::u32>(entry.out[k].location)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nid)); s.append(";\n");
     }
     s.append("}\n");
@@ -2154,22 +3438,46 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_vec_fusable(nd.op)) { return false; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); } // B0-4 variadic operands
+        if (!is_vec_fusable(nd.op))
+        {
+            return false;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) // B0-4 variadic operands
+        {
+            stk.push_back(g.ext_operand(nd, k));
+        }
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
     out.n_inputs = 0;
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         if (g.node(i).op == KOp::Input)
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
@@ -2183,7 +3491,16 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     s.clear();
     s.append("#version 450\n");
     s.append("layout(local_size_x = 256) in;\n");
-    for (int b = 0; b < out.n_inputs; ++b) { s.append("layout(std430, binding = "); app_uint(s, static_cast<crd::u32>(b)); s.append(") readonly buffer B"); app_uint(s, static_cast<crd::u32>(b)); s.append(" { float in"); app_uint(s, static_cast<crd::u32>(b)); s.append("[]; };\n"); }
+    for (int b = 0; b < out.n_inputs; ++b)
+    {
+        s.append("layout(std430, binding = ");
+        app_uint(s, static_cast<crd::u32>(b));
+        s.append(") readonly buffer B");
+        app_uint(s, static_cast<crd::u32>(b));
+        s.append(" { float in");
+        app_uint(s, static_cast<crd::u32>(b));
+        s.append("[]; };\n");
+    }
     s.append("layout(std430, binding = "); app_uint(s, static_cast<crd::u32>(out.n_inputs)); s.append(") writeonly buffer BOUT { float outb[]; };\n");
     s.append("layout(push_constant) uniform PC { uint n; };\n");
     { // quaternion/slerp helper functions (no GLSL builtins) — emitted once when the graph uses them
@@ -2193,33 +3510,142 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         bool qa = false;
         bool qt = false;
         bool sl = false;
-        for (int i = 0; i < n; ++i) { if (!reach[static_cast<crd::usize>(i)]) { continue; } switch (g.node(i).op) { case KOp::QuatMul: qm = true; break; case KOp::QuatConj: qc = true; break; case KOp::QuatRotate: qr = true; break; case KOp::QuatAxisAngle: qa = true; break; case KOp::QuatToMat3: qt = true; break; case KOp::Slerp: sl = true; break; default: break; } }
-        if (qm) { s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n"); }
-        if (qc) { s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n"); }
-        if (qr) { s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n"); }
-        if (qa) { s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n"); }
-        if (qt) { s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n"); }
-        if (sl) { s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n"); }
+        for (int i = 0; i < n; ++i)
+        {
+            if (!reach[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
+            switch (g.node(i).op)
+            {
+                case KOp::QuatMul:
+                    qm = true;
+                    break;
+                case KOp::QuatConj:
+                    qc = true;
+                    break;
+                case KOp::QuatRotate:
+                    qr = true;
+                    break;
+                case KOp::QuatAxisAngle:
+                    qa = true;
+                    break;
+                case KOp::QuatToMat3:
+                    qt = true;
+                    break;
+                case KOp::Slerp:
+                    sl = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (qm)
+        {
+            s.append("vec4 crd_qmul(vec4 a,vec4 b){return vec4(a.w*b.xyz+b.w*a.xyz+cross(a.xyz,b.xyz),a.w*b.w-dot(a.xyz,b.xyz));}\n");
+        }
+        if (qc)
+        {
+            s.append("vec4 crd_qconj(vec4 q){return vec4(-q.xyz,q.w);}\n");
+        }
+        if (qr)
+        {
+            s.append("vec3 crd_qrot(vec4 q,vec3 v){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}\n");
+        }
+        if (qa)
+        {
+            s.append("vec4 crd_qaa(vec3 ax,float an){float h=an*0.5;return vec4(ax*sin(h),cos(h));}\n");
+        }
+        if (qt)
+        {
+            s.append("mat3 crd_qmat(vec4 q){float x=q.x,y=q.y,z=q.z,w=q.w;return mat3(1.0-2.0*(y*y+z*z),2.0*(x*y+w*z),2.0*(x*z-w*y),2.0*(x*y-w*z),1.0-2.0*(x*x+z*z),2.0*(y*z+w*x),2.0*(x*z+w*y),2.0*(y*z-w*x),1.0-2.0*(x*x+y*y));}\n");
+        }
+        if (sl)
+        {
+            s.append("vec4 crd_slerp(vec4 a,vec4 b,float t){float d=dot(a,b);float sg=1.0;if(d<0.0){d=-d;sg=-1.0;}if(d>0.9995){return normalize(mix(a,sg*b,t));}float th=acos(d);float sn=sin(th);return (sin((1.0-t)*th)*a+sin(t*th)*sg*b)/sn;}\n");
+        }
     }
     s.append("void main() {\n  uint gid = gl_GlobalInvocationID.x;\n  if (gid >= n) { return; }\n");
     // A4 tier-2: body-scoping — mark loop-varying nodes (LoopIndex/LoopAcc + consumers; For = barrier) + their owning For.
     crd::containers::Array<crd::u8> varying(scratch);
     varying.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { const KNode& v = g.node(i); if (v.op == KOp::For) { continue; } const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc; const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]); if (loop_leaf || from_operand) { varying[static_cast<crd::usize>(i)] = 1; } }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& v = g.node(i);
+        if (v.op == KOp::For)
+        {
+            continue;
+        }
+        const bool loop_leaf = v.op == KOp::LoopIndex || v.op == KOp::LoopAcc;
+        const bool from_operand = (v.a >= 0 && varying[static_cast<crd::usize>(v.a)]) || (v.b >= 0 && varying[static_cast<crd::usize>(v.b)]) || (v.c >= 0 && varying[static_cast<crd::usize>(v.c)]) || (v.d >= 0 && varying[static_cast<crd::usize>(v.d)]);
+        if (loop_leaf || from_operand)
+        {
+            varying[static_cast<crd::usize>(i)] = 1;
+        }
+    }
     crd::containers::Array<int> body_of(scratch);
     body_of.resize(static_cast<crd::usize>(n), -1);
     crd::containers::Array<int> rstk(scratch);
-    for (int fi = 0; fi < n; ++fi) { if (g.node(fi).op != KOp::For) { continue; } rstk.push_back(g.node(fi).c); while (rstk.size() > 0) { const int bid = rstk[rstk.size() - 1]; rstk.resize(rstk.size() - 1); if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1) { continue; } body_of[static_cast<crd::usize>(bid)] = fi; const KNode& bn = g.node(bid); rstk.push_back(bn.a); rstk.push_back(bn.b); rstk.push_back(bn.c); rstk.push_back(bn.d); } }
+    for (int fi = 0; fi < n; ++fi)
+    {
+        if (g.node(fi).op != KOp::For)
+        {
+            continue;
+        }
+        rstk.push_back(g.node(fi).c);
+        while (rstk.size() > 0)
+        {
+            const int bid = rstk[rstk.size() - 1];
+            rstk.resize(rstk.size() - 1);
+            if (bid < 0 || !varying[static_cast<crd::usize>(bid)] || body_of[static_cast<crd::usize>(bid)] != -1)
+            {
+                continue;
+            }
+            body_of[static_cast<crd::usize>(bid)] = fi;
+            const KNode& bn = g.node(bid);
+            rstk.push_back(bn.a);
+            rstk.push_back(bn.b);
+            rstk.push_back(bn.c);
+            rstk.push_back(bn.d);
+        }
+    }
 
     const auto compute_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
     {
         const KNode& lnd = gg.node(li);
-        if (lnd.op != KOp::Input) { return false; } // compute leaf: only `Input` reads a storage buffer (raster uses its own)
+        if (lnd.op != KOp::Input) // compute leaf: only `Input` reads a storage buffer (raster uses its own)
+        {
+            return false;
+        }
         const int lc = lnd.comps();
         const int bd = binding_of[static_cast<crd::usize>(li)];
         emit_stmt_prefix(gg, li, ss);
-        if (lc == 1) { ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid]"); }
-        else { ss.append(vtype(lnd.type)); ss.append("("); for (int k = 0; k < lc; ++k) { if (k) { ss.append(", "); } ss.append("in"); app_uint(ss, static_cast<crd::u32>(bd)); ss.append("[gid*"); app_uint(ss, static_cast<crd::u32>(lc)); ss.append("+"); app_uint(ss, static_cast<crd::u32>(k)); ss.append("]"); } ss.append(")"); } // GLSL matrix ctors take column-major scalars
+        if (lc == 1)
+        {
+            ss.append("in");
+            app_uint(ss, static_cast<crd::u32>(bd));
+            ss.append("[gid]");
+        }
+        else // GLSL matrix ctors take column-major scalars
+        {
+            ss.append(vtype(lnd.type));
+            ss.append("(");
+            for (int k = 0; k < lc; ++k)
+            {
+                if (k)
+                {
+                    ss.append(", ");
+                }
+                ss.append("in");
+                app_uint(ss, static_cast<crd::u32>(bd));
+                ss.append("[gid*");
+                app_uint(ss, static_cast<crd::u32>(lc));
+                ss.append("+");
+                app_uint(ss, static_cast<crd::u32>(k));
+                ss.append("]");
+            }
+            ss.append(")");
+        }
         ss.append(";\n");
         return true;
     };
@@ -2227,7 +3653,10 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)] || varying[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         if (nd.op == KOp::For) // A4 tier-2: native per-thread `for`; body-scoped nodes (loop-varying) emit INSIDE the loop
         {
@@ -2235,15 +3664,40 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
             s.append("  for (int li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = 0; li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(" < int(t"); app_uint(s, static_cast<crd::u32>(nd.a)); s.append("); li_"); app_uint(s, static_cast<crd::u32>(i)); s.append("++) {\n");
             for (int bid = 0; bid < i; ++bid)
             {
-                if (body_of[static_cast<crd::usize>(bid)] != i) { continue; }
+                if (body_of[static_cast<crd::usize>(bid)] != i)
+                {
+                    continue;
+                }
                 const KNode& bn = g.node(bid);
-                if (bn.op == KOp::LoopIndex) { s.append("  precise float t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = float(li_"); app_uint(s, static_cast<crd::u32>(i)); s.append(");\n"); }
-                else if (bn.op == KOp::LoopAcc) { s.append("  precise "); s.append(vtype(bn.type)); s.append(" t"); app_uint(s, static_cast<crd::u32>(bid)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(i)); s.append(";\n"); }
-                else if (!emit_expr(bid)) { return false; }
+                if (bn.op == KOp::LoopIndex)
+                {
+                    s.append("  precise float t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = float(li_");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(");\n");
+                }
+                else if (bn.op == KOp::LoopAcc)
+                {
+                    s.append("  precise ");
+                    s.append(vtype(bn.type));
+                    s.append(" t");
+                    app_uint(s, static_cast<crd::u32>(bid));
+                    s.append(" = t");
+                    app_uint(s, static_cast<crd::u32>(i));
+                    s.append(";\n");
+                }
+                else if (!emit_expr(bid))
+                {
+                    return false;
+                }
             }
             s.append("  t"); app_uint(s, static_cast<crd::u32>(i)); s.append(" = t"); app_uint(s, static_cast<crd::u32>(nd.c)); s.append(";\n  }\n");
         }
-        else if (!emit_expr(i)) { return false; }
+        else if (!emit_expr(i))
+        {
+            return false;
+        }
     }
     // Write back column-major. Matrix-ness comes from the TYPE, not from the component count: a comps==4 output is a
     // vec4 (indexed `t[k]`) or a mat2 (indexed `t[col][row]`), and guessing from `oc` gets mat2 wrong.
@@ -2251,13 +3705,39 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
     const KType& oty = g.node(output).type;
     if (oty.kind == TKind::Mat)
     {
-        for (int col = 0; col < oty.cols; ++col) { for (int row = 0; row < oty.rows; ++row) { s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, col * oty.rows + row); s.append("] = t"); app_uint(s, output); s.append("["); app_uint(s, col); s.append("]["); app_uint(s, row); s.append("];\n"); } }
+        for (int col = 0; col < oty.cols; ++col)
+        {
+            for (int row = 0; row < oty.rows; ++row)
+            {
+                s.append("  outb[gid*");
+                app_uint(s, oc);
+                s.append("+");
+                app_uint(s, col * oty.rows + row);
+                s.append("] = t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, col);
+                s.append("][");
+                app_uint(s, row);
+                s.append("];\n");
+            }
+        }
     }
     // the output buffer is `float`; a bool / bvec component converts on write (the oracle materializes 0.0 / 1.0 too).
     else if (oc == 1)
     {
         s.append("  outb[gid] = ");
-        if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append(")"); } else { s.append("t"); app_uint(s, output); }
+        if (oty.scalar == DType::Bool)
+        {
+            s.append("float(t");
+            app_uint(s, output);
+            s.append(")");
+        }
+        else
+        {
+            s.append("t");
+            app_uint(s, output);
+        }
         s.append(";\n");
     }
     else
@@ -2265,8 +3745,22 @@ inline bool emit_vec_glsl(const KGraph& g, int output, crd::memory::IAllocator* 
         for (int k = 0; k < oc; ++k)
         {
             s.append("  outb[gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); s.append("] = ");
-            if (oty.scalar == DType::Bool) { s.append("float(t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("])"); }
-            else { s.append("t"); app_uint(s, output); s.append("["); app_uint(s, k); s.append("]"); }
+            if (oty.scalar == DType::Bool)
+            {
+                s.append("float(t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, k);
+                s.append("])");
+            }
+            else
+            {
+                s.append("t");
+                app_uint(s, output);
+                s.append("[");
+                app_uint(s, k);
+                s.append("]");
+            }
             s.append(";\n");
         }
     }
@@ -2290,14 +3784,23 @@ inline bool emit_contract_glsl(const KGraph& g, int output, GlslKernel& out)
         if (r.op == KOp::Max)
         {
             const KNode& zb = g.node(r.b);
-            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0) { return false; }
+            if (g.node(r.a).op != KOp::Contract || zb.op != KOp::Const || zb.cval != 0.0)
+            {
+                return false;
+            }
             croot = r.a;
             relu  = true;
         }
     }
     const KNode& c = g.node(croot);
-    if (c.op != KOp::Contract) { return false; }
-    if (g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract)
+    {
+        return false;
+    }
+    if (g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2331,7 +3834,10 @@ inline bool emit_contract_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_contract_tiled_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2355,7 +3861,17 @@ inline bool emit_contract_tiled_glsl(const KGraph& g, int output, GlslKernel& ou
     for (int i = 0; i < 4; ++i)
     {
         s.append("  precise float ");
-        for (int j = 0; j < 4; ++j) { s.append("a"); s.append(d[i]); s.append(d[j]); s.append(" = 0.0"); if (j < 3) { s.append(", "); } }
+        for (int j = 0; j < 4; ++j)
+        {
+            s.append("a");
+            s.append(d[i]);
+            s.append(d[j]);
+            s.append(" = 0.0");
+            if (j < 3)
+            {
+                s.append(", ");
+            }
+        }
         s.append(";\n");
     }
     s.append("  for (uint k0 = 0u; k0 < K; k0 += 8u) {\n");
@@ -2397,11 +3913,20 @@ inline bool emit_contract_tiled_glsl_sched(const KGraph& g, int output, int bt, 
 {
     using namespace glsl_detail;
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
-    if (bt <= 0 || bk <= 0 || tm <= 0 || (bt % tm) != 0) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
+    if (bt <= 0 || bk <= 0 || tm <= 0 || (bt % tm) != 0)
+    {
+        return false;
+    }
     const int tpr = bt / tm;      // threads per tile-row/col
     const int nt  = tpr * tpr;    // NT = (BT/TM)^2
-    if (nt < 1 || nt > 1024) { return false; }
+    if (nt < 1 || nt > 1024)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2424,7 +3949,17 @@ inline bool emit_contract_tiled_glsl_sched(const KGraph& g, int output, int bt, 
     for (int i = 0; i < tm; ++i) // TM×TM scalar accumulators (register-resident)
     {
         s.append("  float ");
-        for (int j = 0; j < tm; ++j) { s.append("a"); n(i); n(j); s.append(" = 0.0"); if (j < tm - 1) { s.append(", "); } }
+        for (int j = 0; j < tm; ++j)
+        {
+            s.append("a");
+            n(i);
+            n(j);
+            s.append(" = 0.0");
+            if (j < tm - 1)
+            {
+                s.append(", ");
+            }
+        }
         s.append(";\n");
     }
     s.append("  for (uint k0 = 0u; k0 < K; k0 += "); n(bk); s.append("u) {\n");
@@ -2475,7 +4010,10 @@ inline bool emit_contract_tiled_glsl_sched(const KGraph& g, int output, int bt, 
 inline bool emit_contract_fast_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -2558,10 +4096,20 @@ inline bool emit_contract_coopmat2_glsl(GlslKernel& out, crd::u32 kdim, crd::u32
     auto tou = [](crd::u32 v, char* buf) {
         char tmp[12];
         int  t = 0;
-        if (v == 0) { tmp[t++] = '0'; }
-        while (v > 0) { tmp[t++] = static_cast<char>('0' + (v % 10U)); v /= 10U; }
+        if (v == 0)
+        {
+            tmp[t++] = '0';
+        }
+        while (v > 0)
+        {
+            tmp[t++] = static_cast<char>('0' + (v % 10U));
+            v /= 10U;
+        }
         int p = 0;
-        while (t > 0) { buf[p++] = tmp[--t]; }
+        while (t > 0)
+        {
+            buf[p++] = tmp[--t];
+        }
         buf[p++] = 'u';
         buf[p]   = '\0';
     };
@@ -2600,15 +4148,40 @@ inline bool emit_contract_coopmat2_glsl(GlslKernel& out, crd::u32 kdim, crd::u32
 inline bool emit_reduce_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (!is_reduce(rn.op)) { return false; }
-    if (g.node(rn.a).op != KOp::Input) { return false; }
+    if (!is_reduce(rn.op))
+    {
+        return false;
+    }
+    if (g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0; // trailing reduced axes
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; } // only trailing-contiguous reductions supported by this emitter
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask) // only trailing-contiguous reductions supported by this emitter
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
 
@@ -2621,12 +4194,30 @@ inline bool emit_reduce_glsl(const KGraph& g, int output, GlslKernel& out)
     s.append("layout(push_constant) uniform PC { uint nout; uint redsize; };\n");
     s.append("void main() {\n  uint o = gl_GlobalInvocationID.x;\n  if (o >= nout) { return; }\n");
     s.append("  uint base = o * redsize;\n");
-    if (rn.op == KOp::ReduceSum) { s.append("  precise float acc = 0.0;\n  for (uint r = 0u; r < redsize; ++r) { acc = acc + A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceProd) { s.append("  precise float acc = 1.0;\n  for (uint r = 0u; r < redsize; ++r) { acc = acc * A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceMax) { s.append("  precise float acc = A[base];\n  for (uint r = 1u; r < redsize; ++r) { acc = max(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ReduceMin) { s.append("  precise float acc = A[base];\n  for (uint r = 1u; r < redsize; ++r) { acc = min(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ArgMax) { s.append("  float bv = A[base]; uint bi = 0u;\n  for (uint r = 1u; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = float(bi);\n"); }
-    else { s.append("  float bv = A[base]; uint bi = 0u;\n  for (uint r = 1u; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = float(bi);\n"); }
+    if (rn.op == KOp::ReduceSum)
+    {
+        s.append("  precise float acc = 0.0;\n  for (uint r = 0u; r < redsize; ++r) { acc = acc + A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceProd)
+    {
+        s.append("  precise float acc = 1.0;\n  for (uint r = 0u; r < redsize; ++r) { acc = acc * A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceMax)
+    {
+        s.append("  precise float acc = A[base];\n  for (uint r = 1u; r < redsize; ++r) { acc = max(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ReduceMin)
+    {
+        s.append("  precise float acc = A[base];\n  for (uint r = 1u; r < redsize; ++r) { acc = min(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ArgMax)
+    {
+        s.append("  float bv = A[base]; uint bi = 0u;\n  for (uint r = 1u; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = float(bi);\n");
+    }
+    else
+    {
+        s.append("  float bv = A[base]; uint bi = 0u;\n  for (uint r = 1u; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  precise float acc = float(bi);\n");
+    }
     s.append("  O[o] = acc;\n}\n");
     return true;
 }
@@ -2637,14 +4228,36 @@ inline bool emit_reduce_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_reduce_fast_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input) { return false; }
+    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0;
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; }
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2671,7 +4284,10 @@ inline bool emit_reduce_fast_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_gather_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& gn = g.node(output);
-    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input) { return false; }
+    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(gn.a).iidx; // data
     out.input_iidx[1] = g.node(gn.b).iidx; // idx
@@ -2699,7 +4315,10 @@ inline bool emit_broadcast_nd_glsl(const KGraph& g, int output, GlslKernel& out)
     Shape    osh;
     crd::u32 coef[kMaxRank];
     int      rank = 0;
-    if (!broadcast_coef(g, output, osh, coef, rank)) { return false; }
+    if (!broadcast_coef(g, output, osh, coef, rank))
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(g.node(output).a).iidx;
     crd::containers::String& s = out.source;
@@ -2721,7 +4340,10 @@ inline bool emit_permute_glsl(const KGraph& g, int output, GlslKernel& out)
     Shape    osh;
     crd::u32 coef[kMaxRank];
     int      rank = 0;
-    if (!permute_coef(g, output, osh, coef, rank)) { return false; }
+    if (!permute_coef(g, output, osh, coef, rank))
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(g.node(output).a).iidx;
     crd::containers::String& s = out.source;
@@ -2740,7 +4362,10 @@ inline bool emit_permute_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scatter_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input) { return false; }
+    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 3;
     out.input_iidx[0] = g.node(sn.a).iidx; // base
     out.input_iidx[1] = g.node(sn.b).iidx; // idx
@@ -2768,7 +4393,10 @@ inline bool emit_scatter_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scatteradd_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScatterAdd || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScatterAdd || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(sn.a).iidx; // idx
     out.input_iidx[1] = g.node(sn.b).iidx; // updates
@@ -2791,7 +4419,10 @@ inline bool emit_scatteradd_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_broadcast_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& bn = g.node(output);
-    if (bn.op != KOp::Broadcast || g.node(bn.a).op != KOp::Input || g.node(bn.a).shape.numel() != 1) { return false; }
+    if (bn.op != KOp::Broadcast || g.node(bn.a).op != KOp::Input || g.node(bn.a).shape.numel() != 1)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(bn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2810,7 +4441,10 @@ inline bool emit_broadcast_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_iota_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& in = g.node(output);
-    if (in.op != KOp::Iota || in.shape.rank != 1) { return false; } // 1-D only (flat index == gid)
+    if (in.op != KOp::Iota || in.shape.rank != 1) // 1-D only (flat index == gid)
+    {
+        return false;
+    }
     out.n_inputs = 0;
     crd::containers::String& s = out.source;
     s.clear();
@@ -2827,7 +4461,10 @@ inline bool emit_iota_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2849,7 +4486,10 @@ inline bool emit_scan_glsl(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_fast_glsl(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -2884,29 +4524,66 @@ inline void emit_epi_clike(const KGraph& g, int output, const FuseInfo& fi, crd:
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::Contract || nd.op == KOp::Broadcast) { continue; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
+        if (nd.op == KOp::Contract || nd.op == KOp::Broadcast)
+        {
+            continue;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
     }
     s.append("float epi(float acc");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append(", float b"); app_uint(s, j); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append(", float b");
+        app_uint(s, j);
+    }
     s.append(") {\n");
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         s.append("  float e"); app_uint(s, i); s.append(" = ");
         const auto te = [&](int id) { s.append("e"); app_uint(s, id); };
-        if (i == fi.contract) { s.append("acc"); }
+        if (i == fi.contract)
+        {
+            s.append("acc");
+        }
         else
         {
             bool is_bias = false;
-            for (int j = 0; j < fi.n_bias; ++j) { if (fi.bias_node[j] == i) { s.append("b"); app_uint(s, j); is_bias = true; break; } }
+            for (int j = 0; j < fi.n_bias; ++j)
+            {
+                if (fi.bias_node[j] == i)
+                {
+                    s.append("b");
+                    app_uint(s, j);
+                    is_bias = true;
+                    break;
+                }
+            }
             if (!is_bias)
             {
                 switch (nd.op)
@@ -2950,18 +4627,33 @@ inline void emit_epi_clike(const KGraph& g, int output, const FuseInfo& fi, crd:
 inline bool emit_contract_fused_glsl(const KGraph& g, int output, int contract, const FuseInfo& fi, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     const KNode& c = g.node(contract);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2 + fi.n_bias;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
-    for (int j = 0; j < fi.n_bias; ++j) { out.input_iidx[2 + j] = fi.bias_iidx[j]; }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        out.input_iidx[2 + j] = fi.bias_iidx[j];
+    }
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 450\n");
     s.append("layout(local_size_x = 256) in;\n");
     s.append("layout(std430, binding = 0) readonly buffer BA { float A[]; };\n");
     s.append("layout(std430, binding = 1) readonly buffer BB { float Bm[]; };\n");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append("layout(std430, binding = "); glsl_detail::app_uint(s, 2 + j); s.append(") readonly buffer BBias"); glsl_detail::app_uint(s, j); s.append(" { float bias"); glsl_detail::app_uint(s, j); s.append("[]; };\n"); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append("layout(std430, binding = ");
+        glsl_detail::app_uint(s, 2 + j);
+        s.append(") readonly buffer BBias");
+        glsl_detail::app_uint(s, j);
+        s.append(" { float bias");
+        glsl_detail::app_uint(s, j);
+        s.append("[]; };\n");
+    }
     s.append("layout(std430, binding = "); glsl_detail::app_uint(s, 2 + fi.n_bias); s.append(") writeonly buffer BC { float C[]; };\n");
     s.append("layout(push_constant) uniform PC { uint M; uint N; uint K; };\n");
     emit_epi_clike(g, output, fi, scratch, s);
@@ -2969,7 +4661,12 @@ inline bool emit_contract_fused_glsl(const KGraph& g, int output, int contract, 
     s.append("  uint m = gid / N; uint nn = gid % N;\n");
     s.append("  precise float acc = 0.0;\n  for (uint k = 0u; k < K; ++k) { precise float prod = A[m * K + k] * Bm[k * N + nn]; acc = acc + prod; }\n");
     s.append("  C[m * N + nn] = epi(acc");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append(", bias"); glsl_detail::app_uint(s, j); s.append("[nn]"); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append(", bias");
+        glsl_detail::app_uint(s, j);
+        s.append("[nn]");
+    }
     s.append(");\n}\n");
     return true;
 }

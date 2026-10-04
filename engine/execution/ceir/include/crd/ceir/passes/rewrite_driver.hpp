@@ -52,7 +52,10 @@ inline void greedy_collect(Region* region, containers::Array<Operation*>& ops)
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            for (u32 i = 0; i < op->num_regions(); ++i) { greedy_collect(op->region(i), ops); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                greedy_collect(op->region(i), ops);
+            }
             ops.push_back(op);
         }
     }
@@ -77,7 +80,10 @@ inline void greedy_collect(Region* region, containers::Array<Operation*>& ops)
         for (usize i = 0; i < ops.size(); ++i)
         {
             Operation* const op = ops[i];
-            if (op->is_erased()) { continue; } // ⛔ a pattern erased it earlier THIS round (a later-in-array target) — skip
+            if (op->is_erased()) // ⛔ a pattern erased it earlier THIS round (a later-in-array target) — skip
+            {
+                continue;
+            }
             for (usize p = 0; p < patterns.size(); ++p)
             {
                 if (try_apply(patterns[p], ctx, *op))
@@ -88,7 +94,10 @@ inline void greedy_collect(Region* region, containers::Array<Operation*>& ops)
                 }
             }
         }
-        if (!round_changed) { break; }
+        if (!round_changed)
+        {
+            break;
+        }
         if (++round >= cap)
         {
             const containers::StringView notes[1] = {pass_name};

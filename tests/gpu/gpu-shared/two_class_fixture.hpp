@@ -16,38 +16,69 @@ namespace crd::tests
 inline void fill_two_class_sandwich(crd::u32 mrows, crd::u32 d0, crd::u32 d1, crd::u32 d2, crd::u32 d3, float* x_in, float* w0_in,
                                     float* w1_in, float* w2_in, float* w3_in, float* oracle)
 {
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d0; ++i) { w0_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 6) - 2); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
-    for (crd::u32 i = 0; i < d2 * d3; ++i) { w3_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 4) - 1); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d0; ++i)
+    {
+        w0_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 6) - 2);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
+    for (crd::u32 i = 0; i < d2 * d3; ++i)
+    {
+        w3_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 4) - 1);
+    }
     for (crd::u32 mm = 0; mm < mrows; ++mm)
     {
         float xp[64]; // x' row = gemm(x,W0) [width d0], plain (no activation)
         for (crd::u32 nn = 0; nn < d0; ++nn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { const float prod = x_in[mm * d0 + kk] * w0_in[kk * d0 + nn]; acc = acc + prod; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                const float prod = x_in[mm * d0 + kk] * w0_in[kk * d0 + nn];
+                acc = acc + prod;
+            }
             xp[nn] = acc;
         }
         float h1[64]; // relu(x' @ W1) [width d1]
         for (crd::u32 nn = 0; nn < d1; ++nn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { const float prod = xp[kk] * w1_in[kk * d1 + nn]; acc = acc + prod; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                const float prod = xp[kk] * w1_in[kk * d1 + nn];
+                acc = acc + prod;
+            }
             h1[nn] = crd::math::max(acc, 0.0F);
         }
         float yy[64]; // y = h1 @ W2 [width d2]
         for (crd::u32 j = 0; j < d2; ++j)
         {
             float acc = 0.0F;
-            for (crd::u32 nn = 0; nn < d1; ++nn) { const float prod = h1[nn] * w2_in[nn * d2 + j]; acc = acc + prod; }
+            for (crd::u32 nn = 0; nn < d1; ++nn)
+            {
+                const float prod = h1[nn] * w2_in[nn * d2 + j];
+                acc = acc + prod;
+            }
             yy[j] = acc;
         }
         for (crd::u32 l = 0; l < d3; ++l) // z = y @ W3 [width d3]
         {
             float acc = 0.0F;
-            for (crd::u32 j = 0; j < d2; ++j) { const float prod = yy[j] * w3_in[j * d3 + l]; acc = acc + prod; }
+            for (crd::u32 j = 0; j < d2; ++j)
+            {
+                const float prod = yy[j] * w3_in[j * d3 + l];
+                acc = acc + prod;
+            }
             oracle[mm * d3 + l] = acc;
         }
     }

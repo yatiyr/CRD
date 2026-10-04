@@ -29,7 +29,10 @@ inline void gemm(const crd::f64* a, const crd::f64* b, crd::f64* c, int m, int k
         for (int j = 0; j < p; ++j)
         {
             crd::f64 s = 0.0;
-            for (int t = 0; t < k; ++t) { s += a[i * k + t] * b[t * p + j]; }
+            for (int t = 0; t < k; ++t)
+            {
+                s += a[i * k + t] * b[t * p + j];
+            }
             c[i * p + j] = s;
         }
     }
@@ -42,7 +45,10 @@ inline void gemm_tn(const crd::f64* a, const crd::f64* b, crd::f64* c, int m, in
         for (int j = 0; j < p; ++j)
         {
             crd::f64 s = 0.0;
-            for (int t = 0; t < k; ++t) { s += a[t * m + i] * b[t * p + j]; }
+            for (int t = 0; t < k; ++t)
+            {
+                s += a[t * m + i] * b[t * p + j];
+            }
             c[i * p + j] = s;
         }
     }
@@ -57,7 +63,10 @@ inline void trisolve_lower(const T* l, const T* b, T* y, int n, int p) noexcept
         for (int j = 0; j < p; ++j)
         {
             T s = b[i * p + j];
-            for (int t = 0; t < i; ++t) { s = s - l[i * n + t] * y[t * p + j]; }
+            for (int t = 0; t < i; ++t)
+            {
+                s = s - l[i * n + t] * y[t * p + j];
+            }
             y[i * p + j] = s / l[i * n + i];
         }
     }
@@ -71,7 +80,10 @@ inline void trisolve_lower_t(const T* l, const T* y, T* x, int n, int p) noexcep
         for (int j = 0; j < p; ++j)
         {
             T s = y[i * p + j];
-            for (int t = i + 1; t < n; ++t) { s = s - l[t * n + i] * x[t * p + j]; }
+            for (int t = i + 1; t < n; ++t)
+            {
+                s = s - l[t * n + i] * x[t * p + j];
+            }
             x[i * p + j] = s / l[i * n + i];
         }
     }
@@ -87,7 +99,10 @@ inline bool cholesky(const T* a, T* l, int n) noexcept
         for (int j = 0; j <= i; ++j)
         {
             T s = a[i * n + j];
-            for (int t = 0; t < j; ++t) { s = s - l[i * n + t] * l[j * n + t]; }
+            for (int t = 0; t < j; ++t)
+            {
+                s = s - l[i * n + t] * l[j * n + t];
+            }
             if (i == j)
             {
                 using crd::math::sqrt;
@@ -98,7 +113,10 @@ inline bool cholesky(const T* a, T* l, int n) noexcept
                 l[i * n + j] = s / l[j * n + j];
             }
         }
-        for (int j = i + 1; j < n; ++j) { l[i * n + j] = T(0); }
+        for (int j = i + 1; j < n; ++j)
+        {
+            l[i * n + j] = T(0);
+        }
     }
     return true;
 }
@@ -110,7 +128,10 @@ inline void gemm_jvp(const crd::f64* a, const crd::f64* b, const crd::f64* da, c
 {
     gemm(da, b, dc, m, k, p);
     gemm(a, db, scratch, m, k, p);
-    for (int i = 0; i < m * p; ++i) { dc[i] += scratch[i]; }
+    for (int i = 0; i < m * p; ++i)
+    {
+        dc[i] += scratch[i];
+    }
 }
 
 // ★ SPD solve  A·X = B (X = A⁻¹B), A = L·Lᵀ given the factor L. dX = A⁻¹·(dB − dA·X). ONE gemm + two trisolves,
@@ -119,7 +140,10 @@ inline void solve_spd_jvp(const crd::f64* l, const crd::f64* x, const crd::f64* 
                           int n, int p, crd::f64* r /*n*p*/) noexcept
 {
     gemm(da, x, r, n, n, p);               // r = dA·X
-    for (int i = 0; i < n * p; ++i) { r[i] = db[i] - r[i]; } // r = dB − dA·X
+    for (int i = 0; i < n * p; ++i) // r = dB − dA·X
+    {
+        r[i] = db[i] - r[i];
+    }
     trisolve_lower(l, r, dx, n, p);        // L·y = r
     trisolve_lower_t(l, dx, dx, n, p);     // Lᵀ·dX = y   (dX ← A⁻¹ r)
 }
@@ -132,15 +156,24 @@ inline void cholesky_jvp(const crd::f64* l, const crd::f64* da, crd::f64* dl, in
     trisolve_lower(l, da, m1, n, n); // m1 = L⁻¹·dA
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { m2[i * n + j] = m1[j * n + i]; } // m2 = m1ᵀ
+        for (int j = 0; j < n; ++j) // m2 = m1ᵀ
+        {
+            m2[i * n + j] = m1[j * n + i];
+        }
     }
     trisolve_lower(l, m2, m1, n, n); // m1 = L⁻¹·m1ᵀ = M (symmetric)
     for (int i = 0; i < n; ++i)      // Φ(M): lower-tri, halved diagonal, zero above
     {
         for (int j = 0; j < n; ++j)
         {
-            if (j > i) { m1[i * n + j] = 0.0; }
-            else if (j == i) { m1[i * n + j] *= 0.5; }
+            if (j > i)
+            {
+                m1[i * n + j] = 0.0;
+            }
+            else if (j == i)
+            {
+                m1[i * n + j] *= 0.5;
+            }
         }
     }
     gemm(l, m1, dl, n, n, n); // dL = L·Φ(M)
@@ -157,11 +190,17 @@ inline void cholesky_jvp(const crd::f64* l, const crd::f64* da, crd::f64* dl, in
     // Simpler: Tr(m1·L⁻ᵀ) = Σ_i Σ_j m1_ij (L⁻ᵀ)_ji = Σ_i (m1·L⁻ᵀ)_ii. Get X = L⁻¹·m1ᵀ (so Xᵀ = m1·L⁻ᵀ), trace(Xᵀ)=trace(X).
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { m2[i * n + j] = m1[j * n + i]; } // m2 = m1ᵀ
+        for (int j = 0; j < n; ++j) // m2 = m1ᵀ
+        {
+            m2[i * n + j] = m1[j * n + i];
+        }
     }
     crd::f64 tr = 0.0;
     trisolve_lower(l, m2, m1, n, n); // m1 = L⁻¹·m1ᵀ ; trace(m1) = Tr(L⁻¹ dA L⁻ᵀ)
-    for (int i = 0; i < n; ++i) { tr += m1[i * n + i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        tr += m1[i * n + i];
+    }
     return tr;
 }
 
@@ -173,7 +212,10 @@ inline void eigvals_jvp(const crd::f64* q, const crd::f64* da, crd::f64* dlambda
     for (int i = 0; i < n; ++i)     // dλ_i = (Qᵀ dA Q)_ii = Σ_t Q_ti · tmp_ti
     {
         crd::f64 s = 0.0;
-        for (int t = 0; t < n; ++t) { s += q[t * n + i] * tmp[t * n + i]; }
+        for (int t = 0; t < n; ++t)
+        {
+            s += q[t * n + i] * tmp[t * n + i];
+        }
         dlambda[i] = s;
     }
 }
@@ -187,7 +229,10 @@ inline void svdvals_jvp(const crd::f64* u, const crd::f64* v, const crd::f64* da
     for (int i = 0; i < n; ++i) // dσ_i = (Uᵀ dA V)_ii = Σ_t U_ti · tmp_ti
     {
         crd::f64 s = 0.0;
-        for (int t = 0; t < m; ++t) { s += u[t * n + i] * tmp[t * n + i]; }
+        for (int t = 0; t < m; ++t)
+        {
+            s += u[t * n + i] * tmp[t * n + i];
+        }
         dsigma[i] = s;
     }
 }

@@ -30,13 +30,34 @@ namespace variant_detail
 // Collect the addresses of an entry's live root node-refs (the same set lower_entry / cook::specialize_variant gather).
 [[nodiscard]] inline int gather_roots(crd::kir::KEntry& e, int** slots, int n) noexcept
 {
-    if (e.position >= 0) { slots[n++] = &e.position; }
-    if (e.frag_depth >= 0) { slots[n++] = &e.frag_depth; }
-    if (e.discard_cond >= 0) { slots[n++] = &e.discard_cond; }
-    if (e.shading_rate >= 0) { slots[n++] = &e.shading_rate; }
-    if (e.storage_write_index >= 0) { slots[n++] = &e.storage_write_index; }
-    if (e.storage_write_value >= 0) { slots[n++] = &e.storage_write_value; }
-    for (int k = 0; k < e.n_out; ++k) { slots[n++] = &e.out[k].node; }
+    if (e.position >= 0)
+    {
+        slots[n++] = &e.position;
+    }
+    if (e.frag_depth >= 0)
+    {
+        slots[n++] = &e.frag_depth;
+    }
+    if (e.discard_cond >= 0)
+    {
+        slots[n++] = &e.discard_cond;
+    }
+    if (e.shading_rate >= 0)
+    {
+        slots[n++] = &e.shading_rate;
+    }
+    if (e.storage_write_index >= 0)
+    {
+        slots[n++] = &e.storage_write_index;
+    }
+    if (e.storage_write_value >= 0)
+    {
+        slots[n++] = &e.storage_write_value;
+    }
+    for (int k = 0; k < e.n_out; ++k)
+    {
+        slots[n++] = &e.out[k].node;
+    }
     return n;
 }
 } // namespace variant_detail
@@ -56,7 +77,10 @@ inline void specialize(crd::kir::KGraph& g, crd::kir::KEntry& e, const int* opti
     if (e.is_kernel())
     {
         crd::f64 values[32];
-        for (int i = 0; i < n; ++i) { values[i] = ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0; }
+        for (int i = 0; i < n; ++i)
+        {
+            values[i] = ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0;
+        }
         g.specialize_kernel(e, options, values, n); // compute body: pin + gather statement roots + optimize + write back
     }
     else
@@ -64,7 +88,10 @@ inline void specialize(crd::kir::KGraph& g, crd::kir::KEntry& e, const int* opti
         // material/raster: pin ALL options, then the B7 specialize sequence over the entry's output roots — optimize folds
         // scalar consts, fold_static_branches collapses const-condition Selects (incl. VECTOR selects, which optimize's
         // scalar-only fold skips — an emissive vec3 Select is exactly that case), then optimize DCEs the dead branches.
-        for (int i = 0; i < n; ++i) { g.pin_const(options[i], ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0); }
+        for (int i = 0; i < n; ++i)
+        {
+            g.pin_const(options[i], ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0);
+        }
         crd::kir::lower::lower_entry(g, e);
         crd::kir::lower::fold_static_branches(g);
         crd::kir::lower::lower_entry(g, e);
@@ -79,15 +106,24 @@ inline void specialize(
     crd::kir::KGraph& g, crd::kir::KEntry& vs, crd::kir::KEntry& fs, const int* options, crd::u32 key, int n_options)
 {
     const int n = n_options < 32 ? n_options : 32;
-    for (int i = 0; i < n; ++i) { g.pin_const(options[i], ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0); }
+    for (int i = 0; i < n; ++i)
+    {
+        g.pin_const(options[i], ((key >> static_cast<crd::u32>(i)) & 1U) != 0U ? 1.0 : 0.0);
+    }
     int*       slots[2 * (crd::kir::kMaxStageOutputs + 6)];
     const auto fold = [&]() {
         int ns = variant_detail::gather_roots(vs, slots, 0);
         ns     = variant_detail::gather_roots(fs, slots, ns);
         int roots[2 * (crd::kir::kMaxStageOutputs + 6)];
-        for (int i = 0; i < ns; ++i) { roots[i] = *slots[i]; }
+        for (int i = 0; i < ns; ++i)
+        {
+            roots[i] = *slots[i];
+        }
         crd::kir::lower::lower(g, roots, ns);
-        for (int i = 0; i < ns; ++i) { *slots[i] = roots[i]; }
+        for (int i = 0; i < ns; ++i)
+        {
+            *slots[i] = roots[i];
+        }
     };
     fold();
     crd::kir::lower::fold_static_branches(g);

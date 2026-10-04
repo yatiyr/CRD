@@ -84,7 +84,10 @@ rtree_raycast(const RTree<T>&             tree,
     const crd::geometry::primitives::Ray3<T> raw_ray{
         crd::math::to_raw_vec(typed_ray.origin), typed_ray.direction};
     const auto raw_hit = tree.raycast(raw_ray, tmax.value);
-    if (!raw_hit.has_value()) { return std::nullopt; }
+    if (!raw_hit.has_value())
+    {
+        return std::nullopt;
+    }
     return RTreeRayHitT<D, T>{crd::units::Quantity<D, T>{raw_hit->t}, raw_hit->payload};
 }
 

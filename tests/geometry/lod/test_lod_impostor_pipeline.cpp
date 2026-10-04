@@ -45,7 +45,12 @@ void make_tetrahedron(crd::resources::MeshResource& mesh)
         float e2[3] = {t.c[0]-t.a[0], t.c[1]-t.a[1], t.c[2]-t.a[2]};
         float n[3]  = {e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]};
         float nl    = std::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
-        if (nl > 1.0e-12F) { n[0] /= nl; n[1] /= nl; n[2] /= nl; }
+        if (nl > 1.0e-12F)
+        {
+            n[0] /= nl;
+            n[1] /= nl;
+            n[2] /= nl;
+        }
         write_vert(vi + 0, t.a, n);
         write_vert(vi + 1, t.b, n);
         write_vert(vi + 2, t.c, n);
@@ -53,7 +58,10 @@ void make_tetrahedron(crd::resources::MeshResource& mesh)
     }
 
     auto* idx = reinterpret_cast<crd::u32*>(mesh.indices.data());
-    for (crd::u32 i = 0; i < 12; ++i) { idx[i] = i; }
+    for (crd::u32 i = 0; i < 12; ++i)
+    {
+        idx[i] = i;
+    }
     mesh.bounds_min[0] = -0.4714F; mesh.bounds_min[1] = -0.3333F; mesh.bounds_min[2] = -0.8165F;
     mesh.bounds_max[0] =  0.9428F; mesh.bounds_max[1] =  1.0F;    mesh.bounds_max[2] =  0.8165F;
 }
@@ -127,7 +135,10 @@ TEST_CASE("REN-40-C5.6 GATE: RGBA8 unpack matches what the baker writes",
             CHECK(ub == b8);
             CHECK(ua == a8);
 
-            if (a8 > 0U) { ++checked_covered; }
+            if (a8 > 0U)
+            {
+                ++checked_covered;
+            }
         }
     }
     CHECK(checked_covered == report.covered_pixels);

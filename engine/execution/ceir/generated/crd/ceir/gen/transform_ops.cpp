@@ -17,51 +17,131 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_assign_provider(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("provider");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("provider");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_constrain_provider_class(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("class");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("class");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_fuse(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("enable");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("enable");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_place_mesh(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("mesh");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("classes");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
-    { const AttrId a = op.attr("fallback");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("mesh");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("classes");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("fallback");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_share_storage(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("enable");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("enable");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

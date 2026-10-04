@@ -62,7 +62,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 // Three triangles sharing edge (0, 1): T0=(0,1,2), T1=(0,1,3), T2=(1,0,4).

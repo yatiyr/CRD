@@ -54,7 +54,10 @@ template <MathScalar T>
 [[nodiscard]] T signed_area(Ring2<T> r) noexcept
 {
     const crd::usize n = r.size();
-    if (n < 3U) { return T{0}; }
+    if (n < 3U)
+    {
+        return T{0};
+    }
     crd::f64 sum = 0.0;
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -121,10 +124,22 @@ template <MathScalar T>
     for (crd::u32 r = 0; r < rc; ++r)
     {
         const AABB rb = aabb(p.ring(r));
-        if (rb.min.x < out.min.x) { out.min.x = rb.min.x; }
-        if (rb.min.y < out.min.y) { out.min.y = rb.min.y; }
-        if (rb.max.x > out.max.x) { out.max.x = rb.max.x; }
-        if (rb.max.y > out.max.y) { out.max.y = rb.max.y; }
+        if (rb.min.x < out.min.x)
+        {
+            out.min.x = rb.min.x;
+        }
+        if (rb.min.y < out.min.y)
+        {
+            out.min.y = rb.min.y;
+        }
+        if (rb.max.x > out.max.x)
+        {
+            out.max.x = rb.max.x;
+        }
+        if (rb.max.y > out.max.y)
+        {
+            out.max.y = rb.max.y;
+        }
     }
     return out;
 }
@@ -141,7 +156,10 @@ template <MathScalar T>
 [[nodiscard]] crd::math::Vec2<T> centroid(Ring2<T> r) noexcept
 {
     const crd::usize n = r.size();
-    if (n == 0U) { return crd::math::Vec2<T>{T{0}, T{0}}; }
+    if (n == 0U)
+    {
+        return crd::math::Vec2<T>{T{0}, T{0}};
+    }
     if (n < 3U)
     {
         crd::f64 cx = 0.0;
@@ -194,7 +212,10 @@ template <MathScalar T>
     // contribute negative — the weighted average is the centroid of the
     // filled region.
     const crd::u32 rc = p.ring_count();
-    if (rc == 0U) { return crd::math::Vec2<T>{T{0}, T{0}}; }
+    if (rc == 0U)
+    {
+        return crd::math::Vec2<T>{T{0}, T{0}};
+    }
     crd::f64 cx       = 0.0;
     crd::f64 cy       = 0.0;
     crd::f64 area_acc = 0.0;
@@ -207,7 +228,10 @@ template <MathScalar T>
         cy += static_cast<crd::f64>(c.y) * a;
         area_acc += a;
     }
-    if (area_acc == 0.0) { return centroid(p.outer()); }
+    if (area_acc == 0.0)
+    {
+        return centroid(p.outer());
+    }
     const crd::f64 inv = 1.0 / area_acc;
     return crd::math::Vec2<T>{static_cast<T>(cx * inv), static_cast<T>(cy * inv)};
 }
@@ -253,7 +277,10 @@ template <MathScalar T>
             // Push reversed.
             crd::containers::Array<crd::math::Vec2<T>> rev(alloc);
             rev.reserve(ring.size());
-            for (crd::usize i = ring.size(); i > 0U; --i) { rev.push_back(ring[i - 1U]); }
+            for (crd::usize i = ring.size(); i > 0U; --i)
+            {
+                rev.push_back(ring[i - 1U]);
+            }
             out.add_ring(rev);
         }
     }
@@ -298,7 +325,10 @@ template <MathScalar T>
 [[nodiscard]] PointInPolygon point_in_ring(Ring2<T> r, const crd::math::Vec2<T>& p) noexcept
 {
     const crd::usize n = r.size();
-    if (n < 3U) { return PointInPolygon::Outside; }
+    if (n < 3U)
+    {
+        return PointInPolygon::Outside;
+    }
     if (!crd::geometry::primitives::is_finite(p))
     {
         // Query tolerate: non-finite query point ⇒ "Outside" (defensive,
@@ -335,7 +365,10 @@ template <MathScalar T>
             // predicates so adverse coords get the exact sign.
             const bool upward = b_above; // edge goes from below p.y to above
             const bool right  = upward ? (o > T{0}) : (o < T{0});
-            if (right) { ++crossings; }
+            if (right)
+            {
+                ++crossings;
+            }
         }
     }
     return (crossings & 1) != 0 ? PointInPolygon::Inside : PointInPolygon::Outside;
@@ -346,16 +379,31 @@ template <MathScalar T>
                                               const crd::math::Vec2<T>& q) noexcept
 {
     const crd::u32 rc = p.ring_count();
-    if (rc == 0U) { return PointInPolygon::Outside; }
+    if (rc == 0U)
+    {
+        return PointInPolygon::Outside;
+    }
     const auto pir_outer = point_in_ring(p.outer(), q);
-    if (pir_outer == PointInPolygon::OnBoundary) { return PointInPolygon::OnBoundary; }
-    if (pir_outer == PointInPolygon::Outside) { return PointInPolygon::Outside; }
+    if (pir_outer == PointInPolygon::OnBoundary)
+    {
+        return PointInPolygon::OnBoundary;
+    }
+    if (pir_outer == PointInPolygon::Outside)
+    {
+        return PointInPolygon::Outside;
+    }
     // Inside outer — check holes. Inside a hole ⇒ Outside the polygon.
     for (crd::u32 r = 1; r < rc; ++r)
     {
         const auto pir = point_in_ring(p.ring(r), q);
-        if (pir == PointInPolygon::OnBoundary) { return PointInPolygon::OnBoundary; }
-        if (pir == PointInPolygon::Inside) { return PointInPolygon::Outside; }
+        if (pir == PointInPolygon::OnBoundary)
+        {
+            return PointInPolygon::OnBoundary;
+        }
+        if (pir == PointInPolygon::Inside)
+        {
+            return PointInPolygon::Outside;
+        }
     }
     return PointInPolygon::Inside;
 }
@@ -387,14 +435,29 @@ template <MathScalar T>
     const T o4 = crd::geometry::primitives::orient2d(b1, b2, a2);
     const bool proper = ((o1 > T{0} && o2 < T{0}) || (o1 < T{0} && o2 > T{0})) &&
                         ((o3 > T{0} && o4 < T{0}) || (o3 < T{0} && o4 > T{0}));
-    if (proper) { return true; }
+    if (proper)
+    {
+        return true;
+    }
     // Collinear / touching — count as intersection iff the touch is interior
     // to either segment (endpoint-touch of adjacent edges is the legal
     // case, filtered by the caller via the adjacency skip).
-    if (o1 == T{0} && on_segment_2d(a1, a2, b1)) { return true; }
-    if (o2 == T{0} && on_segment_2d(a1, a2, b2)) { return true; }
-    if (o3 == T{0} && on_segment_2d(b1, b2, a1)) { return true; }
-    if (o4 == T{0} && on_segment_2d(b1, b2, a2)) { return true; }
+    if (o1 == T{0} && on_segment_2d(a1, a2, b1))
+    {
+        return true;
+    }
+    if (o2 == T{0} && on_segment_2d(a1, a2, b2))
+    {
+        return true;
+    }
+    if (o3 == T{0} && on_segment_2d(b1, b2, a1))
+    {
+        return true;
+    }
+    if (o4 == T{0} && on_segment_2d(b1, b2, a2))
+    {
+        return true;
+    }
     return false;
 }
 } // namespace polygon_detail
@@ -403,7 +466,10 @@ template <MathScalar T>
 [[nodiscard]] bool is_simple(Ring2<T> r) noexcept
 {
     const crd::usize n = r.size();
-    if (n < 3U) { return true; }
+    if (n < 3U)
+    {
+        return true;
+    }
     for (crd::usize i = 0; i < n; ++i)
     {
         const auto& a1 = r[i];
@@ -412,10 +478,16 @@ template <MathScalar T>
         {
             // Skip the edge adjacent to (i)'s start — the wraparound case
             // pairs edge (n-1, 0) with edge (0, 1) which share vertex 0.
-            if (i == 0U && j == n - 1U) { continue; }
+            if (i == 0U && j == n - 1U)
+            {
+                continue;
+            }
             const auto& b1 = r[j];
             const auto& b2 = r[r.next(j)];
-            if (polygon_detail::segments_proper_intersect_2d(a1, a2, b1, b2)) { return false; }
+            if (polygon_detail::segments_proper_intersect_2d(a1, a2, b1, b2))
+            {
+                return false;
+            }
         }
     }
     return true;
@@ -427,7 +499,10 @@ template <MathScalar T>
     const crd::u32 rc = p.ring_count();
     for (crd::u32 r = 0; r < rc; ++r)
     {
-        if (!is_simple(p.ring(r))) { return false; }
+        if (!is_simple(p.ring(r)))
+        {
+            return false;
+        }
     }
     return true;
 }

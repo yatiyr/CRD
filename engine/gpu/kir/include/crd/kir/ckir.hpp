@@ -106,8 +106,14 @@ struct KType
     // mean mat2 construct it explicitly via `mat()`.
     [[nodiscard]] static constexpr KType from_comps(DType d, int n) noexcept
     {
-        if (n == 9) { return mat(d, 3, 3); }
-        if (n == 16) { return mat(d, 4, 4); }
+        if (n == 9)
+        {
+            return mat(d, 3, 3);
+        }
+        if (n == 16)
+        {
+            return mat(d, 4, 4);
+        }
         return vec(d, n);
     }
 
@@ -817,20 +823,36 @@ struct Shape
     [[nodiscard]] crd::i64 numel() const noexcept
     {
         crd::i64 n = 1;
-        for (int i = 0; i < rank; ++i) { n *= dims[i]; }
+        for (int i = 0; i < rank; ++i)
+        {
+            n *= dims[i];
+        }
         return n;
     }
     [[nodiscard]] bool operator==(const Shape& o) const noexcept
     {
-        if (rank != o.rank) { return false; }
-        for (int i = 0; i < rank; ++i) { if (dims[i] != o.dims[i]) { return false; } }
+        if (rank != o.rank)
+        {
+            return false;
+        }
+        for (int i = 0; i < rank; ++i)
+        {
+            if (dims[i] != o.dims[i])
+            {
+                return false;
+            }
+        }
         return true;
     }
     // row-major strides into `s` (elements, not bytes).
     void row_major_strides(crd::i64* s) const noexcept
     {
         crd::i64 acc = 1;
-        for (int i = rank - 1; i >= 0; --i) { s[i] = acc; acc *= dims[i]; }
+        for (int i = rank - 1; i >= 0; --i)
+        {
+            s[i] = acc;
+            acc *= dims[i];
+        }
     }
 };
 
@@ -839,7 +861,10 @@ struct Shape
     Shape s;
     s.rank = static_cast<int>(d.size());
     int i  = 0;
-    for (const crd::i64 v : d) { s.dims[i++] = v; }
+    for (const crd::i64 v : d)
+    {
+        s.dims[i++] = v;
+    }
     return s;
 }
 
@@ -878,12 +903,21 @@ struct KNode
 // round an f64 accumulator to a storage dtype so the reference is bit-faithful to that precision.
 [[nodiscard]] inline crd::f64 round_dtype(crd::f64 v, DType dt) noexcept
 {
-    if (dt == DType::F32) { return static_cast<crd::f64>(static_cast<float>(v)); }
-    if (dt == DType::Bool) { return v != 0.0 ? 1.0 : 0.0; } // a bool materializes as exactly 0.0 or 1.0 in the oracle
+    if (dt == DType::F32)
+    {
+        return static_cast<crd::f64>(static_cast<float>(v));
+    }
+    if (dt == DType::Bool) // a bool materializes as exactly 0.0 or 1.0 in the oracle
+    {
+        return v != 0.0 ? 1.0 : 0.0;
+    }
     // Integer storage types are INTEGRAL and truncate toward zero — a GPU int/uint is never fractional, and `uint/uint`
     // division + `(u)int(x)` casts truncate. Without this the oracle keeps fractional index arithmetic and diverges from
     // every backend (found wiring the FFT/transpose index math). Bit-op / add-mul results are already integral ⇒ no-op there.
-    if (dt == DType::I32 || dt == DType::I64 || dt == DType::U8 || dt == DType::U32) { return static_cast<crd::f64>(static_cast<crd::i64>(v)); }
+    if (dt == DType::I32 || dt == DType::I64 || dt == DType::U8 || dt == DType::U32)
+    {
+        return static_cast<crd::f64>(static_cast<crd::i64>(v));
+    }
     return v; // F64 / F16 / BF16 (exact narrow rounding lands with their backends)
 }
 
@@ -919,10 +953,47 @@ struct KNode
     case KOp::Cosh: return crd::math::cosh(x);          // ULP
     case KOp::Cbrt: return crd::math::cbrt(x);          // ULP (no GPU builtin — emitted as sign·pow(abs,1/3))
     case KOp::BitNot: return static_cast<crd::f64>(~static_cast<crd::i64>(x)); // 32-bit-compatible for ≤31-bit values
-    case KOp::BitCount: { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); int cnt = 0; while (v != 0U) { cnt += static_cast<int>(v & 1U); v >>= 1U; } return static_cast<crd::f64>(cnt); }
-    case KOp::FindLSB: { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); if (v == 0U) { return -1.0; } int i = 0; while ((v & 1U) == 0U) { ++i; v >>= 1U; } return static_cast<crd::f64>(i); }
-    case KOp::FindMSB: { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); int i = -1; while (v != 0U) { ++i; v >>= 1U; } return static_cast<crd::f64>(i); }
-    case KOp::BitReverse: { crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); crd::u32 r = 0U; for (int b = 0; b < 32; ++b) { r = (r << 1U) | (v & 1U); v >>= 1U; } return static_cast<crd::f64>(r); }
+    case KOp::BitCount:
+    {
+        crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); int cnt = 0;
+        while (v != 0U)
+        {
+            cnt += static_cast<int>(v & 1U);
+            v >>= 1U;
+        }
+        return static_cast<crd::f64>(cnt); }
+    case KOp::FindLSB:
+    {
+        crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x));
+        if (v == 0U)
+        {
+            return -1.0;
+        }
+        int i = 0;
+        while ((v & 1U) == 0U)
+        {
+            ++i;
+            v >>= 1U;
+        }
+        return static_cast<crd::f64>(i); }
+    case KOp::FindMSB:
+    {
+        crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); int i = -1;
+        while (v != 0U)
+        {
+            ++i;
+            v >>= 1U;
+        }
+        return static_cast<crd::f64>(i); }
+    case KOp::BitReverse:
+    {
+        crd::u32 v = static_cast<crd::u32>(static_cast<crd::i64>(x)); crd::u32 r = 0U;
+        for (int b = 0; b < 32; ++b)
+        {
+            r = (r << 1U) | (v & 1U);
+            v >>= 1U;
+        }
+        return static_cast<crd::f64>(r); }
     case KOp::FloatBitsToInt: { const float f = static_cast<float>(x); crd::i32 b = 0; std::memcpy(&b, &f, 4); return static_cast<crd::f64>(b); } // reinterpret f32 bits → i32
     case KOp::IntBitsToFloat: { const crd::i32 b = static_cast<crd::i32>(static_cast<crd::i64>(x)); float f = 0.0F; std::memcpy(&f, &b, 4); return static_cast<crd::f64>(f); } // reinterpret i32 bits → f32
     // B1 fragment derivatives: the CPU oracle sees ONE invocation with no neighbours, so ∂/∂x = ∂/∂y = 0 (and fwidth = 0).
@@ -951,7 +1022,24 @@ struct KNode
     case KOp::Step: return y < x ? 0.0 : 1.0;            // GLSL step(edge=x, v=y): v<edge ? 0 : 1 — exact
     case KOp::Atan2: return crd::math::atan2(x, y);      // atan2(y=x, x=y) — ULP
     case KOp::Mod: return crd::math::fmod(x, y);         // C fmod (sign of x) — ULP
-    case KOp::Ldexp: { crd::f64 p = 1.0; const crd::i64 e = static_cast<crd::i64>(y); if (e >= 0) { for (crd::i64 j = 0; j < e; ++j) { p *= 2.0; } } else { for (crd::i64 j = 0; j < -e; ++j) { p *= 0.5; } } return x * p; } // m * 2^e (exact)
+    case KOp::Ldexp:
+    {
+        crd::f64 p = 1.0; const crd::i64 e = static_cast<crd::i64>(y);
+        if (e >= 0)
+        {
+            for (crd::i64 j = 0; j < e; ++j)
+            {
+                p *= 2.0;
+            }
+        }
+        else
+        {
+            for (crd::i64 j = 0; j < -e; ++j)
+            {
+                p *= 0.5;
+            }
+        }
+        return x * p; } // m * 2^e (exact)
     // Integer bitwise: reinterpret the (exactly-integer) f64 through i64, operate, return exact. Valid for values within
     // f64's exact-integer range (|v| < 2^53) — morton (≤30-bit), radix keys, hashing all fit.
     case KOp::Shl: return static_cast<crd::f64>(static_cast<crd::i64>(x) << static_cast<crd::i64>(y));
@@ -1017,7 +1105,10 @@ public:
     {
         const int id = static_cast<int>(m_sbegin.size());
         m_sbegin.push_back(static_cast<crd::u32>(m_sfields.size())); // one `begin` per struct; the end is the next begin
-        for (int i = 0; i < n_fields; ++i) { m_sfields.push_back(fields[i]); }
+        for (int i = 0; i < n_fields; ++i)
+        {
+            m_sfields.push_back(fields[i]);
+        }
         return id;
     }
     [[nodiscard]] int struct_field_count(int id) const noexcept
@@ -1035,7 +1126,10 @@ public:
     [[nodiscard]] int struct_field_offset(int id, int k) const noexcept
     {
         int off = 0;
-        for (int i = 0; i < k; ++i) { off += struct_field(id, i).comps(); }
+        for (int i = 0; i < k; ++i)
+        {
+            off += struct_field(id, i).comps();
+        }
         return off;
     }
     [[nodiscard]] int struct_flat_comps(int id) const noexcept
@@ -1235,7 +1329,10 @@ public:
     [[nodiscard]] int unroll_for(int count, int init, BodyFn body)
     {
         int acc = init;
-        for (int it = 0; it < count; ++it) { acc = body(it, acc); }
+        for (int it = 0; it < count; ++it)
+        {
+            acc = body(it, acc);
+        }
         return acc;
     }
     // A4 tier-2 DYNAMIC loop (real per-thread `for`): acc = init; for it in [0, count): acc = body(index, acc); return acc.
@@ -1280,7 +1377,14 @@ public:
     {
         KNode n; n.op = KOp::Swizzle; n.shape = t(v).shape; n.a = v;
         int w = 0; const int idx[4] = {i0, i1, i2, i3};
-        for (int k = 0; k < 4; ++k) { if (idx[k] >= 0) { n.perm[k] = static_cast<crd::u8>(idx[k]); ++w; } }
+        for (int k = 0; k < 4; ++k)
+        {
+            if (idx[k] >= 0)
+            {
+                n.perm[k] = static_cast<crd::u8>(idx[k]);
+                ++w;
+            }
+        }
         n.type = KType::vec(t(v).dtype(), w); // a 1-wide swizzle (.x) is a scalar
         return push(n);
     }
@@ -1506,8 +1610,14 @@ public:
     {
         const TexDim dim = t(tex).type.tex_dim();
         int          nc  = 2;
-        if (dim == TexDim::Tex3D) { nc = 3; }
-        else if (dim == TexDim::Tex1D) { nc = 1; }
+        if (dim == TexDim::Tex3D)
+        {
+            nc = 3;
+        }
+        else if (dim == TexDim::Tex1D)
+        {
+            nc = 1;
+        }
         KNode        n;
         n.op = KOp::TexSize; n.type = KType::vec(DType::I32, nc); n.shape = make_shape({1});
         n.a = tex; n.b = samp; n.d = lod;
@@ -1561,14 +1671,29 @@ public:
         for (crd::usize i = 0; i < m_nodes.size(); ++i)
         {
             KNode& g = m_nodes[i];
-            if (g.a == from) { g.a = to; }
-            if (g.b == from) { g.b = to; }
-            if (g.c == from) { g.c = to; }
-            if (g.d == from) { g.d = to; }
+            if (g.a == from)
+            {
+                g.a = to;
+            }
+            if (g.b == from)
+            {
+                g.b = to;
+            }
+            if (g.c == from)
+            {
+                g.c = to;
+            }
+            if (g.d == from)
+            {
+                g.d = to;
+            }
             for (int k = 0; k < static_cast<int>(g.n_ext); ++k)
             {
                 const crd::usize e = static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k);
-                if (m_ext[e] == from) { m_ext[e] = to; }
+                if (m_ext[e] == from)
+                {
+                    m_ext[e] = to;
+                }
             }
         }
     }
@@ -1618,14 +1743,24 @@ public:
     [[nodiscard]] int reduce(KOp op, int a, crd::u32 mask, DetTier tier = DetTier::Exact)
     {
         KNode n; n.op = op; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.axes = mask; n.shape = t(a).shape; n.tier = tier;
-        for (int i = 0; i < n.shape.rank; ++i) { if ((mask >> i) & 1U) { n.shape.dims[i] = 1; } }
+        for (int i = 0; i < n.shape.rank; ++i)
+        {
+            if ((mask >> i) & 1U)
+            {
+                n.shape.dims[i] = 1;
+            }
+        }
         return push(n);
     }
     [[nodiscard]] int reshape(int a, const Shape& out) { KNode n; n.op = KOp::Reshape; n.type = KType::make_scalar(t(a).dtype()); n.shape = out; n.a = a; return push(n); }
     [[nodiscard]] int permute(int a, const crd::u8* p)
     {
         KNode n; n.op = KOp::Permute; n.type = KType::make_scalar(t(a).dtype()); n.a = a; n.shape.rank = t(a).shape.rank;
-        for (int i = 0; i < n.shape.rank; ++i) { n.perm[i] = p[i]; n.shape.dims[i] = t(a).shape.dims[p[i]]; }
+        for (int i = 0; i < n.shape.rank; ++i)
+        {
+            n.perm[i] = p[i];
+            n.shape.dims[i] = t(a).shape.dims[p[i]];
+        }
         return push(n);
     }
     [[nodiscard]] int broadcast(int a, const Shape& out) { KNode n; n.op = KOp::Broadcast; n.type = KType::make_scalar(t(a).dtype()); n.shape = out; n.a = a; return push(n); }
@@ -1696,7 +1831,11 @@ public:
         int patched = 0;
         for (crd::usize i = 0; i < m_nodes.size(); ++i)
         {
-            if (is_spec_const(m_nodes[i]) && spec_const_id(m_nodes[i]) == id) { m_nodes[i].cval = value; ++patched; }
+            if (is_spec_const(m_nodes[i]) && spec_const_id(m_nodes[i]) == id)
+            {
+                m_nodes[i].cval = value;
+                ++patched;
+            }
         }
         return patched;
     }
@@ -1712,11 +1851,31 @@ public:
     void serial_restore(const KNode* nodes, crd::u64 n_nodes, const crd::i32* ext, crd::u64 n_ext, const KType* sfields,
                         crd::u64 n_sfields, const crd::u32* sbegin, crd::u64 n_sbegin, const KStmt* stmts, crd::u64 n_stmts, int ninputs)
     {
-        m_nodes.clear();   for (crd::u64 i = 0; i < n_nodes; ++i) { m_nodes.push_back(nodes[i]); }
-        m_ext.clear();     for (crd::u64 i = 0; i < n_ext; ++i) { m_ext.push_back(ext[i]); }
-        m_sfields.clear(); for (crd::u64 i = 0; i < n_sfields; ++i) { m_sfields.push_back(sfields[i]); }
-        m_sbegin.clear();  for (crd::u64 i = 0; i < n_sbegin; ++i) { m_sbegin.push_back(sbegin[i]); }
-        m_stmts.clear();   for (crd::u64 i = 0; i < n_stmts; ++i) { m_stmts.push_back(stmts[i]); }
+        m_nodes.clear();
+        for (crd::u64 i = 0; i < n_nodes; ++i)
+        {
+            m_nodes.push_back(nodes[i]);
+        }
+        m_ext.clear();
+        for (crd::u64 i = 0; i < n_ext; ++i)
+        {
+            m_ext.push_back(ext[i]);
+        }
+        m_sfields.clear();
+        for (crd::u64 i = 0; i < n_sfields; ++i)
+        {
+            m_sfields.push_back(sfields[i]);
+        }
+        m_sbegin.clear();
+        for (crd::u64 i = 0; i < n_sbegin; ++i)
+        {
+            m_sbegin.push_back(sbegin[i]);
+        }
+        m_stmts.clear();
+        for (crd::u64 i = 0; i < n_stmts; ++i)
+        {
+            m_stmts.push_back(stmts[i]);
+        }
         m_ninput = ninputs;
     }
 
@@ -1731,14 +1890,23 @@ public:
             const crd::i32 ops[4] = {n.a, n.b, n.c, n.d};
             for (const crd::i32 o : ops)
             {
-                if (o == -1) { continue; }
-                if (o < 0 || o >= i) { return false; }
+                if (o == -1)
+                {
+                    continue;
+                }
+                if (o < 0 || o >= i)
+                {
+                    return false;
+                }
             }
             // the VARIADIC operands are operands too — the `d`-remap bug, one field further out
             for (int k = 0; k < static_cast<int>(n.n_ext); ++k)
             {
                 const crd::i32 o = ext_operand(n, k);
-                if (o < 0 || o >= i) { return false; }
+                if (o < 0 || o >= i)
+                {
+                    return false;
+                }
             }
         }
         return true;
@@ -1787,24 +1955,48 @@ public:
     // way a per-key builder does, so two keys that fold to the same kernel produce identical IR and DEDUP.
     void specialize_kernel(const KEntry& e, const int* options, const crd::f64* values, int n_options)
     {
-        for (int i = 0; i < n_options; ++i) { pin_const(options[i], values[i]); }
-        if (e.kernel_body_count <= 0) { return; }
+        for (int i = 0; i < n_options; ++i)
+        {
+            pin_const(options[i], values[i]);
+        }
+        if (e.kernel_body_count <= 0)
+        {
+            return;
+        }
         auto*                             al = m_nodes.allocator();
         crd::containers::Array<crd::i32*> slots(al); // addresses of the body's node-ref fields (written back post-renumber)
         const int                         end = e.kernel_body_begin + e.kernel_body_count;
         for (int s = e.kernel_body_begin; s < end; ++s)
         {
             KStmt& st = m_stmts[static_cast<crd::usize>(s)];
-            if (st.target >= 0) { slots.push_back(&st.target); }
-            if (st.index >= 0) { slots.push_back(&st.index); }
-            if (st.value >= 0) { slots.push_back(&st.value); }
-            if (st.result >= 0) { slots.push_back(&st.result); }
+            if (st.target >= 0)
+            {
+                slots.push_back(&st.target);
+            }
+            if (st.index >= 0)
+            {
+                slots.push_back(&st.index);
+            }
+            if (st.value >= 0)
+            {
+                slots.push_back(&st.value);
+            }
+            if (st.result >= 0)
+            {
+                slots.push_back(&st.result);
+            }
         }
         crd::containers::Array<int> roots(al);
         roots.resize(slots.size());
-        for (crd::usize i = 0; i < slots.size(); ++i) { roots[i] = *slots[i]; }
+        for (crd::usize i = 0; i < slots.size(); ++i)
+        {
+            roots[i] = *slots[i];
+        }
         optimize(roots.data(), static_cast<int>(roots.size()));
-        for (crd::usize i = 0; i < slots.size(); ++i) { *slots[i] = roots[i]; }
+        for (crd::usize i = 0; i < slots.size(); ++i)
+        {
+            *slots[i] = roots[i];
+        }
     }
 
     // B7 branch-elimination primitive: make node `node` an exact copy of `target` (every consumer now reads target's
@@ -1829,12 +2021,35 @@ public:
             // D12: a spec constant is a PIPELINE-TIME value — treat it as opaque (not a compile-time const), so it is never
             // folded into a literal nor folded THROUGH (an expression reading it stays runtime). The leaf itself survives DCE
             // when referenced; its axes+iidx are preserved (a leaf is never mutated by the folder).
-            if (is_spec_const(g)) { continue; }
-            if (g.op == KOp::Const) { isc[static_cast<crd::usize>(i)] = 1; cval[static_cast<crd::usize>(i)] = g.cval; continue; }
-            if (g.op == KOp::Input || g.op == KOp::Iota || g.op == KOp::Contract || g.op == KOp::For || g.op == KOp::LoopIndex || g.op == KOp::LoopAcc) { continue; }
-            if (g.op == KOp::Call) { continue; } // GM-3: a pre-lowering module call is OPAQUE — never fold it (lower_calls inlines it first; a stray 0-arg Call must not fold)
-            if (g.op == KOp::Attention) { continue; } // AS-4: the fused attention intrinsic is OPAQUE (a whole-tensor op) — never const-fold it
-            if (is_resource_leaf(g.op)) { continue; } // buffer/shared/texture/sampler/AS/payload decls NAME storage — never fold
+            if (is_spec_const(g))
+            {
+                continue;
+            }
+            if (g.op == KOp::Const)
+            {
+                isc[static_cast<crd::usize>(i)] = 1;
+                cval[static_cast<crd::usize>(i)] = g.cval;
+                continue;
+            }
+            if (g.op == KOp::Input || g.op == KOp::Iota || g.op == KOp::Contract || g.op == KOp::For || g.op == KOp::LoopIndex || g.op == KOp::LoopAcc)
+            {
+                continue;
+            }
+            // GM-3: a pre-lowering module call is OPAQUE — never fold it (lower_calls inlines it first; a stray 0-arg
+            // Call must not fold)
+            if (g.op == KOp::Call)
+            {
+                continue;
+            }
+            // AS-4: the fused attention intrinsic is OPAQUE (a whole-tensor op) — never const-fold it
+            if (g.op == KOp::Attention)
+            {
+                continue;
+            }
+            if (is_resource_leaf(g.op)) // buffer/shared/texture/sampler/AS/payload decls NAME storage — never fold
+            {
+                continue;
+            }
             // ⛔⛔ A MEMORY READ IS NEVER A COMPILE-TIME CONSTANT, however constant its INDEX is.
             // `StorageLoad`'s ONLY operand is the index (`sbuf.data[i]`), so a literal index made every
             // header/uniform read look foldable and it was replaced by a literal — silently miscompiling any
@@ -1842,25 +2057,68 @@ public:
             // forward variant does (light direction at word 22, cascade matrices at 32+), and it rendered BLACK.
             // `BufferLoad`/`SharedLoad` escaped only by accident: their FIRST operand is a resource declaration,
             // which is already unfoldable. Excluding the whole family makes that safety intentional.
-            if (g.op == KOp::StorageLoad || g.op == KOp::BufferLoad || g.op == KOp::SharedLoad) { continue; }
-            if (is_stage_leaf(g.op)) { continue; } // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
+            if (g.op == KOp::StorageLoad || g.op == KOp::BufferLoad || g.op == KOp::SharedLoad)
+            {
+                continue;
+            }
+            if (is_stage_leaf(g.op)) // B3 leaves have no operands — a SCALAR one (Builtin::VertexIndex, a
+            {
+                continue;
+            }
                                                   // scalar StageIn) would otherwise const-fold into a compile-time value
-            if (g.n_ext != 0 || g.op == KOp::FieldGet || g.op == KOp::ArrayGet) { continue; } // aggregates never fold to one scalar Const
-            if (g.comps() != 1) { continue; } // vec/mat values fold to multiple components — never a single scalar Const
+            // aggregates never fold to one scalar Const
+            if (g.n_ext != 0 || g.op == KOp::FieldGet || g.op == KOp::ArrayGet)
+            {
+                continue;
+            }
+            if (g.comps() != 1) // vec/mat values fold to multiple components — never a single scalar Const
+            {
+                continue;
+            }
             const bool ac = g.a < 0 || isc[static_cast<crd::usize>(g.a)];
             const bool bc = g.b < 0 || isc[static_cast<crd::usize>(g.b)];
             const bool cc = g.c < 0 || isc[static_cast<crd::usize>(g.c)];
-            if (!(ac && bc && cc)) { continue; }
+            if (!(ac && bc && cc))
+            {
+                continue;
+            }
             const crd::f64 av = g.a >= 0 ? cval[static_cast<crd::usize>(g.a)] : 0.0;
             const crd::f64 bv = g.b >= 0 ? cval[static_cast<crd::usize>(g.b)] : 0.0;
             crd::f64       r  = 0.0;
-            if (g.op == KOp::Select) { r = (g.c >= 0 && cval[static_cast<crd::usize>(g.c)] != 0.0) ? av : bv; }
-            else if (g.op == KOp::Cast) { r = round_dtype(av, g.dtype()); }
+            if (g.op == KOp::Select)
+            {
+                r = (g.c >= 0 && cval[static_cast<crd::usize>(g.c)] != 0.0) ? av : bv;
+            }
+            else if (g.op == KOp::Cast)
+            {
+                r = round_dtype(av, g.dtype());
+            }
             // movement (Reshape/Permute/Broadcast) + ReduceMax of a uniform fill are all identity on the value
-            else if (g.op == KOp::Reshape || g.op == KOp::Permute || g.op == KOp::Broadcast || g.op == KOp::ReduceMax) { r = av; }
-            else if (g.op == KOp::ReduceSum) { crd::i64 c = 1; const Shape& sa = m_nodes[static_cast<crd::usize>(g.a)].shape; for (int k = 0; k < sa.rank; ++k) { if ((g.axes >> k) & 1U) { c *= sa.dims[k]; } } r = av * static_cast<crd::f64>(c); }
-            else if (g.b >= 0) { r = apply_binary_typed(g.op, av, bv, g.dtype()); }
-            else { r = apply_unary(g.op, av); }
+            else if (g.op == KOp::Reshape || g.op == KOp::Permute || g.op == KOp::Broadcast || g.op == KOp::ReduceMax)
+            {
+                r = av;
+            }
+            else if (g.op == KOp::ReduceSum)
+            {
+                crd::i64 c = 1;
+                const Shape& sa = m_nodes[static_cast<crd::usize>(g.a)].shape;
+                for (int k = 0; k < sa.rank; ++k)
+                {
+                    if ((g.axes >> k) & 1U)
+                    {
+                        c *= sa.dims[k];
+                    }
+                }
+                r = av * static_cast<crd::f64>(c);
+            }
+            else if (g.b >= 0)
+            {
+                r = apply_binary_typed(g.op, av, bv, g.dtype());
+            }
+            else
+            {
+                r = apply_unary(g.op, av);
+            }
             const Shape sh = g.shape;
             const KType ty = g.type;
             g = KNode{};
@@ -1870,22 +2128,46 @@ public:
         crd::containers::Array<crd::u8> keep(al);
         crd::containers::Array<int>     stk(al);
         keep.resize(static_cast<crd::usize>(n), 0);
-        for (int r = 0; r < n_roots; ++r) { stk.push_back(roots[r]); }
+        for (int r = 0; r < n_roots; ++r)
+        {
+            stk.push_back(roots[r]);
+        }
         while (stk.size() > 0)
         {
             const int i = stk[stk.size() - 1];
             stk.resize(stk.size() - 1);
-            if (keep[static_cast<crd::usize>(i)]) { continue; }
+            if (keep[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
             keep[static_cast<crd::usize>(i)] = 1;
             const KNode& g = m_nodes[static_cast<crd::usize>(i)];
-            if (g.a >= 0) { stk.push_back(g.a); }
-            if (g.b >= 0) { stk.push_back(g.b); }
-            if (g.c >= 0) { stk.push_back(g.c); }
-            if (g.d >= 0) { stk.push_back(g.d); }
-            for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { stk.push_back(ext_operand(g, k)); } // variadic operands keep their fields alive
+            if (g.a >= 0)
+            {
+                stk.push_back(g.a);
+            }
+            if (g.b >= 0)
+            {
+                stk.push_back(g.b);
+            }
+            if (g.c >= 0)
+            {
+                stk.push_back(g.c);
+            }
+            if (g.d >= 0)
+            {
+                stk.push_back(g.d);
+            }
+            for (int k = 0; k < static_cast<int>(g.n_ext); ++k) // variadic operands keep their fields alive
+            {
+                stk.push_back(ext_operand(g, k));
+            }
         }
         int cap = 1;
-        while (cap < 2 * n + 4) { cap <<= 1; }
+        while (cap < 2 * n + 4)
+        {
+            cap <<= 1;
+        }
         crd::containers::Array<int>      table(al);
         crd::containers::Array<int>      newid(al);
         crd::containers::Array<KNode>    nn(al);
@@ -1894,23 +2176,44 @@ public:
         newid.resize(static_cast<crd::usize>(n), -1);
         for (int i = 0; i < n; ++i)
         {
-            if (!keep[static_cast<crd::usize>(i)]) { continue; }
+            if (!keep[static_cast<crd::usize>(i)])
+            {
+                continue;
+            }
             KNode g = m_nodes[static_cast<crd::usize>(i)];
-            if (g.a >= 0) { g.a = newid[static_cast<crd::usize>(g.a)]; }
-            if (g.b >= 0) { g.b = newid[static_cast<crd::usize>(g.b)]; }
-            if (g.c >= 0) { g.c = newid[static_cast<crd::usize>(g.c)]; }
-            if (g.d >= 0) { g.d = newid[static_cast<crd::usize>(g.d)]; } // 4th operand (mat4 column) — renumbered like the rest
+            if (g.a >= 0)
+            {
+                g.a = newid[static_cast<crd::usize>(g.a)];
+            }
+            if (g.b >= 0)
+            {
+                g.b = newid[static_cast<crd::usize>(g.b)];
+            }
+            if (g.c >= 0)
+            {
+                g.c = newid[static_cast<crd::usize>(g.c)];
+            }
+            if (g.d >= 0) // 4th operand (mat4 column) — renumbered like the rest
+            {
+                g.d = newid[static_cast<crd::usize>(g.d)];
+            }
             if (g.n_ext != 0)
             {
                 const int noff = static_cast<int>(nx.size());
-                for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { nx.push_back(newid[static_cast<crd::usize>(m_ext[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)])]); }
+                for (int k = 0; k < static_cast<int>(g.n_ext); ++k)
+                {
+                    nx.push_back(newid[static_cast<crd::usize>(m_ext[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)])]);
+                }
                 g.ext = noff;
             }
             newid[static_cast<crd::usize>(i)] = intern(table, cap, nn, g, nx);
         }
         m_nodes = static_cast<crd::containers::Array<KNode>&&>(nn);
         m_ext   = static_cast<crd::containers::Array<crd::i32>&&>(nx);
-        for (int r = 0; r < n_roots; ++r) { roots[r] = newid[static_cast<crd::usize>(roots[r])]; }
+        for (int r = 0; r < n_roots; ++r)
+        {
+            roots[r] = newid[static_cast<crd::usize>(roots[r])];
+        }
         CRD_ASSERT(operands_valid());
     }
 
@@ -1947,7 +2250,10 @@ private:
     int push_ext(const int* ops, int n)
     {
         const int off = static_cast<int>(m_ext.size());
-        for (int i = 0; i < n; ++i) { m_ext.push_back(ops[i]); }
+        for (int i = 0; i < n; ++i)
+        {
+            m_ext.push_back(ops[i]);
+        }
         return off;
     }
 
@@ -1967,7 +2273,10 @@ private:
         mix(static_cast<crd::u64>(g.type.elem_comps));
         // hash the variadic operand VALUES, never the pool offset — two identical StructMakes sit at different offsets.
         mix(static_cast<crd::u64>(g.n_ext));
-        for (int k = 0; k < static_cast<int>(g.n_ext); ++k) { mix(static_cast<crd::u64>(static_cast<crd::u32>(pool[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)]))); }
+        for (int k = 0; k < static_cast<int>(g.n_ext); ++k)
+        {
+            mix(static_cast<crd::u64>(static_cast<crd::u32>(pool[static_cast<crd::usize>(g.ext) + static_cast<crd::usize>(k)])));
+        }
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.a)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.b)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.c)));
@@ -1979,21 +2288,47 @@ private:
         mix(static_cast<crd::u64>(g.dset)); // B3: two UniformBlocks at the same binding but different SETS are distinct
         mix(static_cast<crd::u64>(g.axes));
         mix(static_cast<crd::u64>(g.shape.rank));
-        for (int k = 0; k < g.shape.rank; ++k) { mix(static_cast<crd::u64>(g.shape.dims[k])); mix(static_cast<crd::u64>(g.perm[k])); }
+        for (int k = 0; k < g.shape.rank; ++k)
+        {
+            mix(static_cast<crd::u64>(g.shape.dims[k]));
+            mix(static_cast<crd::u64>(g.perm[k]));
+        }
         return h;
     }
     [[nodiscard]] static bool node_equal(const KNode& x, const KNode& y, const crd::containers::Array<crd::i32>& pool) noexcept
     {
-        if (x.op == KOp::For || x.op == KOp::LoopIndex || x.op == KOp::LoopAcc) { return false; } // never CSE loop constructs — operandless leaves belong to a specific loop
-        if (x.op != y.op || !(x.type == y.type) || x.a != y.a || x.b != y.b || x.c != y.c || x.d != y.d || x.iidx != y.iidx || x.dset != y.dset || x.axes != y.axes) { return false; }
-        if (x.cval != y.cval || !(x.shape == y.shape)) { return false; }
-        for (int k = 0; k < x.shape.rank; ++k) { if (x.perm[k] != y.perm[k]) { return false; } }
-        if (x.n_ext != y.n_ext) { return false; }
+        // never CSE loop constructs — operandless leaves belong to a specific loop
+        if (x.op == KOp::For || x.op == KOp::LoopIndex || x.op == KOp::LoopAcc)
+        {
+            return false;
+        }
+        if (x.op != y.op || !(x.type == y.type) || x.a != y.a || x.b != y.b || x.c != y.c || x.d != y.d || x.iidx != y.iidx || x.dset != y.dset || x.axes != y.axes)
+        {
+            return false;
+        }
+        if (x.cval != y.cval || !(x.shape == y.shape))
+        {
+            return false;
+        }
+        for (int k = 0; k < x.shape.rank; ++k)
+        {
+            if (x.perm[k] != y.perm[k])
+            {
+                return false;
+            }
+        }
+        if (x.n_ext != y.n_ext)
+        {
+            return false;
+        }
         for (int k = 0; k < static_cast<int>(x.n_ext); ++k)
         {
             const crd::usize xk = static_cast<crd::usize>(x.ext) + static_cast<crd::usize>(k);
             const crd::usize yk = static_cast<crd::usize>(y.ext) + static_cast<crd::usize>(k);
-            if (pool[xk] != pool[yk]) { return false; }
+            if (pool[xk] != pool[yk])
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -2004,7 +2339,10 @@ private:
         int       slot = static_cast<int>(key_hash(g, pool) & static_cast<crd::u64>(mask));
         while (table[static_cast<crd::usize>(slot)] >= 0)
         {
-            if (node_equal(nn[static_cast<crd::usize>(table[static_cast<crd::usize>(slot)])], g, pool)) { return table[static_cast<crd::usize>(slot)]; }
+            if (node_equal(nn[static_cast<crd::usize>(table[static_cast<crd::usize>(slot)])], g, pool))
+            {
+                return table[static_cast<crd::usize>(slot)];
+            }
             slot = (slot + 1) & mask;
         }
         const int id = static_cast<int>(nn.size());
@@ -2030,7 +2368,10 @@ private:
 [[nodiscard]] inline bool entry_valid(const KGraph& g, const KEntry& e, const char** why = nullptr)
 {
     const auto fail = [&](const char* reason) {
-        if (why != nullptr) { *why = reason; }
+        if (why != nullptr)
+        {
+            *why = reason;
+        }
         return false;
     };
 
@@ -2041,30 +2382,63 @@ private:
     // mis-built graph, not a harmless extra — it means the author thought they were writing a vertex stage.
     if (stage_writes_position(e.stage))
     {
-        if (!node_ok(e.position)) { return fail("stage must write `position` (clip-space vec4)"); }
-        if (g.node(e.position).type != KType::vec(DType::F32, 4)) { return fail("`position` must be a vec4"); }
+        if (!node_ok(e.position))
+        {
+            return fail("stage must write `position` (clip-space vec4)");
+        }
+        if (g.node(e.position).type != KType::vec(DType::F32, 4))
+        {
+            return fail("`position` must be a vec4");
+        }
     }
-    else if (e.position >= 0) { return fail("stage does not write `position`"); }
+    else if (e.position >= 0)
+    {
+        return fail("stage does not write `position`");
+    }
 
     if (e.frag_depth >= 0)
     {
-        if (!stage_writes_frag_depth(e.stage)) { return fail("only a fragment stage writes `frag_depth`"); }
-        if (!node_ok(e.frag_depth)) { return fail("`frag_depth` names no node"); }
-        if (g.node(e.frag_depth).type != KType::make_scalar(DType::F32)) { return fail("`frag_depth` must be a float"); }
+        if (!stage_writes_frag_depth(e.stage))
+        {
+            return fail("only a fragment stage writes `frag_depth`");
+        }
+        if (!node_ok(e.frag_depth))
+        {
+            return fail("`frag_depth` names no node");
+        }
+        if (g.node(e.frag_depth).type != KType::make_scalar(DType::F32))
+        {
+            return fail("`frag_depth` must be a float");
+        }
     }
 
     if (e.discard_cond >= 0) // B1-b: alpha-test / cutout — a bool the fragment discards on
     {
-        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can `discard`"); }
-        if (!node_ok(e.discard_cond)) { return fail("`discard_cond` names no node"); }
-        if (g.node(e.discard_cond).type != KType::make_scalar(DType::Bool)) { return fail("`discard_cond` must be a bool"); }
+        if (e.stage != KStage::Fragment)
+        {
+            return fail("only a fragment stage can `discard`");
+        }
+        if (!node_ok(e.discard_cond))
+        {
+            return fail("`discard_cond` names no node");
+        }
+        if (g.node(e.discard_cond).type != KType::make_scalar(DType::Bool))
+        {
+            return fail("`discard_cond` must be a bool");
+        }
     }
 
     if (e.early_fragment_tests) // B1-d: force the depth/stencil test before the fragment shader runs
     {
-        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can force `early_fragment_tests`"); }
+        if (e.stage != KStage::Fragment)
+        {
+            return fail("only a fragment stage can force `early_fragment_tests`");
+        }
         // The early test uses the INTERPOLATED depth, so a shader depth write would be meaningless — refuse the combo.
-        if (e.frag_depth >= 0) { return fail("`early_fragment_tests` cannot coexist with a `frag_depth` write"); }
+        if (e.frag_depth >= 0)
+        {
+            return fail("`early_fragment_tests` cannot coexist with a `frag_depth` write");
+        }
     }
     // B1-d: a conservative-depth promise only means something for a shader that actually writes depth.
     if (e.depth_mode != DepthMode::Any && e.frag_depth < 0)
@@ -2074,8 +2448,14 @@ private:
 
     if (e.shading_rate >= 0) // B1-e: per-primitive variable-rate-shading output (gl_PrimitiveShadingRateEXT / SV_ShadingRate)
     {
-        if (!stage_writes_position(e.stage)) { return fail("only a position-writing stage can output a `shading_rate`"); }
-        if (!node_ok(e.shading_rate)) { return fail("`shading_rate` names no node"); }
+        if (!stage_writes_position(e.stage))
+        {
+            return fail("only a position-writing stage can output a `shading_rate`");
+        }
+        if (!node_ok(e.shading_rate))
+        {
+            return fail("`shading_rate` names no node");
+        }
         const DType sr = g.node(e.shading_rate).type.scalar;
         if (g.node(e.shading_rate).type.kind != TKind::Scalar || (sr != DType::I32 && sr != DType::U32))
         {
@@ -2085,12 +2465,27 @@ private:
 
     if (e.storage_write_index >= 0 || e.storage_write_value >= 0) // B1-f: a fragment storage-buffer write
     {
-        if (e.stage != KStage::Fragment) { return fail("only a fragment stage can write the storage buffer"); }
-        if (!node_ok(e.storage_write_index) || !node_ok(e.storage_write_value)) { return fail("`storage_write` names no node"); }
-        if (g.node(e.storage_write_index).type != KType::make_scalar(DType::U32)) { return fail("storage write index must be uint"); }
-        if (g.node(e.storage_write_value).type != KType::make_scalar(DType::U32)) { return fail("storage write value must be uint"); }
+        if (e.stage != KStage::Fragment)
+        {
+            return fail("only a fragment stage can write the storage buffer");
+        }
+        if (!node_ok(e.storage_write_index) || !node_ok(e.storage_write_value))
+        {
+            return fail("`storage_write` names no node");
+        }
+        if (g.node(e.storage_write_index).type != KType::make_scalar(DType::U32))
+        {
+            return fail("storage write index must be uint");
+        }
+        if (g.node(e.storage_write_value).type != KType::make_scalar(DType::U32))
+        {
+            return fail("storage write value must be uint");
+        }
     }
-    if (e.interlock && e.stage != KStage::Fragment) { return fail("only a fragment stage can use `interlock`"); }
+    if (e.interlock && e.stage != KStage::Fragment)
+    {
+        return fail("only a fragment stage can use `interlock`");
+    }
     // REN-39-C1: read-only is a PROMISE (DX12 binds the buffer in shader-read states during an indexed draw) —
     // an entry that stores through it would be undefined, so the combination is refused, never trusted.
     if (e.storage_read_only && (e.storage_write_index >= 0 || e.storage_write_value >= 0))
@@ -2101,21 +2496,48 @@ private:
     // B4: a MESH entry emits `mesh_primitives` triangles; `mesh_prim` is the uvec3 of LOCAL vertex indices for primitive tid.
     if (e.stage == KStage::Mesh)
     {
-        if (e.mesh_vertices == 0U) { return fail("a mesh entry must set mesh_vertices > 0"); }
-        if (e.mesh_primitives == 0U) { return fail("a mesh entry must set mesh_primitives > 0"); }
-        if (!node_ok(e.mesh_prim)) { return fail("a mesh entry must set `mesh_prim` (uvec3 of local vertex indices)"); }
-        if (g.node(e.mesh_prim).type != KType::vec(DType::U32, 3)) { return fail("`mesh_prim` must be a uvec3"); }
+        if (e.mesh_vertices == 0U)
+        {
+            return fail("a mesh entry must set mesh_vertices > 0");
+        }
+        if (e.mesh_primitives == 0U)
+        {
+            return fail("a mesh entry must set mesh_primitives > 0");
+        }
+        if (!node_ok(e.mesh_prim))
+        {
+            return fail("a mesh entry must set `mesh_prim` (uvec3 of local vertex indices)");
+        }
+        if (g.node(e.mesh_prim).type != KType::vec(DType::U32, 3))
+        {
+            return fail("`mesh_prim` must be a uvec3");
+        }
     }
-    else if (e.mesh_prim >= 0 || e.mesh_vertices > 0U) { return fail("`mesh_*` fields are only for a mesh stage"); }
-    if (e.mesh_payload_in && e.stage != KStage::Mesh) { return fail("`mesh_payload_in` is only for a mesh stage"); }
+    else if (e.mesh_prim >= 0 || e.mesh_vertices > 0U)
+    {
+        return fail("`mesh_*` fields are only for a mesh stage");
+    }
+    if (e.mesh_payload_in && e.stage != KStage::Mesh)
+    {
+        return fail("`mesh_payload_in` is only for a mesh stage");
+    }
 
     // B4: a TASK / amplification entry computes `task_emit` (the mesh-workgroup count it launches) + an optional single-uint
     // `task_payload`. It emits NO geometry (no position / out / mesh_*), so it renders nothing itself — it drives the mesh.
     if (e.stage == KStage::Task)
     {
-        if (!node_ok(e.task_emit)) { return fail("a task entry must set `task_emit` (u32 mesh-workgroup count)"); }
-        if (g.node(e.task_emit).type != KType::make_scalar(DType::U32)) { return fail("`task_emit` must be a uint"); }
-        if (e.n_task_payload > static_cast<crd::u32>(KEntry::kMaxTaskPayload)) { return fail("at most 4 payload fields"); }
+        if (!node_ok(e.task_emit))
+        {
+            return fail("a task entry must set `task_emit` (u32 mesh-workgroup count)");
+        }
+        if (g.node(e.task_emit).type != KType::make_scalar(DType::U32))
+        {
+            return fail("`task_emit` must be a uint");
+        }
+        if (e.n_task_payload > static_cast<crd::u32>(KEntry::kMaxTaskPayload))
+        {
+            return fail("at most 4 payload fields");
+        }
         for (crd::u32 i = 0; i < e.n_task_payload; ++i) // every active payload field must be a written uint node
         {
             if (!node_ok(e.task_payload[i]) || g.node(e.task_payload[i]).type != KType::make_scalar(DType::U32))
@@ -2123,16 +2545,28 @@ private:
                 return fail("each `task_payload` field must be a uint");
             }
         }
-        if (e.position >= 0 || e.n_out > 0) { return fail("a task entry emits no geometry (no position/out)"); }
+        if (e.position >= 0 || e.n_out > 0)
+        {
+            return fail("a task entry emits no geometry (no position/out)");
+        }
     }
-    else if (e.task_emit >= 0 || e.n_task_payload > 0U) { return fail("`task_*` fields are only for a task stage"); }
+    else if (e.task_emit >= 0 || e.n_task_payload > 0U)
+    {
+        return fail("`task_*` fields are only for a task stage");
+    }
 
     // B4-tess: a TESSELLATION entry. TessControl (hull) sets the tess levels (float `tess_inner`/`tess_outer`) + passes the
     // control points; TessEval (domain) writes the displaced clip `position` (checked by the position path below).
     if (e.stage == KStage::TessControl)
     {
-        if (e.tess_patch_size == 0U) { return fail("a tess-control entry must set tess_patch_size > 0"); }
-        if (!node_ok(e.tess_inner) || !node_ok(e.tess_outer)) { return fail("a tess-control entry needs tess_inner + tess_outer"); }
+        if (e.tess_patch_size == 0U)
+        {
+            return fail("a tess-control entry must set tess_patch_size > 0");
+        }
+        if (!node_ok(e.tess_inner) || !node_ok(e.tess_outer))
+        {
+            return fail("a tess-control entry needs tess_inner + tess_outer");
+        }
         if (g.node(e.tess_inner).type != KType::make_scalar(DType::F32)
             || g.node(e.tess_outer).type != KType::make_scalar(DType::F32))
         {
@@ -2141,18 +2575,30 @@ private:
     }
     else if (e.stage == KStage::TessEval)
     {
-        if (e.tess_patch_size == 0U) { return fail("a tess-eval entry must set tess_patch_size > 0"); }
+        if (e.tess_patch_size == 0U)
+        {
+            return fail("a tess-eval entry must set tess_patch_size > 0");
+        }
     }
     else if (e.tess_patch_size > 0U || e.tess_inner >= 0 || e.tess_outer >= 0)
     {
         return fail("`tess_*` fields are only for a tessellation stage");
     }
 
-    if (e.n_out < 0 || e.n_out > kMaxStageOutputs) { return fail("output count out of range"); }
+    if (e.n_out < 0 || e.n_out > kMaxStageOutputs)
+    {
+        return fail("output count out of range");
+    }
     for (int i = 0; i < e.n_out; ++i)
     {
-        if (!node_ok(e.out[i].node)) { return fail("output names no node"); }
-        if (e.out[i].location < 0) { return fail("output location is negative"); }
+        if (!node_ok(e.out[i].node))
+        {
+            return fail("output names no node");
+        }
+        if (e.out[i].location < 0)
+        {
+            return fail("output location is negative");
+        }
         // B1-c: an integer VS interpolant cannot be smoothly interpolated — it must be `flat`.
         if (e.stage == KStage::Vertex && requires_flat_interp(g.node(e.out[i].node).type) && e.out[i].interp != Interp::Flat)
         {
@@ -2160,7 +2606,10 @@ private:
         }
         for (int j = 0; j < i; ++j)
         {
-            if (e.out[j].location == e.out[i].location) { return fail("two outputs share one location"); }
+            if (e.out[j].location == e.out[i].location)
+            {
+                return fail("two outputs share one location");
+            }
         }
     }
 
@@ -2181,11 +2630,17 @@ private:
         if (nd.op == KOp::Builtin)
         {
             const auto b = static_cast<KBuiltin>(nd.iidx);
-            if (!builtin_allowed_in(b, e.stage)) { return fail("builtin is not readable in this stage"); }
+            if (!builtin_allowed_in(b, e.stage))
+            {
+                return fail("builtin is not readable in this stage");
+            }
         }
         else if (nd.op == KOp::StageIn)
         {
-            if (e.stage == KStage::Compute) { return fail("a compute stage has no location-indexed inputs"); }
+            if (e.stage == KStage::Compute)
+            {
+                return fail("a compute stage has no location-indexed inputs");
+            }
             // B1-c: an integer FRAGMENT interpolant must be `flat` (a vertex ATTRIBUTE is not interpolated, so it is exempt).
             if (e.stage == KStage::Fragment && requires_flat_interp(nd.type)
                 && static_cast<Interp>(nd.dset) != Interp::Flat)

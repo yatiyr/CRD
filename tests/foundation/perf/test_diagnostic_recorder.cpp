@@ -57,7 +57,9 @@ TEST_CASE("recorder: record then snapshot preserves order", "[diag][recorder]")
     REQUIRE(r.init(8U));
 
     for (crd::u32 i = 0; i < 5U; ++i)
+    {
         r.record(ev(100U + i, i));
+    }
 
     CHECK(r.count() == 5U);
     CHECK(r.total_recorded() == 5U);
@@ -66,7 +68,9 @@ TEST_CASE("recorder: record then snapshot preserves order", "[diag][recorder]")
     r.snapshot(snap);
     REQUIRE(snap.size() == 5U);
     for (crd::u32 i = 0; i < 5U; ++i)
+    {
         CHECK(snap[i].code == 100U + i); // oldest first
+    }
     r.shutdown();
 }
 
@@ -76,7 +80,9 @@ TEST_CASE("recorder: a full ring overwrites the oldest and keeps valid records",
     REQUIRE(r.init(4U));
 
     for (crd::u32 i = 0; i < 10U; ++i) // 10 into a 4-slot ring
+    {
         r.record(ev(i, i));
+    }
 
     CHECK(r.count() == 4U);
     CHECK(r.total_recorded() == 10U);
@@ -104,12 +110,18 @@ TEST_CASE("recorder: concurrent record is safe and bounded", "[diag][recorder][s
     cont::Array<std::thread> threads;
     threads.reserve(kThreads);
     for (crd::u32 t = 0; t < kThreads; ++t)
+    {
         threads.emplace_back([&r, t]() {
             for (crd::u32 i = 0; i < kEach; ++i)
+            {
                 r.record(ev(t * 1000U + (i & 0xFFU), i));
+            }
         });
+    }
     for (auto& th : threads)
+    {
         th.join();
+    }
 
     CHECK(r.count() == 64U);                              // bounded to capacity
     CHECK(r.total_recorded() == kThreads * kEach);        // every record accounted for

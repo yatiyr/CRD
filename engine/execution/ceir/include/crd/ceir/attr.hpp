@@ -141,26 +141,41 @@ struct AttrValue
 
 [[nodiscard]] inline bool attr_spans_eq(containers::ConstSpan<AttrId> a, containers::ConstSpan<AttrId> b) noexcept
 {
-    if (a.size() != b.size()) { return false; }
+    if (a.size() != b.size())
+    {
+        return false;
+    }
     for (usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] != b[i]) { return false; }
+        if (a[i] != b[i])
+        {
+            return false;
+        }
     }
     return true;
 }
 [[nodiscard]] inline bool attr_keys_eq(containers::ConstSpan<containers::StringView> a,
                                        containers::ConstSpan<containers::StringView> b) noexcept
 {
-    if (a.size() != b.size()) { return false; }
+    if (a.size() != b.size())
+    {
+        return false;
+    }
     for (usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] != b[i]) { return false; }
+        if (a[i] != b[i])
+        {
+            return false;
+        }
     }
     return true;
 }
 [[nodiscard]] inline bool operator==(const AttrValue& a, const AttrValue& b) noexcept
 {
-    if (a.kind != b.kind) { return false; }
+    if (a.kind != b.kind)
+    {
+        return false;
+    }
     switch (a.kind)
     {
     case AttrKind::Int:       return a.i == b.i;
@@ -204,18 +219,30 @@ struct AttrValue
         return union0 && s0 && keys0 && pay0 && cls0 && wt0;
     case AttrKind::Dict: // `keys` + `elems` used, parallel + keys strictly byte-order sorted (dedup + hash stability)
     {
-        if (!(union0 && s0 && pay0 && cls0 && wt0)) { return false; }
-        if (v.keys.size() != v.elems.size()) { return false; }
+        if (!(union0 && s0 && pay0 && cls0 && wt0))
+        {
+            return false;
+        }
+        if (v.keys.size() != v.elems.size())
+        {
+            return false;
+        }
         for (usize i = 1; i < v.keys.size(); ++i)
         {
             const containers::StringView p = v.keys[i - 1U];
             const containers::StringView q = v.keys[i];
             const usize                  n = p.size() < q.size() ? p.size() : q.size();
             usize                        k = 0;
-            while (k < n && p[k] == q[k]) { ++k; }
+            while (k < n && p[k] == q[k])
+            {
+                ++k;
+            }
             const bool p_less = (k < n) ? (static_cast<unsigned char>(p[k]) < static_cast<unsigned char>(q[k]))
                                         : (p.size() < q.size());
-            if (!p_less) { return false; } // not strictly increasing ⇒ unsorted or a duplicate key
+            if (!p_less) // not strictly increasing ⇒ unsorted or a duplicate key
+            {
+                return false;
+            }
         }
         return true;
     }

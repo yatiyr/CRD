@@ -78,23 +78,31 @@ ClusterDagCookReport cook_cluster_dag(const crd::f32* positions, crd::u32 vertex
 
     out.packed_clusters.resize(static_cast<crd::usize>(cc) * kClusterGpuWords);
     for (crd::u32 ci = 0; ci < cc; ++ci)
+    {
         pack_cluster(dag.clusters[ci],
                      out.packed_clusters.data() + static_cast<crd::usize>(ci) * kClusterGpuWords);
+    }
 
     out.packed_bvh.resize(static_cast<crd::usize>(bvh_rep.node_count) * kBvhNodeGpuWords);
     for (crd::u32 ni = 0; ni < bvh_rep.node_count; ++ni)
+    {
         pack_bvh_node(bvh.nodes[ni],
                       out.packed_bvh.data() + static_cast<crd::usize>(ni) * kBvhNodeGpuWords);
+    }
 
     out.cluster_vertices.resize(dag.cluster_vertices.size());
     for (crd::usize i = 0; i < dag.cluster_vertices.size(); ++i)
+    {
         out.cluster_vertices[i] = dag.cluster_vertices[i];
+    }
 
     const crd::u32 tri_bytes = static_cast<crd::u32>(dag.cluster_triangles.size());
     const crd::u32 tri_words = (tri_bytes + 3U) / 4U;
     out.cluster_triangles_packed.resize(tri_words);
     for (crd::u32 i = 0; i < tri_words; ++i)
+    {
         out.cluster_triangles_packed[i] = 0U;
+    }
     for (crd::u32 i = 0; i < tri_bytes; ++i)
     {
         const crd::u32 word_idx = i / 4U;
@@ -105,7 +113,9 @@ ClusterDagCookReport cook_cluster_dag(const crd::f32* positions, crd::u32 vertex
 
     out.positions.resize(dag.positions.size());
     for (crd::usize i = 0; i < dag.positions.size(); ++i)
+    {
         out.positions[i] = dag.positions[i];
+    }
 
     out.cluster_count       = cc;
     out.bvh_node_count      = bvh_rep.node_count;

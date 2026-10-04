@@ -31,7 +31,10 @@ TEST_CASE("v16-k: B-spline basis is a partition of unity + analytic derivative =
         f64 db[kNb];
         kan::bspline(x, grid, kNb, kP, b, db);
         f64 sum = 0.0;
-        for (int g = 0; g < kNb; ++g) { sum += b[g]; }
+        for (int g = 0; g < kNb; ++g)
+        {
+            sum += b[g];
+        }
         CHECK_THAT(sum, WithinAbs(1.0, 1e-12)); // partition of unity
         // derivative vs central FD, per basis
         const f64 h = 1e-6;
@@ -39,7 +42,10 @@ TEST_CASE("v16-k: B-spline basis is a partition of unity + analytic derivative =
         f64       bm[kNb];
         kan::bspline(x + h, grid, kNb, kP, bp, nullptr);
         kan::bspline(x - h, grid, kNb, kP, bm, nullptr);
-        for (int g = 0; g < kNb; ++g) { CHECK_THAT(db[g], WithinAbs((bp[g] - bm[g]) / (2.0 * h), 1e-5)); }
+        for (int g = 0; g < kNb; ++g)
+        {
+            CHECK_THAT(db[g], WithinAbs((bp[g] - bm[g]) / (2.0 * h), 1e-5));
+        }
     }
 }
 
@@ -51,15 +57,24 @@ TEST_CASE("v16-k: efficient KAN forward == naive per-edge (bit-identical) + kan_
     kan::make_grid(-2.0, 2.0, kG, kP, grid);
     f64 wb[dout * din];
     f64 ws[dout * din * kNb];
-    for (int i = 0; i < dout * din; ++i) { wb[i] = 0.3 * std::sin(1.0 + i); }
-    for (int i = 0; i < dout * din * kNb; ++i) { ws[i] = 0.2 * std::cos(0.5 + i); }
+    for (int i = 0; i < dout * din; ++i)
+    {
+        wb[i] = 0.3 * std::sin(1.0 + i);
+    }
+    for (int i = 0; i < dout * din * kNb; ++i)
+    {
+        ws[i] = 0.2 * std::cos(0.5 + i);
+    }
     const f64 x[din] = {0.4, -0.6};
 
     f64 ye[dout];
     f64 yn[dout];
     kan::kan_forward(din, dout, kNb, kP, wb, ws, grid, x, ye);
     kan::kan_forward_naive(din, dout, kNb, kP, wb, ws, grid, x, yn);
-    for (int j = 0; j < dout; ++j) { CHECK(ye[j] == yn[j]); } // BIT-identical
+    for (int j = 0; j < dout; ++j) // BIT-identical
+    {
+        CHECK(ye[j] == yn[j]);
+    }
 
     // kan_vjp: scalar loss L = Σ_j c_j y_j ; dL/dparam via vjp == central FD
     const f64 c[dout] = {1.0, -0.5, 0.7};
@@ -72,14 +87,20 @@ TEST_CASE("v16-k: efficient KAN forward == naive per-edge (bit-identical) + kan_
         f64 y[dout];
         kan::kan_forward(din, dout, kNb, kP, wbb, wss, grid, xx, y);
         f64 s = 0.0;
-        for (int j = 0; j < dout; ++j) { s += c[j] * y[j]; }
+        for (int j = 0; j < dout; ++j)
+        {
+            s += c[j] * y[j];
+        }
         return s;
     };
     const f64 hh = 1e-6;
     for (int m = 0; m < dout * din; ++m)
     {
         f64 wp[dout * din];
-        for (int i = 0; i < dout * din; ++i) { wp[i] = wb[i]; }
+        for (int i = 0; i < dout * din; ++i)
+        {
+            wp[i] = wb[i];
+        }
         wp[m] += hh;
         const f64 fp = loss(wp, ws, x);
         wp[m] -= 2 * hh;
@@ -97,7 +118,10 @@ TEST_CASE("v16-k: efficient KAN forward == naive per-edge (bit-identical) + kan_
     for (int m : {0, 17, 40})
     {
         f64 wp[dout * din * kNb];
-        for (int i = 0; i < dout * din * kNb; ++i) { wp[i] = ws[i]; }
+        for (int i = 0; i < dout * din * kNb; ++i)
+        {
+            wp[i] = ws[i];
+        }
         wp[m] += hh;
         const f64 fp = loss(wb, wp, x);
         wp[m] -= 2 * hh;
@@ -131,10 +155,22 @@ TEST_CASE("v16-k: 2-layer KAN fits a coupled target and replays bit-for-bit", "[
         f64 ws1[nh * 2 * kNb];
         f64 wb2[1 * nh];
         f64 ws2[1 * nh * kNb];
-        for (int i = 0; i < nh * 2; ++i) { wb1[i] = 0.1 * std::sin(0.3 + i); }
-        for (int i = 0; i < nh * 2 * kNb; ++i) { ws1[i] = 0.1 * std::cos(0.2 + i); }
-        for (int i = 0; i < nh; ++i) { wb2[i] = 0.1 * std::sin(0.7 + i); }
-        for (int i = 0; i < nh * kNb; ++i) { ws2[i] = 0.1 * std::cos(0.4 + i); }
+        for (int i = 0; i < nh * 2; ++i)
+        {
+            wb1[i] = 0.1 * std::sin(0.3 + i);
+        }
+        for (int i = 0; i < nh * 2 * kNb; ++i)
+        {
+            ws1[i] = 0.1 * std::cos(0.2 + i);
+        }
+        for (int i = 0; i < nh; ++i)
+        {
+            wb2[i] = 0.1 * std::sin(0.7 + i);
+        }
+        for (int i = 0; i < nh * kNb; ++i)
+        {
+            ws2[i] = 0.1 * std::cos(0.4 + i);
+        }
         for (int epoch = 0; epoch < 3000; ++epoch)
         {
             f64 gwb1[nh * 2] = {};
@@ -156,18 +192,45 @@ TEST_CASE("v16-k: 2-layer KAN fits a coupled target and replays bit-for-bit", "[
                 kan::kan_vjp(nh, 1, kNb, kP, wb2, ws2, grid, z, &dy, gwb2, gws2, gz);
                 kan::kan_vjp(2, nh, kNb, kP, wb1, ws1, grid, xs + k * 2, gz, gwb1, gws1, gxdummy);
             }
-            if (epoch == 0) { *loss_first = loss; }
+            if (epoch == 0)
+            {
+                *loss_first = loss;
+            }
             *loss_last = loss;
             const f64 lr = 0.02 / static_cast<f64>(npt);
-            for (int i = 0; i < nh * 2; ++i) { wb1[i] -= lr * gwb1[i]; }
-            for (int i = 0; i < nh * 2 * kNb; ++i) { ws1[i] -= lr * gws1[i]; }
-            for (int i = 0; i < nh; ++i) { wb2[i] -= lr * gwb2[i]; }
-            for (int i = 0; i < nh * kNb; ++i) { ws2[i] -= lr * gws2[i]; }
+            for (int i = 0; i < nh * 2; ++i)
+            {
+                wb1[i] -= lr * gwb1[i];
+            }
+            for (int i = 0; i < nh * 2 * kNb; ++i)
+            {
+                ws1[i] -= lr * gws1[i];
+            }
+            for (int i = 0; i < nh; ++i)
+            {
+                wb2[i] -= lr * gwb2[i];
+            }
+            for (int i = 0; i < nh * kNb; ++i)
+            {
+                ws2[i] -= lr * gws2[i];
+            }
         }
-        for (int i = 0; i < nh * 2; ++i) { wb1o[i] = wb1[i]; }
-        for (int i = 0; i < nh * 2 * kNb; ++i) { ws1o[i] = ws1[i]; }
-        for (int i = 0; i < nh; ++i) { wb2o[i] = wb2[i]; }
-        for (int i = 0; i < nh * kNb; ++i) { ws2o[i] = ws2[i]; }
+        for (int i = 0; i < nh * 2; ++i)
+        {
+            wb1o[i] = wb1[i];
+        }
+        for (int i = 0; i < nh * 2 * kNb; ++i)
+        {
+            ws1o[i] = ws1[i];
+        }
+        for (int i = 0; i < nh; ++i)
+        {
+            wb2o[i] = wb2[i];
+        }
+        for (int i = 0; i < nh * kNb; ++i)
+        {
+            ws2o[i] = ws2[i];
+        }
     };
 
     f64 a1[nh * 2];
@@ -186,5 +249,8 @@ TEST_CASE("v16-k: 2-layer KAN fits a coupled target and replays bit-for-bit", "[
     run(b1, b2, b3, b4, &lf2, &ll2);
     CHECK(ll1 < 0.6 * lf1); // fit the coupled target (loss reduced >40%)
     CHECK(ll1 == ll2);       // bit-identical replay
-    for (int i = 0; i < nh * 2 * kNb; ++i) { CHECK(a2[i] == b2[i]); }
+    for (int i = 0; i < nh * 2 * kNb; ++i)
+    {
+        CHECK(a2[i] == b2[i]);
+    }
 }

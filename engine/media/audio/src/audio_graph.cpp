@@ -26,8 +26,14 @@ namespace
             return inter == crd::hesap::interp::KeyInterp::CubicHermite ? vals[k * elems + 1U]
                                                                         : vals[k * elems];
         };
-        if (crd::time::compare(t, key_time(0)) <= 0) { return key_value(0); }
-        if (crd::time::compare(t, key_time(a.key_count - 1)) >= 0) { return key_value(a.key_count - 1); }
+        if (crd::time::compare(t, key_time(0)) <= 0)
+        {
+            return key_value(0);
+        }
+        if (crd::time::compare(t, key_time(a.key_count - 1)) >= 0)
+        {
+            return key_value(a.key_count - 1);
+        }
         crd::u32 seg = 0;
         for (crd::u32 k = 1; k < a.key_count; ++k)
         {
@@ -71,7 +77,10 @@ namespace
     {
         for (const AudioAutoRec& a : g.automation)
         {
-            if (a.node == node && a.param == static_cast<crd::u8>(param)) { return &a; }
+            if (a.node == node && a.param == static_cast<crd::u8>(param))
+            {
+                return &a;
+            }
         }
         return nullptr;
     }
@@ -83,7 +92,10 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
 {
     const crd::u32 n = static_cast<crd::u32>(graph.nodes.size());
     out.clear();
-    if (n == 0 || n > 256 || graph.out_node >= n || frames <= 0 || bindings.size() < n) { return 0; }
+    if (n == 0 || n > 256 || graph.out_node >= n || frames <= 0 || bindings.size() < n)
+    {
+        return 0;
+    }
     for (crd::u32 i = 0; i < n; ++i) // every Source must be bound — a missing buffer is a refusal, not silence
     {
         if (static_cast<AudioNodeType>(graph.nodes[i].type) == AudioNodeType::Source &&
@@ -97,23 +109,38 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
     crd::u32 indegree[256] = {};
     crd::u32 order[256];
     crd::u32 count = 0;
-    for (const AudioEdgeRec& e : graph.edges) { ++indegree[e.to]; }
+    for (const AudioEdgeRec& e : graph.edges)
+    {
+        ++indegree[e.to];
+    }
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (indegree[i] == 0) { order[count++] = i; }
+        if (indegree[i] == 0)
+        {
+            order[count++] = i;
+        }
     }
     for (crd::u32 head = 0; head < count; ++head)
     {
         for (const AudioEdgeRec& e : graph.edges)
         {
-            if (e.from == order[head] && --indegree[e.to] == 0) { order[count++] = e.to; }
+            if (e.from == order[head] && --indegree[e.to] == 0)
+            {
+                order[count++] = e.to;
+            }
         }
     }
-    if (count != n) { return 0; }
+    if (count != n)
+    {
+        return 0;
+    }
 
     crd::memory::IAllocator* alloc = out.allocator();
     out.resize(static_cast<crd::usize>(frames) * 2U);
-    for (crd::usize i = 0; i < out.size(); ++i) { out[i] = 0.0F; }
+    for (crd::usize i = 0; i < out.size(); ++i)
+    {
+        out[i] = 0.0F;
+    }
 
     // per-node stereo block buses + biquad state (f64, DF2T, per channel)
     constexpr crd::i64                block_cap = 256;
@@ -125,7 +152,10 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
     for (crd::i64 start = 0; start < frames; start += block_cap)
     {
         const crd::i64 len = frames - start < block_cap ? frames - start : block_cap;
-        for (crd::usize i = 0; i < bus.size(); ++i) { bus[i] = 0.0F; }
+        for (crd::usize i = 0; i < bus.size(); ++i)
+        {
+            bus[i] = 0.0F;
+        }
 
         for (crd::u32 oi = 0; oi < n; ++oi)
         {
@@ -136,9 +166,15 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
             // sum inputs (every edge into me) — Mix semantics for every node type
             for (const AudioEdgeRec& e : graph.edges)
             {
-                if (e.to != node_index) { continue; }
+                if (e.to != node_index)
+                {
+                    continue;
+                }
                 const crd::f32* theirs = bus.data() + static_cast<crd::usize>(e.from) * block_cap * 2U;
-                for (crd::i64 i = 0; i < len * 2; ++i) { mine[i] += theirs[i]; }
+                for (crd::i64 i = 0; i < len * 2; ++i)
+                {
+                    mine[i] += theirs[i];
+                }
             }
 
             switch (static_cast<AudioNodeType>(node.type))
@@ -150,7 +186,10 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
             case AudioNodeType::Send:
             {
                 const AudioAutoRec* autom = find_auto(graph, node_index, AudioParam::GainDb);
-                if (autom == nullptr) { apply_gain(mine, len, node.gain_db); }
+                if (autom == nullptr)
+                {
+                    apply_gain(mine, len, node.gain_db);
+                }
                 else // AUTOMATED: a per-sample dB -- the branch the extracted apply_gain deliberately does NOT cover
                 {
                     for (crd::i64 i = 0; i < len; ++i)
@@ -178,7 +217,10 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
         }
 
         const crd::f32* final_bus = bus.data() + static_cast<crd::usize>(graph.out_node) * block_cap * 2U;
-        for (crd::i64 i = 0; i < len * 2; ++i) { out[static_cast<crd::usize>(start) * 2U + i] = final_bus[i]; }
+        for (crd::i64 i = 0; i < len * 2; ++i)
+        {
+            out[static_cast<crd::usize>(start) * 2U + i] = final_bus[i];
+        }
     }
     return frames;
 }

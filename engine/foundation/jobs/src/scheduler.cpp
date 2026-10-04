@@ -51,7 +51,9 @@ bool Scheduler::init(const SchedulerConfig& cfg)
 void Scheduler::shutdown() noexcept
 {
     if (!m_initialized)
+    {
         return;
+    }
 
     m_thread_states.clear();
     m_low_injection.reset();
@@ -183,8 +185,16 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 2. High priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_high_injection->try_pop(job))  { run_job(job); return true; }
-        if (auto opt = me.high.pop())        { run_job(*opt); return true; }
+        if (m_high_injection->try_pop(job))
+        {
+            run_job(job);
+            return true;
+        }
+        if (auto opt = me.high.pop())
+        {
+            run_job(*opt);
+            return true;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
@@ -199,8 +209,16 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 3. Normal priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_normal_injection->try_pop(job)) { run_job(job); return true; }
-        if (auto opt = me.normal.pop())       { run_job(*opt); return true; }
+        if (m_normal_injection->try_pop(job))
+        {
+            run_job(job);
+            return true;
+        }
+        if (auto opt = me.normal.pop())
+        {
+            run_job(*opt);
+            return true;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
@@ -215,8 +233,16 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
     // 4. Low priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_low_injection->try_pop(job))  { run_job(job); return true; }
-        if (auto opt = me.low.pop())        { run_job(*opt); return true; }
+        if (m_low_injection->try_pop(job))
+        {
+            run_job(job);
+            return true;
+        }
+        if (auto opt = me.low.pop())
+        {
+            run_job(*opt);
+            return true;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
@@ -258,39 +284,63 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
     // 2. High priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_high_injection->try_pop(job)) return job;
-        if (auto opt = me.high.pop()) return *opt;
+        if (m_high_injection->try_pop(job))
+        {
+            return job;
+        }
+        if (auto opt = me.high.pop())
+        {
+            return *opt;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->high.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            {
                 return *opt;
+            }
         }
     }
 
     // 3. Normal priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_normal_injection->try_pop(job)) return job;
-        if (auto opt = me.normal.pop()) return *opt;
+        if (m_normal_injection->try_pop(job))
+        {
+            return job;
+        }
+        if (auto opt = me.normal.pop())
+        {
+            return *opt;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->normal.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            {
                 return *opt;
+            }
         }
     }
 
     // 4. Low priority: injection → local → steal.
     {
         crd::jobs::JobDecl job{};
-        if (m_low_injection->try_pop(job)) return job;
-        if (auto opt = me.low.pop()) return *opt;
+        if (m_low_injection->try_pop(job))
+        {
+            return job;
+        }
+        if (auto opt = me.low.pop())
+        {
+            return *opt;
+        }
         for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
         {
             const crd::u32 peer = (thread_idx + i) % m_config.num_threads;
             if (auto opt = m_thread_states[peer]->low.steal()) // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            {
                 return *opt;
+            }
         }
     }
 
@@ -339,7 +389,9 @@ void Scheduler::wake_all(crd::u32 count)
         return;
     }
     if (count > 0U)
+    {
         m_semaphore.release(count);
+    }
 }
 
 void Scheduler::wake_worker(crd::u32 thread_index) noexcept

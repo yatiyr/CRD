@@ -15,7 +15,10 @@ namespace
 {
 void set_where(crd::containers::String* where, std::string_view w)
 {
-    if (where == nullptr) { return; }
+    if (where == nullptr)
+    {
+        return;
+    }
     where->clear();
     where->append(crd::containers::StringView(w.data(), w.size()));
 }
@@ -70,10 +73,16 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
 {
     out = LodPolicy{};
     crd::toml::parse_result pr = crd::toml::parse(std::string_view(text.data(), text.size()));
-    if (!pr) { return LodCookError::ParseFailed; }
+    if (!pr)
+    {
+        return LodCookError::ParseFailed;
+    }
     crd::toml::node root = std::move(pr).table();
 
-    if (root["schema"].value_or<int64_t>(0) != 1) { return LodCookError::BadSchema; }
+    if (root["schema"].value_or<int64_t>(0) != 1)
+    {
+        return LodCookError::BadSchema;
+    }
     out.boundary_weight = static_cast<crd::f32>(root["boundary_weight"].value_or<double>(1000.0));
     // ⛔ The two ACCEPTANCE tests a generated level has to pass (see LodPolicy): a triangle floor, and a shape
     // test. Both authored, because "still a surface" and "still the object" are properties of the content.
@@ -85,8 +94,14 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
     // artefact it exists to remove.
     out.hysteresis  = static_cast<crd::f32>(root["hysteresis"].value_or<double>(0.15));
     out.dither_band = static_cast<crd::f32>(root["dither_band"].value_or<double>(0.25));
-    if (!(out.hysteresis >= 0.0F) || out.hysteresis > 4.0F) { out.hysteresis = 0.0F; }
-    if (!(out.dither_band >= 0.0F) || out.dither_band > 1.0F) { out.dither_band = 0.0F; }
+    if (!(out.hysteresis >= 0.0F) || out.hysteresis > 4.0F)
+    {
+        out.hysteresis = 0.0F;
+    }
+    if (!(out.dither_band >= 0.0F) || out.dither_band > 1.0F)
+    {
+        out.dither_band = 0.0F;
+    }
     // ⭐⭐ REN-40-C5: octahedral impostors. 0 = disabled (the parity arm). Grid clamped to [2, 16] when
     // non-zero: below 2 there are not enough views to reconstruct a direction, above 16 the atlas is 1024²
     // per tile (a 64-tile atlas at 64 px/tile is already 4096² and 64 MB — the next step is streaming, not a
@@ -96,22 +111,40 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
     out.impostor_tile = static_cast<crd::u32>(root["impostor_tile"].value_or<int64_t>(64));
     if (out.impostor_grid != 0U)
     {
-        if (out.impostor_grid < 2U) { out.impostor_grid = 2U; }
-        if (out.impostor_grid > 16U) { out.impostor_grid = 16U; }
+        if (out.impostor_grid < 2U)
+        {
+            out.impostor_grid = 2U;
+        }
+        if (out.impostor_grid > 16U)
+        {
+            out.impostor_grid = 16U;
+        }
     }
-    if (out.impostor_tile < 8U) { out.impostor_tile = 8U; }
-    if (out.impostor_tile > 128U) { out.impostor_tile = 128U; }
+    if (out.impostor_tile < 8U)
+    {
+        out.impostor_tile = 8U;
+    }
+    if (out.impostor_tile > 128U)
+    {
+        out.impostor_tile = 128U;
+    }
     // ⭐⭐ REN-40-C3: the PER-VIEW BIAS (see LodPolicy) — `view_bias = [camera, cascade0, cascade1, ...]`.
     // ⛔ Every view defaults to 1.0, and a non-positive entry is REFUSED back to 1.0: a bias of 0 would drive the
     // projected height to zero and pin that whole view to the coarsest level — a shadow map that silently drew
     // impostors, which reads as broken shadows rather than as a policy typo.
-    for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb) { out.view_bias[vb] = 1.0F; }
+    for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb)
+    {
+        out.view_bias[vb] = 1.0F;
+    }
     if (const auto* vba = root["view_bias"].as_array())
     {
         crd::u32 vi = 0U;
         for (const auto& node : *vba)
         {
-            if (vi >= kMaxLodLevels) { break; }
+            if (vi >= kMaxLodLevels)
+            {
+                break;
+            }
             const auto v      = static_cast<crd::f32>(node.value_or<double>(1.0));
             out.view_bias[vi] = v > 0.0F ? v : 1.0F;
             ++vi;
@@ -119,14 +152,23 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
     }
 
     const auto* levels = root["level"].as_array();
-    if (levels == nullptr || levels->size() == 0U) { return LodCookError::NoLevels; }
-    if (levels->size() > static_cast<crd::usize>(kMaxLodLevels - 1U)) { return LodCookError::TooManyLevels; }
+    if (levels == nullptr || levels->size() == 0U)
+    {
+        return LodCookError::NoLevels;
+    }
+    if (levels->size() > static_cast<crd::usize>(kMaxLodLevels - 1U))
+    {
+        return LodCookError::TooManyLevels;
+    }
 
     crd::u32 n = 0U;
     for (const auto& node : *levels)
     {
         const auto* t = node.as_table();
-        if (t == nullptr) { continue; }
+        if (t == nullptr)
+        {
+            continue;
+        }
         const auto ratio  = static_cast<crd::f32>((*t)["ratio"].value_or<double>(0.0));
         const auto height = static_cast<crd::f32>((*t)["screen_height"].value_or<double>(0.0));
         char       buf[32]{};
@@ -148,7 +190,10 @@ LodCookError parse_lod_toml(crd::containers::StringView text, LodPolicy& out, cr
         out.screen_height[n] = height;
         ++n;
     }
-    if (n == 0U) { return LodCookError::NoLevels; }
+    if (n == 0U)
+    {
+        return LodCookError::NoLevels;
+    }
     for (crd::u32 i = 1; i < n; ++i)
     {
         if (!(out.screen_height[i] < out.screen_height[i - 1U]))
@@ -189,7 +234,10 @@ void write_lod_toml(const LodPolicy& policy, crd::containers::String& out)
     app(out, "\nview_bias = [");
     for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb)
     {
-        if (vb > 0U) { app(out, ", "); }
+        if (vb > 0U)
+        {
+            app(out, ", ");
+        }
         app_f32(out, policy.view_bias[vb]);
     }
     app(out, "]");
@@ -218,7 +266,10 @@ crd::u64 lod_policy_identity(const LodPolicy& policy) noexcept
     hash_u64(h, policy.impostor_grid);
     hash_u64(h, policy.impostor_tile);
     // ⛔ It changes WHICH LEVEL each view selects, so two policies differing only here are different assets.
-    for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb) { hash_f32(h, policy.view_bias[vb]); }
+    for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb)
+    {
+        hash_f32(h, policy.view_bias[vb]);
+    }
     for (crd::u32 i = 0; i < policy.extra_levels; ++i)
     {
         hash_f32(h, policy.ratio[i]);

@@ -61,9 +61,18 @@ crd::gpu::ComputePipeline* swap_resolve(const ce::Operation* disp, void* user)
 {
     auto* const     s  = static_cast<SwapResolve*>(user);
     const ce::AttrValue kv = s->ctx->attr_value(disp->attr(crd::containers::StringView("kernel")));
-    if (kv.kind != ce::AttrKind::SymbolRef) { return nullptr; }
-    if (kv.s == crd::containers::StringView("radd")) { return s->p_add; }
-    if (kv.s == crd::containers::StringView("rmax")) { return s->p_max; }
+    if (kv.kind != ce::AttrKind::SymbolRef)
+    {
+        return nullptr;
+    }
+    if (kv.s == crd::containers::StringView("radd"))
+    {
+        return s->p_add;
+    }
+    if (kv.s == crd::containers::StringView("rmax"))
+    {
+        return s->p_max;
+    }
     return nullptr;
 }
 
@@ -110,7 +119,11 @@ TEST_CASE("ceir 13z: add CEIR asset on Vulkan == direct CKIR (byte-identical) + 
     gcfg.headless          = true;
     gcfg.enable_validation = true; // the dispatch path must be validation-SILENT, asserted by counters
     auto ctx               = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     gpu::ValidationCapture     capture(*vkctx);
@@ -152,7 +165,12 @@ TEST_CASE("ceir 13z: add CEIR asset on Vulkan == direct CKIR (byte-identical) + 
     float ad[n];
     float bd[n];
     float cd[n];
-    for (int i = 0; i < n; ++i) { ad[i] = a0[i]; bd[i] = b0[i]; cd[i] = 0.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        ad[i] = a0[i];
+        bd[i] = b0[i];
+        cd[i] = 0.0F;
+    }
     float* hd[3] = {ad, bd, cd};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, hd, lens, 3, 1U);
 
@@ -160,7 +178,12 @@ TEST_CASE("ceir 13z: add CEIR asset on Vulkan == direct CKIR (byte-identical) + 
     float ac[n];
     float bc[n];
     float cc[n];
-    for (int i = 0; i < n; ++i) { ac[i] = a0[i]; bc[i] = b0[i]; cc[i] = 0.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        ac[i] = a0[i];
+        bc[i] = b0[i];
+        cc[i] = 0.0F;
+    }
     float* hc[3] = {ac, bc, cc};
     const ceg::ExecuteError err =
         cgt::dispatch_ceir_1wg(cctx, crd::containers::ConstSpan<ceg::LoweredCommand>(cmds.data(), cmds.size()), binds, *pipe,
@@ -168,7 +191,10 @@ TEST_CASE("ceir 13z: add CEIR asset on Vulkan == direct CKIR (byte-identical) + 
 
     CHECK(err == ceg::ExecuteError::None);
     CHECK(std::memcmp(cc, cd, sizeof(cc)) == 0);        // ⭐ CEIR path byte-identical to the direct CKIR path
-    for (int i = 0; i < n; ++i) { CHECK(cc[i] == a0[i] + b0[i]); } // == the CPU oracle (f32 add exact)
+    for (int i = 0; i < n; ++i) // == the CPU oracle (f32 add exact)
+    {
+        CHECK(cc[i] == a0[i] + b0[i]);
+    }
     CHECK(capture.error_count() == 0U);                 // validation-SILENT
 }
 
@@ -180,7 +206,11 @@ TEST_CASE("ceir 13z: reduce CEIR asset on Vulkan == direct CKIR (byte-identical)
     gcfg.headless          = true;
     gcfg.enable_validation = true;
     auto ctx               = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     gpu::ValidationCapture     capture(*vkctx);
@@ -218,14 +248,20 @@ TEST_CASE("ceir 13z: reduce CEIR asset on Vulkan == direct CKIR (byte-identical)
 
     float ind[n];
     float outd[1];
-    for (int i = 0; i < n; ++i) { ind[i] = in0[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        ind[i] = in0[i];
+    }
     outd[0]      = 0.0F;
     float* hd[2] = {ind, outd};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, hd, lens, 2, 1U);
 
     float inc[n];
     float outc[1];
-    for (int i = 0; i < n; ++i) { inc[i] = in0[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        inc[i] = in0[i];
+    }
     outc[0]      = 0.0F;
     float* hc[2] = {inc, outc};
     const ceg::ExecuteError err =
@@ -246,7 +282,11 @@ TEST_CASE("ceir 13z: scan CEIR asset on Vulkan == direct CKIR (byte-identical) +
     gcfg.headless          = true;
     gcfg.enable_validation = true;
     auto ctx               = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     gpu::ValidationCapture     capture(*vkctx);
@@ -314,7 +354,10 @@ TEST_CASE("ceir 13z: scan CEIR asset on Vulkan == direct CKIR (byte-identical) +
     CHECK(err == ceg::ExecuteError::None);
     CHECK(std::memcmp(outc, outd, sizeof(outc)) == 0); // ⭐ CEIR path byte-identical to the direct CKIR path
     CHECK(bsc[0] == bsd[0]);
-    for (int i = 0; i < n; ++i) { CHECK(outc[i] == pref[i]); } // == the inclusive-scan oracle
+    for (int i = 0; i < n; ++i) // == the inclusive-scan oracle
+    {
+        CHECK(outc[i] == pref[i]);
+    }
     CHECK(bsc[0] == total);                                    // bsum[0] == the span total (the free landmine-2 oracle)
     CHECK(capture.error_count() == 0U);                        // validation-SILENT
 }
@@ -326,7 +369,11 @@ TEST_CASE("ceir 13z: a TEXT-authored reduce asset (parsed) executes on Vulkan ==
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     crd::memory::TlsfAllocator alloc(32U << 20U);
@@ -374,7 +421,10 @@ TEST_CASE("ceir 13z: a TEXT-authored reduce asset (parsed) executes on Vulkan ==
     const int lens[2] = {n, 1};
     float     inc[n];
     float     outc[1];
-    for (int i = 0; i < n; ++i) { inc[i] = in0[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        inc[i] = in0[i];
+    }
     outc[0]      = 0.0F;
     float* hc[2] = {inc, outc};
     const ceg::ExecuteError err =
@@ -458,7 +508,11 @@ TEST_CASE("ceir 13z-4: a hot-reloaded reduce asset re-executes on Vulkan add to 
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     crd::memory::TlsfAllocator alloc(32U << 20U);
@@ -508,7 +562,10 @@ TEST_CASE("ceir 13z-4: a hot-reloaded reduce asset re-executes on Vulkan add to 
         REQUIRE(cmds.size() == 1U);
         float in[n];
         float out[1];
-        for (int i = 0; i < n; ++i) { in[i] = static_cast<float>(i); }
+        for (int i = 0; i < n; ++i)
+        {
+            in[i] = static_cast<float>(i);
+        }
         out[0]            = 0.0F;
         float*    hc[2]   = {in, out};
         const int lens[2] = {n, 1};
@@ -543,7 +600,11 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
     gcfg.headless          = true;
     gcfg.enable_validation = true;
     auto ctx               = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vkctx = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     gpu::ValidationCapture     capture(*vkctx);
@@ -563,7 +624,11 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
@@ -595,7 +660,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
         h64[plan.tw_row_re][k]   = f32d(crd::math::cos(a));
         h64[plan.tw_row_im][k]   = f32d(-crd::math::sin(a));
     }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc); // the CPU oracle (mutates h64 -> the spectrum)
 
@@ -623,7 +691,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
         mp[pi].nbind  = plan.passes[pi].nbind;
         mp[pi].access = (plan.passes[pi].nbind == 6) ? "r,r,r,r,w,w" : "r,w";
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
-        for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
+        for (int k = 0; k < plan.passes[pi].nbind; ++k)
+        {
+            mp[pi].bind[k] = plan.passes[pi].bind[k];
+        }
     }
     crd::memory::GrowableTlsfAllocator  croot;
     ce::Context                   cctx(&croot);
@@ -632,7 +703,10 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
     ceg::lower_region(cctx, *asset.block, cmds);
 
     int sizes[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { sizes[b] = plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        sizes[b] = plan.buffers[b].size;
+    }
 
     // run the CEIR path (execute_lowered derives + replays the inter-pass barriers) into h32.
     const ceg::ExecuteError err = cgt::dispatch_ceir_multi(
@@ -644,8 +718,14 @@ TEST_CASE("ceir 13z: a 6-dispatch 2D FFT CEIR asset on Vulkan == CPU oracle (mul
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
     {
-        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     CHECK(badr == 0);
     CHECK(badi == 0);
@@ -673,7 +753,11 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> aref(&alloc);
     crd::containers::Array<crd::f64> acei(&alloc);
     aref.resize(static_cast<crd::usize>(total), 0.0);
@@ -703,7 +787,10 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
         href[plan.tw_row_re][k] = crd::math::cos(a);
         href[plan.tw_row_im][k] = -crd::math::sin(a);
     }
-    for (int i = 0; i < total; ++i) { acei[static_cast<crd::usize>(i)] = aref[static_cast<crd::usize>(i)]; } // identical start
+    for (int i = 0; i < total; ++i) // identical start
+    {
+        acei[static_cast<crd::usize>(i)] = aref[static_cast<crd::usize>(i)];
+    }
 
     // PLAN driver (the independent reference).
     crd::kir_test::run_fft2d_cpu(plan, href, &alloc);
@@ -717,7 +804,10 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
         mp[pi].nbind  = plan.passes[pi].nbind;
         mp[pi].access = (plan.passes[pi].nbind == 6) ? "r,r,r,r,w,w" : "r,w";
         mp[pi].grid   = static_cast<int>(plan.passes[pi].num_workgroups);
-        for (int k = 0; k < plan.passes[pi].nbind; ++k) { mp[pi].bind[k] = plan.passes[pi].bind[k]; }
+        for (int k = 0; k < plan.passes[pi].nbind; ++k)
+        {
+            mp[pi].bind[k] = plan.passes[pi].bind[k];
+        }
     }
     crd::memory::GrowableTlsfAllocator                croot;
     ce::Context                                 cctx(&croot);
@@ -726,10 +816,16 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
     ceg::lower_region(cctx, *asset.block, cmds);
 
     cgt::CpuKernelRef refs[8];
-    for (int pi = 0; pi < plan.npasses; ++pi) { refs[pi] = {plan.passes[pi].graph, plan.passes[pi].entry}; }
+    for (int pi = 0; pi < plan.npasses; ++pi)
+    {
+        refs[pi] = {plan.passes[pi].graph, plan.passes[pi].entry};
+    }
     cgt::CpuMultiResolve cr{asset.dispatches, refs, plan.npasses};
     cgt::CpuBinding      cb[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { cb[b] = {asset.buffers[b], hcei[b], plan.buffers[b].size}; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        cb[b] = {asset.buffers[b], hcei[b], plan.buffers[b].size};
+    }
 
     const bool ok = cgt::execute_lowered_cpu(cctx, crd::containers::ConstSpan<ceg::LoweredCommand>(cmds.data(), cmds.size()),
                                              cgt::resolve_cpu_multi, &cr, cb, plan.nbuffers, &alloc);
@@ -739,7 +835,10 @@ TEST_CASE("ceir 13z-4: the CPU reference executor of the lowered FFT list == run
     int bad = 0;
     for (int i = 0; i < total; ++i)
     {
-        if (acei[static_cast<crd::usize>(i)] != aref[static_cast<crd::usize>(i)]) { ++bad; }
+        if (acei[static_cast<crd::usize>(i)] != aref[static_cast<crd::usize>(i)])
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
 }

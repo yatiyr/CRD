@@ -130,6 +130,8 @@ jobs:
         run: python scripts/check-pins.py
       - name: Generated sources carry their provenance and bytes
         run: python scripts/check-generated.py
+      - name: Allman braces on every control statement
+        run: python scripts/check-allman-braces.py
       - name: License manifest follows the registry
         run: python scripts/gen_license_manifest.py --check
       - name: Build tooling regression checks

@@ -81,7 +81,10 @@ TEST_CASE("REN-40-I4: every cluster appears as exactly one leaf",
 
     crd::containers::Array<crd::u32> seen(&alloc);
     seen.resize(32U);
-    for (crd::u32 i = 0; i < 32U; ++i) seen[i] = 0U;
+    for (crd::u32 i = 0; i < 32U; ++i)
+    {
+        seen[i] = 0U;
+    }
 
     for (crd::u32 ni = 0; ni < report.node_count; ++ni)
     {
@@ -93,7 +96,10 @@ TEST_CASE("REN-40-I4: every cluster appears as exactly one leaf",
             seen[ci] = 1U;
         }
     }
-    for (crd::u32 i = 0; i < 32U; ++i) REQUIRE(seen[i] == 1U);
+    for (crd::u32 i = 0; i < 32U; ++i)
+    {
+        REQUIRE(seen[i] == 1U);
+    }
 }
 
 TEST_CASE("REN-40-I4: internal spheres enclose children",
@@ -111,7 +117,10 @@ TEST_CASE("REN-40-I4: internal spheres enclose children",
     for (crd::u32 ni = 0; ni < report.node_count; ++ni)
     {
         const auto& node = result.nodes[ni];
-        if (node.right == 0xFFFFFFFFU) continue;
+        if (node.right == 0xFFFFFFFFU)
+        {
+            continue;
+        }
 
         REQUIRE(sphere_contains(node, result.nodes[node.left]));
         REQUIRE(sphere_contains(node, result.nodes[node.right]));
@@ -133,17 +142,26 @@ TEST_CASE("REN-40-I4: error fields propagate correctly",
     for (crd::u32 ni = 0; ni < report.node_count; ++ni)
     {
         const auto& node = result.nodes[ni];
-        if (node.right == 0xFFFFFFFFU) continue;
+        if (node.right == 0xFFFFFFFFU)
+        {
+            continue;
+        }
 
         const auto& left  = result.nodes[node.left];
         const auto& right_child = result.nodes[node.right];
 
         crd::f32 child_max_err = left.max_error;
-        if (right_child.max_error > child_max_err) child_max_err = right_child.max_error;
+        if (right_child.max_error > child_max_err)
+        {
+            child_max_err = right_child.max_error;
+        }
         REQUIRE(node.max_error >= child_max_err - 1.0e-6F);
 
         crd::f32 child_min_pe = left.min_parent_error;
-        if (right_child.min_parent_error < child_min_pe) child_min_pe = right_child.min_parent_error;
+        if (right_child.min_parent_error < child_min_pe)
+        {
+            child_min_pe = right_child.min_parent_error;
+        }
         REQUIRE(node.min_parent_error <= child_min_pe + 1.0e-6F);
     }
 }

@@ -75,7 +75,10 @@ TEST_CASE("ceir 8e: the reserved interface catalog names are all distinct", "[ce
     {
         CHECK(ids[i].valid());
         CHECK(ids[i] != CostInterface::kId); // the reserved names don't collide with the live proof interface
-        for (crd::u32 j = i + 1U; j < 7U; ++j) { CHECK(ids[i] != ids[j]); }
+        for (crd::u32 j = i + 1U; j < 7U; ++j)
+        {
+            CHECK(ids[i] != ids[j]);
+        }
     }
 }
 

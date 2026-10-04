@@ -38,7 +38,10 @@ TEST_CASE("crd::math native gap-fills are bit-exact vs std", "[math][select][sca
             CHECK(crd::math::fmax(x, y) == std::fmax(x, y));
             CHECK(crd::math::fmin(x, y) == std::fmin(x, y));
             CHECK(crd::math::fdim(x, y) == std::fdim(x, y));
-            if (y != 0.0) { CHECK(db(crd::math::remainder(x, y)) == db(std::remainder(x, y))); } // bit-exact incl. ties-to-even + −0
+            if (y != 0.0) // bit-exact incl. ties-to-even + −0
+            {
+                CHECK(db(crd::math::remainder(x, y)) == db(std::remainder(x, y)));
+            }
         }
     }
     // NaN handling: fmax/fmin drop a NaN operand (IEEE maxNum/minNum); remainder edge cases.
@@ -71,6 +74,9 @@ TEST_CASE("crd::math native gap-fills are bit-exact vs std", "[math][select][sca
     }
     for (float x : fv)
     {
-        for (float y : fv) { CHECK(crd::math::fmax(x, y) == std::fmax(x, y)); }
+        for (float y : fv)
+        {
+            CHECK(crd::math::fmax(x, y) == std::fmax(x, y));
+        }
     }
 }

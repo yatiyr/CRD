@@ -45,7 +45,9 @@ using detail::append_u64;
 void append_key_str(cont::String& out, const char* key, cont::StringView val, bool leading_comma)
 {
     if (leading_comma)
+    {
         out.push_back(',');
+    }
     out.push_back('"');
     out.append(key);
     out.append("\":\"");
@@ -56,7 +58,9 @@ void append_key_str(cont::String& out, const char* key, cont::StringView val, bo
 void append_key_num(cont::String& out, const char* key, crd::u64 val, bool leading_comma)
 {
     if (leading_comma)
+    {
         out.push_back(',');
+    }
     out.push_back('"');
     out.append(key);
     out.append("\":");
@@ -87,18 +91,24 @@ crd::u64 diagnostic_now_ns() noexcept
 bool policy_admits(const DiagnosticPolicy& p, Severity s) noexcept
 {
     if (is_fatal(s))
+    {
         return true; // required validation is never policy-gated away
+    }
     return static_cast<crd::u8>(s) >= static_cast<crd::u8>(p.min_severity);
 }
 
 PolicyLoadStatus DiagnosticPolicyStore::load(const DiagnosticPolicy& candidate) noexcept
 {
     if (candidate.schema_version != kDiagnosticSchemaVersion)
+    {
         return PolicyLoadStatus::RejectedUnknownVersion;
+    }
 
     if (candidate.max_events == 0U || candidate.max_events > kMaxPolicyEvents ||
         candidate.max_message_bytes == 0U || candidate.max_message_bytes > kMaxPolicyMessageBytes)
+    {
         return PolicyLoadStatus::RejectedOutOfBounds;
+    }
 
     // Explicit generation-wrap guard: never advance past the max or reuse 0.
     if (m_generation == 0xFFFFFFFFU)
@@ -168,20 +178,26 @@ void to_log_line(const DiagnosticEvent& e, cont::String& out)
     out.append(") ");
     out.append(cont::StringView{e.message.c_str(), e.message.size()});
     if (e.message_truncated)
+    {
         out.append(" [truncated]");
+    }
 }
 
 bool register_code_range(cont::StringView module_name, EventCode lo, EventCode hi) noexcept
 {
     if (lo <= kFoundationCodeMax || hi < lo)
+    {
         return false;
+    }
 
     std::lock_guard<std::mutex> guard(registry_mutex());
     cont::Array<CodeRange>&     reg = code_registry();
     for (crd::usize i = 0; i < reg.size(); ++i)
     {
         if (lo <= reg[i].hi && reg[i].lo <= hi) // overlap
+        {
             return false;
+        }
     }
     CodeRange r;
     r.module = cont::String{module_name};
@@ -194,14 +210,18 @@ bool register_code_range(cont::StringView module_name, EventCode lo, EventCode h
 cont::StringView owning_module(EventCode code) noexcept
 {
     if (code <= kFoundationCodeMax)
+    {
         return cont::StringView{"foundation"};
+    }
 
     std::lock_guard<std::mutex> guard(registry_mutex());
     const cont::Array<CodeRange>& reg = code_registry();
     for (crd::usize i = 0; i < reg.size(); ++i)
     {
         if (code >= reg[i].lo && code <= reg[i].hi)
+        {
             return cont::StringView{reg[i].module.c_str(), reg[i].module.size()};
+        }
     }
     return cont::StringView{"unassigned"};
 }
@@ -220,7 +240,9 @@ void set_fatal_invariant_handler(FatalInvariantHandler handler) noexcept
 void check_invariant(bool cond, EventCode code, SourceIdentity src, cont::StringView message)
 {
     if (cond)
+    {
         return;
+    }
 
     // Build the event with a default (bounded) policy view -- no store is threaded here because a
     // fatal invariant must fire even before any policy is loaded.

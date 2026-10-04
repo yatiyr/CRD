@@ -35,7 +35,10 @@ namespace fs = crd::platform::fs;
     if (out.size() > 0U)
     {
         const char last = out.data()[out.size() - 1U];
-        if (last != '/' && last != '\\') { out.append("/"); }
+        if (last != '/' && last != '\\')
+        {
+            out.append("/");
+        }
     }
     out.append(file_name);
     return out;
@@ -43,7 +46,10 @@ namespace fs = crd::platform::fs;
 
 [[nodiscard]] bool ensure_dir(crd::containers::StringView dir) noexcept
 {
-    if (dir.empty()) { return true; }
+    if (dir.empty())
+    {
+        return true;
+    }
     return fs::create_directories(fs::Path(dir));
 }
 

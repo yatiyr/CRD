@@ -68,9 +68,17 @@ struct alignas(32) Vec8i
         vst1q_s32(lo_buf, lo.v);
         vst1q_s32(hi_buf, hi.v);
     #else
-        for (int j = 0; j < 4; ++j) { lo_buf[j] = lo.v[j]; hi_buf[j] = hi.v[j]; }
+        for (int j = 0; j < 4; ++j)
+        {
+            lo_buf[j] = lo.v[j];
+            hi_buf[j] = hi.v[j];
+        }
     #endif
-        for (int j = 0; j < 4; ++j) { tmp[j] = lo_buf[j]; tmp[j + 4] = hi_buf[j]; }
+        for (int j = 0; j < 4; ++j)
+        {
+            tmp[j] = lo_buf[j];
+            tmp[j + 4] = hi_buf[j];
+        }
 #endif
         return tmp[i];
     }

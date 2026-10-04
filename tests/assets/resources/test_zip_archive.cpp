@@ -24,11 +24,17 @@ void wr16(crd::containers::Array<crd::u8>& b, crd::u16 v)
 }
 void wr32(crd::containers::Array<crd::u8>& b, crd::u32 v)
 {
-    for (crd::u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 void wr64(crd::containers::Array<crd::u8>& b, crd::u64 v)
 {
-    for (crd::u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 64U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 } // namespace
 
@@ -39,7 +45,10 @@ TEST_CASE("zip: write -> read round-trip, deflate + stored, deterministic", "[re
 
     // entry 1: highly compressible (deflate WILL shrink it); entry 2: 4 random-ish bytes (stored — deflate can't win)
     crd::containers::Array<crd::u8> big(&alloc);
-    for (crd::u32 i = 0; i < 4096U; ++i) { big.push_back(static_cast<crd::u8>(i % 7U)); }
+    for (crd::u32 i = 0; i < 4096U; ++i)
+    {
+        big.push_back(static_cast<crd::u8>(i % 7U));
+    }
     const crd::u8 tiny[4] = {0xDEU, 0xADU, 0xBEU, 0xEFU};
 
     const auto build = [&]() {
@@ -115,8 +124,14 @@ TEST_CASE("zip: Zip64 READ -- sentinel fields resolve through the 0x0001 extra +
     wr32(z, static_cast<crd::u32>(plen));
     wr16(z, static_cast<crd::u16>(name_len));
     wr16(z, 0U); // extra len
-    for (crd::usize i = 0; i < name_len; ++i) { z.push_back(static_cast<crd::u8>(name[i])); }
-    for (crd::usize i = 0; i < plen; ++i) { z.push_back(static_cast<crd::u8>(payload[i])); }
+    for (crd::usize i = 0; i < name_len; ++i)
+    {
+        z.push_back(static_cast<crd::u8>(name[i]));
+    }
+    for (crd::usize i = 0; i < plen; ++i)
+    {
+        z.push_back(static_cast<crd::u8>(payload[i]));
+    }
 
     const crd::u64 cdir_off = z.size();
     // central record: sizes AND local offset all sentinel -> the 0x0001 extra carries the truth
@@ -137,7 +152,10 @@ TEST_CASE("zip: Zip64 READ -- sentinel fields resolve through the 0x0001 extra +
     wr16(z, 0U);           // internal attrs
     wr32(z, 0U);           // external attrs
     wr32(z, 0xFFFFFFFFU);  // local offset sentinel
-    for (crd::usize i = 0; i < name_len; ++i) { z.push_back(static_cast<crd::u8>(name[i])); }
+    for (crd::usize i = 0; i < name_len; ++i)
+    {
+        z.push_back(static_cast<crd::u8>(name[i]));
+    }
     wr16(z, 0x0001U); // the Zip64 extra: uncompressed, compressed, local offset (spec order)
     wr16(z, 24U);
     wr64(z, plen);
@@ -182,7 +200,10 @@ TEST_CASE("zip: Zip64 READ -- sentinel fields resolve through the 0x0001 extra +
 
     // a sentinel central record WITHOUT the 0x0001 extra is a structure violation, not a quiet zero-size entry
     crd::containers::Array<crd::u8> bad(&alloc);
-    for (crd::usize i = 0; i < z.size(); ++i) { bad.push_back(z[i]); }
+    for (crd::usize i = 0; i < z.size(); ++i)
+    {
+        bad.push_back(z[i]);
+    }
     bad[static_cast<crd::usize>(cdir_off) + 46U + name_len] = 0x02U; // corrupt the extra id (0x0001 -> 0x0002)
     res::ZipReader rb(&alloc);
     CHECK(rb.open(crd::containers::ConstSpan<crd::u8>(bad.data(), bad.size())) == res::ZipError::Malformed);

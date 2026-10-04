@@ -90,7 +90,10 @@ MortonRadixGpuPipeline::MortonRadixGpuPipeline(crd::gpu::IComputeContext&   ctx,
     impl.histogram = build_pipeline(ctx, shader_dir, sv("radix_sort_histogram"), 2, sizeof(HistogramPushConstants));
     impl.scan      = build_pipeline(ctx, shader_dir, sv("radix_sort_scan"), 2, sizeof(ScanPushConstants));
     impl.scatter   = build_pipeline(ctx, shader_dir, sv("radix_sort_scatter"), 3, sizeof(ScatterPushConstants));
-    if (impl.init == nullptr || impl.histogram == nullptr || impl.scan == nullptr || impl.scatter == nullptr) { return; }
+    if (impl.init == nullptr || impl.histogram == nullptr || impl.scan == nullptr || impl.scatter == nullptr)
+    {
+        return;
+    }
 
     impl.valid = true;
 }
@@ -110,8 +113,14 @@ MortonRadixGpuPipeline::dispatch_radix_sort(
     crd::memory::IAllocator* alloc) noexcept
 {
     crd::containers::Array<MortonPair<crd::u32>> out(alloc);
-    if (!is_valid()) { return out; }
-    if (codes.empty()) { return out; }
+    if (!is_valid())
+    {
+        return out;
+    }
+    if (codes.empty())
+    {
+        return out;
+    }
 
     const crd::u32 count = static_cast<crd::u32>(codes.size());
     CRD_ASSERT_MSG(count <= kRadixMaxItems,
@@ -147,7 +156,10 @@ MortonRadixGpuPipeline::dispatch_radix_sort(
         std::memcpy(dst, codes.data(), codes_bytes);
         codes_staging->unmap();
     }
-    else { return out; }
+    else
+    {
+        return out;
+    }
 
     using A = crd::gpu::ComputeAccess;
     auto& rec = ctx.begin();

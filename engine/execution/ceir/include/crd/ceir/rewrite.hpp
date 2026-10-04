@@ -25,8 +25,14 @@ struct RewritePattern
 // rewrites while iterating is the iterator-invalidation trap whose solution IS the reserved CEIR-26 driver.
 [[nodiscard]] inline bool try_apply(const RewritePattern& p, Context& ctx, Operation& op)
 {
-    if (p.match == nullptr || !p.match(ctx, op)) { return false; }
-    if (p.rewrite != nullptr) { p.rewrite(ctx, op); }
+    if (p.match == nullptr || !p.match(ctx, op))
+    {
+        return false;
+    }
+    if (p.rewrite != nullptr)
+    {
+        p.rewrite(ctx, op);
+    }
     return true;
 }
 
@@ -56,8 +62,14 @@ public:
         {
             if (m_rules[i].kind == op.kind())
             {
-                if (m_rules[i].legality == Legality::Legal) { return true; }
-                if (m_rules[i].legality == Legality::Illegal) { return false; }
+                if (m_rules[i].legality == Legality::Legal)
+                {
+                    return true;
+                }
+                if (m_rules[i].legality == Legality::Illegal)
+                {
+                    return false;
+                }
                 return m_rules[i].dynamic == nullptr || m_rules[i].dynamic(ctx, op); // Dynamic
             }
         }

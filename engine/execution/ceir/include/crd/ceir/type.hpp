@@ -158,7 +158,10 @@ struct DimMismatch
 {
     for (u8 i = 0; i < static_cast<u8>(kQuantityBases); ++i)
     {
-        if (a.exp[i] != b.exp[i]) { return DimMismatch{false, i}; }
+        if (a.exp[i] != b.exp[i])
+        {
+            return DimMismatch{false, i};
+        }
     }
     return DimMismatch{true, 0U};
 }
@@ -177,7 +180,10 @@ struct DimArith
     {
         const i32 sum = subtract ? (static_cast<i32>(a.exp[i]) - static_cast<i32>(b.exp[i]))
                                  : (static_cast<i32>(a.exp[i]) + static_cast<i32>(b.exp[i]));
-        if (sum > 127 || sum < -128) { return DimArith{false, {}}; } // i8 overflow
+        if (sum > 127 || sum < -128) // i8 overflow
+        {
+            return DimArith{false, {}};
+        }
         r.dim.exp[i] = static_cast<i8>(sum);
     }
     r.ok = true;
@@ -269,11 +275,17 @@ struct Type
     }
     for (usize i = 0; i < a.members.size(); ++i)
     {
-        if (a.members[i] != b.members[i]) { return false; }
+        if (a.members[i] != b.members[i])
+        {
+            return false;
+        }
     }
     for (usize i = 0; i < a.labels.size(); ++i)
     {
-        if (a.labels[i] != b.labels[i]) { return false; }
+        if (a.labels[i] != b.labels[i])
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -351,10 +363,16 @@ struct Type
 // contract. ⛔ Default `fkind` is F32 (=2), NOT 0. Subsumes well-formedness (arity/parity) first.
 [[nodiscard]] inline bool type_is_canonical(const Type& t) noexcept
 {
-    if (!type_is_well_formed(t)) { return false; }
+    if (!type_is_well_formed(t))
+    {
+        return false;
+    }
     // ⛔ CEIR-8a: the type-class fields are Extern-ONLY — junk on any other kind prints identically to the real type but
     // interns as a DISTINCT id (equality includes type_class), the exact "prints-but-differs" hazard this check guards.
-    if (t.kind != TypeKind::Extern && (t.type_class.valid() || t.type_class_version != 0U)) { return false; }
+    if (t.kind != TypeKind::Extern && (t.type_class.valid() || t.type_class_version != 0U))
+    {
+        return false;
+    }
     const bool scalars_default = !t.is_signed && t.fkind == FloatKind::F32 && t.count == 0U && t.cols == 0U;
     switch (t.kind)
     {
@@ -400,7 +418,10 @@ struct Type
         return scalars_default;
     case TypeKind::Dim: // cols = DimKind; Static uses count, Symbolic uses name (and must NOT be the reserved "dyn")
     {
-        if (t.is_signed || t.fkind != FloatKind::F32) { return false; }
+        if (t.is_signed || t.fkind != FloatKind::F32)
+        {
+            return false;
+        }
         switch (static_cast<DimKind>(t.cols))
         {
         case DimKind::Static: return t.name.empty();

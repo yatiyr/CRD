@@ -170,8 +170,14 @@ struct SceneConfig
 inline void run_kernel(const SceneConfig& sc, kir::KGraph& g, const kir::KEntry& e, kir::KernelBuffer* bufs, int nbufs,
                        crd::u32 groups, crd::memory::IAllocator& scratch)
 {
-    if (sc.dispatch != nullptr) { sc.dispatch(sc.dispatch_ctx, g, e, bufs, nbufs, groups); }
-    else { kir::eval_cpu_kernel(g, e, bufs, nbufs, e.local_size[0], &scratch, groups); }
+    if (sc.dispatch != nullptr)
+    {
+        sc.dispatch(sc.dispatch_ctx, g, e, bufs, nbufs, groups);
+    }
+    else
+    {
+        kir::eval_cpu_kernel(g, e, bufs, nbufs, e.local_size[0], &scratch, groups);
+    }
 }
 
 struct Stats
@@ -188,11 +194,17 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
 {
     std::FILE* f = nullptr;
 #ifdef _MSC_VER
-    if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC treats the deprecated fopen as an error under /WX
+    if (fopen_s(&f, path, "wb") != 0) // MSVC treats the deprecated fopen as an error under /WX
+    {
+        f = nullptr;
+    }
 #else
     f = std::fopen(path, "wb");
 #endif
-    if (f == nullptr) { return; }
+    if (f == nullptr)
+    {
+        return;
+    }
     const int     rowsz  = ((w * 3 + 3) / 4) * 4;
     const int     imgsz  = rowsz * h;
     const int     filesz = 54 + imgsz;
@@ -224,8 +236,14 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
             {
                 double v = rgb[static_cast<crd::usize>(y) * static_cast<crd::usize>(w) * 3U
                                + static_cast<crd::usize>(x) * 3U + static_cast<crd::usize>(2 - c)]; // BGR
-                if (v < 0.0) { v = 0.0; }
-                if (v > 1.0) { v = 1.0; }
+                if (v < 0.0)
+                {
+                    v = 0.0;
+                }
+                if (v > 1.0)
+                {
+                    v = 1.0;
+                }
                 px[c] = static_cast<unsigned char>(crd::math::lround(v * 255.0));
             }
             std::fwrite(px, 1, 3, f);
@@ -268,15 +286,26 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
     fdep.resize(npix, 0.0);
     for (crd::usize p = 0; p < npix; ++p)
     {
-        for (int c = 0; c < 3; ++c) { fcol[p * 3U + uz(c)] = img[p * 3U + uz(c)]; }
+        for (int c = 0; c < 3; ++c)
+        {
+            fcol[p * 3U + uz(c)] = img[p * 3U + uz(c)];
+        }
         const bool hashair = zbuf[p] < 1.0e29;
         fdep[p]            = hashair ? zbuf[p] : 1.0e3;
         const V3d    tw    = {gtan[p * 3U + 0U], gtan[p * 3U + 1U], gtan[p * 3U + 2U]};
         double       tsx   = dot(tw, rgt);
         double       tsy   = dot(tw, up);
         const double tl    = crd::math::sqrt(tsx * tsx + tsy * tsy);
-        if (!hashair || tl < 1.0e-9) { tsx = 1.0; tsy = 0.0; }
-        else { tsx /= tl; tsy /= tl; }
+        if (!hashair || tl < 1.0e-9)
+        {
+            tsx = 1.0;
+            tsy = 0.0;
+        }
+        else
+        {
+            tsx /= tl;
+            tsy /= tl;
+        }
         ftan[p * 2U + 0U] = tsx;
         ftan[p * 2U + 1U] = tsy;
     }
@@ -293,7 +322,10 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
             // Background pixels all carry the same far depth, so the guard lets them gather ONLY each other - and the
             // sky is a smooth gradient, so a normalised symmetric kernel returns what was already there. Skipping is
             // equivalent, not an approximation, and it is ~5x of the filter's cost at this coverage.
-            if (fdep[p] > 9.0e2) { continue; }
+            if (fdep[p] > 9.0e2)
+            {
+                continue;
+            }
             const double tsx_p = ftan[p * 2U + 0U];
             const double     tsy_p = ftan[p * 2U + 1U];
             double           acc[3] = {0.0, 0.0, 0.0};
@@ -304,9 +336,15 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
                 {
                     const int qx = x + dx;
                     const int qy = y + dy;
-                    if (qx < 0 || qx >= rw || qy < 0 || qy >= rh) { continue; }
+                    if (qx < 0 || qx >= rw || qy < 0 || qy >= rh)
+                    {
+                        continue;
+                    }
                     const crd::usize q = uz(qy) * uz(rw) + uz(qx);
-                    if (crd::math::abs(fdep[q] - fdep[p]) >= fcfg.depth_reject) { continue; }
+                    if (crd::math::abs(fdep[q] - fdep[p]) >= fcfg.depth_reject)
+                    {
+                        continue;
+                    }
                     const double dpar  = static_cast<double>(dx) * tsx_p + static_cast<double>(dy) * tsy_p;
                     const double dperp = static_cast<double>(dx) * (-tsy_p) + static_cast<double>(dy) * tsx_p;
                     double       cd2   = 0.0;
@@ -316,7 +354,10 @@ inline void write_bmp(const char* path, int w, int h, const crd::containers::Arr
                         cd2 += d * d;
                     }
                     const double w = crd::math::exp(-(dpar * dpar * isp + dperp * dperp * isq)) * crd::math::exp(-cd2 * isc);
-                    for (int c = 0; c < 3; ++c) { acc[c] += w * fcol[q * 3U + uz(c)]; }
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        acc[c] += w * fcol[q * 3U + uz(c)];
+                    }
                     wsum += w;
                 }
             }
@@ -449,12 +490,21 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         {
             const crd::usize so = (uz(si) * uz(npts) + uz(j)) * 6U;
             const crd::usize go = (uz(si) * uz(npts) + uz(j)) * 3U;
-            for (int c = 0; c < 3; ++c) { tng[go + uz(c)] = pos[so + 3U + uz(c)]; }
-            for (int c = 0; c < 3; ++c) { pos_x[go + uz(c)] = pos[so + uz(c)]; }
+            for (int c = 0; c < 3; ++c)
+            {
+                tng[go + uz(c)] = pos[so + 3U + uz(c)];
+            }
+            for (int c = 0; c < 3; ++c)
+            {
+                pos_x[go + uz(c)] = pos[so + uz(c)];
+            }
             wpar[uz(si) * uz(npts) + uz(j)] = static_cast<double>(j) / static_cast<double>(npts - 1);
         }
     }
-    for (crd::usize i = 0; i < pos_x.size(); ++i) { pos[i] = pos_x[i]; }
+    for (crd::usize i = 0; i < pos_x.size(); ++i)
+    {
+        pos[i] = pos_x[i];
+    }
     pos.resize(uz(strand_count) * uz(npts) * 3U, 0.0);
 
 
@@ -481,7 +531,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     const auto project = [&](V3d p, double& sx, double& sy, double& depth) {
         const V3d d = p - eye;
         depth       = dot(d, fwd);
-        if (depth < 1.0e-3) { return false; }
+        if (depth < 1.0e-3)
+        {
+            return false;
+        }
         sx = (dot(d, rgt) / depth) * flen;
         sy = (dot(d, up) / depth) * flen;
         sx = (sx * 0.5 + 0.5) * rw;
@@ -516,9 +569,15 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const double bq = 2.0 * dot(o, d);
                 const double c  = dot(o, o) - 1.0;
                 const double di = bq * bq - 4.0 * a * c;
-                if (di <= 0.0) { continue; }
+                if (di <= 0.0)
+                {
+                    continue;
+                }
                 const double t = (-bq - crd::math::sqrt(di)) / (2.0 * a);
-                if (t <= 1.0e-3) { continue; }
+                if (t <= 1.0e-3)
+                {
+                    continue;
+                }
                 const V3d wp = eye + rd * t;
                 const V3d n  = norm(V3d{(wp.x - hc.x) / (hr.x * hr.x), (wp.y - hc.y) / (hr.y * hr.y),
                                        (wp.z - hc.z) / (hr.z * hr.z)});
@@ -550,7 +609,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             double           x1 = 0.0;
             double           y1 = 0.0;
             double           d1 = 0.0;
-            if (!project(p0, x0, y0, d0) || !project(p1, x1, y1, d1)) { continue; }
+            if (!project(p0, x0, y0, d0) || !project(p1, x1, y1, d1))
+            {
+                continue;
+            }
             const int steps = static_cast<int>(crd::math::abs(x1 - x0) + crd::math::abs(y1 - y0)) + 2;
             for (int t = 0; t <= steps; ++t)
             {
@@ -575,19 +637,34 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                     {
                         const int ix = bx + qx;
                         const int iy = by + qy;
-                        if (ix < 0 || ix >= rw || iy < 0 || iy >= rh) { continue; }
+                        if (ix < 0 || ix >= rw || iy < 0 || iy >= rh)
+                        {
+                            continue;
+                        }
                         const double bw = (qx == 0 ? 1.0 - tx : tx) * (qy == 0 ? 1.0 - ty : ty);
-                        if (bw < 1.0e-4) { continue; }
+                        if (bw < 1.0e-4)
+                        {
+                            continue;
+                        }
                         const crd::usize pi = uz(iy) * uz(rw) + uz(ix);
-                        if (dz >= zhead[pi]) { continue; } // occluded by the scalp — contributes neither colour nor alpha
+                        if (dz >= zhead[pi]) // occluded by the scalp — contributes neither colour nor alpha
+                        {
+                            continue;
+                        }
                         // Coverage accrues from EVERY fragment, including ones the depth test discards: an occluded
                         // strand still blocks light through this pixel. 1-prod(1-a) is order-independent.
                         cov[pi] = cov[pi] + (1.0 - cov[pi]) * ac * bw;
-                        if (dz >= zbuf[pi]) { continue; }
+                        if (dz >= zbuf[pi])
+                        {
+                            continue;
+                        }
                         zbuf[pi] = dz;
                         gid[pi]  = si;
                         gw[pi]   = wpar[uz(si) * uz(npts) + uz(j)] + (1.0 / npts) * a;
-                        for (int c = 0; c < 3; ++c) { gtan[pi * 3U + uz(c)] = tng[o0 + uz(c)]; }
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            gtan[pi * 3U + uz(c)] = tng[o0 + uz(c)];
+                        }
                     }
                 }
             }
@@ -595,10 +672,19 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     }
 
     Array<int> pix(&alloc);
-    for (crd::usize i = 0; i < npix; ++i) { if (gid[i] >= 0) { pix.push_back(static_cast<int>(i)); } }
+    for (crd::usize i = 0; i < npix; ++i)
+    {
+        if (gid[i] >= 0)
+        {
+            pix.push_back(static_cast<int>(i));
+        }
+    }
     const int nc = static_cast<int>(pix.size());
     st.covered   = nc;
-    if (nc == 0) { return st; }
+    if (nc == 0)
+    {
+        return st;
+    }
 
     // ── 2b. LIGHT-VIEW DEEP OPACITY MAP — the self-shadow, and the single biggest cue that a groom has VOLUME. ────────
     struct LightMap
@@ -636,10 +722,22 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const V3d        p{pos[o], pos[o + 1U], pos[o + 2U]};
                 const double     ux = dot(p, lm.lx);
                 const double     uy = dot(p, lm.ly);
-                if (ux < minx) { minx = ux; }
-                if (ux > maxx) { maxx = ux; }
-                if (uy < miny) { miny = uy; }
-                if (uy > maxy) { maxy = uy; }
+                if (ux < minx)
+                {
+                    minx = ux;
+                }
+                if (ux > maxx)
+                {
+                    maxx = ux;
+                }
+                if (uy < miny)
+                {
+                    miny = uy;
+                }
+                if (uy > maxy)
+                {
+                    maxy = uy;
+                }
             }
         }
         const double pad = 0.06 * crd::math::max(maxx - minx, maxy - miny);
@@ -663,7 +761,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         // ⚠ Splat SEGMENTS, not vertices. Depositing only the sampled points leaves the light map a dotted line while the
         //   camera sees a continuous one; pixels landing in the holes come back unshadowed and the frame speckles.
         const auto deposit = [&](int cx, int cy, double dz) {
-            if (cx < 0 || cx >= lmap || cy < 0 || cy >= lmap) { return; }
+            if (cx < 0 || cx >= lmap || cy < 0 || cy >= lmap)
+            {
+                return;
+            }
             const crd::usize c = uz(cy) * uz(lmap) + uz(cx);
             int              n = used[c];
             if (n < lfrag)
@@ -680,9 +781,16 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             for (int k = 0; k < lfrag; ++k)
             {
                 const double d = frag[(c * uz(lfrag) + uz(k)) * 2U + 0U];
-                if (d > wd) { wd = d; worst = k; }
+                if (d > wd)
+                {
+                    wd = d;
+                    worst = k;
+                }
             }
-            if (dz < wd) { frag[(c * uz(lfrag) + uz(worst)) * 2U + 0U] = dz; }
+            if (dz < wd)
+            {
+                frag[(c * uz(lfrag) + uz(worst)) * 2U + 0U] = dz;
+            }
         };
         for (int s = 0; s < strand_count; ++s)
         {
@@ -711,8 +819,14 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             int sat    = 0;
             for (crd::usize c = 0; c < uz(lmap) * uz(lmap); ++c)
             {
-                if (used[c] > 0) { ++filled; }
-                if (used[c] >= lfrag) { ++sat; }
+                if (used[c] > 0)
+                {
+                    ++filled;
+                }
+                if (used[c] >= lfrag)
+                {
+                    ++sat;
+                }
             }
             std::printf("  [DOM] cells=%d occupied=%d saturated=%d (%.1f%%)\n", lmap * lmap, filled, sat,
                         filled > 0 ? 100.0 * static_cast<double>(sat) / static_cast<double>(filled) : 0.0);
@@ -746,8 +860,14 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             lc.n_phi_o   = 24;
             lc.eta       = 1.55;
             lc.sigma_a   = base_sigma.z;
-            if (c == 0) { lc.sigma_a = base_sigma.x; }
-            else if (c == 1) { lc.sigma_a = base_sigma.y; }
+            if (c == 0)
+            {
+                lc.sigma_a = base_sigma.x;
+            }
+            else if (c == 1)
+            {
+                lc.sigma_a = base_sigma.y;
+            }
             lc.beta_m    = look.beta_m;
             lc.beta_n    = look.beta_n;
             lc.alpha_deg = look.alpha;
@@ -770,8 +890,20 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         V3d       lcol  = sc.fill_col;
         double    inten = sc.fill_int;
         LightMap* lmp   = &lm_fil;
-        if (pass == 0) { ldir = sc.key_dir; lcol = sc.key_col; inten = sc.key_int; lmp = &lm_key; }
-        else if (pass == 1) { ldir = sc.rim_dir; lcol = sc.rim_col; inten = sc.rim_int; lmp = &lm_rim; }
+        if (pass == 0)
+        {
+            ldir = sc.key_dir;
+            lcol = sc.key_col;
+            inten = sc.key_int;
+            lmp = &lm_key;
+        }
+        else if (pass == 1)
+        {
+            ldir = sc.rim_dir;
+            lcol = sc.rim_col;
+            inten = sc.rim_int;
+            lmp = &lm_rim;
+        }
         LightMap& lm = *lmp;
         build_lightmap(ldir, lm);
 
@@ -827,12 +959,18 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         hk.alpha_deg = look.alpha;
         for (int c = 0; c < 3; ++c)
         {
-            for (int i = 0; i < nc; ++i) { bin[uz(i) * 6U + 5U] = sig_c[uz(i) * 3U + uz(c)]; }
+            for (int i = 0; i < nc; ++i)
+            {
+                bin[uz(i) * 6U + 5U] = sig_c[uz(i) * 3U + uz(c)];
+            }
             kir::KGraph       gb(&alloc);
             const kir::KEntry eb    = kir::hair::build_hair_bcsdf_kernel(gb, hk);
             kir::KernelBuffer bb[2] = {{bin.data(), nlane * 6, 0, 0}, {bout.data(), nlane, 0, 1}};
             run_kernel(sc, gb, eb, bb, 2, static_cast<crd::u32>(nlane / 64), alloc);
-            for (int i = 0; i < nc; ++i) { fo[uz(i) * 3U + uz(c)] = bout[uz(i)]; }
+            for (int i = 0; i < nc; ++i)
+            {
+                fo[uz(i) * 3U + uz(c)] = bout[uz(i)];
+            }
         }
 
         // ── SELF-SHADOW via the B18-c DOM lookup kernel, 4-tap bilinear PCF (a single nearest-cell tap makes transmittance
@@ -861,10 +999,22 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             {
                 int tx = bx + (k & 1);
                 int ty = by + (k >> 1);
-                if (tx < 0) { tx = 0; }
-                if (tx >= lmap) { tx = lmap - 1; }
-                if (ty < 0) { ty = 0; }
-                if (ty >= lmap) { ty = lmap - 1; }
+                if (tx < 0)
+                {
+                    tx = 0;
+                }
+                if (tx >= lmap)
+                {
+                    tx = lmap - 1;
+                }
+                if (ty < 0)
+                {
+                    ty = 0;
+                }
+                if (ty >= lmap)
+                {
+                    ty = lmap - 1;
+                }
                 const crd::usize qi = (uz(i) * 4U + uz(k)) * 2U;
                 qry[qi + 0U] = static_cast<double>(ty * lmap + tx);
                 qry[qi + 1U] = ld;
@@ -905,14 +1055,23 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const double     tho  = crd::math::asin(sto);
                 double           dphi = crd::math::atan2(dot(ldir, b2), dot(ldir, b1))
                                       - crd::math::atan2(dot(vd, b2), dot(vd, b1));
-                while (dphi > 3.14159265358979323846) { dphi -= 2.0 * 3.14159265358979323846; }
-                while (dphi < -3.14159265358979323846) { dphi += 2.0 * 3.14159265358979323846; }
+                while (dphi > 3.14159265358979323846)
+                {
+                    dphi -= 2.0 * 3.14159265358979323846;
+                }
+                while (dphi < -3.14159265358979323846)
+                {
+                    dphi += 2.0 * 3.14159265358979323846;
+                }
                 // n = fibres crossed on the shadow path. The deep-opacity map's accumulated opacity IS that count scaled by
                 // the per-fragment alpha we deposited, which is exactly what Zinke's Eq 5/8 consume.
                 const double opac = qout[(uz(i) * 4U + 0U) * 2U + 1U];
                 double       nstr = crd::math::max(0.0, opac / crd::math::max(1.0e-6, sc.dom_alpha));
                 nstr = crd::math::min(nstr, sc.ds_max_fibres) * sc.ds_fibre_scale;
-                if (nstr > dbg_nmax) { dbg_nmax = nstr; }
+                if (nstr > dbg_nmax)
+                {
+                    dbg_nmax = nstr;
+                }
                 dbg_nsum += nstr;
                 ++dbg_ncnt;
                 const double thd = 0.5 * (thi - tho); // theta_d, the Marschner difference angle
@@ -925,8 +1084,14 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                 const double fbin = (thd + 0.5 * 3.14159265358979323846) / 3.14159265358979323846
                                     * static_cast<double>(sc.ds_bins);
                 int          lbin = static_cast<int>(fbin);
-                if (lbin < 0) { lbin = 0; }
-                if (lbin > sc.ds_bins - 1) { lbin = sc.ds_bins - 1; }
+                if (lbin < 0)
+                {
+                    lbin = 0;
+                }
+                if (lbin > sc.ds_bins - 1)
+                {
+                    lbin = sc.ds_bins - 1;
+                }
                 for (int c = 0; c < 3; ++c)
                 {
                     const crd::usize o = (uz(i) * 3U + uz(c)) * 6U;
@@ -938,8 +1103,14 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                     dsin[o + 5U] = nstr;
                     double af = ds_lut[uz(c) * uz(sc.ds_bins) * uz(kir::hairms::kLutStride)
                                        + uz(lbin) * uz(kir::hairms::kLutStride) + 0U];
-                    if (af < 1.0e-5) { af = 1.0e-5; }
-                    if (af > 0.999) { af = 0.999; }
+                    if (af < 1.0e-5)
+                    {
+                        af = 1.0e-5;
+                    }
+                    if (af > 0.999)
+                    {
+                        af = 0.999;
+                    }
                     tf_arr[uz(i) * 3U + uz(c)] = 0.7 * crd::math::pow(af, nstr); // d_f = 0.7 (Zinke, all figures)
                 }
             }
@@ -956,7 +1127,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             {
                 for (int i = 0; i < nc; ++i)
                 {
-                    for (int k = 0; k < 6; ++k) { chan_in[uz(i) * 6U + uz(k)] = dsin[(uz(i) * 3U + uz(c)) * 6U + uz(k)]; }
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        chan_in[uz(i) * 6U + uz(k)] = dsin[(uz(i) * 3U + uz(c)) * 6U + uz(k)];
+                    }
                 }
                 kir::KGraph                    gs(&alloc);
                 kir::hairms::DualScatterConfig dcfg;
@@ -993,10 +1167,19 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
             for (int c = 0; c < 3; ++c)
             {
                 double lc = lcol.z;
-                if (c == 0) { lc = lcol.x; }
-                else if (c == 1) { lc = lcol.y; }
+                if (c == 0)
+                {
+                    lc = lcol.x;
+                }
+                else if (c == 1)
+                {
+                    lc = lcol.y;
+                }
                 double       vv = fo[uz(i) * 3U + uz(c)];
-                if (!(vv == vv) || vv < 0.0) { vv = 0.0; } // NaN/negative guard at grazing configurations
+                if (!(vv == vv) || vv < 0.0) // NaN/negative guard at grazing configurations
+                {
+                    vv = 0.0;
+                }
                 if (sc.dual_scatter)
                 {
                     // T_f attenuates the direct lobe; f_back is the LOCAL backscattering BCSDF (Eq 10-15), which IS a
@@ -1005,7 +1188,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                     // both would double-count the same occlusion.
                     const double t_f = tf_arr[uz(i) * 3U + uz(c)];
                     double       fbk = dsout[(uz(i) * 3U + uz(c)) * 2U + 1U];
-                    if (!(fbk == fbk) || fbk < 0.0) { fbk = 0.0; }
+                    if (!(fbk == fbk) || fbk < 0.0)
+                    {
+                        fbk = 0.0;
+                    }
                     shade[uz(i) * 3U + uz(c)] += t_f * (vv + 0.7 * fbk) * ct * lc * inten;
                 }
                 else
@@ -1037,7 +1223,10 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
         {
             if (zhead[p] < 1.0e29)
             {
-                for (int c = 0; c < 3; ++c) { img[p * 3U + uz(c)] = headrgb[p * 3U + uz(c)]; }
+                for (int c = 0; c < 3; ++c)
+                {
+                    img[p * 3U + uz(c)] = headrgb[p * 3U + uz(c)];
+                }
             }
         }
     }
@@ -1045,14 +1234,20 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
     {
         const crd::usize p = uz(pix[uz(i)]);
         const double     a = cov[p] < 1.0 ? cov[p] : 1.0;
-        if (a > 0.05 && a < 0.95) { ++st.partial; }
+        if (a > 0.05 && a < 0.95)
+        {
+            ++st.partial;
+        }
         for (int c = 0; c < 3; ++c)
         {
             const double v = shade[uz(i) * 3U + uz(c)];
             // OVER, not overwrite — this is what antialiases the silhouette. The depth-guarded filter below deliberately
             // refuses to blend hair with background, so if coverage were binary NO pass could ever soften that edge.
             img[p * 3U + uz(c)] = v * a + img[p * 3U + uz(c)] * (1.0 - a);
-            if (v > st.peak) { st.peak = v; }
+            if (v > st.peak)
+            {
+                st.peak = v;
+            }
         }
     }
 
@@ -1085,15 +1280,24 @@ inline Stats render(crd::memory::IAllocator& alloc, const SceneConfig& sc, const
                     for (int sx = 0; sx < ss; ++sx)
                     {
                         const crd::usize sp = uz(y * ss + sy) * uz(rw) + uz(x * ss + sx);
-                        for (int c = 0; c < 3; ++c) { acc[c] += crd::math::pow(img[sp * 3U + uz(c)], 2.2); }
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            acc[c] += crd::math::pow(img[sp * 3U + uz(c)], 2.2);
+                        }
                     }
                 }
                 const crd::usize dp = uz(y) * uz(sc.width) + uz(x);
-                for (int c = 0; c < 3; ++c) { down[dp * 3U + uz(c)] = crd::math::pow(acc[c] * inv, 1.0 / 2.2); }
+                for (int c = 0; c < 3; ++c)
+                {
+                    down[dp * 3U + uz(c)] = crd::math::pow(acc[c] * inv, 1.0 / 2.2);
+                }
             }
         }
         img.resize(uz(sc.width) * uz(sc.height) * 3U, 0.0);
-        for (crd::usize i = 0; i < down.size(); ++i) { img[i] = down[i]; }
+        for (crd::usize i = 0; i < down.size(); ++i)
+        {
+            img[i] = down[i];
+        }
     }
     return st;
 }

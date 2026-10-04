@@ -107,10 +107,16 @@ material_pass = "Forward"
 
 [[nodiscard]] bool bytes_equal(const crd::containers::Array<crd::u8>& a, const crd::containers::Array<crd::u8>& b)
 {
-    if (a.size() != b.size()) { return false; }
+    if (a.size() != b.size())
+    {
+        return false;
+    }
     for (crd::usize i = 0; i < a.size(); ++i)
     {
-        if (a[i] != b[i]) { return false; }
+        if (a[i] != b[i])
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -121,8 +127,14 @@ material_pass = "Forward"
     for (crd::usize i = 0; i < g.passes.size(); ++i)
     {
         crd::usize k = 0;
-        while (n[k] != '\0' && k < g.passes[i].name.size() && g.passes[i].name.c_str()[k] == n[k]) { ++k; }
-        if (n[k] == '\0' && k == g.passes[i].name.size()) { return &g.passes[i]; }
+        while (n[k] != '\0' && k < g.passes[i].name.size() && g.passes[i].name.c_str()[k] == n[k])
+        {
+            ++k;
+        }
+        if (n[k] == '\0' && k == g.passes[i].name.size())
+        {
+            return &g.passes[i];
+        }
     }
     return nullptr;
 }
@@ -274,7 +286,10 @@ TEST_CASE("REN-37.3 binding contract rejects a pass that does not supply a decla
         fc::FramePassDesc* p = nullptr;
         for (crd::usize i = 0; i < g2.passes.size(); ++i)
         {
-            if (fc::pass_str(g2.passes[i], crd::containers::StringView(fc::pp::kTechnique)).size() > 0U) { p = &g2.passes[i]; }
+            if (fc::pass_str(g2.passes[i], crd::containers::StringView(fc::pp::kTechnique)).size() > 0U)
+            {
+                p = &g2.passes[i];
+            }
         }
         REQUIRE(p != nullptr);
         p->reads.pop_back(); // shadow_atlas — the pass no longer declares the atlas it shades with
@@ -287,7 +302,10 @@ TEST_CASE("REN-37.3 binding contract rejects a pass that does not supply a decla
         fc::FrameGraphDesc g3(&alloc);
         REQUIRE(fc::parse_frame_toml(crd::containers::StringView(kGraphWithTechnique), g3, &where)
                 == fc::FrameCookError::Ok);
-        for (crd::usize i = 0; i < g3.resources.size(); ++i) { g3.resources[i].layers = 1U; }
+        for (crd::usize i = 0; i < g3.resources.size(); ++i)
+        {
+            g3.resources[i].layers = 1U;
+        }
         const fc::FramePassDesc* p = find_pass(g3, "forward");
         REQUIRE(p != nullptr);
         CHECK(tc::verify_technique_bindings(tech, g3, *p, &where)
@@ -311,7 +329,10 @@ TEST_CASE("REN-37.2 an AUTHORED technique graph splices and evaluates identicall
         KEntry     se;
         const auto sh = make_shape({1});
         const int  base = src.input(sh, DType::F32); // iidx 0 = kTiBaseColor
-        for (int i = 1; i < technique::kTiEmissive; ++i) { (void)src.input(sh, DType::F32); }
+        for (int i = 1; i < technique::kTiEmissive; ++i)
+        {
+            (void)src.input(sh, DType::F32);
+        }
         const int emis = src.input(sh, DType::F32);  // iidx 4 = kTiEmissive
         const int sum  = src.binary(KOp::Add, base, emis);
         se.stage       = KStage::Fragment;
@@ -328,7 +349,10 @@ TEST_CASE("REN-37.2 an AUTHORED technique graph splices and evaluates identicall
     const int  e    = g.constant(0.5, sh, DType::F32);
 
     technique::TechniqueContext ctx;
-    for (int i = 0; i < technique::kTechFixedInputs; ++i) { ctx.fixed[i] = b; }
+    for (int i = 0; i < technique::kTechFixedInputs; ++i)
+    {
+        ctx.fixed[i] = b;
+    }
     ctx.fixed[technique::kTiBaseColor] = b;
     ctx.fixed[technique::kTiEmissive]  = e;
 
@@ -367,7 +391,10 @@ TEST_CASE("REN-37.2 an AUTHORED technique graph splices and evaluates identicall
         KGraph host2(&alloc);
         const int hb = host2.constant(1.0, sh, DType::F32);
         technique::TechniqueContext c2;
-        for (int i = 0; i < technique::kTechFixedInputs; ++i) { c2.fixed[i] = hb; }
+        for (int i = 0; i < technique::kTechFixedInputs; ++i)
+        {
+            c2.fixed[i] = hb;
+        }
         CHECK(technique::apply_technique(host2, t2, c2) < 0);
     }
 }

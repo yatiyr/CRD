@@ -73,9 +73,15 @@ struct Rig
         const int i2 = g.vec4(kf(0.0), kf(0.0), kf(1.0), kf(0.0));
         const int i3 = g.vec4(kf(0.0), kf(0.0), kf(0.0), kf(1.0));
         const int id = g.mat4(i0, i1, i2, i3);
-        for (int& v : b.csm_light_vp) { v = id; }
+        for (int& v : b.csm_light_vp)
+        {
+            v = id;
+        }
         b.csm_map_size = kf(2048.0);
-        for (int& s : b.sh) { s = g.vec3(kf(0.1), kf(0.1), kf(0.1)); }
+        for (int& s : b.sh)
+        {
+            s = g.vec3(kf(0.1), kf(0.1), kf(0.1));
+        }
         const int tex2d = g.texture(0, 3);
         const int samp  = g.sampler(0, 4);
         b.prefiltered   = g.texture(0, 5, kir::DType::F32, kir::TexDim::TexCube); // sampled by DIRECTION
@@ -118,12 +124,18 @@ struct Rig
 [[nodiscard]] int cook_size(memory::IAllocator* a, const char* sections)
 {
     lc::LightingDesc d(a);
-    if (parse(a, sections, d) != lc::LightingCookError::Ok) { return -1; }
+    if (parse(a, sections, d) != lc::LightingCookError::Ok)
+    {
+        return -1;
+    }
     // The atlas TYPE follows the declared filter — exactly how a live caller builds its bindings from the asset.
     Rig       r(a, lc::lighting_shadow_is_comparison(d));
     const int before = r.g.size();
     const int lit    = lc::cook_lighting(d, r.g, r.in, r.b);
-    if (lit < 0) { return -1; }
+    if (lit < 0)
+    {
+        return -1;
+    }
     return r.g.size() - before;
 }
 } // namespace
@@ -355,7 +367,11 @@ TEST_CASE("REN-38-E6: the shadow vocabulary beyond CSM", "[light-cook][ren38]")
             {
                 for (crd::usize x = 0; x < fbytes[i].size(); ++x)
                 {
-                    if (fbytes[i][x] != fbytes[k][x]) { same = false; break; }
+                    if (fbytes[i][x] != fbytes[k][x])
+                    {
+                        same = false;
+                        break;
+                    }
                 }
             }
             CHECK_FALSE(same);

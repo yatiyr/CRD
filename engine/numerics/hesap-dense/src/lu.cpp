@@ -22,8 +22,15 @@ constexpr crd::usize kBlockSize = 64;
 template <typename T>
 inline RealType<T> abs_value(T x) noexcept
 {
-    if constexpr (is_complex_v<T>) { return crd::math::sqrt(x.re * x.re + x.im * x.im); }
-    else { return x < T{0} ? -x : x; }
+    if constexpr (is_complex_v<T>)
+    {
+        return crd::math::sqrt(x.re * x.re + x.im * x.im);
+    }
+    else
+    {
+        return x < T{0}
+        ? -x : x;
+    }
 }
 
 // Swap row a and row b across columns [c0, c1).

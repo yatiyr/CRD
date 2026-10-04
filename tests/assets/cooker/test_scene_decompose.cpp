@@ -56,7 +56,10 @@ crd::cooker::CookHandlerFn glb_handler()
 void push_bytes(crd::containers::Array<crd::u8>& b, const void* src, crd::usize n)
 {
     const crd::u8* s = static_cast<const crd::u8*>(src);
-    for (crd::usize i = 0; i < n; ++i) { b.push_back(s[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        b.push_back(s[i]);
+    }
 }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v) { push_bytes(b, &v, 4); }
 void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v) { push_bytes(b, &v, 4); }
@@ -80,7 +83,10 @@ TEST_CASE("cooker: glTF scene DECOMPOSES into a SCEN artifact -- SI transforms, 
     // triangle mesh, a spot-light node, and a camera node. .meta position_scale = 0.001 → SI metres everywhere.
     crd::containers::Array<crd::u8> bin(&g_alloc);
     const crd::f32 pos[9] = {0, 0, 0, 1000, 0, 0, 0, 1000, 0}; // mm-scale triangle
-    for (crd::f32 v : pos) { push_f32(bin, v); }
+    for (crd::f32 v : pos)
+    {
+        push_f32(bin, v);
+    }
 
     const char* json = R"({
       "asset": {"version": "2.0"},
@@ -116,11 +122,20 @@ TEST_CASE("cooker: glTF scene DECOMPOSES into a SCEN artifact -- SI transforms, 
     push_u32(glb, jlen + jpad);
     push_u32(glb, 0x4E4F534AU);
     push_bytes(glb, json, jlen);
-    for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+    for (crd::u32 i = 0; i < jpad; ++i)
+    {
+        glb.push_back(' ');
+    }
     push_u32(glb, blen + bpad);
     push_u32(glb, 0x004E4942U);
-    for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
-    for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+    for (crd::usize i = 0; i < bin.size(); ++i)
+    {
+        glb.push_back(bin[i]);
+    }
+    for (crd::u32 i = 0; i < bpad; ++i)
+    {
+        glb.push_back(0);
+    }
 
     const char* src_path  = "scen_rig.glb";
     const char* meta_path = "scen_rig.glb.meta";

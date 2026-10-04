@@ -61,7 +61,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& positions, crd::containers::Ar
         // +X face (x=1)
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i = 0; i < 36U; ++i) { indices.push_back(tris[i]); }
+    for (u32 i = 0; i < 36U; ++i)
+    {
+        indices.push_back(tris[i]);
+    }
 }
 
 // Single triangle.
@@ -264,7 +267,10 @@ TEST_CASE("HalfEdgeMesh: for_each_outgoing_he visits the cube vertex's full fan"
         u32 slot_count = 0;
         for (u32 h = 0; h < m.he_pool_size(); ++h)
         {
-            if (m.he_alive(h) && m.he(h).origin == v) { ++slot_count; }
+            if (m.he_alive(h) && m.he(h).origin == v)
+            {
+                ++slot_count;
+            }
         }
         INFO("vertex " << v << " walk=" << walk_count << " slot=" << slot_count);
         CHECK(walk_count == slot_count);
@@ -292,10 +298,20 @@ TEST_CASE("HalfEdgeMesh: flip_edge swaps the diagonal in a quad",
     u32 diagonal_he = k_null_he;
     for (u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (m.he_is_boundary(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (m.he_is_boundary(h))
+        {
+            continue;
+        }
         const u32 t = m.he(h).twin;
-        if (t != k_null_he && !m.he_is_boundary(t)) { diagonal_he = h; break; }
+        if (t != k_null_he && !m.he_is_boundary(t))
+        {
+            diagonal_he = h;
+            break;
+        }
     }
     REQUIRE(diagonal_he != k_null_he);
 
@@ -321,8 +337,15 @@ TEST_CASE("HalfEdgeMesh: flip_edge on boundary returns false",
     u32 boundary_he = k_null_he;
     for (u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (m.he_is_boundary(h)) { boundary_he = h; break; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (m.he_is_boundary(h))
+        {
+            boundary_he = h;
+            break;
+        }
     }
     REQUIRE(boundary_he != k_null_he);
     CHECK_FALSE(m.flip_edge(boundary_he));
@@ -347,10 +370,20 @@ TEST_CASE("HalfEdgeMesh: split_edge on a quad's diagonal - 1 vertex + 2 faces ad
     u32 diag = k_null_he;
     for (u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (m.he_is_boundary(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (m.he_is_boundary(h))
+        {
+            continue;
+        }
         const u32 t = m.he(h).twin;
-        if (t != k_null_he && !m.he_is_boundary(t)) { diag = h; break; }
+        if (t != k_null_he && !m.he_is_boundary(t))
+        {
+            diag = h;
+            break;
+        }
     }
     REQUIRE(diag != k_null_he);
 
@@ -383,8 +416,14 @@ TEST_CASE("HalfEdgeMesh: collapse_edge on cube - vertex / face count drops",
     u32 candidate = k_null_he;
     for (u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (m.he_is_boundary(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (m.he_is_boundary(h))
+        {
+            continue;
+        }
         const u32 t = m.he(h).twin;
         if (t != k_null_he && !m.he_is_boundary(t))
         {

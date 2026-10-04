@@ -33,21 +33,45 @@ void usage()
 
 [[nodiscard]] crd::u32 parse_backends(const char* s)
 {
-    if (s == nullptr || std::strcmp(s, "all") == 0) { return static_cast<crd::u32>(crd::shadercook::CookBackend::All); }
+    if (s == nullptr || std::strcmp(s, "all") == 0)
+    {
+        return static_cast<crd::u32>(crd::shadercook::CookBackend::All);
+    }
     crd::u32   mask = 0U;
     const char* p   = s;
     while (*p != '\0')
     {
         const char* start = p;
-        while (*p != '\0' && *p != ',') { ++p; }
+        while (*p != '\0' && *p != ',')
+        {
+            ++p;
+        }
         const auto n = static_cast<crd::usize>(p - start);
         const auto is = [&](const char* tok) { return std::strlen(tok) == n && std::strncmp(start, tok, n) == 0; };
-        if (is("spirv")) { mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::SpirV); }
-        else if (is("dxil")) { mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Dxil); }
-        else if (is("cuda")) { mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Cuda); }
-        else if (is("msl")) { mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Msl); }
-        else if (is("wgsl")) { mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Wgsl); }
-        if (*p == ',') { ++p; }
+        if (is("spirv"))
+        {
+            mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::SpirV);
+        }
+        else if (is("dxil"))
+        {
+            mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Dxil);
+        }
+        else if (is("cuda"))
+        {
+            mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Cuda);
+        }
+        else if (is("msl"))
+        {
+            mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Msl);
+        }
+        else if (is("wgsl"))
+        {
+            mask |= static_cast<crd::u32>(crd::shadercook::CookBackend::Wgsl);
+        }
+        if (*p == ',')
+        {
+            ++p;
+        }
     }
     return mask;
 }
@@ -62,13 +86,32 @@ int cmd_cook(int argc, char** argv)
     bool        compress = false;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) { out = argv[++i]; }
-        else if (std::strcmp(argv[i], "--backends") == 0 && i + 1 < argc) { backends = parse_backends(argv[++i]); }
-        else if (std::strcmp(argv[i], "--cache") == 0 && i + 1 < argc) { cache = argv[++i]; }
-        else if (std::strcmp(argv[i], "--name") == 0 && i + 1 < argc) { name = argv[++i]; }
-        else if (std::strcmp(argv[i], "--compress") == 0) { compress = true; }
+        if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+        {
+            out = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--backends") == 0 && i + 1 < argc)
+        {
+            backends = parse_backends(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--cache") == 0 && i + 1 < argc)
+        {
+            cache = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--name") == 0 && i + 1 < argc)
+        {
+            name = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--compress") == 0)
+        {
+            compress = true;
+        }
     }
-    if (in == nullptr || out == nullptr) { usage(); return 2; }
+    if (in == nullptr || out == nullptr)
+    {
+        usage();
+        return 2;
+    }
 
     crd::containers::Array<crd::u8> ir(&g_alloc);
     if (!crd::platform::fs::read_file_binary(crd::platform::fs::Path(in), ir))
@@ -106,7 +149,11 @@ int cmd_cook(int argc, char** argv)
 
 int cmd_info(int argc, char** argv)
 {
-    if (argc < 1) { usage(); return 2; }
+    if (argc < 1)
+    {
+        usage();
+        return 2;
+    }
     crd::containers::Array<crd::u8> bytes(&g_alloc);
     if (!crd::platform::fs::read_file_binary(crd::platform::fs::Path(argv[0]), bytes))
     {
@@ -134,9 +181,19 @@ int cmd_info(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
-    if (argc < 2) { usage(); return 2; }
-    if (std::strcmp(argv[1], "cook") == 0) { return cmd_cook(argc - 2, argv + 2); }
-    if (std::strcmp(argv[1], "info") == 0) { return cmd_info(argc - 2, argv + 2); }
+    if (argc < 2)
+    {
+        usage();
+        return 2;
+    }
+    if (std::strcmp(argv[1], "cook") == 0)
+    {
+        return cmd_cook(argc - 2, argv + 2);
+    }
+    if (std::strcmp(argv[1], "info") == 0)
+    {
+        return cmd_info(argc - 2, argv + 2);
+    }
     usage();
     return 2;
 }

@@ -20,7 +20,10 @@ crd::u32 IrBuilder::push_primitive(IrPrimKind kind, std::initializer_list<crd::f
                    "IrBuilder: primitive param count mismatch");
 
     const crd::u32 params_offset = static_cast<crd::u32>(m_ir.params_mut().size());
-    for (crd::f32 v : params) { m_ir.params_mut().push_back(v); }
+    for (crd::f32 v : params)
+    {
+        m_ir.params_mut().push_back(v);
+    }
 
     IrNode node{};
     node.kind             = IrNode::Kind::Primitive;
@@ -46,10 +49,16 @@ crd::u32 IrBuilder::push_operator(IrOpKind kind,
                    "IrBuilder: operator child count mismatch");
 
     const crd::u32 params_offset = static_cast<crd::u32>(m_ir.params_mut().size());
-    for (crd::f32 v : params) { m_ir.params_mut().push_back(v); }
+    for (crd::f32 v : params)
+    {
+        m_ir.params_mut().push_back(v);
+    }
 
     const crd::u32 children_offset = static_cast<crd::u32>(m_ir.children_mut().size());
-    for (crd::u32 c : children) { m_ir.children_mut().push_back(c); }
+    for (crd::u32 c : children)
+    {
+        m_ir.children_mut().push_back(c);
+    }
 
     IrNode node{};
     node.kind             = IrNode::Kind::Operator;
@@ -196,7 +205,10 @@ visit_node(const FormulaIr& ir,
     {
         return {IrValidationStatus::CycleDetected, idx};
     }
-    if (state[idx] == kVisited) { return {IrValidationStatus::Ok, idx}; }
+    if (state[idx] == kVisited)
+    {
+        return {IrValidationStatus::Ok, idx};
+    }
 
     state[idx] = kInProgress;
     const IrNode& n = ir.nodes()[idx];
@@ -249,7 +261,10 @@ visit_node(const FormulaIr& ir,
             return {IrValidationStatus::NodeOutOfBoundsChild, idx};
         }
         const auto child_result = visit_node(ir, child_idx, state);
-        if (child_result.status != IrValidationStatus::Ok) { return child_result; }
+        if (child_result.status != IrValidationStatus::Ok)
+        {
+            return child_result;
+        }
     }
 
     state[idx] = kVisited;
@@ -260,7 +275,10 @@ visit_node(const FormulaIr& ir,
 
 IrValidationResult validate(const FormulaIr& ir) noexcept
 {
-    if (ir.is_empty()) { return {IrValidationStatus::EmptyIr, 0U}; }
+    if (ir.is_empty())
+    {
+        return {IrValidationStatus::EmptyIr, 0U};
+    }
     if (ir.root() >= ir.nodes().size())
     {
         return {IrValidationStatus::RootOutOfBounds, ir.root()};
@@ -273,7 +291,10 @@ IrValidationResult validate(const FormulaIr& ir) noexcept
     state.resize(ir.nodes().size(), kUnvisited);
 
     const auto walk_result = visit_node(ir, ir.root(), state);
-    if (walk_result.status != IrValidationStatus::Ok) { return walk_result; }
+    if (walk_result.status != IrValidationStatus::Ok)
+    {
+        return walk_result;
+    }
 
     // Check all nodes are reachable from root (no orphans).
     for (crd::u32 i = 0U; i < static_cast<crd::u32>(state.size()); ++i)

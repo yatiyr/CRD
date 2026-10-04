@@ -75,7 +75,10 @@ public:
     AudioBufferLoader() = default;
     explicit AudioBufferLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override { return kFourCC_ABUF; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }
@@ -171,9 +174,15 @@ struct AudioGraphResource
 
     crd::u32 intern(const char* s)
     {
-        if (s == nullptr || s[0] == '\0') { return 0; }
+        if (s == nullptr || s[0] == '\0')
+        {
+            return 0;
+        }
         const crd::u32 off = static_cast<crd::u32>(strings.size());
-        for (const char* p = s; *p != '\0'; ++p) { strings.push_back(*p); }
+        for (const char* p = s; *p != '\0'; ++p)
+        {
+            strings.push_back(*p);
+        }
         strings.push_back('\0');
         return off;
     }
@@ -189,7 +198,10 @@ public:
     AudioGraphLoader() = default;
     explicit AudioGraphLoader(crd::memory::IAllocator* payload_alloc) noexcept
     {
-        if (payload_alloc != nullptr) { m_payload = payload_alloc; }
+        if (payload_alloc != nullptr)
+        {
+            m_payload = payload_alloc;
+        }
     }
     [[nodiscard]] crd::u32 type_fourcc() const noexcept override { return kFourCC_AGRF; }
     [[nodiscard]] crd::u32 loader_version() const noexcept override { return 1U; }

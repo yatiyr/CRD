@@ -43,7 +43,11 @@ TEST_CASE("B15-a transmittance LUT: whole-atmosphere extinction with the Rayleig
     // (1) every texel is a physical transmittance ∈ (0, 1].
     double lo = 2.0;
     double hi = -1.0;
-    for (int i = 0; i < w * ht * 3; ++i) { lo = out[uz(i)] < lo ? out[uz(i)] : lo; hi = out[uz(i)] > hi ? out[uz(i)] : hi; }
+    for (int i = 0; i < w * ht * 3; ++i)
+    {
+        lo = out[uz(i)] < lo ? out[uz(i)] : lo;
+        hi = out[uz(i)] > hi ? out[uz(i)] : hi;
+    }
     CHECK(lo > 0.0);
     CHECK(hi <= 1.0 + 1e-6);
 
@@ -101,7 +105,11 @@ TEST_CASE("B15-a multiple-scattering LUT: positive, finite bluish fill that grow
     // (1) the multiscatter fill is a POSITIVE, FINITE radiance everywhere (the geometric series converged: f_ms < 1).
     double lo = 1e30;
     double hi = -1e30;
-    for (int i = 0; i < res * res * 3; ++i) { lo = ms[uz(i)] < lo ? ms[uz(i)] : lo; hi = ms[uz(i)] > hi ? ms[uz(i)] : hi; }
+    for (int i = 0; i < res * res * 3; ++i)
+    {
+        lo = ms[uz(i)] < lo ? ms[uz(i)] : lo;
+        hi = ms[uz(i)] > hi ? ms[uz(i)] : hi;
+    }
     CHECK(lo >= 0.0);
     CHECK(hi < 10.0); // bounded — no runaway from the 1/(1−f_ms) series
 
@@ -166,7 +174,11 @@ TEST_CASE("B15-a sky-view LUT: a blue zenith, a sun-side glow, and a bright hori
     // (1) the sky radiance is non-negative and finite everywhere.
     double lo = 1e30;
     double hi = -1e30;
-    for (int i = 0; i < sw * sh * 3; ++i) { lo = sv[uz(i)] < lo ? sv[uz(i)] : lo; hi = sv[uz(i)] > hi ? sv[uz(i)] : hi; }
+    for (int i = 0; i < sw * sh * 3; ++i)
+    {
+        lo = sv[uz(i)] < lo ? sv[uz(i)] : lo;
+        hi = sv[uz(i)] > hi ? sv[uz(i)] : hi;
+    }
     CHECK(lo >= 0.0);
     CHECK(hi < 100.0);
 

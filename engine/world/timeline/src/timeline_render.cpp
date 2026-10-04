@@ -33,37 +33,64 @@ crd::i64 render_exr_sequence(const TimelineResource& tl, const RenderConfig& cfg
         const crd::time::RationalTime t =
             crd::time::add(cfg.start, crd::time::RationalTime{f, cfg.frame_rate});
 
-        for (crd::usize i = 0; i < texels; ++i) { canvas.pixels[i] = 0.0F; } // deterministic black
+        for (crd::usize i = 0; i < texels; ++i) // deterministic black
+        {
+            canvas.pixels[i] = 0.0F;
+        }
         active.clear();
         evaluate_tracks(tl, t, active);
 
         // OTIO stack order: track 0 is the BOTTOM — later video tracks overwrite where they have content
         for (crd::usize ti = 0; ti < tl.tracks.size(); ++ti)
         {
-            if (tl.tracks[ti].kind != static_cast<crd::u8>(TrackKind::Video)) { continue; }
+            if (tl.tracks[ti].kind != static_cast<crd::u8>(TrackKind::Video))
+            {
+                continue;
+            }
             bool track_has_content = false;
-            for (crd::usize i = 0; i < texels; ++i) { mixed.pixels[i] = 0.0F; }
+            for (crd::usize i = 0; i < texels; ++i)
+            {
+                mixed.pixels[i] = 0.0F;
+            }
             for (const ActiveClip& clip : active)
             {
-                if (clip.track_index != ti) { continue; }
+                if (clip.track_index != ti)
+                {
+                    continue;
+                }
                 bool resolved = resolve(resolve_user, tl, clip, layer);
                 if (!resolved)
                 {
-                    for (crd::usize i = 0; i < texels; ++i) { layer.pixels[i] = 0.0F; } // black, never a shift
+                    for (crd::usize i = 0; i < texels; ++i) // black, never a shift
+                    {
+                        layer.pixels[i] = 0.0F;
+                    }
                 }
-                for (crd::usize i = 0; i < texels; ++i) { mixed.pixels[i] += clip.weight * layer.pixels[i]; }
+                for (crd::usize i = 0; i < texels; ++i)
+                {
+                    mixed.pixels[i] += clip.weight * layer.pixels[i];
+                }
                 track_has_content = true;
             }
             if (track_has_content)
             {
-                for (crd::usize i = 0; i < texels; ++i) { canvas.pixels[i] = mixed.pixels[i]; }
+                for (crd::usize i = 0; i < texels; ++i)
+                {
+                    canvas.pixels[i] = mixed.pixels[i];
+                }
             }
         }
 
         const crd::containers::Array<crd::u8> exr =
             crd::resources::hdr_encode_exr(canvas, cfg.pixel_type, cfg.compression, alloc);
-        if (exr.size() == 0) { return f; }
-        if (!sink(sink_user, f, crd::containers::as_const_span(exr))) { return f; }
+        if (exr.size() == 0)
+        {
+            return f;
+        }
+        if (!sink(sink_user, f, crd::containers::as_const_span(exr)))
+        {
+            return f;
+        }
     }
     return cfg.frame_count;
 }

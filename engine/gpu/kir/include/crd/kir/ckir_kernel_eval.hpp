@@ -63,7 +63,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
     const int       nnode = g.size();
     Array<crd::i32> shared_off(scratch);
     shared_off.resize(static_cast<crd::usize>(nnode));
-    for (int i = 0; i < nnode; ++i) { shared_off[i] = -1; }
+    for (int i = 0; i < nnode; ++i)
+    {
+        shared_off[i] = -1;
+    }
     Array<crd::f64> shared_pool(scratch);
     for (int i = 0; i < nnode; ++i)
     {
@@ -72,12 +75,21 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         {
             shared_off[i]        = static_cast<crd::i32>(shared_pool.size());
             const crd::usize len = static_cast<crd::usize>(n.iidx) + static_cast<crd::usize>(n.axes); // length + pad
-            for (crd::usize k = 0; k < len; ++k) { shared_pool.push_back(0.0); }
+            for (crd::usize k = 0; k < len; ++k)
+            {
+                shared_pool.push_back(0.0);
+            }
         }
     }
     auto buffer_for = [&](int decl_node) -> KernelBuffer* {
         const KNode& d = g.node(decl_node);
-        for (int b = 0; b < nbufs; ++b) { if (bufs[b].set == d.dset && bufs[b].binding == static_cast<crd::u8>(d.iidx)) { return &bufs[b]; } }
+        for (int b = 0; b < nbufs; ++b)
+        {
+            if (bufs[b].set == d.dset && bufs[b].binding == static_cast<crd::u8>(d.iidx))
+            {
+                return &bufs[b];
+            }
+        }
         return nullptr;
     };
 
@@ -99,16 +111,28 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         for (crd::isize k = static_cast<crd::isize>(overlay.size()) - 1; k >= 0; --k)
         {
             const PendingWrite& w = overlay[static_cast<crd::usize>(k)];
-            if (w.thread == tid && w.is_shared == is_shared && w.res_node == res_node && w.index == idx) { return w.value; }
+            if (w.thread == tid && w.is_shared == is_shared && w.res_node == res_node && w.index == idx)
+            {
+                return w.value;
+            }
         }
-        if (is_shared) { return shared_pool[static_cast<crd::usize>(shared_off[res_node]) + static_cast<crd::usize>(idx)]; }
+        if (is_shared)
+        {
+            return shared_pool[static_cast<crd::usize>(shared_off[res_node]) + static_cast<crd::usize>(idx)];
+        }
         const KernelBuffer* kb = buffer_for(res_node);
-        if (kb == nullptr) { return 0.0; }
+        if (kb == nullptr)
+        {
+            return 0.0;
+        }
         // ⛔ REN-38 llvmpipe campaign: an OOB read is a KERNEL DEFECT, never quietly 0.0 — the old clamp
         // imitated robustBufferAccess, so unguarded TAIL THREADS (dispatch rounded up past the element count)
         // passed every oracle gate while corrupting memory on any device without robustness (llvmpipe: SIGSEGV).
         CRD_ASSERT_MSG(idx >= 0 && idx < kb->len, "eval_cpu_kernel: OOB buffer READ - guard the tail threads");
-        if (idx < 0 || idx >= kb->len) { return 0.0; } // release-build containment only; the assert is the gate
+        if (idx < 0 || idx >= kb->len) // release-build containment only; the assert is the gate
+        {
+            return 0.0;
+        }
         return kb->data[idx];
     };
 
@@ -117,7 +141,15 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
     // Collapses the recursive re-walk that makes deep noise / cloud-density graphs intractable. DISABLED when the graph has
     // subgroup ops (they change `tid` MID-eval ⇒ a value cached under one lane would be wrong for another).
     bool has_subgroup = false;
-    for (int i = 0; i < nnode; ++i) { const KOp op = g.node(i).op; if (op == KOp::SubgroupBallot || op == KOp::SubgroupMatch || op == KOp::SubgroupBallotExclCount || (op >= KOp::SubgroupAdd && op <= KOp::QuadSwapDiagonal)) { has_subgroup = true; break; } }
+    for (int i = 0; i < nnode; ++i)
+    {
+        const KOp op = g.node(i).op;
+        if (op == KOp::SubgroupBallot || op == KOp::SubgroupMatch || op == KOp::SubgroupBallotExclCount || (op >= KOp::SubgroupAdd && op <= KOp::QuadSwapDiagonal))
+        {
+            has_subgroup = true;
+            break;
+        }
+    }
     Array<crd::f64> memo(scratch);     memo.resize(static_cast<crd::usize>(nnode), 0.0);
     Array<crd::i64> memo_gen(scratch); memo_gen.resize(static_cast<crd::usize>(nnode), -1);
     crd::i64        cur_gen    = 0;
@@ -125,23 +157,39 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
 
     // recursive per-thread scalar evaluation of a value node (for the current `tid`).
     auto eval = [&](auto&& self, int node) -> crd::f64 {
-        if (eval_depth == 0 && !has_subgroup) { ++cur_gen; } // top-level entry ⇒ a fresh context (tid/loop/state fixed within it)
+        if (eval_depth == 0 && !has_subgroup) // top-level entry ⇒ a fresh context (tid/loop/state fixed within it)
+        {
+            ++cur_gen;
+        }
         ++eval_depth;
         if (mat_off[static_cast<crd::usize>(node)] >= 0) // a frozen node returns its per-thread snapshot
         {
             --eval_depth;
             return mat_pool[static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]) + static_cast<crd::usize>(tid)];
         }
-        if (!has_subgroup && memo_gen[static_cast<crd::usize>(node)] == cur_gen) { --eval_depth; return memo[static_cast<crd::usize>(node)]; }
+        if (!has_subgroup && memo_gen[static_cast<crd::usize>(node)] == cur_gen)
+        {
+            --eval_depth;
+            return memo[static_cast<crd::usize>(node)];
+        }
         const KNode& n = g.node(node);
         crd::f64     r = 0.0;
         switch (n.op)
         {
             case KOp::Const: r = n.cval; break;
             case KOp::Builtin: // LocalInvocationIndex = thread id; WorkgroupIndex = the current workgroup (1-D)
-                if (static_cast<KBuiltin>(n.iidx) == KBuiltin::LocalInvocationIndex) { r = static_cast<crd::f64>(tid); }
-                else if (static_cast<KBuiltin>(n.iidx) == KBuiltin::WorkgroupIndex) { r = static_cast<crd::f64>(wg); }
-                else { r = 0.0; }
+                if (static_cast<KBuiltin>(n.iidx) == KBuiltin::LocalInvocationIndex)
+                {
+                    r = static_cast<crd::f64>(tid);
+                }
+                else if (static_cast<KBuiltin>(n.iidx) == KBuiltin::WorkgroupIndex)
+                {
+                    r = static_cast<crd::f64>(wg);
+                }
+                else
+                {
+                    r = 0.0;
+                }
                 break;
             case KOp::KernelLoopVar: r = static_cast<crd::f64>(loopval[static_cast<crd::usize>(n.a)]); break;
             case KOp::BufferLoad: r = read_res(n.a, static_cast<int>(self(self, n.b)), false); break;
@@ -156,7 +204,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 for (crd::u32 l = sgbase; l < sgbase + subgroup_lanes && l < local_size; ++l)
                 {
                     tid = l;
-                    if (self(self, n.a) != 0.0) { mask |= (1U << (l - sgbase)); }
+                    if (self(self, n.a) != 0.0)
+                    {
+                        mask |= (1U << (l - sgbase));
+                    }
                 }
                 tid = saved;
                 r   = static_cast<crd::f64>(mask);
@@ -171,7 +222,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 for (crd::u32 l = sgbase; l < sgbase + subgroup_lanes && l < local_size; ++l)
                 {
                     tid = l;
-                    if (self(self, n.a) == mine) { mask |= (1U << (l - sgbase)); }
+                    if (self(self, n.a) == mine)
+                    {
+                        mask |= (1U << (l - sgbase));
+                    }
                 }
                 tid = saved;
                 r   = static_cast<crd::f64>(mask);
@@ -183,7 +237,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 const crd::u32 lane = tid % subgroup_lanes;
                 const crd::u32 low  = (lane == 0U) ? 0U : (mask & ((1U << lane) - 1U));
                 int            cnt  = 0;
-                for (crd::u32 v = low; v != 0U; v >>= 1U) { cnt += static_cast<int>(v & 1U); }
+                for (crd::u32 v = low; v != 0U; v >>= 1U)
+                {
+                    cnt += static_cast<int>(v & 1U);
+                }
                 r = static_cast<crd::f64>(cnt);
                 break;
             }
@@ -206,15 +263,39 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 {
                     tid              = l;
                     const crd::f64 v = self(self, n.a);
-                    if (n.op == KOp::SubgroupAdd) { acc += v; }
-                    else if (n.op == KOp::SubgroupMin) { if (first || v < acc) { acc = v; } }
-                    else if (n.op == KOp::SubgroupMax) { if (first || v > acc) { acc = v; } }
+                    if (n.op == KOp::SubgroupAdd)
+                    {
+                        acc += v;
+                    }
+                    else if (n.op == KOp::SubgroupMin)
+                    {
+                        if (first || v < acc)
+                        {
+                            acc = v;
+                        }
+                    }
+                    else if (n.op == KOp::SubgroupMax)
+                    {
+                        if (first || v > acc)
+                        {
+                            acc = v;
+                        }
+                    }
                     else
                     {
                         const crd::u32 u = static_cast<crd::u32>(static_cast<crd::i64>(v));
-                        if (n.op == KOp::SubgroupAnd) { bacc &= u; }
-                        else if (n.op == KOp::SubgroupOr) { bacc |= u; }
-                        else { bacc ^= u; }
+                        if (n.op == KOp::SubgroupAnd)
+                        {
+                            bacc &= u;
+                        }
+                        else if (n.op == KOp::SubgroupOr)
+                        {
+                            bacc |= u;
+                        }
+                        else
+                        {
+                            bacc ^= u;
+                        }
                     }
                     first = false;
                 }
@@ -229,7 +310,11 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 const crd::u32 sgbase = (saved / subgroup_lanes) * subgroup_lanes;
                 const crd::u32 upto   = n.op == KOp::SubgroupInclusiveAdd ? saved + 1U : saved; // prefix over lanes < upto
                 crd::f64       acc    = 0.0;
-                for (crd::u32 l = sgbase; l < upto && l < local_size; ++l) { tid = l; acc += self(self, n.a); }
+                for (crd::u32 l = sgbase; l < upto && l < local_size; ++l)
+                {
+                    tid = l;
+                    acc += self(self, n.a);
+                }
                 tid = saved;
                 r   = acc;
                 break;
@@ -269,8 +354,14 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             {
                 const crd::u32 saved = tid;
                 crd::u32 xr = 3U; // QuadSwapDiagonal: flip BOTH quad axes
-                if (n.op == KOp::QuadSwapX) { xr = 1U; }
-                else if (n.op == KOp::QuadSwapY) { xr = 2U; }
+                if (n.op == KOp::QuadSwapX)
+                {
+                    xr = 1U;
+                }
+                else if (n.op == KOp::QuadSwapY)
+                {
+                    xr = 2U;
+                }
                 tid                  = saved ^ xr;
                 r                    = self(self, n.a);
                 tid                  = saved;
@@ -296,12 +387,22 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
             default:
                 if (n.c >= 0 && n.b >= 0 && n.a >= 0 && !is_compare(n.op) && n.op != KOp::Select)
                 { r = apply_ternary(n.op, self(self, n.a), self(self, n.b), self(self, n.c)); }
-                else if (n.b >= 0) { r = apply_binary_typed(n.op, self(self, n.a), self(self, n.b), n.dtype()); }
-                else if (n.a >= 0) { r = apply_unary(n.op, self(self, n.a)); }
+                else if (n.b >= 0)
+                {
+                    r = apply_binary_typed(n.op, self(self, n.a), self(self, n.b), n.dtype());
+                }
+                else if (n.a >= 0)
+                {
+                    r = apply_unary(n.op, self(self, n.a));
+                }
                 break;
         }
         const crd::f64 rr = round_dtype(r, n.dtype());
-        if (!has_subgroup) { memo[static_cast<crd::usize>(node)] = rr; memo_gen[static_cast<crd::usize>(node)] = cur_gen; }
+        if (!has_subgroup)
+        {
+            memo[static_cast<crd::usize>(node)] = rr;
+            memo_gen[static_cast<crd::usize>(node)] = cur_gen;
+        }
         --eval_depth;
         return rr;
     };
@@ -311,7 +412,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
         for (crd::usize k = 0; k < overlay.size(); ++k)
         {
             const PendingWrite& w = overlay[k];
-            if (w.is_shared) { shared_pool[static_cast<crd::usize>(shared_off[w.res_node]) + static_cast<crd::usize>(w.index)] = w.value; }
+            if (w.is_shared)
+            {
+                shared_pool[static_cast<crd::usize>(shared_off[w.res_node]) + static_cast<crd::usize>(w.index)] = w.value;
+            }
             else
             {
                 KernelBuffer* kb = buffer_for(w.res_node);
@@ -320,7 +424,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     // ⛔ same rule as the read side: an OOB WRITE is a kernel defect, refused loudly (see read_res)
                     CRD_ASSERT_MSG(w.index >= 0 && w.index < kb->len,
                                    "eval_cpu_kernel: OOB buffer WRITE - guard the tail threads");
-                    if (w.index >= 0 && w.index < kb->len) { kb->data[w.index] = w.value; }
+                    if (w.index >= 0 && w.index < kb->len)
+                    {
+                        kb->data[w.index] = w.value;
+                    }
                 }
             }
         }
@@ -379,14 +486,23 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         tid = active[a];
                         vals.push_back(round_dtype(eval(eval, node), g.node(node).dtype()));
                     }
-                    if (saved >= 0) { mat_off[static_cast<crd::usize>(node)] = saved; }
+                    if (saved >= 0)
+                    {
+                        mat_off[static_cast<crd::usize>(node)] = saved;
+                    }
                     else
                     {
                         mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     const crd::usize off = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
-                    for (crd::usize a = 0; a < active.size(); ++a) { mat_pool[off + static_cast<crd::usize>(active[a])] = vals[a]; }
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        mat_pool[off + static_cast<crd::usize>(active[a])] = vals[a];
+                    }
                     ++i;
                     break;
                 }
@@ -397,7 +513,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         tid           = active[0]; // the bound is uniform across the workgroup
                         const int cnt = static_cast<int>(eval(eval, st.value));
                         Array<crd::u32> loop_active(scratch); // loop-local set: ForBreakIf shrinks it for the REMAINING iterations
-                        for (crd::usize a = 0; a < active.size(); ++a) { loop_active.push_back(active[a]); }
+                        for (crd::usize a = 0; a < active.size(); ++a)
+                        {
+                            loop_active.push_back(active[a]);
+                        }
                         for (int it = 0; it < cnt && loop_active.size() > 0; ++it)
                         {
                             loopval[static_cast<crd::usize>(i)] = it;
@@ -411,9 +530,19 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 case KStmtKind::ForBreakIf: // per-thread break: drop threads whose cond fired from the loop's active set
                 {
                     Array<crd::u32> keep(scratch);
-                    for (crd::usize a = 0; a < active.size(); ++a) { tid = active[a]; if (eval(eval, st.value) == 0.0) { keep.push_back(active[a]); } }
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        tid = active[a];
+                        if (eval(eval, st.value) == 0.0)
+                        {
+                            keep.push_back(active[a]);
+                        }
+                    }
                     active.resize(0);
-                    for (crd::usize a = 0; a < keep.size(); ++a) { active.push_back(keep[a]); }
+                    for (crd::usize a = 0; a < keep.size(); ++a)
+                    {
+                        active.push_back(keep[a]);
+                    }
                     ++i;
                     break;
                 }
@@ -425,7 +554,11 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         const int     idx  = static_cast<int>(eval(eval, st.index));
                         KernelBuffer* kb   = buffer_for(st.target);
                         crd::f64      tick = 0.0;
-                        if (kb != nullptr && idx >= 0 && idx < kb->len) { tick = kb->data[idx]; kb->data[idx] += 1.0; }
+                        if (kb != nullptr && idx >= 0 && idx < kb->len)
+                        {
+                            tick = kb->data[idx];
+                            kb->data[idx] += 1.0;
+                        }
                         shared_pool[static_cast<crd::usize>(shared_off[st.value])] = tick;
                     }
                     ++i;
@@ -439,7 +572,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         const int      idx = static_cast<int>(eval(eval, st.index));
                         const crd::f64 val = eval(eval, st.value);
                         KernelBuffer*  kb  = buffer_for(st.target);
-                        if (kb != nullptr && idx >= 0 && idx < kb->len) { kb->data[idx] += val; }
+                        if (kb != nullptr && idx >= 0 && idx < kb->len)
+                        {
+                            kb->data[idx] += val;
+                        }
                     }
                     ++i;
                     break;
@@ -452,7 +588,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         const int      idx = static_cast<int>(eval(eval, st.index));
                         const crd::f64 val = eval(eval, st.value);
                         KernelBuffer*  kb  = buffer_for(st.target);
-                        if (kb != nullptr && idx >= 0 && idx < kb->len && val < kb->data[idx]) { kb->data[idx] = val; }
+                        if (kb != nullptr && idx >= 0 && idx < kb->len && val < kb->data[idx])
+                        {
+                            kb->data[idx] = val;
+                        }
                     }
                     ++i;
                     break;
@@ -464,7 +603,10 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     if (mat_off[static_cast<crd::usize>(node)] < 0) // the GPU's) ⇒ validate the DETERMINISTIC downstream (sorted resolve).
                     {
                         mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     const crd::usize off = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
                     const bool       add = st.kind == KStmtKind::BufferAtomicAddFetch;
@@ -475,7 +617,11 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                         const crd::f64 val = eval(eval, st.value);
                         KernelBuffer*  kb  = buffer_for(st.target);
                         crd::f64       old = 0.0;
-                        if (kb != nullptr && idx >= 0 && idx < kb->len) { old = kb->data[idx]; kb->data[idx] = add ? old + val : val; }
+                        if (kb != nullptr && idx >= 0 && idx < kb->len)
+                        {
+                            old = kb->data[idx];
+                            kb->data[idx] = add ? old + val : val;
+                        }
                         mat_pool[off + static_cast<crd::usize>(active[a])] = old;
                     }
                     ++i;
@@ -495,17 +641,26 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     if (mat_off[static_cast<crd::usize>(node)] < 0)
                     {
                         mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     if (mat_off[static_cast<crd::usize>(unode)] < 0)
                     {
                         mat_off[static_cast<crd::usize>(unode)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     if (mat_off[static_cast<crd::usize>(pnode)] < 0)
                     {
                         mat_off[static_cast<crd::usize>(pnode)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     const crd::usize    toff = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
                     const crd::usize    uoff = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(unode)]);
@@ -591,12 +746,22 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                             if (h1 > 0.0F)
                             {
                                 const float t1 = -m3 - crd::math::sqrt(h1) + tsh;
-                                if (t1 > tminu && t1 < best) { best = t1; bu = 0.0F; bp = static_cast<crd::u32>(sgi); }
+                                if (t1 > tminu && t1 < best)
+                                {
+                                    best = t1;
+                                    bu = 0.0F;
+                                    bp = static_cast<crd::u32>(sgi);
+                                }
                             }
                             if (h2 > 0.0F)
                             {
                                 const float t2 = -m6 - crd::math::sqrt(h2) + tsh;
-                                if (t2 > tminu && t2 < best) { best = t2; bu = 1.0F; bp = static_cast<crd::u32>(sgi); }
+                                if (t2 > tminu && t2 < best)
+                                {
+                                    best = t2;
+                                    bu = 1.0F;
+                                    bp = static_cast<crd::u32>(sgi);
+                                }
                             }
                         }
                         best = best * rinv; // back to RAY units
@@ -616,12 +781,18 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                     if (mat_off[static_cast<crd::usize>(node)] < 0)
                     {
                         mat_off[static_cast<crd::usize>(node)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     if (is_hit && mat_off[static_cast<crd::usize>(pnode)] < 0)
                     {
                         mat_off[static_cast<crd::usize>(pnode)] = static_cast<crd::i32>(mat_pool.size());
-                        for (crd::u32 t = 0; t < local_size; ++t) { mat_pool.push_back(0.0); }
+                        for (crd::u32 t = 0; t < local_size; ++t)
+                        {
+                            mat_pool.push_back(0.0);
+                        }
                     }
                     const crd::usize    off  = static_cast<crd::usize>(mat_off[static_cast<crd::usize>(node)]);
                     const KernelBuffer* geo  = buffer_for(st.target); // the AS binding holds the triangle geometry in the oracle
@@ -653,20 +824,33 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                             const crd::f64 py = dz * e2x - dx * e2z;
                             const crd::f64 pz = dx * e2y - dy * e2x;
                             const crd::f64 det = e1x * px + e1y * py + e1z * pz;
-                            if (det > -1.0e-12 && det < 1.0e-12) { continue; } // ray parallel to the triangle
+                            if (det > -1.0e-12 && det < 1.0e-12) // ray parallel to the triangle
+                            {
+                                continue;
+                            }
                             const crd::f64 inv = 1.0 / det;
                             const crd::f64 tvx = ox - geo->data[b + 0];
                             const crd::f64 tvy = oy - geo->data[b + 1];
                             const crd::f64 tvz = oz - geo->data[b + 2];
                             const crd::f64 u   = (tvx * px + tvy * py + tvz * pz) * inv;
-                            if (u < 0.0 || u > 1.0) { continue; }
+                            if (u < 0.0 || u > 1.0)
+                            {
+                                continue;
+                            }
                             const crd::f64 qx = tvy * e1z - tvz * e1y; // tvec x e1
                             const crd::f64 qy = tvz * e1x - tvx * e1z;
                             const crd::f64 qz = tvx * e1y - tvy * e1x;
                             const crd::f64 v  = (dx * qx + dy * qy + dz * qz) * inv;
-                            if (v < 0.0 || u + v > 1.0) { continue; }
+                            if (v < 0.0 || u + v > 1.0)
+                            {
+                                continue;
+                            }
                             const crd::f64 t = (e2x * qx + e2y * qy + e2z * qz) * inv;
-                            if (t > tmin && t < best) { best = t; best_tri = tr; }
+                            if (t > tmin && t < best)
+                            {
+                                best = t;
+                                best_tri = tr;
+                            }
                         }
                         mat_pool[off + static_cast<crd::usize>(active[a])] = best;
                         if (is_hit)
@@ -681,7 +865,14 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
                 case KStmtKind::If:
                 {
                     Array<crd::u32> sub(scratch);
-                    for (crd::usize a = 0; a < active.size(); ++a) { tid = active[a]; if (eval(eval, st.value) != 0.0) { sub.push_back(active[a]); } }
+                    for (crd::usize a = 0; a < active.size(); ++a)
+                    {
+                        tid = active[a];
+                        if (eval(eval, st.value) != 0.0)
+                        {
+                            sub.push_back(active[a]);
+                        }
+                    }
                     self(self, st.body_begin, st.body_count, sub);
                     i = st.body_begin + st.body_count;
                     break;
@@ -701,10 +892,16 @@ inline void eval_cpu_kernel(const KGraph& g, const KEntry& entry, KernelBuffer* 
     };
 
     Array<crd::u32> all(scratch);
-    for (crd::u32 t = 0; t < local_size; ++t) { all.push_back(t); }
+    for (crd::u32 t = 0; t < local_size; ++t)
+    {
+        all.push_back(t);
+    }
     for (wg = 0; wg < num_workgroups; ++wg) // each workgroup is independent: fresh shared, its own WorkgroupIndex
     {
-        for (crd::usize k = 0; k < shared_pool.size(); ++k) { shared_pool[k] = 0.0; }
+        for (crd::usize k = 0; k < shared_pool.size(); ++k)
+        {
+            shared_pool[k] = 0.0;
+        }
         overlay.resize(0);
         exec(exec, entry.kernel_body_begin, entry.kernel_body_count, all);
         commit_all(); // flush any writes after the last barrier

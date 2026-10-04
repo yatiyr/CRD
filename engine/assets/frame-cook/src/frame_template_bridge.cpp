@@ -73,7 +73,10 @@ rp::QueueKind queue_of(const FramePassDesc& d) noexcept
     {
         return rp::QueueKind::Compute;
     }
-    if (pass_is_transfer(d)) { return rp::QueueKind::Transfer; }
+    if (pass_is_transfer(d))
+    {
+        return rp::QueueKind::Transfer;
+    }
     return rp::QueueKind::Graphics;
 }
 
@@ -84,7 +87,10 @@ crd::u32 amplify_count_of(const FramePassDesc& d) noexcept
     for (crd::usize i = 0; i < d.params.size(); ++i)
     {
         const FrameParam& p = d.params[i];
-        if (name_is(p.name, "groups") || name_is(p.name, "patches")) { return static_cast<crd::u32>(p.v[0]); }
+        if (name_is(p.name, "groups") || name_is(p.name, "patches"))
+        {
+            return static_cast<crd::u32>(p.v[0]);
+        }
     }
     return 0U;
 }
@@ -95,7 +101,10 @@ FrameResourceKind res_kind(const FrameGraphDesc& desc, crd::u64 h) noexcept
 {
     for (crd::usize i = 0; i < desc.resources.size(); ++i)
     {
-        if (name_hash(desc.resources[i].name) == h) { return desc.resources[i].kind; }
+        if (name_hash(desc.resources[i].name) == h)
+        {
+            return desc.resources[i].kind;
+        }
     }
     return FrameResourceKind::TransientBuffer;
 }
@@ -455,9 +464,18 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
     for (crd::usize i = 0; i < d.params.size(); ++i)
     {
         const FrameParam& p = d.params[i];
-        if (name_is(p.name, "groups_x")) { gx = static_cast<crd::u32>(p.v[0]); }
-        else if (name_is(p.name, "groups_y")) { gy = static_cast<crd::u32>(p.v[0]); }
-        else if (name_is(p.name, "groups_z")) { gz = static_cast<crd::u32>(p.v[0]); }
+        if (name_is(p.name, "groups_x"))
+        {
+            gx = static_cast<crd::u32>(p.v[0]);
+        }
+        else if (name_is(p.name, "groups_y"))
+        {
+            gy = static_cast<crd::u32>(p.v[0]);
+        }
+        else if (name_is(p.name, "groups_z"))
+        {
+            gz = static_cast<crd::u32>(p.v[0]);
+        }
     }
     pl.params.push_back(rp::ParamValue{slot_id("groups_x"), tv_u32(gx)});
     pl.params.push_back(rp::ParamValue{slot_id("groups_y"), tv_u32(gy)});
@@ -516,12 +534,18 @@ bool map_compute(const FramePassDesc& d, const FrameGraphDesc& desc, rp::PassPay
         // takes a storage slot for the write-before-read edge.
         if (!pass_flag(d, SV(pp::kUntracked)))
         {
-            if (!put(d.reads[i].name)) { return false; }
+            if (!put(d.reads[i].name))
+            {
+                return false;
+            }
         }
     }
     for (crd::usize i = 0; i < d.writes.size(); ++i)
     {
-        if (!put(d.writes[i].name)) { return false; }
+        if (!put(d.writes[i].name))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -561,8 +585,14 @@ bool map_present(const FramePassDesc& d, rp::PassPayload& pl, DiagnosticList& di
 {
     // present READS the final image (the swapchain source). Accept it from reads[0] or, if authored as a write, writes[0].
     const crd::containers::String* src = nullptr;
-    if (!d.reads.empty()) { src = &d.reads[0].name; }
-    else if (!d.writes.empty()) { src = &d.writes[0].name; }
+    if (!d.reads.empty())
+    {
+        src = &d.reads[0].name;
+    }
+    else if (!d.writes.empty())
+    {
+        src = &d.writes[0].name;
+    }
     if (src == nullptr)
     {
         diags.emit(crd::renderasset::Severity::Error, DiagCode::InvalidSlot, "a present pass names no source",
@@ -586,9 +616,18 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
     for (crd::usize i = 0; i < d.params.size(); ++i)
     {
         const FrameParam& p = d.params[i];
-        if (name_is(p.name, "groups_x")) { gx = static_cast<crd::u32>(p.v[0]); }
-        else if (name_is(p.name, "groups_y")) { gy = static_cast<crd::u32>(p.v[0]); }
-        else if (name_is(p.name, "groups_z")) { gz = static_cast<crd::u32>(p.v[0]); }
+        if (name_is(p.name, "groups_x"))
+        {
+            gx = static_cast<crd::u32>(p.v[0]);
+        }
+        else if (name_is(p.name, "groups_y"))
+        {
+            gy = static_cast<crd::u32>(p.v[0]);
+        }
+        else if (name_is(p.name, "groups_z"))
+        {
+            gz = static_cast<crd::u32>(p.v[0]);
+        }
     }
     pl.params.push_back(rp::ParamValue{slot_id("groups_x"), tv_u32(gx)});
     pl.params.push_back(rp::ParamValue{slot_id("groups_y"), tv_u32(gy)});
@@ -628,11 +667,17 @@ bool map_rt_common(const FramePassDesc& d, rp::PassPayload& pl, const rg::FrameG
             accel_found = true;
             continue;
         }
-        if (!put_storage(res)) { return false; }
+        if (!put_storage(res))
+        {
+            return false;
+        }
     }
     for (crd::usize i = 0; i < d.writes.size(); ++i)
     {
-        if (!put_storage(name_hash(d.writes[i].name))) { return false; }
+        if (!put_storage(name_hash(d.writes[i].name)))
+        {
+            return false;
+        }
     }
     if (!accel_found)
     {
@@ -731,10 +776,19 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
         const FramePassDesc& d = desc.passes[pi];
-        for (crd::usize j = 0; j < d.reads.size(); ++j) { declare_external(d.reads[j].name, out); }
-        for (crd::usize j = 0; j < d.writes.size(); ++j) { declare_external(d.writes[j].name, out); }
+        for (crd::usize j = 0; j < d.reads.size(); ++j)
+        {
+            declare_external(d.reads[j].name, out);
+        }
+        for (crd::usize j = 0; j < d.writes.size(); ++j)
+        {
+            declare_external(d.writes[j].name, out);
+        }
         const SV sd = pass_str(d, SV(pp::kSharedDepth));
-        if (!sd.empty()) { declare_external(sd, out); }
+        if (!sd.empty())
+        {
+            declare_external(sd, out);
+        }
     }
 
     // 2. Passes -> GraphPasses (for_each expanded into N ordinary passes).
@@ -773,16 +827,46 @@ bool build_frame_graph_template(const FrameGraphDesc& desc, ForEachCountFn for_e
             gp.payload.queue = queue_of(d);
 
             bool pass_ok = true;
-            if (pass_is_scene_raster(d)) { pass_ok = map_raster(d, /*fullscreen*/ false, gp.payload, out, diags); }
-            else if (pass_is_fullscreen(d)) { pass_ok = map_raster(d, /*fullscreen*/ true, gp.payload, out, diags); }
-            else if (pass_is_compute(d)) { pass_ok = map_compute(d, desc, gp.payload, out, diags); }
-            else if (pass_is_transfer(d)) { pass_ok = map_transfer(d, gp.payload, diags); }
-            else if (pass_is_present(d)) { pass_ok = map_present(d, gp.payload, diags); }
-            else if (pass_is_raytrace_dispatch(d)) { pass_ok = map_rt_common(d, gp.payload, out, /*three*/ true, diags); }
-            else if (pass_is_raytrace_pipeline(d)) { pass_ok = map_rt_common(d, gp.payload, out, /*three*/ false, diags); }
-            else if (pass_is_tess(d) || pass_is_mesh(d)) { pass_ok = map_amplify(d, gp.payload, diags); }
-            else if (pass_is_mesh_indirect(d)) { pass_ok = map_mesh_indirect(d, gp.payload, out, diags); }
-            else { pass_ok = false; }
+            if (pass_is_scene_raster(d))
+            {
+                pass_ok = map_raster(d, /*fullscreen*/ false, gp.payload, out, diags);
+            }
+            else if (pass_is_fullscreen(d))
+            {
+                pass_ok = map_raster(d, /*fullscreen*/ true, gp.payload, out, diags);
+            }
+            else if (pass_is_compute(d))
+            {
+                pass_ok = map_compute(d, desc, gp.payload, out, diags);
+            }
+            else if (pass_is_transfer(d))
+            {
+                pass_ok = map_transfer(d, gp.payload, diags);
+            }
+            else if (pass_is_present(d))
+            {
+                pass_ok = map_present(d, gp.payload, diags);
+            }
+            else if (pass_is_raytrace_dispatch(d))
+            {
+                pass_ok = map_rt_common(d, gp.payload, out, /*three*/ true, diags);
+            }
+            else if (pass_is_raytrace_pipeline(d))
+            {
+                pass_ok = map_rt_common(d, gp.payload, out, /*three*/ false, diags);
+            }
+            else if (pass_is_tess(d) || pass_is_mesh(d))
+            {
+                pass_ok = map_amplify(d, gp.payload, diags);
+            }
+            else if (pass_is_mesh_indirect(d))
+            {
+                pass_ok = map_mesh_indirect(d, gp.payload, out, diags);
+            }
+            else
+            {
+                pass_ok = false;
+            }
             if (!pass_ok)
             {
                 ok = false;

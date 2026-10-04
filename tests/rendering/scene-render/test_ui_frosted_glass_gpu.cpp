@@ -60,12 +60,18 @@ memory::TlsfAllocator& galloc()
 [[nodiscard]] bool read_shipped_asset(const char* rel, containers::String& out)
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { return false; }
+    if (root == nullptr || root[0] == '\0')
+    {
+        return false;
+    }
     containers::String p(&galloc());
     p.append(root);
     p.append("/");
     p.append(rel);
-    if (!platform::fs::read_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), out)) { return false; }
+    if (!platform::fs::read_file_text(platform::fs::Path(containers::StringView(p.c_str(), p.size())), out))
+    {
+        return false;
+    }
     // ⛔ CEIR-31b-4-b-iv-g-2: normalize CRLF→LF so the multi-line patch_replace needles (the 3-line `derive_spec_2_*` blocks)
     // match regardless of the checkout's line endings. read_file_text is BINARY (no strip), and .gitattributes has NO
     // `*.toml eol=lf` rule (only `* text=auto`), so a Windows checkout with core.autocrlf rewrites the asset CRLF — which
@@ -73,7 +79,10 @@ memory::TlsfAllocator& galloc()
     usize w = 0;
     for (usize r = 0; r < out.size(); ++r)
     {
-        if (out.data()[r] != '\r') { out.data()[w++] = out.data()[r]; }
+        if (out.data()[r] != '\r')
+        {
+            out.data()[w++] = out.data()[r];
+        }
     }
     out.resize(w);
     return true;
@@ -89,11 +98,18 @@ memory::TlsfAllocator& galloc()
         bool m = true;
         for (usize j = 0; j < nlen; ++j)
         {
-            if (buf.data()[i + j] != needle[j]) { m = false; break; }
+            if (buf.data()[i + j] != needle[j])
+            {
+                m = false;
+                break;
+            }
         }
         if (m)
         {
-            for (usize j = 0; j < nlen; ++j) { buf.data()[i + j] = repl[j]; }
+            for (usize j = 0; j < nlen; ++j)
+            {
+                buf.data()[i + j] = repl[j];
+            }
             return true;
         }
     }
@@ -113,7 +129,11 @@ memory::TlsfAllocator& galloc()
         bool m = true;
         for (usize j = 0; j < nlen; ++j)
         {
-            if (buf.data()[i + j] != needle[j]) { m = false; break; }
+            if (buf.data()[i + j] != needle[j])
+            {
+                m = false;
+                break;
+            }
         }
         if (m)
         {
@@ -149,7 +169,10 @@ struct Rgb
     u64 hsh = 1469598103934665603ULL; // FNV-1a 64-bit offset basis
     for (u32 y = 0U; y < h; ++y)
     {
-        for (u32 x = 0U; x < w; ++x) { hsh = (hsh ^ static_cast<u64>(rt.read_pixel(x, y))) * 1099511628211ULL; }
+        for (u32 x = 0U; x < w; ++x)
+        {
+            hsh = (hsh ^ static_cast<u64>(rt.read_pixel(x, y))) * 1099511628211ULL;
+        }
     }
     return hsh;
 }
@@ -165,7 +188,10 @@ struct Rgb
 // margin (~10% on r,g of a bright backdrop) is the signal. The Vulkan caller wraps this in a ValidationCapture (arm i).
 void run_frosted_glass_mask_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     containers::String graph(&galloc());
     REQUIRE(read_shipped_asset("frame/ui_frosted_glass.frame.toml", graph));
@@ -182,7 +208,10 @@ void run_frosted_glass_mask_arm(gpu::IRasterContext& raster, gpu::IGpuContext& g
     resources::ResourceManager rm(&galloc());
     scenerender::SceneRenderer  renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    if (!renderer.init_programs(gpu_ctx)) { SKIP("the device's shader toolchain (shaderc / dxc) is unavailable"); }
+    if (!renderer.init_programs(gpu_ctx))
+    {
+        SKIP("the device's shader toolchain (shaderc / dxc) is unavailable");
+    }
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str())); // render A: rect [0.25,0.75] covers the centre
     (void)renderer.sync(world);                            // 0 instances — the scene pass clears, draws nothing
 
@@ -282,7 +311,10 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
     resources::ResourceManager rm(&galloc());
     scenerender::SceneRenderer  renderer(&galloc());
     REQUIRE(renderer.init(raster, rm));
-    if (!renderer.init_programs(gpu_ctx)) { SKIP("the device's shader toolchain (shaderc / dxc) is unavailable"); }
+    if (!renderer.init_programs(gpu_ctx))
+    {
+        SKIP("the device's shader toolchain (shaderc / dxc) is unavailable");
+    }
     REQUIRE(renderer.set_frame_graph_toml(graph.c_str()));
     (void)renderer.sync(world); // 0 instances — the probe has no geometry pass, only clear + raster.fullscreen
 
@@ -323,13 +355,25 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
             const double noise255 = static_cast<double>(noise) * 255.0; // the IDEAL real product the converter approximates
             const int    expected = static_cast<int>(std::lround(noise255));
             const int    d        = px.r >= expected ? px.r - expected : expected - px.r;
-            if (px.r == expected) { ++exact; }
-            if (d <= 1) { ++within1; }
-            if (px.r == px.g && px.g == px.b) { ++splat_coherent; }
+            if (px.r == expected)
+            {
+                ++exact;
+            }
+            if (d <= 1)
+            {
+                ++within1;
+            }
+            if (px.r == px.g && px.g == px.b)
+            {
+                ++splat_coherent;
+            }
             // ⛔ a readback beyond 0.5 + 0.6 ULP of the ideal real product is OUT OF SPEC — a genuine error: a wrong hash
             // (arithmetic shift / swapped multiplier / mis-wired x/y) reads ~random bytes far from noise·255, and a
             // systematic ±1 offset pushes ~40% of pixels past 1.1. A conforming converter tie (here ≤0.52) never fires.
-            if (std::fabs(noise255 - static_cast<double>(px.r)) >= 1.1) { ++out_of_spec; }
+            if (std::fabs(noise255 - static_cast<double>(px.r)) >= 1.1)
+            {
+                ++out_of_spec;
+            }
         }
     }
     UNSCOPED_INFO("31b-4-b-ii-2: exact=" << exact << "/4096  within1=" << within1 << "/4096  out_of_spec=" << out_of_spec
@@ -405,17 +449,44 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
                                         const char* blur_step_h = nullptr, const char* blur_step_v = nullptr)
 {
     containers::String graph(&galloc());
-    if (!read_shipped_asset("frame/ui_frosted_glass.frame.toml", graph)) { return false; }
-    if (!patch_same_width(graph, "0.09, 0.10, 0.13", clear_str)) { return false; }        // a same-width scene clear
-    if (!patch_same_width(graph, "spec_0 = 0.25", "spec_0 = 0.00")) { return false; }     // mask x0 = 0
-    if (!patch_same_width(graph, "spec_1 = 0.25", "spec_1 = 0.00")) { return false; }     // mask y0 = 0
-    if (!patch_same_width(graph, "spec_2 = 0.75", mask_full ? "spec_2 = 1.00" : "spec_2 = 0.00")) { return false; }
-    if (!patch_same_width(graph, "spec_3 = 0.75", mask_full ? "spec_3 = 1.00" : "spec_3 = 0.00")) { return false; }
+    if (!read_shipped_asset("frame/ui_frosted_glass.frame.toml", graph))
+    {
+        return false;
+    }
+    if (!patch_same_width(graph, "0.09, 0.10, 0.13", clear_str)) // a same-width scene clear
+    {
+        return false;
+    }
+    if (!patch_same_width(graph, "spec_0 = 0.25", "spec_0 = 0.00")) // mask x0 = 0
+    {
+        return false;
+    }
+    if (!patch_same_width(graph, "spec_1 = 0.25", "spec_1 = 0.00")) // mask y0 = 0
+    {
+        return false;
+    }
+    if (!patch_same_width(graph, "spec_2 = 0.75", mask_full ? "spec_2 = 1.00" : "spec_2 = 0.00"))
+    {
+        return false;
+    }
+    if (!patch_same_width(graph, "spec_3 = 0.75", mask_full ? "spec_3 = 1.00" : "spec_3 = 0.00"))
+    {
+        return false;
+    }
     if (tint_one_amp_zero)
     {
-        if (!patch_same_width(graph, "spec_0 = 0.90", "spec_0 = 1.00")) { return false; } // tint.r = 1 (reproduce backdrop)
-        if (!patch_same_width(graph, "spec_1 = 0.90", "spec_1 = 1.00")) { return false; } // tint.g = 1
-        if (!patch_same_width(graph, "spec_4 = 0.03", "spec_4 = 0.00")) { return false; } // amp = 0 (no noise)
+        if (!patch_same_width(graph, "spec_0 = 0.90", "spec_0 = 1.00")) // tint.r = 1 (reproduce backdrop)
+        {
+            return false;
+        }
+        if (!patch_same_width(graph, "spec_1 = 0.90", "spec_1 = 1.00")) // tint.g = 1
+        {
+            return false;
+        }
+        if (!patch_same_width(graph, "spec_4 = 0.03", "spec_4 = 0.00")) // amp = 0 (no noise)
+        {
+            return false;
+        }
     }
     // CEIR-31b-4-b-iv-g-2: the four blur passes are EXTENT-DERIVED now, so an arm that wants a FIXED step swaps each 3-line
     // `derive_spec_2_{read,axis,op}` block for a one-line `spec_2 = X` literal (variable-width patch_replace). nullptr for a
@@ -433,12 +504,27 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
         const char* const derive_v1 = "derive_spec_2_read = \"blur_a\"\nderive_spec_2_axis = \"y\"\nderive_spec_2_op = \"inv\"";
         const char* const derive_h2 = "derive_spec_2_read = \"blur_b\"\nderive_spec_2_axis = \"x\"\nderive_spec_2_op = \"inv\"";
         const char* const derive_v2 = "derive_spec_2_read = \"blur_a\"\nderive_spec_2_axis = \"y\"\nderive_spec_2_op = \"inv\"";
-        if (r_h1 != nullptr && !patch_replace(graph, derive_h1, r_h1)) { return false; } // blur_h1 (reads blur_src, axis x)
-        if (r_v1 != nullptr && !patch_replace(graph, derive_v1, r_v1)) { return false; } // blur_v1 (reads blur_a, axis y — 1st)
-        if (r_h2 != nullptr && !patch_replace(graph, derive_h2, r_h2)) { return false; } // blur_h2 (reads blur_b, axis x)
-        if (r_v2 != nullptr && !patch_replace(graph, derive_v2, r_v2)) { return false; } // blur_v2 (reads blur_a, axis y — 2nd)
+        if (r_h1 != nullptr && !patch_replace(graph, derive_h1, r_h1)) // blur_h1 (reads blur_src, axis x)
+        {
+            return false;
+        }
+        if (r_v1 != nullptr && !patch_replace(graph, derive_v1, r_v1)) // blur_v1 (reads blur_a, axis y — 1st)
+        {
+            return false;
+        }
+        if (r_h2 != nullptr && !patch_replace(graph, derive_h2, r_h2)) // blur_h2 (reads blur_b, axis x)
+        {
+            return false;
+        }
+        if (r_v2 != nullptr && !patch_replace(graph, derive_v2, r_v2)) // blur_v2 (reads blur_a, axis y — 2nd)
+        {
+            return false;
+        }
     }
-    if (!renderer.set_frame_graph_toml(graph.c_str())) { return false; }
+    if (!renderer.set_frame_graph_toml(graph.c_str()))
+    {
+        return false;
+    }
     (void)renderer.sync(world);
     (void)renderer.render(target, vp, lightdir, clear, nullptr);
     scenerender::SceneRenderer::GpuCullCounts diag{};
@@ -458,7 +544,10 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
 // no-flip default is the correct, tonemap-inherited choice). Both backends — the flip arg is backend-conditional.
 void run_hard_edge_orientation_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b3iii_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b3iii_mtl.crdr"));
@@ -513,7 +602,10 @@ void run_hard_edge_orientation_arm(gpu::IRasterContext& raster, gpu::IGpuContext
 // resample) never rings. ⛔ the real 1/32 step (not the baked 1/512, sub-texel at 64x64) is what makes the blur act.
 void run_hard_edge_numeric_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b3iii2_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b3iii2_mtl.crdr"));
@@ -539,7 +631,10 @@ void run_hard_edge_numeric_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gp
     REQUIRE(render_frosted_frame(renderer, world, *target, proj * view, lightdir, "0.30, 0.30, 0.30", clear, false, false,
                                  nullptr));
     int scene_col[64];
-    for (u32 y = 0U; y < 64U; ++y) { scene_col[y] = pixel_rgb(*target, 32U, y).r; }
+    for (u32 y = 0U; y < 64U; ++y)
+    {
+        scene_col[y] = pixel_rgb(*target, 32U, y).r;
+    }
     // ⛔ NO TONEMAP in this frame ⇒ scene_color goes straight to UNORM8. A SATURATED quad (255) would make (h) vacuous
     // (both paths clamp), and the two sides must be well separated or (b) is empty (the UNORM8-store gate doctrine).
     REQUIRE(scene_col[16] <= 250);               // quad plateau (row 16) unsaturated
@@ -549,7 +644,10 @@ void run_hard_edge_numeric_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gp
     REQUIRE(render_frosted_frame(renderer, world, *target, proj * view, lightdir, "0.30, 0.30, 0.30", clear, true, true,
                                  "spec_2 = 0.031250000"));
     int eff_col[64];
-    for (u32 y = 0U; y < 64U; ++y) { eff_col[y] = pixel_rgb(*target, 32U, y).r; }
+    for (u32 y = 0U; y < 64U; ++y)
+    {
+        eff_col[y] = pixel_rgb(*target, 32U, y).r;
+    }
 
     // (h) FAR from the blurred edge (rows 0-20 = quad, 44-63 = clear, outside the ±8 px ramp at row ~32) AND at the BORDERS
     // (rows 0 and 63) the effect is a FAITHFUL PER-ROW reproduction of the scene: tint=1 ⇒ effect[y] == scene[y] within the
@@ -587,7 +685,10 @@ void run_hard_edge_numeric_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gp
         CHECK(eff_col[y] <= hi + 1); // no ringing above the local scene maximum
     }
     // MONOTONE across the ramp (rows 24-40, where the step dominates the ~0.2-LSB/row quad gradient): non-increasing.
-    for (u32 y = 25U; y <= 40U; ++y) { CHECK(eff_col[y] <= eff_col[y - 1] + 1); }
+    for (u32 y = 25U; y <= 40U; ++y)
+    {
+        CHECK(eff_col[y] <= eff_col[y - 1] + 1);
+    }
     // the blur actually MIXED the two sides at the edge (strictly between the plateaus, well clear of both) — a real ramp.
     CHECK(eff_col[32] > scene_col[48] + 10); // above the clear plateau
     CHECK(eff_col[32] < scene_col[16] - 10); // below the quad plateau
@@ -604,7 +705,10 @@ void run_hard_edge_numeric_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gp
 // from the scene by >1 LSB (the ramp — where the blur acts; the plateaus match per-row, per b-iii-2).
 void run_width_scaling_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b3iii3_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b3iii3_mtl.crdr"));
@@ -627,7 +731,10 @@ void run_width_scaling_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ct
     REQUIRE(render_frosted_frame(renderer, world, *target, proj * view, lightdir, "0.30, 0.30, 0.30", clear, false, false,
                                  nullptr));
     int scene_col[64];
-    for (u32 y = 0U; y < 64U; ++y) { scene_col[y] = pixel_rgb(*target, 32U, y).r; }
+    for (u32 y = 0U; y < 64U; ++y)
+    {
+        scene_col[y] = pixel_rgb(*target, 32U, y).r;
+    }
     REQUIRE(scene_col[16] - scene_col[48] > 20); // a real edge, else width is meaningless
 
     // ramp WIDTH = rows whose effect deviates from the scene by >1 LSB (the blur-affected rows) at a given step. ⛔ count ONLY
@@ -641,7 +748,10 @@ void run_width_scaling_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ct
         for (u32 y = 12U; y <= 52U; ++y)
         {
             const int d = pixel_rgb(*target, 32U, y).r - scene_col[y];
-            if (d > 1 || d < -1) { ++w; }
+            if (d > 1 || d < -1)
+            {
+                ++w;
+            }
         }
         return w;
     };
@@ -671,7 +781,10 @@ void run_width_scaling_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ct
 // chain, the same [12,52] ramp-width metric as b-iii-3.
 void run_ping_pong_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b4f_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b4f_mtl.crdr"));
@@ -693,7 +806,10 @@ void run_ping_pong_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
     REQUIRE(render_frosted_frame(renderer, world, *target, proj * view, lightdir, "0.30, 0.30, 0.30", clear, false, false,
                                  nullptr));
     int scene_col[64];
-    for (u32 y = 0U; y < 64U; ++y) { scene_col[y] = pixel_rgb(*target, 32U, y).r; }
+    for (u32 y = 0U; y < 64U; ++y)
+    {
+        scene_col[y] = pixel_rgb(*target, 32U, y).r;
+    }
     REQUIRE(scene_col[16] - scene_col[48] > 20); // a real edge
 
     // ramp width over the edge neighbourhood [12,52] (as b-iii-3), given per-iteration steps (step1 = h1/v1, step2 = h2/v2).
@@ -704,7 +820,10 @@ void run_ping_pong_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
         for (u32 y = 12U; y <= 52U; ++y)
         {
             const int d = pixel_rgb(*target, 32U, y).r - scene_col[y];
-            if (d > 1 || d < -1) { ++w; }
+            if (d > 1 || d < -1)
+            {
+                ++w;
+            }
         }
         return w;
     };
@@ -742,7 +861,10 @@ void run_ping_pong_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 // patching through the variable-width patch_replace (the 3-line derive block ⇄ a `spec_2 = X` literal, in render_frosted_frame).
 void run_step_travels_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b4g1_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b4g1_mtl.crdr"));
@@ -766,7 +888,10 @@ void run_step_travels_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx
     REQUIRE(render_frosted_frame(renderer, world, *target, proj * view, lightdir, "0.30, 0.30, 0.30", clear, false, false,
                                  nullptr));
     int scene_col[128];
-    for (u32 y = 0U; y < 128U; ++y) { scene_col[y] = pixel_rgb(*target, 64U, y).r; }
+    for (u32 y = 0U; y < 128U; ++y)
+    {
+        scene_col[y] = pixel_rgb(*target, 64U, y).r;
+    }
     REQUIRE(scene_col[32] - scene_col[96] > 20); // a real edge at 128² (top plateau row 32, bottom plateau row 96)
 
     // ramp WIDTH over the edge neighbourhood [24,104] (±40 around the row-64 edge; borders excluded, per b-iii-3 [12,52] ×2).
@@ -777,7 +902,10 @@ void run_step_travels_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx
         for (u32 y = 24U; y <= 104U; ++y)
         {
             const int d = pixel_rgb(*target, 64U, y).r - scene_col[y];
-            if (d > 1 || d < -1) { ++w; }
+            if (d > 1 || d < -1)
+            {
+                ++w;
+            }
         }
         return w;
     };
@@ -806,7 +934,10 @@ void run_step_travels_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx
 // proving the seat honours the AXIS, not merely "some step". An axis-blind resolver fails the equality; a baked one fails both.
 void run_derive_step_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_ctx)
 {
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays (the composite read heap)"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays (the composite read heap)");
+    }
 
     const platform::fs::Path   mesh_path(containers::StringView("sr_b4g2_mesh.crdr"));
     const platform::fs::Path   mtl_path(containers::StringView("sr_b4g2_mtl.crdr"));
@@ -872,7 +1003,10 @@ TEST_CASE("CEIR-31b-4-b-i GATE (Vulkan): the frosted-glass composite reads the p
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-i] " << msgs[i].message_text.c_str());
         }
     }
@@ -904,7 +1038,10 @@ TEST_CASE("CEIR-31b-4-b-ii-2 GATE (Vulkan): the tint_noise integer hash computes
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-ii-2] " << msgs[i].message_text.c_str());
         }
     }
@@ -934,7 +1071,10 @@ TEST_CASE("CEIR-31b-4-b-iii-1 GATE (Vulkan): the ui chain preserves scene orient
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iii-1] " << msgs[i].message_text.c_str());
         }
     }
@@ -965,7 +1105,10 @@ TEST_CASE("CEIR-31b-4-b-iii-2 GATE (Vulkan): the ui blur is a monotone low-pass,
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iii-2] " << msgs[i].message_text.c_str());
         }
     }
@@ -995,7 +1138,10 @@ TEST_CASE("CEIR-31b-4-b-iii-3 GATE (Vulkan): the ui blur ramp width scales with 
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iii-3] " << msgs[i].message_text.c_str());
         }
     }
@@ -1025,7 +1171,10 @@ TEST_CASE("CEIR-31b-4-b-iv-f GATE (Vulkan): the 2-iter blur ping-pong chains thr
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iv-f] " << msgs[i].message_text.c_str());
         }
     }
@@ -1055,7 +1204,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-1 GATE (Vulkan): the baked blur step literal does n
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iv-g-1] " << msgs[i].message_text.c_str());
         }
     }
@@ -1087,7 +1239,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-2 GATE (Vulkan): the derived blur step is resolutio
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[31b-4-b-iv-g-2] " << msgs[i].message_text.c_str());
         }
     }
@@ -1103,7 +1258,10 @@ TEST_CASE("CEIR-31b-4-b-i GATE (DX12): the frosted-glass composite reads the pan
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_frosted_glass_mask_arm(*raster, *gctx);
@@ -1117,7 +1275,10 @@ TEST_CASE("CEIR-31b-4-b-ii-2 GATE (DX12): the tint_noise integer hash computes o
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_tint_noise_hash_arm(*raster, *gctx);
@@ -1128,7 +1289,10 @@ TEST_CASE("CEIR-31b-4-b-iii-1 GATE (DX12): the ui chain preserves scene orientat
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_hard_edge_orientation_arm(*raster, *gctx);
@@ -1141,7 +1305,10 @@ TEST_CASE("CEIR-31b-4-b-iii-2 GATE (DX12): the ui blur is a monotone low-pass, f
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_hard_edge_numeric_arm(*raster, *gctx);
@@ -1152,7 +1319,10 @@ TEST_CASE("CEIR-31b-4-b-iii-3 GATE (DX12): the ui blur ramp width scales with it
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_width_scaling_arm(*raster, *gctx);
@@ -1164,7 +1334,10 @@ TEST_CASE("CEIR-31b-4-b-iv-f GATE (DX12): the 2-iter blur ping-pong chains throu
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_ping_pong_arm(*raster, *gctx);
@@ -1176,7 +1349,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-1 GATE (DX12): the baked blur step literal does not
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_step_travels_arm(*raster, *gctx);
@@ -1189,7 +1365,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-2 GATE (DX12): the derived blur step is resolution-
           "[scene-render][ceir31b][gpu][dx12]")
 {
     auto gctx = gpu::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     run_derive_step_arm(*raster, *gctx);

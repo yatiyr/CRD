@@ -172,8 +172,14 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
     // the PRIMARY write target (color / depth): image_with_depth when a separate depth companion, image_layer for a
     // for_each cascade slice, else a plain image — exactly record_pass's `t` resolution.
     const rg::SlotResolve prim = [&]() -> rg::SlotResolve {
-        if (p.depth_target.valid()) { return rg::SlotResolve::ImageWithDepth; }
-        if (p.indexed_target) { return rg::SlotResolve::ImageLayer; }
+        if (p.depth_target.valid())
+        {
+            return rg::SlotResolve::ImageWithDepth;
+        }
+        if (p.indexed_target)
+        {
+            return rg::SlotResolve::ImageLayer;
+        }
         return rg::SlotResolve::Image;
     }();
     const auto bind_prim = [&](const char* slot, rp::SlotResourceKind kind, rp::SlotAccess access) {
@@ -187,11 +193,17 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
             // ⛔ CEIR-16z-3 (§41): a PROCEDURAL (visbuffer) draw has NO storage (gl_VertexIndex geometry). The storage-null
             // skip is the STORAGE ladder's resolve-failure guard, so it must NOT drop a procedural draw (which legitimately
             // carries no storage). Storage mode is byte-identical to before.
-            if (!procedural && it.storage == nullptr) { continue; }
+            if (!procedural && it.storage == nullptr)
+            {
+                continue;
+            }
             g::IRasterProgram* twin = nullptr;
             if (!p.program_is_instance)
             {
-                if (depth_only)                            { twin = it.program_depth != nullptr ? it.program_depth : it.program; }
+                if (depth_only)
+                {
+                    twin = it.program_depth != nullptr ? it.program_depth : it.program;
+                }
                 // ⛔⛔ CEIR-18c: a G-buffer pass PACKS the surface (material_pass="GBuffer") — it must be checked
                 // BEFORE the MRT-velocity arm (a G-buffer pass IS an MRT pass) and must NOT fall back to `program`:
                 // the forward FS as "albedo" is a silent-wrong the deferred lighting then decodes as a surface (the
@@ -200,9 +212,18 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
                 // MRT-velocity arm (a G-buffer pass IS an MRT pass) and NEVER falling back to `program` (the forward
                 // FS as "albedo" is the §128 silent-wrong). Null twin ⇒ the draw is refused, never degraded.
                 else if (pass_u32(d, SV(pp::kMaterialPass), 0U)
-                         == static_cast<crd::u32>(crd::framecook::FrameMaterialPass::GBuffer)) { twin = it.program_gbuffer; }
-                else if (pass_flag(d, SV(pp::kMrt)))       { twin = it.program_velocity != nullptr ? it.program_velocity : it.program; }
-                else                                       { twin = it.program; }
+                         == static_cast<crd::u32>(crd::framecook::FrameMaterialPass::GBuffer))
+                {
+                    twin = it.program_gbuffer;
+                }
+                else if (pass_flag(d, SV(pp::kMrt)))
+                {
+                    twin = it.program_velocity != nullptr ? it.program_velocity : it.program;
+                }
+                else
+                {
+                    twin = it.program;
+                }
             }
             rg::AuthoredDraw ad{};
             if (procedural)
@@ -240,8 +261,14 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         p_clear();
         p_f32("clear_depth", pass_f32(d, SV(pp::kClearDepth), 1.0F));
         p_enum("depth_compare", pass_u32(d, SV(pp::kDepthCompare), static_cast<crd::u32>(g::DepthCompare::LessEqual)));
-        if (pass_flag(d, SV(pp::kLoad)) || p.load_override) { p_bool("load", true); }
-        if (pass_flag(d, SV(pp::kLoadDepth))) { p_bool("load_depth", true); }
+        if (pass_flag(d, SV(pp::kLoad)) || p.load_override)
+        {
+            p_bool("load", true);
+        }
+        if (pass_flag(d, SV(pp::kLoadDepth)))
+        {
+            p_bool("load_depth", true);
+        }
         if (mrt)
         {
             static const char* const kMrt[3]   = {"color1", "color2", "color3"};
@@ -258,7 +285,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         }
         // ⛔ CEIR-16z-3: a visbuffer (procedural) scene pass carries the background id into the payload (cook==record parity;
         // the CEIR plan bakes the typed uint clear from the R32Uint target, and the payload mirrors the authored id).
-        if (procedural) { p_u32("clear_id", p.clear_id); }
+        if (procedural)
+        {
+            p_u32("clear_id", p.clear_id);
+        }
         add_draws_scene(depth_only, procedural);
         // the pass's sampled read (shadow atlas / moment array) — the scene executor's atlas/sampler routing.
         if (p.n_sampled > 0U)
@@ -287,10 +317,19 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         }
         p_clear();
         const crd::u32 sr = pass_u32(d, SV(pp::kShadingRate), static_cast<crd::u32>(g::ShadingRate::Rate1x1));
-        if (sr != static_cast<crd::u32>(g::ShadingRate::Rate1x1)) { p_enum("shading_rate", sr); }
+        if (sr != static_cast<crd::u32>(g::ShadingRate::Rate1x1))
+        {
+            p_enum("shading_rate", sr);
+        }
         const crd::u32 cons = pass_u32(d, SV(pp::kConservative), static_cast<crd::u32>(g::ConservativeMode::Off));
-        if (cons != static_cast<crd::u32>(g::ConservativeMode::Off)) { p_enum("conservative", cons); }
-        if (pass_flag(d, SV(pp::kDepthAsFloat))) { p_bool("depth_as_float", true); }
+        if (cons != static_cast<crd::u32>(g::ConservativeMode::Off))
+        {
+            p_enum("conservative", cons);
+        }
+        if (pass_flag(d, SV(pp::kDepthAsFloat)))
+        {
+            p_bool("depth_as_float", true);
+        }
         if (pass_flag(d, SV(pp::kComposite)))
         {
             p_bool("load", true);
@@ -322,7 +361,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         for (crd::u32 i = 0; i < p.draws.count(); ++i)
         {
             const DrawItem it = p.draws.at(i);
-            if (it.storage == nullptr) { continue; } // the compute wrapper skipped an unresolved per-item storage
+            if (it.storage == nullptr) // the compute wrapper skipped an unresolved per-item storage
+            {
+                continue;
+            }
             rg::AuthoredDraw ad{};
             ad.has_storage = true; ad.storage = p.storage_of[i]; ad.args = it.args;
             ad.dispatch_groups = it.dispatch_groups;
@@ -335,7 +377,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         out.programs.raster = p.program;
         bind_prim("color", rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write);
         p_clear();
-        if (p.draws.count() == 0U) { p_u32("amplify_count", p.amplify_count); }
+        if (p.draws.count() == 0U)
+        {
+            p_u32("amplify_count", p.amplify_count);
+        }
         for (crd::u32 i = 0; i < p.draws.count(); ++i)
         {
             const DrawItem it = p.draws.at(i);
@@ -403,7 +448,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
                      g::FgBuffer{}, nullptr, g::FgImage{}, 0U);
             }
             bind_prim("dst", rp::SlotResourceKind::ColorTarget, rp::SlotAccess::Write);
-            if (pass_is_blit(d)) { p_enum("filter", pass_u32(d, SV(pp::kFilter), static_cast<crd::u32>(FrameBlitFilter::Linear))); }
+            if (pass_is_blit(d))
+            {
+                p_enum("filter", pass_u32(d, SV(pp::kFilter), static_cast<crd::u32>(FrameBlitFilter::Linear)));
+            }
         }
     }
     else if (pass_is_present(d))
@@ -439,7 +487,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
             const FrameParam& fp = d.params[k];
             // ⭐ RAF-12.3 §7 fold: forward only GENUINE authored params into the custom payload — the folded engine
             // config (clear_color handled by p_clear() above, plus depth/blend/sampler/state/…) is not the app's.
-            if (is_folded_pass_param(SV(fp.name.c_str(), fp.name.size()))) { continue; }
+            if (is_folded_pass_param(SV(fp.name.c_str(), fp.name.size())))
+            {
+                continue;
+            }
             switch (fp.type)
             {
             case FrameParamType::Float: p_f32(fp.name.c_str(), static_cast<float>(fp.v[0])); break;
@@ -460,7 +511,10 @@ void to_authored_pass(const PassRec& p, rg::AuthoredPass& out)
         for (crd::u32 i = 0; i < p.draws.count(); ++i)
         {
             const DrawItem it = p.draws.at(i);
-            if (it.storage == nullptr) { continue; }
+            if (it.storage == nullptr)
+            {
+                continue;
+            }
             rg::AuthoredDraw ad{};
             ad.has_storage = true; ad.storage = p.storage_of[i];
             ad.program = p.program_is_instance ? nullptr : it.program; ad.texture = it.texture;
@@ -497,7 +551,10 @@ SpecSet build_pass_spec_set(const FramePassDesc& d, const FrameGraphDesc& desc, 
     for (crd::usize i = 0; i < d.params.size(); ++i)
     {
         crd::u32 sid = 0U;
-        if (!parse_spec_param(crd::containers::StringView(d.params[i].name.c_str(), d.params[i].name.size()), sid)) { continue; }
+        if (!parse_spec_param(crd::containers::StringView(d.params[i].name.c_str(), d.params[i].name.size()), sid))
+        {
+            continue;
+        }
         CRD_ASSERT_MSG(n < kMaxSpecConsts, "cook guarantees <= kMaxSpecConsts spec params (SpecConstTooMany)");
         if (n < kMaxSpecConsts)
         {
@@ -536,13 +593,23 @@ SpecSet build_pass_spec_set(const FramePassDesc& d, const FrameGraphDesc& desc, 
             have_axis = true;
             break;
         }
-        if (!have_axis) { continue; } // an incomplete derive that slipped past the cook — leave it unresolved
+        if (!have_axis) // an incomplete derive that slipped past the cook — leave it unresolved
+        {
+            continue;
+        }
         const FrameResourceDesc* rd = nullptr;
         for (crd::usize r = 0; r < desc.resources.size(); ++r)
         {
-            if (name_is(desc.resources[r].name, read_name)) { rd = &desc.resources[r]; break; }
+            if (name_is(desc.resources[r].name, read_name))
+            {
+                rd = &desc.resources[r];
+                break;
+            }
         }
-        if (rd == nullptr) { continue; }
+        if (rd == nullptr)
+        {
+            continue;
+        }
         const crd::u32 ext = axis_x ? image_dim_px(rd->width, out_w, rd->scale) : image_dim_px(rd->height, out_h, rd->scale);
         CRD_ASSERT_MSG(n < kMaxSpecConsts, "cook guarantees <= kMaxSpecConsts spec params (literals + deriveds union)");
         if (n < kMaxSpecConsts)
@@ -621,11 +688,20 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
     (void)raster; // the graph is the caller's; the raster context is reached through it
     g::IFrameGraph* fgraph = &fgraph_ref;
     const auto fail = [&](FrameExecError e, const crd::containers::String* name) {
-        if (err != nullptr) { *err = e; }
-        if (where != nullptr && name != nullptr) { *where = *name; }
+        if (err != nullptr)
+        {
+            *err = e;
+        }
+        if (where != nullptr && name != nullptr)
+        {
+            *where = *name;
+        }
         return false;
     };
-    if (err != nullptr) { *err = FrameExecError::Ok; }
+    if (err != nullptr)
+    {
+        *err = FrameExecError::Ok;
+    }
 
     // Capability tier FIRST — a graph that needs what the device lacks must never half-run (REN-35's rule).
     for (crd::usize i = 0; i < desc.requires_caps.size(); ++i)
@@ -638,9 +714,15 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
     }
 
     g::IRasterTarget* out_target = host.output();
-    if (out_target == nullptr) { return fail(FrameExecError::NoOutput, nullptr); }
+    if (out_target == nullptr)
+    {
+        return fail(FrameExecError::NoOutput, nullptr);
+    }
     // ⛔ The arena cap is CHECKED, not hoped: a 33rd recording would reuse a block the graph still points at.
-    if (m_impl->used >= kMaxRecordingsPerFrame) { return fail(FrameExecError::BuildRejected, &desc.name); }
+    if (m_impl->used >= kMaxRecordingsPerFrame)
+    {
+        return fail(FrameExecError::BuildRejected, &desc.name);
+    }
     crd::containers::Array<crd::rendergraph::AuthoredPass>& aps = m_impl->authored[m_impl->used];
     crd::containers::Array<PassRec>& recs = m_impl->blocks[m_impl->used++];
     aps.clear();
@@ -675,7 +757,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         if (r.kind == FrameResourceKind::ExternalTexture)
         {
             g::ITexture* tx = host.texture(crd::containers::StringView(r.name.c_str(), r.name.size()));
-            if (tx == nullptr) { return fail(FrameExecError::UnresolvedResource, &r.name); }
+            if (tx == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedResource, &r.name);
+            }
             images.push_back(fgraph->import_texture(*tx));
             buffers.push_back(g::FgBuffer{});
             pingpong.push_back(g::FgImage{});
@@ -686,7 +771,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         if (r.kind == FrameResourceKind::ExternalBuffer)
         {
             g::IStorageBuffer* sb = host.storage_buffer(crd::containers::StringView(r.name.c_str(), r.name.size()));
-            if (sb == nullptr) { return fail(FrameExecError::UnresolvedResource, &r.name); }
+            if (sb == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedResource, &r.name);
+            }
             buffers.push_back(fgraph->import_storage(*sb));
             images.push_back(g::FgImage{});
             pingpong.push_back(g::FgImage{});
@@ -721,7 +809,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             if (r.kind == FrameResourceKind::PersistentImage)
             {
                 const g::FgImage h = fgraph->create_persistent_image(base, pid);
-                if (!h.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+                if (!h.valid())
+                {
+                    return fail(FrameExecError::TransientFailed, &r.name);
+                }
                 images.push_back(h);
                 buffers.push_back(g::FgBuffer{});
                 pingpong.push_back(g::FgImage{}); // not a pair
@@ -734,7 +825,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             const bool     odd  = (m_impl->frame_parity & 1U) != 0U;
             const g::FgImage a  = fgraph->create_persistent_image(base ^ 0x9E3779B9U, pid);
             const g::FgImage b2 = fgraph->create_persistent_image(base ^ 0x85EBCA6BU, pid);
-            if (!a.valid() || !b2.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+            if (!a.valid() || !b2.valid())
+            {
+                return fail(FrameExecError::TransientFailed, &r.name);
+            }
             images.push_back(odd ? b2 : a);   // CURR — what a write lands in
             pingpong.push_back(odd ? a : b2); // PREV — what a read comes from
             buffers.push_back(g::FgBuffer{});
@@ -747,7 +841,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             || r.kind == FrameResourceKind::StructuredBuffer || r.kind == FrameResourceKind::CounterBuffer)
         {
             const g::FgBuffer bh = fgraph->create_transient_buffer(r.size_bytes);
-            if (!bh.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+            if (!bh.valid())
+            {
+                return fail(FrameExecError::TransientFailed, &r.name);
+            }
             buffers.push_back(bh);
             images.push_back(g::FgImage{}); // keep the arrays index-parallel
             pingpong.push_back(g::FgImage{});
@@ -779,7 +876,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             id.optimized_clear = plans->clear_hints[i].value;
         }
         const g::FgImage h = fgraph->create_transient_image(id);
-        if (!h.valid()) { return fail(FrameExecError::TransientFailed, &r.name); }
+        if (!h.valid())
+        {
+            return fail(FrameExecError::TransientFailed, &r.name);
+        }
         images.push_back(h);
         pingpong.push_back(g::FgImage{});
     }
@@ -792,7 +892,12 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
     // ⭐ REN-38-B1: `for_read` is what makes ping-pong work with no new syntax. Everything else ignores it.
     const auto resolve_image = [&](const crd::containers::String& n, g::FgImage& h, bool& is_depth,
                                    bool for_read = false, bool* is_array = nullptr) -> bool {
-        if (name_is(n, "@output")) { h = out_handle; is_depth = false; return true; }
+        if (name_is(n, "@output"))
+        {
+            h = out_handle;
+            is_depth = false;
+            return true;
+        }
         for (crd::usize i = 0; i < desc.resources.size(); ++i)
         {
             if (desc.resources[i].name.size() == n.size()
@@ -804,7 +909,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 // exactly as long as the only atlas was a depth atlas — a MOMENT atlas is a colour array, and
                 // under the depth proxy it would be routed as a MATERIAL map: any draw carrying its own albedo
                 // would then silently drop its shadows, the REN-37.10 regression in a new costume.
-                if (is_array != nullptr) { *is_array = desc.resources[i].layers > 1U; }
+                if (is_array != nullptr)
+                {
+                    *is_array = desc.resources[i].layers > 1U;
+                }
                 // ⭐ REN-38-B1: a READ of a PING-PONG resource resolves to the PREVIOUS frame's image, a write to
                 // this frame's. That is the whole mechanism, and it needs no syntax the author can hold wrong.
                 if (for_read && desc.resources[i].kind == FrameResourceKind::PingPongImage && pingpong[i].valid())
@@ -864,8 +972,14 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         const crd::u32 n = host.for_each_count(d.for_each, d.for_each_arg);
         // ⛔ 0 is a REPORTED failure, never a silent skip — a shadow graph that renders no cascades is
         // indistinguishable from a scene that has no shadows.
-        if (n == 0U) { return fail(FrameExecError::UnresolvedForEach, &d.name); }
-        for (crd::u32 i = 0; i < n; ++i) { plan.push_back(Instance{pi, i, n}); }
+        if (n == 0U)
+        {
+            return fail(FrameExecError::UnresolvedForEach, &d.name);
+        }
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            plan.push_back(Instance{pi, i, n});
+        }
     }
 
     // ── passes ──
@@ -959,13 +1073,22 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 for (crd::usize bi = 0; bi < desc.resources.size(); ++bi)
                 {
-                    if (desc.resources[bi].kind != FrameResourceKind::AccelerationStructure) { continue; }
-                    if (!name_is(desc.resources[bi].name, d.reads[rr].name.c_str())) { continue; }
+                    if (desc.resources[bi].kind != FrameResourceKind::AccelerationStructure)
+                    {
+                        continue;
+                    }
+                    if (!name_is(desc.resources[bi].name, d.reads[rr].name.c_str()))
+                    {
+                        continue;
+                    }
                     rec.accel = host.acceleration_structure(
                         crd::containers::StringView(d.reads[rr].name.c_str(), d.reads[rr].name.size()));
                     // ⛔ A NAMED failure. A raytrace pass that traversed nothing would render every ray as a miss
                     // — a black image indistinguishable from a scene with no geometry.
-                    if (rec.accel == nullptr) { return fail(FrameExecError::UnresolvedAccel, &d.reads[rr].name); }
+                    if (rec.accel == nullptr)
+                    {
+                        return fail(FrameExecError::UnresolvedAccel, &d.reads[rr].name);
+                    }
                     break;
                 }
             }
@@ -1007,28 +1130,46 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         if (pass_is_raytrace_pipeline(d))
         {
             rec.rt_raygen = host.kernel(pass_str(d, SV(pp::kRaygen)));
-            if (rec.rt_raygen == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kRaygen))); }
+            if (rec.rt_raygen == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kRaygen)));
+            }
             rec.rt_miss = host.kernel(pass_str(d, SV(pp::kMiss)));
-            if (rec.rt_miss == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kMiss))); }
+            if (rec.rt_miss == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kMiss)));
+            }
             rec.rt_chit = host.kernel(pass_str(d, SV(pp::kClosestHit)));
-            if (rec.rt_chit == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kClosestHit))); }
+            if (rec.rt_chit == nullptr)
+            {
+                return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kClosestHit)));
+            }
             // REN-38 audit: the any-hit is OPTIONAL, but a NAMED one that does not resolve FAILS — a pipeline
             // silently built without its any-hit traces every transparent texel as solid, which renders.
             if (!pass_str(d, SV(pp::kAnyHit)).empty())
             {
                 rec.rt_anyhit = host.kernel(pass_str(d, SV(pp::kAnyHit)));
-                if (rec.rt_anyhit == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kAnyHit))); }
+                if (rec.rt_anyhit == nullptr)
+                {
+                    return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kAnyHit)));
+                }
             }
             // REN-38-F13: the last two SBT roles - optional, but a NAMED one that does not resolve FAILS.
             if (!pass_str(d, SV(pp::kIntersection)).empty())
             {
                 rec.rt_isect = host.kernel(pass_str(d, SV(pp::kIntersection)));
-                if (rec.rt_isect == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kIntersection))); }
+                if (rec.rt_isect == nullptr)
+                {
+                    return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kIntersection)));
+                }
             }
             if (!pass_str(d, SV(pp::kCallable)).empty())
             {
                 rec.rt_callable = host.kernel(pass_str(d, SV(pp::kCallable)));
-                if (rec.rt_callable == nullptr) { return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kCallable))); }
+                if (rec.rt_callable == nullptr)
+                {
+                    return fail(FrameExecError::UnresolvedProgram, str_ptr(d, SV(pp::kCallable)));
+                }
             }
         }
         // ⛔ REN-38-A16: the LAUNCH GRID is read for the RT-pipeline kind too. It was not, so `groups` stayed
@@ -1040,9 +1181,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 const FrameParam& prm    = d.params[pg];
                 const auto        as_u32 = [&]() { return static_cast<crd::u32>(prm.v[0] > 0.0 ? prm.v[0] : 1.0); };
-                if (name_is(prm.name, "groups_x")) { rec.groups[0] = as_u32(); }
-                else if (name_is(prm.name, "groups_y")) { rec.groups[1] = as_u32(); }
-                else if (name_is(prm.name, "groups_z")) { rec.groups[2] = as_u32(); }
+                if (name_is(prm.name, "groups_x"))
+                {
+                    rec.groups[0] = as_u32();
+                }
+                else if (name_is(prm.name, "groups_y"))
+                {
+                    rec.groups[1] = as_u32();
+                }
+                else if (name_is(prm.name, "groups_z"))
+                {
+                    rec.groups[2] = as_u32();
+                }
             }
         }
         if (pass_dispatches_kernel(d))
@@ -1061,9 +1211,18 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             {
                 const FrameParam& prm = d.params[pi2];
                 const auto        as_u32 = [&]() { return static_cast<crd::u32>(prm.v[0] > 0.0 ? prm.v[0] : 1.0); };
-                if (name_is(prm.name, "groups_x")) { rec.groups[0] = as_u32(); }
-                else if (name_is(prm.name, "groups_y")) { rec.groups[1] = as_u32(); }
-                else if (name_is(prm.name, "groups_z")) { rec.groups[2] = as_u32(); }
+                if (name_is(prm.name, "groups_x"))
+                {
+                    rec.groups[0] = as_u32();
+                }
+                else if (name_is(prm.name, "groups_y"))
+                {
+                    rec.groups[1] = as_u32();
+                }
+                else if (name_is(prm.name, "groups_z"))
+                {
+                    rec.groups[2] = as_u32();
+                }
             }
         }
         // A per-instance program is OPTIONAL: null means "use the pass's own", the common case where cascades
@@ -1100,9 +1259,16 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         bool writes_output = false;
         for (crd::usize w = 0; w < dp.writes.size(); ++w)
         {
-            if (name_is(dp.writes[w].name, "@output")) { writes_output = true; break; }
+            if (name_is(dp.writes[w].name, "@output"))
+            {
+                writes_output = true;
+                break;
+            }
         }
-        if (!writes_output || dp.reads.size() == 0U) { continue; }
+        if (!writes_output || dp.reads.size() == 0U)
+        {
+            continue;
+        }
         g::FgImage h;
         bool       is_depth = false;
         if (resolve_image(dp.reads[0].name, h, is_depth, /*for_read=*/true, nullptr))
@@ -1128,7 +1294,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         // ⛔⛔ The overlay pass must be ADDED TO THE GRAPH BEFORE the display pass's builder is created — this
         // graph orders passes by add_pass CALL ORDER, so weaving after the display pass's builder existed put the
         // overlay AFTER the display read (and nothing showed). Weave at the TOP of the display pass's iteration.
-        if (overlay_before_ii >= 0 && static_cast<crd::i64>(ii) == overlay_before_ii) { weave_overlay(); }
+        if (overlay_before_ii >= 0 && static_cast<crd::i64>(ii) == overlay_before_ii)
+        {
+            weave_overlay();
+        }
 
         bool                        dummy_depth = false;
         // ⛔ The DEVICE pass kind is derived from the AUTHORED one, never assumed. It drives queue placement and
@@ -1141,7 +1310,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         {
             dev_kind = g::FgPassKind::Compute;
         }
-        else if (pass_is_present(d)) { dev_kind = g::FgPassKind::Present; }
+        else if (pass_is_present(d))
+        {
+            dev_kind = g::FgPassKind::Present;
+        }
         // ⛔ REN-38-A6: copy/blit/resolve are TRANSFER passes so the barrier scheduler picks TRANSFER_SRC/DST.
         // A CLEAR is NOT: it is `LOAD_OP_CLEAR` on an attachment (`ClearRenderTargetView` on DX12), which needs
         // the ordinary colour-attachment layout — classifying it as transfer would clear an image the hardware
@@ -1156,7 +1328,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         crd::u32    n_write_bufs = 0U;
         // REN-38-A14: pass the asset's QUEUE REQUEST through. The graph decides whether it can honour it and
         // reports the answer in `last_async_pass_count()` — the executor never claims it on the graph's behalf.
-        if (d.queue == FrameQueue::Async) { pb.queue(g::FgQueue::Async); }
+        if (d.queue == FrameQueue::Async)
+        {
+            pb.queue(g::FgQueue::Async);
+        }
         bool first_write = true;
         for (crd::usize w = 0; w < d.writes.size(); ++w)
         {
@@ -1178,7 +1353,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                     continue;
                 }
                 pb.writes(buffers[bi]);
-                if (n_write_bufs < kMaxPassReads) { write_bufs[n_write_bufs++] = buffers[bi]; }
+                if (n_write_bufs < kMaxPassReads)
+                {
+                    write_bufs[n_write_bufs++] = buffers[bi];
+                }
                 // REN-38-B3: a pass that WRITES a counter buffer is the pass that appends into it, so it is the
                 // pass whose reset must precede. Collected here, issued at the top of the body.
                 if (wk == FrameResourceKind::CounterBuffer && rec.n_counters < kMaxPassReads)
@@ -1188,8 +1366,14 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 w_buffer = true;
                 break;
             }
-            if (w_buffer) { continue; }
-            if (!resolve_image(d.writes[w].name, h, dummy_depth)) { return fail(FrameExecError::UnresolvedResource, &d.writes[w].name); }
+            if (w_buffer)
+            {
+                continue;
+            }
+            if (!resolve_image(d.writes[w].name, h, dummy_depth))
+            {
+                return fail(FrameExecError::UnresolvedResource, &d.writes[w].name);
+            }
             pb.writes(h);
             // ── ⭐⭐ REN-41 / CEIR-19b: a SECONDARY DEPTH-format write is the DEPTH ATTACHMENT, not an extra colour RTV. ──
             // The velocity MRT prepass writes `["velocity", "scene_depth"]` and the hybrid forward pass writes
@@ -1207,7 +1391,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 rec.depth_target = h;
                 continue;
             }
-            if (rec.n_writes < kMaxPassReads) { rec.writes_all[rec.n_writes++] = h; }
+            if (rec.n_writes < kMaxPassReads)
+            {
+                rec.writes_all[rec.n_writes++] = h;
+            }
             if (first_write)
             {
                 rec.target = h;
@@ -1261,24 +1448,43 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                 // ⛔ REN-38-B4: an ACCELERATION STRUCTURE is NOT a graph-tracked resource. It is external and
                 // read-only for the whole frame, so there is no hazard to order and no barrier to derive —
                 // declaring it as a read would ask the graph to schedule against a node it does not own.
-                if (rk == FrameResourceKind::AccelerationStructure) { was_accel = true; break; }
+                if (rk == FrameResourceKind::AccelerationStructure)
+                {
+                    was_accel = true;
+                    break;
+                }
                 pb.reads(buffers[bi]);
                 // REN-38-A10: remember WHICH buffer holds the arguments. It is a graph-tracked read like any
                 // other, which is exactly what orders this pass after the cull pass that wrote it.
-                if (rk == FrameResourceKind::IndirectArgs) { rec.args_buf = buffers[bi]; }
+                if (rk == FrameResourceKind::IndirectArgs)
+                {
+                    rec.args_buf = buffers[bi];
+                }
                 // ⭐⭐ REN-41 (TAA): a non-args buffer read on a fullscreen pass is its CONSTANTS buffer. Harmless
                 // to record for any kind (only the RasterFullscreen path binds it).
-                else { rec.fs_constants = buffers[bi]; }
+                else
+                {
+                    rec.fs_constants = buffers[bi];
+                }
                 was_buffer = true;
                 break;
             }
-            if (was_accel) { continue; }
-            if (was_buffer) { continue; }
+            if (was_accel)
+            {
+                continue;
+            }
+            if (was_buffer)
+            {
+                continue;
+            }
             bool is_array = false;
             if (resolve_image(d.reads[r].name, h, is_depth, /*for_read=*/true, &is_array))
             {
                 pb.reads(h);
-                if (rec.n_sampled < kMaxPassReads) { rec.sampled[rec.n_sampled++] = h; }
+                if (rec.n_sampled < kMaxPassReads)
+                {
+                    rec.sampled[rec.n_sampled++] = h;
+                }
                 if (first_read)
                 {
                     rec.sampled_is_depth = is_depth && !pass_flag(d, SV(pp::kDepthAsFloat));
@@ -1286,7 +1492,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                     first_read           = false;
                 }
             }
-            else { return fail(FrameExecError::UnresolvedResource, &d.reads[r].name); }
+            else
+            {
+                return fail(FrameExecError::UnresolvedResource, &d.reads[r].name);
+            }
         }
         // The draw list's vertex-pull buffer is a graph-tracked READ, so the graph orders + barriers it like any
         // other resource (this is why a pass never has to think about upload/consume hazards).
@@ -1295,9 +1504,19 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         for (crd::u32 di = 0; di < rec.draws.count(); ++di)
         {
             const DrawItem it = rec.draws.at(di);
-            if (it.storage == nullptr) { continue; }
+            if (it.storage == nullptr)
+            {
+                continue;
+            }
             rec.storage_of[di] = fgraph->import_storage(*it.storage);
-            if (pass_flag(d, SV(pp::kUntracked))) { if (di == 0U) { rec.storage = rec.storage_of[0]; } continue; }
+            if (pass_flag(d, SV(pp::kUntracked)))
+            {
+                if (di == 0U)
+                {
+                    rec.storage = rec.storage_of[0];
+                }
+                continue;
+            }
             // ⛔⛔ NOT IF THIS PASS ALREADY DECLARED IT A WRITE. A GPU-driven cull pass walks this same draw list
             // to find the buffers it COMPACTS INTO — `writes = ["instances"]` — and adding a read of the very
             // same handle makes the pass both a writer and a reader of it. Two such passes then each depend on
@@ -1308,10 +1527,20 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
             bool already_written = false;
             for (crd::u32 wb = 0; wb < n_write_bufs; ++wb)
             {
-                if (write_bufs[wb] == rec.storage_of[di]) { already_written = true; break; }
+                if (write_bufs[wb] == rec.storage_of[di])
+                {
+                    already_written = true;
+                    break;
+                }
             }
-            if (!already_written) { pb.reads(rec.storage_of[di]); }
-            if (di == 0U) { rec.storage = rec.storage_of[0]; }
+            if (!already_written)
+            {
+                pb.reads(rec.storage_of[di]);
+            }
+            if (di == 0U)
+            {
+                rec.storage = rec.storage_of[0];
+            }
         }
         // ── REN-38-A2: a COMPUTE pass's kernel bindings are its declared BUFFER reads then writes, in that order.
         // ⛔ Reads before writes is the CONTRACT, stated here because it is the only place it can be: a kernel
@@ -1332,18 +1561,30 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
                                           || rk == FrameResourceKind::StructuredBuffer
                                           || rk == FrameResourceKind::CounterBuffer
                                           || (rk == FrameResourceKind::IndirectArgs && as_args);
-                    if (!bindable) { continue; }
+                    if (!bindable)
+                    {
+                        continue;
+                    }
                     if (desc.resources[bi].name.size() != n.size()
                         || std::memcmp(desc.resources[bi].name.c_str(), n.c_str(), n.size()) != 0)
                     {
                         continue;
                     }
-                    if (rec.n_kernel_bufs < kMaxPassReads) { rec.kernel_bufs[rec.n_kernel_bufs++] = buffers[bi]; }
+                    if (rec.n_kernel_bufs < kMaxPassReads)
+                    {
+                        rec.kernel_bufs[rec.n_kernel_bufs++] = buffers[bi];
+                    }
                     return;
                 }
             };
-            for (crd::usize rr = 0; rr < d.reads.size(); ++rr) { add_buf(d.reads[rr].name, false); }
-            for (crd::usize ww = 0; ww < d.writes.size(); ++ww) { add_buf(d.writes[ww].name, true); }
+            for (crd::usize rr = 0; rr < d.reads.size(); ++rr)
+            {
+                add_buf(d.reads[rr].name, false);
+            }
+            for (crd::usize ww = 0; ww < d.writes.size(); ++ww)
+            {
+                add_buf(d.writes[ww].name, true);
+            }
         }
         // ⭐ REN-38-A5: THE PRESENT SEAM. The asset said WHEN in the frame to present and WHAT to present; the
         // host says WHERE. A missing surface FAILS by pass name — a graph that claims to present and silently
@@ -1351,7 +1592,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         if (pass_is_present(d))
         {
             g::IPresentSurface* surf = host.present_surface();
-            if (surf == nullptr) { return fail(FrameExecError::NoPresentSurface, &d.name); }
+            if (surf == nullptr)
+            {
+                return fail(FrameExecError::NoPresentSurface, &d.name);
+            }
             // ⛔ The source must be the IMPORTED output. The cooker already rejects a transient source
             // (`PresentSourceInternal`), but a PROGRAMMATIC graph never passes through the cooker — and the two
             // provenances are held to the same rules, so the check is repeated here where it cannot be bypassed.
@@ -1379,7 +1623,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         // no-record the 16d-live-4c deletion could otherwise produce (the imperative fallback that masked it is GONE). The
         // caller MUST build_frame_plans and pass them (the scene renderer does; execute_frame_graph does; direct callers
         // must). Fires BEFORE any device work. This is the doctrine the L1243 comment promised and nothing implemented.
-        if (ap.plan == nullptr && pass_is_migrated_ceir(d)) { return fail(FrameExecError::MissingCeirPlan, &d.name); }
+        if (ap.plan == nullptr && pass_is_migrated_ceir(d))
+        {
+            return fail(FrameExecError::MissingCeirPlan, &d.name);
+        }
         ap.device_kind = dev_kind;
         ap.has_sampler = pass_flag(d, SV(pp::kHasSampler));
         ap.sampler     = pass_sampler(d);
@@ -1387,7 +1634,10 @@ bool FrameRecorder::record(const FrameGraphDesc& desc, g::IFrameGraph& fgraph_re
         ap.n_counters  = rec.n_counters < crd::rendergraph::kMaxAuthoredCounters
                              ? rec.n_counters
                              : crd::rendergraph::kMaxAuthoredCounters;
-        for (crd::u32 ci = 0; ci < ap.n_counters; ++ci) { ap.counters[ci] = rec.counters[ci]; }
+        for (crd::u32 ci = 0; ci < ap.n_counters; ++ci)
+        {
+            ap.counters[ci] = rec.counters[ci];
+        }
         ap.records = &m_impl->records;
         ap.alloc   = m_impl->alloc;
         ap.diags   = &m_impl->dispatch_diags;
@@ -1422,7 +1672,10 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
     auto fgraph = raster.create_frame_graph();
     if (fgraph == nullptr)
     {
-        if (err != nullptr) { *err = FrameExecError::NoOutput; }
+        if (err != nullptr)
+        {
+            *err = FrameExecError::NoOutput;
+        }
         return false;
     }
     // ⛔⛔ CEIR-17z: the migrated executors (scene/fullscreen/mesh/tess/mesh.indirect → record_ceir_render) need a per-pass
@@ -1434,17 +1687,32 @@ bool execute_frame_graph(const FrameGraphDesc& desc, g::IRasterContext& raster, 
     FramePlans                       plans(desc.resources.allocator());
     if (!build_frame_plans(desc, plans, plan_diags))
     {
-        if (err != nullptr) { *err = FrameExecError::MissingCeirPlan; }
-        if (where != nullptr) { *where = desc.name; }
+        if (err != nullptr)
+        {
+            *err = FrameExecError::MissingCeirPlan;
+        }
+        if (where != nullptr)
+        {
+            *where = desc.name;
+        }
         return false;
     }
     FrameRecorder rec(desc.resources.allocator());
     rec.begin_frame();
-    if (!rec.record(desc, *fgraph, raster, host, err, where, &plans)) { return false; }
+    if (!rec.record(desc, *fgraph, raster, host, err, where, &plans))
+    {
+        return false;
+    }
     if (!fgraph->build())
     {
-        if (err != nullptr) { *err = FrameExecError::BuildRejected; }
-        if (where != nullptr) { *where = desc.name; }
+        if (err != nullptr)
+        {
+            *err = FrameExecError::BuildRejected;
+        }
+        if (where != nullptr)
+        {
+            *where = desc.name;
+        }
         return false;
     }
     fgraph->execute();
@@ -1587,23 +1855,42 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
     for (const FrameResourceRef& write : pass.writes)
     {
         const FrameResourceDesc* resource = fs_find_resource(desc, write.name);
-        if (resource != nullptr && fs_read_is_buffer(resource->kind)) { continue; }
-        if (resource != nullptr && g::fg_format_has_depth(resource->format)) { depth = resource; }
-        else if (color_count < g::kMaxColorAttachments) { colors[color_count++] = resource; }
+        if (resource != nullptr && fs_read_is_buffer(resource->kind))
+        {
+            continue;
+        }
+        if (resource != nullptr && g::fg_format_has_depth(resource->format))
+        {
+            depth = resource;
+        }
+        else if (color_count < g::kMaxColorAttachments)
+        {
+            colors[color_count++] = resource;
+        }
     }
     const SV shared_depth = pass_str(pass, SV(pp::kSharedDepth));
     if (!shared_depth.empty())
     {
         for (const FrameResourceDesc& resource : desc.resources)
         {
-            if (SV(resource.name.c_str(), resource.name.size()) == shared_depth) { depth = &resource; break; }
+            if (SV(resource.name.c_str(), resource.name.size()) == shared_depth)
+            {
+                depth = &resource;
+                break;
+            }
         }
     }
-    if (depth == nullptr && color_count > 0U && colors[0] != nullptr && colors[0]->depth_buffer) { depth = colors[0]; }
+    if (depth == nullptr && color_count > 0U && colors[0] != nullptr && colors[0]->depth_buffer)
+    {
+        depth = colors[0];
+    }
     const crd::ceir::Context& ctx = *plans.ctx;
     for (const crd::ceir::gpu::LoweredCommand& command : commands)
     {
-        if (command.kind != crd::ceir::gpu::LoweredKind::BeginRender || command.op == nullptr) { continue; }
+        if (command.kind != crd::ceir::gpu::LoweredKind::BeginRender || command.op == nullptr)
+        {
+            continue;
+        }
         for (crd::u32 i = 0; i < command.op->num_operands(); ++i)
         {
             const crd::ceir::Operation* attachment = command.op->operand(i)->defining_op();
@@ -1611,25 +1898,40 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
             g::DepthStencilAttachmentDesc dep;
             if (crd::ceir::gpu::materialize_color_attachment_desc(ctx, attachment, color))
             {
-                if (color.load != g::LoadOp::Clear) { continue; }
+                if (color.load != g::LoadOp::Clear)
+                {
+                    continue;
+                }
                 crd::u32 slot = 0U;
                 const crd::ceir::AttrId attr = attachment->attr(SV("color_slot"));
                 if (attr.valid())
                 {
                     const crd::ceir::AttrValue value = ctx.attr_value(attr);
                     if (value.kind != crd::ceir::AttrKind::Int || value.i < 0
-                        || value.i >= static_cast<crd::i64>(g::kMaxColorAttachments)) { continue; }
+                        || value.i >= static_cast<crd::i64>(g::kMaxColorAttachments))
+                    {
+                        continue;
+                    }
                     slot = static_cast<crd::u32>(value.i);
                 }
-                if (slot >= color_count || colors[slot] == nullptr) { continue; }
+                if (slot >= color_count || colors[slot] == nullptr)
+                {
+                    continue;
+                }
                 auto& hint = plans.clear_hints[static_cast<crd::usize>(colors[slot] - desc.resources.data())];
-                if (hint.color_set) { continue; }
+                if (hint.color_set)
+                {
+                    continue;
+                }
                 hint.color_set = true;
                 // The public MRT clear contract gives multiplicative blends the identity clear. Uint uses
                 // the native attachment's value conversion, not a float bit reinterpretation.
                 if (color.blend == g::BlendMode::Multiply || color.blend == g::BlendMode::RevealageMultiply)
                 {
-                    for (float& value : hint.value.color) { value = 1.0F; }
+                    for (float& value : hint.value.color)
+                    {
+                        value = 1.0F;
+                    }
                 }
                 else if (color.clear_kind == g::ClearKind::Uint)
                 {
@@ -1648,7 +1950,11 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
                      && dep.load == g::LoadOp::Clear)
             {
                 auto& hint = plans.clear_hints[static_cast<crd::usize>(depth - desc.resources.data())];
-                if (!hint.depth_set) { hint.value.depth = dep.clear_depth; hint.depth_set = true; }
+                if (!hint.depth_set)
+                {
+                    hint.value.depth = dep.clear_depth;
+                    hint.depth_set = true;
+                }
             }
         }
     }
@@ -1680,9 +1986,15 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
             ++nfs;
         }
     }
-    if (nfs == 0U) { return true; } // no migrated pass in this asset — nothing to build
+    if (nfs == 0U) // no migrated pass in this asset — nothing to build
+    {
+        return true;
+    }
     out.storage.reserve(nfs);
-    if (out.ctx == nullptr) { out.ctx = new crd::ceir::Context(out.alloc); }
+    if (out.ctx == nullptr)
+    {
+        out.ctx = new crd::ceir::Context(out.alloc);
+    }
 
     for (crd::usize pi = 0; pi < desc.passes.size(); ++pi)
     {
@@ -1691,7 +2003,10 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
         const bool           is_mind  = !is_fs && pass_is_mesh_indirect(d);
         const bool           is_amp   = !is_fs && !is_mind && (pass_is_tess(d) || pass_is_mesh(d));
         const bool           is_scene = !is_fs && !is_mind && !is_amp && pass_is_scene_raster(d);
-        if (!is_fs && !is_mind && !is_amp && !is_scene) { continue; }
+        if (!is_fs && !is_mind && !is_amp && !is_scene)
+        {
+            continue;
+        }
 
         // ⛔ CEIR-16d-live-4a-4: the scene COLOUR-attachment count = the build_scene_ceir `mrt_n`. Count COLOUR writes exactly
         // as the record-time resolver routes them (frame_runtime L1032-1085): a buffer write is not an attachment, and a
@@ -1712,7 +2027,10 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
                 {
                     continue;
                 }
-                if (scene_colour_writes == 0U) { scene_first_col_is_uint = crd::gpu::fg_format_is_uint(res->format); }
+                if (scene_colour_writes == 0U)
+                {
+                    scene_first_col_is_uint = crd::gpu::fg_format_is_uint(res->format);
+                }
                 ++scene_colour_writes;
             }
         }
@@ -1782,8 +2100,14 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
             // whichever is present (mirror the recorder), NOT the schema's "amplify_count": the shipped scene_mesh/scene_tess
             // use groups/patches, so reading "amplify_count" gave 0 and every amplify pass rendered BLACK (flag-ON sweep bug).
             crd::u32 amp = pass_u32(d, crd::containers::StringView("groups"), 0U);
-            if (amp == 0U) { amp = pass_u32(d, crd::containers::StringView("patches"), 0U); }
-            if (amp == 0U) { amp = pass_u32(d, crd::containers::StringView("amplify_count"), 0U); }
+            if (amp == 0U)
+            {
+                amp = pass_u32(d, crd::containers::StringView("patches"), 0U);
+            }
+            if (amp == 0U)
+            {
+                amp = pass_u32(d, crd::containers::StringView("amplify_count"), 0U);
+            }
             abd.fallback_count = amp;
             float cc[4] = {0.0F, 0.0F, 0.0F, 1.0F};
             pass_vec4(d, SV(pp::kClearColor), cc);

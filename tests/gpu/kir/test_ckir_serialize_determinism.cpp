@@ -33,9 +33,15 @@ CRD_NOINLINE void dirty_stack(crd::u8 pattern) noexcept
 {
     constexpr crd::usize k_bytes = 48U * 1024U;
     volatile crd::u8     buf[k_bytes];
-    for (crd::usize i = 0; i < k_bytes; ++i) { buf[i] = pattern; }
+    for (crd::usize i = 0; i < k_bytes; ++i)
+    {
+        buf[i] = pattern;
+    }
     volatile crd::u8 sink = 0;
-    for (crd::usize i = 0; i < k_bytes; i += 512U) { sink = static_cast<crd::u8>(sink + buf[i]); }
+    for (crd::usize i = 0; i < k_bytes; i += 512U)
+    {
+        sink = static_cast<crd::u8>(sink + buf[i]);
+    }
     (void)sink;
 }
 
@@ -97,7 +103,10 @@ int first_diff(const crd::containers::Array<crd::u8>& x, const crd::containers::
     const crd::usize n = x.size() < y.size() ? x.size() : y.size();
     for (crd::usize i = 0; i < n; ++i)
     {
-        if (x[i] != y[i]) { return static_cast<int>(i); }
+        if (x[i] != y[i])
+        {
+            return static_cast<int>(i);
+        }
     }
     return x.size() == y.size() ? -1 : static_cast<int>(n);
 }

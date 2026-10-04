@@ -78,7 +78,10 @@ template <crd::math::MathValue T> struct Polyline3
         : points(alloc), closed(closed_in)
     {
         points.reserve(initial.size());
-        for (const auto& p : initial) { points.push_back(p); }
+        for (const auto& p : initial)
+        {
+            points.push_back(p);
+        }
     }
 
     [[nodiscard]] Polyline3View<T> view() const noexcept
@@ -120,7 +123,10 @@ template <crd::math::MathValue T> struct Polyline2
         : points(alloc), closed(closed_in)
     {
         points.reserve(initial.size());
-        for (const auto& p : initial) { points.push_back(p); }
+        for (const auto& p : initial)
+        {
+            points.push_back(p);
+        }
     }
 
     [[nodiscard]] Polyline2View<T> view() const noexcept

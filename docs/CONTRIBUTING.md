@@ -56,6 +56,11 @@ and `check-generated.py --refresh docs/generated/dependency-licenses.md` records
 [project-structure synchronizer](design/project-structure-sync.md) for moved sources. A push that touches these
 paths resolves to the complete tier, so every owned preset runs hosted.
 
+Every C/C++ control statement uses Allman braces, even around one statement: no `if (x) { y; }` one-liners, no
+brace-less bodies, no `if (x) {` and no `} else`. The strict tidy gate does not see this, so
+`check-allman-braces.py` holds it on every lane; `--fix <paths>` rewrites the mechanical cases. A generated file is
+fixed in its generator.
+
 ## Generated sources and provenance
 
 Runtime changes also follow [DIAG](design/runtime-diagnostics.md): retained ownership/provenance, actionable failure

@@ -368,8 +368,14 @@ TEST_CASE("step_fixed: variable-rate systems run once per call regardless of sub
     crd::u32 variable_count = 0;
     for (const auto& e : trace)
     {
-        if (e == crd::containers::String{"fixed"}) ++fixed_count;
-        else if (e == crd::containers::String{"variable"}) ++variable_count;
+        if (e == crd::containers::String{"fixed"})
+        {
+            ++fixed_count;
+        }
+        else if (e == crd::containers::String{"variable"})
+        {
+            ++variable_count;
+        }
     }
     CHECK(fixed_count == 3U);
     CHECK(variable_count == 1U);

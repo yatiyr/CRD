@@ -32,7 +32,10 @@ crd::f32 v3_len(V3 a)
 V3 v3_norm(V3 a)
 {
     const crd::f32 l = v3_len(a);
-    if (l < 1.0e-12F) { return {0.0F, 0.0F, 1.0F}; }
+    if (l < 1.0e-12F)
+    {
+        return {0.0F, 0.0F, 1.0F};
+    }
     const crd::f32 inv = 1.0F / l;
     return {a.x * inv, a.y * inv, a.z * inv};
 }
@@ -46,7 +49,10 @@ void build_basis(V3 fwd, V3& right, V3& up)
 {
     fwd = v3_norm(fwd);
     V3 hint = {0.0F, 1.0F, 0.0F};
-    if (fabsf_crd(v3_dot(fwd, hint)) > 0.99F) { hint = {1.0F, 0.0F, 0.0F}; }
+    if (fabsf_crd(v3_dot(fwd, hint)) > 0.99F)
+    {
+        hint = {1.0F, 0.0F, 0.0F};
+    }
     right = v3_norm(v3_cross(hint, fwd));
     up    = v3_cross(fwd, right);
 }
@@ -96,19 +102,43 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
     crd::f32 max_y = sy[0];
     for (int i = 1; i < 3; ++i)
     {
-        if (sx[i] < min_x) { min_x = sx[i]; }
-        if (sx[i] > max_x) { max_x = sx[i]; }
-        if (sy[i] < min_y) { min_y = sy[i]; }
-        if (sy[i] > max_y) { max_y = sy[i]; }
+        if (sx[i] < min_x)
+        {
+            min_x = sx[i];
+        }
+        if (sx[i] > max_x)
+        {
+            max_x = sx[i];
+        }
+        if (sy[i] < min_y)
+        {
+            min_y = sy[i];
+        }
+        if (sy[i] > max_y)
+        {
+            max_y = sy[i];
+        }
     }
     auto ix0 = static_cast<crd::i32>(min_x);
     auto ix1 = static_cast<crd::i32>(max_x + 1.0F);
     auto iy0 = static_cast<crd::i32>(min_y);
     auto iy1 = static_cast<crd::i32>(max_y + 1.0F);
-    if (ix0 < 0) { ix0 = 0; }
-    if (iy0 < 0) { iy0 = 0; }
-    if (ix1 > static_cast<crd::i32>(tile.w)) { ix1 = static_cast<crd::i32>(tile.w); }
-    if (iy1 > static_cast<crd::i32>(tile.h)) { iy1 = static_cast<crd::i32>(tile.h); }
+    if (ix0 < 0)
+    {
+        ix0 = 0;
+    }
+    if (iy0 < 0)
+    {
+        iy0 = 0;
+    }
+    if (ix1 > static_cast<crd::i32>(tile.w))
+    {
+        ix1 = static_cast<crd::i32>(tile.w);
+    }
+    if (iy1 > static_cast<crd::i32>(tile.h))
+    {
+        iy1 = static_cast<crd::i32>(tile.h);
+    }
 
     // edge function: e(p) = (v1-v0) × (p-v0) — positive inside for CCW winding
     const crd::f32 dx01 = sx[1] - sx[0];
@@ -118,7 +148,10 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
     const crd::f32 dx20 = sx[0] - sx[2];
     const crd::f32 dy20 = sy[0] - sy[2];
     const crd::f32 area2 = dx01 * (sy[2] - sy[0]) - dy01 * (sx[2] - sx[0]);
-    if (fabsf_crd(area2) < 1.0e-6F) { return; } // degenerate
+    if (fabsf_crd(area2) < 1.0e-6F) // degenerate
+    {
+        return;
+    }
     const crd::f32 inv_area2 = 1.0F / area2;
     // ⛔ Handle BOTH windings: if area2 < 0, the triangle is CW and we must accept negative edge
     // values as "inside". Flipping the sign of inv_area2 makes the barycentrics positive for CW,
@@ -135,7 +168,10 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
             const crd::f32 e0 = dx12 * (cy - sy[1]) - dy12 * (cx - sx[1]);
             const crd::f32 e1 = dx20 * (cy - sy[2]) - dy20 * (cx - sx[2]);
             const crd::f32 e2 = dx01 * (cy - sy[0]) - dy01 * (cx - sx[0]);
-            if (e0 * sign_a < 0.0F || e1 * sign_a < 0.0F || e2 * sign_a < 0.0F) { continue; }
+            if (e0 * sign_a < 0.0F || e1 * sign_a < 0.0F || e2 * sign_a < 0.0F)
+            {
+                continue;
+            }
 
             // barycentrics
             const crd::f32 b0 = e0 * inv_area2;
@@ -144,7 +180,10 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
             const crd::f32 zp = b0 * z[0] + b1 * z[1] + b2 * z[2];
 
             const auto idx = static_cast<crd::u32>(py) * tile.w + static_cast<crd::u32>(px);
-            if (zp >= tile.depth[idx]) { continue; } // depth test
+            if (zp >= tile.depth[idx]) // depth test
+            {
+                continue;
+            }
             tile.depth[idx] = zp;
 
             const bool was_empty = tile.rgba[idx * 4U + 3U] == 0U;
@@ -154,7 +193,10 @@ void rasterise_triangle(Tile& tile, const crd::f32 p[3][2], const crd::f32 z[3],
             tile.rgba[idx * 4U + 2U] = 204U;
             tile.rgba[idx * 4U + 3U] = 255U; // coverage = opaque
 
-            if (was_empty) { ++tile.covered; }
+            if (was_empty)
+            {
+                ++tile.covered;
+            }
         }
     }
 }
@@ -196,7 +238,12 @@ void oct_decode_cpu(crd::f32 ox, crd::f32 oy, crd::f32& dx, crd::f32& dy, crd::f
 void oct_encode_cpu(crd::f32 dx, crd::f32 dy, crd::f32 dz, crd::f32& ox, crd::f32& oy)
 {
     const crd::f32 s = fabsf_crd(dx) + fabsf_crd(dy) + fabsf_crd(dz);
-    if (s < 1.0e-12F) { ox = 0.0F; oy = 0.0F; return; }
+    if (s < 1.0e-12F)
+    {
+        ox = 0.0F;
+        oy = 0.0F;
+        return;
+    }
     const crd::f32 px = dx / s;
     const crd::f32 py = dy / s;
     if (dz < 0.0F)
@@ -221,7 +268,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
     out.tile = tile;
     out.mips = 0U;
 
-    if (grid == 0U || tile == 0U) { return report; }
+    if (grid == 0U || tile == 0U)
+    {
+        return report;
+    }
 
     // ⭐⭐ REN-41: the atlas is now a MIP PYRAMID (see impostor_atlas.hpp). Allocate every level up front;
     // level 0 is baked antialiased (supersampled coverage → fractional alpha), the rest box-downsampled
@@ -239,7 +289,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
 
     const crd::u32 vert_count = static_cast<crd::u32>(mesh.vertices.size() / crd::resources::kMeshVertexStride);
     const crd::u32 idx_count  = static_cast<crd::u32>(mesh.indices.size() / sizeof(crd::u32));
-    if (vert_count == 0U || idx_count < 3U) { return report; }
+    if (vert_count == 0U || idx_count < 3U)
+    {
+        return report;
+    }
 
     const crd::u8* verts   = mesh.vertices.data();
     const crd::u32* indices = reinterpret_cast<const crd::u32*>(mesh.indices.data());
@@ -259,10 +312,16 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
         V3 p = read_position(verts, crd::resources::kMeshVertexStride, vi);
         V3 d = v3_sub(p, center);
         const crd::f32 r2 = v3_dot(d, d);
-        if (r2 > max_r2) { max_r2 = r2; }
+        if (r2 > max_r2)
+        {
+            max_r2 = r2;
+        }
     }
     crd::f32 radius = (max_r2 > 0.0F) ? std::sqrt(max_r2) : 1.0F;
-    if (radius < 1.0e-6F) { radius = 1.0F; }
+    if (radius < 1.0e-6F)
+    {
+        radius = 1.0F;
+    }
     const crd::f32 half_extent = radius * 1.05F; // 5% margin for rasterisation
 
     // ⭐⭐ REN-41: SUPERSAMPLE level 0. Rasterise each tile at `tile*SS` and box-downsample to `tile`, so the
@@ -300,7 +359,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
             V3 up;
             build_basis(fwd, right, up);
 
-            for (crd::u32 di = 0; di < hi * hi; ++di) { depth_buf[di] = 1.0e30F; }
+            for (crd::u32 di = 0; di < hi * hi; ++di)
+            {
+                depth_buf[di] = 1.0e30F;
+            }
             std::memset(hi_rgba.data(), 0, hi_rgba.size());
 
             Tile t{};
@@ -315,7 +377,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
                 const crd::u32 i0 = indices[ti * 3U + 0U];
                 const crd::u32 i1 = indices[ti * 3U + 1U];
                 const crd::u32 i2 = indices[ti * 3U + 2U];
-                if (i0 >= vert_count || i1 >= vert_count || i2 >= vert_count) { continue; }
+                if (i0 >= vert_count || i1 >= vert_count || i2 >= vert_count)
+                {
+                    continue;
+                }
                 V3 p0 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i0), center);
                 V3 p1 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i1), center);
                 V3 p2 = v3_sub(read_position(verts, crd::resources::kMeshVertexStride, i2), center);
@@ -327,7 +392,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
                 V3 edge1 = v3_sub(p1, p0);
                 V3 edge2 = v3_sub(p2, p0);
                 V3 fn    = v3_norm(v3_cross(edge1, edge2));
-                if (v3_dot(fn, fwd) >= 0.0F) { continue; }
+                if (v3_dot(fn, fwd) >= 0.0F)
+                {
+                    continue;
+                }
                 rasterise_triangle(t, proj, zvals, half_extent);
             }
 
@@ -349,7 +417,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
                     const crd::u32 cov = asum / (ss * ss); // 0..255 fractional coverage
                     crd::u8* d = lvl_texel(0U, tx, ty, x, y);
                     d[0] = 204U; d[1] = 204U; d[2] = 204U; d[3] = static_cast<crd::u8>(cov);
-                    if (cov > 0U) { ++tile_covered; }
+                    if (cov > 0U)
+                    {
+                        ++tile_covered;
+                    }
                 }
             }
 
@@ -377,7 +448,10 @@ ImpostorBakeReport bake_impostor_atlas(const crd::resources::MeshResource& mesh,
 
             report.covered_pixels += tile_covered;
             ++report.tiles_baked;
-            if (tile_covered == 0U) { ++report.tiles_empty; }
+            if (tile_covered == 0U)
+            {
+                ++report.tiles_empty;
+            }
         }
     }
 

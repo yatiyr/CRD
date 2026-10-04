@@ -45,7 +45,9 @@ bool CounterPool::init(crd::u32 capacity) noexcept
 void CounterPool::shutdown() noexcept
 {
     if (!m_initialized)
+    {
         return;
+    }
     CRD_ASSERT_MSG(m_acquired.load(std::memory_order_relaxed) == 0U,
                    "CounterPool::shutdown: counters still acquired — call release() first");
     m_counters.reset();
@@ -192,7 +194,9 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
     // Waiters only ever wait for 0 (see counter_wait's assert). Until we hit it,
     // leave the list alone — they stay parked.
     if (new_val != 0U)
+    {
         return nullptr;
+    }
 
     CRD_JOBS_SCHED_POINT("dec.zero"); // hit zero, before stealing the waiter list
 
@@ -275,7 +279,9 @@ void counter_wait(Counter* counter, Waiter* w, Fiber* current_fiber,
 
     // Fast path: value is already at target — no need to park at all.
     if (counter->value.load(std::memory_order_acquire) == target)
+    {
         return;
+    }
 
     // Prepare the Waiter and hand parking off to the scheduler.
     w->fiber  = current_fiber;
@@ -384,7 +390,9 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     // released and re-acquired while this park was in flight — the reclamation race the handshake exists
     // to prevent (see park_task_id above).
     if (counter->task_id != park_task_id)
+    {
         detail::sched_check_note_violation("fp.recycled-under-park");
+    }
 #endif
 
     // Done touching `counter` and `w`. Release the fiber to complete jobs::wait()

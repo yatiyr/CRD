@@ -15,13 +15,22 @@ void vk_name_object(VkDevice device, VkObjectType type, crd::u64 handle, const O
                     std::string_view site) noexcept
 {
     // A null handle or VK_OBJECT_TYPE_UNKNOWN is rejected by some ICDs/layers -- never call the PFN with either.
-    if (device == VK_NULL_HANDLE || handle == 0U || type == VK_OBJECT_TYPE_UNKNOWN) { return; }
+    if (device == VK_NULL_HANDLE || handle == 0U || type == VK_OBJECT_TYPE_UNKNOWN)
+    {
+        return;
+    }
     const auto fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
         vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
-    if (fn == nullptr) { return; } // VK_EXT_debug_utils not provided by any layer/ICD -- best-effort, non-fatal
+    if (fn == nullptr) // VK_EXT_debug_utils not provided by any layer/ICD -- best-effort, non-fatal
+    {
+        return;
+    }
     char             name[kDebugNamePrefixChars + 96];
     const crd::usize n = format_debug_name(id, site, name, sizeof(name)); // NUL-terminated; 0 if invalid/too small
-    if (n == 0U) { return; }
+    if (n == 0U)
+    {
+        return;
+    }
     VkDebugUtilsObjectNameInfoEXT ni{};
     ni.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
     ni.objectType   = type;
@@ -48,11 +57,17 @@ void vk_detach_identity(const ObjectIdentity& id) noexcept
 PassLabelScope::PassLabelScope(PFN_vkCmdBeginDebugUtilsLabelEXT begin_fn, PFN_vkCmdEndDebugUtilsLabelEXT end_fn,
                                VkCommandBuffer cb, const ObjectIdentity& id, const char* name) noexcept
 {
-    if (begin_fn == nullptr || end_fn == nullptr || cb == VK_NULL_HANDLE) { return; } // best-effort no-op
+    if (begin_fn == nullptr || end_fn == nullptr || cb == VK_NULL_HANDLE) // best-effort no-op
+    {
+        return;
+    }
     const std::string_view nm  = (name != nullptr) ? std::string_view(name) : std::string_view("pass");
     char                   buf[kDebugNamePrefixChars + 96];
     const crd::usize       n = format_debug_name(id, nm, buf, sizeof(buf)); // "[pass:N] <name>"; 0 if invalid/too small
-    if (n == 0U) { return; }                                               // do NOT Begin -> dtor stays a no-op (balanced)
+    if (n == 0U) // do NOT Begin -> dtor stays a no-op (balanced)
+    {
+        return;
+    }
     VkDebugUtilsLabelEXT label{};
     label.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
     label.pLabelName = static_cast<const char*>(buf);
@@ -63,7 +78,10 @@ PassLabelScope::PassLabelScope(PFN_vkCmdBeginDebugUtilsLabelEXT begin_fn, PFN_vk
 
 PassLabelScope::~PassLabelScope() noexcept
 {
-    if (m_end_fn != nullptr) { m_end_fn(m_cb); }
+    if (m_end_fn != nullptr)
+    {
+        m_end_fn(m_cb);
+    }
 }
 
 } // namespace crd::gpu::detail

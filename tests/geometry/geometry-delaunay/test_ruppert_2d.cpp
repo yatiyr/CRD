@@ -97,7 +97,10 @@ bool all_triangles_meet_quality(const RuppertResult2<T>& r, T threshold_deg, T t
         const auto& b = r.vertices[ib];
         const auto& c = r.vertices[ic];
         const T ang = triangle_min_angle_deg<T>(a, b, c);
-        if (ang < threshold_deg - tol_deg) { return false; }
+        if (ang < threshold_deg - tol_deg)
+        {
+            return false;
+        }
     }
     return true;
 }

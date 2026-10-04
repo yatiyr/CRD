@@ -104,9 +104,18 @@ void build_tri_adjacency_for_nni(const crd::containers::Array<crd::u32>& tri_ind
     }
     crd::containers::sort(hes.data(), hes.data() + hes.size(),
                           [](const HalfEdge& l, const HalfEdge& r) noexcept {
-                              if (l.a != r.a) { return l.a < r.a; }
-                              if (l.b != r.b) { return l.b < r.b; }
-                              if (l.tri != r.tri) { return l.tri < r.tri; }
+                              if (l.a != r.a)
+                              {
+                                  return l.a < r.a;
+                              }
+                              if (l.b != r.b)
+                              {
+                                  return l.b < r.b;
+                              }
+                              if (l.tri != r.tri)
+                              {
+                                  return l.tri < r.tri;
+                              }
                               return l.k < r.k;
                           });
     for (crd::u32 i = 0; i + 1U < hes.size(); ++i)
@@ -142,7 +151,10 @@ crd::u32 locate_tri(const crd::containers::Array<crd::u32>& tri_indices,
     crd::u32 cur = start_tri;
     for (crd::u32 step = 0; step < max_steps; ++step)
     {
-        if (cur == kNullNbr) { return kNullNbr; }
+        if (cur == kNullNbr)
+        {
+            return kNullNbr;
+        }
         const crd::u32 ia = tri_indices[3U * cur + 0U];
         const crd::u32 ib = tri_indices[3U * cur + 1U];
         const crd::u32 ic = tri_indices[3U * cur + 2U];
@@ -154,10 +166,22 @@ crd::u32 locate_tri(const crd::containers::Array<crd::u32>& tri_indices,
             return cur;
         }
         crd::u32 cross_edge = 3U;
-        if (s0 < static_cast<T>(0))      { cross_edge = 0U; }
-        else if (s1 < static_cast<T>(0)) { cross_edge = 1U; }
-        else if (s2 < static_cast<T>(0)) { cross_edge = 2U; }
-        if (cross_edge >= 3U) { return cur; }
+        if (s0 < static_cast<T>(0))
+        {
+            cross_edge = 0U;
+        }
+        else if (s1 < static_cast<T>(0))
+        {
+            cross_edge = 1U;
+        }
+        else if (s2 < static_cast<T>(0))
+        {
+            cross_edge = 2U;
+        }
+        if (cross_edge >= 3U)
+        {
+            return cur;
+        }
         cur = tri_nbrs[3U * cur + cross_edge];
     }
     return kNullNbr;
@@ -167,7 +191,10 @@ crd::u32 locate_tri(const crd::containers::Array<crd::u32>& tri_indices,
 template <crd::math::MathScalar T>
 T polygon_signed_area(const crd::math::Vec2<T>* verts, crd::u32 n) noexcept
 {
-    if (n < 3U) { return static_cast<T>(0); }
+    if (n < 3U)
+    {
+        return static_cast<T>(0);
+    }
     T sum = static_cast<T>(0);
     for (crd::u32 i = 0; i < n; ++i)
     {
@@ -194,8 +221,14 @@ NniInterpolator2<T>::NniInterpolator2(crd::containers::ConstSpan<crd::math::Vec2
     }
     m_sites.reserve(sites.size());
     m_values.reserve(values.size());
-    for (crd::usize i = 0; i < sites.size(); ++i) { m_sites.push_back(sites[i]); }
-    for (crd::usize i = 0; i < values.size(); ++i) { m_values.push_back(values[i]); }
+    for (crd::usize i = 0; i < sites.size(); ++i)
+    {
+        m_sites.push_back(sites[i]);
+    }
+    for (crd::usize i = 0; i < values.size(); ++i)
+    {
+        m_values.push_back(values[i]);
+    }
 
     auto del = delaunay_2d<T>(sites, alloc);
     if (!del.ok())
@@ -271,8 +304,14 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
         for (crd::u32 k = 0; k < 3U; ++k)
         {
             const crd::u32 nbr = m_tri_neighbours[3U * cur + k];
-            if (nbr == kNullNbr) { continue; }
-            if (in_cavity[nbr] != 0U) { continue; }
+            if (nbr == kNullNbr)
+            {
+                continue;
+            }
+            if (in_cavity[nbr] != 0U)
+            {
+                continue;
+            }
             const crd::u32 a = m_tri_indices[3U * nbr + 0U];
             const crd::u32 b = m_tri_indices[3U * nbr + 1U];
             const crd::u32 c = m_tri_indices[3U * nbr + 2U];
@@ -298,7 +337,10 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
         {
             const crd::u32 nbr = m_tri_neighbours[3U * ti + k];
             const bool nbr_cavity = (nbr != kNullNbr) && (in_cavity[nbr] != 0U);
-            if (nbr_cavity) { continue; }
+            if (nbr_cavity)
+            {
+                continue;
+            }
             // Cavity boundary edge (whether the outer side is another tri OR
             // a hull edge with null neighbour). For q strictly inside the
             // convex hull this still forms a closed boundary cycle since
@@ -321,7 +363,10 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
     // input site count.
     crd::containers::Array<crd::u32> next_v(m_alloc);
     next_v.resize(m_sites.size(), kNullNbr);
-    for (const auto& e : boundary) { next_v[e.u] = e.v; }
+    for (const auto& e : boundary)
+    {
+        next_v[e.u] = e.v;
+    }
     crd::containers::Array<crd::u32> cycle(m_alloc);
     const crd::u32 start_u = boundary[0].u;
     cycle.push_back(start_u);
@@ -367,7 +412,10 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
     auto local_of = [&](crd::u32 t, crd::u32 vi) -> crd::u32 {
         for (crd::u32 k = 0; k < 3U; ++k)
         {
-            if (m_tri_indices[3U * t + k] == vi) { return k; }
+            if (m_tri_indices[3U * t + k] == vi)
+            {
+                return k;
+            }
         }
         return 3U;
     };
@@ -409,7 +457,10 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
         for (crd::u32 step = 0; step < cavity_safety; ++step)
         {
             stolen_poly.push_back(m_circumcentres[cur_t]);
-            if (cur_t == end_t) { break; }
+            if (cur_t == end_t)
+            {
+                break;
+            }
             // Find the next cavity tri across the edge of cur_t that
             // contains n_i but is NOT the edge we came in on (i.e., not the
             // boundary edge (n_prev, n_i)).
@@ -417,7 +468,11 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
             //   edge k where v[k] = n_i (outgoing) and edge (k+2)%3 where
             //   v[(k+2)%3+1] = n_i (incoming).
             const crd::u32 ni_local = local_of(cur_t, n_i);
-            if (ni_local >= 3U) { result.status = NniStatus::InternalInvariant; return result; }
+            if (ni_local >= 3U)
+            {
+                result.status = NniStatus::InternalInvariant;
+                return result;
+            }
             const crd::u32 edge_out = ni_local;                 // (v[ni_local], v[ni_local+1])
             const crd::u32 edge_in  = (ni_local + 2U) % 3U;     // (v[ni_local-1], v[ni_local])
             // The "internal" edges at n_i are the two; one shares with prev_t
@@ -427,9 +482,18 @@ NniResult<T> NniInterpolator2<T>::interpolate(const crd::math::Vec2<T>& query) c
             for (crd::u32 ke : {edge_out, edge_in})
             {
                 const crd::u32 nbr = m_tri_neighbours[3U * cur_t + ke];
-                if (nbr == kNullNbr) { continue; }
-                if (in_cavity[nbr] == 0U) { continue; }
-                if (nbr == prev_t) { continue; }
+                if (nbr == kNullNbr)
+                {
+                    continue;
+                }
+                if (in_cavity[nbr] == 0U)
+                {
+                    continue;
+                }
+                if (nbr == prev_t)
+                {
+                    continue;
+                }
                 next_t = nbr;
                 break;
             }

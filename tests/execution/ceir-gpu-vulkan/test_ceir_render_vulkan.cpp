@@ -60,7 +60,11 @@ TEST_CASE("ceir 14z-3: the CEIR triangle renders RED on a Vulkan raster encoder 
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -79,7 +83,11 @@ TEST_CASE("ceir 14z-3: the CEIR triangle renders RED on a Vulkan raster encoder 
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -125,7 +133,11 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the Vulkan FRAME G
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -134,7 +146,11 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the Vulkan FRAME G
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -144,7 +160,11 @@ TEST_CASE("ceir 14z-4a: the CEIR triangle renders RED through the Vulkan FRAME G
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -186,7 +206,11 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -195,7 +219,11 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -205,7 +233,11 @@ TEST_CASE("ceir 14z-4c: a TWO-SCOPE CEIR program renders into TWO targets throug
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe);
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -258,7 +290,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -267,7 +303,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -277,7 +317,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MRT program drives draw_storage_mrt RED@0/GREEN@1
     crd::kir::KEntry fe;
     crd::gputest::build_gbuffer_two_output_fs(fg, fe); // RED@0 / GREEN@1
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -342,7 +386,11 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -351,7 +399,11 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -361,7 +413,11 @@ TEST_CASE("ceir 14z-4c: a CEIR uint MRT program drives distinct uint clears + id
     crd::kir::KEntry fe;
     crd::gputest::build_visbuffer_two_output_fs(fg, fe); // id 7 @0 / id 9 @1
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -417,7 +473,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -426,7 +486,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -436,7 +500,11 @@ TEST_CASE("ceir 14z-4c: a CEIR MIXED uint+float MRT program renders through the 
     crd::kir::KEntry fe;
     crd::gputest::build_gbuffer_uint_float_fs(fg, fe); // uint id 7 @0 / GREEN @1
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -497,7 +565,11 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -506,7 +578,11 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     // scope-0 program: the storage-pull triangle VS + a DEPTH-ONLY FS (n_out = 0, frag_depth = 0.5).
@@ -517,7 +593,11 @@ TEST_CASE("ceir 14z-5: a CEIR depth-only pass renders depth; a later scope occlu
     crd::kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = vk->create_program(dvg, dve);
-    if (dvs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (dvs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto dfs = vk->create_program(dfg, dfe);
     REQUIRE(dfs != nullptr);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
@@ -593,7 +673,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -602,7 +686,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -612,7 +700,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -648,7 +740,10 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect draw pushes the per-sub-draw Draw
     crd::u32       args_words[12] = {0U}; // max 2 x 6 u32 (DX12)
     for (crd::u32 i = 0; i < 2U; ++i)
     {
-        if (argw != 0U) { args_words[i * stride_w] = i; }    // DX12: the per-command DrawIndex root constant
+        if (argw != 0U) // DX12: the per-command DrawIndex root constant
+        {
+            args_words[i * stride_w] = i;
+        }
         args_words[i * stride_w + argw + 0U] = 3U;           // index_count
         args_words[i * stride_w + argw + 1U] = 1U;           // instance_count
         args_words[i * stride_w + argw + 2U] = 0U;           // first_index (IDENTICAL — the DrawIndex split is in the VS)
@@ -694,7 +789,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
     if (!vk->graphics_capable() || !vk->shader_object())
     {
@@ -703,8 +802,16 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
-    if (!raster->indirect_count_supported()) { WARN("no indirect-count support; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
+    if (!raster->indirect_count_supported())
+    {
+        WARN("no indirect-count support; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           vg(&alloc);
@@ -714,7 +821,11 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto vs = vk->create_program(vg, ve);
-    if (vs == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (vs == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);
     auto program = raster->create_raster_program(*vs, *fs);
@@ -742,7 +853,10 @@ TEST_CASE("ceir 14z-6: a CEIR indexed-indirect-count draw gates sub-draws on the
     crd::u32       args_words[12] = {0U};
     for (crd::u32 i = 0; i < 2U; ++i)
     {
-        if (argw != 0U) { args_words[i * stride_w] = i; }
+        if (argw != 0U)
+        {
+            args_words[i * stride_w] = i;
+        }
         args_words[i * stride_w + argw + 0U] = 3U; // index_count
         args_words[i * stride_w + argw + 1U] = 1U; // instance_count
         args_words[i * stride_w + argw + 2U] = 0U; // first_index (identical)
@@ -823,13 +937,29 @@ TEST_CASE("ceir 14z-7: a CEIR mesh dispatch renders the shared triangle through 
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto gc               = g::create_vulkan_gpu_context(cfg);
-    if (gc == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (gc == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<g::VulkanGpuContext*>(gc.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
-    if (!vk->mesh_shader()) { WARN("adapter has no VK_EXT_mesh_shader; skipping the mesh draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!vk->mesh_shader())
+    {
+        WARN("adapter has no VK_EXT_mesh_shader; skipping the mesh draw");
+        return;
+    }
     auto raster = g::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (raster->create_frame_graph() == nullptr) { WARN("no frame graph on this raster context; skipping"); return; }
+    if (raster->create_frame_graph() == nullptr)
+    {
+        WARN("no frame graph on this raster context; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     crd::kir::KGraph           mg(&alloc);
@@ -839,7 +969,11 @@ TEST_CASE("ceir 14z-7: a CEIR mesh dispatch renders the shared triangle through 
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg, fe); // RED
     auto mesh = vk->create_program(mg, me);
-    if (mesh == nullptr) { WARN("glslc/SPIR-V unavailable; skipping the device draw"); return; }
+    if (mesh == nullptr)
+    {
+        WARN("glslc/SPIR-V unavailable; skipping the device draw");
+        return;
+    }
     REQUIRE(mesh->stage() == g::ShaderStage::Mesh);
     auto fs = vk->create_program(fg, fe);
     REQUIRE(fs != nullptr);

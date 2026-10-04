@@ -50,7 +50,10 @@ void make_field(crd::containers::Array<double>& col, crd::containers::Array<doub
     dep.resize(static_cast<crd::usize>(n), 0.5);
     for (int i = 0; i < n; ++i)
     {
-        for (int c = 0; c < 3; ++c) { col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)] = 0.0; }
+        for (int c = 0; c < 3; ++c)
+        {
+            col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)] = 0.0;
+        }
         dep[static_cast<crd::usize>(i)] = 0.5;
     }
     const double inv = 1.0 / crd::math::sqrt(tdx * tdx + tdy * tdy);
@@ -90,7 +93,10 @@ TEST_CASE("ckir hair filter preserves a constant field exactly", "[ckir][hair][f
         {
             const double e = crd::math::abs(out[static_cast<crd::usize>(i) * 4U + static_cast<crd::usize>(c)]
                                             - col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)]);
-            if (e > worst) { worst = e; }
+            if (e > worst)
+            {
+                worst = e;
+            }
         }
         CHECK(out[static_cast<crd::usize>(i) * 4U + 3U] > 0.0); // every pixel gathers SOMETHING (itself, at minimum)
     }
@@ -170,8 +176,14 @@ TEST_CASE("ckir hair filter never blends across a depth discontinuity", "[ckir][
     {
         const double nearv = out[(static_cast<crd::usize>(y) * kFW + (kFW / 2 - 1)) * 4U + 0U];
         const double farv  = out[(static_cast<crd::usize>(y) * kFW + (kFW / 2)) * 4U + 0U];
-        if (crd::math::abs(nearv - 1.0) > leak) { leak = crd::math::abs(nearv - 1.0); }
-        if (crd::math::abs(farv) > leak) { leak = crd::math::abs(farv); }
+        if (crd::math::abs(nearv - 1.0) > leak)
+        {
+            leak = crd::math::abs(nearv - 1.0);
+        }
+        if (crd::math::abs(farv) > leak)
+        {
+            leak = crd::math::abs(farv);
+        }
     }
     INFO("worst cross-silhouette leak " << leak);
     CHECK(leak < 2.0e-6);
@@ -190,13 +202,19 @@ TEST_CASE("ckir hair filter fills gaps along a strand without smearing across st
 
     // Empty pixels sit at the far plane so the depth guard rejects them. This matters: if background counted as a legitimate
     // black sample it would dominate the normaliser and no filter could ever lift a gap out of black.
-    for (int i = 0; i < kFW * kFH; ++i) { dep[static_cast<crd::usize>(i)] = 1.0; }
+    for (int i = 0; i < kFW * kFH; ++i)
+    {
+        dep[static_cast<crd::usize>(i)] = 1.0;
+    }
     for (int x = 0; x < kFW; ++x)
     {
         dep[(static_cast<crd::usize>(row_a) * kFW + static_cast<crd::usize>(x))] = 0.5; // strand A is COVERED everywhere (the conservative layer)...
         dep[(static_cast<crd::usize>(row_b) * kFW + static_cast<crd::usize>(x))] = 0.5;
         // ...but only every other pixel got a shaded sample — the dotted result of 1-spp deferred rasterization.
-        if (x % 2 == 0) { col[(static_cast<crd::usize>(row_a) * kFW + static_cast<crd::usize>(x)) * 3U + 0U] = 1.0; } // A is RED
+        if (x % 2 == 0) // A is RED
+        {
+            col[(static_cast<crd::usize>(row_a) * kFW + static_cast<crd::usize>(x)) * 3U + 0U] = 1.0;
+        }
         col[(static_cast<crd::usize>(row_b) * kFW + static_cast<crd::usize>(x)) * 3U + 1U] = 1.0;                     // B is GREEN, solid
     }
     kir::hairgeom::HairFilterConfig cfg;
@@ -209,8 +227,20 @@ TEST_CASE("ckir hair filter fills gaps along a strand without smearing across st
     for (int x = 8; x < kFW - 8; ++x)
     {
         const double v = out[(static_cast<crd::usize>(row_a) * kFW + static_cast<crd::usize>(x)) * 4U + 0U];
-        if (x % 2 == 0) { if (v < hmin) { hmin = v; } }
-        else            { if (v < gmin) { gmin = v; } }
+        if (x % 2 == 0)
+        {
+            if (v < hmin)
+            {
+                hmin = v;
+            }
+        }
+        else
+        {
+            if (v < gmin)
+            {
+                gmin = v;
+            }
+        }
     }
     // GAP FILL. A gap is exactly 0 in the input; the kernel must pull its along-tangent neighbours in. It cannot reach parity
     // with a hit, and that is BY DESIGN — the colour term deliberately down-weights dissimilar neighbours, which is what stops
@@ -227,8 +257,14 @@ TEST_CASE("ckir hair filter fills gaps along a strand without smearing across st
     {
         const double b = out[(static_cast<crd::usize>(row_a) * kFW + static_cast<crd::usize>(x)) * 4U + 1U];
         const double o = out[(static_cast<crd::usize>(row_b) * kFW + static_cast<crd::usize>(x)) * 4U + 1U];
-        if (b > gbleed) { gbleed = b; }
-        if (o > gown) { gown = o; }
+        if (b > gbleed)
+        {
+            gbleed = b;
+        }
+        if (o > gown)
+        {
+            gown = o;
+        }
     }
     INFO("green bled onto strand A " << gbleed << " vs strand B's own " << gown << " ratio " << (gbleed / gown));
     CHECK(gbleed < 0.05 * gown);
@@ -249,7 +285,10 @@ TEST_CASE("ckir hair filter is a convex combination", "[ckir][hair][filter]")
     };
     for (int i = 0; i < kFW * kFH; ++i)
     {
-        for (int c = 0; c < 3; ++c) { col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)] = rnd(); }
+        for (int c = 0; c < 3; ++c)
+        {
+            col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)] = rnd();
+        }
     }
     kir::hairgeom::HairFilterConfig cfg;
     cfg.width  = kFW;
@@ -265,8 +304,14 @@ TEST_CASE("ckir hair filter is a convex combination", "[ckir][hair][filter]")
         for (int c = 0; c < 3; ++c)
         {
             const double v = col[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)];
-            if (v < lo) { lo = v; }
-            if (v > hi) { hi = v; }
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
         }
     }
     for (int i = 0; i < kFW * kFH; ++i)

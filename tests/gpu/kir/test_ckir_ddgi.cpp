@@ -40,9 +40,24 @@ TEST_CASE("DDGI octahedral: decode(encode(d)) recovers EVERY unit direction (no 
         double dy = rnd();
         double dz = rnd();
         // avoid the degenerate zero vector; a couple of axis directions seeded explicitly for the corner/pole cases
-        if (i == 0) { dx = 0.0; dy = 0.0; dz = 1.0; }
-        if (i == 1) { dx = 0.0; dy = 0.0; dz = -1.0; }
-        if (i == 2) { dx = 1.0; dy = 0.0; dz = 0.0; }
+        if (i == 0)
+        {
+            dx = 0.0;
+            dy = 0.0;
+            dz = 1.0;
+        }
+        if (i == 1)
+        {
+            dx = 0.0;
+            dy = 0.0;
+            dz = -1.0;
+        }
+        if (i == 2)
+        {
+            dx = 1.0;
+            dy = 0.0;
+            dz = 0.0;
+        }
         const double len = std::sqrt(dx * dx + dy * dy + dz * dz) + 1e-9;
         in[uz(i * 3 + 0)] = dx / len;
         in[uz(i * 3 + 1)] = dy / len;
@@ -55,7 +70,10 @@ TEST_CASE("DDGI octahedral: decode(encode(d)) recovers EVERY unit direction (no 
     for (int i = 0; i < n; ++i)
     {
         const double dot = in[uz(i * 3 + 0)] * out[uz(i * 3 + 0)] + in[uz(i * 3 + 1)] * out[uz(i * 3 + 1)] + in[uz(i * 3 + 2)] * out[uz(i * 3 + 2)];
-        if (dot < min_dot) { min_dot = dot; }
+        if (dot < min_dot)
+        {
+            min_dot = dot;
+        }
     }
     CHECK(min_dot > 1.0 - 1e-5); // every recovered direction is parallel to its input (round-trip is lossless up to sqrt ULP)
 }
@@ -124,7 +142,10 @@ TEST_CASE("DDGI sample: a UNIFORM probe field returns exactly that irradiance (t
     {
         for (int t = 0; t < r * r; ++t)
         {
-            for (int ch = 0; ch < 3; ++ch) { sc.irr[uz(pi * r * r * 3 + t * 3 + ch)] = c[ch]; }
+            for (int ch = 0; ch < 3; ++ch)
+            {
+                sc.irr[uz(pi * r * r * 3 + t * 3 + ch)] = c[ch];
+            }
             sc.dpt[uz(pi * r * r * 2 + t * 2 + 0)] = 100.0;   // mean
             sc.dpt[uz(pi * r * r * 2 + t * 2 + 1)] = 10000.0; // mean²
         }
@@ -140,7 +161,10 @@ TEST_CASE("DDGI sample: a UNIFORM probe field returns exactly that irradiance (t
     double maxdev = 0.0;
     for (int p = 0; p < sc.n; ++p)
     {
-        for (int ch = 0; ch < 3; ++ch) { maxdev = std::max(maxdev, std::abs(sc.out[uz(p * 3 + ch)] - c[ch])); }
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            maxdev = std::max(maxdev, std::abs(sc.out[uz(p * 3 + ch)] - c[ch]));
+        }
     }
     CHECK(maxdev < 1e-4); // the full 8-probe blend of a constant field IS that constant (up to fp weighted-mean rounding)
 }
@@ -171,7 +195,10 @@ TEST_CASE("DDGI sample: a FULL GRID indexes the right cell -- a bright probe lig
     out.resize(uz(nq * 3));
     // only probe (2,1,1) — flat index (1·4+1)·4+2 = 22 — is bright RED (uniform over its octahedral map); all else dark.
     const int bright = (1 * 4 + 1) * 4 + 2;
-    for (int t = 0; t < r * r; ++t) { irr[uz(bright * r * r * 3 + t * 3 + 0)] = 1.0; }
+    for (int t = 0; t < r * r; ++t)
+    {
+        irr[uz(bright * r * r * 3 + t * 3 + 0)] = 1.0;
+    }
     for (int pi = 0; pi < np; ++pi)
     {
         for (int t = 0; t < r * r; ++t)
@@ -278,16 +305,32 @@ TEST_CASE("DDGI probe update: aligned rays ACCUMULATE irradiance + set the depth
     const auto max_r = [&]() {
         double m = 0.0;
         int    at = 0;
-        for (int t = 0; t < r * r; ++t) { if (oir[uz(t * 3)] > m) { m = oir[uz(t * 3)]; at = t; } } // probe 0's texels
+        for (int t = 0; t < r * r; ++t) // probe 0's texels
+        {
+            if (oir[uz(t * 3)] > m)
+            {
+                m = oir[uz(t * 3)];
+                at = t;
+            }
+        }
         return std::pair<double, int>(m, at);
     };
     double r1 = 0.0;
     for (int f = 0; f < 40; ++f)
     {
         kir::eval_cpu_kernel(g, e, bufs, 7, e.local_size[0], &alloc, static_cast<crd::u32>(ntx / 64));
-        if (f == 0) { r1 = max_r().first; }
-        for (int i = 0; i < ntx * 3; ++i) { pir[uz(i)] = oir[uz(i)]; }
-        for (int i = 0; i < ntx * 2; ++i) { pdp[uz(i)] = odp[uz(i)]; }
+        if (f == 0)
+        {
+            r1 = max_r().first;
+        }
+        for (int i = 0; i < ntx * 3; ++i)
+        {
+            pir[uz(i)] = oir[uz(i)];
+        }
+        for (int i = 0; i < ntx * 2; ++i)
+        {
+            pdp[uz(i)] = odp[uz(i)];
+        }
     }
     const auto rn = max_r();
     CHECK(r1 > 0.0);                          // one frame already deposits some irradiance in the +Y texel
@@ -296,7 +339,13 @@ TEST_CASE("DDGI probe update: aligned rays ACCUMULATE irradiance + set the depth
     CHECK(odp[uz(rn.second * 2)] > 2.0);      // the +Y texel's depth MEAN converged toward the 5.0 hit distance
     // a texel facing AWAY from +Y (e.g. the −Y direction) receives no aligned rays ⇒ stays ~0
     double min_r = 1.0;
-    for (int t = 0; t < r * r; ++t) { if (oir[uz(t * 3)] < min_r) { min_r = oir[uz(t * 3)]; } }
+    for (int t = 0; t < r * r; ++t)
+    {
+        if (oir[uz(t * 3)] < min_r)
+        {
+            min_r = oir[uz(t * 3)];
+        }
+    }
     CHECK(min_r < 0.05);                      // back-facing texels never lit (cosine weight 0)
 }
 
@@ -324,5 +373,8 @@ TEST_CASE("DDGI Chebyshev visibility: lit when nearer than the mean, occluded (-
     CHECK(std::abs(out[uz(0)] - 1.0) < 1e-6);          // dist 5 ≤ mean 10 ⇒ fully lit
     CHECK(std::abs(out[uz(20)] - 1.0) < 1e-6);         // dist 10 == mean ⇒ still lit (boundary)
     CHECK(out[uz(n - 1)] < 0.05);                       // dist ~21 ≫ mean+σ ⇒ occluded (Chebyshev → ~0, no leak)
-    for (int p = 21; p < n; ++p) { CHECK(out[uz(p)] <= out[uz(p - 1)] + 1e-9); } // monotone non-increasing past the mean
+    for (int p = 21; p < n; ++p) // monotone non-increasing past the mean
+    {
+        CHECK(out[uz(p)] <= out[uz(p - 1)] + 1e-9);
+    }
 }

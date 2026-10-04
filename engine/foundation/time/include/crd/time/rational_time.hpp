@@ -87,8 +87,14 @@ namespace detail
 
     [[nodiscard]] constexpr int u128_cmp(const U128& a, const U128& b) noexcept
     {
-        if (a.hi != b.hi) { return a.hi < b.hi ? -1 : 1; }
-        if (a.lo != b.lo) { return a.lo < b.lo ? -1 : 1; }
+        if (a.hi != b.hi)
+        {
+            return a.hi < b.hi ? -1 : 1;
+        }
+        if (a.lo != b.lo)
+        {
+            return a.lo < b.lo ? -1 : 1;
+        }
         return 0;
     }
 
@@ -102,7 +108,10 @@ namespace detail
     [[nodiscard]] constexpr U128DivResult udiv_128_64(const U128& n, crd::u64 d) noexcept
     {
         U128DivResult r;
-        if (d == 0) { return r; } // guarded by callers; a zero divisor yields 0 (never UB)
+        if (d == 0) // guarded by callers; a zero divisor yields 0 (never UB)
+        {
+            return r;
+        }
         crd::u64 rem = 0;
         for (int bit = 127; bit >= 0; --bit)
         {
@@ -113,8 +122,14 @@ namespace detail
             if (rem >= d)
             {
                 rem -= d;
-                if (bit >= 64) { r.quot.hi |= 1ULL << idx; }
-                else { r.quot.lo |= 1ULL << idx; }
+                if (bit >= 64)
+                {
+                    r.quot.hi |= 1ULL << idx;
+                }
+                else
+                {
+                    r.quot.lo |= 1ULL << idx;
+                }
             }
         }
         r.rem = rem;
@@ -131,11 +146,17 @@ namespace detail
 // Reduced, sign-normalized rate. Zero/negative inputs yield the INVALID rate (never a bogus positive one).
 [[nodiscard]] constexpr RationalRate make_rate(crd::i64 num, crd::i64 den) noexcept
 {
-    if (num <= 0 || den <= 0) { return {}; }
+    if (num <= 0 || den <= 0)
+    {
+        return {};
+    }
     const crd::i64 g  = detail::gcd_i64(num, den);
     const crd::i64 rn = num / g;
     const crd::i64 rd = den / g;
-    if (rn > 0x7FFFFFFF || rd > 0x7FFFFFFF) { return {}; } // beyond any editorial rate — refuse, never truncate
+    if (rn > 0x7FFFFFFF || rd > 0x7FFFFFFF) // beyond any editorial rate — refuse, never truncate
+    {
+        return {};
+    }
     return {static_cast<crd::i32>(rn), static_cast<crd::i32>(rd)};
 }
 
@@ -168,12 +189,18 @@ struct RationalTime
 {
     if (a.rate == b.rate) // the timeline fast path — pure i64
     {
-        if (a.value == b.value) { return 0; }
+        if (a.value == b.value)
+        {
+            return 0;
+        }
         return a.value < b.value ? -1 : 1;
     }
     const bool neg_a = a.value < 0;
     const bool neg_b = b.value < 0;
-    if (neg_a != neg_b) { return neg_a ? -1 : 1; }
+    if (neg_a != neg_b)
+    {
+        return neg_a ? -1 : 1;
+    }
     // |v|*den ≤ 2^63·2^31 = 2^94; ×num ≤ 2^125 — two u64 multiplies, the second on a (≤2^30, u64) pair
     const detail::U128 ad = detail::umul_64_64(detail::abs_u64(a.value), static_cast<crd::u64>(a.rate.den));
     const detail::U128 bd = detail::umul_64_64(detail::abs_u64(b.value), static_cast<crd::u64>(b.rate.den));
@@ -215,8 +242,14 @@ struct RationalTime
 // Does `t` land EXACTLY on a tick of `rate`? (ask before `rescaled_to` when rounding would be a bug)
 [[nodiscard]] constexpr bool rescales_exactly(const RationalTime& t, RationalRate rate) noexcept
 {
-    if (!t.rate.valid() || !rate.valid()) { return false; }
-    if (t.rate == rate) { return true; }
+    if (!t.rate.valid() || !rate.valid())
+    {
+        return false;
+    }
+    if (t.rate == rate)
+    {
+        return true;
+    }
     // v' = v * (num_r * den_t) / (num_t * den_r) — exact iff the denominator divides the 128-bit numerator
     const crd::u64     a = static_cast<crd::u64>(rate.num) * static_cast<crd::u64>(t.rate.den);  // ≤ 2^62
     const crd::u64     b = static_cast<crd::u64>(t.rate.num) * static_cast<crd::u64>(rate.den);  // ≤ 2^62
@@ -234,8 +267,14 @@ enum class RescaleRounding : crd::u8
 [[nodiscard]] constexpr RationalTime rescaled_to(const RationalTime& t, RationalRate rate,
                                                  RescaleRounding rounding = RescaleRounding::Floor) noexcept
 {
-    if (!t.rate.valid() || !rate.valid()) { return {}; }
-    if (t.rate == rate) { return t; }
+    if (!t.rate.valid() || !rate.valid())
+    {
+        return {};
+    }
+    if (t.rate == rate)
+    {
+        return t;
+    }
     const crd::u64     a   = static_cast<crd::u64>(rate.num) * static_cast<crd::u64>(t.rate.den);
     const crd::u64     b   = static_cast<crd::u64>(t.rate.num) * static_cast<crd::u64>(rate.den);
     const bool         neg = t.value < 0;
@@ -244,7 +283,10 @@ enum class RescaleRounding : crd::u8
     crd::u64           q   = d.quot.lo; // editorial magnitudes never fill quot.hi (v·a/b ≤ v·2^31)
     if (rounding == RescaleRounding::Round)
     {
-        if (d.rem * 2 >= b) { q += 1; }
+        if (d.rem * 2 >= b)
+        {
+            q += 1;
+        }
     }
     else if (neg && d.rem != 0)
     {
@@ -258,15 +300,24 @@ enum class RescaleRounding : crd::u8
 // the coarsest grid holding BOTH exactly). Editorial rate products stay far inside i64 (24000×30000 < 2^31).
 [[nodiscard]] constexpr RationalTime add(const RationalTime& a, const RationalTime& b) noexcept
 {
-    if (!a.rate.valid() || !b.rate.valid()) { return {}; }
-    if (a.rate == b.rate) { return {a.value + b.value, a.rate}; }
+    if (!a.rate.valid() || !b.rate.valid())
+    {
+        return {};
+    }
+    if (a.rate == b.rate)
+    {
+        return {a.value + b.value, a.rate};
+    }
     // merged rate = (num_a·num_b) / gcd(den_a·num_b, den_b·num_a)
     const crd::i64     nn = static_cast<crd::i64>(a.rate.num) * b.rate.num;
     const crd::i64     da = static_cast<crd::i64>(a.rate.den) * b.rate.num;
     const crd::i64     db = static_cast<crd::i64>(b.rate.den) * a.rate.num;
     const crd::i64     g  = detail::gcd_i64(da, db);
     const RationalRate m  = make_rate(nn, g);
-    if (!m.valid()) { return {}; }
+    if (!m.valid())
+    {
+        return {};
+    }
     const crd::i64 va = a.value * (da / g); // exact by construction of the merged grid
     const crd::i64 vb = b.value * (db / g);
     return {va + vb, m};
@@ -281,7 +332,10 @@ enum class RescaleRounding : crd::u8
 
 [[nodiscard]] constexpr crd::f64 to_seconds_f64(const RationalTime& t) noexcept
 {
-    if (!t.rate.valid()) { return 0.0; }
+    if (!t.rate.valid())
+    {
+        return 0.0;
+    }
     return static_cast<crd::f64>(t.value) * static_cast<crd::f64>(t.rate.den) / static_cast<crd::f64>(t.rate.num);
 }
 

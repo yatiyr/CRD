@@ -58,7 +58,10 @@ template <crd::math::MathValue T> struct CatmullRom3
         : points(alloc), param(param_in), closed(closed_in)
     {
         points.reserve(control_points.size());
-        for (const auto& p : control_points) { points.push_back(p); }
+        for (const auto& p : control_points)
+        {
+            points.push_back(p);
+        }
     }
 };
 

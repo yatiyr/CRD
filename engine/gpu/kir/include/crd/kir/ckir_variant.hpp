@@ -78,7 +78,10 @@ inline void hash_u64(crd::u64& h, crd::u64 v) noexcept
     detail::hash_u64(h, static_cast<crd::u64>(k.alpha));
     detail::hash_u64(h, k.shading);
     detail::hash_u64(h, k.vertex);
-    for (int i = 0; i < k.n_options; ++i) { detail::hash_u64(h, static_cast<crd::u64>(k.options[i])); }
+    for (int i = 0; i < k.n_options; ++i)
+    {
+        detail::hash_u64(h, static_cast<crd::u64>(k.options[i]));
+    }
     return h;
 }
 
@@ -199,7 +202,10 @@ struct VariantRequest
 [[nodiscard]] inline bool build_variant(const VariantRequest& req, cook::PassType pass, const int* option_values,
                                         KGraph& g, KEntry& e)
 {
-    if (req.material == nullptr || req.tech == nullptr || req.env == nullptr) { return false; }
+    if (req.material == nullptr || req.tech == nullptr || req.env == nullptr)
+    {
+        return false;
+    }
     VariantEnv env;
     req.env(g, env, req.env_user); // graph-local ids, built into THIS graph
     crd::f64 vals[kMaxVariantOptions] = {};
@@ -223,17 +229,29 @@ struct VariantRequest
 [[nodiscard]] inline bool cook_variant_matrix(const VariantRequest& req, crd::memory::IAllocator* alloc,
                                               VariantMatrix& out)
 {
-    if (req.material == nullptr || req.tech == nullptr || req.env == nullptr || req.n_passes <= 0) { return false; }
-    if (req.n_axes > kMaxVariantOptions) { return false; }
+    if (req.material == nullptr || req.tech == nullptr || req.env == nullptr || req.n_passes <= 0)
+    {
+        return false;
+    }
+    if (req.n_axes > kMaxVariantOptions)
+    {
+        return false;
+    }
 
     // total combinations across the declared axes (1 when there are none)
     crd::u64 combos = 1;
     for (int a = 0; a < req.n_axes; ++a)
     {
-        if (req.axes[a].n_values <= 0) { return false; } // an axis with no values is a matrix with no variants
+        if (req.axes[a].n_values <= 0) // an axis with no values is a matrix with no variants
+        {
+            return false;
+        }
         combos *= static_cast<crd::u64>(req.axes[a].n_values);
     }
-    if (req.mode == VariantMode::Editor) { combos = 1; }
+    if (req.mode == VariantMode::Editor)
+    {
+        combos = 1;
+    }
 
     for (int pi = 0; pi < req.n_passes; ++pi)
     {
@@ -280,7 +298,10 @@ struct VariantRequest
 
             KGraph g(alloc);
             KEntry e;
-            if (!build_variant(req, key.pass, static_cast<const int*>(values), g, e)) { return false; }
+            if (!build_variant(req, key.pass, static_cast<const int*>(values), g, e))
+            {
+                return false;
+            }
 
             VariantEntry entry;
             entry.key          = key;

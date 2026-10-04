@@ -49,7 +49,9 @@ u32 crc32(const u8* p, usize n) noexcept
     {
         c ^= p[i];
         for (int k = 0; k < 8; ++k)
+        {
             c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+        }
     }
     return c ^ 0xFFFFFFFFU;
 }
@@ -59,7 +61,9 @@ u32 crc32(const u8* p, usize n) noexcept
 void refresh_header_crc(Array<u8>& b) noexcept
 {
     if (b.size() < sizeof(BundleHeader))
+    {
         return;
+    }
     const u32 crc = crc32(b.data(), 36U);
     std::memcpy(&b[36], &crc, sizeof(crc));
 }
@@ -103,15 +107,21 @@ void check_result(const BundleImport& r, const u8* data, usize size) noexcept
 {
     CRD_FUZZ_REQUIRE((r.status == ImportStatus::Rejected) == (r.reject != ImportReject::None));
     if (r.status != ImportStatus::Rejected)
+    {
         CRD_FUZZ_REQUIRE(r.header.schema_version == kDiagnosticSchemaVersion);
+    }
     CRD_FUZZ_REQUIRE(r.unsafe_names <= r.symbols.size());
     if (r.has_manifest)
+    {
         CRD_FUZZ_REQUIRE(r.manifest_absent_mismatches <= r.manifest.absent_tags.size());
+    }
     for (usize i = 0; i < r.sections.size(); ++i)
     {
         const ConstSpan<u8>& p = r.sections[i].payload;
         if (p.size() != 0U) // a borrowed view -- it must lie strictly inside the input buffer
+        {
             CRD_FUZZ_REQUIRE(p.data() >= data && p.data() + p.size() <= data + size);
+        }
     }
 }
 } // namespace
@@ -119,7 +129,9 @@ void check_result(const BundleImport& r, const u8* data, usize size) noexcept
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
 {
     if (size > crd::fuzz::kMaxInputBytes)
+    {
         return 0;
+    }
 
     crd::fuzz::BudgetAllocator root;
 
@@ -158,10 +170,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         const Array<u8> mp  = serialize_manifest(man);
         const usize     cut = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + mp.size();
         if (cut < golden.size())
+        {
             sink.add("truncated-after-manifest", golden.data(), cut);
+        }
     }
     if (golden.size() > 3U)
+    {
         sink.add("truncated-mid-section", golden.data(), golden.size() - 3U);
+    }
 
     sink.add_text("empty", "");
     sink.add_text("garbage", "this is not a diagnostic bundle");

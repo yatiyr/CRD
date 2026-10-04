@@ -35,8 +35,14 @@ struct RtCapabilities
     [[nodiscard]] bool has(RtFeature f) const noexcept { return (flags & static_cast<crd::u32>(f)) != 0U; }
     void               set(RtFeature f, bool on) noexcept
     {
-        if (on) { flags |= static_cast<crd::u32>(f); }
-        else { flags &= ~static_cast<crd::u32>(f); }
+        if (on)
+        {
+            flags |= static_cast<crd::u32>(f);
+        }
+        else
+        {
+            flags &= ~static_cast<crd::u32>(f);
+        }
     }
 };
 

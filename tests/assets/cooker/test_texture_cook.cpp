@@ -51,7 +51,10 @@ void register_handlers_once()
 void push_bytes(crd::containers::Array<crd::u8>& b, const void* src, crd::usize n)
 {
     const crd::u8* s = static_cast<const crd::u8*>(src);
-    for (crd::usize i = 0; i < n; ++i) { b.push_back(s[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        b.push_back(s[i]);
+    }
 }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v) { push_bytes(b, &v, 4); }
 void push_u32_be(crd::containers::Array<crd::u8>& b, crd::u32 v)
@@ -68,9 +71,15 @@ void add_png_chunk(crd::containers::Array<crd::u8>& out, const char* type, const
     push_u32_be(out, static_cast<crd::u32>(payload.size()));
     crd::containers::Array<crd::u8> crc_input(&g_alloc);
     push_bytes(crc_input, type, 4);
-    for (crd::usize i = 0; i < payload.size(); ++i) { crc_input.push_back(payload[i]); }
+    for (crd::usize i = 0; i < payload.size(); ++i)
+    {
+        crc_input.push_back(payload[i]);
+    }
     push_bytes(out, type, 4);
-    for (crd::usize i = 0; i < payload.size(); ++i) { out.push_back(payload[i]); }
+    for (crd::usize i = 0; i < payload.size(); ++i)
+    {
+        out.push_back(payload[i]);
+    }
     push_u32_be(out, crd::resources::png_crc32(crd::containers::as_const_span(crc_input)));
 }
 
@@ -158,7 +167,10 @@ TxtrView crack_txtr(const crd::containers::Array<crd::u8>& cooked, crd::resource
     REQUIRE(mip0 != nullptr);
     v.mip0 = mip0->payload.data();
     const crd::resources::CrdrChunk* mip1 = crd::resources::crdr_find_chunk(file, crd::resources::make_mip_fourcc(1));
-    if (mip1 != nullptr) { v.mip1 = mip1->payload.data(); }
+    if (mip1 != nullptr)
+    {
+        v.mip1 = mip1->payload.data();
+    }
     return v;
 }
 
@@ -363,13 +375,22 @@ TEST_CASE("wave1 glTF: embedded images DECOMPOSE into TXTR extras -- slot-derive
     // a GLB: 1 triangle + 2 embedded 1×1 PNGs — albedo (baseColorTexture ⇒ sRGB) and bump (normalTexture ⇒ linear)
     crd::containers::Array<crd::u8> bin(&g_alloc);
     const crd::f32 pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
-    for (crd::f32 p : pos) { push_bytes(bin, &p, 4); }
+    for (crd::f32 p : pos)
+    {
+        push_bytes(bin, &p, 4);
+    }
     const auto png_albedo = build_png_1x1(200, 100, 50, 255);
     const auto png_bump   = build_png_1x1(128, 128, 255, 255);
     const crd::usize albedo_off = bin.size();
-    for (crd::usize i = 0; i < png_albedo.size(); ++i) { bin.push_back(png_albedo[i]); }
+    for (crd::usize i = 0; i < png_albedo.size(); ++i)
+    {
+        bin.push_back(png_albedo[i]);
+    }
     const crd::usize bump_off = bin.size();
-    for (crd::usize i = 0; i < png_bump.size(); ++i) { bin.push_back(png_bump[i]); }
+    for (crd::usize i = 0; i < png_bump.size(); ++i)
+    {
+        bin.push_back(png_bump[i]);
+    }
 
     crd::containers::String json(&g_alloc);
     json.append(R"({"asset": {"version": "2.0"},)");
@@ -404,11 +425,20 @@ TEST_CASE("wave1 glTF: embedded images DECOMPOSE into TXTR extras -- slot-derive
     push_u32(glb, jlen + jpad);
     push_u32(glb, 0x4E4F534AU);
     push_bytes(glb, json.c_str(), jlen);
-    for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+    for (crd::u32 i = 0; i < jpad; ++i)
+    {
+        glb.push_back(' ');
+    }
     push_u32(glb, blen + bpad);
     push_u32(glb, 0x004E4942U);
-    for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
-    for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+    for (crd::usize i = 0; i < bin.size(); ++i)
+    {
+        glb.push_back(bin[i]);
+    }
+    for (crd::u32 i = 0; i < bpad; ++i)
+    {
+        glb.push_back(0);
+    }
 
     const char* src_path = "texcook_textured.glb";
     write_bytes_file(src_path, glb);

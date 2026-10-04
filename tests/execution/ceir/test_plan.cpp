@@ -74,9 +74,15 @@ Array<i64> differential(Context& ctx, Module& m, StringView entry, ConstSpan<i64
     const Array<crd::u8> a = exec::pin_values(ConstSpan<i64>(ref.values.data(), ref.values.size()), alloc);
     const Array<crd::u8> b = exec::pin_values(ConstSpan<i64>(got.values.data(), got.values.size()), alloc);
     REQUIRE(a.size() == b.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(a.size()); ++i) { CHECK(a[i] == b[i]); } // byte-identical
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(a.size()); ++i) // byte-identical
+    {
+        CHECK(a[i] == b[i]);
+    }
     Array<i64> out(alloc);
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(got.values.size()); ++i) { out.push_back(got.values[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(got.values.size()); ++i)
+    {
+        out.push_back(got.values[i]);
+    }
     return out;
 }
 } // namespace
@@ -159,7 +165,10 @@ namespace
 Operation* mkfunc(Context& ctx, Module& m, StringView name, crd::u32 nparams)
 {
     Operation* const f = func::create_func(ctx, m, name, Visibility::Public, nparams, ctx.type_i32());
-    if (m.body()->first_block() == nullptr) { m.body()->append(ctx.create_block(0U)); }
+    if (m.body()->first_block() == nullptr)
+    {
+        m.body()->append(ctx.create_block(0U));
+    }
     m.body()->first_block()->append(f);
     return f;
 }
@@ -800,7 +809,10 @@ Operation* mkdp(Context& ctx, const Ops& o, Block* b, StringView name, ConstSpan
                 crd::u32 nregions)
 {
     Value* rv[4] = {nullptr, nullptr, nullptr, nullptr};
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(ranges.size()); ++i) { rv[i] = konst(ctx, o, b, ranges[i])->result(0U); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(ranges.size()); ++i)
+    {
+        rv[i] = konst(ctx, o, b, ranges[i])->result(0U);
+    }
     Operation* const op = ctx.create_operation(ctx.intern_op("task", name),
                                                ConstSpan<Value*>(rv, static_cast<crd::u32>(ranges.size())), nres,
                                                nres != 0U ? ctx.type_i32() : TypeId{}, nregions);
@@ -1112,15 +1124,24 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
     const Array<crd::u8> a = exec::pin_values(ConstSpan<i64>(ref.values.data(), ref.values.size()), alloc);
     const Array<crd::u8> b = exec::pin_values(ConstSpan<i64>(got.values.data(), got.values.size()), alloc);
     REQUIRE(a.size() == b.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(a.size()); ++i) { CHECK(a[i] == b[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(a.size()); ++i)
+    {
+        CHECK(a[i] == b[i]);
+    }
 
     // CELLS â€” handle-based, compile order (watch (a))
     REQUIRE(got.cells.size() >= static_cast<crd::usize>(built.cells.size()));
     for (crd::u32 i = 0; i < static_cast<crd::u32>(built.cells.size()); ++i)
     {
         i64 rv = 0;
-        if (in.cell_value(built.cells[i], rv)) { CHECK(got.cells[i] == rv); }
-        else { CHECK(got.cells[i] == 0); }
+        if (in.cell_value(built.cells[i], rv))
+        {
+            CHECK(got.cells[i] == rv);
+        }
+        else
+        {
+            CHECK(got.cells[i] == 0);
+        }
     }
 
     // MAP_OUTPUTS â€” handle-based, compile order (top-level dp ops; watch (d))
@@ -1129,10 +1150,16 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
     {
         const ConstSpan<i64> refmap = in.map_output(built.maps[j]);
         REQUIRE(got.map_outputs[j].size() == refmap.size());
-        for (crd::u32 e = 0; e < static_cast<crd::u32>(refmap.size()); ++e) { CHECK(got.map_outputs[j][e] == refmap[e]); }
+        for (crd::u32 e = 0; e < static_cast<crd::u32>(refmap.size()); ++e)
+        {
+            CHECK(got.map_outputs[j][e] == refmap[e]);
+        }
     }
     Array<i64> out(alloc);
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(got.values.size()); ++i) { out.push_back(got.values[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(got.values.size()); ++i)
+    {
+        out.push_back(got.values[i]);
+    }
     return out;
 }
 } // namespace
@@ -1215,9 +1242,15 @@ TEST_CASE("ceir 11b corpus: the sec-121 no-privileged-path property at the PLAN 
     REQUIRE(rb.ok());
 
     REQUIRE(ra.values.size() == rb.values.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(ra.values.size()); ++i) { CHECK(ra.values[i] == rb.values[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(ra.values.size()); ++i)
+    {
+        CHECK(ra.values[i] == rb.values[i]);
+    }
     REQUIRE(ra.cells.size() == rb.cells.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(ra.cells.size()); ++i) { CHECK(ra.cells[i] == rb.cells[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(ra.cells.size()); ++i)
+    {
+        CHECK(ra.cells[i] == rb.cells[i]);
+    }
     REQUIRE(ra.map_outputs.size() == rb.map_outputs.size());
     for (crd::u32 j = 0; j < static_cast<crd::u32>(ra.map_outputs.size()); ++j)
     {
@@ -1314,9 +1347,15 @@ TEST_CASE("ceir 11c: the run seam fires pre/post per dispatched instr and is OBS
 
     // OBSERVATION-ONLY: the hooks read only the op id, so results are byte-identical with vs without the seam.
     REQUIRE(r0.values.size() == r1.values.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(r0.values.size()); ++i) { CHECK(r0.values[i] == r1.values[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(r0.values.size()); ++i)
+    {
+        CHECK(r0.values[i] == r1.values[i]);
+    }
     REQUIRE(r0.cells.size() == r1.cells.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(r0.cells.size()); ++i) { CHECK(r0.cells[i] == r1.cells[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(r0.cells.size()); ++i)
+    {
+        CHECK(r0.cells[i] == r1.cells[i]);
+    }
     CHECK(r1.values[0] == 118); // the pinned composing result, unchanged under observation
 
     CHECK(sc.pre == sc.post); // balanced on a SUCCESSFUL run

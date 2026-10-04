@@ -604,7 +604,10 @@ inline crd::gpu::IRasterTarget* ceir_mapped_target_resolver(const ce::Operation*
     auto* const m = static_cast<CeirTargetMap*>(user);
     for (crd::u32 i = 0; i < m->n; ++i)
     {
-        if (m->ops[i] == op) { return m->targets[i]; }
+        if (m->ops[i] == op)
+        {
+            return m->targets[i];
+        }
     }
     return nullptr;
 }
@@ -630,7 +633,10 @@ inline crd::gpu::IRasterProgram* ceir_mapped_program_resolver(const ce::Operatio
     auto* const m = static_cast<CeirProgramMap*>(user);
     for (crd::u32 i = 0; i < m->n; ++i)
     {
-        if (m->ops[i] == op) { return m->programs[i]; }
+        if (m->ops[i] == op)
+        {
+            return m->programs[i];
+        }
     }
     return nullptr;
 }
@@ -656,7 +662,10 @@ inline crd::gpu::IStorageBuffer* ceir_mapped_binding_resolver(const ce::Value* v
     auto* const m = static_cast<CeirBufferMap*>(user);
     for (crd::u32 i = 0; i < m->n; ++i)
     {
-        if (m->vals[i] == v) { return m->buffers[i]; }
+        if (m->vals[i] == v)
+        {
+            return m->buffers[i];
+        }
     }
     return nullptr;
 }

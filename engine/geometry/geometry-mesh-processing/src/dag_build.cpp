@@ -54,7 +54,10 @@ void compute_cluster_bounds(const crd::f32* positions, const crd::u32* verts, cr
         const crd::f32 dy = positions[v * 3U + 1U] - center[1];
         const crd::f32 dz = positions[v * 3U + 2U] - center[2];
         const crd::f32 r2 = dx * dx + dy * dy + dz * dz;
-        if (r2 > max_r2) max_r2 = r2;
+        if (r2 > max_r2)
+        {
+            max_r2 = r2;
+        }
     }
     radius = crd::math::sqrt(max_r2);
 }
@@ -72,10 +75,16 @@ crd::f32 compute_group_error(const crd::containers::Array<V3>& orig_pos,
             const crd::f32 dy = orig_pos[i].y - sim_pos[j].y;
             const crd::f32 dz = orig_pos[i].z - sim_pos[j].z;
             const crd::f32 d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < min_d2) min_d2 = d2;
+            if (d2 < min_d2)
+            {
+                min_d2 = d2;
+            }
         }
         const crd::f32 d = crd::math::sqrt(min_d2);
-        if (d > max_dist) max_dist = d;
+        if (d > max_dist)
+        {
+            max_dist = d;
+        }
     }
     return max_dist;
 }
@@ -95,7 +104,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
 
     // ── Copy positions ────────────────────────────────────────────────────
     out.positions.resize(static_cast<crd::usize>(vertex_count) * 3U);
-    for (crd::u32 i = 0; i < vertex_count * 3U; ++i) out.positions[i] = positions[i];
+    for (crd::u32 i = 0; i < vertex_count * 3U; ++i)
+    {
+        out.positions[i] = positions[i];
+    }
     crd::u32 total_verts = vertex_count;
 
     // ── Level 0: build meshlets ───────────────────────────────────────────
@@ -123,9 +135,13 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
         c.level           = 0U;
 
         for (crd::u32 vi = 0; vi < ml.vertex_count; ++vi)
+        {
             out.cluster_vertices.push_back(mresult.meshlet_vertices[ml.vertex_offset + vi]);
+        }
         for (crd::u32 ti = 0; ti < static_cast<crd::u32>(ml.triangle_count) * 3U; ++ti)
+        {
             out.cluster_triangles.push_back(mresult.meshlet_triangles[ml.triangle_offset + ti]);
+        }
 
         compute_cluster_bounds(out.positions.data(), out.cluster_vertices.data() + c.vertex_offset, c.vertex_count,
                                c.center, c.radius);
@@ -136,7 +152,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
 
     // ── Iterative DAG building ────────────────────────────────────────────
     crd::containers::Array<crd::u32> cur_level(scratch);
-    for (crd::u32 i = 0; i < leaf_count; ++i) cur_level.push_back(i);
+    for (crd::u32 i = 0; i < leaf_count; ++i)
+    {
+        cur_level.push_back(i);
+    }
 
     crd::u32 level = 0U;
 
@@ -154,9 +173,13 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             m.triangle_count  = dc.triangle_count;
             tmp_ml.meshlets.push_back(m);
             for (crd::u32 vi = 0; vi < dc.vertex_count; ++vi)
+            {
                 tmp_ml.meshlet_vertices.push_back(out.cluster_vertices[dc.vertex_offset + vi]);
+            }
             for (crd::u32 ti = 0; ti < static_cast<crd::u32>(dc.triangle_count) * 3U; ++ti)
+            {
                 tmp_ml.meshlet_triangles.push_back(out.cluster_triangles[dc.triangle_offset + ti]);
+            }
         }
         tmp_ml.total_triangles = 0U;
         tmp_ml.total_vertices  = total_verts;
@@ -166,7 +189,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
         gopts.target_group_size = opts.group_size > 0U ? opts.group_size : 4U;
         ClusterGroupResult gresult(scratch);
         const auto         grep = group_meshlets(tmp_ml, total_verts, gopts, gresult, scratch);
-        if (grep.status != ClusterGroupStatus::Ok || grep.group_count == 0U) break;
+        if (grep.status != ClusterGroupStatus::Ok || grep.group_count == 0U)
+        {
+            break;
+        }
 
         crd::containers::Array<crd::u32> next_level(scratch);
         bool any_simplified = false;
@@ -179,7 +205,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             crd::containers::Array<crd::u32> local_remap(scratch);
             local_remap.resize(total_verts);
             constexpr crd::u32 unmapped = ~0U;
-            for (crd::u32 i = 0; i < total_verts; ++i) local_remap[i] = unmapped;
+            for (crd::u32 i = 0; i < total_verts; ++i)
+            {
+                local_remap[i] = unmapped;
+            }
 
             crd::containers::Array<V3>       local_pos(scratch);
             crd::containers::Array<crd::u32> local_idx(scratch);
@@ -213,7 +242,9 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             if (local_idx.size() < 3U)
             {
                 for (crd::u32 mi_local = 0; mi_local < grp.count; ++mi_local)
+                {
                     next_level.push_back(cur_level[gresult.group_meshlets[grp.first + mi_local]]);
+                }
                 continue;
             }
 
@@ -224,7 +255,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             for (crd::u32 bi = bv_beg; bi < bv_end; ++bi)
             {
                 const crd::u32 gv = gresult.boundary_vertices[bi];
-                if (gv < total_verts && local_remap[gv] != unmapped) locked.push_back(local_remap[gv]);
+                if (gv < total_verts && local_remap[gv] != unmapped)
+                {
+                    locked.push_back(local_remap[gv]);
+                }
             }
 
             // ── QEM decimate ──────────────────────────────────────────
@@ -238,17 +272,24 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             if (build_st != BuildStatus::Ok || !he_mesh.is_manifold())
             {
                 for (crd::u32 mi_local = 0; mi_local < grp.count; ++mi_local)
+                {
                     next_level.push_back(cur_level[gresult.group_meshlets[grp.first + mi_local]]);
+                }
                 continue;
             }
 
             crd::u32 target = static_cast<crd::u32>(
                 static_cast<crd::f32>(local_tc) * (opts.simplify_ratio > 0.0F ? opts.simplify_ratio : 0.5F));
-            if (target < 4U) target = 4U;
+            if (target < 4U)
+            {
+                target = 4U;
+            }
             if (target >= local_tc)
             {
                 for (crd::u32 mi_local = 0; mi_local < grp.count; ++mi_local)
+                {
                     next_level.push_back(cur_level[gresult.group_meshlets[grp.first + mi_local]]);
+                }
                 continue;
             }
 
@@ -268,7 +309,9 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             if (sim_pos.empty() || sim_idx.empty() || sim_idx.size() / 3U >= local_idx.size() / 3U)
             {
                 for (crd::u32 mi_local = 0; mi_local < grp.count; ++mi_local)
+                {
                     next_level.push_back(cur_level[gresult.group_meshlets[grp.first + mi_local]]);
+                }
                 continue;
             }
 
@@ -279,7 +322,10 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             for (crd::u32 mi_local = 0; mi_local < grp.count; ++mi_local)
             {
                 const crd::f32 ce = out.clusters[cur_level[gresult.group_meshlets[grp.first + mi_local]]].error;
-                if (ce > max_child_error) max_child_error = ce;
+                if (ce > max_child_error)
+                {
+                    max_child_error = ce;
+                }
             }
             const crd::f32 simplify_error = compute_group_error(local_pos, sim_pos);
             const crd::f32 group_error    = max_child_error + simplify_error;
@@ -323,9 +369,13 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
                 c.level           = level + 1U;
 
                 for (crd::u32 vi = 0; vi < nm.vertex_count; ++vi)
+                {
                     out.cluster_vertices.push_back(base_vert + remresult.meshlet_vertices[nm.vertex_offset + vi]);
+                }
                 for (crd::u32 ti = 0; ti < static_cast<crd::u32>(nm.triangle_count) * 3U; ++ti)
+                {
                     out.cluster_triangles.push_back(remresult.meshlet_triangles[nm.triangle_offset + ti]);
+                }
 
                 compute_cluster_bounds(out.positions.data(), out.cluster_vertices.data() + c.vertex_offset,
                                        c.vertex_count, c.center, c.radius);
@@ -342,17 +392,24 @@ DagBuildReport build_cluster_dag(const crd::f32* positions, crd::u32 vertex_coun
             }
         }
 
-        if (!any_simplified) break;
+        if (!any_simplified)
+        {
+            break;
+        }
 
         cur_level.clear();
         for (crd::u32 i = 0; i < static_cast<crd::u32>(next_level.size()); ++i)
+        {
             cur_level.push_back(next_level[i]);
+        }
         ++level;
     }
 
     // ── Root clusters: parent_error = FLT_MAX ─────────────────────────────
     for (crd::u32 i = 0; i < static_cast<crd::u32>(cur_level.size()); ++i)
+    {
         out.clusters[cur_level[i]].parent_error = std::numeric_limits<crd::f32>::max();
+    }
 
     out.level_count      = level + 1U;
     report.level_count   = out.level_count;

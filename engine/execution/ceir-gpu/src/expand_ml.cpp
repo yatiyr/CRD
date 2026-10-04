@@ -91,7 +91,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     ops[0] = grid;
     ops[1] = grid;
     ops[2] = grid;
-    for (u32 i = 0; i < nb; ++i) { ops[3U + i] = binds[i]; }
+    for (u32 i = 0; i < nb; ++i)
+    {
+        ops[3U + i] = binds[i];
+    }
     Operation* const op = ctx.create_operation(ctx.intern_op("compute", "dispatch"), ConstSpan<Value*>(ops, 3U + nb), 0U);
     ctx.set_attr(op, StringView("kernel"), ctx.attr_symbol(kernel));
     ctx.set_attr(op, StringView("access"), ctx.attr_string(access));
@@ -110,8 +113,14 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     Value* const input = op->operand(0U);
     const u32    nw    = op->num_operands() - 1U; // number of weight matrices
     const TypeId elem  = elem_of(ctx, input->type());
-    if (!is_float_elem(ctx, input->type())) { return MlExpandError::ElementNotFloat; }
-    if (rank_of(ctx, input->type()) != 2U) { return MlExpandError::ShapeRankInvalid; }
+    if (!is_float_elem(ctx, input->type()))
+    {
+        return MlExpandError::ElementNotFloat;
+    }
+    if (rank_of(ctx, input->type()) != 2U)
+    {
+        return MlExpandError::ShapeRankInvalid;
+    }
 
     // ⛔ (pre-check, BEFORE emitting any ops) each weight rank-2. ⭐ CEIR-26d: the relu'd-intermediate `M·hidden == 32` reject is
     //    RETIRED — relu.ckir now ships the SHAPE SENTINEL (local_size=0) and the VizDispatch resolver cook-binds local_size to the
@@ -123,7 +132,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     //    BakedKernelShapeUnsupported enum value is DEAD-marked + KEPT at 26d-4d, append-only per the enum head — never returned).
     for (u32 i = 1U; i <= nw; ++i)
     {
-        if (!is_tensor(ctx, op->operand(i)) || rank_of(ctx, op->operand(i)->type()) != 2U) { return MlExpandError::ShapeRankInvalid; }
+        if (!is_tensor(ctx, op->operand(i)) || rank_of(ctx, op->operand(i)->type()) != 2U)
+        {
+            return MlExpandError::ShapeRankInvalid;
+        }
     }
 
     Block* const blk  = op->parent_block();
@@ -132,7 +144,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     for (u32 i = 1; i <= nw; ++i)
     {
         Value* const wi = op->operand(i);
-        if (!is_tensor(ctx, wi) || rank_of(ctx, wi->type()) != 2U) { return MlExpandError::ShapeRankInvalid; }
+        if (!is_tensor(ctx, wi) || rank_of(ctx, wi->type()) != 2U)
+        {
+            return MlExpandError::ShapeRankInvalid;
+        }
         // The layer output type: [rows(prev), cols(W_i)]; the FINAL layer uses the ml.mlp's declared result type (RAUW-exact).
         const TypeId h_t = (i < nw) ? tensor2(ctx, elem, dim_of(ctx, prev->type(), 0U), dim_of(ctx, wi->type(), 1U))
                                     : op->result(0U)->type();
@@ -144,7 +159,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
             mk_dispatch(ctx, blk, op, grid, binds, 2U, StringView("relu"), StringView("r,w"));
             prev = relu_out;
         }
-        else { prev = h; }
+        else
+        {
+            prev = h;
+        }
     }
     out = prev;
     return MlExpandError::None;
@@ -161,7 +179,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     Value* const q = op->operand(0U); // Q [Sq, D]
     Value* const k = op->operand(1U); // K [Sk, D]
     Value* const v = op->operand(2U); // V [Sk, Dv]
-    if (!is_float_elem(ctx, q->type())) { return MlExpandError::ElementNotFloat; }
+    if (!is_float_elem(ctx, q->type()))
+    {
+        return MlExpandError::ElementNotFloat;
+    }
     if (rank_of(ctx, q->type()) != 2U || rank_of(ctx, k->type()) != 2U || rank_of(ctx, v->type()) != 2U)
     {
         return MlExpandError::ShapeRankInvalid;
@@ -200,17 +221,26 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
 // The FIRST ml.mlp / ml.attention op in `r` (pre-order), or null.
 [[nodiscard]] Operation* find_first_ml(const Context& ctx, Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             const StringView nm = ctx.op_name(op->kind());
-            if (nm == StringView("ml.mlp") || nm == StringView("ml.attention")) { return op; }
+            if (nm == StringView("ml.mlp") || nm == StringView("ml.attention"))
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 Operation* const f = find_first_ml(ctx, op->region(i));
-                if (f != nullptr) { return f; }
+                if (f != nullptr)
+                {
+                    return f;
+                }
             }
         }
     }
@@ -220,14 +250,29 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
 
 MlExpandError expand_ml_op(Context& ctx, Operation* op)
 {
-    if (op == nullptr) { return MlExpandError::OperandNotTensor; }
+    if (op == nullptr)
+    {
+        return MlExpandError::OperandNotTensor;
+    }
     const StringView nm  = ctx.op_name(op->kind());
     Value*           out = nullptr;
     MlExpandError    err = MlExpandError::None;
-    if (nm == StringView("ml.mlp")) { err = expand_mlp(ctx, op, out); }
-    else if (nm == StringView("ml.attention")) { err = expand_attention(ctx, op, out); }
-    else { return MlExpandError::OperandNotTensor; } // not an ml op — a no-op miss (never silently succeed)
-    if (err != MlExpandError::None) { return err; }
+    if (nm == StringView("ml.mlp"))
+    {
+        err = expand_mlp(ctx, op, out);
+    }
+    else if (nm == StringView("ml.attention"))
+    {
+        err = expand_attention(ctx, op, out);
+    }
+    else // not an ml op — a no-op miss (never silently succeed)
+    {
+        return MlExpandError::OperandNotTensor;
+    }
+    if (err != MlExpandError::None)
+    {
+        return err;
+    }
     op->result(0U)->replace_all_uses_with(out);
     op->erase();
     return MlExpandError::None;
@@ -245,7 +290,10 @@ namespace
     for (;;)
     {
         Operation* const op = find_first_ml(ctx, m.body());
-        if (op == nullptr) { break; }
+        if (op == nullptr)
+        {
+            break;
+        }
         Block* const     blk    = op->parent_block();
         Operation* const before = op->prev_in_block(); // stable across the expand (created ops land between before and after)
         Operation* const after  = op->next_in_block();
@@ -259,7 +307,10 @@ namespace
         if (lineage != nullptr && blk != nullptr)
         {
             Operation* const start = (before != nullptr) ? before->next_in_block() : blk->first_op();
-            for (Operation* c = start; c != nullptr && c != after; c = c->next_in_block()) { (void)lineage->insert(c, ml_idx); }
+            for (Operation* c = start; c != nullptr && c != after; c = c->next_in_block())
+            {
+                (void)lineage->insert(c, ml_idx);
+            }
         }
         ++ml_idx;
         ++res.expanded;

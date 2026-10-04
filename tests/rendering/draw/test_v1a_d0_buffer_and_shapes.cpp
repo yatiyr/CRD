@@ -160,9 +160,18 @@ TEST_CASE("v1a-draw d0 box_wire_to emits 12 edges", "[draw][v1a-draw][shapes]")
     for (const auto& l : buf.lines())
     {
         const crd::math::Vec3f d{l.b.x - l.a.x, l.b.y - l.a.y, l.b.z - l.a.z};
-        if      (std::abs(d.x) > 0.5F && std::abs(d.y) < 1e-5F && std::abs(d.z) < 1e-5F) ++axis_x_edges;
-        else if (std::abs(d.y) > 0.5F && std::abs(d.x) < 1e-5F && std::abs(d.z) < 1e-5F) ++axis_y_edges;
-        else if (std::abs(d.z) > 0.5F && std::abs(d.x) < 1e-5F && std::abs(d.y) < 1e-5F) ++axis_z_edges;
+        if      (std::abs(d.x) > 0.5F && std::abs(d.y) < 1e-5F && std::abs(d.z) < 1e-5F)
+        {
+            ++axis_x_edges;
+        }
+        else if (std::abs(d.y) > 0.5F && std::abs(d.x) < 1e-5F && std::abs(d.z) < 1e-5F)
+        {
+            ++axis_y_edges;
+        }
+        else if (std::abs(d.z) > 0.5F && std::abs(d.x) < 1e-5F && std::abs(d.y) < 1e-5F)
+        {
+            ++axis_z_edges;
+        }
     }
     REQUIRE(axis_x_edges == 4);
     REQUIRE(axis_y_edges == 4);

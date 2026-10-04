@@ -16,11 +16,26 @@ extern "C" const char* __asan_default_options()
 }
 #endif
 
+namespace
+{
+// The fault itself. UndefinedBehaviorSanitizer (the linux-gcc-asan lane builds with non-recovering
+// -fsanitize=undefined) reports a null store and aborts before the write reaches the hardware, which the harness
+// reads as Unexpected; exempting this one store from the null check keeps the control a genuine SIGSEGV there,
+// exactly as handle_segv=0 does for ASan. Every other check and every other specimen stays instrumented.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((no_sanitize("null")))
+#endif
+void fault_on_null_write()
+{
+    volatile int* p = nullptr;
+    *p = 42; // access violation / SIGSEGV
+}
+} // namespace
+
 int main()
 {
     crd_diag_harden();
     crd_diag_announce();
-    volatile int* p = nullptr;
-    *p = 42; // access violation / SIGSEGV
+    fault_on_null_write();
     return 0;
 }

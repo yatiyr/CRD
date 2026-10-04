@@ -99,8 +99,14 @@ constexpr double kGauss3[3] = {0.25, 0.5, 0.25}; // separable 3×3 gaussian for 
 
     // clamp a U32 coordinate by a compile-time offset (per-tap sign known ⇒ no unsigned underflow)
     const auto clampc = [&](int coord, int off, int dim) -> int {
-        if (off == 0) { return coord; }
-        if (off > 0) { return g.binary(KOp::Min, add(coord, ku(static_cast<crd::u32>(off))), ku(static_cast<crd::u32>(dim - 1))); }
+        if (off == 0)
+        {
+            return coord;
+        }
+        if (off > 0)
+        {
+            return g.binary(KOp::Min, add(coord, ku(static_cast<crd::u32>(off))), ku(static_cast<crd::u32>(dim - 1)));
+        }
         const int a = -off;
         return g.select(g.binary(KOp::CmpGe, coord, ku(static_cast<crd::u32>(a))), sub(coord, ku(static_cast<crd::u32>(a))), ku(0));
     };

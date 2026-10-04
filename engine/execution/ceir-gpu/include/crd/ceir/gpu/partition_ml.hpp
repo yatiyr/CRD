@@ -81,13 +81,19 @@ struct MlPartition
     [[nodiscard]] crd::u32 fallback() const noexcept
     {
         crd::u32 n = 0;
-        for (crd::usize i = 0; i < assignments.size(); ++i) { n += assignments[i].provider < 0 ? 1U : 0U; }
+        for (crd::usize i = 0; i < assignments.size(); ++i)
+        {
+            n += assignments[i].provider < 0 ? 1U : 0U;
+        }
         return n;
     }
     [[nodiscard]] crd::u32 claimed_by(crd::i32 provider) const noexcept
     {
         crd::u32 n = 0;
-        for (crd::usize i = 0; i < assignments.size(); ++i) { n += assignments[i].provider == provider ? 1U : 0U; }
+        for (crd::usize i = 0; i < assignments.size(); ++i)
+        {
+            n += assignments[i].provider == provider ? 1U : 0U;
+        }
         return n;
     }
     // CEIR-29a-2: how many DISTINCT subgraphs (maximal runs, id >= 0) `provider` claimed. A per-op claimer (claims_subgraphs
@@ -97,11 +103,18 @@ struct MlPartition
         crd::u32 n = 0;
         for (crd::usize i = 0; i < assignments.size(); ++i)
         {
-            if (assignments[i].provider != provider || assignments[i].subgraph < 0) { continue; }
+            if (assignments[i].provider != provider || assignments[i].subgraph < 0)
+            {
+                continue;
+            }
             bool first = true;
             for (crd::usize j = 0; j < i; ++j)
             {
-                if (assignments[j].subgraph == assignments[i].subgraph) { first = false; break; }
+                if (assignments[j].subgraph == assignments[i].subgraph)
+                {
+                    first = false;
+                    break;
+                }
             }
             n += first ? 1U : 0U;
         }
@@ -110,9 +123,15 @@ struct MlPartition
     // CEIR-29a-2: the op-count of the maximal run `id` (a claimed subgraph). 0 for id < 0 (a singleton is not a subgraph).
     [[nodiscard]] crd::u32 subgraph_size(crd::i32 id) const noexcept
     {
-        if (id < 0) { return 0U; }
+        if (id < 0)
+        {
+            return 0U;
+        }
         crd::u32 n = 0;
-        for (crd::usize i = 0; i < assignments.size(); ++i) { n += assignments[i].subgraph == id ? 1U : 0U; }
+        for (crd::usize i = 0; i < assignments.size(); ++i)
+        {
+            n += assignments[i].subgraph == id ? 1U : 0U;
+        }
         return n;
     }
 };

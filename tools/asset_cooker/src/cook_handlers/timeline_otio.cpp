@@ -80,8 +80,14 @@ constexpr crd::u32 kOtioHandlerVersion = 1U;
     {
         crd::timeline::TrackRec rec;
         crd::timeline::TrackKind kind = crd::timeline::TrackKind::Other;
-        if (t.kind == crd::assetio::OtioTrackKind::Video) { kind = crd::timeline::TrackKind::Video; }
-        else if (t.kind == crd::assetio::OtioTrackKind::Audio) { kind = crd::timeline::TrackKind::Audio; }
+        if (t.kind == crd::assetio::OtioTrackKind::Video)
+        {
+            kind = crd::timeline::TrackKind::Video;
+        }
+        else if (t.kind == crd::assetio::OtioTrackKind::Audio)
+        {
+            kind = crd::timeline::TrackKind::Audio;
+        }
         rec.kind = static_cast<crd::u8>(kind);
         rec.kind_name_off = out.intern(t.kind_name.c_str());
         rec.name_off      = out.intern(t.name.c_str());
@@ -96,8 +102,14 @@ constexpr crd::u32 kOtioHandlerVersion = 1U;
     {
         crd::timeline::ItemRec rec;
         crd::timeline::ItemType type = crd::timeline::ItemType::Transition;
-        if (item.type == crd::assetio::OtioItemType::Clip) { type = crd::timeline::ItemType::Clip; }
-        else if (item.type == crd::assetio::OtioItemType::Gap) { type = crd::timeline::ItemType::Gap; }
+        if (item.type == crd::assetio::OtioItemType::Clip)
+        {
+            type = crd::timeline::ItemType::Clip;
+        }
+        else if (item.type == crd::assetio::OtioItemType::Gap)
+        {
+            type = crd::timeline::ItemType::Gap;
+        }
         rec.type = static_cast<crd::u8>(type);
         rec.name_off            = out.intern(item.name.c_str());
         rec.media_ref           = item.media_ref; // index-stable (kOtioInvalid == kInvalidIndex)
@@ -135,10 +147,16 @@ CookResult otio_timeline_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
     result.type_fourcc     = crd::timeline::kFourCC_TIML;
     result.handler_version = kOtioHandlerVersion;
-    if (ctx.io == nullptr) { return result; }
+    if (ctx.io == nullptr)
+    {
+        return result;
+    }
 
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!ctx.io->read_source(src)) { return result; }
+    if (!ctx.io->read_source(src))
+    {
+        return result;
+    }
 
     crd::assetio::ImportedTimeline imported(ctx.allocator);
     crd::assetio::OtioDiag         diag;
@@ -149,10 +167,16 @@ CookResult otio_timeline_handler(const CookContext& ctx)
     }
 
     crd::timeline::TimelineResource tl(ctx.allocator);
-    if (!translate(imported, tl)) { return result; }
+    if (!translate(imported, tl))
+    {
+        return result;
+    }
 
     result.cooked_bytes = crd::timeline::timeline_build(tl, ctx.id, ctx.allocator);
-    if (result.cooked_bytes.size() == 0) { return result; } // structural validation refused
+    if (result.cooked_bytes.size() == 0) // structural validation refused
+    {
+        return result;
+    }
     result.ok = true;
     return result;
 }

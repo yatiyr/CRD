@@ -80,14 +80,18 @@ inline void line(crd::math::Vec3f a, crd::math::Vec3f b, Color c = kWhite,
                  crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         add_line_to(*buf, a, b, c, width_px, flags, lifetime_s);
+    }
 }
 
 inline void point(crd::math::Vec3f p, Color c = kWhite, crd::f32 size_px = 4.0F,
                   PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         add_point_to(*buf, p, c, size_px, flags, lifetime_s);
+    }
 }
 
 inline void triangle(crd::math::Vec3f a, crd::math::Vec3f b, crd::math::Vec3f c,
@@ -95,7 +99,9 @@ inline void triangle(crd::math::Vec3f a, crd::math::Vec3f b, crd::math::Vec3f c,
                      crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         add_triangle_to(*buf, a, b, c, color, flags, lifetime_s);
+    }
 }
 
 inline void box_wire(const crd::math::Mat4f& world, crd::math::Vec3f half_extents,
@@ -103,7 +109,9 @@ inline void box_wire(const crd::math::Mat4f& world, crd::math::Vec3f half_extent
                      PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         box_wire_to(*buf, world, half_extents, color, width_px, flags, lifetime_s);
+    }
 }
 
 inline void box_solid(const crd::math::Mat4f& world, crd::math::Vec3f half_extents,
@@ -111,7 +119,9 @@ inline void box_solid(const crd::math::Mat4f& world, crd::math::Vec3f half_exten
                       crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         box_solid_to(*buf, world, half_extents, color, flags, lifetime_s);
+    }
 }
 
 inline void aabb_wire(crd::math::Vec3f min_corner, crd::math::Vec3f max_corner,
@@ -119,7 +129,9 @@ inline void aabb_wire(crd::math::Vec3f min_corner, crd::math::Vec3f max_corner,
                       PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         aabb_wire_to(*buf, min_corner, max_corner, color, width_px, flags, lifetime_s);
+    }
 }
 
 inline void sphere_wire(crd::math::Vec3f center, crd::f32 radius, Color color = kWhite,
@@ -128,15 +140,19 @@ inline void sphere_wire(crd::math::Vec3f center, crd::f32 radius, Color color = 
                         crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         sphere_wire_to(*buf, center, radius, color, segments_long, segments_lat,
                        width_px, flags, lifetime_s);
+    }
 }
 
 inline void sphere_solid(crd::math::Vec3f center, crd::f32 radius, Color color = kWhite,
                          PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         sphere_solid_to(*buf, center, radius, color, flags, lifetime_s);
+    }
 }
 
 inline void capsule_wire(crd::math::Vec3f a, crd::math::Vec3f b, crd::f32 radius,
@@ -145,7 +161,9 @@ inline void capsule_wire(crd::math::Vec3f a, crd::math::Vec3f b, crd::f32 radius
                          crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         capsule_wire_to(*buf, a, b, radius, color, segments, width_px, flags, lifetime_s);
+    }
 }
 
 inline void capsule_solid(crd::math::Vec3f a, crd::math::Vec3f b, crd::f32 radius,
@@ -153,7 +171,9 @@ inline void capsule_solid(crd::math::Vec3f a, crd::math::Vec3f b, crd::f32 radiu
                           PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         capsule_solid_to(*buf, a, b, radius, color, segments, flags, lifetime_s);
+    }
 }
 
 inline void arrow(crd::math::Vec3f origin, crd::math::Vec3f dir, crd::f32 length,
@@ -162,8 +182,10 @@ inline void arrow(crd::math::Vec3f origin, crd::math::Vec3f dir, crd::f32 length
                   PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         arrow_to(*buf, origin, dir, length, color, head_size_ratio,
                  head_radius_ratio, width_px, flags, lifetime_s);
+    }
 }
 
 inline void axis_triad(const crd::math::Mat4f& transform, crd::f32 length = 1.0F,
@@ -171,7 +193,9 @@ inline void axis_triad(const crd::math::Mat4f& transform, crd::f32 length = 1.0F
                        crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         axis_triad_to(*buf, transform, length, width_px, flags, lifetime_s);
+    }
 }
 
 inline void arc(crd::math::Vec3f center, crd::math::Vec3f axis, crd::math::Vec3f zero_dir,
@@ -180,8 +204,10 @@ inline void arc(crd::math::Vec3f center, crd::math::Vec3f axis, crd::math::Vec3f
                 PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         arc_to(*buf, center, axis, zero_dir, radius, angle_min, angle_max,
                color, segments, width_px, flags, lifetime_s);
+    }
 }
 
 inline void cross_3d(crd::math::Vec3f center, crd::f32 size, Color color = kWhite,
@@ -189,7 +215,9 @@ inline void cross_3d(crd::math::Vec3f center, crd::f32 size, Color color = kWhit
                      crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         cross_3d_to(*buf, center, size, color, width_px, flags, lifetime_s);
+    }
 }
 
 inline void grid(crd::math::Vec3f origin, crd::math::Vec3f right, crd::math::Vec3f forward,
@@ -198,8 +226,10 @@ inline void grid(crd::math::Vec3f origin, crd::math::Vec3f right, crd::math::Vec
                  PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         grid_to(*buf, origin, right, forward, cells_x, cells_z, cell_size,
                 color, width_px, flags, lifetime_s);
+    }
 }
 
 inline void frustum(const crd::math::Mat4f& view_proj, Color color = kYellow,
@@ -207,7 +237,9 @@ inline void frustum(const crd::math::Mat4f& view_proj, Color color = kYellow,
                     PrimFlags flags = kDefaultFlags, crd::f32 lifetime_s = 0.0F)
 {
     if (auto* buf = detail_active::checked_active())
+    {
         frustum_to(*buf, view_proj, color, clip_z_min, width_px, flags, lifetime_s);
+    }
 }
 
 } // namespace crd::draw

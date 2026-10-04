@@ -37,12 +37,18 @@ struct WorkGraphPlan
 [[nodiscard]] inline bool build_work_graph_plan(const WorkBuildDesc& desc, WorkGraphPlan& out)
 {
     out = WorkGraphPlan{};
-    if (desc.num_stages == 0U || desc.num_stages > 8U) { return false; }
+    if (desc.num_stages == 0U || desc.num_stages > 8U)
+    {
+        return false;
+    }
     out.num_nodes = desc.num_stages;
     for (crd::u32 i = 0; i < desc.num_stages; ++i)
     {
         const WorkStageDesc& st = desc.stages[i];
-        if (st.queue >= desc.num_queues) { return false; }
+        if (st.queue >= desc.num_queues)
+        {
+            return false;
+        }
         out.nodes[i].role               = st.kind;
         out.nodes[i].kernel             = st.kernel;
         out.nodes[i].queue_source_param = desc.queues[st.queue].source_param;
@@ -51,7 +57,10 @@ struct WorkGraphPlan
     // wire: each PRODUCE launches the CONSUME that reads its queue.
     for (crd::u32 p = 0; p < out.num_nodes; ++p)
     {
-        if (out.nodes[p].role != WorkStageKind::Produce) { continue; }
+        if (out.nodes[p].role != WorkStageKind::Produce)
+        {
+            continue;
+        }
         for (crd::u32 c = 0; c < out.num_nodes; ++c)
         {
             if (c != p && out.nodes[c].role == WorkStageKind::Consume
@@ -66,7 +75,10 @@ struct WorkGraphPlan
     bool fed[8] = {};
     for (crd::u32 i = 0; i < out.num_nodes; ++i)
     {
-        if (out.nodes[i].downstream != kNoWorkGraphNode) { fed[out.nodes[i].downstream] = true; }
+        if (out.nodes[i].downstream != kNoWorkGraphNode)
+        {
+            fed[out.nodes[i].downstream] = true;
+        }
     }
     crd::u32 entry   = kNoWorkGraphNode;
     crd::u32 n_entry = 0U;
@@ -78,7 +90,10 @@ struct WorkGraphPlan
             ++n_entry;
         }
     }
-    if (n_entry != 1U) { return false; } // ledgered: multi-entry / compact-fed graphs are a later slice
+    if (n_entry != 1U) // ledgered: multi-entry / compact-fed graphs are a later slice
+    {
+        return false;
+    }
     out.entry = entry;
     return true;
 }

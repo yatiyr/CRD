@@ -14,7 +14,10 @@ void draw_polyline_impl(crd::draw::RenderBuffer& buf, const curves::Polyline3Vie
                         crd::draw::PrimFlags flags, crd::f32 lifetime_s) noexcept
 {
     const auto n = poly.points.size();
-    if (n < 2U) { return; }
+    if (n < 2U)
+    {
+        return;
+    }
 
     const auto n_segs = poly.closed ? n : (n - 1U);
     for (crd::usize i = 0U; i < n_segs; ++i)

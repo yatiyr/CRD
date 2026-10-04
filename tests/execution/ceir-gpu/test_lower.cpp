@@ -365,9 +365,19 @@ TEST_CASE("ceir 19c: lower_region emits AccelBuild + RayQuery for ceir.rt ops; t
     const LoweredCommand* rqc     = nullptr;
     for (crd::u32 i = 0U; i < static_cast<crd::u32>(out.size()); ++i)
     {
-        if (out[i].kind == LoweredKind::AccelBuild) { ++n_accel; }
-        else if (out[i].kind == LoweredKind::RayQuery) { ++n_rq; rqc = &out[i]; }
-        else if (out[i].kind == LoweredKind::Barrier) { ++n_bar; }
+        if (out[i].kind == LoweredKind::AccelBuild)
+        {
+            ++n_accel;
+        }
+        else if (out[i].kind == LoweredKind::RayQuery)
+        {
+            ++n_rq;
+            rqc = &out[i];
+        }
+        else if (out[i].kind == LoweredKind::Barrier)
+        {
+            ++n_bar;
+        }
     }
     CHECK(n_accel == 3U);
     CHECK(n_bar == 3U); // the blas->instance->tlas->ray_query handle-dependency RAW chain
@@ -520,8 +530,14 @@ TEST_CASE("ceir 19c: rt.trace + rt.sbt_build are DEFERRED to 19z (they lower to 
     crd::u32 n_rq    = 0U;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i)
     {
-        if (out[i].kind == LoweredKind::AccelBuild) { ++n_accel; }
-        else if (out[i].kind == LoweredKind::RayQuery) { ++n_rq; }
+        if (out[i].kind == LoweredKind::AccelBuild)
+        {
+            ++n_accel;
+        }
+        else if (out[i].kind == LoweredKind::RayQuery)
+        {
+            ++n_rq;
+        }
         CHECK(out[i].op != sbt); // ⛔ rt.sbt_build lowered to no command (DEFERRED)
         CHECK(out[i].op != tr);  // ⛔ rt.trace lowered to no command (DEFERRED)
     }

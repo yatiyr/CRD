@@ -148,7 +148,10 @@ TEST_CASE("ceir host: parallel_for maps iv*iv on the pool, num_jobs-independent"
         REQUIRE(r.ok());
         const ConstSpan<i64> out = prov.map_output(pf);
         REQUIRE(out.size() == 6U);
-        for (crd::u32 i = 0; i < 6U; ++i) { CHECK(out[i] == expected[i]); }
+        for (crd::u32 i = 0; i < 6U; ++i)
+        {
+            CHECK(out[i] == expected[i]);
+        }
     }
 }
 
@@ -180,7 +183,10 @@ TEST_CASE("ceir host: a parallel_for body may CALL a self-contained func", "[cei
     const ConstSpan<i64> out = prov.map_output(pf);
     REQUIRE(out.size() == 5U);
     const i64 expected[5] = {0, 1, 4, 9, 16};
-    for (crd::u32 i = 0; i < 5U; ++i) { CHECK(out[i] == expected[i]); }
+    for (crd::u32 i = 0; i < 5U; ++i)
+    {
+        CHECK(out[i] == expected[i]);
+    }
 }
 
 TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is BadForStep", "[ceir][host]")
@@ -488,7 +494,10 @@ TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jo
 
     // INDEPENDENT reference: the same fold in WRAPPING u64 (the executor's i64 wraps identically) -- NOT self-comparison.
     crd::u64 ref = 0;
-    for (i64 i = 0; i < elem_count; ++i) { ref = (ref * 31ULL) + (static_cast<crd::u64>(i) * static_cast<crd::u64>(i)); }
+    for (i64 i = 0; i < elem_count; ++i)
+    {
+        ref = (ref * 31ULL) + (static_cast<crd::u64>(i) * static_cast<crd::u64>(i));
+    }
     const i64 expected = static_cast<i64>(ref);
 
     crd::memory::GrowableTlsfAllocator pin_root;
@@ -505,12 +514,18 @@ TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jo
             exec::pin_values(ConstSpan<i64>(r.values.data(), r.values.size()), &palloc);
         if (nj == 1U)
         {
-            for (crd::u32 b = 0; b < static_cast<crd::u32>(pinned.size()); ++b) { first.push_back(pinned[b]); }
+            for (crd::u32 b = 0; b < static_cast<crd::u32>(pinned.size()); ++b)
+            {
+                first.push_back(pinned[b]);
+            }
         }
         else
         {
             REQUIRE(pinned.size() == first.size());
-            for (crd::u32 b = 0; b < static_cast<crd::u32>(pinned.size()); ++b) { CHECK(pinned[b] == first[b]); } // byte-identical
+            for (crd::u32 b = 0; b < static_cast<crd::u32>(pinned.size()); ++b) // byte-identical
+            {
+                CHECK(pinned[b] == first[b]);
+            }
         }
     }
 }
@@ -612,10 +627,16 @@ TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-
         const containers::Array<crd::u8> pbytes =
             exec::pin_values(ConstSpan<i64>(rp.values.data(), rp.values.size()), &palloc);
         REQUIRE(pbytes.size() == seq_bytes.size());
-        for (crd::u32 b = 0; b < static_cast<crd::u32>(pbytes.size()); ++b) { CHECK(pbytes[b] == seq_bytes[b]); }
+        for (crd::u32 b = 0; b < static_cast<crd::u32>(pbytes.size()); ++b)
+        {
+            CHECK(pbytes[b] == seq_bytes[b]);
+        }
         const ConstSpan<i64> pmap = prov.map_output(mr);
         REQUIRE(pmap.size() == seq_map.size());
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(pmap.size()); ++i) { CHECK(pmap[i] == seq_map[i]); }
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(pmap.size()); ++i)
+        {
+            CHECK(pmap[i] == seq_map[i]);
+        }
     }
 }
 

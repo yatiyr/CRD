@@ -128,7 +128,10 @@ enum class BindType : crd::u8
     {
         return 2U;
     }
-    if (t == BindType::FloatArray || t == BindType::Mat4Array) { return count == 0U ? 1U : count; }
+    if (t == BindType::FloatArray || t == BindType::Mat4Array)
+    {
+        return count == 0U ? 1U : count;
+    }
     return 1U;
 }
 
@@ -237,8 +240,15 @@ namespace detail
 {
 [[nodiscard]] inline bool tech_name_eq(const char* a, const char* b) noexcept
 {
-    if (a == nullptr || b == nullptr) { return a == b; }
-    while (*a != '\0' && *a == *b) { ++a; ++b; }
+    if (a == nullptr || b == nullptr)
+    {
+        return a == b;
+    }
+    while (*a != '\0' && *a == *b)
+    {
+        ++a;
+        ++b;
+    }
     return *a == *b;
 }
 } // namespace detail
@@ -260,7 +270,10 @@ public:
     {
         for (crd::usize i = m_t.size(); i > 0U; --i)
         {
-            if (detail::tech_name_eq(m_t[i - 1U].name, name)) { return &m_t[i - 1U]; }
+            if (detail::tech_name_eq(m_t[i - 1U].name, name))
+            {
+                return &m_t[i - 1U];
+            }
         }
         return nullptr;
     }
@@ -282,13 +295,22 @@ private:
 // path, and a silently-dropped statement would be a miscompile); or `src_result` is out of range.
 [[nodiscard]] inline int splice_graph(KGraph& dst, const KGraph& src, const int* args, int n_args, int src_result)
 {
-    if (src_result < 0 || src_result >= src.size()) { return -1; }
-    if (!src.serial_stmts().empty()) { return -1; }
+    if (src_result < 0 || src_result >= src.size())
+    {
+        return -1;
+    }
+    if (!src.serial_stmts().empty())
+    {
+        return -1;
+    }
 
     auto*                            al = dst.serial_nodes().allocator();
     crd::containers::Array<crd::i32> map(al);
     map.reserve(static_cast<crd::usize>(src.size()));
-    for (int i = 0; i < src.size(); ++i) { map.push_back(-1); }
+    for (int i = 0; i < src.size(); ++i)
+    {
+        map.push_back(-1);
+    }
 
     // Struct ids are graph-local: a `TKind::Struct` type in `src` names src's registry, so every struct the
     // authored graph declared must be RE-DEFINED in dst and the ids remapped. Structs are processed in order, so
@@ -308,7 +330,10 @@ private:
                 if (ft.kind == TKind::Struct)
                 {
                     const crd::usize idx = static_cast<crd::usize>(ft.struct_id);
-                    if (idx >= smap.size()) { return -1; } // forward reference — not producible by the builders
+                    if (idx >= smap.size()) // forward reference — not producible by the builders
+                    {
+                        return -1;
+                    }
                     ft.struct_id = static_cast<crd::i16>(smap[idx]);
                 }
                 fields.push_back(ft);
@@ -323,7 +348,10 @@ private:
         const KNode& n = src.node(i);
         if (n.op == KOp::Input)
         {
-            if (n.iidx < 0 || n.iidx >= n_args || args[n.iidx] < 0) { return -1; }
+            if (n.iidx < 0 || n.iidx >= n_args || args[n.iidx] < 0)
+            {
+                return -1;
+            }
             map[static_cast<crd::usize>(i)] = args[n.iidx];
             continue;
         }
@@ -331,19 +359,31 @@ private:
         if (c.type.kind == TKind::Struct)
         {
             const crd::usize idx = static_cast<crd::usize>(c.type.struct_id);
-            if (idx >= smap.size()) { return -1; }
+            if (idx >= smap.size())
+            {
+                return -1;
+            }
             c.type.struct_id = static_cast<crd::i16>(smap[idx]);
         }
         const auto remap = [&](crd::i32 o) -> crd::i32 {
-            if (o < 0) { return -1; }
-            if (o >= i) { return -2; } // a forward reference violates the push-order invariant
+            if (o < 0)
+            {
+                return -1;
+            }
+            if (o >= i) // a forward reference violates the push-order invariant
+            {
+                return -2;
+            }
             return map[static_cast<crd::usize>(o)];
         };
         c.a = remap(n.a);
         c.b = remap(n.b);
         c.c = remap(n.c);
         c.d = remap(n.d);
-        if (c.a == -2 || c.b == -2 || c.c == -2 || c.d == -2) { return -1; }
+        if (c.a == -2 || c.b == -2 || c.c == -2 || c.d == -2)
+        {
+            return -1;
+        }
 
         int id = -1;
         if (n.n_ext > 0U)
@@ -352,7 +392,10 @@ private:
             for (int k = 0; k < static_cast<int>(n.n_ext); ++k)
             {
                 const crd::i32 o = remap(static_cast<crd::i32>(src.ext_operand(n, k)));
-                if (o < 0) { return -1; }
+                if (o < 0)
+                {
+                    return -1;
+                }
                 ext_buf.push_back(o);
             }
             id = dst.clone_with_ext(c, ext_buf.data());
@@ -390,21 +433,39 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
 // ABI above. Returns the lit RGB node, or -1.
 [[nodiscard]] inline int apply_technique(KGraph& g, const Technique& t, const TechniqueContext& tc)
 {
-    if (!t.valid()) { return -1; }
-    if (t.body != nullptr) { return t.body(g, tc, t.user); }
+    if (!t.valid())
+    {
+        return -1;
+    }
+    if (t.body != nullptr)
+    {
+        return t.body(g, tc, t.user);
+    }
 
     // AUTHORED provenance: deserialize + splice. The argument vector is the ABI: fixed slots, then the resolved
     // binding nodes in declaration order.
     auto*  al = g.serial_nodes().allocator();
     KGraph src(al);
     KEntry se;
-    if (!deserialize_graph(crd::containers::ConstSpan<crd::u8>(t.blob, t.blob_size), src, se)) { return -1; }
-    if (se.n_out < 1) { return -1; }
+    if (!deserialize_graph(crd::containers::ConstSpan<crd::u8>(t.blob, t.blob_size), src, se))
+    {
+        return -1;
+    }
+    if (se.n_out < 1)
+    {
+        return -1;
+    }
 
     crd::containers::Array<crd::i32> args(al);
     args.reserve(static_cast<crd::usize>(kTechFixedInputs) + static_cast<crd::usize>(tc.n_bindings));
-    for (int i = 0; i < kTechFixedInputs; ++i) { args.push_back(tc.fixed[i]); }
-    for (int i = 0; i < tc.n_bindings; ++i) { args.push_back(tc.bindings[i]); }
+    for (int i = 0; i < kTechFixedInputs; ++i)
+    {
+        args.push_back(tc.fixed[i]);
+    }
+    for (int i = 0; i < tc.n_bindings; ++i)
+    {
+        args.push_back(tc.bindings[i]);
+    }
     return splice_graph(g, src, args.data(), static_cast<int>(args.size()), se.out[0].node);
 }
 
@@ -426,7 +487,10 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
     // was the one consumer that never checked it: `unpack_surface`/`field_get` indexed the node table with -1,
     // an access violation. Found by the 38-G1 override proof (a deliberately broken user `.crdm` on disk must
     // fail the cook BY NAME, not crash the app).
-    if (surface < 0) { return false; }
+    if (surface < 0)
+    {
+        return false;
+    }
     e.stage             = KStage::Fragment;
     switch (pass)
     {
@@ -446,7 +510,10 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
         tc.option_values = option_values;
         tc.n_options     = n_option_values;
         const int lit    = apply_technique(g, tech, tc);
-        if (lit < 0) { return false; }
+        if (lit < 0)
+        {
+            return false;
+        }
         e.n_out  = 1;
         e.out[0] = {g.vec4(g.swizzle(lit, 0), g.swizzle(lit, 1), g.swizzle(lit, 2),
                            g.field_get(surface, material::SfOpacity)),
@@ -454,8 +521,14 @@ inline void unpack_surface(KGraph& g, int surface, const cook::SurfaceInputs& in
         break;
     }
     }
-    if (opts.alpha_mode == material::AlphaMode::Masked) { material::set_masked(g, e, surface, opts.alpha_cutoff); }
-    if (do_lower) { lower::lower_entry(g, e); }
+    if (opts.alpha_mode == material::AlphaMode::Masked)
+    {
+        material::set_masked(g, e, surface, opts.alpha_cutoff);
+    }
+    if (do_lower)
+    {
+        lower::lower_entry(g, e);
+    }
     return true;
 }
 
@@ -552,7 +625,10 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
 
 [[nodiscard]] inline int body_forward_csm(KGraph& g, const TechniqueContext& tc, void* /*user*/)
 {
-    if (tc.n_bindings < kCsmBindCount) { return -1; }
+    if (tc.n_bindings < kCsmBindCount)
+    {
+        return -1;
+    }
     const auto sh  = make_shape({1});
     const auto kf  = [&](double v) { return g.constant(v, sh, DType::F32); };
     const auto add = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
@@ -566,22 +642,40 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     const int tex  = tc.binding(kCsmBindAtlasTex);
     const int samp = tc.binding(kCsmBindAtlasSamp);
     const int msz  = tc.binding(kCsmBindMapSize);
-    if (tex < 0 || samp < 0 || msz < 0) { return -1; }
+    if (tex < 0 || samp < 0 || msz < 0)
+    {
+        return -1;
+    }
 
     // The DECLARED options are compile-time here (ship mode). `specialize_variant` reaches the same graph from an
     // übershader in editor mode — same artifact, two lowering levels (§5).
     auto       n_casc = static_cast<crd::u32>(tc.option(kCsmOptCascades, 4.0));
-    if (n_casc < 1U) { n_casc = 1U; }
-    if (n_casc > kCsmMaxCascades) { n_casc = kCsmMaxCascades; }
+    if (n_casc < 1U)
+    {
+        n_casc = 1U;
+    }
+    if (n_casc > kCsmMaxCascades)
+    {
+        n_casc = kCsmMaxCascades;
+    }
     auto n_taps = static_cast<int>(tc.option(kCsmOptPcfTaps, 4.0));
-    if (n_taps != 1 && n_taps != 4 && n_taps != 8 && n_taps != 16) { n_taps = 4; }
+    if (n_taps != 1 && n_taps != 4 && n_taps != 8 && n_taps != 16)
+    {
+        n_taps = 4;
+    }
 
     // ⭐⭐ REN-40-D: the cascade BLEND fraction, clamped. ⛔ 0 means the graph below is emitted exactly as it
     // was before this option existed — no second sample, no lerp, no extra node — which is what makes
     // "blend = 0 is bit-identical" a property of the COOK rather than a tolerance in a test.
     auto blend = static_cast<double>(tc.option(kCsmOptBlend, 0.0)) * 0.01; // the option is a PERCENT
-    if (!(blend > 0.0)) { blend = 0.0; }
-    if (blend > 0.9) { blend = 0.9; }
+    if (!(blend > 0.0))
+    {
+        blend = 0.0;
+    }
+    if (blend > 0.9)
+    {
+        blend = 0.9;
+    }
     // ⭐⭐ REN-40-D: PCSS. 0 keeps the fixed-radius filter and emits not one extra node.
     const int  soft_mode = static_cast<int>(tc.option(kCsmOptSoft, 0.0));
     const double angle_r = static_cast<double>(tc.option(kCsmOptLightAngle, 27.0)) * (0.01 * 3.14159265358979 / 180.0);
@@ -596,13 +690,28 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     // real engineering rather than timidity — but the content decides where the trade sits, and a technique that
     // wants unbounded softness reaches for a filterable representation (the moment atlas), not a bigger number.
     double max_texels = static_cast<double>(tc.option(kCsmOptSoftMaxTexels, 24.0));
-    if (!(max_texels > 0.0)) { max_texels = 24.0; }
-    if (max_texels > 256.0) { max_texels = 256.0; }
+    if (!(max_texels > 0.0))
+    {
+        max_texels = 24.0;
+    }
+    if (max_texels > 256.0)
+    {
+        max_texels = 256.0;
+    }
     auto n_search = static_cast<int>(tc.option(kCsmOptSoftSearchTaps, 8.0));
-    if (n_search != 4 && n_search != 8 && n_search != 16) { n_search = 8; }
+    if (n_search != 4 && n_search != 8 && n_search != 16)
+    {
+        n_search = 8;
+    }
     auto fade_pct = static_cast<double>(tc.option(kCsmOptFadePct, 30.0)) * 0.01;
-    if (!(fade_pct > 0.0)) { fade_pct = 0.0; }
-    if (fade_pct > 0.5) { fade_pct = 0.5; }
+    if (!(fade_pct > 0.0))
+    {
+        fade_pct = 0.0;
+    }
+    if (fade_pct > 0.5)
+    {
+        fade_pct = 0.5;
+    }
 
     const int wp = tc.fixed[kTiWorldPos]; // the projected position is built PER CASCADE (normal offset, below)
 
@@ -664,7 +773,10 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     for (crd::u32 ci = 0; ci < n_casc; ++ci)
     {
         const int vp = tc.binding(kCsmBindLightVp0 + static_cast<int>(ci));
-        if (vp < 0) { return -1; }
+        if (vp < 0)
+        {
+            return -1;
+        }
         // the matrix columns, as vectors (each is a mat·unit-vector the backend compiler folds to a column read)
         const int col_x = g.mat_mul_vec(vp, g.vec4(kf(1.0), kf(0.0), kf(0.0), kf(0.0)));
         const int col_y = g.mat_mul_vec(vp, g.vec4(kf(0.0), kf(1.0), kf(0.0), kf(0.0)));
@@ -804,9 +916,18 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
     static constexpr double kTaps1[1][2] = {{0.0, 0.0}};
 
     const double(*taps)[2] = kTaps4;
-    if (n_taps == 1) { taps = kTaps1; }
-    else if (n_taps == 8) { taps = kTaps8; }
-    else if (n_taps == 16) { taps = kTaps16; }
+    if (n_taps == 1)
+    {
+        taps = kTaps1;
+    }
+    else if (n_taps == 8)
+    {
+        taps = kTaps8;
+    }
+    else if (n_taps == 16)
+    {
+        taps = kTaps16;
+    }
 
     const int tsz = dvd(kf(1.0), mxf(msz, kf(1.0)));
     // ── ⭐⭐ REN-40-D: soft modes 2 (EVSM) and 3 (MSM) — the FILTERABLE tier. ────────────────────────────────
@@ -871,7 +992,10 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
         {
             const int dtex  = tc.binding(kCsmBindAtlasDepthTex);
             const int dsamp = tc.binding(kCsmBindAtlasDepthSamp);
-            if (dtex < 0 || dsamp < 0) { return -1; }
+            if (dtex < 0 || dsamp < 0)
+            {
+                return -1;
+            }
             const int inv_bsc = dvd(kf(1.0), mxf(bsc, kf(1.0e-9)));
             const int search  = g.binary(KOp::Min, mul(mul(sz, kf(tan_a)), inv_bsc), kf(max_texels));
             // ── the blocker search: average the depths that lie BETWEEN the light and this fragment ──
@@ -899,8 +1023,14 @@ inline constexpr double kMsmMomentBias = 6.0e-5;
             // ⛔ each table is normalised for ITS OWN count — a prefix of the 16-tap spiral only reaches
             // sqrt(N/16) of the radius, so slicing one table would quietly shrink the search at low tap counts.
             const double(*disc)[2] = kDisc8;
-            if (n_search == 4) { disc = kDisc4; }
-            else if (n_search == 16) { disc = kDisc16; }
+            if (n_search == 4)
+            {
+                disc = kDisc4;
+            }
+            else if (n_search == 16)
+            {
+                disc = kDisc16;
+            }
             int sum   = kf(0.0);
             int count = kf(0.0);
             for (int si = 0; si < n_search; ++si)

@@ -49,7 +49,10 @@ namespace detail
 template <typename It, typename Cmp>
 void insertion_sort(It first, It last, Cmp cmp)
 {
-    if (first == last) return;
+    if (first == last)
+    {
+        return;
+    }
     for (It i = first + 1; i != last; ++i)
     {
         auto val = std::move(*i);
@@ -63,7 +66,10 @@ void insertion_sort(It first, It last, Cmp cmp)
                 *j = std::move(*prev);
                 j = prev;
             }
-            else break;
+            else
+            {
+                break;
+            }
         }
         *j = std::move(val);
     }
@@ -86,8 +92,14 @@ void stable_merge(It a_first, It a_last, It b_first, It b_last, T* out, Cmp cmp)
             *out++ = std::move(*a_first++);
         }
     }
-    while (a_first != a_last) *out++ = std::move(*a_first++);
-    while (b_first != b_last) *out++ = std::move(*b_first++);
+    while (a_first != a_last)
+    {
+        *out++ = std::move(*a_first++);
+    }
+    while (b_first != b_last)
+    {
+        *out++ = std::move(*b_first++);
+    }
 }
 
 // Recursive merge sort. Caller pre-allocates `temp` of size (last - first).
@@ -123,12 +135,24 @@ It median_of_three(It a, It b, It c, Cmp cmp) noexcept
 {
     if (cmp(*a, *b))
     {
-        if (cmp(*b, *c)) return b;
-        if (cmp(*a, *c)) return c;
+        if (cmp(*b, *c))
+        {
+            return b;
+        }
+        if (cmp(*a, *c))
+        {
+            return c;
+        }
         return a;
     }
-    if (cmp(*a, *c)) return a;
-    if (cmp(*b, *c)) return c;
+    if (cmp(*a, *c))
+    {
+        return a;
+    }
+    if (cmp(*b, *c))
+    {
+        return c;
+    }
     return b;
 }
 
@@ -176,7 +200,10 @@ void heap_sift_up(It first, decltype(std::declval<It>() - std::declval<It>()) id
             first[idx] = std::move(first[parent]);
             idx = parent;
         }
-        else break;
+        else
+        {
+            break;
+        }
     }
     first[idx] = std::move(val);
 }
@@ -188,11 +215,20 @@ void heap_sift_down(It first, Diff idx, Diff size, Cmp cmp)
     while (true)
     {
         const Diff left  = 2 * idx + 1;
-        if (left >= size) break;
+        if (left >= size)
+        {
+            break;
+        }
         const Diff right = left + 1;
         Diff largest = left;
-        if (right < size && cmp(first[left], first[right])) largest = right;
-        if (!cmp(val, first[largest])) break;
+        if (right < size && cmp(first[left], first[right]))
+        {
+            largest = right;
+        }
+        if (!cmp(val, first[largest]))
+        {
+            break;
+        }
         first[idx] = std::move(first[largest]);
         idx = largest;
     }
@@ -277,7 +313,10 @@ void stable_sort(It first, It last, Cmp cmp, memory::IAllocator* alloc)
     using Diff   = decltype(last - first);
     using T      = typename std::iterator_traits<It>::value_type;
     const Diff n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
 
     Array<T> temp(alloc);
     temp.resize(static_cast<usize>(n));
@@ -299,7 +338,10 @@ void stable_sort(It first, It last, Cmp cmp, Array<typename std::iterator_traits
 {
     using Diff   = decltype(last - first);
     const Diff n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
     scratch.resize(static_cast<usize>(n));
     detail::merge_sort_recursive(first, last, scratch.data(), cmp);
 }
@@ -312,7 +354,10 @@ template <typename It, typename Cmp = std::less<>>
 void sort(It first, It last, Cmp cmp = Cmp{})
 {
     const auto n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
     detail::introsort_loop(first, last, 2 * detail::floor_log2(n), cmp);
     detail::insertion_sort(first, last, cmp);
 }
@@ -324,13 +369,25 @@ void sort(It first, It last, Cmp cmp = Cmp{})
 template <typename It, typename Cmp = std::less<>>
 void nth_element(It first, It nth, It last, Cmp cmp = Cmp{})
 {
-    if (nth == last) return;
+    if (nth == last)
+    {
+        return;
+    }
     while (last - first > 16)
     {
         It p = detail::partition_lomuto(first, last, cmp);
-        if (p == nth)        return;
-        if (p < nth)    first = p + 1;
-        else                 last  = p;
+        if (p == nth)
+        {
+            return;
+        }
+        if (p < nth)
+        {
+            first = p + 1;
+        }
+        else
+        {
+            last  = p;
+        }
     }
     detail::insertion_sort(first, last, cmp);
 }
@@ -342,7 +399,10 @@ void push_heap(It first, It last, Cmp cmp = Cmp{})
 {
     using Diff = decltype(last - first);
     const Diff n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
     detail::heap_sift_up(first, n - 1, cmp);
 }
 
@@ -351,7 +411,10 @@ void pop_heap(It first, It last, Cmp cmp = Cmp{})
 {
     using Diff = decltype(last - first);
     const Diff n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
     std::swap(*first, *(last - 1));
     detail::heap_sift_down(first, Diff{0}, n - 1, cmp);
 }
@@ -361,7 +424,10 @@ void make_heap(It first, It last, Cmp cmp = Cmp{})
 {
     using Diff = decltype(last - first);
     const Diff n = last - first;
-    if (n < 2) return;
+    if (n < 2)
+    {
+        return;
+    }
     // Floyd's bottom-up heapify: O(n).
     for (Diff i = (n / 2) - 1; i >= 0; --i)
     {

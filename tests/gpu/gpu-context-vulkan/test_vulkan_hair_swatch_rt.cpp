@@ -47,11 +47,17 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h,
 {
     std::FILE* f = nullptr;
 #ifdef _MSC_VER
-    if (fopen_s(&f, path, "wb") != 0) { f = nullptr; }
+    if (fopen_s(&f, path, "wb") != 0)
+    {
+        f = nullptr;
+    }
 #else
     f = std::fopen(path, "wb");
 #endif
-    if (f == nullptr) { return; }
+    if (f == nullptr)
+    {
+        return;
+    }
     const int     rowsz  = ((w * 3 + 3) / 4) * 4;
     const int     imgsz  = rowsz * h;
     const int     filesz = 54 + imgsz;
@@ -80,8 +86,14 @@ void write_bmp(crd::memory::IAllocator& alloc, const char* path, int w, int h,
             {
                 const double v   = rgb[uz((y * w + x) * 3 + c)];
                 double       clp = v;
-                if (clp < 0.0) { clp = 0.0; }
-                if (clp > 1.0) { clp = 1.0; }
+                if (clp < 0.0)
+                {
+                    clp = 0.0;
+                }
+                if (clp > 1.0)
+                {
+                    clp = 1.0;
+                }
                 row[uz(x * 3 + (2 - c))] = static_cast<unsigned char>(crd::math::lround(clp * 255.0));
             }
         }
@@ -130,9 +142,17 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
     gcfg.backend  = gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(gcfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -169,7 +189,10 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
 
     for (const Look& lk : looks)
     {
-        if (&lk != &looks[k_only_look]) { continue; } // iterate on ONE look; the rest are a final-pass concern
+        if (&lk != &looks[k_only_look]) // iterate on ONE look; the rest are a final-pass concern
+        {
+            continue;
+        }
         hs::SwatchConfig sw;
         sw.curl_amp    = lk.curl_amp;
         sw.curl_freq   = lk.curl_freq;
@@ -189,9 +212,18 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         sw.segments        = static_cast<int>(40.0 > turns * 28.0 ? 40.0 : turns * 28.0);
         // strands PER LOCK carry the density now that the lock count is low; scale it down only where the curl
         // frequency has already inflated the segment count.
-        if (sw.segments > 200) { sw.per_clump = 1400; }
-        else if (sw.segments > 90) { sw.per_clump = 1900; }
-        else { sw.per_clump = 2600; }
+        if (sw.segments > 200)
+        {
+            sw.per_clump = 1400;
+        }
+        else if (sw.segments > 90)
+        {
+            sw.per_clump = 1900;
+        }
+        else
+        {
+            sw.per_clump = 2600;
+        }
         const crd::u32 nseg = hs::build_swatch(sw, segs, tans, &alloc);
 
         auto scene = rt.build_scene_curves(segs.data(), nseg);
@@ -214,12 +246,18 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             const double tgt[3] = {0.0, 0.380, 0.020};
             double       fwd[3] = {tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2]};
             const double fl     = crd::math::sqrt(fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]);
-            for (int k = 0; k < 3; ++k) { fwd[k] /= fl; }
+            for (int k = 0; k < 3; ++k)
+            {
+                fwd[k] /= fl;
+            }
             const double wup[3] = {0.0, 1.0, 0.0};
             double       rgt[3] = {fwd[1] * wup[2] - fwd[2] * wup[1], fwd[2] * wup[0] - fwd[0] * wup[2],
                              fwd[0] * wup[1] - fwd[1] * wup[0]};
             const double rl = crd::math::sqrt(rgt[0] * rgt[0] + rgt[1] * rgt[1] + rgt[2] * rgt[2]);
-            for (int k = 0; k < 3; ++k) { rgt[k] /= rl; }
+            for (int k = 0; k < 3; ++k)
+            {
+                rgt[k] /= rl;
+            }
             const double upv[3] = {rgt[1] * fwd[2] - rgt[2] * fwd[1], rgt[2] * fwd[0] - rgt[0] * fwd[2],
                                    rgt[0] * fwd[1] - rgt[1] * fwd[0]};
             for (int k = 0; k < 3; ++k)
@@ -239,11 +277,21 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
         const double l0[3] = {-0.52, 0.62, 0.58};
         const double l1[3] = {0.18, 0.32, -0.93};
         const double l2[3] = {0.72, -0.10, 0.68};
-        for (int k = 0; k < 3; ++k) { cfg.light_dir[0][k] = l0[k]; cfg.light_dir[1][k] = l1[k]; cfg.light_dir[2][k] = l2[k]; }
+        for (int k = 0; k < 3; ++k)
+        {
+            cfg.light_dir[0][k] = l0[k];
+            cfg.light_dir[1][k] = l1[k];
+            cfg.light_dir[2][k] = l2[k];
+        }
         const double c0[3] = {4.20, 4.05, 3.85};
         const double c1[3] = {5.10, 4.70, 4.15};
         const double c2[3] = {0.70, 0.78, 0.98};
-        for (int k = 0; k < 3; ++k) { cfg.light_col[0][k] = c0[k]; cfg.light_col[1][k] = c1[k]; cfg.light_col[2][k] = c2[k]; }
+        for (int k = 0; k < 3; ++k)
+        {
+            cfg.light_col[0][k] = c0[k];
+            cfg.light_col[1][k] = c1[k];
+            cfg.light_col[2][k] = c2[k];
+        }
         cfg.light_radius[0] = 0.045;
         cfg.light_radius[1] = 0.030;
         cfg.light_radius[2] = 0.150;
@@ -254,9 +302,16 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             const double up[3] = {crd::math::abs(d[1]) > 0.9 ? 1.0 : 0.0, crd::math::abs(d[1]) > 0.9 ? 0.0 : 1.0, 0.0};
             double       t[3]  = {up[1] * d[2] - up[2] * d[1], up[2] * d[0] - up[0] * d[2], up[0] * d[1] - up[1] * d[0]};
             const double tl = crd::math::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
-            for (int k = 0; k < 3; ++k) { t[k] /= tl; }
+            for (int k = 0; k < 3; ++k)
+            {
+                t[k] /= tl;
+            }
             const double b[3] = {d[1] * t[2] - d[2] * t[1], d[2] * t[0] - d[0] * t[2], d[0] * t[1] - d[1] * t[0]};
-            for (int k = 0; k < 3; ++k) { cfg.light_t[l][k] = t[k]; cfg.light_b[l][k] = b[k]; }
+            for (int k = 0; k < 3; ++k)
+            {
+                cfg.light_t[l][k] = t[k];
+                cfg.light_b[l][k] = b[k];
+            }
         }
         cfg.shadow_tmin = 0.5 * sw.root_radius; // the normal offset does the clearing now, not this
         cfg.ray_tmin    = 0.5 * sw.root_radius;
@@ -346,7 +401,10 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             REQUIRE(rsv.ok);
 
             const int k_frames = 96;
-            for (uz_t i = 0; i < acc.size(); ++i) { acc[i] = 0.0; }
+            for (uz_t i = 0; i < acc.size(); ++i)
+            {
+                acc[i] = 0.0;
+            }
             double frame_ms_sum = 0.0;
             double frame_ms_min = 1.0e30;
             for (int fr = 0; fr < k_frames; ++fr)
@@ -365,16 +423,29 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
                 // ⚠ this per-frame time INCLUDES the ~3.35 s pipeline-rebuild + readback overhead of the one-shot
                 //   trace_dispatch — a harness artifact, NOT a rendering cost. Subtract the measured fixed cost to get
                 //   the real per-frame GPU number; the lever sweep above gives the clean per-sample figure.
-                if (fr > 0) { frame_ms_sum += fms; frame_ms_min = fms < frame_ms_min ? fms : frame_ms_min; }
-                for (uz_t i = 0; i < acc.size(); ++i) { acc[i] += static_cast<double>(outf[i]); }
+                if (fr > 0)
+                {
+                    frame_ms_sum += fms;
+                    frame_ms_min = fms < frame_ms_min ? fms : frame_ms_min;
+                }
+                for (uz_t i = 0; i < acc.size(); ++i)
+                {
+                    acc[i] += static_cast<double>(outf[i]);
+                }
                 if (fr == 0)
                 {
-                    for (uz_t i = 0; i < img.size(); ++i) { img[i] = srgb(tonemap(static_cast<double>(outf[i]) * 4.0)); }
+                    for (uz_t i = 0; i < img.size(); ++i)
+                    {
+                        img[i] = srgb(tonemap(static_cast<double>(outf[i]) * 4.0));
+                    }
                     write_bmp(alloc, "build/rt_1frame.bmp", k_w, k_h, img);
                 }
             }
             const double invf = 4.0 / static_cast<double>(k_frames); // 4.0 = the same exposure the 1-frame used
-            for (uz_t i = 0; i < img.size(); ++i) { img[i] = srgb(tonemap(acc[i] * invf)); }
+            for (uz_t i = 0; i < img.size(); ++i)
+            {
+                img[i] = srgb(tonemap(acc[i] * invf));
+            }
             write_bmp(alloc, "build/rt_accum.bmp", k_w, k_h, img);
             std::printf("[realtime] 1-bounce 2-step shadow, 1 spp/frame @ %dx%d: wall %.1f ms/frame (incl. ~3.35s "
                         "harness overhead) — the lever sweep's 29 ms/spp is the true GPU cost; %d frames accumulated\n",
@@ -384,7 +455,10 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             continue;
         }
 
-        for (uz_t i = 0; i < acc.size(); ++i) { acc[i] = 0.0; }
+        for (uz_t i = 0; i < acc.size(); ++i)
+        {
+            acc[i] = 0.0;
+        }
         const auto t_start = std::chrono::steady_clock::now();
         for (int p = 0; p < k_passes; ++p)
         {
@@ -405,7 +479,10 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()),
                                       crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 4),
                                       static_cast<crd::u32>((k_w * k_h + 63) / 64)));
-            for (uz_t i = 0; i < acc.size(); ++i) { acc[i] += static_cast<double>(outf[i]); }
+            for (uz_t i = 0; i < acc.size(); ++i)
+            {
+                acc[i] += static_cast<double>(outf[i]);
+            }
         }
 
         const auto   t_end   = std::chrono::steady_clock::now();
@@ -431,11 +508,20 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             for (uz_t i = 0; i < img.size(); i += 3U)
             {
                 const double hits = acc[i + 1U];
-                if (hits < 0.25 * static_cast<double>(k_passes * cfg.spp)) { continue; } // ≥25% coverage
+                if (hits < 0.25 * static_cast<double>(k_passes * cfg.spp)) // ≥25% coverage
+                {
+                    continue;
+                }
                 const double mh = acc[i] / hits;
                 int          b  = static_cast<int>(mh * 10.0);
-                if (b < 0) { b = 0; }
-                if (b > 9) { b = 9; }
+                if (b < 0)
+                {
+                    b = 0;
+                }
+                if (b > 9)
+                {
+                    b = 9;
+                }
                 ++hist[b];
                 sum += mh;
                 ++n;
@@ -464,8 +550,15 @@ TEST_CASE("B18-f showcase: path-traced hair swatch", "[.][gpu-context][vulkan][g
             const double gq = acc[i + 1U] * inv;
             const double b = acc[i + 2U] * inv;
             const double lum = 0.2126 * r + 0.7152 * gq + 0.0722 * b;
-            if (lum > peak) { peak = lum; }
-            if (lum > cfg.bg[1] * 1.5) { logsum += crd::math::log(lum + 1.0e-6); ++nhair; }
+            if (lum > peak)
+            {
+                peak = lum;
+            }
+            if (lum > cfg.bg[1] * 1.5)
+            {
+                logsum += crd::math::log(lum + 1.0e-6);
+                ++nhair;
+            }
         }
         const double key   = nhair > 0 ? crd::math::exp(logsum / static_cast<double>(nhair)) : 1.0;
         const double scale = k_key / (key > 1.0e-6 ? key : 1.0e-6);

@@ -85,20 +85,36 @@ CommandResult impl_gemm_f32(const CommandArgs& args)
     Mat b_mat(args.alloc, kk, nn);
     Mat c_mat(args.alloc, mm, nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < kk; ++j)
+        {
             a_mat(i, j) = static_cast<T>(a_flat[i * kk + j]);
+        }
+    }
     for (crd::usize i = 0; i < kk; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             b_mat(i, j) = static_cast<T>(b_flat[i * nn + j]);
+        }
+    }
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             c_mat(i, j) = static_cast<T>(c_in[i * nn + j]);
+        }
+    }
     crd::hesap::dense::gemm<T, Layout::RowMajor>(alpha, a_mat.cview(), b_mat.cview(), beta, c_mat.view());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(mm * nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             out.push_back(static_cast<crd::f64>(c_mat(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -125,20 +141,36 @@ CommandResult impl_gemm_f64(const CommandArgs& args)
     Mat b_mat(args.alloc, kk, nn);
     Mat c_mat(args.alloc, mm, nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < kk; ++j)
+        {
             a_mat(i, j) = a_flat[i * kk + j];
+        }
+    }
     for (crd::usize i = 0; i < kk; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             b_mat(i, j) = b_flat[i * nn + j];
+        }
+    }
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             c_mat(i, j) = c_in[i * nn + j];
+        }
+    }
     crd::hesap::dense::gemm<T, Layout::RowMajor>(alpha, a_mat.cview(), b_mat.cview(), beta, c_mat.view());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(mm * nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             out.push_back(c_mat(i, j));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -162,19 +194,31 @@ CommandResult impl_trsm_lower_f32(const CommandArgs& args)
     const crd::usize cc = static_cast<crd::usize>(cols);
     Tri tri_l(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             tri_l.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Mat b_mat(args.alloc, nn, cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             b_mat(i, j) = static_cast<T>(b_flat[i * cc + j]);
+        }
+    }
     crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(alpha, tri_l, b_mat.view(),
                                                                                 Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             out.push_back(static_cast<crd::f64>(b_mat(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -196,19 +240,31 @@ CommandResult impl_trsm_lower_f64(const CommandArgs& args)
     const crd::usize cc = static_cast<crd::usize>(cols);
     Tri tri_l(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             tri_l.at(i, j) = a_flat[i * nn + j];
+        }
+    }
     Mat b_mat(args.alloc, nn, cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             b_mat(i, j) = b_flat[i * cc + j];
+        }
+    }
     crd::hesap::dense::trsm<T, TriangularSide::Lower, TriangularDiag::Explicit>(alpha, tri_l, b_mat.view(),
                                                                                 Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             out.push_back(b_mat(i, j));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -233,17 +289,29 @@ template <typename T> CommandResult impl_syrk(const CommandArgs& args)
     Mat a_mat(args.alloc, mm, kk);
     Sym c_sym(args.alloc, mm);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < kk; ++j)
+        {
             a_mat(i, j) = static_cast<T>(a_flat[i * kk + j]);
+        }
+    }
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             c_sym.at(i, j) = static_cast<T>(c_in[i * mm + j]);
+        }
+    }
     crd::hesap::dense::syrk<T>(alpha, a_mat.cview(), beta, c_sym);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(mm * mm);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < mm; ++j)
+        {
             out.push_back(static_cast<crd::f64>(c_sym.at(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -270,24 +338,36 @@ template <typename T, TriangularSide Side> CommandResult impl_trmm(const Command
         if constexpr (Side == TriangularSide::Lower)
         {
             for (crd::usize j = 0; j <= i; ++j)
+            {
                 tri_a.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+            }
         }
         else
         {
             for (crd::usize j = i; j < nn; ++j)
+            {
                 tri_a.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+            }
         }
     }
     Mat b_mat(args.alloc, nn, cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             b_mat(i, j) = static_cast<T>(b_in[i * cc + j]);
+        }
+    }
     crd::hesap::dense::trmm<T, Side, TriangularDiag::Explicit>(alpha, tri_a, b_mat.view());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             out.push_back(static_cast<crd::f64>(b_mat(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -310,19 +390,31 @@ template <typename T> CommandResult impl_trsm_upper(const CommandArgs& args)
     const crd::usize cc = static_cast<crd::usize>(cols);
     Tri tri_u(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = i; j < nn; ++j)
+        {
             tri_u.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Mat b_mat(args.alloc, nn, cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             b_mat(i, j) = static_cast<T>(b_flat[i * cc + j]);
+        }
+    }
     crd::hesap::dense::trsm<T, TriangularSide::Upper, TriangularDiag::Explicit>(alpha, tri_u, b_mat.view(),
                                                                                 Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn * cc);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j < cc; ++j)
+        {
             out.push_back(static_cast<crd::f64>(b_mat(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -351,20 +443,36 @@ template <typename T> CommandResult impl_gemm_parallel_auto(const CommandArgs& a
     Mat b_mat(args.alloc, kk, nn);
     Mat c_mat(args.alloc, mm, nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < kk; ++j)
+        {
             a_mat(i, j) = static_cast<T>(a_flat[i * kk + j]);
+        }
+    }
     for (crd::usize i = 0; i < kk; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             b_mat(i, j) = static_cast<T>(b_flat[i * nn + j]);
+        }
+    }
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             c_mat(i, j) = static_cast<T>(c_in[i * nn + j]);
+        }
+    }
     crd::hesap::dense::gemm_parallel_auto<T, Layout::RowMajor>(alpha, a_mat.cview(), b_mat.cview(), beta, c_mat.view());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(mm * nn);
     for (crd::usize i = 0; i < mm; ++i)
+    {
         for (crd::usize j = 0; j < nn; ++j)
+        {
             out.push_back(static_cast<crd::f64>(c_mat(i, j)));
+        }
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 

@@ -28,12 +28,18 @@ public:
     // Ensure a node exists even with no edges (participates in ordering). id 0 (invalid) is ignored.
     void add_node(NodeId id)
     {
-        if (id != 0U) { (void)ensure_node(id); }
+        if (id != 0U)
+        {
+            (void)ensure_node(id);
+        }
     }
     // Record "from depends on to" (so `to` orders before `from`). Self-edges + invalid ids are ignored.
     void add_edge(NodeId from, NodeId to)
     {
-        if (from == 0U || to == 0U || from == to) { return; }
+        if (from == 0U || to == 0U || from == to)
+        {
+            return;
+        }
         (void)ensure_node(to);
         const usize fi = ensure_node(from); // last, so fi stays valid
         insert_sorted_unique(m_nodes[fi].deps, to);
@@ -79,7 +85,10 @@ public:
             emitted[pick] = 1U;
             for (usize j = 0; j < n; ++j)
             {
-                if (emitted[j] == 0U && remaining[j] > 0U && contains(m_nodes[j].deps, pid)) { --remaining[j]; }
+                if (emitted[j] == 0U && remaining[j] > 0U && contains(m_nodes[j].deps, pid))
+                {
+                    --remaining[j];
+                }
             }
         }
         return true;
@@ -90,7 +99,10 @@ public:
     [[nodiscard]] bool affected_by(NodeId changed, Array<NodeId>& out) const
     {
         out.clear();
-        if (changed == 0U) { return true; }
+        if (changed == 0U)
+        {
+            return true;
+        }
         Array<NodeId> affected(m_alloc);
         Array<NodeId> frontier(m_alloc);
         frontier.push_back(changed);
@@ -101,7 +113,10 @@ public:
             for (usize i = 0; i < m_nodes.size(); ++i)
             {
                 const Node& node = m_nodes[i];
-                if (node.id == changed) { continue; } // never fold `changed` into its own dependent set
+                if (node.id == changed) // never fold `changed` into its own dependent set
+                {
+                    continue;
+                }
                 if (contains(node.deps, cur) && !contains(affected, node.id))
                 {
                     insert_sorted_unique(affected, node.id);
@@ -109,12 +124,22 @@ public:
                 }
             }
         }
-        if (affected.size() == 0U) { return true; }
+        if (affected.size() == 0U)
+        {
+            return true;
+        }
         Array<NodeId> order(m_alloc);
-        if (!topo_order(order)) { out.clear(); return false; } // reuse the deterministic order (a cyclic graph rejects)
+        if (!topo_order(order)) // reuse the deterministic order (a cyclic graph rejects)
+        {
+            out.clear();
+            return false;
+        }
         for (usize i = 0; i < order.size(); ++i)
         {
-            if (contains(affected, order[i])) { out.push_back(order[i]); }
+            if (contains(affected, order[i]))
+            {
+                out.push_back(order[i]);
+            }
         }
         return true;
     }
@@ -125,7 +150,10 @@ public:
     // module may include.
     void set_revision(NodeId id, u64 content, u64 interface_rev)
     {
-        if (id == 0U) { return; }
+        if (id == 0U)
+        {
+            return;
+        }
         const usize i          = ensure_node(id);
         m_nodes[i].content      = content;
         m_nodes[i].interface_rev = interface_rev;
@@ -148,7 +176,10 @@ public:
     [[nodiscard]] bool recompute_after_change(NodeId changed, u64 new_content, u64 new_interface, Array<NodeId>& out)
     {
         out.clear();
-        if (changed == 0U) { return true; }
+        if (changed == 0U)
+        {
+            return true;
+        }
         const usize i                 = ensure_node(changed);
         const bool  content_changed   = m_nodes[i].content != new_content;
         const bool  interface_changed = m_nodes[i].interface_rev != new_interface;
@@ -157,12 +188,22 @@ public:
         // ⛔ self recomputes on EITHER change: an interface change without a content change is incoherent under
         // content-addressing (interface is a projection of content), so recompute self conservatively rather than let a
         // dependent recompute against a node that never did (over-recompute, never stale — the EMPTY≠UNKNOWN direction).
-        if (content_changed || interface_changed) { out.push_back(changed); } // topo-first — it is its dependents' dep
+        if (content_changed || interface_changed) // topo-first — it is its dependents' dep
+        {
+            out.push_back(changed);
+        }
         if (interface_changed)
         {
             Array<NodeId> deps(m_alloc);
-            if (!affected_by(changed, deps)) { out.clear(); return false; }
-            for (usize k = 0; k < deps.size(); ++k) { out.push_back(deps[k]); } // dependents, topo-ordered
+            if (!affected_by(changed, deps))
+            {
+                out.clear();
+                return false;
+            }
+            for (usize k = 0; k < deps.size(); ++k) // dependents, topo-ordered
+            {
+                out.push_back(deps[k]);
+            }
         }
         return true;
     }
@@ -183,8 +224,14 @@ private:
         while (lo < hi)
         {
             const usize mid = lo + (hi - lo) / 2U;
-            if (a[mid] < id) { lo = mid + 1U; }
-            else { hi = mid; }
+            if (a[mid] < id)
+            {
+                lo = mid + 1U;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
         return lo;
     }
@@ -196,9 +243,15 @@ private:
     static void insert_sorted_unique(Array<NodeId>& a, NodeId id)
     {
         const usize idx = lower_bound(a, id);
-        if (idx < a.size() && a[idx] == id) { return; }
+        if (idx < a.size() && a[idx] == id)
+        {
+            return;
+        }
         a.push_back(id);
-        for (usize j = a.size() - 1U; j > idx; --j) { std::swap(a[j], a[j - 1U]); }
+        for (usize j = a.size() - 1U; j > idx; --j)
+        {
+            std::swap(a[j], a[j - 1U]);
+        }
     }
     [[nodiscard]] usize find_node(NodeId id) const noexcept
     {
@@ -207,17 +260,29 @@ private:
         while (lo < hi)
         {
             const usize mid = lo + (hi - lo) / 2U;
-            if (m_nodes[mid].id < id) { lo = mid + 1U; }
-            else { hi = mid; }
+            if (m_nodes[mid].id < id)
+            {
+                lo = mid + 1U;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
         return lo;
     }
     usize ensure_node(NodeId id)
     {
         const usize idx = find_node(id);
-        if (idx < m_nodes.size() && m_nodes[idx].id == id) { return idx; }
+        if (idx < m_nodes.size() && m_nodes[idx].id == id)
+        {
+            return idx;
+        }
         m_nodes.push_back(Node{id, Array<NodeId>(m_alloc), 0U, 0U});
-        for (usize j = m_nodes.size() - 1U; j > idx; --j) { std::swap(m_nodes[j], m_nodes[j - 1U]); }
+        for (usize j = m_nodes.size() - 1U; j > idx; --j)
+        {
+            std::swap(m_nodes[j], m_nodes[j - 1U]);
+        }
         return idx;
     }
 

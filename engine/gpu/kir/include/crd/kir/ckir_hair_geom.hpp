@@ -181,7 +181,10 @@ struct StrandGenConfig
     // Global spline parameter. A per-strand length fraction ends the strand EARLY along the same curve, so tips within one
     // tuft land at different lengths - real hair has no flat cut, and a uniform one is instantly readable as CG.
     int s = mul(g, w, ks(static_cast<double>(nlay - 1)));
-    if (cfg.per_strand_style) { s = mul(g, s, c_len); }
+    if (cfg.per_strand_style)
+    {
+        s = mul(g, s, c_len);
+    }
 
     // The active segment is selected branchlessly; every control point is HOST-indexed, so no runtime array indexing is needed.
     V3 pos{ks(0.0), ks(0.0), ks(0.0)};
@@ -245,7 +248,10 @@ struct StrandGenConfig
     g.stmt_buffer_store(out_b, g.binary(KOp::Add, jo, cu(4)), tan.y);
     g.stmt_buffer_store(out_b, g.binary(KOp::Add, jo, cu(5)), tan.z);
     g.stmt_for_end(loop);
-    if (guard >= 0) { g.stmt_if_end(guard); }
+    if (guard >= 0)
+    {
+        g.stmt_if_end(guard);
+    }
 
     KEntry e;
     e.stage             = KStage::Compute;
@@ -444,7 +450,10 @@ struct HairFilterConfig
     g.stmt_materialize(cr); g.stmt_materialize(cg); g.stmt_materialize(cb);
     g.stmt_materialize(tx); g.stmt_materialize(ty); g.stmt_materialize(dp);
 
-    for (int k = 0; k < 4; ++k) { g.stmt_buffer_store(out_b, g.binary(KOp::Add, ob, cu(static_cast<crd::u32>(k))), ks(0.0)); }
+    for (int k = 0; k < 4; ++k)
+    {
+        g.stmt_buffer_store(out_b, g.binary(KOp::Add, ob, cu(static_cast<crd::u32>(k))), ks(0.0));
+    }
 
     const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(dim * dim)));
     const int iv   = g.kernel_loop_var(loop);

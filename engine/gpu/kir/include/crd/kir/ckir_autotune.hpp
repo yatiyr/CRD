@@ -40,20 +40,44 @@ struct ScheduleResources
 // Compute a WarpTiled schedule's derived footprint. `ok=false` (via the return) iff a division is non-integral or a field is 0.
 [[nodiscard]] inline bool schedule_resources(const TileSchedule& s, ScheduleResources& r) noexcept
 {
-    if (s.kind != Sched::WarpTiled) { return false; }
-    if (s.bm <= 0 || s.bn <= 0 || s.bk <= 0 || s.wm <= 0 || s.wn <= 0 || s.wniter <= 0 || s.tm <= 0 || s.tn <= 0) { return false; }
-    if ((s.bm % s.wm) != 0 || (s.bn % s.wn) != 0) { return false; }              // warps tile the block
+    if (s.kind != Sched::WarpTiled)
+    {
+        return false;
+    }
+    if (s.bm <= 0 || s.bn <= 0 || s.bk <= 0 || s.wm <= 0 || s.wn <= 0 || s.wniter <= 0 || s.tm <= 0 || s.tn <= 0)
+    {
+        return false;
+    }
+    if ((s.bm % s.wm) != 0 || (s.bn % s.wn) != 0) // warps tile the block
+    {
+        return false;
+    }
     const int warps = (s.bm / s.wm) * (s.bn / s.wn);
     const int nt    = 32 * warps;
     const int denom = 32 * s.tm * s.tn * s.wniter;
-    if (denom == 0 || (s.wm * s.wn) % denom != 0) { return false; }               // WMITER integral
+    if (denom == 0 || (s.wm * s.wn) % denom != 0) // WMITER integral
+    {
+        return false;
+    }
     const int wmiter = (s.wm * s.wn) / denom;
-    if (wmiter <= 0 || (s.wm % wmiter) != 0 || (s.wn % s.wniter) != 0) { return false; }
+    if (wmiter <= 0 || (s.wm % wmiter) != 0 || (s.wn % s.wniter) != 0)
+    {
+        return false;
+    }
     const int wsubm = s.wm / wmiter;
     const int wsubn = s.wn / s.wniter;
-    if ((wsubm % s.tm) != 0 || (wsubn % s.tn) != 0) { return false; }
-    if ((wsubm / s.tm) * (wsubn / s.tn) != 32) { return false; }                  // the 32 lanes tile the warp sub-tile
-    if (nt != s.nt) { return false; }                                            // NT must equal the derived thread count
+    if ((wsubm % s.tm) != 0 || (wsubn % s.tn) != 0)
+    {
+        return false;
+    }
+    if ((wsubm / s.tm) * (wsubn / s.tn) != 32) // the 32 lanes tile the warp sub-tile
+    {
+        return false;
+    }
+    if (nt != s.nt) // NT must equal the derived thread count
+    {
+        return false;
+    }
     r.threads = static_cast<crd::u32>(nt);
     r.warps   = static_cast<crd::u32>(warps);
     r.wmiter  = static_cast<crd::u32>(wmiter);
@@ -68,21 +92,48 @@ struct ScheduleResources
 [[nodiscard]] inline bool contract_schedule_valid(const TileSchedule& s, int m, int n, int k, const DeviceLimits& lim) noexcept
 {
     ScheduleResources r;
-    if (!schedule_resources(s, r)) { return false; }
+    if (!schedule_resources(s, r))
+    {
+        return false;
+    }
     // shape divisibility (else the tiled kernel reads/writes out of bounds — select_schedule's constraint)
-    if (m < s.bm || n < s.bn || (m % s.bm) != 0 || (n % s.bn) != 0 || (k % s.bk) != 0) { return false; }
+    if (m < s.bm || n < s.bn || (m % s.bm) != 0 || (n % s.bn) != 0 || (k % s.bk) != 0)
+    {
+        return false;
+    }
     // float4 vectorized global loads: A along K (BK%4), B along N (BN%4)
-    if ((s.bk % 4) != 0 || (s.bn % 4) != 0) { return false; }
+    if ((s.bk % 4) != 0 || (s.bn % 4) != 0)
+    {
+        return false;
+    }
     // the smem-load stride pattern must tile evenly (stride_a = NT·4/BK divides BM; stride_b = NT/(BN/4) divides BK)
     const int stride_a = static_cast<int>((r.threads * 4U) / static_cast<crd::u32>(s.bk));
-    if (stride_a == 0 || ((r.threads * 4U) % static_cast<crd::u32>(s.bk)) != 0 || (s.bm % stride_a) != 0) { return false; }
-    if ((r.threads % (static_cast<crd::u32>(s.bn) / 4U)) != 0) { return false; }
+    if (stride_a == 0 || ((r.threads * 4U) % static_cast<crd::u32>(s.bk)) != 0 || (s.bm % stride_a) != 0)
+    {
+        return false;
+    }
+    if ((r.threads % (static_cast<crd::u32>(s.bn) / 4U)) != 0)
+    {
+        return false;
+    }
     const int stride_b = static_cast<int>(r.threads / (static_cast<crd::u32>(s.bn) / 4U));
-    if (stride_b == 0 || (s.bk % stride_b) != 0) { return false; }
+    if (stride_b == 0 || (s.bk % stride_b) != 0)
+    {
+        return false;
+    }
     // device ceilings
-    if (r.threads < 32U || r.threads > lim.max_threads) { return false; }
-    if (r.smem > lim.smem_bytes) { return false; }
-    if (r.accum > lim.max_accum) { return false; }
+    if (r.threads < 32U || r.threads > lim.max_threads)
+    {
+        return false;
+    }
+    if (r.smem > lim.smem_bytes)
+    {
+        return false;
+    }
+    if (r.accum > lim.max_accum)
+    {
+        return false;
+    }
     return true;
 }
 
@@ -100,16 +151,28 @@ struct ScheduleResources
     static constexpr int kWNITER[] = {1, 2, 4};
     static constexpr int kT[]      = {4, 8};
     int count = 0;
-    for (int bm : kBM) {
-    for (int bn : kBN) {
-    for (int bk : kBK) {
-    for (int wm : kWM) {
-    for (int wn : kWN) {
-    for (int wniter : kWNITER) {
-    for (int tm : kT) {
-    for (int tn : kT) {
-    for (int db = 0; db < 2; ++db) {
-        if ((bm % wm) != 0 || (bn % wn) != 0) { continue; }
+    for (int bm : kBM)
+    {
+    for (int bn : kBN)
+    {
+    for (int bk : kBK)
+    {
+    for (int wm : kWM)
+    {
+    for (int wn : kWN)
+    {
+    for (int wniter : kWNITER)
+    {
+    for (int tm : kT)
+    {
+    for (int tn : kT)
+    {
+    for (int db = 0; db < 2; ++db)
+    {
+        if ((bm % wm) != 0 || (bn % wn) != 0)
+        {
+            continue;
+        }
         TileSchedule s;
         s.kind          = Sched::WarpTiled;
         s.bm            = bm; s.bn = bn; s.bk = bk;
@@ -118,8 +181,14 @@ struct ScheduleResources
         s.nt            = 32 * (bm / wm) * (bn / wn); // NT is DERIVED, never searched
         s.double_buffer = db != 0;
         s.fma           = true; // the perf tier; the exact (no-FMA) tier is validated ULP-tolerant against the oracle
-        if (!contract_schedule_valid(s, m, n, k, lim)) { continue; }
-        if (count < cap) { out[count] = s; }
+        if (!contract_schedule_valid(s, m, n, k, lim))
+        {
+            continue;
+        }
+        if (count < cap)
+        {
+            out[count] = s;
+        }
         ++count;
     }}}}}}}}}
     return count < cap ? count : cap;
@@ -143,10 +212,16 @@ struct ScheduleResources
     double blocks_smem = (100.0 * 1024.0) / smem;
     double blocks_thr  = 1536.0 / nt;
     double blocks      = blocks_smem < blocks_thr ? blocks_smem : blocks_thr;
-    if (blocks > 24.0) { blocks = 24.0; }
+    if (blocks > 24.0)
+    {
+        blocks = 24.0;
+    }
     const double warps = blocks * (nt / 32.0);
     double       occ   = warps / 16.0;         // saturate at ~16 resident warps/SM (enough to hide DRAM latency)
-    if (occ > 1.0) { occ = 1.0; }
+    if (occ > 1.0)
+    {
+        occ = 1.0;
+    }
     const double reg_penalty = r.accum <= 64U ? 1.0 : 64.0 / static_cast<double>(r.accum); // fat accumulator tile → low occupancy
     const double db_bonus    = s.double_buffer ? 1.15 : 1.0;                                // double-buffering hides global-load latency
     const int    tt          = s.tm * s.tn;
@@ -191,14 +266,29 @@ struct DeviceSpec
     double       blocks = spec.smem_per_sm / smem;
     const double b_thr  = spec.threads_per_sm / nt;
     const double b_reg  = spec.regs_per_sm / (regs * nt);
-    if (b_thr < blocks) { blocks = b_thr; }
-    if (b_reg < blocks) { blocks = b_reg; }
-    if (blocks > spec.max_blocks_sm) { blocks = spec.max_blocks_sm; }
+    if (b_thr < blocks)
+    {
+        blocks = b_thr;
+    }
+    if (b_reg < blocks)
+    {
+        blocks = b_reg;
+    }
+    if (blocks > spec.max_blocks_sm)
+    {
+        blocks = spec.max_blocks_sm;
+    }
     const double resident = blocks >= 1.0 ? static_cast<double>(static_cast<int>(blocks)) : 0.0; // floor; <1 ⇒ can't fit a block
     const double warps    = resident * (nt / 32.0);
     double       occ_eff  = warps / spec.hide_warps; // <1 ⇒ too few resident warps to hide latency ⇒ compute stalls
-    if (occ_eff > 1.0) { occ_eff = 1.0; }
-    if (occ_eff < 0.02) { occ_eff = 0.02; }          // an infeasible/near-empty config is heavily penalized (ranked last)
+    if (occ_eff > 1.0)
+    {
+        occ_eff = 1.0;
+    }
+    if (occ_eff < 0.02) // an infeasible/near-empty config is heavily penalized (ranked last)
+    {
+        occ_eff = 0.02;
+    }
     const double db         = s.double_buffer ? 1.10 : 1.0;
     const double compute_ms = flops / (spec.peak_gflops * 1.0e6) / (occ_eff * db);
     const double mem_ms     = gbytes / (spec.bw_gbps * 1.0e6);
@@ -219,13 +309,26 @@ struct DeviceSpec
         double best_t = 1.0e300;
         for (int i = 0; i < lim; ++i)
         {
-            if (used[i]) { continue; }
+            if (used[i])
+            {
+                continue;
+            }
             ScheduleResources r;
-            if (!schedule_resources(cand[i], r)) { continue; }
+            if (!schedule_resources(cand[i], r))
+            {
+                continue;
+            }
             const double pt = predict_contract_ms(cand[i], r, m, nn, k, spec);
-            if (pt < best_t) { best_t = pt; best_i = i; }
+            if (pt < best_t)
+            {
+                best_t = pt;
+                best_i = i;
+            }
         }
-        if (best_i < 0) { return t; }
+        if (best_i < 0)
+        {
+            return t;
+        }
         used[best_i] = true;
         out_idx[t]   = best_i;
     }
@@ -246,13 +349,26 @@ struct DeviceSpec
         double best_s = -1.0;
         for (int i = 0; i < lim; ++i)
         {
-            if (used[i]) { continue; }
+            if (used[i])
+            {
+                continue;
+            }
             ScheduleResources r;
-            if (!schedule_resources(cand[i], r)) { continue; }
+            if (!schedule_resources(cand[i], r))
+            {
+                continue;
+            }
             const double sc = heuristic_score(cand[i], r);
-            if (sc > best_s) { best_s = sc; best_i = i; }
+            if (sc > best_s)
+            {
+                best_s = sc;
+                best_i = i;
+            }
         }
-        if (best_i < 0) { return t; }
+        if (best_i < 0)
+        {
+            return t;
+        }
         used[best_i]   = true;
         out_idx[t]     = best_i;
     }
@@ -276,7 +392,10 @@ struct ReduceSchedule
 [[nodiscard]] inline int reduce_nblocks(int n, const ReduceSchedule& s) noexcept
 {
     const int span = s.threads * s.per_thread;
-    if (span <= 0 || (n % span) != 0) { return 0; }
+    if (span <= 0 || (n % span) != 0)
+    {
+        return 0;
+    }
     return n / span;
 }
 
@@ -285,10 +404,19 @@ struct ReduceSchedule
 // (build_reduce's constraint). A schedule that violates one either miscomputes or fails to launch, so the search never emits it.
 [[nodiscard]] inline bool reduce_schedule_valid(int n, const ReduceSchedule& s, const DeviceLimits& lim) noexcept
 {
-    if (s.threads < 32 || s.threads > static_cast<int>(lim.max_threads) || s.per_thread < 1) { return false; }
-    if ((s.threads & (s.threads - 1)) != 0) { return false; } // power of two
+    if (s.threads < 32 || s.threads > static_cast<int>(lim.max_threads) || s.per_thread < 1)
+    {
+        return false;
+    }
+    if ((s.threads & (s.threads - 1)) != 0) // power of two
+    {
+        return false;
+    }
     const int nb = reduce_nblocks(n, s);
-    if (nb <= 0) { return false; }
+    if (nb <= 0)
+    {
+        return false;
+    }
     return (nb % s.threads) == 0; // final pass: reduce nb partials with `threads` threads, per_thread_final ≥ 1
 }
 
@@ -305,8 +433,14 @@ struct ReduceSchedule
         for (int pt : kPerThread)
         {
             const ReduceSchedule s{threads, pt};
-            if (!reduce_schedule_valid(n, s, lim)) { continue; }
-            if (count < cap) { out[count] = s; }
+            if (!reduce_schedule_valid(n, s, lim))
+            {
+                continue;
+            }
+            if (count < cap)
+            {
+                out[count] = s;
+            }
             ++count;
         }
     }
@@ -321,12 +455,21 @@ struct ReduceSchedule
 [[nodiscard]] inline double predict_reduce_ms(int n, const ReduceSchedule& s, const DeviceSpec& spec)
 {
     const int nb = reduce_nblocks(n, s);
-    if (nb <= 0) { return 1.0e30; }
+    if (nb <= 0)
+    {
+        return 1.0e30;
+    }
     const double bytes   = 4.0 * (static_cast<double>(n) + 2.0 * static_cast<double>(nb));
     const double target  = 2.0 * spec.num_sms; // resident-block target to saturate DRAM
     double       util    = static_cast<double>(nb) / target;
-    if (util > 1.0) { util = 1.0; }
-    if (util < 0.05) { util = 0.05; } // a badly under-utilized launch is ranked last, not infinite
+    if (util > 1.0)
+    {
+        util = 1.0;
+    }
+    if (util < 0.05) // a badly under-utilized launch is ranked last, not infinite
+    {
+        util = 0.05;
+    }
     return bytes / (spec.bw_gbps * 1.0e6 * util);
 }
 
@@ -343,11 +486,21 @@ struct ReduceSchedule
         double best_ms = 1.0e300;
         for (int i = 0; i < lim; ++i)
         {
-            if (used[i]) { continue; }
+            if (used[i])
+            {
+                continue;
+            }
             const double ms = predict_reduce_ms(nelem, cand[i], spec);
-            if (ms < best_ms) { best_ms = ms; best_i = i; }
+            if (ms < best_ms)
+            {
+                best_ms = ms;
+                best_i = i;
+            }
         }
-        if (best_i < 0) { return t; }
+        if (best_i < 0)
+        {
+            return t;
+        }
         used[best_i] = true;
         out_idx[t]   = best_i;
     }
@@ -371,8 +524,14 @@ struct AttentionSchedule
 // enumerator) rejects it by being slow.
 [[nodiscard]] inline bool attention_schedule_valid(int dim, const AttentionSchedule& s, const DeviceLimits& lim) noexcept
 {
-    if (dim <= 0 || s.br < 32 || s.br > static_cast<int>(lim.max_threads) || s.bc < 8) { return false; }
-    if ((s.br & (s.br - 1)) != 0) { return false; }                             // BR power of two
+    if (dim <= 0 || s.br < 32 || s.br > static_cast<int>(lim.max_threads) || s.bc < 8)
+    {
+        return false;
+    }
+    if ((s.br & (s.br - 1)) != 0) // BR power of two
+    {
+        return false;
+    }
     return static_cast<crd::i64>(s.bc) * dim * 2 * 4 <= 48 * 1024;              // static shared cap
 }
 
@@ -388,8 +547,14 @@ struct AttentionSchedule
         for (int bc : kBC)
         {
             const AttentionSchedule s{br, bc};
-            if (!attention_schedule_valid(dim, s, lim)) { continue; }
-            if (count < cap) { out[count] = s; }
+            if (!attention_schedule_valid(dim, s, lim))
+            {
+                continue;
+            }
+            if (count < cap)
+            {
+                out[count] = s;
+            }
             ++count;
         }
     }

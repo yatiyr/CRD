@@ -53,7 +53,11 @@ struct Kit
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -82,14 +86,20 @@ u32 count_ops(const Context& ctx, Block* b, StringView name)
     u32 n = 0;
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) == name) { ++n; }
+        if (ctx.op_name(op->kind()) == name)
+        {
+            ++n;
+        }
     }
     return n;
 }
 u32 count_all(Block* b)
 {
     u32 n = 0;
-    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { ++n; }
+    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        ++n;
+    }
     return n;
 }
 TypeId sh1(Context& ctx, u32 a)
@@ -174,9 +184,18 @@ TEST_CASE("ceir 25a-1: vjp_gemm emits 2 transpose + 2 gemm (right shapes/wiring)
     f64 av[mm * kk];
     f64 bv[kk * nn];
     f64 dcv[mm * nn];
-    for (u32 i = 0; i < mm * kk; ++i) { av[i] = 0.5 + 0.13 * static_cast<f64>(i) - 0.017 * static_cast<f64>(i * i); }
-    for (u32 i = 0; i < kk * nn; ++i) { bv[i] = -0.4 + 0.21 * static_cast<f64>(i); }
-    for (u32 i = 0; i < mm * nn; ++i) { dcv[i] = 0.3 - 0.05 * static_cast<f64>(i) + 0.02 * static_cast<f64>((i * 7U) % 5U); }
+    for (u32 i = 0; i < mm * kk; ++i)
+    {
+        av[i] = 0.5 + 0.13 * static_cast<f64>(i) - 0.017 * static_cast<f64>(i * i);
+    }
+    for (u32 i = 0; i < kk * nn; ++i)
+    {
+        bv[i] = -0.4 + 0.21 * static_cast<f64>(i);
+    }
+    for (u32 i = 0; i < mm * nn; ++i)
+    {
+        dcv[i] = 0.3 - 0.05 * static_cast<f64>(i) + 0.02 * static_cast<f64>((i * 7U) % 5U);
+    }
 
     f64 ga[mm * kk];
     f64 gb[kk * nn];
@@ -185,12 +204,18 @@ TEST_CASE("ceir 25a-1: vjp_gemm emits 2 transpose + 2 gemm (right shapes/wiring)
     f64 bt_cpu[nn * kk]; // B[K,N] -> Bt[N,K]
     for (u32 r = 0; r < kk; ++r)
     {
-        for (u32 col = 0; col < nn; ++col) { bt_cpu[col * kk + r] = bv[r * nn + col]; }
+        for (u32 col = 0; col < nn; ++col)
+        {
+            bt_cpu[col * kk + r] = bv[r * nn + col];
+        }
     }
     f64 at_cpu[kk * mm]; // A[M,K] -> At[K,M]
     for (u32 r = 0; r < mm; ++r)
     {
-        for (u32 col = 0; col < kk; ++col) { at_cpu[col * mm + r] = av[r * kk + col]; }
+        for (u32 col = 0; col < kk; ++col)
+        {
+            at_cpu[col * mm + r] = av[r * kk + col];
+        }
     }
 
     constexpr f64 tol = 1e-6; // covers f32(eval_cpu)-vs-f64(oracle) accumulation; the assertion's real job is operand ORDER
@@ -201,7 +226,10 @@ TEST_CASE("ceir 25a-1: vjp_gemm emits 2 transpose + 2 gemm (right shapes/wiring)
         const f64* ins[2] = {dcv, bt_cpu};
         f64        out[mm * kk];
         kir::eval_cpu(gda, ins, &root, s.output, out);
-        for (u32 i = 0; i < mm * kk; ++i) { CHECK(crd::math::abs(out[i] - ga[i]) <= tol * (1.0 + crd::math::abs(ga[i]))); }
+        for (u32 i = 0; i < mm * kk; ++i)
+        {
+            CHECK(crd::math::abs(out[i] - ga[i]) <= tol * (1.0 + crd::math::abs(ga[i])));
+        }
     }
     {
         kir::KGraph           gdb(&root);
@@ -210,7 +238,10 @@ TEST_CASE("ceir 25a-1: vjp_gemm emits 2 transpose + 2 gemm (right shapes/wiring)
         const f64* ins[2] = {at_cpu, dcv};
         f64        out[kk * nn];
         kir::eval_cpu(gdb, ins, &root, s.output, out);
-        for (u32 i = 0; i < kk * nn; ++i) { CHECK(crd::math::abs(out[i] - gb[i]) <= tol * (1.0 + crd::math::abs(gb[i]))); }
+        for (u32 i = 0; i < kk * nn; ++i)
+        {
+            CHECK(crd::math::abs(out[i] - gb[i]) <= tol * (1.0 + crd::math::abs(gb[i])));
+        }
     }
 }
 
@@ -310,16 +341,25 @@ TEST_CASE("ceir 25a-2: build_gradient differentiates gemm(A,A)->reduce(sum) - ba
     // ── PARTIAL NUMERIC: the two backward gemms == matmul_vjp(A,A,dC).ga/.gb; total dA = ga+gb (broadcast/add = 25b). ──
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     f64 av[nn * nn];
-    for (u32 i = 0; i < nn * nn; ++i) { av[i] = 0.4 + 0.17 * static_cast<f64>(i) - 0.03 * static_cast<f64>((i * 5U) % 7U); }
+    for (u32 i = 0; i < nn * nn; ++i)
+    {
+        av[i] = 0.4 + 0.17 * static_cast<f64>(i) - 0.03 * static_cast<f64>((i * 5U) % 7U);
+    }
     f64 dc[nn * nn];
-    for (u32 i = 0; i < nn * nn; ++i) { dc[i] = 1.0; } // seed all-ones -> reduce(axis=1,sum) VJP broadcasts 1 to every C[i,j]
+    for (u32 i = 0; i < nn * nn; ++i) // seed all-ones -> reduce(axis=1,sum) VJP broadcasts 1 to every C[i,j]
+    {
+        dc[i] = 1.0;
+    }
     f64 ga[nn * nn];
     f64 gb[nn * nn];
     nnr::matmul_vjp(av, av, dc, ga, gb, static_cast<int>(nn), static_cast<int>(nn), static_cast<int>(nn));
     f64 at_cpu[nn * nn];
     for (u32 r = 0; r < nn; ++r)
     {
-        for (u32 col = 0; col < nn; ++col) { at_cpu[col * nn + r] = av[r * nn + col]; }
+        for (u32 col = 0; col < nn; ++col)
+        {
+            at_cpu[col * nn + r] = av[r * nn + col];
+        }
     }
     constexpr f64 tol = 1e-6;
     {
@@ -329,7 +369,10 @@ TEST_CASE("ceir 25a-2: build_gradient differentiates gemm(A,A)->reduce(sum) - ba
         const f64* ins[2] = {dc, at_cpu};
         f64        out[nn * nn];
         kir::eval_cpu(gg, ins, &root, s.output, out);
-        for (u32 i = 0; i < nn * nn; ++i) { CHECK(crd::math::abs(out[i] - ga[i]) <= tol * (1.0 + crd::math::abs(ga[i]))); }
+        for (u32 i = 0; i < nn * nn; ++i)
+        {
+            CHECK(crd::math::abs(out[i] - ga[i]) <= tol * (1.0 + crd::math::abs(ga[i])));
+        }
     }
     {
         kir::KGraph           gg(&root);
@@ -338,7 +381,10 @@ TEST_CASE("ceir 25a-2: build_gradient differentiates gemm(A,A)->reduce(sum) - ba
         const f64* ins[2] = {at_cpu, dc};
         f64        out[nn * nn];
         kir::eval_cpu(gg, ins, &root, s.output, out);
-        for (u32 i = 0; i < nn * nn; ++i) { CHECK(crd::math::abs(out[i] - gb[i]) <= tol * (1.0 + crd::math::abs(gb[i]))); }
+        for (u32 i = 0; i < nn * nn; ++i)
+        {
+            CHECK(crd::math::abs(out[i] - gb[i]) <= tol * (1.0 + crd::math::abs(gb[i])));
+        }
     }
 }
 
@@ -462,9 +508,16 @@ TEST_CASE("ceir 25c-1: vjp_mlp differentiates a 2-layer ml.mlp - backward graph 
     Operation* relu_vjp_disp = nullptr;
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) != StringView("compute.dispatch")) { continue; }
+        if (ctx.op_name(op->kind()) != StringView("compute.dispatch"))
+        {
+            continue;
+        }
         const AttrValue kv = ctx.attr_value(op->attr(StringView("kernel")));
-        if (kv.kind == AttrKind::SymbolRef && kv.s == StringView("relu_vjp")) { relu_vjp_disp = op; break; }
+        if (kv.kind == AttrKind::SymbolRef && kv.s == StringView("relu_vjp"))
+        {
+            relu_vjp_disp = op;
+            break;
+        }
     }
     REQUIRE(relu_vjp_disp != nullptr);
     REQUIRE(relu_vjp_disp->num_operands() >= 4U);
@@ -472,7 +525,10 @@ TEST_CASE("ceir 25c-1: vjp_mlp differentiates a 2-layer ml.mlp - backward graph 
 
     // ⛔ dW1 (grads[0]) is the TERMINAL op (emitted last) so it is the plan's single-Output readback target (the 25c-2 gate reads it).
     Operation* last = b->first_op();
-    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { last = op; }
+    for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        last = op;
+    }
     CHECK(grads[0]->defining_op() == last);
 
     // verify-clean (ml.mlp composite still present + the emitted backward vocab).

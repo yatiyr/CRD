@@ -155,11 +155,15 @@ void SpatialHash<T>::insert_into_cells(u32 obj_idx, const AABB3<T>& aabb)
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z);
 
     for (i32 iz = min_z; iz <= max_z; ++iz)
-    for (i32 iy = min_y; iy <= max_y; ++iy)
-    for (i32 ix = min_x; ix <= max_x; ++ix)
     {
-        const u32 h = hash_cell(ix, iy, iz);
-        m_buckets[h].push_back(obj_idx);
+        for (i32 iy = min_y; iy <= max_y; ++iy)
+        {
+            for (i32 ix = min_x; ix <= max_x; ++ix)
+            {
+                const u32 h = hash_cell(ix, iy, iz);
+                m_buckets[h].push_back(obj_idx);
+            }
+        }
     }
 }
 
@@ -175,24 +179,28 @@ void SpatialHash<T>::remove_from_cells(u32 obj_idx, const AABB3<T>& aabb)
     aabb_cell_range(aabb, min_x, min_y, min_z, max_x, max_y, max_z);
 
     for (i32 iz = min_z; iz <= max_z; ++iz)
-    for (i32 iy = min_y; iy <= max_y; ++iy)
-    for (i32 ix = min_x; ix <= max_x; ++ix)
     {
-        const u32 h = hash_cell(ix, iy, iz);
-        auto& bucket = m_buckets[h];
-        // Note: hash collisions can put OTHER objects in the same bucket
-        // whose AABBs don't overlap our cell. We must scan the full bucket
-        // and remove only OUR obj_idx (swap-with-last). Since we visit each
-        // cell once in our cell range, we want to remove exactly ONE
-        // occurrence of obj_idx per visit (a hash collision could put us
-        // in this same bucket from multiple cells; remove first match).
-        for (usize i = 0; i < bucket.size(); ++i)
+        for (i32 iy = min_y; iy <= max_y; ++iy)
         {
-            if (bucket[i] == obj_idx)
+            for (i32 ix = min_x; ix <= max_x; ++ix)
             {
-                bucket[i] = bucket[bucket.size() - 1];
-                bucket.resize(bucket.size() - 1);
-                break;
+                const u32 h = hash_cell(ix, iy, iz);
+                auto& bucket = m_buckets[h];
+                // Note: hash collisions can put OTHER objects in the same bucket
+                // whose AABBs don't overlap our cell. We must scan the full bucket
+                // and remove only OUR obj_idx (swap-with-last). Since we visit each
+                // cell once in our cell range, we want to remove exactly ONE
+                // occurrence of obj_idx per visit (a hash collision could put us
+                // in this same bucket from multiple cells; remove first match).
+                for (usize i = 0; i < bucket.size(); ++i)
+                {
+                    if (bucket[i] == obj_idx)
+                    {
+                        bucket[i] = bucket[bucket.size() - 1];
+                        bucket.resize(bucket.size() - 1);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -293,7 +301,10 @@ usize SpatialHash<T>::max_bucket_size() const noexcept
     usize m = 0;
     for (usize i = 0; i < m_buckets.size(); ++i)
     {
-        if (m_buckets[i].size() > m) { m = m_buckets[i].size(); }
+        if (m_buckets[i].size() > m)
+        {
+            m = m_buckets[i].size();
+        }
     }
     return m;
 }
@@ -301,9 +312,15 @@ usize SpatialHash<T>::max_bucket_size() const noexcept
 template <MathScalar T>
 f32 SpatialHash<T>::load_factor() const noexcept
 {
-    if (m_buckets.size() == 0) { return 0.0F; }
+    if (m_buckets.size() == 0)
+    {
+        return 0.0F;
+    }
     usize total = 0;
-    for (usize i = 0; i < m_buckets.size(); ++i) { total += m_buckets[i].size(); }
+    for (usize i = 0; i < m_buckets.size(); ++i)
+    {
+        total += m_buckets[i].size();
+    }
     return static_cast<f32>(total) / static_cast<f32>(m_buckets.size());
 }
 
@@ -370,8 +387,14 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 SpatialHash<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 {
-    if (m_object_count == 0) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_object_count == 0)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     if (!crd::geometry::primitives::is_finite(ray.origin)
         || !crd::geometry::primitives::is_finite(ray.direction))
     {
@@ -395,8 +418,14 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 SpatialHash<T>::raycast(const Ray3<T>& ray, SpatialHashScratch& scratch, T tmax) const noexcept
 {
-    if (m_object_count == 0) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_object_count == 0)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     if (!crd::geometry::primitives::is_finite(ray.origin)
         || !crd::geometry::primitives::is_finite(ray.direction))
     {
@@ -432,8 +461,14 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
 
     // Step direction per axis. Zero direction component => no traversal on that axis.
     auto sign_step = [](T d) noexcept -> i32 {
-        if (d > T{0}) { return 1; }
-        if (d < T{0}) { return -1; }
+        if (d > T{0})
+        {
+            return 1;
+        }
+        if (d < T{0})
+        {
+            return -1;
+        }
         return 0;
     };
     const i32 step_x = sign_step(ray.direction.x);
@@ -449,7 +484,10 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
     // tMax per axis = parametric t at which ray crosses the NEXT cell boundary.
     // For step_x > 0: next boundary at (ix+1)*cs; for step_x < 0: at ix*cs.
     auto initial_tmax = [&](T origin_a, T dir_a, i32 ia, i32 step_a) -> T {
-        if (step_a == 0) { return inf; }
+        if (step_a == 0)
+        {
+            return inf;
+        }
         const T boundary = (step_a > 0) ? static_cast<T>(ia + 1) * m_cell_size
                                           : static_cast<T>(ia) * m_cell_size;
         return (boundary - origin_a) / dir_a;
@@ -474,20 +512,40 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
             const T hi = a.max[static_cast<usize>(ax)];
             if (std::abs(d) < std::numeric_limits<T>::epsilon())
             {
-                if (o < lo || o > hi) { return false; }
+                if (o < lo || o > hi)
+                {
+                    return false;
+                }
             }
             else
             {
                 const T inv = T{1} / d;
                 T t1 = (lo - o) * inv;
                 T t2 = (hi - o) * inv;
-                if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                if (t1 > tmin) { tmin = t1; }
-                if (t2 < tcur_max) { tcur_max = t2; }
-                if (tmin > tcur_max) { return false; }
+                if (t1 > t2)
+                {
+                    const T tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+                if (t1 > tmin)
+                {
+                    tmin = t1;
+                }
+                if (t2 < tcur_max)
+                {
+                    tcur_max = t2;
+                }
+                if (tmin > tcur_max)
+                {
+                    return false;
+                }
             }
         }
-        if (tmin < T{0}) { return false; }
+        if (tmin < T{0})
+        {
+            return false;
+        }
         out_t = tmin;
         return true;
     };
@@ -498,11 +556,17 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
         for (usize i = 0; i < bucket.size(); ++i)
         {
             const u32 obj_idx = bucket[i];
-            if (was_visited(obj_idx)) { continue; }
+            if (was_visited(obj_idx))
+            {
+                continue;
+            }
             mark_visited(obj_idx);
             const ObjectEntry& obj = m_objects[obj_idx];
             T t = T{0};
-            if (!ray_aabb(obj.aabb, t)) { continue; }
+            if (!ray_aabb(obj.aabb, t))
+            {
+                continue;
+            }
             if (t < best_t)
             {
                 best_t = t;
@@ -526,20 +590,41 @@ SpatialHash<T>::raycast_traverse_(const Ray3<T>& ray, T tmax,
 
         // Stop if we've left the best_t-bounded region.
         const T t_next = std::min(std::min(tmax_x, tmax_y), tmax_z);
-        if (t_next > best_t) { break; }
-        if (t_next > tmax)   { break; }
+        if (t_next > best_t)
+        {
+            break;
+        }
+        if (t_next > tmax)
+        {
+            break;
+        }
 
         // Advance ALL axes whose tMax equals the minimum. Strict-less-only
         // chains skip cells when the ray exactly grazes a cell corner (two
         // or three tMax values tie); advancing every tied axis preserves
         // Amanatides-Woo correctness on corner-grazing rays.
         const T t_min = std::min(std::min(tmax_x, tmax_y), tmax_z);
-        if (tmax_x == t_min) { ix += step_x; tmax_x += tdelta_x; }
-        if (tmax_y == t_min) { iy += step_y; tmax_y += tdelta_y; }
-        if (tmax_z == t_min) { iz += step_z; tmax_z += tdelta_z; }
+        if (tmax_x == t_min)
+        {
+            ix += step_x;
+            tmax_x += tdelta_x;
+        }
+        if (tmax_y == t_min)
+        {
+            iy += step_y;
+            tmax_y += tdelta_y;
+        }
+        if (tmax_z == t_min)
+        {
+            iz += step_z;
+            tmax_z += tdelta_z;
+        }
     }
 
-    if (!any) { return std::nullopt; }
+    if (!any)
+    {
+        return std::nullopt;
+    }
     return crd::geometry::RayHit<u32>{static_cast<f32>(best_t), best_payload};
 }
 
@@ -555,7 +640,10 @@ template <MathScalar T>
 void SpatialHash<T>::find_overlapping_pairs(crd::containers::Array<SpatialHashPair>& out) const
 {
     out.clear();
-    if (m_object_count < 2) { return; }
+    if (m_object_count < 2)
+    {
+        return;
+    }
 
     auto aabb_isect = [](const AABB3<T>& a, const AABB3<T>& b) noexcept {
         return a.min.x <= b.max.x && a.max.x >= b.min.x
@@ -567,7 +655,10 @@ void SpatialHash<T>::find_overlapping_pairs(crd::containers::Array<SpatialHashPa
     {
         const auto& bucket = m_buckets[bi];
         const usize n = bucket.size();
-        if (n < 2) { continue; }
+        if (n < 2)
+        {
+            continue;
+        }
         for (usize i = 0; i < n; ++i)
         {
             const u32 ai = bucket[i];
@@ -575,9 +666,15 @@ void SpatialHash<T>::find_overlapping_pairs(crd::containers::Array<SpatialHashPa
             for (usize j = i + 1; j < n; ++j)
             {
                 const u32 bi_inner = bucket[j];
-                if (ai == bi_inner) { continue; } // hash collision: same obj in same bucket twice (impossible by construction)
+                if (ai == bi_inner) // hash collision: same obj in same bucket twice (impossible by construction)
+                {
+                    continue;
+                }
                 const ObjectEntry& b = m_objects[bi_inner];
-                if (!aabb_isect(a.aabb, b.aabb)) { continue; }
+                if (!aabb_isect(a.aabb, b.aabb))
+                {
+                    continue;
+                }
                 const u32 lo = a.payload < b.payload ? a.payload : b.payload;
                 const u32 hi = a.payload < b.payload ? b.payload : a.payload;
                 out.push_back(SpatialHashPair{lo, hi});
@@ -598,7 +695,10 @@ void SpatialHash<T>::find_overlapping_pairs(crd::containers::Array<SpatialHashPa
         {
             if (!(out[r] == out[r - 1U]))
             {
-                if (w != r) { out[w] = out[r]; }
+                if (w != r)
+                {
+                    out[w] = out[r];
+                }
                 ++w;
             }
         }

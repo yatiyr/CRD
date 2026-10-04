@@ -21,7 +21,10 @@ namespace
 
 RationalRate rate_from_f64(crd::f64 rate) noexcept
 {
-    if (!std::isfinite(rate) || rate <= 0.0) { return {}; }
+    if (!std::isfinite(rate) || rate <= 0.0)
+    {
+        return {};
+    }
 
     // integral fast path (24, 25, 30, 48, 50, 60, 96, 120 …)
     if (rate == std::floor(rate) && rate <= static_cast<crd::f64>(kMaxI32))
@@ -32,7 +35,10 @@ RationalRate rate_from_f64(crd::f64 rate) noexcept
     // SMPTE snap: the f64 OTIO writes for 24000/1001 is EXACTLY (f64)24000/1001 — match it bit-for-bit
     for (const RationalRate& r : kSmpteFamily)
     {
-        if (rate == static_cast<crd::f64>(r.num) / static_cast<crd::f64>(r.den)) { return r; }
+        if (rate == static_cast<crd::f64>(r.num) / static_cast<crd::f64>(r.den))
+        {
+            return r;
+        }
     }
 
     // best rational by continued fractions, accepted ONLY when it round-trips to the exact input f64
@@ -45,11 +51,17 @@ RationalRate rate_from_f64(crd::f64 rate) noexcept
         for (int i = 0; i < 40; ++i)
         {
             const crd::f64 fa = std::floor(x);
-            if (fa > static_cast<crd::f64>(kMaxI32)) { break; }
+            if (fa > static_cast<crd::f64>(kMaxI32))
+            {
+                break;
+            }
             const crd::i64 a  = static_cast<crd::i64>(fa);
             const crd::i64 h2 = a * h1 + h0;
             const crd::i64 q2 = a * q1 + q0;
-            if (h2 > kMaxI32 || q2 > kCfDenLimit) { break; }
+            if (h2 > kMaxI32 || q2 > kCfDenLimit)
+            {
+                break;
+            }
             h0 = h1;
             h1 = h2;
             q0 = q1;
@@ -59,7 +71,10 @@ RationalRate rate_from_f64(crd::f64 rate) noexcept
                 return make_rate(h1, q1);
             }
             const crd::f64 frac = x - fa;
-            if (frac <= 0.0) { break; }
+            if (frac <= 0.0)
+            {
+                break;
+            }
             x = 1.0 / frac;
         }
     }
@@ -84,7 +99,10 @@ RationalRate rate_from_f64(crd::f64 rate) noexcept
 RationalTime time_from_f64(crd::f64 value, crd::f64 rate) noexcept
 {
     const RationalRate r = rate_from_f64(rate);
-    if (!r.valid() || !std::isfinite(value)) { return {}; }
+    if (!r.valid() || !std::isfinite(value))
+    {
+        return {};
+    }
 
     if (value == std::floor(value) && value >= -9.0e15 && value <= 9.0e15) // integral frames — the OTIO norm
     {
@@ -99,7 +117,10 @@ RationalTime time_from_f64(crd::f64 value, crd::f64 rate) noexcept
         scaled *= 2.0;
         pow2 *= 2;
         const crd::i64 scaled_num = static_cast<crd::i64>(r.num) * pow2;
-        if (scaled_num > kMaxI32) { break; }
+        if (scaled_num > kMaxI32)
+        {
+            break;
+        }
         if (scaled == std::floor(scaled) && scaled >= -9.0e15 && scaled <= 9.0e15)
         {
             return {static_cast<crd::i64>(scaled), make_rate(scaled_num, r.den)};
@@ -107,13 +128,19 @@ RationalTime time_from_f64(crd::f64 value, crd::f64 rate) noexcept
     }
     // beyond exact representation (sub-2^-40 subframe dust): the containing tick, floor — documented rounding
     const crd::f64 floored = std::floor(value);
-    if (floored < -9.0e15 || floored > 9.0e15) { return {}; }
+    if (floored < -9.0e15 || floored > 9.0e15)
+    {
+        return {};
+    }
     return {static_cast<crd::i64>(floored), r};
 }
 
 crd::f64 rate_to_f64(RationalRate rate) noexcept
 {
-    if (!rate.valid()) { return 0.0; }
+    if (!rate.valid())
+    {
+        return 0.0;
+    }
     return static_cast<crd::f64>(rate.num) / static_cast<crd::f64>(rate.den);
 }
 
@@ -129,17 +156,32 @@ namespace
     // nominal integer fps for timecode counting: integer rates directly; the /1001 family counts at num/1000
     [[nodiscard]] crd::i64 nominal_fps(RationalRate rate) noexcept
     {
-        if (!rate.valid()) { return 0; }
-        if (rate.den == 1) { return rate.num; }
-        if (rate.den == 1001 && rate.num % 1000 == 0) { return rate.num / 1000; }
+        if (!rate.valid())
+        {
+            return 0;
+        }
+        if (rate.den == 1)
+        {
+            return rate.num;
+        }
+        if (rate.den == 1001 && rate.num % 1000 == 0)
+        {
+            return rate.num / 1000;
+        }
         return 0;
     }
 
     // drop-frame is DEFINED for 29.97 (drop 2/min) and 59.94 (drop 4/min) only — SMPTE 12M
     [[nodiscard]] crd::i64 drop_count(RationalRate rate) noexcept
     {
-        if (rate == kRateNtsc30) { return 2; }
-        if (rate == kRateNtsc60) { return 4; }
+        if (rate == kRateNtsc30)
+        {
+            return 2;
+        }
+        if (rate == kRateNtsc60)
+        {
+            return 4;
+        }
         return 0;
     }
 } // namespace
@@ -148,13 +190,19 @@ bool to_timecode(const RationalTime& t, bool drop_frame, Timecode& out) noexcept
 {
     out.text[0] = '\0';
     const crd::i64 fps = nominal_fps(t.rate);
-    if (fps <= 0 || fps > 99 || t.value < 0) { return false; }
+    if (fps <= 0 || fps > 99 || t.value < 0)
+    {
+        return false;
+    }
 
     crd::i64 display = t.value;
     if (drop_frame)
     {
         const crd::i64 d = drop_count(t.rate);
-        if (d == 0) { return false; }
+        if (d == 0)
+        {
+            return false;
+        }
         const crd::i64 per_min_nominal = 60 * fps;         // the block's first (undropped) minute
         const crd::i64 per_min_actual  = 60 * fps - d;     // each of the 9 dropped minutes
         const crd::i64 per_10min       = per_min_nominal + 9 * per_min_actual;
@@ -177,7 +225,10 @@ bool to_timecode(const RationalTime& t, bool drop_frame, Timecode& out) noexcept
     const crd::i64 ss    = total % 60;
     const crd::i64 mm    = (total / 60) % 60;
     const crd::i64 hh    = total / 3600;
-    if (hh > 99) { return false; }
+    if (hh > 99)
+    {
+        return false;
+    }
     // ⛔ gcc -Werror=format-truncation cannot prove hh∈[0,99] / mm,ss∈[0,59] / ff∈[0,fps) from the i64 TYPE, so it
     // over-estimates each `%02lld` at up to 17 bytes writing into `text[16]`. Format into a temp sized for that
     // worst case, then copy the (always ≤ 11-char) result — correct AND silences the diagnostic without widening
@@ -186,7 +237,10 @@ bool to_timecode(const RationalTime& t, bool drop_frame, Timecode& out) noexcept
     const int n = std::snprintf(static_cast<char*>(tmp), sizeof(tmp), "%02lld:%02lld:%02lld%c%02lld",
                                 static_cast<long long>(hh), static_cast<long long>(mm), static_cast<long long>(ss),
                                 drop_frame ? ';' : ':', static_cast<long long>(ff));
-    if (n < 0 || static_cast<crd::usize>(n) >= sizeof(out.text)) { return false; }
+    if (n < 0 || static_cast<crd::usize>(n) >= sizeof(out.text))
+    {
+        return false;
+    }
     std::memcpy(static_cast<void*>(out.text), static_cast<const void*>(tmp), static_cast<crd::usize>(n) + 1U);
     return true;
 }
@@ -195,10 +249,16 @@ bool from_timecode(const char* text, RationalRate rate, RationalTime& out) noexc
 {
     out = {};
     const crd::i64 fps = nominal_fps(rate);
-    if (text == nullptr || fps <= 0 || fps > 99) { return false; }
+    if (text == nullptr || fps <= 0 || fps > 99)
+    {
+        return false;
+    }
 
     const auto two_digits = [](const char* p, crd::i64& v) noexcept -> bool {
-        if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9') { return false; }
+        if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9')
+        {
+            return false;
+        }
         v = static_cast<crd::i64>(p[0] - '0') * 10 + (p[1] - '0');
         return true;
     };
@@ -212,16 +272,28 @@ bool from_timecode(const char* text, RationalRate rate, RationalTime& out) noexc
         return false;
     }
     const char sep = text[8];
-    if ((sep != ':' && sep != ';') || !two_digits(text + 9, ff) || text[11] != '\0') { return false; }
-    if (mm > 59 || ss > 59 || ff >= fps) { return false; }
+    if ((sep != ':' && sep != ';') || !two_digits(text + 9, ff) || text[11] != '\0')
+    {
+        return false;
+    }
+    if (mm > 59 || ss > 59 || ff >= fps)
+    {
+        return false;
+    }
 
     const bool drop_frame = sep == ';';
     if (drop_frame)
     {
         const crd::i64 d = drop_count(rate);
-        if (d == 0) { return false; }
+        if (d == 0)
+        {
+            return false;
+        }
         const crd::i64 total_minutes = hh * 60 + mm;
-        if (total_minutes % 10 != 0 && ss == 0 && ff < d) { return false; } // a DROPPED number is not a time
+        if (total_minutes % 10 != 0 && ss == 0 && ff < d) // a DROPPED number is not a time
+        {
+            return false;
+        }
         const crd::i64 display = ((total_minutes * 60) + ss) * fps + ff;
         out = {display - d * (total_minutes - total_minutes / 10), rate};
         return true;

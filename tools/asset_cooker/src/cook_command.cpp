@@ -51,7 +51,10 @@ crd::containers::StringView path_extension(const fs::Path& p)
     const crd::usize fname_start = (slash != crd::containers::StringView::npos) ? slash + 1U : 0U;
     const crd::containers::StringView fname = sv.substr(fname_start);
     const auto                        dot   = fname.find('.');
-    if (dot == crd::containers::StringView::npos) { return {}; }
+    if (dot == crd::containers::StringView::npos)
+    {
+        return {};
+    }
     return sv.substr(fname_start + dot);
 }
 
@@ -59,7 +62,10 @@ crd::containers::StringView path_filename(const fs::Path& p)
 {
     const crd::containers::StringView sv    = p.generic();
     const auto                        slash = sv.rfind('/');
-    if (slash == crd::containers::StringView::npos) { return sv; }
+    if (slash == crd::containers::StringView::npos)
+    {
+        return sv;
+    }
     return sv.substr(slash + 1U);
 }
 
@@ -69,7 +75,10 @@ crd::containers::StringView root_relative(crd::containers::StringView path, crd:
     if (path.starts_with(root))
     {
         path = path.substr(root.size());
-        if (!path.empty() && path.front() == '/') { path = path.substr(1U); }
+        if (!path.empty() && path.front() == '/')
+        {
+            path = path.substr(1U);
+        }
     }
     return path;
 }
@@ -79,14 +88,23 @@ crd::containers::StringView root_relative(crd::containers::StringView path, crd:
 bool meta_read(const fs::Path& meta_path, ResourceId& out_id)
 {
     crd::containers::String text(&g_cook_alloc);
-    if (!fs::read_file_text(meta_path, text)) { return false; }
+    if (!fs::read_file_text(meta_path, text))
+    {
+        return false;
+    }
     const std::string_view sv(text.data(), text.size());
     const std::string_view key = "uuid = \"";
     auto                   pos = sv.find(key);
-    if (pos == std::string_view::npos) { return false; }
+    if (pos == std::string_view::npos)
+    {
+        return false;
+    }
     pos += key.size();
     const auto end = sv.find('"', pos);
-    if (end == std::string_view::npos) { return false; }
+    if (end == std::string_view::npos)
+    {
+        return false;
+    }
     out_id = ResourceId::parse(sv.substr(pos, end - pos));
     return !out_id.is_null();
 }
@@ -122,7 +140,10 @@ bool write_file_atomic(const fs::Path& path, crd::containers::ConstSpan<crd::u8>
     tmp.append(path.generic().data(), path.generic().size());
     tmp.append(".tmp");
     const fs::Path tmp_path(crd::containers::StringView(tmp.data(), tmp.size()));
-    if (!fs::write_file_binary(tmp_path, bytes)) { return false; }
+    if (!fs::write_file_binary(tmp_path, bytes))
+    {
+        return false;
+    }
     return fs::rename_file(tmp_path, path);
 }
 
@@ -140,7 +161,10 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
 
         if (fs::is_directory(entry))
         {
-            if (name != ".cook_cache") { scan_recursive(entry, out); }
+            if (name != ".cook_cache")
+            {
+                scan_recursive(entry, out);
+            }
         }
         else if (fs::is_file(entry) && !name.ends_with(".meta"))
         {
@@ -162,7 +186,10 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
         const fs::Path abs   = root / crd::containers::StringView(input.path.data(), input.path.size());
         crd::containers::Array<crd::u8> bytes(&g_cook_alloc);
         const bool                      exists_now = fs::read_file_binary(abs, bytes);
-        if (exists_now != input.existed) { return false; } // appearance/disappearance IS a change
+        if (exists_now != input.existed) // appearance/disappearance IS a change
+        {
+            return false;
+        }
         if (exists_now && cook_hash64(crd::containers::as_const_span(bytes)) != input.content_hash)
         {
             return false;
@@ -177,8 +204,14 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
     for (crd::usize p = 0; p < rec.products.size(); ++p)
     {
         crd::containers::Array<crd::u8> bytes(&g_cook_alloc);
-        if (!fs::read_file_binary(cache_artifact_path(root, rec.products[p].id), bytes)) { return false; }
-        if (cook_hash64(crd::containers::as_const_span(bytes)) != rec.products[p].artifact_hash) { return false; }
+        if (!fs::read_file_binary(cache_artifact_path(root, rec.products[p].id), bytes))
+        {
+            return false;
+        }
+        if (cook_hash64(crd::containers::as_const_span(bytes)) != rec.products[p].artifact_hash)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -404,7 +437,10 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
             return true;
         };
 
-        if (!publish(asset_id, std::move(result.cooked_bytes), rel_sv)) { return 1; }
+        if (!publish(asset_id, std::move(result.cooked_bytes), rel_sv))
+        {
+            return 1;
+        }
         for (crd::usize ei = 0; ei < result.extra_artifacts.size(); ++ei)
         {
             ExtraArtifact& extra = result.extra_artifacts[ei];
@@ -478,7 +514,10 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
 
     for (const ArtifactInfo& info : artifacts)
     {
-        for (crd::u8 byte : info.bytes) { pack_bytes.push_back(byte); }
+        for (crd::u8 byte : info.bytes)
+        {
+            pack_bytes.push_back(byte);
+        }
     }
 
     if (!write_file_atomic(out_path, crd::containers::as_const_span(pack_bytes)))

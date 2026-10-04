@@ -110,13 +110,22 @@ bool init(crd::gpu::IGpuContext& ctx, crd::gpu::IRasterContext& raster, const In
                           std::unique_ptr<crd::gpu::IRasterProgram>& out_prog) {
         crd::kir::KGraph vg(&graph_alloc);
         crd::kir::KEntry ve;
-        if (!cook_vs_toml(vs_toml, vg, ve)) { return false; }
+        if (!cook_vs_toml(vs_toml, vg, ve))
+        {
+            return false;
+        }
         crd::kir::KGraph fg(&graph_alloc);
         crd::kir::KEntry fe;
-        if (!cook_fs_toml(fs_toml, fg, fe)) { return false; }
+        if (!cook_fs_toml(fs_toml, fg, fe))
+        {
+            return false;
+        }
         out_vs = ctx.create_program(vg, ve);
         out_fs = ctx.create_program(fg, fe);
-        if (out_vs == nullptr || out_fs == nullptr) { return false; }
+        if (out_vs == nullptr || out_fs == nullptr)
+        {
+            return false;
+        }
         out_prog = raster.create_raster_program(*out_vs, *out_fs);
         return out_prog != nullptr;
     };

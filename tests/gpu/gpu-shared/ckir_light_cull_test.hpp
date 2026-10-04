@@ -97,18 +97,28 @@ struct ClusterCullScene
     };
     for (int i = 0; i < ClusterCullScene::num_lights; ++i)
     {
-        for (int k = 0; k < 4; ++k) { s.light[i * 4 + k] = lights[i][k]; }
+        for (int k = 0; k < 4; ++k)
+        {
+            s.light[i * 4 + k] = lights[i][k];
+        }
     }
 
     // analytic expected lists: survivors ascending (POINT indices, 0-based), then null_index padding; count = survivors.
     for (int c = 0; c < ClusterCullScene::num_clusters; ++c)
     {
-        for (int k = 0; k < ClusterCullScene::cap; ++k) { s.expected_list[c][k] = ClusterCullScene::null_index; }
+        for (int k = 0; k < ClusterCullScene::cap; ++k)
+        {
+            s.expected_list[c][k] = ClusterCullScene::null_index;
+        }
         s.expected_count[c] = 0;
     }
     const auto set = [&](int c, std::initializer_list<int> ids) {
         int n = 0;
-        for (int id : ids) { s.expected_list[c][n] = id; ++n; }
+        for (int id : ids)
+        {
+            s.expected_list[c][n] = id;
+            ++n;
+        }
         s.expected_count[c] = n;
     };
     set(0, {0});
@@ -190,16 +200,26 @@ struct ClusterCullScene3D
     };
     for (int i = 0; i < ClusterCullScene3D::num_lights; ++i)
     {
-        for (int k = 0; k < 4; ++k) { s.light[i * 4 + k] = lights[i][k]; }
+        for (int k = 0; k < 4; ++k)
+        {
+            s.light[i * 4 + k] = lights[i][k];
+        }
     }
     for (int c = 0; c < ClusterCullScene3D::num_clusters; ++c)
     {
-        for (int k = 0; k < ClusterCullScene3D::cap; ++k) { s.expected_list[c][k] = ClusterCullScene3D::null_index; }
+        for (int k = 0; k < ClusterCullScene3D::cap; ++k)
+        {
+            s.expected_list[c][k] = ClusterCullScene3D::null_index;
+        }
         s.expected_count[c] = 0;
     }
     const auto set = [&](int c, std::initializer_list<int> ids) {
         int n = 0;
-        for (int id : ids) { s.expected_list[c][n] = id; ++n; }
+        for (int id : ids)
+        {
+            s.expected_list[c][n] = id;
+            ++n;
+        }
         s.expected_count[c] = n;
     };
     set(0, {0});   // L0: tile(0,0) slice0
@@ -266,9 +286,15 @@ inline void cull_counts_from_list(const crd::containers::Array<crd::u32>& list, 
                                          const char* path = CRD_REPO_DIR "/assets/ckir/scene_light_cull.ckir")
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
-    if (sz <= 0) { return false; }
+    if (sz <= 0)
+    {
+        return false;
+    }
     f.seekg(0);
     crd::containers::Array<char> src(&alloc);
     src.resize(static_cast<crd::usize>(sz), '\0');
@@ -337,12 +363,21 @@ inline void cull_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pipe, co
 
     // fill the synthetic group buffer straight into the mapped upload buffer (header words → section bases, then bits).
     auto* gp0 = static_cast<crd::u32*>(grp_up->map());
-    for (int i = 0; i < Scene::total_words; ++i) { gp0[i] = 0U; }
+    for (int i = 0; i < Scene::total_words; ++i)
+    {
+        gp0[i] = 0U;
+    }
     gp0[Scene::list_word]  = static_cast<crd::u32>(Scene::list_off);
     gp0[Scene::aabb_word]  = static_cast<crd::u32>(Scene::aabb_off);
     gp0[Scene::light_word] = static_cast<crd::u32>(Scene::light_off);
-    for (int i = 0; i < Scene::aabb_words; ++i) { gp0[Scene::aabb_off + i] = cull_fbits(sc.aabb[i]); }
-    for (int i = 0; i < Scene::light_words; ++i) { gp0[Scene::light_off + i] = cull_fbits(sc.light[i]); }
+    for (int i = 0; i < Scene::aabb_words; ++i)
+    {
+        gp0[Scene::aabb_off + i] = cull_fbits(sc.aabb[i]);
+    }
+    for (int i = 0; i < Scene::light_words; ++i)
+    {
+        gp0[Scene::light_off + i] = cull_fbits(sc.light[i]);
+    }
     grp_up->unmap();
 
     auto&              rec      = ctx.begin();
@@ -356,7 +391,10 @@ inline void cull_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pipe, co
 
     list_out.resize(static_cast<crd::usize>(Scene::list_len), 0U);
     const auto* rl = static_cast<const crd::u32*>(list_rb->map());
-    for (int i = 0; i < Scene::list_len; ++i) { list_out[static_cast<crd::usize>(i)] = rl[i]; }
+    for (int i = 0; i < Scene::list_len; ++i)
+    {
+        list_out[static_cast<crd::usize>(i)] = rl[i];
+    }
     list_rb->unmap();
     cull_counts_from_list<Scene>(list_out, count_out);
 }

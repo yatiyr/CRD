@@ -161,7 +161,10 @@ TEST_CASE("IdentityRegistry mints uniquely under concurrent creators", "[gpu][di
             in_range = false;
             continue;
         }
-        if (seen[idx]) { distinct = false; }
+        if (seen[idx])
+        {
+            distinct = false;
+        }
         seen[idx] = true;
     }
     CHECK(in_range);  // 400 fresh mints, no retires -> indices exactly fill [0, 400)

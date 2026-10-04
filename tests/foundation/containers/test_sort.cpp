@@ -37,7 +37,10 @@ TEST_CASE("sort small in-place", "[sort]")
 {
     crd::containers::Array<i32> a = { 5, 2, 8, 1, 9, 3, 7, 4, 6, 0 };
     crd::containers::sort(a.data(), a.data() + a.size());
-    for (usize i = 0; i + 1 < a.size(); ++i) REQUIRE(a[i] <= a[i + 1]);
+    for (usize i = 0; i + 1 < a.size(); ++i)
+    {
+        REQUIRE(a[i] <= a[i + 1]);
+    }
 }
 
 TEST_CASE("sort large random ascending+descending+already-sorted", "[sort]")
@@ -73,7 +76,10 @@ TEST_CASE("sort with custom comparator (descending)", "[sort]")
 {
     crd::containers::Array<i32> a = { 5, 2, 8, 1, 9, 3 };
     crd::containers::sort(a.data(), a.data() + a.size(), std::greater<i32>{});
-    for (usize i = 0; i + 1 < a.size(); ++i) REQUIRE(a[i] >= a[i + 1]);
+    for (usize i = 0; i + 1 < a.size(); ++i)
+    {
+        REQUIRE(a[i] >= a[i + 1]);
+    }
 }
 
 TEST_CASE("stable_sort preserves relative order for equal keys", "[sort][stable]")
@@ -139,21 +145,36 @@ TEST_CASE("nth_element places nth correctly", "[sort][nth]")
     // a[nth] should be the 4th smallest = 4 (sorted: 0,1,2,3,4,5,6,7,8,9).
     REQUIRE(a[nth] == 4);
     // Left side ≤ a[nth].
-    for (usize i = 0; i < nth; ++i) REQUIRE(a[i] <= a[nth]);
+    for (usize i = 0; i < nth; ++i)
+    {
+        REQUIRE(a[i] <= a[nth]);
+    }
     // Right side ≥ a[nth].
-    for (usize i = nth + 1; i < a.size(); ++i) REQUIRE(a[i] >= a[nth]);
+    for (usize i = nth + 1; i < a.size(); ++i)
+    {
+        REQUIRE(a[i] >= a[nth]);
+    }
 }
 
 TEST_CASE("nth_element on large random input", "[sort][nth]")
 {
     constexpr usize k_n = 200;
     crd::containers::Array<i32> a; a.resize(k_n);
-    for (usize i = 0; i < k_n; ++i) a[i] = static_cast<i32>((i * 31 + 11) % k_n);
+    for (usize i = 0; i < k_n; ++i)
+    {
+        a[i] = static_cast<i32>((i * 31 + 11) % k_n);
+    }
 
     const usize nth = k_n / 3;
     crd::containers::nth_element(a.data(), a.data() + nth, a.data() + k_n);
-    for (usize i = 0; i < nth; ++i)        REQUIRE(a[i] <= a[nth]);
-    for (usize i = nth + 1; i < k_n; ++i)   REQUIRE(a[i] >= a[nth]);
+    for (usize i = 0; i < nth; ++i)
+    {
+        REQUIRE(a[i] <= a[nth]);
+    }
+    for (usize i = nth + 1; i < k_n; ++i)
+    {
+        REQUIRE(a[i] >= a[nth]);
+    }
 }
 
 // ===========================================================================
@@ -172,12 +193,21 @@ TEST_CASE("make_heap + pop_heap (sort_heap) sorts correctly", "[sort][heap]")
     {
         const usize l = 2 * i + 1;
         const usize r = l + 1;
-        if (l < a.size()) REQUIRE(a[i] >= a[l]);
-        if (r < a.size()) REQUIRE(a[i] >= a[r]);
+        if (l < a.size())
+        {
+            REQUIRE(a[i] >= a[l]);
+        }
+        if (r < a.size())
+        {
+            REQUIRE(a[i] >= a[r]);
+        }
     }
 
     crd::containers::sort_heap(a.data(), a.data() + a.size());
-    for (usize i = 0; i + 1 < a.size(); ++i) REQUIRE(a[i] <= a[i + 1]);
+    for (usize i = 0; i + 1 < a.size(); ++i)
+    {
+        REQUIRE(a[i] <= a[i + 1]);
+    }
 }
 
 TEST_CASE("push_heap maintains invariant", "[sort][heap]")
@@ -248,7 +278,11 @@ TEST_CASE("Sort vs std::sort: same elements, in-order check",
     constexpr usize k_n = 200;
     crd::containers::Array<i32> a; a.resize(k_n);
     crd::containers::Array<i32> b; b.resize(k_n);
-    for (usize i = 0; i < k_n; ++i) { a[i] = static_cast<i32>((i * 17 + 5) % 100); b[i] = a[i]; }
+    for (usize i = 0; i < k_n; ++i)
+    {
+        a[i] = static_cast<i32>((i * 17 + 5) % 100);
+        b[i] = a[i];
+    }
 
     crd::containers::sort(a.data(), a.data() + a.size());
     std::sort(b.data(), b.data() + b.size());  // crd-lint-allow-std-math

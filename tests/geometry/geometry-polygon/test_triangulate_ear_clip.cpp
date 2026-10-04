@@ -182,7 +182,10 @@ TEST_CASE("triangulate_ear_clip: every triangle is CCW for arbitrary concave pol
     }
     // We built it CW (because we wanted to walk the star outline); reverse for CCW.
     crd::containers::Array<Vec2<f32>> star_ccw(&f.alloc);
-    for (u32 i = static_cast<u32>(star.size()); i > 0U; --i) { star_ccw.push_back(star[i - 1U]); }
+    for (u32 i = static_cast<u32>(star.size()); i > 0U; --i)
+    {
+        star_ccw.push_back(star[i - 1U]);
+    }
 
     auto result = triangulate_ear_clip(ring_of(star_ccw), &f.alloc);
     REQUIRE(result.ok());
@@ -420,7 +423,10 @@ TEST_CASE("triangulate_ear_clip: polygon-with-hole CCW triangles invariant",
         const u32 i1 = result.triangle_indices[3U * t + 1U];
         const u32 i2 = result.triangle_indices[3U * t + 2U];
         const f32 a  = tri_area(p.vertices()[i0], p.vertices()[i1], p.vertices()[i2]);
-        if (a >= 0.F) { ++nonneg; }
+        if (a >= 0.F)
+        {
+            ++nonneg;
+        }
     }
     CHECK(nonneg == result.triangle_count); // every triangle CCW-or-flat
 }

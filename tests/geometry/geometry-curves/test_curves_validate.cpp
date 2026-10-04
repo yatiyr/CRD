@@ -150,7 +150,10 @@ TEST_CASE("v10a validate BSpline3: knot vector contracts", "[curves][validate][b
     {
         BSpline3<float> b(&alloc);
         b.points.reserve(4U);
-        for (const auto& p : points) { b.points.push_back(p); }
+        for (const auto& p : points)
+        {
+            b.points.push_back(p);
+        }
         b.knots.push_back(0.0F);
         b.knots.push_back(0.0F);
         // Should be 8 knots; we provide 2.
@@ -161,9 +164,15 @@ TEST_CASE("v10a validate BSpline3: knot vector contracts", "[curves][validate][b
     {
         BSpline3<float> b(&alloc);
         b.points.reserve(4U);
-        for (const auto& p : points) { b.points.push_back(p); }
+        for (const auto& p : points)
+        {
+            b.points.push_back(p);
+        }
         const float knots[] = {0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 1.0F, 1.0F, 1.0F};
-        for (float k : knots) { b.knots.push_back(k); }
+        for (float k : knots)
+        {
+            b.knots.push_back(k);
+        }
         const auto result = validate(b);
         REQUIRE(result.status == CurveValidationStatus::KnotNonMonotonic);
         REQUIRE(result.offending_index == 4U);

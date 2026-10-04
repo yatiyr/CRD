@@ -98,11 +98,20 @@ TEST_CASE("vm commit gives zeroed, writable pages; readback matches", "[vm]")
     unsigned char* p = bytes_at(r.base, 0);
 
     // Zero-on-commit guarantee.
-    for (crd::usize i = 0; i < page * 4; ++i) { REQUIRE(p[i] == 0); }
+    for (crd::usize i = 0; i < page * 4; ++i)
+    {
+        REQUIRE(p[i] == 0);
+    }
 
     // Write a pattern across the committed span, read it back (ASan: in-bounds).
-    for (crd::usize i = 0; i < page * 4; ++i) { p[i] = static_cast<unsigned char>((i * 31U + 7U) & 0xFF); }
-    for (crd::usize i = 0; i < page * 4; ++i) { REQUIRE(p[i] == static_cast<unsigned char>((i * 31U + 7U) & 0xFF)); }
+    for (crd::usize i = 0; i < page * 4; ++i)
+    {
+        p[i] = static_cast<unsigned char>((i * 31U + 7U) & 0xFF);
+    }
+    for (crd::usize i = 0; i < page * 4; ++i)
+    {
+        REQUIRE(p[i] == static_cast<unsigned char>((i * 31U + 7U) & 0xFF));
+    }
 
     vm::release(r);
 }
@@ -116,7 +125,10 @@ TEST_CASE("vm decommit then recommit keeps the address and zeroes the memory", "
 
     REQUIRE(vm::commit(r.base, page * 8));
     unsigned char* p = bytes_at(r.base, 0);
-    for (crd::usize i = 0; i < page * 8; ++i) { p[i] = 0xAB; }
+    for (crd::usize i = 0; i < page * 8; ++i)
+    {
+        p[i] = 0xAB;
+    }
 
     REQUIRE(vm::decommit(r.base, page * 8));
     // Address space is still reserved at the SAME base after decommit.
@@ -124,7 +136,10 @@ TEST_CASE("vm decommit then recommit keeps the address and zeroes the memory", "
 
     REQUIRE(vm::commit(r.base, page * 8)); // recommit same range
     p = bytes_at(r.base, 0);
-    for (crd::usize i = 0; i < page * 8; ++i) { REQUIRE(p[i] == 0); } // zero-filled again
+    for (crd::usize i = 0; i < page * 8; ++i) // zero-filled again
+    {
+        REQUIRE(p[i] == 0);
+    }
 
     vm::release(r);
 }
@@ -193,8 +208,14 @@ TEST_CASE("vm commit rounds sub-page requests up to a full page", "[vm]")
     // Commit a 1-byte request at base+1: the whole containing page must become usable.
     REQUIRE(vm::commit(bytes_at(r.base, 1), 1));
     unsigned char* p = bytes_at(r.base, 0);
-    for (crd::usize i = 0; i < page; ++i) { p[i] = static_cast<unsigned char>(i & 0xFF); }
-    for (crd::usize i = 0; i < page; ++i) { REQUIRE(p[i] == static_cast<unsigned char>(i & 0xFF)); }
+    for (crd::usize i = 0; i < page; ++i)
+    {
+        p[i] = static_cast<unsigned char>(i & 0xFF);
+    }
+    for (crd::usize i = 0; i < page; ++i)
+    {
+        REQUIRE(p[i] == static_cast<unsigned char>(i & 0xFF));
+    }
 
     vm::release(r);
 }

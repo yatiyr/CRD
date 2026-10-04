@@ -206,7 +206,10 @@ TEST_CASE("B16-a-0: compute transcendentals emit on ALL backends", "[kir][kernel
     crd::containers::Array<crd::f64> out(&alloc);
     in.resize(64, 0.0);
     out.resize(64, 0.0);
-    for (int i = 0; i < 64; ++i) { in[static_cast<crd::usize>(i)] = 0.25 + 0.01 * static_cast<double>(i); }
+    for (int i = 0; i < 64; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = 0.25 + 0.01 * static_cast<double>(i);
+    }
     kir::KernelBuffer bufs[2] = {{in.data(), 64, 0, 0}, {out.data(), 64, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, 1U);
     const double xv  = in[3];
@@ -498,7 +501,10 @@ TEST_CASE("B-cmp profile: emit the FFT kernels as CUDA for the ncu harness", "[.
     const auto                 dump = [](const char* path, const kir::GlslKernel& k) {
         FILE* f = nullptr;
 #ifdef _MSC_VER
-        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+        if (fopen_s(&f, path, "wb") != 0) // MSVC: the deprecated fopen errors under /WX
+        {
+            f = nullptr;
+        }
 #else
         f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
 #endif
@@ -605,8 +611,14 @@ TEST_CASE("D-007 D1: IR-as-crdr round-trips (serialize->deserialize == byte-iden
     bool b0_present  = false;
     for (int i = 0; i < refl.n_bindings; ++i)
     {
-        if (refl.bindings[i].set == 0U && refl.bindings[i].binding == 0U) { b0_present = true; }
-        if (refl.bindings[i].binding == 1U) { b1_writable = refl.bindings[i].writable; }
+        if (refl.bindings[i].set == 0U && refl.bindings[i].binding == 0U)
+        {
+            b0_present = true;
+        }
+        if (refl.bindings[i].binding == 1U)
+        {
+            b1_writable = refl.bindings[i].writable;
+        }
         CHECK(refl.bindings[i].kind == kir::BindKind::StorageBuffer);
     }
     CHECK(b0_present);

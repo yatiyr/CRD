@@ -90,7 +90,10 @@ constexpr crd::u32 kPi3 = 805459861U;
         const int lbase = ku(static_cast<crd::u32>(l * tsz)); // this level's table offset (in ENTRIES)
 
         int feat[8]; // up to F features accumulated (F ≤ 8 practical)
-        for (int f = 0; f < ftr; ++f) { feat[f] = kf(0.0); }
+        for (int f = 0; f < ftr; ++f)
+        {
+            feat[f] = kf(0.0);
+        }
         for (int corner = 0; corner < 8; ++corner)
         {
             const int dx = corner & 1;
@@ -233,7 +236,10 @@ constexpr crd::u32 kPi3 = 805459861U;
     for (int o = 0; o < oo; ++o)
     {
         int acc = g.buffer_load(b2_b, ku(static_cast<crd::u32>(o)));
-        for (int j = 0; j < hh; ++j) { acc = add(acc, mul(g.buffer_load(w2_b, ku(static_cast<crd::u32>(o * hh + j))), hact[j])); }
+        for (int j = 0; j < hh; ++j)
+        {
+            acc = add(acc, mul(g.buffer_load(w2_b, ku(static_cast<crd::u32>(o * hh + j))), hact[j]));
+        }
         dout[o] = mul(kf(2.0), sub(acc, g.buffer_load(tgt_b, add(tb, ku(static_cast<crd::u32>(o)))))); // ∂L/∂out_o
     }
 
@@ -250,7 +256,10 @@ constexpr crd::u32 kPi3 = 805459861U;
     for (int j = 0; j < hh; ++j)
     {
         int dh = kf(0.0);
-        for (int o = 0; o < oo; ++o) { dh = add(dh, mul(dout[o], g.buffer_load(w2_b, ku(static_cast<crd::u32>(o * hh + j))))); }
+        for (int o = 0; o < oo; ++o)
+        {
+            dh = add(dh, mul(dout[o], g.buffer_load(w2_b, ku(static_cast<crd::u32>(o * hh + j)))));
+        }
         const int dpre = mul(hmask[j], dh);
         for (int d = 0; d < dd; ++d)
         {

@@ -17,87 +17,210 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_delay(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 2U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_for(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 3U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
+    if (op.num_operands() != 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_foreach(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 1U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_history(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 2U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_if(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_regions() != 2U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
-    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 2U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
+    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_match(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() < 1U) { return false; }
-    for (u32 ri = 0U; ri < op.num_regions(); ++ri) { const Block* const rb = op.region(ri)->first_block();
-      if (rb != nullptr && rb->num_args() != 0U) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() < 1U)
+    {
+        return false;
+    }
+    for (u32 ri = 0U; ri < op.num_regions(); ++ri)
+    {
+        const Block* const rb = op.region(ri)->first_block();
+        if (rb != nullptr && rb->num_args() != 0U)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_scope(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_state(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 2U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_switch(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() < 1U) { return false; }
-    for (u32 ri = 0U; ri < op.num_regions(); ++ri) { const Block* const rb = op.region(ri)->first_block();
-      if (rb != nullptr && rb->num_args() != 0U) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() < 1U)
+    {
+        return false;
+    }
+    for (u32 ri = 0U; ri < op.num_regions(); ++ri)
+    {
+        const Block* const rb = op.region(ri)->first_block();
+        if (rb != nullptr && rb->num_args() != 0U)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_while(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 2U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
-    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 0U) { return false; }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 2U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
+    if (op.region(1U)->first_block() != nullptr && op.region(1U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_yield(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 } // namespace

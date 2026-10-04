@@ -41,24 +41,34 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
     // ── Step 1: vertex → meshlet CSR ──────────────────────────────────────
     crd::containers::Array<crd::u32> vtm_count(scratch);
     vtm_count.resize(vertex_count);
-    for (crd::u32 i = 0; i < vertex_count; ++i) vtm_count[i] = 0U;
+    for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
+        vtm_count[i] = 0U;
+    }
 
     for (crd::u32 m = 0; m < mc; ++m)
     {
         const auto& ml = meshlets.meshlets[m];
         for (crd::u32 vi = 0; vi < ml.vertex_count; ++vi)
+        {
             vtm_count[meshlets.meshlet_vertices[ml.vertex_offset + vi]]++;
+        }
     }
 
     crd::containers::Array<crd::u32> vtm_off(scratch);
     vtm_off.resize(vertex_count + 1U);
     vtm_off[0] = 0U;
     for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
         vtm_off[i + 1U] = vtm_off[i] + vtm_count[i];
+    }
 
     crd::containers::Array<crd::u32> vtm_data(scratch);
     vtm_data.resize(vtm_off[vertex_count]);
-    for (crd::u32 i = 0; i < vertex_count; ++i) vtm_count[i] = 0U;
+    for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
+        vtm_count[i] = 0U;
+    }
 
     for (crd::u32 m = 0; m < mc; ++m)
     {
@@ -99,7 +109,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
 
     crd::containers::sort(raw_edges.begin(), raw_edges.end(),
                           [](const RawEdge& a, const RawEdge& b) {
-                              if (a.m0 != b.m0) return a.m0 < b.m0;
+                              if (a.m0 != b.m0)
+                              {
+                                  return a.m0 < b.m0;
+                              }
                               return a.m1 < b.m1;
                           });
 
@@ -134,7 +147,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
 
     crd::containers::Array<crd::u32> adj_count(scratch);
     adj_count.resize(mc);
-    for (crd::u32 i = 0; i < mc; ++i) adj_count[i] = 0U;
+    for (crd::u32 i = 0; i < mc; ++i)
+    {
+        adj_count[i] = 0U;
+    }
     for (crd::u32 i = 0; i < we_count; ++i)
     {
         adj_count[wedges[i].m0]++;
@@ -144,13 +160,18 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
     out.adjacency.offsets.resize(mc + 1U);
     out.adjacency.offsets[0] = 0U;
     for (crd::u32 i = 0; i < mc; ++i)
+    {
         out.adjacency.offsets[i + 1U] = out.adjacency.offsets[i] + adj_count[i];
+    }
 
     const crd::u32 adj_total = out.adjacency.offsets[mc];
     out.adjacency.neighbors.resize(adj_total);
     out.adjacency.weights.resize(adj_total);
 
-    for (crd::u32 i = 0; i < mc; ++i) adj_count[i] = 0U;
+    for (crd::u32 i = 0; i < mc; ++i)
+    {
+        adj_count[i] = 0U;
+    }
     for (crd::u32 i = 0; i < we_count; ++i)
     {
         const crd::u32 a = wedges[i].m0;
@@ -172,14 +193,20 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
     crd::containers::Array<crd::u32> meshlet_group(scratch);
     meshlet_group.resize(mc);
     constexpr crd::u32 no_group = ~0U;
-    for (crd::u32 i = 0; i < mc; ++i) meshlet_group[i] = no_group;
+    for (crd::u32 i = 0; i < mc; ++i)
+    {
+        meshlet_group[i] = no_group;
+    }
 
     crd::u32                         group_idx = 0U;
     crd::containers::Array<crd::u32> cur_group(scratch);
 
     for (crd::u32 seed = 0U; seed < mc; ++seed)
     {
-        if (meshlet_group[seed] != no_group) continue;
+        if (meshlet_group[seed] != no_group)
+        {
+            continue;
+        }
 
         cur_group.clear();
         cur_group.push_back(seed);
@@ -198,7 +225,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                 for (crd::u32 ai = adj_beg; ai < adj_end; ++ai)
                 {
                     const crd::u32 nb = out.adjacency.neighbors[ai];
-                    if (meshlet_group[nb] != no_group) continue;
+                    if (meshlet_group[nb] != no_group)
+                    {
+                        continue;
+                    }
 
                     crd::u32 score = 0U;
                     for (crd::u32 gj = 0; gj < static_cast<crd::u32>(cur_group.size()); ++gj)
@@ -209,7 +239,9 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                         for (crd::u32 ai2 = b2; ai2 < e2; ++ai2)
                         {
                             if (out.adjacency.neighbors[ai2] == nb)
+                            {
                                 score += out.adjacency.weights[ai2];
+                            }
                         }
                     }
 
@@ -221,7 +253,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                 }
             }
 
-            if (best_m == no_group) break;
+            if (best_m == no_group)
+            {
+                break;
+            }
             cur_group.push_back(best_m);
             meshlet_group[best_m] = group_idx;
         }
@@ -231,7 +266,9 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
         g.count = static_cast<crd::u32>(cur_group.size());
         out.groups.push_back(g);
         for (crd::u32 gi = 0; gi < static_cast<crd::u32>(cur_group.size()); ++gi)
+        {
             out.group_meshlets.push_back(cur_group[gi]);
+        }
 
         ++group_idx;
     }
@@ -242,7 +279,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
 
     crd::containers::Array<crd::u32> bv_gen(scratch);
     bv_gen.resize(vertex_count);
-    for (crd::u32 i = 0; i < vertex_count; ++i) bv_gen[i] = no_group;
+    for (crd::u32 i = 0; i < vertex_count; ++i)
+    {
+        bv_gen[i] = no_group;
+    }
 
     for (crd::u32 g = 0; g < group_idx; ++g)
     {
@@ -254,7 +294,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
             for (crd::u32 vi = 0; vi < ml.vertex_count; ++vi)
             {
                 const crd::u32 gv = meshlets.meshlet_vertices[ml.vertex_offset + vi];
-                if (bv_gen[gv] == g) continue;
+                if (bv_gen[gv] == g)
+                {
+                    continue;
+                }
 
                 const crd::u32 vb = vtm_off[gv];
                 const crd::u32 ve = vtm_off[gv + 1U];
@@ -268,7 +311,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
                     }
                 }
                 bv_gen[gv] = g;
-                if (is_boundary) out.boundary_vertices.push_back(gv);
+                if (is_boundary)
+                {
+                    out.boundary_vertices.push_back(gv);
+                }
             }
         }
         out.boundary_offsets[g + 1U] = static_cast<crd::u32>(out.boundary_vertices.size());
@@ -279,7 +325,10 @@ ClusterGroupReport group_meshlets(const MeshletBuildResult& meshlets, crd::u32 v
     if (group_idx > 0U)
     {
         crd::u32 total = 0U;
-        for (crd::u32 g = 0; g < group_idx; ++g) total += out.groups[g].count;
+        for (crd::u32 g = 0; g < group_idx; ++g)
+        {
+            total += out.groups[g].count;
+        }
         report.avg_group_size_x10 = (total * 10U + group_idx / 2U) / group_idx;
     }
     report.boundary_vertex_count = static_cast<crd::u32>(out.boundary_vertices.size());

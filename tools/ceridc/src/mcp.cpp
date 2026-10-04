@@ -58,11 +58,17 @@ namespace
         for (char* tok = crd_strtok(buf, ",", &save); tok != nullptr; tok = crd_strtok(nullptr, ",", &save))
         {
             char* colon = std::strchr(tok, ':');
-            if (colon == nullptr) { continue; }
+            if (colon == nullptr)
+            {
+                continue;
+            }
             *colon      = '\0';
             char* type  = colon + 1;
             char* bang  = std::strchr(type, '!');
-            if (bang != nullptr) { *bang = '\0'; }
+            if (bang != nullptr)
+            {
+                *bang = '\0';
+            }
             w.key(tok);
             w.begin_object();
             w.kv("type", type);
@@ -76,9 +82,15 @@ namespace
         save = nullptr;
         for (char* tok = crd_strtok(buf2, ",", &save); tok != nullptr; tok = crd_strtok(nullptr, ",", &save))
         {
-            if (std::strchr(tok, '!') == nullptr) { continue; }
+            if (std::strchr(tok, '!') == nullptr)
+            {
+                continue;
+            }
             char* colon = std::strchr(tok, ':');
-            if (colon != nullptr) { *colon = '\0'; }
+            if (colon != nullptr)
+            {
+                *colon = '\0';
+            }
             w.value_string(tok);
         }
         w.end_array();
@@ -115,7 +127,10 @@ namespace
         char d[512];
         if (std::strcmp(name, "import") == 0)
         {
-            if (!arg_str(doc, args, "path", a, sizeof(a))) { return crd::containers::String("", alloc); }
+            if (!arg_str(doc, args, "path", a, sizeof(a)))
+            {
+                return crd::containers::String("", alloc);
+            }
             return verb_import(a, alloc);
         }
         if (std::strcmp(name, "cook") == 0)
@@ -128,7 +143,10 @@ namespace
         }
         if (std::strcmp(name, "query") == 0)
         {
-            if (!arg_str(doc, args, "pack", a, sizeof(a))) { return crd::containers::String("", alloc); }
+            if (!arg_str(doc, args, "pack", a, sizeof(a)))
+            {
+                return crd::containers::String("", alloc);
+            }
             return verb_query(a, alloc);
         }
         if (std::strcmp(name, "instantiate") == 0)
@@ -200,7 +218,10 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
     char method[64] = {};
     (void)json::str_value(doc, json::find(doc, doc.root, "method"), method, sizeof(method));
     const crd::u32 id_node = json::find(doc, doc.root, "id");
-    if (id_node == json::kInvalid) { return crd::containers::String("", alloc); } // notification — no reply
+    if (id_node == json::kInvalid) // notification — no reply
+    {
+        return crd::containers::String("", alloc);
+    }
     const crd::i64 id = json::as_i64(doc, id_node, 0);
 
     const auto begin_result = [&] {

@@ -50,11 +50,20 @@ namespace canon_detail
 [[nodiscard]] inline bool match_reshape_of_reshape(const Context& ctx, const Operation& op) noexcept
 {
     (void)ctx;
-    if (op.kind() != OpId{fnv1a_ct("tensor.reshape")}) { return false; }
-    if (op.num_results() == 0U || !op.result(0)->has_uses() || op.num_operands() == 0U) { return false; }
+    if (op.kind() != OpId{fnv1a_ct("tensor.reshape")})
+    {
+        return false;
+    }
+    if (op.num_results() == 0U || !op.result(0)->has_uses() || op.num_operands() == 0U)
+    {
+        return false;
+    }
     const Value* const     in    = op.operand(0);
     const Operation* const inner = (in != nullptr) ? in->defining_op() : nullptr;
-    if (inner == nullptr || inner->kind() != OpId{fnv1a_ct("tensor.reshape")} || inner->num_operands() == 0U) { return false; }
+    if (inner == nullptr || inner->kind() != OpId{fnv1a_ct("tensor.reshape")} || inner->num_operands() == 0U)
+    {
+        return false;
+    }
     return inner->operand(0) != nullptr; // the value before both reshapes exists (identity result cleaned up by identity_reshape)
 }
 inline void rewrite_reshape_of_reshape(Context& ctx, Operation& op)
@@ -72,8 +81,14 @@ inline void rewrite_reshape_of_reshape(Context& ctx, Operation& op)
 [[nodiscard]] inline bool match_identity_reshape(const Context& ctx, const Operation& op) noexcept
 {
     (void)ctx;
-    if (op.kind() != OpId{fnv1a_ct("tensor.reshape")}) { return false; }
-    if (op.num_results() == 0U || !op.result(0)->has_uses() || op.num_operands() == 0U) { return false; }
+    if (op.kind() != OpId{fnv1a_ct("tensor.reshape")})
+    {
+        return false;
+    }
+    if (op.num_results() == 0U || !op.result(0)->has_uses() || op.num_operands() == 0U)
+    {
+        return false;
+    }
     const Value* const in = op.operand(0);
     return in != nullptr && op.result(0)->type() == in->type(); // a same-type (no-op) reshape
 }

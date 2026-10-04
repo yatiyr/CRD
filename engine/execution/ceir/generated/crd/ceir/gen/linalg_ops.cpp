@@ -17,17 +17,46 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_gemm(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 3U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("alpha");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("beta");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float) { return false; } }
-    { const AttrId a = op.attr("trans_a");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { return false; } }
-    { const AttrId a = op.attr("trans_b");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool) { return false; } }
+    if (op.num_operands() != 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("alpha");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("beta");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Float)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("trans_a");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("trans_b");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Bool)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

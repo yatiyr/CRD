@@ -104,12 +104,18 @@ struct DrawListBinding
     // Uniform view for the executor: one draw when the host filled the legacy triple, N when it filled `items`.
     [[nodiscard]] crd::u32 count() const noexcept
     {
-        if (resolved > 0U) { return resolved; }
+        if (resolved > 0U)
+        {
+            return resolved;
+        }
         return storage != nullptr ? 1U : 0U;
     }
     [[nodiscard]] DrawItem at(crd::u32 i) const noexcept
     {
-        if (resolved > 0U) { return items[i]; }
+        if (resolved > 0U)
+        {
+            return items[i];
+        }
         return DrawItem{storage, program, vertex_count, nullptr};
     }
 };
@@ -315,12 +321,26 @@ enum class FrameExecError : crd::u8
 // because they name FrameExecError values). A host that does not override them has no spec support.
 inline crd::gpu::IRasterProgram* IFrameGraphHost::program_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err)
 {
-    if (specs.count > 0U) { if (err != nullptr) { *err = FrameExecError::SpecConstUnsupportedByHost; } return nullptr; }
+    if (specs.count > 0U)
+    {
+        if (err != nullptr)
+        {
+            *err = FrameExecError::SpecConstUnsupportedByHost;
+        }
+        return nullptr;
+    }
     return program(id);
 }
 inline crd::gpu::IGpuProgram* IFrameGraphHost::kernel_spec(crd::containers::StringView id, SpecSet specs, FrameExecError* err)
 {
-    if (specs.count > 0U) { if (err != nullptr) { *err = FrameExecError::SpecConstUnsupportedByHost; } return nullptr; }
+    if (specs.count > 0U)
+    {
+        if (err != nullptr)
+        {
+            *err = FrameExecError::SpecConstUnsupportedByHost;
+        }
+        return nullptr;
+    }
     return kernel(id);
 }
 

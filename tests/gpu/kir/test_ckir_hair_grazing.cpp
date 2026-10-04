@@ -27,7 +27,10 @@ TEST_CASE("B18-a probe: hair BCSDF across the grazing limit", "[.][ckir][hair][p
     constexpr int k_n = 64;
     hbuf.resize(static_cast<crd::usize>(k_n), 0.0);
     out.resize(static_cast<crd::usize>(k_n) * 4U, 0.0);
-    for (int i = 0; i < k_n; ++i) { hbuf[static_cast<crd::usize>(i)] = static_cast<double>(i) / static_cast<double>(k_n - 1); }
+    for (int i = 0; i < k_n; ++i)
+    {
+        hbuf[static_cast<crd::usize>(i)] = static_cast<double>(i) / static_cast<double>(k_n - 1);
+    }
 
     kir::KGraph      g(&alloc);
     const kir::Shape shu = kir::make_shape({1});
@@ -62,7 +65,10 @@ TEST_CASE("B18-a probe: hair BCSDF across the grazing limit", "[.][ckir][hair][p
     for (int i = 0; i < k_n; ++i)
     {
         const crd::usize o = static_cast<crd::usize>(i) * 4U;
-        if (i < 48 && (i % 6) != 0) { continue; } // coarse below 0.75, every sample above
+        if (i < 48 && (i % 6) != 0) // coarse below 0.75, every sample above
+        {
+            continue;
+        }
         std::printf("  %7.4f  %11.5f  %11.5f  %11.5f  %11.5f\n", hbuf[static_cast<crd::usize>(i)], out[o], out[o + 1U],
                     out[o + 2U], out[o + 3U]);
     }

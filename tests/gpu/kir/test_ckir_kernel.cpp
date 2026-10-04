@@ -40,12 +40,22 @@ TEST_CASE("B-cmp: shared-memory REVERSE kernel -- CPU oracle (barrier-gated cros
 
     crd::f64 in[ls];
     crd::f64 out[ls];
-    for (int i = 0; i < ls; ++i) { in[i] = 1.0 + 3.0 * i; out[i] = -1.0; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in[i] = 1.0 + 3.0 * i;
+        out[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in, ls, 0, 0}, {out, ls, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out[i] != in[ls - 1 - i]) { ++bad; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out[i] != in[ls - 1 - i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -87,7 +97,12 @@ TEST_CASE("B-cmp: shared-memory workgroup REDUCTION kernel -- CPU oracle (tree s
     crd::f64 in[ls];
     crd::f64 out[ls];
     crd::f64 ref = 0.0;
-    for (int i = 0; i < ls; ++i) { in[i] = 1.0 + 3.0 * i; out[i] = -1.0; ref += in[i]; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in[i] = 1.0 + 3.0 * i;
+        out[i] = -1.0;
+        ref += in[i];
+    }
     kir::KernelBuffer bufs[2] = {{in, ls, 0, 0}, {out, ls, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
@@ -136,12 +151,24 @@ TEST_CASE("B-cmp: workgroup PREFIX-SCAN kernel -- For + If + inner barrier (Hill
     crd::f64 out[ls];
     crd::f64 ref[ls];
     crd::f64 acc = 0.0;
-    for (int i = 0; i < ls; ++i) { in[i] = static_cast<crd::f64>(i + 1); acc += in[i]; ref[i] = acc; out[i] = -1.0; } // 1,3,6,10,...
+    for (int i = 0; i < ls; ++i) // 1,3,6,10,...
+    {
+        in[i] = static_cast<crd::f64>(i + 1);
+        acc += in[i];
+        ref[i] = acc;
+        out[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in, ls, 0, 0}, {out, ls, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out[i] != ref[i]) { ++bad; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out[i] != ref[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(out[ls - 1] == 36.0); // 1+2+...+8
 }
@@ -189,12 +216,25 @@ TEST_CASE("B-cmp: shared-memory TRANSPOSE kernel -- For loops + barrier + cross-
 
     crd::f64 in[tt * tt];
     crd::f64 out[tt * tt];
-    for (int i = 0; i < tt * tt; ++i) { in[i] = static_cast<crd::f64>(i); out[i] = -1.0; }
+    for (int i = 0; i < tt * tt; ++i)
+    {
+        in[i] = static_cast<crd::f64>(i);
+        out[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in, tt * tt, 0, 0}, {out, tt * tt, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
     int bad = 0;
-    for (int r = 0; r < tt; ++r) { for (int c = 0; c < tt; ++c) { if (out[r * tt + c] != in[c * tt + r]) { ++bad; } } }
+    for (int r = 0; r < tt; ++r)
+    {
+        for (int c = 0; c < tt; ++c)
+        {
+            if (out[r * tt + c] != in[c * tt + r])
+            {
+                ++bad;
+            }
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -268,7 +308,13 @@ TEST_CASE("B-cmp: radix-2 butterfly PASS kernel -- twiddled complex butterfly (t
         crd::f64 ii[n];
         crd::f64 orr[n];
         crd::f64 oi[n];
-        for (int i = 0; i < n; ++i) { ir[i] = static_cast<crd::f64>(i + 1); ii[i] = static_cast<crd::f64>((i % 3) - 1); orr[i] = -9.0; oi[i] = -9.0; }
+        for (int i = 0; i < n; ++i)
+        {
+            ir[i] = static_cast<crd::f64>(i + 1);
+            ii[i] = static_cast<crd::f64>((i % 3) - 1);
+            orr[i] = -9.0;
+            oi[i] = -9.0;
+        }
         kir::KernelBuffer bufs[6] = {{ir, n, 0, 0}, {ii, n, 0, 1}, {twr, half, 0, 2}, {twi, half, 0, 3}, {orr, n, 0, 4}, {oi, n, 0, 5}};
         kir::eval_cpu_kernel(g, e, bufs, 6, static_cast<crd::u32>(half), &alloc);
 
@@ -277,10 +323,22 @@ TEST_CASE("B-cmp: radix-2 butterfly PASS kernel -- twiddled complex butterfly (t
         {
             const crd::f64 tr_ref = twr[jj] * ir[jj + half] - twi[jj] * ii[jj + half];
             const crd::f64 ti_ref = twr[jj] * ii[jj + half] + twi[jj] * ir[jj + half];
-            if (fabs64(orr[jj] - (ir[jj] + tr_ref)) > 1e-4) { ++bad; }
-            if (fabs64(oi[jj] - (ii[jj] + ti_ref)) > 1e-4) { ++bad; }
-            if (fabs64(orr[jj + half] - (ir[jj] - tr_ref)) > 1e-4) { ++bad; }
-            if (fabs64(oi[jj + half] - (ii[jj] - ti_ref)) > 1e-4) { ++bad; }
+            if (fabs64(orr[jj] - (ir[jj] + tr_ref)) > 1e-4)
+            {
+                ++bad;
+            }
+            if (fabs64(oi[jj] - (ii[jj] + ti_ref)) > 1e-4)
+            {
+                ++bad;
+            }
+            if (fabs64(orr[jj + half] - (ir[jj] - tr_ref)) > 1e-4)
+            {
+                ++bad;
+            }
+            if (fabs64(oi[jj + half] - (ii[jj] - ti_ref)) > 1e-4)
+            {
+                ++bad;
+            }
         }
         CHECK(bad == 0);
     }
@@ -291,15 +349,27 @@ TEST_CASE("B-cmp: radix-2 butterfly PASS kernel -- twiddled complex butterfly (t
         crd::f64 ii[n];
         crd::f64 orr[n];
         crd::f64 oi[n];
-        for (int i = 0; i < n; ++i) { ir[i] = (i < half) ? static_cast<crd::f64>(i + 1) : 0.0; ii[i] = 0.0; orr[i] = -9.0; oi[i] = -9.0; }
+        for (int i = 0; i < n; ++i)
+        {
+            ir[i] = (i < half) ? static_cast<crd::f64>(i + 1) : 0.0;
+            ii[i] = 0.0;
+            orr[i] = -9.0;
+            oi[i] = -9.0;
+        }
         kir::KernelBuffer bufs[6] = {{ir, n, 0, 0}, {ii, n, 0, 1}, {twr, half, 0, 2}, {twi, half, 0, 3}, {orr, n, 0, 4}, {oi, n, 0, 5}};
         kir::eval_cpu_kernel(g, e, bufs, 6, static_cast<crd::u32>(half), &alloc);
 
         int bad = 0;
         for (int jj = 0; jj < half; ++jj) // x[j+half]=0 ⇒ out[j]=out[j+half]=x[j], exactly
         {
-            if (orr[jj] != ir[jj] || orr[jj + half] != ir[jj]) { ++bad; }
-            if (oi[jj] != 0.0 || oi[jj + half] != 0.0) { ++bad; }
+            if (orr[jj] != ir[jj] || orr[jj + half] != ir[jj])
+            {
+                ++bad;
+            }
+            if (oi[jj] != 0.0 || oi[jj + half] != 0.0)
+            {
+                ++bad;
+            }
         }
         CHECK(bad == 0);
     }
@@ -339,12 +409,22 @@ TEST_CASE("B-cmp: MATERIALIZE freezes a shared value across an overwrite (CPU or
 
     crd::f64 in[ls];
     crd::f64 out[ls];
-    for (int i = 0; i < ls; ++i) { in[i] = static_cast<crd::f64>(i + 1); out[i] = -1.0; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in[i] = static_cast<crd::f64>(i + 1);
+        out[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in, ls, 0, 0}, {out, ls, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out[i] != in[ls - 1 - i]) { ++bad; } } // reversed, not 999
+    for (int i = 0; i < ls; ++i) // reversed, not 999
+    {
+        if (out[i] != in[ls - 1 - i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -399,7 +479,10 @@ TEST_CASE("ceir 23d-1: a runtime-count For reduction round-trips through .ckir +
     crd::f64          y0[gseg] = {-1.0, -1.0, -1.0, -1.0};
     kir::KernelBuffer b0[3]    = {{starts_d, gseg + 1, 0, 0}, {vals_d, 9, 0, 1}, {y0, gseg, 0, 2}};
     kir::eval_cpu_kernel(g, e, b0, 3, static_cast<crd::u32>(gseg), &alloc);
-    for (int i = 0; i < gseg; ++i) { CHECK(y0[i] == ref[i]); }
+    for (int i = 0; i < gseg; ++i)
+    {
+        CHECK(y0[i] == ref[i]);
+    }
 
     // (B) the SERIALIZED form round-trips byte-exact AND the deserialized graph evals identically (the For survives text).
     crd::containers::String text = kir::ckir_write(g, e, &alloc);
@@ -412,7 +495,10 @@ TEST_CASE("ceir 23d-1: a runtime-count For reduction round-trips through .ckir +
     crd::f64          y1[gseg] = {-1.0, -1.0, -1.0, -1.0};
     kir::KernelBuffer b1[3]    = {{starts_d, gseg + 1, 0, 0}, {vals_d, 9, 0, 1}, {y1, gseg, 0, 2}};
     kir::eval_cpu_kernel(g2, e2, b1, 3, static_cast<crd::u32>(gseg), &alloc);
-    for (int i = 0; i < gseg; ++i) { CHECK(y1[i] == ref[i]); }
+    for (int i = 0; i < gseg; ++i)
+    {
+        CHECK(y1[i] == ref[i]);
+    }
 
     // (C) emit smoke: the runtime-For kernel compiles to GLSL (the device legs will).
     kir::GlslKernel kern(&alloc);

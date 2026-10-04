@@ -23,7 +23,10 @@ constexpr int kMaxN = 8;
 f64 frob(const f64* a, const f64* b, int cnt) // Frobenius inner product Σ a_i b_i
 {
     f64 s = 0.0;
-    for (int i = 0; i < cnt; ++i) { s += a[i] * b[i]; }
+    for (int i = 0; i < cnt; ++i)
+    {
+        s += a[i] * b[i];
+    }
     return s;
 }
 
@@ -33,14 +36,20 @@ void make_spd(f64* a, int n, f64 seed)
     f64 b[kMaxN * kMaxN];
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { b[i * n + j] = std::sin(seed + 1.3 * i + 0.7 * j); }
+        for (int j = 0; j < n; ++j)
+        {
+            b[i * n + j] = std::sin(seed + 1.3 * i + 0.7 * j);
+        }
     }
     for (int i = 0; i < n; ++i)
     {
         for (int j = 0; j < n; ++j)
         {
             f64 s = 0.0;
-            for (int k = 0; k < n; ++k) { s += b[i * n + k] * b[j * n + k]; }
+            for (int k = 0; k < n; ++k)
+            {
+                s += b[i * n + k] * b[j * n + k];
+            }
             a[i * n + j] = s + (i == j ? static_cast<f64>(n) : 0.0);
         }
     }
@@ -64,22 +73,35 @@ void jacobi_eig(const f64* ain, f64* q, f64* lam, int n)
     f64 w[kMaxN * kMaxN];
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { w[i * n + j] = ain[i * n + j]; q[i * n + j] = (i == j) ? 1.0 : 0.0; }
+        for (int j = 0; j < n; ++j)
+        {
+            w[i * n + j] = ain[i * n + j];
+            q[i * n + j] = (i == j) ? 1.0 : 0.0;
+        }
     }
     for (int sweep = 0; sweep < 100; ++sweep)
     {
         f64 off = 0.0;
         for (int i = 0; i < n; ++i)
         {
-            for (int j = i + 1; j < n; ++j) { off += w[i * n + j] * w[i * n + j]; }
+            for (int j = i + 1; j < n; ++j)
+            {
+                off += w[i * n + j] * w[i * n + j];
+            }
         }
-        if (off < 1e-30) { break; }
+        if (off < 1e-30)
+        {
+            break;
+        }
         for (int p = 0; p < n; ++p)
         {
             for (int qq = p + 1; qq < n; ++qq)
             {
                 const f64 apq = w[p * n + qq];
-                if (std::abs(apq) < 1e-300) { continue; }
+                if (std::abs(apq) < 1e-300)
+                {
+                    continue;
+                }
                 const f64 tau = (w[qq * n + qq] - w[p * n + p]) / (2.0 * apq);
                 const f64 t   = (tau >= 0.0 ? 1.0 : -1.0) / (std::abs(tau) + std::sqrt(tau * tau + 1.0));
                 const f64 cc  = 1.0 / std::sqrt(t * t + 1.0);
@@ -108,17 +130,26 @@ void jacobi_eig(const f64* ain, f64* q, f64* lam, int n)
             }
         }
     }
-    for (int i = 0; i < n; ++i) { lam[i] = w[i * n + i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        lam[i] = w[i * n + i];
+    }
 }
 
 // One-sided Jacobi SVD: A (m×n, m≥n) → sigma[n], u[m*n] (U cols), v[n*n] (V cols).
 void jacobi_svd(const f64* ain, f64* u, f64* v, f64* sigma, int m, int n)
 {
     f64 w[kMaxN * kMaxN];
-    for (int i = 0; i < m * n; ++i) { w[i] = ain[i]; }
+    for (int i = 0; i < m * n; ++i)
+    {
+        w[i] = ain[i];
+    }
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { v[i * n + j] = (i == j) ? 1.0 : 0.0; }
+        for (int j = 0; j < n; ++j)
+        {
+            v[i * n + j] = (i == j) ? 1.0 : 0.0;
+        }
     }
     for (int sweep = 0; sweep < 100; ++sweep)
     {
@@ -137,7 +168,10 @@ void jacobi_svd(const f64* ain, f64* u, f64* v, f64* sigma, int m, int n)
                     gamma += w[k * n + p] * w[k * n + qq];
                 }
                 maxg = std::max(maxg, std::abs(gamma));
-                if (std::abs(gamma) < 1e-300) { continue; }
+                if (std::abs(gamma) < 1e-300)
+                {
+                    continue;
+                }
                 const f64 zeta = (beta - alpha) / (2.0 * gamma);
                 const f64 t    = (zeta >= 0.0 ? 1.0 : -1.0) / (std::abs(zeta) + std::sqrt(1.0 + zeta * zeta));
                 const f64 cc   = 1.0 / std::sqrt(1.0 + t * t);
@@ -158,15 +192,24 @@ void jacobi_svd(const f64* ain, f64* u, f64* v, f64* sigma, int m, int n)
                 }
             }
         }
-        if (maxg < 1e-28) { break; }
+        if (maxg < 1e-28)
+        {
+            break;
+        }
     }
     for (int i = 0; i < n; ++i)
     {
         f64 nrm = 0.0;
-        for (int k = 0; k < m; ++k) { nrm += w[k * n + i] * w[k * n + i]; }
+        for (int k = 0; k < m; ++k)
+        {
+            nrm += w[k * n + i] * w[k * n + i];
+        }
         nrm       = std::sqrt(nrm);
         sigma[i]  = nrm;
-        for (int k = 0; k < m; ++k) { u[k * n + i] = w[k * n + i] / nrm; }
+        for (int k = 0; k < m; ++k)
+        {
+            u[k * n + i] = w[k * n + i] / nrm;
+        }
     }
 }
 } // namespace
@@ -181,9 +224,20 @@ TEST_CASE("v16-d: gemm VJP == transpose of gemm JVP, and == central FD", "[autod
     f64           da[m * k];
     f64           db[k * p];
     f64           gc[m * p];
-    for (int i = 0; i < m * k; ++i) { a[i] = 0.3 + 0.1 * i; da[i] = std::sin(0.4 + i); }
-    for (int i = 0; i < k * p; ++i) { b[i] = -0.2 + 0.15 * i; db[i] = std::cos(0.7 + i); }
-    for (int i = 0; i < m * p; ++i) { gc[i] = 0.5 - 0.2 * i; }
+    for (int i = 0; i < m * k; ++i)
+    {
+        a[i] = 0.3 + 0.1 * i;
+        da[i] = std::sin(0.4 + i);
+    }
+    for (int i = 0; i < k * p; ++i)
+    {
+        b[i] = -0.2 + 0.15 * i;
+        db[i] = std::cos(0.7 + i);
+    }
+    for (int i = 0; i < m * p; ++i)
+    {
+        gc[i] = 0.5 - 0.2 * i;
+    }
     // transpose identity: ⟨gc, dC⟩ == ⟨gA,dA⟩ + ⟨gB,dB⟩
     f64 dc[m * p];
     f64 scr[m * p];
@@ -215,9 +269,15 @@ TEST_CASE("v16-d: general solve VJP (LU factor-reuse) == central FD, determinist
     f64           b[n * p];
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { a[i * n + j] = std::sin(0.3 + 1.7 * i + 0.9 * j) + (i == j ? 6.0 : 0.0); }
+        for (int j = 0; j < n; ++j)
+        {
+            a[i * n + j] = std::sin(0.3 + 1.7 * i + 0.9 * j) + (i == j ? 6.0 : 0.0);
+        }
     }
-    for (int i = 0; i < n * p; ++i) { b[i] = 0.4 * std::cos(0.5 + i); }
+    for (int i = 0; i < n * p; ++i)
+    {
+        b[i] = 0.4 * std::cos(0.5 + i);
+    }
     // forward solve x = A⁻¹B (fresh LU)
     f64 alu[n * n];
     f64 x[n * p];
@@ -227,28 +287,46 @@ TEST_CASE("v16-d: general solve VJP (LU factor-reuse) == central FD, determinist
     int piv[n];
     auto solve = [&](const f64* aa, const f64* bb, f64* xx)
     {
-        for (int i = 0; i < n * n; ++i) { alu[i] = aa[i]; }
+        for (int i = 0; i < n * n; ++i)
+        {
+            alu[i] = aa[i];
+        }
         spr::dense_lu_factor(alu, piv, n);
         for (int j = 0; j < p; ++j)
         {
-            for (int i = 0; i < n; ++i) { rhs[i] = bb[i * p + j]; }
+            for (int i = 0; i < n; ++i)
+            {
+                rhs[i] = bb[i * p + j];
+            }
             spr::dense_lu_solve(alu, piv, rhs, sol, n);
-            for (int i = 0; i < n; ++i) { xx[i * p + j] = sol[i]; }
+            for (int i = 0; i < n; ++i)
+            {
+                xx[i * p + j] = sol[i];
+            }
         }
     };
     solve(a, b, x);
     // factor once, reuse for the VJP
-    for (int i = 0; i < n * n; ++i) { alu[i] = a[i]; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        alu[i] = a[i];
+    }
     spr::dense_lu_factor(alu, piv, n);
     f64 xbar[n * p];
-    for (int i = 0; i < n * p; ++i) { xbar[i] = 0.3 * std::sin(1.0 + 0.7 * i); }
+    for (int i = 0; i < n * p; ++i)
+    {
+        xbar[i] = 0.3 * std::sin(1.0 + 0.7 * i);
+    }
     f64 ga[n * n];
     f64 gb[n * p];
     f64 ga2[n * n];
     f64 gb2[n * p];
     mr::solve_lu_vjp(alu, piv, x, xbar, ga, gb, n, p, rhs, sol, tmp);
     mr::solve_lu_vjp(alu, piv, x, xbar, ga2, gb2, n, p, rhs, sol, tmp);
-    for (int i = 0; i < n * n; ++i) { CHECK(ga[i] == ga2[i]); } // deterministic
+    for (int i = 0; i < n * n; ++i) // deterministic
+    {
+        CHECK(ga[i] == ga2[i]);
+    }
     auto loss = [&]() -> f64 { f64 xx[n * p]; solve(a, b, xx); return frob(xbar, xx, n * p); };
     const f64 h = 1e-6;
     for (int e = 0; e < n * n; e += 4)
@@ -282,7 +360,10 @@ TEST_CASE("v16-d: SPD solve VJP == transpose of the v15-f SPD solve JVP", "[auto
     f64           b[n * p];
     make_spd(a, n, 0.6);
     REQUIRE(mj::cholesky(a, l, n));
-    for (int i = 0; i < n * p; ++i) { b[i] = 0.5 * std::cos(0.4 + i); }
+    for (int i = 0; i < n * p; ++i)
+    {
+        b[i] = 0.5 * std::cos(0.4 + i);
+    }
     // x = A⁻¹B
     f64 x[n * p];
     f64 t1[n * p];
@@ -293,7 +374,11 @@ TEST_CASE("v16-d: SPD solve VJP == transpose of the v15-f SPD solve JVP", "[auto
     f64 db[n * p];
     f64 xbar[n * p];
     make_sym_pert(da, n, 1.2);
-    for (int i = 0; i < n * p; ++i) { db[i] = 0.1 * std::sin(0.8 + i); xbar[i] = 0.3 * std::cos(0.2 + i); }
+    for (int i = 0; i < n * p; ++i)
+    {
+        db[i] = 0.1 * std::sin(0.8 + i);
+        xbar[i] = 0.3 * std::cos(0.2 + i);
+    }
     f64 dx[n * p];
     f64 r[n * p];
     mj::solve_spd_jvp(l, x, da, db, dx, n, p, r);
@@ -317,7 +402,10 @@ TEST_CASE("v16-d: Cholesky VJP == transpose of the v15-f Cholesky JVP", "[autodi
     make_sym_pert(da, n, 2.1);
     for (int i = 0; i < n; ++i) // L̄ lower-tri random
     {
-        for (int j = 0; j < n; ++j) { lbar[i * n + j] = (j <= i) ? 0.2 * std::sin(0.3 + 1.1 * i + 0.5 * j) : 0.0; }
+        for (int j = 0; j < n; ++j)
+        {
+            lbar[i * n + j] = (j <= i) ? 0.2 * std::sin(0.3 + 1.1 * i + 0.5 * j) : 0.0;
+        }
     }
     f64 dl[n * n];
     f64 m1[n * n];
@@ -355,14 +443,20 @@ TEST_CASE("v16-d: logdet VJP (SPD + general LU) == transpose JVP / FD, value-onl
     f64 ag[n * n];
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { ag[i * n + j] = std::cos(0.2 + 1.3 * i + 0.8 * j) + (i == j ? 7.0 : 0.0); }
+        for (int j = 0; j < n; ++j)
+        {
+            ag[i * n + j] = std::cos(0.2 + 1.3 * i + 0.8 * j) + (i == j ? 7.0 : 0.0);
+        }
     }
     f64 alu[n * n];
     f64 tmp[n];
     f64 e[n];
     f64 xx[n];
     int piv[n];
-    for (int i = 0; i < n * n; ++i) { alu[i] = ag[i]; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        alu[i] = ag[i];
+    }
     spr::dense_lu_factor(alu, piv, n);
     f64 gag[n * n];
     mr::logdet_lu_vjp(alu, piv, gbar, gag, n, e, xx, tmp);
@@ -370,10 +464,16 @@ TEST_CASE("v16-d: logdet VJP (SPD + general LU) == transpose JVP / FD, value-onl
     {
         f64 w[n * n];
         int pv[n];
-        for (int i = 0; i < n * n; ++i) { w[i] = aa[i]; }
+        for (int i = 0; i < n * n; ++i)
+        {
+            w[i] = aa[i];
+        }
         spr::dense_lu_factor(w, pv, n);
         f64 s = 0.0;
-        for (int i = 0; i < n; ++i) { s += std::log(std::abs(w[i * n + i])); }
+        for (int i = 0; i < n; ++i)
+        {
+            s += std::log(std::abs(w[i * n + i]));
+        }
         return gbar * s;
     };
     const f64 h = 1e-6;
@@ -404,14 +504,20 @@ TEST_CASE("v16-d: eigvals VJP == transpose JVP, FINITE at repeated eigenvalues (
         for (int j = 0; j < n; ++j)
         {
             f64 s = 0.0;
-            for (int t = 0; t < n; ++t) { s += q[i * n + t] * lam[t] * q[j * n + t]; }
+            for (int t = 0; t < n; ++t)
+            {
+                s += q[i * n + t] * lam[t] * q[j * n + t];
+            }
             CHECK_THAT(s, WithinAbs(a[i * n + j], 1e-9));
         }
     }
     f64 da[n * n];
     f64 lbar[n];
     make_sym_pert(da, n, 0.4);
-    for (int i = 0; i < n; ++i) { lbar[i] = 0.3 * std::sin(0.6 + i); }
+    for (int i = 0; i < n; ++i)
+    {
+        lbar[i] = 0.3 * std::sin(0.6 + i);
+    }
     f64 dlam[n];
     f64 tmp[n * n];
     mj::eigvals_jvp(q, da, dlam, n, tmp);
@@ -423,12 +529,21 @@ TEST_CASE("v16-d: eigvals VJP == transpose JVP, FINITE at repeated eigenvalues (
     f64 arep[n * n];
     f64 qr[n * n];
     f64 lamr[n];
-    for (int i = 0; i < n * n; ++i) { arep[i] = 0.0; }
-    for (int i = 0; i < n; ++i) { arep[i * n + i] = 2.0; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        arep[i] = 0.0;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        arep[i * n + i] = 2.0;
+    }
     jacobi_eig(arep, qr, lamr, n);
     f64 gar[n * n];
     mr::eigvals_sym_vjp(qr, lbar, gar, n, tmp);
-    for (int i = 0; i < n * n; ++i) { CHECK(std::isfinite(gar[i])); }
+    for (int i = 0; i < n * n; ++i)
+    {
+        CHECK(std::isfinite(gar[i]));
+    }
 }
 
 TEST_CASE("v16-d: svdvals VJP == transpose JVP, FINITE at repeated singular values (value-only)",
@@ -442,7 +557,10 @@ TEST_CASE("v16-d: svdvals VJP == transpose JVP, FINITE at repeated singular valu
     f64           sig[n];
     for (int i = 0; i < m; ++i)
     {
-        for (int j = 0; j < n; ++j) { a[i * n + j] = std::sin(0.5 + 1.1 * i + 0.6 * j); }
+        for (int j = 0; j < n; ++j)
+        {
+            a[i * n + j] = std::sin(0.5 + 1.1 * i + 0.6 * j);
+        }
     }
     jacobi_svd(a, u, v, sig, m, n);
     // validate: A ≈ U Σ Vᵀ
@@ -451,14 +569,23 @@ TEST_CASE("v16-d: svdvals VJP == transpose JVP, FINITE at repeated singular valu
         for (int j = 0; j < n; ++j)
         {
             f64 s = 0.0;
-            for (int t = 0; t < n; ++t) { s += u[i * n + t] * sig[t] * v[j * n + t]; }
+            for (int t = 0; t < n; ++t)
+            {
+                s += u[i * n + t] * sig[t] * v[j * n + t];
+            }
             CHECK_THAT(s, WithinAbs(a[i * n + j], 1e-9));
         }
     }
     f64 da[m * n];
     f64 sbar[n];
-    for (int i = 0; i < m * n; ++i) { da[i] = 0.1 * std::cos(0.3 + i); }
-    for (int i = 0; i < n; ++i) { sbar[i] = 0.3 * std::sin(0.7 + i); }
+    for (int i = 0; i < m * n; ++i)
+    {
+        da[i] = 0.1 * std::cos(0.3 + i);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        sbar[i] = 0.3 * std::sin(0.7 + i);
+    }
     f64 dsig[n];
     f64 tmp[m * n];
     mj::svdvals_jvp(u, v, da, dsig, m, n, tmp);
@@ -471,10 +598,19 @@ TEST_CASE("v16-d: svdvals VJP == transpose JVP, FINITE at repeated singular valu
     f64 ur[m * n];
     f64 vr[n * n];
     f64 sr[n];
-    for (int i = 0; i < m * n; ++i) { arep[i] = 0.0; }
-    for (int i = 0; i < n; ++i) { arep[i * n + i] = 1.0; }
+    for (int i = 0; i < m * n; ++i)
+    {
+        arep[i] = 0.0;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        arep[i * n + i] = 1.0;
+    }
     jacobi_svd(arep, ur, vr, sr, m, n);
     f64 gar[m * n];
     mr::svdvals_vjp(ur, vr, sbar, gar, m, n, tmp);
-    for (int i = 0; i < m * n; ++i) { CHECK(std::isfinite(gar[i])); }
+    for (int i = 0; i < m * n; ++i)
+    {
+        CHECK(std::isfinite(gar[i]));
+    }
 }

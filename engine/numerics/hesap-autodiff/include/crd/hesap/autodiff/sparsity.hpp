@@ -159,7 +159,10 @@ namespace detail
 template <int W>
 constexpr void jl_or(JacLocal<W>& r, const JacLocal<W>& a, const JacLocal<W>& b) noexcept
 {
-    for (int w = 0; w < W; ++w) { r.bits[w] = a.bits[w] | b.bits[w]; }
+    for (int w = 0; w < W; ++w)
+    {
+        r.bits[w] = a.bits[w] | b.bits[w];
+    }
 }
 template <int W>
 constexpr void jl_gated(JacLocal<W>& r, const JacLocal<W>& a, crd::f64 da, const JacLocal<W>& b, crd::f64 db) noexcept
@@ -172,7 +175,10 @@ constexpr void jl_gated(JacLocal<W>& r, const JacLocal<W>& a, crd::f64 da, const
 template <int W>
 constexpr void jl_copy(JacLocal<W>& r, const JacLocal<W>& a) noexcept
 {
-    for (int w = 0; w < W; ++w) { r.bits[w] = a.bits[w]; }
+    for (int w = 0; w < W; ++w)
+    {
+        r.bits[w] = a.bits[w];
+    }
 }
 } // namespace detail
 
@@ -229,7 +235,10 @@ template <int W>
 {
     JacLocal<W> r;
     r.v = s * a.v;
-    for (int w = 0; w < W; ++w) { r.bits[w] = (s != 0.0) ? a.bits[w] : crd::u64{0}; }
+    for (int w = 0; w < W; ++w)
+    {
+        r.bits[w] = (s != 0.0) ? a.bits[w] : crd::u64{0};
+    }
     return r;
 }
 template <int W>

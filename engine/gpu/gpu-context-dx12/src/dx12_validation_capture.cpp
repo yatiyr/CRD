@@ -143,8 +143,15 @@ void receive_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3
             ++report.warnings;
             level = Dx12ValidationSeverity::Warning;
         }
-        else { ++report.info; }
-        if (report.messages == capture->capacity) { ++report.dropped; continue; }
+        else
+        {
+            ++report.info;
+        }
+        if (report.messages == capture->capacity)
+        {
+            ++report.dropped;
+            continue;
+        }
         auto& message = capture->records[report.messages++];
         message.severity = level;
         message.id = static_cast<u32>(id);
@@ -153,7 +160,10 @@ void receive_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3
         message.identity = ObjectIdentity{}; // records storage is raw (try_allocate) -- set every field explicitly
         if (description != nullptr)
         {
-            while (length + 1U < sizeof(message.text) && description[length] != '\0') { ++length; }
+            while (length + 1U < sizeof(message.text) && description[length] != '\0')
+            {
+                ++length;
+            }
             std::memcpy(message.text, description, length);
             message.truncated = description[length] != '\0';
             // DIAG.7a(d1): parse the Cerid token from the FULL description (before the text[] truncation), so a token
@@ -161,7 +171,10 @@ void receive_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3
             (void)parse(std::string_view{description}, message.identity);
         }
         message.text[length] = '\0';
-        if (message.truncated) { ++report.truncated; }
+        if (message.truncated)
+        {
+            ++report.truncated;
+        }
     }
 }
 
@@ -174,7 +187,11 @@ bool critical_messages_visible(ID3D12InfoQueue1* queue, bool storage) noexcept
     SIZE_T size = sizeof(bytes);
     const HRESULT result = storage ? queue->GetStorageFilter(filter, &size) : queue->GetRetrievalFilter(filter, &size);
     const auto issue = storage ? Dx12ValidationIssue::StorageFilter : Dx12ValidationIssue::RetrievalFilter;
-    if (FAILED(result)) { instrumentation_failure(issue, result, size); return false; }
+    if (FAILED(result))
+    {
+        instrumentation_failure(issue, result, size);
+        return false;
+    }
     const auto& allow = filter->AllowList;
     const auto& deny = filter->DenyList;
     bool visible = allow.NumCategories == 0U && allow.NumSeverities == 0U && allow.NumIDs == 0U
@@ -182,9 +199,15 @@ bool critical_messages_visible(ID3D12InfoQueue1* queue, bool storage) noexcept
     for (UINT index = 0; index < deny.NumSeverities; ++index)
     {
         const auto severity = deny.pSeverityList[index];
-        if (severity != D3D12_MESSAGE_SEVERITY_INFO && severity != D3D12_MESSAGE_SEVERITY_MESSAGE) { visible = false; }
+        if (severity != D3D12_MESSAGE_SEVERITY_INFO && severity != D3D12_MESSAGE_SEVERITY_MESSAGE)
+        {
+            visible = false;
+        }
     }
-    if (!visible) { instrumentation_failure(issue, result, size); }
+    if (!visible)
+    {
+        instrumentation_failure(issue, result, size);
+    }
     return visible;
 }
 
@@ -201,14 +224,21 @@ void replay_startup(DeviceRegistration& device) noexcept
         instrumentation_failure(Dx12ValidationIssue::StartupOverflow);
     }
     const UINT64 count = queue->GetNumStoredMessagesAllowedByRetrievalFilter();
-    if (count > kMaxMessages) { instrumentation_failure(Dx12ValidationIssue::StartupOverflow, S_OK, count); }
+    if (count > kMaxMessages)
+    {
+        instrumentation_failure(Dx12ValidationIssue::StartupOverflow, S_OK, count);
+    }
     for (UINT64 index = 0; index < count && index < kMaxMessages; ++index)
     {
         alignas(D3D12_MESSAGE) unsigned char bytes[8192]{};
         SIZE_T size = sizeof(bytes);
         auto* message = reinterpret_cast<D3D12_MESSAGE*>(bytes);
         const HRESULT result = queue->GetMessage(index, message, &size);
-        if (FAILED(result)) { instrumentation_failure(Dx12ValidationIssue::StartupRead, result, size); continue; }
+        if (FAILED(result))
+        {
+            instrumentation_failure(Dx12ValidationIssue::StartupRead, result, size);
+            continue;
+        }
         receive_message(message->Category, message->Severity, message->ID, message->pDescription, &device);
     }
 }
@@ -221,9 +251,15 @@ Dx12ValidationCapture::Dx12ValidationCapture(memory::IAllocator* allocator, u32 
         m_readiness = Dx12ValidationReadiness::InvalidCapacity;
         return;
     }
-    if (allocator == nullptr) { return; }
+    if (allocator == nullptr)
+    {
+        return;
+    }
     void* storage = allocator->try_allocate(sizeof(detail::Dx12CaptureState), alignof(detail::Dx12CaptureState));
-    if (storage == nullptr) { return; }
+    if (storage == nullptr)
+    {
+        return;
+    }
     m_state = std::construct_at(static_cast<detail::Dx12CaptureState*>(storage));
     m_state->allocator = allocator;
     m_state->records = static_cast<Dx12ValidationMessage*>(allocator->try_allocate(
@@ -239,7 +275,10 @@ Dx12ValidationCapture::Dx12ValidationCapture(memory::IAllocator* allocator, u32 
     m_state->capacity = capacity;
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);
-    if (state.live_contexts != 0U) { m_readiness = Dx12ValidationReadiness::StartedAfterDevice; }
+    if (state.live_contexts != 0U)
+    {
+        m_readiness = Dx12ValidationReadiness::StartedAfterDevice;
+    }
     else if (!state.enabled)
     {
         ComPtr<ID3D12Debug> debug;
@@ -254,7 +293,10 @@ Dx12ValidationCapture::Dx12ValidationCapture(memory::IAllocator* allocator, u32 
             m_readiness = Dx12ValidationReadiness::Ready;
         }
     }
-    else { m_readiness = Dx12ValidationReadiness::Ready; }
+    else
+    {
+        m_readiness = Dx12ValidationReadiness::Ready;
+    }
     const std::lock_guard record_lock(state.records_mutex);
     m_state->first_context = state.next_context;
     m_state->report.readiness = m_readiness;
@@ -269,13 +311,19 @@ Dx12ValidationCapture::Dx12ValidationCapture(memory::IAllocator* allocator, u32 
 
 Dx12ValidationCapture::~Dx12ValidationCapture() noexcept
 {
-    if (m_state == nullptr) { return; }
+    if (m_state == nullptr)
+    {
+        return;
+    }
     auto& state = registry();
     {
         // The callback holds this same lock while visiting observers, so removal waits for every active visit.
         const std::lock_guard lock(state.records_mutex);
         auto** link = &state.captures;
-        while (*link != m_state) { link = &(*link)->next; }
+        while (*link != m_state)
+        {
+            link = &(*link)->next;
+        }
         *link = m_state->next;
     }
     auto* allocator = m_state->allocator;
@@ -288,7 +336,10 @@ Dx12ValidationCapture::~Dx12ValidationCapture() noexcept
 Dx12ValidationReport Dx12ValidationCapture::report() const noexcept
 {
     const std::lock_guard lock(registry().records_mutex);
-    if (m_state != nullptr) { return m_state->report; }
+    if (m_state != nullptr)
+    {
+        return m_state->report;
+    }
     Dx12ValidationReport report;
     report.readiness = m_readiness;
     return report;
@@ -297,14 +348,20 @@ Dx12ValidationReport Dx12ValidationCapture::report() const noexcept
 bool Dx12ValidationCapture::message(u32 index, Dx12ValidationMessage& output) const noexcept
 {
     const std::lock_guard lock(registry().records_mutex);
-    if (m_state == nullptr || index >= m_state->report.messages) { return false; }
+    if (m_state == nullptr || index >= m_state->report.messages)
+    {
+        return false;
+    }
     output = m_state->records[index];
     return true;
 }
 
 void detail::dx12_execution_failure(HRESULT result, const char* operation) noexcept
 {
-    if (SUCCEEDED(result)) { return; }
+    if (SUCCEEDED(result))
+    {
+        return;
+    }
     char text[256]{};
     (void)std::snprintf(text, sizeof(text), "%s failed: HRESULT 0x%08lX", operation,
                        static_cast<unsigned long>(result));
@@ -321,7 +378,10 @@ void detail::dx12_execution_failure(HRESULT result, const char* operation) noexc
 
 HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* adapter) noexcept
 {
-    if (m_created || output != nullptr) { return E_UNEXPECTED; }
+    if (m_created || output != nullptr)
+    {
+        return E_UNEXPECTED;
+    }
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);
     // DIAG.7a(f-3): apply the requested validation modes to the PROCESS-GLOBAL debug state before creating this device.
@@ -342,7 +402,11 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         debug_ok = (any_req || reset_gbv) && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
         if (debug_ok)
         {
-            if ((m_req_core || m_req_gbv) && !state.enabled) { debug->EnableDebugLayer(); state.enabled = true; }
+            if ((m_req_core || m_req_gbv) && !state.enabled)
+            {
+                debug->EnableDebugLayer();
+                state.enabled = true;
+            }
             Microsoft::WRL::ComPtr<ID3D12Debug1> debug1;
             if (SUCCEEDED(debug.As(&debug1)))
             {
@@ -367,11 +431,21 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         const std::lock_guard record_lock(state.records_mutex);
         for (auto* capture = state.captures; capture != nullptr; capture = capture->next)
         {
-            if (FAILED(result)) { ++capture->report.device_creation_failures; }
-            else { ++capture->report.contexts_started; ++capture->report.active_contexts; }
+            if (FAILED(result))
+            {
+                ++capture->report.device_creation_failures;
+            }
+            else
+            {
+                ++capture->report.contexts_started;
+                ++capture->report.active_contexts;
+            }
         }
     }
-    if (FAILED(result)) { return result; }
+    if (FAILED(result))
+    {
+        return result;
+    }
     m_created = true;
     // DIAG.7a(f-3): device created -> resolve per-mode activation. Core active is OBSERVABLE (ID3D12InfoQueue QI on this
     // device succeeds iff the debug layer is on for it -- the post-hoc oracle Vulkan lacks). GPU-assisted active == the
@@ -407,7 +481,10 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     }
     m_ordinal = state.next_context++;
     ++state.live_contexts;
-    if (!state.enabled) { return result; }
+    if (!state.enabled)
+    {
+        return result;
+    }
     for (u32 index = 0; index < kMaxDevices; ++index)
     {
         auto& device = state.devices[index];
@@ -421,7 +498,10 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     for (u32 index = 0; index < kMaxDevices; ++index)
     {
         auto& device = state.devices[index];
-        if (device.references != 0U || device.quarantined) { continue; }
+        if (device.references != 0U || device.quarantined)
+        {
+            continue;
+        }
         device.identity = output.Get();
         device.references = 1;
         device.id = state.next_device++;
@@ -461,7 +541,10 @@ bool detail::dx12_gbv_process_state() noexcept
 
 detail::Dx12DeviceScope::~Dx12DeviceScope() noexcept
 {
-    if (!m_created) { return; }
+    if (!m_created)
+    {
+        return;
+    }
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);
     if (m_slot >= 0)

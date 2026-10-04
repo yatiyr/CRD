@@ -104,7 +104,9 @@ TEST_CASE("REN-40-I6: flat and BVH selection produce the same set",
     crd::containers::sort(sel_flat.data(), sel_flat.data() + n_flat);
     crd::containers::sort(sel_bvh.data(), sel_bvh.data() + n_bvh);
     for (crd::u32 i = 0; i < n_flat; ++i)
+    {
         REQUIRE(sel_flat[i] == sel_bvh[i]);
+    }
 }
 
 TEST_CASE("REN-40-I6: selected clusters satisfy LOD criterion",
@@ -163,13 +165,22 @@ TEST_CASE("REN-40-I6: non-selected clusters violate at least one condition",
 
     crd::containers::Array<crd::u32> is_selected(&fx.alloc);
     is_selected.resize(fx.cc);
-    for (crd::u32 i = 0; i < fx.cc; ++i) is_selected[i] = 0U;
-    for (crd::u32 i = 0; i < n; ++i)     is_selected[sel[i]] = 1U;
+    for (crd::u32 i = 0; i < fx.cc; ++i)
+    {
+        is_selected[i] = 0U;
+    }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        is_selected[sel[i]] = 1U;
+    }
 
     const crd::f32 tp = params.error_threshold * params.proj_factor;
     for (crd::u32 ci = 0; ci < fx.cc; ++ci)
     {
-        if (is_selected[ci] == 1U) continue;
+        if (is_selected[ci] == 1U)
+        {
+            continue;
+        }
         const crd::u32* w = fx.cook.packed_clusters.data()
                           + static_cast<crd::usize>(ci) * mp::kClusterGpuWords;
         const crd::f32 err  = bits_to_f32(w[3]);
@@ -260,7 +271,9 @@ TEST_CASE("REN-40-I6: determinism",
 
     REQUIRE(n1 == n2);
     for (crd::u32 i = 0; i < n1; ++i)
+    {
         REQUIRE(s1[i] == s2[i]);
+    }
 }
 
 TEST_CASE("REN-40-I6: empty input returns zero",

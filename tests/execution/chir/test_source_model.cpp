@@ -191,7 +191,10 @@ TEST_CASE("chir 32b: stable ids are DETERMINISTIC and POSITION-INDEPENDENT (ADR-
     const auto id_of = [](const SourceModel& m, StringView name) -> crd::u64 {
         for (crd::u32 i = 0; i < m.node_count(); ++i)
         {
-            if (m.str(m.node(i).name) == name) { return m.node(i).id.value; }
+            if (m.str(m.node(i).name) == name)
+            {
+                return m.node(i).id.value;
+            }
         }
         return 0U;
     };
@@ -375,7 +378,10 @@ TEST_CASE("chir 32c: source spans SURVIVE the parse (contract item 6)", "[chir]"
     crd::u32 want_line = 1;
     for (crd::usize i = 0; i < qoff; ++i)
     {
-        if (text[i] == '\n') { ++want_line; }
+        if (text[i] == '\n')
+        {
+            ++want_line;
+        }
     }
 
     crd::u32 q = kInvalidNode;

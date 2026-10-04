@@ -78,7 +78,10 @@ TEST_CASE("B16-a-1: ocean spectrum is a well-formed directional wave spectrum (C
     for (int i = 0; i < nt; ++i)
     {
         REQUIRE(amp[uz(i)] >= 0.0);
-        if (!std::isfinite(amp[uz(i)])) { allfin = false; }
+        if (!std::isfinite(amp[uz(i)]))
+        {
+            allfin = false;
+        }
         tot += amp[uz(i)] * amp[uz(i)];
     }
     REQUIRE(allfin);
@@ -104,7 +107,11 @@ TEST_CASE("B16-a-1: ocean spectrum is a well-formed directional wave spectrum (C
     for (int o = 1; o < n / 2; ++o)
     {
         const double v = at(n / 2 + o, n / 2);
-        if (v > best) { best = v; best_o = o; }
+        if (v > best)
+        {
+            best = v;
+            best_o = o;
+        }
     }
     CHECK(best_o >= 1);
     CHECK(best_o <= n / 4); // peak sits in the low-to-mid band, not out at Nyquist
@@ -128,7 +135,10 @@ TEST_CASE("B16-a-1: ocean spectrum is a well-formed directional wave spectrum (C
     bool same = true;
     for (int i = 0; i < nt; ++i)
     {
-        if (amp2[uz(i)] != amp[uz(i)]) { same = false; }
+        if (amp2[uz(i)] != amp[uz(i)])
+        {
+            same = false;
+        }
     }
     CHECK(same);
 }
@@ -226,7 +236,10 @@ TEST_CASE("B16-a-2: ocean time-evolution packs 8 real fields into 4 Hermitian co
     bool same_e = true;
     for (int i = 0; i < nt * 4; ++i)
     {
-        if (sr2[uz(i)] != sr[uz(i)] || si2[uz(i)] != si[uz(i)]) { same_e = false; }
+        if (sr2[uz(i)] != sr[uz(i)] || si2[uz(i)] != si[uz(i)])
+        {
+            same_e = false;
+        }
     }
     CHECK(same_e);
 }
@@ -279,11 +292,19 @@ TEST_CASE("B16-a-2: full FFT-ocean pipeline (evolve -> batched IFFT -> assemble)
     const kir::Fft2dPlan plan = kir::build_fft2d_c2c_batched(graphs, n, n, 4, true, 8);
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> arena(&alloc);
     arena.resize(uz(total), 0.0);
     const auto buf = [&](int id) -> crd::f64* { return arena.data() + off[id]; };
-    for (int i = 0; i < rc * 4; ++i) { buf(plan.in_re)[i] = sr[uz(i)]; buf(plan.in_im)[i] = si[uz(i)]; }
+    for (int i = 0; i < rc * 4; ++i)
+    {
+        buf(plan.in_re)[i] = sr[uz(i)];
+        buf(plan.in_im)[i] = si[uz(i)];
+    }
     for (int k = 0; k < n; ++k)
     {
         const double a         = tau * k / n;
@@ -296,7 +317,10 @@ TEST_CASE("B16-a-2: full FFT-ocean pipeline (evolve -> batched IFFT -> assemble)
     {
         const kir::Fft2dPass& p = plan.passes[pi];
         kir::KernelBuffer      kb[8];
-        for (int k = 0; k < p.nbind; ++k) { kb[k] = kir::KernelBuffer{buf(p.bind[k]), plan.buffers[p.bind[k]].size, 0, static_cast<crd::u8>(k)}; }
+        for (int k = 0; k < p.nbind; ++k)
+        {
+            kb[k] = kir::KernelBuffer{buf(p.bind[k]), plan.buffers[p.bind[k]].size, 0, static_cast<crd::u8>(k)};
+        }
         kir::eval_cpu_kernel(*p.graph, p.entry, kb, p.nbind, p.entry.local_size[0], &alloc, p.num_workgroups);
     }
 
@@ -318,7 +342,10 @@ TEST_CASE("B16-a-2: full FFT-ocean pipeline (evolve -> batched IFFT -> assemble)
     crd::containers::Array<crd::f64> fi(&alloc);
     fr.resize(uz(rc * 4));
     fi.resize(uz(rc * 4));
-    for (int f = 0; f < 4; ++f) { idft2(n, sr.data() + f * rc, si.data() + f * rc, fr.data() + f * rc, fi.data() + f * rc); }
+    for (int f = 0; f < 4; ++f)
+    {
+        idft2(n, sr.data() + f * rc, si.data() + f * rc, fr.data() + f * rc, fi.data() + f * rc);
+    }
 
     double maxerr = 0.0;
     for (int q = 0; q < rc; ++q)
@@ -352,11 +379,17 @@ TEST_CASE("B16-a-2: full FFT-ocean pipeline (evolve -> batched IFFT -> assemble)
     for (int q = 0; q < rc; ++q)
     {
         const double fo = disp[uz(q * 4 + 3)];
-        if (fo < -1e-6 || fo > 1.0 + 1e-6) { foam_ok = false; }
+        if (fo < -1e-6 || fo > 1.0 + 1e-6)
+        {
+            foam_ok = false;
+        }
         const double nx = norm[uz(q * 4 + 0)];
         const double ny = norm[uz(q * 4 + 1)];
         const double nz = norm[uz(q * 4 + 2)];
-        if (std::fabs(std::sqrt(nx * nx + ny * ny + nz * nz) - 1.0) > 2e-3) { norm_unit = false; }
+        if (std::fabs(std::sqrt(nx * nx + ny * ny + nz * nz) - 1.0) > 2e-3)
+        {
+            norm_unit = false;
+        }
     }
     CHECK(foam_ok);
     CHECK(norm_unit);
@@ -436,7 +469,10 @@ TEST_CASE("B16-a-2 FUSION: fused evolve+row-IFFT == un-fused (evolve then radix-
     int bad = 0;
     for (int i = 0; i < rc * 4; ++i)
     {
-        if (xfr[uz(i)] != xur[uz(i)] || xfi[uz(i)] != xui[uz(i)]) { ++bad; }
+        if (xfr[uz(i)] != xur[uz(i)] || xfi[uz(i)] != xui[uz(i)])
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
 }
@@ -491,11 +527,19 @@ TEST_CASE("B16-a-3: multi-cascade batched FFT-ocean -- each cascade matches a di
     const kir::Fft2dPlan plan = kir::build_fft2d_c2c_batched(graphs, n, n, nf, true, 8);
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> arena(&alloc);
     arena.resize(uz(total), 0.0);
     const auto buf = [&](int id) -> crd::f64* { return arena.data() + off[id]; };
-    for (int i = 0; i < nf * rc; ++i) { buf(plan.in_re)[i] = sr[uz(i)]; buf(plan.in_im)[i] = si[uz(i)]; }
+    for (int i = 0; i < nf * rc; ++i)
+    {
+        buf(plan.in_re)[i] = sr[uz(i)];
+        buf(plan.in_im)[i] = si[uz(i)];
+    }
     for (int k = 0; k < n; ++k)
     {
         const double a         = tau * k / n;
@@ -508,7 +552,10 @@ TEST_CASE("B16-a-3: multi-cascade batched FFT-ocean -- each cascade matches a di
     {
         const kir::Fft2dPass& p = plan.passes[pi];
         kir::KernelBuffer      kb[8];
-        for (int k = 0; k < p.nbind; ++k) { kb[k] = kir::KernelBuffer{buf(p.bind[k]), plan.buffers[p.bind[k]].size, 0, static_cast<crd::u8>(k)}; }
+        for (int k = 0; k < p.nbind; ++k)
+        {
+            kb[k] = kir::KernelBuffer{buf(p.bind[k]), plan.buffers[p.bind[k]].size, 0, static_cast<crd::u8>(k)};
+        }
         kir::eval_cpu_kernel(*p.graph, p.entry, kb, p.nbind, p.entry.local_size[0], &alloc, p.num_workgroups);
     }
 
@@ -565,11 +612,17 @@ TEST_CASE("B16-a-3: multi-cascade batched FFT-ocean -- each cascade matches a di
                 maxerr = std::max(maxerr, std::fabs(norm[uz(dq)] - rn[k]) / sn);
             }
             const double fov = disp[uz(4 * c * rc + q * 4 + 3)];
-            if (fov < -1e-6 || fov > 1.0 + 1e-6) { foam_ok = false; }
+            if (fov < -1e-6 || fov > 1.0 + 1e-6)
+            {
+                foam_ok = false;
+            }
             const double nx = norm[uz(4 * c * rc + q * 4 + 0)];
             const double ny = norm[uz(4 * c * rc + q * 4 + 1)];
             const double nz = norm[uz(4 * c * rc + q * 4 + 2)];
-            if (std::fabs(std::sqrt(nx * nx + ny * ny + nz * nz) - 1.0) > 2e-3) { norm_ok = false; }
+            if (std::fabs(std::sqrt(nx * nx + ny * ny + nz * nz) - 1.0) > 2e-3)
+            {
+                norm_ok = false;
+            }
         }
     }
     CHECK(maxerr < 5e-3);
@@ -578,7 +631,10 @@ TEST_CASE("B16-a-3: multi-cascade batched FFT-ocean -- each cascade matches a di
 
     // cascades have DIFFERENT patch length ⇒ distinct displacement fields.
     double diff = 0.0;
-    for (int q = 0; q < rc; ++q) { diff += std::fabs(disp[uz(0 * rc + q * 4 + 1)] - disp[uz(4 * 2 * rc + q * 4 + 1)]); }
+    for (int q = 0; q < rc; ++q)
+    {
+        diff += std::fabs(disp[uz(0 * rc + q * 4 + 1)] - disp[uz(4 * 2 * rc + q * 4 + 1)]);
+    }
     CHECK(diff > 1e-6);
 }
 
@@ -600,7 +656,10 @@ TEST_CASE("B16-a-3: temporal foam accumulation persists, decays, and re-injects"
     zero.resize(uz(rc), 0.0);
     prev.resize(uz(rc), 0.0);
     out.resize(uz(rc), 0.0);
-    for (int i = 0; i < rc; ++i) { inject[uz(i)] = (i % 3 == 0) ? 0.8 : 0.0; }
+    for (int i = 0; i < rc; ++i)
+    {
+        inject[uz(i)] = (i % 3 == 0) ? 0.8 : 0.0;
+    }
 
     const auto step = [&](crd::containers::Array<crd::f64>& p, crd::containers::Array<crd::f64>& inj, crd::containers::Array<crd::f64>& o) {
         kir::KernelBuffer b[3] = {{p.data(), rc, 0, 0}, {inj.data(), rc, 0, 1}, {o.data(), rc, 0, 2}};
@@ -610,22 +669,49 @@ TEST_CASE("B16-a-3: temporal foam accumulation persists, decays, and re-injects"
     // frame 1: prev=0, inject ⇒ foam = inject.
     step(prev, inject, out);
     bool f1 = true;
-    for (int i = 0; i < rc; ++i) { if (std::fabs(out[uz(i)] - inject[uz(i)]) > 1e-5) { f1 = false; } }
+    for (int i = 0; i < rc; ++i)
+    {
+        if (std::fabs(out[uz(i)] - inject[uz(i)]) > 1e-5)
+        {
+            f1 = false;
+        }
+    }
     CHECK(f1);
 
     // frames 2,3: no inject ⇒ foam decays by 0.9 each frame ⇒ inject·0.81.
-    for (int i = 0; i < rc; ++i) { prev[uz(i)] = out[uz(i)]; }
+    for (int i = 0; i < rc; ++i)
+    {
+        prev[uz(i)] = out[uz(i)];
+    }
     step(prev, zero, out);
-    for (int i = 0; i < rc; ++i) { prev[uz(i)] = out[uz(i)]; }
+    for (int i = 0; i < rc; ++i)
+    {
+        prev[uz(i)] = out[uz(i)];
+    }
     step(prev, zero, out);
     bool f3 = true;
-    for (int i = 0; i < rc; ++i) { if (std::fabs(out[uz(i)] - inject[uz(i)] * 0.81) > 1e-4) { f3 = false; } }
+    for (int i = 0; i < rc; ++i)
+    {
+        if (std::fabs(out[uz(i)] - inject[uz(i)] * 0.81) > 1e-4)
+        {
+            f3 = false;
+        }
+    }
     CHECK(f3);
 
     // frame 4: re-inject ⇒ max(decayed, inject) = inject (inject > inject·0.9·0.81), whitecaps refresh.
-    for (int i = 0; i < rc; ++i) { prev[uz(i)] = out[uz(i)]; }
+    for (int i = 0; i < rc; ++i)
+    {
+        prev[uz(i)] = out[uz(i)];
+    }
     step(prev, inject, out);
     bool f4 = true;
-    for (int i = 0; i < rc; ++i) { if (std::fabs(out[uz(i)] - inject[uz(i)]) > 1e-5) { f4 = false; } }
+    for (int i = 0; i < rc; ++i)
+    {
+        if (std::fabs(out[uz(i)] - inject[uz(i)]) > 1e-5)
+        {
+            f4 = false;
+        }
+    }
     CHECK(f4);
 }

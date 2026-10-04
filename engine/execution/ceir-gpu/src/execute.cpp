@@ -22,19 +22,34 @@ namespace
     {
         return ExecuteError::UnsupportedCommand; // dynamic-grid / Indirect resolution is named-forward (proof kernels are Direct const-grid)
     }
-    if (cmd.groups_x == 0U || cmd.groups_y == 0U || cmd.groups_z == 0U) { return ExecuteError::ZeroDispatch; }
+    if (cmd.groups_x == 0U || cmd.groups_y == 0U || cmd.groups_z == 0U)
+    {
+        return ExecuteError::ZeroDispatch;
+    }
 
     crd::gpu::ComputePipeline* const pipe = (resolver != nullptr) ? resolver(cmd.op, user) : nullptr;
-    if (pipe == nullptr) { return ExecuteError::UnresolvedKernel; }
-    if (out_pipe != nullptr) { *out_pipe = pipe; }
+    if (pipe == nullptr)
+    {
+        return ExecuteError::UnresolvedKernel;
+    }
+    if (out_pipe != nullptr)
+    {
+        *out_pipe = pipe;
+    }
 
     const Operation* const op    = cmd.op;
     const crd::u32         nops  = (op != nullptr) ? op->num_operands() : 0U;
     const crd::u32         fixed = 3U; // Direct: gx, gy, gz precede the bindings (mirrors lower.cpp's gather)
     const crd::u32         nbind = nops >= fixed ? nops - fixed : 0U;
-    if (nbind > crd::gpu::kMaxBindings) { return ExecuteError::BindingArity; }
+    if (nbind > crd::gpu::kMaxBindings)
+    {
+        return ExecuteError::BindingArity;
+    }
 
-    if (out_bufs != nullptr) { out_bufs->clear(); }
+    if (out_bufs != nullptr)
+    {
+        out_bufs->clear();
+    }
     for (crd::u32 i = 0; i < nbind; ++i)
     {
         const Value* const           root = ctx.resource_root(op->operand(fixed + i));
@@ -47,8 +62,14 @@ namespace
                 break;
             }
         }
-        if (buf == nullptr) { return ExecuteError::UnmappedBinding; }
-        if (out_bufs != nullptr) { out_bufs->push_back(buf); }
+        if (buf == nullptr)
+        {
+            return ExecuteError::UnmappedBinding;
+        }
+        if (out_bufs != nullptr)
+        {
+            out_bufs->push_back(buf);
+        }
     }
     return ExecuteError::None;
 }
@@ -118,8 +139,14 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
         const LoweredCommand& cmd = commands[i];
-        if (cmd.kind == LoweredKind::Barrier) { continue; } // inert at 13z-1 (the resource-on-barrier map is 13z-3)
-        if (cmd.kind == LoweredKind::Transfer) { return ExecuteError::UnsupportedCommand; }
+        if (cmd.kind == LoweredKind::Barrier) // inert at 13z-1 (the resource-on-barrier map is 13z-3)
+        {
+            continue;
+        }
+        if (cmd.kind == LoweredKind::Transfer)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
         // CEIR-14b: render kinds (BeginRender/Draw/EndRender) target the 14z RASTER executor, not this IComputeContext
         // surface — reject them TYPED (the Transfer named-forward mirror), never fall through to check_dispatch.
         if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
@@ -139,7 +166,10 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
             return ExecuteError::UnsupportedCommand;
         }
         const ExecuteError err = check_dispatch(ctx, cmd, resolver, user, bindings, nullptr, nullptr);
-        if (err != ExecuteError::None) { return err; }
+        if (err != ExecuteError::None)
+        {
+            return err;
+        }
     }
     return ExecuteError::None;
 }
@@ -157,7 +187,10 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
             emit_barrier(rec, cmd, bindings);
             continue;
         }
-        if (cmd.kind == LoweredKind::Transfer) { return ExecuteError::UnsupportedCommand; }
+        if (cmd.kind == LoweredKind::Transfer)
+        {
+            return ExecuteError::UnsupportedCommand;
+        }
         // CEIR-14b: render kinds target the 14z RASTER executor — reject them TYPED (the Transfer mirror).
         if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
         {
@@ -176,7 +209,10 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         }
         crd::gpu::ComputePipeline* pipe = nullptr;
         const ExecuteError         err  = check_dispatch(ctx, cmd, resolver, user, bindings, &pipe, &bufs);
-        if (err != ExecuteError::None) { return err; }
+        if (err != ExecuteError::None)
+        {
+            return err;
+        }
         rec.dispatch(*pipe, containers::ConstSpan<crd::gpu::ComputeBuffer*>(bufs.data(), bufs.size()), nullptr, 0U,
                      cmd.groups_x, cmd.groups_y, cmd.groups_z);
     }
@@ -193,27 +229,52 @@ ExecuteError validate_rt_lowered(const Context& ctx, containers::ConstSpan<Lower
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
         const LoweredCommand& cmd = commands[i];
-        if (cmd.kind == LoweredKind::Barrier) { continue; } // inert (submit+wait per dispatch)
+        if (cmd.kind == LoweredKind::Barrier) // inert (submit+wait per dispatch)
+        {
+            continue;
+        }
         if (cmd.kind == LoweredKind::AccelBuild)
         {
-            if (cmd.op != nullptr && cmd.op->num_results() > 0U) { built.push_back(cmd.op->result(0U)); }
+            if (cmd.op != nullptr && cmd.op->num_results() > 0U)
+            {
+                built.push_back(cmd.op->result(0U));
+            }
             continue;
         }
         if (cmd.kind == LoweredKind::RayQuery)
         {
-            if (cmd.dynamic_grid) { return ExecuteError::UnsupportedCommand; } // const-grid witness (a host-readback grid is named-forward)
-            if (cmd.groups_x == 0U || cmd.groups_y == 0U || cmd.groups_z == 0U) { return ExecuteError::ZeroDispatch; }
+            if (cmd.dynamic_grid) // const-grid witness (a host-readback grid is named-forward)
+            {
+                return ExecuteError::UnsupportedCommand;
+            }
+            if (cmd.groups_x == 0U || cmd.groups_y == 0U || cmd.groups_z == 0U)
+            {
+                return ExecuteError::ZeroDispatch;
+            }
             const containers::ConstSpan<crd::u8> kb =
                 (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(cmd.op, hooks.user) : containers::ConstSpan<crd::u8>{};
-            if (kb.size() == 0U) { return ExecuteError::UnresolvedKernel; }
+            if (kb.size() == 0U)
+            {
+                return ExecuteError::UnresolvedKernel;
+            }
             const Operation* const op = cmd.op;
-            if (op == nullptr || op->num_operands() < 4U) { return ExecuteError::UnresolvedTlas; } // grid(0..2) + %tlas(3) minimum
+            if (op == nullptr || op->num_operands() < 4U) // grid(0..2) + %tlas(3) minimum
+            {
+                return ExecuteError::UnresolvedTlas;
+            }
             bool found = false; // %tlas = operand 3, matched by SSA identity to an earlier AccelBuild %result (NOT resource_root:
             for (crd::u32 j = 0; j < static_cast<crd::u32>(built.size()); ++j) // it is an rt.tlas Extern handle, not a buffer)
             {
-                if (built[j] == op->operand(3U)) { found = true; break; }
+                if (built[j] == op->operand(3U))
+                {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { return ExecuteError::UnresolvedTlas; }
+            if (!found)
+            {
+                return ExecuteError::UnresolvedTlas;
+            }
             continue;
         }
         return ExecuteError::UnsupportedCommand; // Dispatch/Transfer/render kinds are not the RT surface
@@ -225,7 +286,10 @@ ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<Lowere
                                 containers::ConstSpan<RtHostBinding> bindings)
 {
     const ExecuteError verr = validate_rt_lowered(ctx, commands, hooks, bindings);
-    if (verr != ExecuteError::None) { return verr; }
+    if (verr != ExecuteError::None)
+    {
+        return verr;
+    }
 
     containers::Array<const Value*>  keys(ctx.allocator());    // AccelBuild %result → handle (parallel arrays, program order)
     containers::Array<RtSceneHandle> handles(ctx.allocator());
@@ -233,11 +297,17 @@ ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<Lowere
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
         const LoweredCommand& cmd = commands[i];
-        if (cmd.kind == LoweredKind::Barrier) { continue; } // inert
+        if (cmd.kind == LoweredKind::Barrier) // inert
+        {
+            continue;
+        }
         if (cmd.kind == LoweredKind::AccelBuild)
         {
             const RtSceneHandle h = (hooks.build_scene != nullptr) ? hooks.build_scene(cmd.op, hooks.user) : 0U;
-            if (h == 0U) { return ExecuteError::AccelBuildFailed; }
+            if (h == 0U)
+            {
+                return ExecuteError::AccelBuildFailed;
+            }
             if (cmd.op != nullptr && cmd.op->num_results() > 0U)
             {
                 keys.push_back(cmd.op->result(0U));
@@ -250,12 +320,22 @@ ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<Lowere
         RtSceneHandle          tlas = 0U;
         for (crd::u32 j = 0; j < static_cast<crd::u32>(keys.size()); ++j)
         {
-            if (keys[j] == op->operand(3U)) { tlas = handles[j]; break; }
+            if (keys[j] == op->operand(3U))
+            {
+                tlas = handles[j];
+                break;
+            }
         }
-        if (tlas == 0U) { return ExecuteError::UnresolvedTlas; }
+        if (tlas == 0U)
+        {
+            return ExecuteError::UnresolvedTlas;
+        }
         const containers::ConstSpan<crd::u8> kb =
             (hooks.kernel_bytes != nullptr) ? hooks.kernel_bytes(op, hooks.user) : containers::ConstSpan<crd::u8>{};
-        if (kb.size() == 0U) { return ExecuteError::UnresolvedKernel; }
+        if (kb.size() == 0U)
+        {
+            return ExecuteError::UnresolvedKernel;
+        }
         // SSBO bindings: operands 4+ (resource_root-normalized) → the caller's host spans, in operand order (slots 1,2,…).
         ordered.clear();
         const crd::u32 nops = op->num_operands();
@@ -272,13 +352,19 @@ ExecuteError execute_rt_lowered(const Context& ctx, containers::ConstSpan<Lowere
                     break;
                 }
             }
-            if (!found) { return ExecuteError::UnmappedBinding; }
+            if (!found)
+            {
+                return ExecuteError::UnmappedBinding;
+            }
         }
         const bool ok = (hooks.trace_dispatch != nullptr)
                         && hooks.trace_dispatch(tlas, kb,
                                                 containers::ConstSpan<RtHostBinding>(ordered.data(), ordered.size()),
                                                 cmd.groups_x, cmd.groups_y, cmd.groups_z, hooks.user);
-        if (!ok) { return ExecuteError::TraceDispatchFailed; }
+        if (!ok)
+        {
+            return ExecuteError::TraceDispatchFailed;
+        }
     }
     return ExecuteError::None;
 }

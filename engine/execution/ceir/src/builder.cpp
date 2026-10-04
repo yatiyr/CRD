@@ -31,7 +31,10 @@ Operation* ModuleBuilder::func(containers::StringView name, Visibility vis, u32 
     // registered-but-unplaced func in the table.
     CRD_ASSERT_MSG(m_insert != nullptr, "ModuleBuilder::func needs an insertion block (call add_block first)");
     Operation* const fn = func::create_func(m_ctx, *m_module, name, vis, num_params, param_type);
-    if (fn != nullptr) { m_insert->append(fn); }
+    if (fn != nullptr)
+    {
+        m_insert->append(fn);
+    }
     return fn;
 }
 
@@ -56,19 +59,28 @@ namespace
 {
 [[nodiscard]] bool verify_region(const Context& ctx, Region* r, const Operation** failing)
 {
-    if (r == nullptr) { return true; }
+    if (r == nullptr)
+    {
+        return true;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             if (!ctx.verify(*op))
             {
-                if (failing != nullptr) { *failing = op; }
+                if (failing != nullptr)
+                {
+                    *failing = op;
+                }
                 return false;
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (!verify_region(ctx, op->region(i), failing)) { return false; }
+                if (!verify_region(ctx, op->region(i), failing))
+                {
+                    return false;
+                }
             }
         }
     }
@@ -94,7 +106,10 @@ OpBuilder& OpBuilder::operand(Value* v)
 }
 OpBuilder& OpBuilder::operands(containers::ConstSpan<Value*> vs)
 {
-    for (usize i = 0; i < vs.size(); ++i) { m_operands.push_back(vs[i]); }
+    for (usize i = 0; i < vs.size(); ++i)
+    {
+        m_operands.push_back(vs[i]);
+    }
     return *this;
 }
 OpBuilder& OpBuilder::result(TypeId t)
@@ -134,7 +149,10 @@ Operation* OpBuilder::build()
     Operation* const op = ctx.create_operation(m_kind, containers::ConstSpan<Value*>(m_operands.data(), m_operands.size()),
                                                m_num_results, m_result_type, m_num_regions);
     insert->append(op);
-    for (usize i = 0; i < m_attrs.size(); ++i) { ctx.set_attr(op, m_attrs[i].name, m_attrs[i].value); }
+    for (usize i = 0; i < m_attrs.size(); ++i)
+    {
+        ctx.set_attr(op, m_attrs[i].name, m_attrs[i].value);
+    }
     op->set_loc(m_loc);
     if (!detail::register_symbol(ctx, *m_mb.module(), op))
     {

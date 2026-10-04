@@ -55,7 +55,12 @@ void row(const char* name, CF cerid_fn, BF boost_fn)
                           {
                               double s = 0;
                               for (int i = 0; i < nn; ++i)
-                                  for (int j = 0; j < nx; ++j) s += cerid_fn(kNu[i], kX[j]);
+                              {
+                                  for (int j = 0; j < nx; ++j)
+                                  {
+                                      s += cerid_fn(kNu[i], kX[j]);
+                                  }
+                              }
                               return s;
                           }) /
                       (kReps * nn * nx);
@@ -64,7 +69,12 @@ void row(const char* name, CF cerid_fn, BF boost_fn)
                           {
                               double s = 0;
                               for (int i = 0; i < nn; ++i)
-                                  for (int j = 0; j < nx; ++j) s += boost_fn(kNu[i], kX[j]);
+                              {
+                                  for (int j = 0; j < nx; ++j)
+                                  {
+                                      s += boost_fn(kNu[i], kX[j]);
+                                  }
+                              }
                               return s;
                           }) /
                       (kReps * nn * nx);
@@ -81,7 +91,10 @@ void arow(const char* name, CF cfn, BF bfn)
                           [&]
                           {
                               double s = 0;
-                              for (int i = 0; i < na; ++i) s += cfn(kAx[i]);
+                              for (int i = 0; i < na; ++i)
+                              {
+                                  s += cfn(kAx[i]);
+                              }
                               return s;
                           }) /
                       (kReps * na);
@@ -89,7 +102,10 @@ void arow(const char* name, CF cfn, BF bfn)
                           [&]
                           {
                               double s = 0;
-                              for (int i = 0; i < na; ++i) s += bfn(kAx[i]);
+                              for (int i = 0; i < na; ++i)
+                              {
+                                  s += bfn(kAx[i]);
+                              }
                               return s;
                           }) /
                       (kReps * na);

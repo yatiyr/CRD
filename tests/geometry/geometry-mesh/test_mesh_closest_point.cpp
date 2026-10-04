@@ -81,7 +81,10 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
         1, 3, 5,  3, 7, 5   // +X
     };
     m.indices.reserve(36);
-    for (crd::u32 j = 0U; j < 36U; ++j) { m.indices.push_back(idx[j]); }
+    for (crd::u32 j = 0U; j < 36U; ++j)
+    {
+        m.indices.push_back(idx[j]);
+    }
     return m;
 }
 } // namespace
@@ -152,17 +155,21 @@ TEST_CASE("v4a BVH result matches brute-force across a corpus of query points",
     int matches = 0;
     int probes = 0;
     for (int xi = -2; xi <= 2; ++xi)
-    for (int yi = -2; yi <= 2; ++yi)
-    for (int zi = -2; zi <= 2; ++zi)
     {
-        const Vec3f q{static_cast<crd::f32>(xi), static_cast<crd::f32>(yi), static_cast<crd::f32>(zi)};
-        const auto bvh_r = mesh_closest_point(view, bvh, q);
-        const auto brute_r = brute_closest(view, q);
-        ++probes;
-        if (bvh_r.has_value())
+        for (int yi = -2; yi <= 2; ++yi)
         {
-            CHECK(bvh_r->distance_squared == Catch::Approx(brute_r.dsq).margin(1.0e-5F));
-            ++matches;
+            for (int zi = -2; zi <= 2; ++zi)
+            {
+                const Vec3f q{static_cast<crd::f32>(xi), static_cast<crd::f32>(yi), static_cast<crd::f32>(zi)};
+                const auto bvh_r = mesh_closest_point(view, bvh, q);
+                const auto brute_r = brute_closest(view, q);
+                ++probes;
+                if (bvh_r.has_value())
+                {
+                    CHECK(bvh_r->distance_squared == Catch::Approx(brute_r.dsq).margin(1.0e-5F));
+                    ++matches;
+                }
+            }
         }
     }
     REQUIRE(matches == probes);

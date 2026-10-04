@@ -15,14 +15,24 @@ namespace kir = crd::kir;
 namespace
 {
 constexpr int kN = 1024;
-void fill(float* v, int n, float base) { for (int i = 0; i < n; ++i) { v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7); } }
+void fill(float* v, int n, float base)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7);
+    }
+}
 } // namespace
 
 TEST_CASE("v17-d: HIP elementwise + matmul + reduce bit-match the CPU oracle", "[kir][hip][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendHip         hp(&alloc);
-    if (!hp.valid()) { WARN("no HIP device available; skipping (validated at Part C)"); return; }
+    if (!hp.valid())
+    {
+        WARN("no HIP device available; skipping (validated at Part C)");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     SECTION("elementwise arith")
@@ -41,7 +51,10 @@ TEST_CASE("v17-d: HIP elementwise + matmul + reduce bit-match the CPU oracle", "
         float        cpu_out[kN];
         REQUIRE(hp.run(g, out, inputs, 2, gpu_out));
         REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-        for (int i = 0; i < kN; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < kN; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
     SECTION("matmul 32x48 @ 48x24")
     {
@@ -61,6 +74,9 @@ TEST_CASE("v17-d: HIP elementwise + matmul + reduce bit-match the CPU oracle", "
         float        cpu_out[mm * nn];
         REQUIRE(hp.run(g, c, inputs, 2, gpu_out));
         REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
-        for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < mm * nn; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
 }

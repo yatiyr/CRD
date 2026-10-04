@@ -37,13 +37,21 @@ enum class HangVerdict : crd::u8
                                                  crd::u32 pause_factor = 3U) noexcept
 {
     if (requested_ms != 0U && actual_ms > requested_ms * pause_factor)
+    {
         return HangVerdict::Paused;
+    }
     if (after.outstanding == 0U)
+    {
         return HangVerdict::None; // no jobs left to run/finish -- a held-but-satisfied counter is not a hang
+    }
     if (after.completions != before.completions)
+    {
         return HangVerdict::Progressing; // real work finished this window
+    }
     if (after.executing != 0U)
+    {
         return HangVerdict::Progressing; // a long job is still running -- progressing, not deadlocked
+    }
     return HangVerdict::SuspectedHang;   // outstanding work, nothing finished, nothing executing
 }
 
@@ -81,7 +89,9 @@ enum class HangVerdict : crd::u8
         {
             const crd::u64 owner = parked[j].own_task_id;
             if (owner != 0U && owner == target)
+            {
                 succ |= (crd::u64{1} << j);
+            }
         }
         reach[i] = succ;
     }
@@ -89,16 +99,28 @@ enum class HangVerdict : crd::u8
     // Warshall transitive closure over >=1-edge reachability: if bit i ends up set in reach[i], a path of length
     // >= 1 returns to i -- a cycle. O(n^3) with n <= 64, run only on a confirmed (rare) hang.
     for (crd::usize k = 0U; k < n; ++k)
+    {
         for (crd::usize i = 0U; i < n; ++i)
+        {
             if (reach[i] & (crd::u64{1} << k))
+            {
                 reach[i] |= reach[k];
+            }
+        }
+    }
 
     for (crd::usize i = 0U; i < n; ++i)
+    {
         if (reach[i] & (crd::u64{1} << i))
+        {
             return HangKind::WaitCycle;
+        }
+    }
 
     if (raw == 0U)
+    {
         return HangKind::ExecutorStarved; // outstanding work (by the caller's contract) but nothing parked
+    }
     return HangKind::ParkedStalled;
 }
 
@@ -123,7 +145,9 @@ public:
             return false;
         }
         if (m_fired)
+        {
             return false; // already reported this episode
+        }
         if (++m_stale >= m_k)
         {
             m_fired = true;
@@ -152,14 +176,22 @@ private:
 {
     bool system_progressed = completions_after != completions_before;
     for (crd::u32 i = 0U; i < 3U; ++i)
+    {
         system_progressed = system_progressed || (after.pops[i] != before.pops[i]);
+    }
     if (!system_progressed)
+    {
         return 0U; // nothing anywhere advanced -> hang territory, not starvation
+    }
 
     crd::u8 mask = 0U;
     for (crd::u32 i = 0U; i < 3U; ++i)
+    {
         if (after.backlog[i] > 0U && after.pops[i] == before.pops[i])
+        {
             mask |= static_cast<crd::u8>(1U << i);
+        }
+    }
     return mask;
 }
 
@@ -186,7 +218,9 @@ public:
                 continue;
             }
             if (m_fired[i])
+            {
                 continue; // already reported this episode for this lane
+            }
             if (++m_stale[i] >= m_k)
             {
                 m_fired[i] = true;
@@ -224,7 +258,9 @@ public:
                                   std::span<crd::jobs::ProgressNode>       fired_out) noexcept
     {
         for (crd::u32 i = 0U; i < kCapacity; ++i)
+        {
             m_slots[i].seen = false;
+        }
 
         crd::usize fired_count = 0U;
         for (const crd::jobs::ProgressNode& node : seen)
@@ -234,7 +270,9 @@ public:
             {
                 slot = allocate();
                 if (slot == nullptr)
+                {
                     continue; // table full: this task is untracked (monitored_total reports the truth)
+                }
                 slot->used        = true;
                 slot->tier        = node.tier;
                 slot->fiber_index = node.fiber_index;
@@ -253,23 +291,33 @@ public:
             {
                 slot->fired = true;
                 if (fired_count < fired_out.size())
+                {
                     fired_out[fired_count] = node; // the current node carries parent_task_id / epoch for the report
+                }
                 ++fired_count;
             }
             slot->seen = true;
         }
 
         for (crd::u32 i = 0U; i < kCapacity; ++i)
+        {
             if (m_slots[i].used && !m_slots[i].seen)
+            {
                 m_slots[i] = Slot{}; // evict tasks that completed / parked / had their slot reused
+            }
+        }
         return fired_count;
     }
 
     [[nodiscard]] crd::u32 stale_windows(crd::u64 task_id) const noexcept
     {
         for (crd::u32 i = 0U; i < kCapacity; ++i)
+        {
             if (m_slots[i].used && m_slots[i].task_id == task_id)
+            {
                 return m_slots[i].stale;
+            }
+        }
         return 0U;
     }
 
@@ -289,17 +337,25 @@ private:
     [[nodiscard]] Slot* find(const crd::jobs::ProgressNode& n) noexcept
     {
         for (crd::u32 i = 0U; i < kCapacity; ++i)
+        {
             if (m_slots[i].used && m_slots[i].task_id == n.task_id && m_slots[i].tier == n.tier &&
                 m_slots[i].fiber_index == n.fiber_index)
+            {
                 return &m_slots[i];
+            }
+        }
         return nullptr;
     }
 
     [[nodiscard]] Slot* allocate() noexcept
     {
         for (crd::u32 i = 0U; i < kCapacity; ++i)
+        {
             if (!m_slots[i].used)
+            {
                 return &m_slots[i];
+            }
+        }
         return nullptr;
     }
 

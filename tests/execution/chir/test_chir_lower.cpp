@@ -53,15 +53,25 @@ StringView sv(const String& s) { return StringView(s.data(), s.size()); }
 bool contains(StringView hay, const char* needle)
 {
     const StringView n(needle);
-    if (n.size() > hay.size()) { return false; }
+    if (n.size() > hay.size())
+    {
+        return false;
+    }
     for (crd::usize i = 0; i + n.size() <= hay.size(); ++i)
     {
         bool eq = true;
         for (crd::usize j = 0; j < n.size(); ++j)
         {
-            if (hay[i + j] != n[j]) { eq = false; break; }
+            if (hay[i + j] != n[j])
+            {
+                eq = false;
+                break;
+            }
         }
-        if (eq) { return true; }
+        if (eq)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -138,7 +148,10 @@ crd::ceir::Operation* first_func(crd::ceir::Context& ctx, crd::ceir::Module& mod
     const crd::ceir::OpId fk = ctx.intern_op("func", "func");
     for (crd::ceir::Operation* op = mod.body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (op->kind() == fk) { return op; }
+        if (op->kind() == fk)
+        {
+            return op;
+        }
     }
     return nullptr;
 }
@@ -150,7 +163,10 @@ crd::u64 decl_id(const crd::chir::SourceModel& m, const char* name)
     for (crd::u32 i = 0; i < m.node_count(); ++i)
     {
         const crd::chir::ChirNode& n = m.node(i);
-        if (n.kind == crd::chir::NodeKind::StateDecl && m.str(n.name) == want) { return n.id.value; }
+        if (n.kind == crd::chir::NodeKind::StateDecl && m.str(n.name) == want)
+        {
+            return n.id.value;
+        }
     }
     return 0U;
 }
@@ -165,7 +181,10 @@ bool contains_id(const crd::containers::Array<crd::ceir::StateCell>& cells, crd:
 {
     for (crd::u32 i = 0; i < cells.size(); ++i)
     {
-        if (cells[i].id == id) { return true; }
+        if (cells[i].id == id)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -237,7 +256,11 @@ TEST_CASE("chir 32d: the lowered CEIR is structure-verifier-clean, round-trips, 
     crd::ceir::Operation* fn         = nullptr;
     for (crd::ceir::Operation* op = mod->body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (op->kind() == func_kind) { fn = op; break; }
+        if (op->kind() == func_kind)
+        {
+            fn = op;
+            break;
+        }
     }
     REQUIRE(fn != nullptr);
     crd::ceir::Block* const fb = crd::ceir::func::func_body_block(fn);
@@ -245,7 +268,11 @@ TEST_CASE("chir 32d: the lowered CEIR is structure-verifier-clean, round-trips, 
     crd::ceir::Operation* pf = nullptr;
     for (crd::ceir::Operation* op = fb->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (op->kind() == pf_kind) { pf = op; break; }
+        if (op->kind() == pf_kind)
+        {
+            pf = op;
+            break;
+        }
     }
     REQUIRE(pf != nullptr);
     crd::ceir::Block* const     pb   = pf->region(0)->first_block();
@@ -275,7 +302,10 @@ TEST_CASE("chir 32d: the lowering THREADS the CHIR edges (oracle-minus-edges low
         m.add_attr(q, StringView("components"), StringView("A")); // 1 component => the func has 1 view param
         const crd::u32 pf = m.add_node(NodeKind::ParallelFor, StringView("u"), h);
         m.add_pin(pf, PinDir::In, StringView("entities"), StringView("E"));
-        if (with_edge) { m.add_edge(q, 0U, pf, 0U); } // q.entities -> parallel.entities
+        if (with_edge) // q.entities -> parallel.entities
+        {
+            m.add_edge(q, 0U, pf, 0U);
+        }
         m.derive_ids();
     };
 
@@ -527,7 +557,10 @@ struct ChFuzzRng
 {
     Array<crd::u8> b(a);
     b.reserve(count);
-    for (crd::usize i = 0U; i < count; ++i) { b.push_back(src[i]); }
+    for (crd::usize i = 0U; i < count; ++i)
+    {
+        b.push_back(src[i]);
+    }
     return b;
 }
 
@@ -556,7 +589,10 @@ struct ChFuzzRng
         b.reserve(n - 1U);
         for (crd::usize i = 0U; i < n; ++i)
         {
-            if (i != pos) { b.push_back(src[i]); }
+            if (i != pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     case 2U: // insert an arbitrary byte before pos
@@ -565,7 +601,10 @@ struct ChFuzzRng
         b.reserve(n + 1U);
         for (crd::usize i = 0U; i < n; ++i)
         {
-            if (i == pos) { b.push_back(v); }
+            if (i == pos)
+            {
+                b.push_back(v);
+            }
             b.push_back(src[i]);
         }
         break;
@@ -575,7 +614,10 @@ struct ChFuzzRng
         for (crd::usize i = 0U; i < n; ++i)
         {
             b.push_back(src[i]);
-            if (i == pos) { b.push_back(src[i]); }
+            if (i == pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     default: // swap two bytes
@@ -585,8 +627,14 @@ struct ChFuzzRng
         for (crd::usize i = 0U; i < n; ++i)
         {
             crd::u8 v = src[i];
-            if (i == pos) { v = src[q]; }
-            else if (i == q) { v = src[pos]; }
+            if (i == pos)
+            {
+                v = src[q];
+            }
+            else if (i == q)
+            {
+                v = src[pos];
+            }
             b.push_back(v);
         }
         break;
@@ -598,17 +646,26 @@ struct ChFuzzRng
 // A ChirParseResult is WELL-FORMED iff a rejection carries an in-range byte offset + a non-empty static message.
 [[nodiscard]] bool chir_result_wf(const crd::chir::ChirParseResult& r, crd::usize input_size) noexcept
 {
-    if (r.ok) { return true; }
+    if (r.ok)
+    {
+        return true;
+    }
     return static_cast<crd::usize>(r.err_off) <= input_size && r.msg.size() > 0U;
 }
 
 // byte-equality of two char arrays (the canonical-idempotence tooth's compare).
 [[nodiscard]] bool ch_bytes_eq(const Array<char>& x, const Array<char>& y) noexcept
 {
-    if (x.size() != y.size()) { return false; }
+    if (x.size() != y.size())
+    {
+        return false;
+    }
     for (crd::usize i = 0U; i < x.size(); ++i)
     {
-        if (x[i] != y[i]) { return false; }
+        if (x[i] != y[i])
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -655,7 +712,10 @@ TEST_CASE("ceir fuzz: parse_chir survives byte mutation of a .chir and never cra
                 CHECK(ch_bytes_eq(c1, c2));
             }
         }
-        else { ++rejects; }
+        else
+        {
+            ++rejects;
+        }
         return (static_cast<crd::u64>(r.ok) << 63U) ^ static_cast<crd::u64>(r.err_off);
     };
 

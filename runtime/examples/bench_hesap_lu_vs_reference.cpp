@@ -222,7 +222,13 @@ void run(const char* name)
     crd::u64 cerid_fill = 0;
     if (cf.info() == 0)
     {
-        t_cerid_slv = best_ms([&]() { for (crd::u32 i = 0; i < un; ++i) { x[i] = b[i]; } (void)cf.solve({x.data(), un}); });
+        t_cerid_slv = best_ms([&]()
+        {
+            for (crd::u32 i = 0; i < un; ++i)
+            {
+                x[i] = b[i];
+            }
+            (void)cf.solve({x.data(), un}); });
         for (crd::u32 i = 0; i < un; ++i)
         {
             cerid_res += (x[i] - 1.0) * (x[i] - 1.0);

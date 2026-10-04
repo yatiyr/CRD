@@ -89,7 +89,10 @@ namespace
 
 inline crd::u32 canonical_he_id(crd::u32 h, crd::u32 twin) noexcept
 {
-    if (twin == k_null_he) { return h; }
+    if (twin == k_null_he)
+    {
+        return h;
+    }
     return (h < twin) ? h : twin;
 }
 
@@ -98,7 +101,10 @@ inline T edge_length_squared(const HalfEdgeMesh<T>& m, crd::u32 h) noexcept
 {
     const crd::u32 va = m.he(h).origin;
     const crd::u32 vb = m.he_dest(h);
-    if (vb == k_null_vertex) { return T{0}; }
+    if (vb == k_null_vertex)
+    {
+        return T{0};
+    }
     const auto& pa = m.vertex(va).position;
     const auto& pb = m.vertex(vb).position;
     const T dx = pb.x - pa.x;
@@ -115,8 +121,14 @@ crd::containers::Array<crd::u32> snapshot_canonical_edges(const HalfEdgeMesh<T>&
     snap.reserve(m.he_pool_size() / 2U);
     for (crd::u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (h != canonical_he_id(h, m.he(h).twin)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (h != canonical_he_id(h, m.he(h).twin))
+        {
+            continue;
+        }
         snap.push_back(h);
     }
     return snap;
@@ -127,9 +139,16 @@ bool is_boundary_vertex(const HalfEdgeMesh<T>& m, crd::u32 v) noexcept
 {
     bool b = false;
     m.for_each_outgoing_he(v, [&](crd::u32 ho) {
-        if (m.he_is_boundary(ho)) { b = true; return; }
+        if (m.he_is_boundary(ho))
+        {
+            b = true;
+            return;
+        }
         const crd::u32 t = m.he(ho).twin;
-        if (t != k_null_he && m.he_is_boundary(t)) { b = true; }
+        if (t != k_null_he && m.he_is_boundary(t))
+        {
+            b = true;
+        }
     });
     return b;
 }
@@ -156,12 +175,21 @@ crd::u32 split_long_edges(HalfEdgeMesh<T>& m, T length_high_sq)
     for (crd::u32 i = 0; i < snap.size(); ++i)
     {
         const crd::u32 h = snap[i];
-        if (!m.he_alive(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
         const crd::u32 t = m.he(h).twin;
         // v7a's split_edge rejects boundary edges (returns k_null_vertex).
-        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t)) { continue; }
+        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t))
+        {
+            continue;
+        }
         const T len_sq = edge_length_squared(m, h);
-        if (len_sq <= length_high_sq) { continue; }
+        if (len_sq <= length_high_sq)
+        {
+            continue;
+        }
         const auto& pa = m.vertex(m.he(h).origin).position;
         const auto& pb = m.vertex(m.he_dest(h)).position;
         const crd::math::Vec3<T> mid{
@@ -170,7 +198,10 @@ crd::u32 split_long_edges(HalfEdgeMesh<T>& m, T length_high_sq)
             (pa.z + pb.z) / T{2},
         };
         const crd::u32 new_v = m.split_edge(h, mid);
-        if (new_v != k_null_vertex) { ++count; }
+        if (new_v != k_null_vertex)
+        {
+            ++count;
+        }
     }
     return count;
 }
@@ -183,12 +214,21 @@ crd::u32 collapse_short_edges(HalfEdgeMesh<T>& m, T length_low_sq, T length_high
     for (crd::u32 i = 0; i < snap.size(); ++i)
     {
         const crd::u32 h = snap[i];
-        if (!m.he_alive(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
         const crd::u32 t = m.he(h).twin;
         // v7a's collapse_edge rejects boundary-side collapses.
-        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t)) { continue; }
+        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t))
+        {
+            continue;
+        }
         const T len_sq = edge_length_squared(m, h);
-        if (len_sq >= length_low_sq) { continue; }
+        if (len_sq >= length_low_sq)
+        {
+            continue;
+        }
 
         const crd::u32 va = m.he(h).origin;
         const crd::u32 vb = m.he_dest(h);
@@ -205,21 +245,39 @@ crd::u32 collapse_short_edges(HalfEdgeMesh<T>& m, T length_low_sq, T length_high
         bool safe = true;
         auto check_neighbours = [&](crd::u32 endpoint) {
             m.for_each_outgoing_he(endpoint, [&](crd::u32 ho) {
-                if (!safe) { return; }
+                if (!safe)
+                {
+                    return;
+                }
                 const crd::u32 dest = m.he_dest(ho);
-                if (dest == k_null_vertex || dest == va || dest == vb) { return; }
+                if (dest == k_null_vertex || dest == va || dest == vb)
+                {
+                    return;
+                }
                 const auto& pd = m.vertex(dest).position;
                 const T ddx = pd.x - midpoint.x;
                 const T ddy = pd.y - midpoint.y;
                 const T ddz = pd.z - midpoint.z;
-                if (ddx * ddx + ddy * ddy + ddz * ddz > length_high_sq) { safe = false; }
+                if (ddx * ddx + ddy * ddy + ddz * ddz > length_high_sq)
+                {
+                    safe = false;
+                }
             });
         };
         check_neighbours(va);
-        if (safe) { check_neighbours(vb); }
-        if (!safe) { continue; }
+        if (safe)
+        {
+            check_neighbours(vb);
+        }
+        if (!safe)
+        {
+            continue;
+        }
 
-        if (m.collapse_edge(h, midpoint)) { ++count; }
+        if (m.collapse_edge(h, midpoint))
+        {
+            ++count;
+        }
     }
     return count;
 }
@@ -231,8 +289,14 @@ bool vertices_connected(const HalfEdgeMesh<T>& m, crd::u32 u, crd::u32 w) noexce
 {
     bool found = false;
     m.for_each_outgoing_he(u, [&](crd::u32 ho) {
-        if (found) { return; }
-        if (m.he_dest(ho) == w) { found = true; }
+        if (found)
+        {
+            return;
+        }
+        if (m.he_dest(ho) == w)
+        {
+            found = true;
+        }
     });
     return found;
 }
@@ -245,9 +309,15 @@ crd::u32 flip_to_equalize_valence(HalfEdgeMesh<T>& m)
     for (crd::u32 i = 0; i < snap.size(); ++i)
     {
         const crd::u32 h = snap[i];
-        if (!m.he_alive(h)) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
         const crd::u32 t = m.he(h).twin;
-        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t)) { continue; }
+        if (m.he_is_boundary(h) || t == k_null_he || m.he_is_boundary(t))
+        {
+            continue;
+        }
 
         const crd::u32 va = m.he(h).origin;
         const crd::u32 vb = m.he_dest(h);
@@ -258,7 +328,10 @@ crd::u32 flip_to_equalize_valence(HalfEdgeMesh<T>& m)
         // mesh, flipping creates a duplicate edge (c, d has 2 incident
         // edges, hence ≥4 incident faces post-flip → non-manifold). v7a's
         // flip_edge doesn't check this case; we must gate here.
-        if (vertices_connected(m, vc, vd)) { continue; }
+        if (vertices_connected(m, vc, vd))
+        {
+            continue;
+        }
 
         const crd::u32 val_a = vertex_valence(m, va);
         const crd::u32 val_b = vertex_valence(m, vb);
@@ -275,11 +348,20 @@ crd::u32 flip_to_equalize_valence(HalfEdgeMesh<T>& m)
         // After flip: edge endpoints va, vb lose 1 valence each (the edge
         // they shared is gone); apex vertices vc, vd gain 1 each (they're
         // the endpoints of the new edge).
-        if (val_a == 0 || val_b == 0) { continue; }
+        if (val_a == 0 || val_b == 0)
+        {
+            continue;
+        }
         const crd::u32 dev_after = absdiff(val_a - 1U, tgt_a) + absdiff(val_b - 1U, tgt_b)
                                    + absdiff(val_c + 1U, tgt_c) + absdiff(val_d + 1U, tgt_d);
-        if (dev_after >= dev_before) { continue; }
-        if (m.flip_edge(h)) { ++count; }
+        if (dev_after >= dev_before)
+        {
+            continue;
+        }
+        if (m.flip_edge(h))
+        {
+            ++count;
+        }
     }
     return count;
 }
@@ -293,7 +375,10 @@ crd::math::Vec3<T> compute_vertex_normal(const HalfEdgeMesh<T>& m, crd::u32 v) n
     crd::math::Vec3<T> sum{T{0}, T{0}, T{0}};
     m.for_each_outgoing_he(v, [&](crd::u32 ho) {
         const crd::u32 f = m.he(ho).face;
-        if (f == k_null_face) { return; }
+        if (f == k_null_face)
+        {
+            return;
+        }
         const crd::u32 h0 = m.face(f).first_he;
         const crd::u32 h1 = m.he(h0).next;
         const crd::u32 h2 = m.he(h1).next;
@@ -304,7 +389,10 @@ crd::math::Vec3<T> compute_vertex_normal(const HalfEdgeMesh<T>& m, crd::u32 v) n
         sum = sum + n;
     });
     const T len = crd::math::length(sum);
-    if (len < static_cast<T>(1e-20)) { return crd::math::Vec3<T>{T{0}, T{0}, T{0}}; }
+    if (len < static_cast<T>(1e-20))
+    {
+        return crd::math::Vec3<T>{T{0}, T{0}, T{0}};
+    }
     return sum * (T{1} / len);
 }
 
@@ -319,9 +407,15 @@ bool smoothing_no_inversion(const HalfEdgeMesh<T>&    m,
 {
     bool ok = true;
     m.for_each_outgoing_he(v, [&](crd::u32 ho) {
-        if (!ok) { return; }
+        if (!ok)
+        {
+            return;
+        }
         const crd::u32 f = m.he(ho).face;
-        if (f == k_null_face) { return; }
+        if (f == k_null_face)
+        {
+            return;
+        }
         const crd::u32 h0 = m.face(f).first_he;
         const crd::u32 h1 = m.he(h0).next;
         const crd::u32 h2 = m.he(h1).next;
@@ -336,7 +430,10 @@ bool smoothing_no_inversion(const HalfEdgeMesh<T>&    m,
         const auto p1_new = (v1 == v) ? new_p : p1;
         const auto p2_new = (v2 == v) ? new_p : p2;
         const auto n_new = crd::math::cross(p1_new - p0_new, p2_new - p0_new);
-        if (crd::math::dot(n_old, n_new) <= T{0}) { ok = false; }
+        if (crd::math::dot(n_old, n_new) <= T{0})
+        {
+            ok = false;
+        }
     });
     return ok;
 }
@@ -356,7 +453,10 @@ crd::u32 tangential_smooth_pass(HalfEdgeMesh<T>&                      m,
     crd::u32 count = 0;
     for (crd::u32 v = 0; v < m.vertex_pool_size(); ++v)
     {
-        if (!m.vertex_alive(v)) { continue; }
+        if (!m.vertex_alive(v))
+        {
+            continue;
+        }
         const auto& p = m.vertex(v).position;
 
         if (opts.keep_boundary_fixed && is_boundary_vertex(m, v))
@@ -371,7 +471,10 @@ crd::u32 tangential_smooth_pass(HalfEdgeMesh<T>&                      m,
         crd::u32           n = 0;
         m.for_each_outgoing_he(v, [&](crd::u32 ho) {
             const crd::u32 dest = m.he_dest(ho);
-            if (dest == k_null_vertex) { return; }
+            if (dest == k_null_vertex)
+            {
+                return;
+            }
             sum = sum + m.vertex(dest).position;
             ++n;
         });
@@ -446,8 +549,14 @@ crd::u32 tangential_smooth_pass(HalfEdgeMesh<T>&                      m,
     // Apply all-at-once.
     for (crd::u32 v = 0; v < m.vertex_pool_size(); ++v)
     {
-        if (updated[v] == 0U) { continue; }
-        if (!m.vertex_alive(v)) { continue; }
+        if (updated[v] == 0U)
+        {
+            continue;
+        }
+        if (!m.vertex_alive(v))
+        {
+            continue;
+        }
         m.set_vertex_position(v, new_positions[v]);
     }
     return count;
@@ -462,7 +571,10 @@ HalfEdgeMesh<T> isotropic_remesh(const HalfEdgeMesh<T>&             input,
 {
     IsotropicRemeshReport report{};
     auto                  report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr

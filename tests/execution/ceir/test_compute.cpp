@@ -74,7 +74,10 @@ Operation* mk_dispatch(Context& ctx, const Kit& k, Block* b, Value* gx, Value* g
     ops.push_back(gx);
     ops.push_back(gy);
     ops.push_back(gz);
-    for (u32 i = 0; i < nb; ++i) { ops.push_back(binds[i]); }
+    for (u32 i = 0; i < nb; ++i)
+    {
+        ops.push_back(binds[i]);
+    }
     Operation* const op = ctx.create_operation(k.disp, ConstSpan<Value*>(ops.data(), ops.size()), 0U);
     ctx.set_attr(op, "kernel", ctx.attr_symbol(containers::StringView(kernel)));
     ctx.set_attr(op, "access", ctx.attr_string(containers::StringView(access)));
@@ -88,7 +91,10 @@ Operation* find_op(const Context& ctx, Module& m, containers::StringView qual)
     {
         for (Operation* op = func::func_body_block(fn)->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == qual) { return op; }
+            if (ctx.op_name(op->kind()) == qual)
+            {
+                return op;
+            }
         }
     }
     return nullptr;

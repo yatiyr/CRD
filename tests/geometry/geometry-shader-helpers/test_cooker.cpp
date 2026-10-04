@@ -54,7 +54,10 @@ namespace fs   = crd::platform::fs;
     crd::containers::String out(alloc);
     const bool ok = fs::read_file_text(
         fs::Path(crd::containers::StringView{path.data(), path.size()}), out);
-    if (!ok) { out = crd::containers::String("<read failed>", alloc); }
+    if (!ok)
+    {
+        out = crd::containers::String("<read failed>", alloc);
+    }
     return out;
 }
 

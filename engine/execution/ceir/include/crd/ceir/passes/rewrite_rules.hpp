@@ -81,14 +81,26 @@ struct RewriteMisuse
 // Map a constraint/action string to its enum, or None if unrecognized -- the closed vocabulary lives in ONE place.
 [[nodiscard]] inline RewriteConstraint constraint_from(containers::StringView s) noexcept
 {
-    if (s == containers::StringView("result_type_eq_operand")) { return RewriteConstraint::ResultTypeEqOperand; }
-    if (s == containers::StringView("operand_defined_by_root")) { return RewriteConstraint::OperandDefinedByRoot; }
+    if (s == containers::StringView("result_type_eq_operand"))
+    {
+        return RewriteConstraint::ResultTypeEqOperand;
+    }
+    if (s == containers::StringView("operand_defined_by_root"))
+    {
+        return RewriteConstraint::OperandDefinedByRoot;
+    }
     return RewriteConstraint::None;
 }
 [[nodiscard]] inline RewriteAction action_from(containers::StringView s) noexcept
 {
-    if (s == containers::StringView("replace_result_with_operand")) { return RewriteAction::ReplaceResultWithOperand; }
-    if (s == containers::StringView("build_op_from_inner_operand")) { return RewriteAction::BuildOpFromInnerOperand; }
+    if (s == containers::StringView("replace_result_with_operand"))
+    {
+        return RewriteAction::ReplaceResultWithOperand;
+    }
+    if (s == containers::StringView("build_op_from_inner_operand"))
+    {
+        return RewriteAction::BuildOpFromInnerOperand;
+    }
     return RewriteAction::None;
 }
 
@@ -98,13 +110,19 @@ namespace detail
 [[nodiscard]] inline containers::StringView rule_str(const Context& ctx, const Operation& op, containers::StringView name) noexcept
 {
     const AttrId a = op.attr(name);
-    if (!a.valid()) { return {}; }
+    if (!a.valid())
+    {
+        return {};
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::String ? v.s : containers::StringView();
 }
 [[nodiscard]] inline RewriteMisuse scan_rewrite_region(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -113,8 +131,14 @@ namespace detail
             {
                 const RewriteConstraint con = constraint_from(rule_str(ctx, *op, containers::StringView("constraint")));
                 const RewriteAction     act = action_from(rule_str(ctx, *op, containers::StringView("action")));
-                if (con == RewriteConstraint::None) { return {op, RewriteMisuseKind::UnknownConstraint}; }
-                if (act == RewriteAction::None) { return {op, RewriteMisuseKind::UnknownAction}; }
+                if (con == RewriteConstraint::None)
+                {
+                    return {op, RewriteMisuseKind::UnknownConstraint};
+                }
+                if (act == RewriteAction::None)
+                {
+                    return {op, RewriteMisuseKind::UnknownAction};
+                }
                 // ⛔ a path-WALKING action may only pair with the constraint that VALIDATES the path: build_op_from_inner_operand
                 //    derefs operand(operand_idx).def.operand(inner) -> REQUIRES operand_defined_by_root (which proves that inner op
                 //    is a root op with that operand). Else a vocab-valid asset null-derefs in rule_apply (the 27a duplicate shape).
@@ -126,7 +150,10 @@ namespace detail
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const RewriteMisuse e = scan_rewrite_region(ctx, op->region(i));
-                if (e.kind != RewriteMisuseKind::None) { return e; }
+                if (e.kind != RewriteMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -150,10 +177,16 @@ namespace detail
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (op->kind() != rule_k) { continue; }
+            if (op->kind() != rule_k)
+            {
+                continue;
+            }
             const containers::StringView root_nm = detail::rule_str(ctx, *op, containers::StringView("root"));
             usize                        dot     = 0U; // split "dialect.op" at the '.' (op_name is dialect-qualified -- I6)
-            while (dot < root_nm.size() && root_nm[dot] != '.') { ++dot; }
+            while (dot < root_nm.size() && root_nm[dot] != '.')
+            {
+                ++dot;
+            }
             const containers::StringView dia(root_nm.data(), dot);
             const containers::StringView opn(root_nm.data() + (dot < root_nm.size() ? dot + 1U : dot),
                                              dot < root_nm.size() ? root_nm.size() - dot - 1U : 0U);
@@ -183,23 +216,38 @@ namespace rr_detail
 // does `rule` MATCH `op`? kind + the action's re-match guard + the constraint (all runtime, arity-guarded).
 [[nodiscard]] inline bool rule_matches(const Context& /*ctx*/, const rewrite::RewriteRule& rule, const Operation& op) noexcept
 {
-    if (op.kind() != rule.root_kind) { return false; }
+    if (op.kind() != rule.root_kind)
+    {
+        return false;
+    }
     // ⛔ UNIVERSAL RAUW-and-leave guard (driver's contract, not a rule attr): BOTH actions RAUW result(result_idx) and LEAVE the dead
     //    op for DCE, so an op whose result is already RAUW'd (no uses) must NOT re-match -- else round_changed never settles -> the cap
     //    -> FATAL. canonicalize.hpp:51/73 carry it in BOTH matches. This ALSO bounds result_idx for every constraint/action below.
-    if (rule.result_idx >= op.num_results() || !op.result(rule.result_idx)->has_uses()) { return false; }
+    if (rule.result_idx >= op.num_results() || !op.result(rule.result_idx)->has_uses())
+    {
+        return false;
+    }
     if (rule.constraint == rewrite::RewriteConstraint::ResultTypeEqOperand)
     {
-        if (rule.operand_idx >= op.num_operands()) { return false; } // this constraint owns the operand_idx bound
+        if (rule.operand_idx >= op.num_operands()) // this constraint owns the operand_idx bound
+        {
+            return false;
+        }
         return op.result(rule.result_idx)->type() == op.operand(rule.operand_idx)->type();
     }
     if (rule.constraint == rewrite::RewriteConstraint::OperandDefinedByRoot)
     {
         // operand(operand_idx) is produced by an op of kind==root with an inner_operand'th operand (reshape-of-reshape; canon.hpp:52-55).
-        if (rule.operand_idx >= op.num_operands()) { return false; }
+        if (rule.operand_idx >= op.num_operands())
+        {
+            return false;
+        }
         const Value* const     in    = op.operand(rule.operand_idx);
         const Operation* const inner = (in != nullptr) ? in->defining_op() : nullptr;
-        if (inner == nullptr || inner->kind() != rule.root_kind || rule.inner_operand_idx >= inner->num_operands()) { return false; }
+        if (inner == nullptr || inner->kind() != rule.root_kind || rule.inner_operand_idx >= inner->num_operands())
+        {
+            return false;
+        }
         return inner->operand(rule.inner_operand_idx) != nullptr;
     }
     return false; // an unknown constraint never matches (find_rewrite_misuse rejects it statically anyway)
@@ -244,7 +292,10 @@ inline void rule_apply(Context& ctx, const rewrite::RewriteRule& rule, Operation
         for (usize i = 0; i < ops.size(); ++i)
         {
             Operation* const op = ops[i];
-            if (op->is_erased()) { continue; }
+            if (op->is_erased())
+            {
+                continue;
+            }
             for (usize r = 0; r < rules.size(); ++r)
             {
                 if (rr_detail::rule_matches(ctx, rules[r], *op))
@@ -256,7 +307,10 @@ inline void rule_apply(Context& ctx, const rewrite::RewriteRule& rule, Operation
                 }
             }
         }
-        if (!round_changed) { break; }
+        if (!round_changed)
+        {
+            break;
+        }
         if (++round >= cap)
         {
             const containers::StringView notes[1] = {pass_name};

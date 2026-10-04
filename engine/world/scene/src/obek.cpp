@@ -1040,7 +1040,10 @@ ObekBatchHandle World::instantiate_obek_batch(const ObekResource& res, crd::u32 
             {
                 const EntityId p = get_relation_target<relations::ChildOf>(e);
                 const bool     is_root = p.is_null() || p == parent;
-                if (!is_root) { continue; }
+                if (!is_root)
+                {
+                    continue;
+                }
                 add_component(e, transforms[static_cast<crd::usize>(slot)]);
                 mark_transform_subtree_dirty(e);
             }
@@ -1087,19 +1090,34 @@ namespace
 void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
                          crd::u32 component_fourcc, crd::u32 field_offset, crd::u32 field_size)
 {
-    if (inst.source == nullptr) return;
-    if (file_idx >= inst.entities.size()) return;
+    if (inst.source == nullptr)
+    {
+        return;
+    }
+    if (file_idx >= inst.entities.size())
+    {
+        return;
+    }
     const ObekResource& res = *inst.source;
 
     const crd::u32 ci = find_payload_ci(res, component_fourcc);
-    if (ci >= res.info.component_count) return;
+    if (ci >= res.info.component_count)
+    {
+        return;
+    }
 
     const ObekComponentDescriptor& d = res.component_descriptors[ci];
     const auto& pp = res.component_payloads[ci];
     const crd::u32 r = find_payload_record(d, pp, file_idx);
-    if (r >= d.record_count) return;
+    if (r >= d.record_count)
+    {
+        return;
+    }
 
-    if (static_cast<crd::usize>(field_offset) + field_size > d.size) return;
+    if (static_cast<crd::usize>(field_offset) + field_size > d.size)
+    {
+        return;
+    }
 
     // Find the registered ComponentId for this fourcc in the target World.
     ComponentId target_cid{};
@@ -1113,11 +1131,17 @@ void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
             break;
         }
     }
-    if (target_cid.is_null()) return;
+    if (target_cid.is_null())
+    {
+        return;
+    }
 
     const EntityId e = inst.entities[file_idx];
     void* dst = backend_for(target_cid).get_mut(e, target_cid);
-    if (dst == nullptr) return;
+    if (dst == nullptr)
+    {
+        return;
+    }
 
     // 1. Restore source bytes for the field range.
     const crd::u8* src_bytes = pp.payloads.data() + static_cast<crd::usize>(r) * d.size;
@@ -1126,7 +1150,10 @@ void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
     // 2. Re-apply any cook-time overrides that overlap this field range.
     for (const ObekOverrideRecord& rec : res.cook_override_records)
     {
-        if (rec.file_idx != file_idx || rec.component_fourcc != component_fourcc) continue;
+        if (rec.file_idx != file_idx || rec.component_fourcc != component_fourcc)
+        {
+            continue;
+        }
         const crd::u32 ov_start = rec.field_offset;
         const crd::u32 ov_end   = rec.field_offset + rec.payload_size;
         const crd::u32 fld_end  = field_offset + field_size;
@@ -1150,16 +1177,25 @@ void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
 
 void World::revert_component(ObekInstantiation& inst, crd::u32 file_idx, crd::u32 component_fourcc)
 {
-    if (inst.source == nullptr) return;
+    if (inst.source == nullptr)
+    {
+        return;
+    }
     const ObekResource& res = *inst.source;
     const crd::u32 ci = find_payload_ci(res, component_fourcc);
-    if (ci >= res.info.component_count) return;
+    if (ci >= res.info.component_count)
+    {
+        return;
+    }
     revert_field(inst, file_idx, component_fourcc, 0U, res.component_descriptors[ci].size);
 }
 
 void World::revert_entity(ObekInstantiation& inst, crd::u32 file_idx)
 {
-    if (inst.source == nullptr) return;
+    if (inst.source == nullptr)
+    {
+        return;
+    }
     const ObekResource& res = *inst.source;
     for (crd::u32 ci = 0; ci < res.info.component_count; ++ci)
     {
@@ -1170,7 +1206,10 @@ void World::revert_entity(ObekInstantiation& inst, crd::u32 file_idx)
 
 void World::revert_all(ObekInstantiation& inst)
 {
-    if (inst.source == nullptr) return;
+    if (inst.source == nullptr)
+    {
+        return;
+    }
     for (crd::u32 i = 0; i < inst.entities.size(); ++i)
     {
         revert_entity(inst, i);

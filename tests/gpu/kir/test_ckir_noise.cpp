@@ -86,8 +86,14 @@ double ref_grad3(crd::u32 hash, double x, double y, double z)
     const double   u  = h < 8U ? x : y;
     const bool     hz = (h == 12U) || (h == 14U);
     double         v  = z;
-    if (h < 4U) { v = y; }
-    else if (hz) { v = x; }
+    if (h < 4U)
+    {
+        v = y;
+    }
+    else if (hz)
+    {
+        v = x;
+    }
     return ref_negif(u, (h & 1U) != 0U) + ref_negif(v, (h & 2U) != 0U);
 }
 double ref_perlin2(double px, double py)
@@ -125,7 +131,13 @@ double ref_fractal2(double px, double py, int oct, double lac, double dim)
     double fx = px;
     double fy = py;
     double amp = 1.0;
-    for (int o = 0; o < oct; ++o) { acc += amp * ref_perlin2(fx, fy); fx *= lac; fy *= lac; amp *= dim; }
+    for (int o = 0; o < oct; ++o)
+    {
+        acc += amp * ref_perlin2(fx, fy);
+        fx *= lac;
+        fy *= lac;
+        amp *= dim;
+    }
     return acc;
 }
 // ── worley reference (mx_worley_*) ──
@@ -154,13 +166,32 @@ double ref_worley2(double px, double py, double jitter, int style, int metric)
             const double dx = (static_cast<double>(x) + off[0]) - lx;
             const double dy = (static_cast<double>(y) + off[1]) - ly;
             double dist = dx * dx + dy * dy;
-            if (metric == 2) { dist = ref_dabs(dx) + ref_dabs(dy); }
-            else if (metric == 3) { const double axd = ref_dabs(dx); const double ayd = ref_dabs(dy); dist = axd > ayd ? axd : ayd; }
-            if (dist < best) { best = dist; mp[0] = dx; mp[1] = dy; }
+            if (metric == 2)
+            {
+                dist = ref_dabs(dx) + ref_dabs(dy);
+            }
+            else if (metric == 3)
+            {
+                const double axd = ref_dabs(dx);
+                const double ayd = ref_dabs(dy);
+                dist = axd > ayd ? axd : ayd;
+            }
+            if (dist < best)
+            {
+                best = dist;
+                mp[0] = dx;
+                mp[1] = dy;
+            }
         }
     }
-    if (style == 1) { return ref_cell2(mp[0] + px, mp[1] + py); }
-    if (metric == 0) { return std::sqrt(best); }
+    if (style == 1)
+    {
+        return ref_cell2(mp[0] + px, mp[1] + py);
+    }
+    if (metric == 0)
+    {
+        return std::sqrt(best);
+    }
     return best;
 }
 void ref_cell_vec3_from3(int ix, int iy, int iz, double out[3])
@@ -196,14 +227,33 @@ double ref_worley3(double px, double py, double pz, double jitter, int style, in
                 const double dy = (static_cast<double>(y) + ((cn[1] - 0.5) * jitter + 0.5)) - ly;
                 const double dz = (static_cast<double>(z) + ((cn[2] - 0.5) * jitter + 0.5)) - lz;
                 double dist = dx * dx + dy * dy + dz * dz;
-                if (metric == 2) { dist = ref_dabs(dx) + ref_dabs(dy) + ref_dabs(dz); }
-                else if (metric == 3) { const double m0 = ref_dabs(dx) > ref_dabs(dy) ? ref_dabs(dx) : ref_dabs(dy); dist = m0 > ref_dabs(dz) ? m0 : ref_dabs(dz); }
-                if (dist < best) { best = dist; mp[0] = dx; mp[1] = dy; mp[2] = dz; }
+                if (metric == 2)
+                {
+                    dist = ref_dabs(dx) + ref_dabs(dy) + ref_dabs(dz);
+                }
+                else if (metric == 3)
+                {
+                    const double m0 = ref_dabs(dx) > ref_dabs(dy) ? ref_dabs(dx) : ref_dabs(dy);
+                    dist = m0 > ref_dabs(dz) ? m0 : ref_dabs(dz);
+                }
+                if (dist < best)
+                {
+                    best = dist;
+                    mp[0] = dx;
+                    mp[1] = dy;
+                    mp[2] = dz;
+                }
             }
         }
     }
-    if (style == 1) { return ref_cell3(mp[0] + px, mp[1] + py, mp[2] + pz); }
-    if (metric == 0) { return std::sqrt(best); }
+    if (style == 1)
+    {
+        return ref_cell3(mp[0] + px, mp[1] + py, mp[2] + pz);
+    }
+    if (metric == 0)
+    {
+        return std::sqrt(best);
+    }
     return best;
 }
 } // namespace
@@ -230,7 +280,17 @@ TEST_CASE("B6-b: noise hash + perlin/cell/fractal bit-exact vs MaterialX mx_nois
     const crd::f64* inp[] = {xv, yv, zv};
 
     int        bad = 0;
-    const auto chk = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chk = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     chk(nz::perlin2(g, px, py), [&](int i) { return ref_perlin2(xv[i], yv[i]); });
     chk(nz::perlin3(g, px, py, pz), [&](int i) { return ref_perlin3(xv[i], yv[i], zv[i]); });
@@ -263,7 +323,17 @@ TEST_CASE("B6-b: worley (cellular) noise bit-exact vs MaterialX mx_worley on the
     const crd::f64* inp[] = {xv, yv, zv};
 
     int        bad = 0;
-    const auto chk = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chk = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     // 2D: every metric (0=euclid,1=dist²,2=manhattan,3=chebyshev) + both styles, jitter 1.0.
     chk(nz::worley2(g, px, py, 1.0, 0, 0), [&](int i) { return ref_worley2(xv[i], yv[i], 1.0, 0, 0); });

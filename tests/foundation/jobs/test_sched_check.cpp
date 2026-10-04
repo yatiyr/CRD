@@ -50,7 +50,9 @@ void found_child(void* /*data*/) noexcept
     // Gated so its completion decrement lands AFTER the scheduler's ABA load saw value==1 -- the decrement
     // then owns the resume (the scheduler does not cancel), which is what the forced interleaving needs.
     while (!g_go.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
 }
 
 void found_root(void* /*data*/) noexcept
@@ -128,7 +130,9 @@ ExposeResult expose_with(const TagTrace& script)
     drv.mark("test.reacquired"); // release the scheduler; it now runs the detector against the recycled slot
 
     for (crd::jobs::Counter* c : noops)
+    {
         crd::jobs::wait(c); // balance every acquire so shutdown()'s m_acquired==0 assert holds
+    }
 
     crd::jobs::test::SchedDriver::uninstall();
     crd::jobs::shutdown();
@@ -173,21 +177,31 @@ struct StressState
         phase.store(0, std::memory_order_relaxed);
         launched.store(0, std::memory_order_relaxed);
         for (crd::u32 i = 0U; i < kMaxWorkers; ++i)
+        {
             last_tag[i].store(nullptr, std::memory_order_relaxed);
+        }
     }
 
     void on_point(const char* tag) noexcept
     {
         if (std::strcmp(tag, "fp.published") == 0)
+        {
             published.fetch_add(1, std::memory_order_relaxed);
+        }
         else if (std::strcmp(tag, "dec.claim") == 0)
+        {
             dec_claim.fetch_add(1, std::memory_order_relaxed);
+        }
         else if (std::strcmp(tag, "wait.resumed") == 0)
+        {
             wait_resumed.fetch_add(1, std::memory_order_relaxed);
+        }
 
         const crd::u32 w = crd::jobs::worker_index();
         if (w < kMaxWorkers)
+        {
             last_tag[w].store(tag, std::memory_order_relaxed);
+        }
 
         // Seeded jitter: yield at ~1/4 of points to widen the windows between the counter path's atomic steps.
         unsigned x = rng.load(std::memory_order_relaxed);
@@ -196,7 +210,9 @@ struct StressState
         x ^= x << 5;
         rng.store(x, std::memory_order_relaxed);
         if ((x & 3U) == 0U)
+        {
             std::this_thread::yield();
+        }
     }
 
     static void on_point_cb(void* user, const char* tag) noexcept
@@ -227,7 +243,9 @@ void dump_stress_state(const char* prefix) noexcept
     {
         const char* const t = g_stress.last_tag[w].load(std::memory_order_relaxed);
         if (t != nullptr)
+        {
             std::fprintf(stderr, "  worker[%u] last=%s\n", w, t);
+        }
     }
     std::fflush(stderr);
 }
@@ -331,7 +349,9 @@ TEST_CASE("schedcheck: the recording oracle captures the counter-path trace and 
         for (crd::usize i = 0U; i < ev.size(); ++i)
         {
             if (std::strcmp(ev[i].tag, tag) == 0)
+            {
                 return static_cast<long>(i);
+            }
         }
         return -1;
     };
@@ -459,9 +479,13 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
         {
             const ExposeResult r = expose_with(s);
             if (!r.arrived || !r.reacquired)
+            {
                 choreography_ok = false;
+            }
             if (r.deadlocked || !r.found)
+            {
                 return false;
+            }
         }
         return true;
     };
@@ -484,7 +508,9 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
             }
         }
         if (!dup)
+        {
             seed.push_back(tag);
+        }
     }
     CHECK(seed.size() >= 4U); // at least fp.published, wait.resumed, test.reacquired, fp.finalizing
 
@@ -561,11 +587,15 @@ TEST_CASE("schedcheck: perturbed multicore park/reclaim stress -- the detector s
             for (int i = 0; i < 200; ++i) // 200 * 100 ms = 20 s
             {
                 if (done.load(std::memory_order_acquire))
+                {
                     return;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             if (done.load(std::memory_order_acquire))
+            {
                 return;
+            }
             dump_stress_state("STRESS HANG");
             std::_Exit(3); // hard-exit so a hang is a bounded, diagnosable failure rather than a wedge
         });
@@ -595,7 +625,9 @@ TEST_CASE("schedcheck: perturbed multicore park/reclaim stress -- the detector s
             cs.push_back(crd::jobs::run(root));
         }
         for (crd::jobs::Counter* c : cs)
+        {
             crd::jobs::wait(c);
+        }
         launched += n;
         g_stress.launched.store(launched, std::memory_order_relaxed);
     }

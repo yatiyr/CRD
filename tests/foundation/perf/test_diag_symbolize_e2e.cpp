@@ -84,8 +84,12 @@ fs::path first_dump(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".dmp")
+        {
             return it->path();
+        }
+    }
     return {};
 }
 
@@ -94,7 +98,9 @@ cont::Array<crd::u8> read_bytes(const fs::path& p)
     cont::Array<crd::u8> out;
     std::FILE*           f = nullptr;
     if (_wfopen_s(&f, p.wstring().c_str(), L"rb") != 0 || f == nullptr)
+    {
         return out;
+    }
     std::fseek(f, 0, SEEK_END);
     const long sz = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
@@ -155,7 +161,9 @@ TEST_CASE("symbolize (windows): a real dump yields every-module identity + match
     {
         const ModuleIdentity& m = imp.symbols[i];
         if (m.unloaded)
+        {
             ++unloaded;
+        }
         const cont::String path = debug_file_path(m, cont::StringView{"S:/sym"});
         if (m.id_kind == SymbolIdKind::None)
         {
@@ -175,11 +183,13 @@ TEST_CASE("symbolize (windows): a real dump yields every-module identity + match
     // (3) reject wrong symbols: the same module with a bumped age must not match (never a plausible-but-wrong line).
     const ModuleIdentity* rsds = nullptr;
     for (crd::usize i = 0; i < imp.symbols.size(); ++i)
+    {
         if (imp.symbols[i].id_kind == SymbolIdKind::Rsds)
         {
             rsds = &imp.symbols[i];
             break;
         }
+    }
     REQUIRE(rsds != nullptr); // a debug-built specimen always carries an RSDS record -- never skip this clause
     ModuleIdentity wrong = *rsds;
     wrong.age += 1U;

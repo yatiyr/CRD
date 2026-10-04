@@ -125,7 +125,10 @@ bool draw_enum_combo(const char* label, Enum& value, const char* (*to_label)(Enu
                     changed = true;
                 }
             }
-            if (selected) { ImGui::SetItemDefaultFocus(); }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
         }
         ImGui::EndCombo();
     }

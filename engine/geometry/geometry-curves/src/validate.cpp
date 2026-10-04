@@ -44,18 +44,33 @@ template <crd::math::MathScalar T>
 template <crd::math::MathScalar T>
 [[nodiscard]] CurveValidationResult validate_arc_axes(const crd::math::Vec3<T>& u, const crd::math::Vec3<T>& v) noexcept
 {
-    if (!is_finite_vec3(u) || !is_finite_vec3(v)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!approx_unit(u)) { return {CurveValidationStatus::AxisNotUnit, 0U}; }
-    if (!approx_unit(v)) { return {CurveValidationStatus::AxisNotUnit, 1U}; }
+    if (!is_finite_vec3(u) || !is_finite_vec3(v))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!approx_unit(u))
+    {
+        return {CurveValidationStatus::AxisNotUnit, 0U};
+    }
+    if (!approx_unit(v))
+    {
+        return {CurveValidationStatus::AxisNotUnit, 1U};
+    }
     const T uv = crd::math::dot(u, v);
-    if (std::abs(uv) > static_cast<T>(1e-3)) { return {CurveValidationStatus::AxesNotOrthogonal, 0U}; }
+    if (std::abs(uv) > static_cast<T>(1e-3))
+    {
+        return {CurveValidationStatus::AxesNotOrthogonal, 0U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
 template <crd::math::MathScalar T>
 [[nodiscard]] bool valid_sweep(T sweep_radians) noexcept
 {
-    if (!std::isfinite(sweep_radians)) { return false; }
+    if (!std::isfinite(sweep_radians))
+    {
+        return false;
+    }
     constexpr T two_pi = static_cast<T>(6.28318530717958647692);
     return std::abs(sweep_radians) <= two_pi + static_cast<T>(1e-5);
 }
@@ -69,7 +84,10 @@ template <crd::math::MathScalar T>
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const Polyline3View<T>& curve) noexcept
 {
-    if (curve.points.size() < 2U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
+    if (curve.points.size() < 2U)
+    {
+        return {CurveValidationStatus::NotEnoughPoints, 0U};
+    }
     for (crd::usize i = 0U; i < curve.points.size(); ++i)
     {
         if (!is_finite_vec3(curve.points[i]))
@@ -93,19 +111,40 @@ CurveValidationResult validate(const Polyline3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const QuadBezier3<T>& curve) noexcept
 {
-    if (!is_finite_vec3(curve.p0)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!is_finite_vec3(curve.p1)) { return {CurveValidationStatus::NonFinitePoint, 1U}; }
-    if (!is_finite_vec3(curve.p2)) { return {CurveValidationStatus::NonFinitePoint, 2U}; }
+    if (!is_finite_vec3(curve.p0))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!is_finite_vec3(curve.p1))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 1U};
+    }
+    if (!is_finite_vec3(curve.p2))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 2U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CubicBezier3<T>& curve) noexcept
 {
-    if (!is_finite_vec3(curve.p0)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!is_finite_vec3(curve.p1)) { return {CurveValidationStatus::NonFinitePoint, 1U}; }
-    if (!is_finite_vec3(curve.p2)) { return {CurveValidationStatus::NonFinitePoint, 2U}; }
-    if (!is_finite_vec3(curve.p3)) { return {CurveValidationStatus::NonFinitePoint, 3U}; }
+    if (!is_finite_vec3(curve.p0))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!is_finite_vec3(curve.p1))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 1U};
+    }
+    if (!is_finite_vec3(curve.p2))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 2U};
+    }
+    if (!is_finite_vec3(curve.p3))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 3U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
@@ -116,10 +155,22 @@ CurveValidationResult validate(const CubicBezier3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CubicHermite3<T>& curve) noexcept
 {
-    if (!is_finite_vec3(curve.p0)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!is_finite_vec3(curve.p1)) { return {CurveValidationStatus::NonFinitePoint, 1U}; }
-    if (!is_finite_vec3(curve.t0)) { return {CurveValidationStatus::NonFiniteTangent, 0U}; }
-    if (!is_finite_vec3(curve.t1)) { return {CurveValidationStatus::NonFiniteTangent, 1U}; }
+    if (!is_finite_vec3(curve.p0))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!is_finite_vec3(curve.p1))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 1U};
+    }
+    if (!is_finite_vec3(curve.t0))
+    {
+        return {CurveValidationStatus::NonFiniteTangent, 0U};
+    }
+    if (!is_finite_vec3(curve.t1))
+    {
+        return {CurveValidationStatus::NonFiniteTangent, 1U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
@@ -130,7 +181,10 @@ CurveValidationResult validate(const CubicHermite3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CatmullRom3<T>& curve) noexcept
 {
-    if (curve.points.size() < 2U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
+    if (curve.points.size() < 2U)
+    {
+        return {CurveValidationStatus::NotEnoughPoints, 0U};
+    }
     for (crd::usize i = 0U; i < curve.points.size(); ++i)
     {
         if (!is_finite_vec3(curve.points[i]))
@@ -168,7 +222,10 @@ template <crd::math::MathScalar T>
 CurveValidationResult validate(const BSpline3<T>& curve) noexcept
 {
     constexpr crd::u32 degree = BSpline3<T>::k_degree;
-    if (curve.points.size() < degree + 1U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
+    if (curve.points.size() < degree + 1U)
+    {
+        return {CurveValidationStatus::NotEnoughPoints, 0U};
+    }
     for (crd::usize i = 0U; i < curve.points.size(); ++i)
     {
         if (!is_finite_vec3(curve.points[i]))
@@ -201,7 +258,10 @@ CurveValidationResult validate(const BSpline3<T>& curve) noexcept
                 return {CurveValidationStatus::KnotMultiplicityExceeded, static_cast<crd::u32>(i)};
             }
         }
-        else { run = 1U; }
+        else
+        {
+            run = 1U;
+        }
     }
     return {CurveValidationStatus::Ok, 0U};
 }
@@ -213,23 +273,38 @@ CurveValidationResult validate(const BSpline3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CircularArc3<T>& curve) noexcept
 {
-    if (!is_finite_vec3(curve.center)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
+    if (!is_finite_vec3(curve.center))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
     const auto axes = validate_arc_axes(curve.axis_u, curve.axis_v);
-    if (axes.status != CurveValidationStatus::Ok) { return axes; }
+    if (axes.status != CurveValidationStatus::Ok)
+    {
+        return axes;
+    }
     if (!std::isfinite(curve.radius) || curve.radius <= static_cast<T>(0))
     {
         return {CurveValidationStatus::InvalidRadius, 0U};
     }
-    if (!valid_sweep(curve.sweep_radians)) { return {CurveValidationStatus::SweepOutOfRange, 0U}; }
+    if (!valid_sweep(curve.sweep_radians))
+    {
+        return {CurveValidationStatus::SweepOutOfRange, 0U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const EllipseArc3<T>& curve) noexcept
 {
-    if (!is_finite_vec3(curve.center)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
+    if (!is_finite_vec3(curve.center))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
     const auto axes = validate_arc_axes(curve.axis_u, curve.axis_v);
-    if (axes.status != CurveValidationStatus::Ok) { return axes; }
+    if (axes.status != CurveValidationStatus::Ok)
+    {
+        return axes;
+    }
     if (!std::isfinite(curve.radius_u) || curve.radius_u <= static_cast<T>(0))
     {
         return {CurveValidationStatus::InvalidRadius, 0U};
@@ -238,7 +313,10 @@ CurveValidationResult validate(const EllipseArc3<T>& curve) noexcept
     {
         return {CurveValidationStatus::InvalidRadius, 1U};
     }
-    if (!valid_sweep(curve.sweep_radians)) { return {CurveValidationStatus::SweepOutOfRange, 0U}; }
+    if (!valid_sweep(curve.sweep_radians))
+    {
+        return {CurveValidationStatus::SweepOutOfRange, 0U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
@@ -249,7 +327,10 @@ CurveValidationResult validate(const EllipseArc3<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const Polyline2View<T>& curve) noexcept
 {
-    if (curve.points.size() < 2U) { return {CurveValidationStatus::NotEnoughPoints, 0U}; }
+    if (curve.points.size() < 2U)
+    {
+        return {CurveValidationStatus::NotEnoughPoints, 0U};
+    }
     for (crd::usize i = 0U; i < curve.points.size(); ++i)
     {
         if (!is_finite_vec2(curve.points[i]))
@@ -269,26 +350,50 @@ CurveValidationResult validate(const Polyline2<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const QuadBezier2<T>& curve) noexcept
 {
-    if (!is_finite_vec2(curve.p0)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!is_finite_vec2(curve.p1)) { return {CurveValidationStatus::NonFinitePoint, 1U}; }
-    if (!is_finite_vec2(curve.p2)) { return {CurveValidationStatus::NonFinitePoint, 2U}; }
+    if (!is_finite_vec2(curve.p0))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!is_finite_vec2(curve.p1))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 1U};
+    }
+    if (!is_finite_vec2(curve.p2))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 2U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CubicBezier2<T>& curve) noexcept
 {
-    if (!is_finite_vec2(curve.p0)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
-    if (!is_finite_vec2(curve.p1)) { return {CurveValidationStatus::NonFinitePoint, 1U}; }
-    if (!is_finite_vec2(curve.p2)) { return {CurveValidationStatus::NonFinitePoint, 2U}; }
-    if (!is_finite_vec2(curve.p3)) { return {CurveValidationStatus::NonFinitePoint, 3U}; }
+    if (!is_finite_vec2(curve.p0))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
+    if (!is_finite_vec2(curve.p1))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 1U};
+    }
+    if (!is_finite_vec2(curve.p2))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 2U};
+    }
+    if (!is_finite_vec2(curve.p3))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 3U};
+    }
     return {CurveValidationStatus::Ok, 0U};
 }
 
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const CircularArc2<T>& curve) noexcept
 {
-    if (!is_finite_vec2(curve.center)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
+    if (!is_finite_vec2(curve.center))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
     if (!std::isfinite(curve.radius) || curve.radius <= static_cast<T>(0))
     {
         return {CurveValidationStatus::InvalidRadius, 0U};
@@ -303,7 +408,10 @@ CurveValidationResult validate(const CircularArc2<T>& curve) noexcept
 template <crd::math::MathScalar T>
 CurveValidationResult validate(const EllipseArc2<T>& curve) noexcept
 {
-    if (!is_finite_vec2(curve.center)) { return {CurveValidationStatus::NonFinitePoint, 0U}; }
+    if (!is_finite_vec2(curve.center))
+    {
+        return {CurveValidationStatus::NonFinitePoint, 0U};
+    }
     if (!std::isfinite(curve.radius_u) || curve.radius_u <= static_cast<T>(0))
     {
         return {CurveValidationStatus::InvalidRadius, 0U};

@@ -43,8 +43,14 @@ struct MaxByDistance
 {
     [[nodiscard]] bool operator()(const KdNeighbor<T>& a, const KdNeighbor<T>& b) const noexcept
     {
-        if (a.distance_squared < b.distance_squared) return true;
-        if (a.distance_squared > b.distance_squared) return false;
+        if (a.distance_squared < b.distance_squared)
+        {
+            return true;
+        }
+        if (a.distance_squared > b.distance_squared)
+        {
+            return false;
+        }
         return a.payload < b.payload;
     }
 };
@@ -55,8 +61,14 @@ struct AscendByDistance
 {
     [[nodiscard]] bool operator()(const KdNeighbor<T>& a, const KdNeighbor<T>& b) const noexcept
     {
-        if (a.distance_squared < b.distance_squared) return true;
-        if (a.distance_squared > b.distance_squared) return false;
+        if (a.distance_squared < b.distance_squared)
+        {
+            return true;
+        }
+        if (a.distance_squared > b.distance_squared)
+        {
+            return false;
+        }
         return a.payload < b.payload;
     }
 };
@@ -104,7 +116,10 @@ void kd_nearest_n_impl(const KdTree<T>&                       tree,
         // Strict `>` (not `>=`): a subtree whose lower bound equals `worst`
         // could still contain a tied-distance point with a lower payload index
         // that would win the ADR-0076 §4 pin #11 tiebreak — we must descend.
-        if (out.size() == k && f.lower_dsq > worst) { continue; }
+        if (out.size() == k && f.lower_dsq > worst)
+        {
+            continue;
+        }
 
         const KdNode<T>& n = nodes[f.node];
 
@@ -152,8 +167,16 @@ void kd_nearest_n_impl(const KdTree<T>&                       tree,
 
         u32 near_node;
         u32 far_node;
-        if (dq < T{0}) { near_node = left;  far_node = right; }
-        else            { near_node = right; far_node = left;  }
+        if (dq < T{0})
+        {
+            near_node = left;
+            far_node = right;
+        }
+        else
+        {
+            near_node = right;
+            far_node = left;
+        }
 
         const T far_lower = f.lower_dsq + dq * dq;
 
@@ -163,7 +186,10 @@ void kd_nearest_n_impl(const KdTree<T>&                       tree,
         // cross the split plane).
         // `<= worst` (not `<`): tied lower-bound subtree may contain a lower-
         // payload tie winner — descend.
-        if (out.size() < k || far_lower <= worst) { stack[sp++] = Frame{far_node,  far_lower}; }
+        if (out.size() < k || far_lower <= worst)
+        {
+            stack[sp++] = Frame{far_node,  far_lower};
+        }
         stack[sp++] = Frame{near_node, f.lower_dsq};
     }
 

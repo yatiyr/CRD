@@ -272,7 +272,10 @@ int main(int argc, char* argv[])
         const char* root_arg = nullptr;
         for (int i = 2; i < argc - 1; ++i)
         {
-            if (std::strcmp(argv[i], "--root") == 0) { root_arg = argv[i + 1]; }
+            if (std::strcmp(argv[i], "--root") == 0)
+            {
+                root_arg = argv[i + 1];
+            }
         }
         if (root_arg == nullptr)
         {
@@ -293,7 +296,10 @@ int main(int argc, char* argv[])
                 root_arg = argv[i + 1];
                 ++i;
             }
-            else { what = argv[i]; }
+            else
+            {
+                what = argv[i];
+            }
         }
         if (root_arg == nullptr || what == nullptr)
         {

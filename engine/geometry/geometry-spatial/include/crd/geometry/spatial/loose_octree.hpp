@@ -330,7 +330,10 @@ template <MathScalar T>
 template <typename Fn>
 void LooseOctree<T>::overlap(const AABB3<T>& query, Fn&& on_hit) const
 {
-    if (m_root == k_null) { return; }
+    if (m_root == k_null)
+    {
+        return;
+    }
     Fn on_hit_ref = static_cast<Fn&&>(on_hit);
     overlap_recursive<Fn>(m_root, query, on_hit_ref);
 }
@@ -341,7 +344,10 @@ void LooseOctree<T>::overlap_recursive(crd::u32 cell_idx, const AABB3<T>& query,
 {
     const OctreeNode<T>& node = m_nodes[cell_idx];
     const AABB3<T> loose = loose_aabb_of(node);
-    if (!crd::geometry::primitives::intersects(loose, query)) { return; }
+    if (!crd::geometry::primitives::intersects(loose, query))
+    {
+        return;
+    }
 
     // Local objects of this cell.
     if (cell_idx < m_cells.size())

@@ -37,7 +37,10 @@ public:
         : m_device(device), m_module(module), m_stage(stage), m_spirv(crd::memory::default_allocator())
     {
         m_spirv.resize(spirv.size());
-        for (crd::usize i = 0; i < spirv.size(); ++i) { m_spirv[i] = spirv[i]; }
+        for (crd::usize i = 0; i < spirv.size(); ++i)
+        {
+            m_spirv[i] = spirv[i];
+        }
         // DIAG.7a(d2b-vk): ONE logical Program identity per compiled shader stage -- mint on the VkShaderModule (the only
         // native object this wrapper owns). A separate identity from the raster program (P3) that later links it.
         m_identity = detail::vk_attach_identity(m_device, VK_OBJECT_TYPE_SHADER_MODULE,
@@ -47,7 +50,10 @@ public:
     ~VulkanGpuProgramImpl() override
     {
         detail::vk_detach_identity(m_identity); // DIAG.7a(d2b-vk): retire the shader-stage Program identity
-        if (m_module != VK_NULL_HANDLE) { vkDestroyShaderModule(m_device, m_module, nullptr); }
+        if (m_module != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(m_device, m_module, nullptr);
+        }
     }
     VulkanGpuProgramImpl(const VulkanGpuProgramImpl&)            = delete;
     VulkanGpuProgramImpl& operator=(const VulkanGpuProgramImpl&) = delete;
@@ -76,8 +82,14 @@ public:
     explicit VulkanGpuContextImpl(const GpuContextConfig& config) { init(config); }
     ~VulkanGpuContextImpl() override
     {
-        if (m_device != VK_NULL_HANDLE) { vkDestroyDevice(m_device, nullptr); }
-        if (m_instance != VK_NULL_HANDLE) { vkDestroyInstance(m_instance, nullptr); }
+        if (m_device != VK_NULL_HANDLE)
+        {
+            vkDestroyDevice(m_device, nullptr);
+        }
+        if (m_instance != VK_NULL_HANDLE)
+        {
+            vkDestroyInstance(m_instance, nullptr);
+        }
     }
 
     [[nodiscard]] bool             valid() const noexcept override { return m_valid; }
@@ -155,13 +167,25 @@ public:
         // B3-c: raster stages behind the SAME seam. `entry_valid` first — e.g. a `FragCoord` in a vertex entry is rejected.
         if (entry.stage == crd::kir::KStage::Vertex || entry.stage == crd::kir::KStage::Fragment)
         {
-            if (!crd::kir::entry_valid(graph, entry)) { diag("vtx.entry_valid", nullptr, nullptr); return nullptr; }
+            if (!crd::kir::entry_valid(graph, entry))
+            {
+                diag("vtx.entry_valid", nullptr, nullptr);
+                return nullptr;
+            }
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_stage_glsl(graph, entry, a, kern)) { diag("vtx.emit", &kern, nullptr); return nullptr; }
+            if (!crd::kir::emit_stage_glsl(graph, entry, a, kern))
+            {
+                diag("vtx.emit", &kern, nullptr);
+                return nullptr;
+            }
             const ShaderStage stage =
                 (entry.stage == crd::kir::KStage::Vertex) ? ShaderStage::Vertex : ShaderStage::Fragment;
             const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_stage", a);
-            if (!spv.ok) { diag("vtx.spv", &kern, &spv); return nullptr; }
+            if (!spv.ok)
+            {
+                diag("vtx.spv", &kern, &spv);
+                return nullptr;
+            }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
@@ -177,25 +201,55 @@ public:
             || entry.stage == crd::kir::KStage::Intersection || entry.stage == crd::kir::KStage::Callable)
         {
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_rt_stage_glsl(graph, entry, a, kern, invocation_reorder())) { return nullptr; }
+            if (!crd::kir::emit_rt_stage_glsl(graph, entry, a, kern, invocation_reorder()))
+            {
+                return nullptr;
+            }
             ShaderStage stage = ShaderStage::RayGen;
-            if (entry.stage == crd::kir::KStage::ClosestHit) { stage = ShaderStage::ClosestHit; }
-            else if (entry.stage == crd::kir::KStage::Miss)  { stage = ShaderStage::Miss; }
-            else if (entry.stage == crd::kir::KStage::AnyHit) { stage = ShaderStage::AnyHit; }
+            if (entry.stage == crd::kir::KStage::ClosestHit)
+            {
+                stage = ShaderStage::ClosestHit;
+            }
+            else if (entry.stage == crd::kir::KStage::Miss)
+            {
+                stage = ShaderStage::Miss;
+            }
+            else if (entry.stage == crd::kir::KStage::AnyHit)
+            {
+                stage = ShaderStage::AnyHit;
+            }
             // REN-38-F13: the last two stages route through the SAME emitter + compile seam
-            else if (entry.stage == crd::kir::KStage::Intersection) { stage = ShaderStage::Intersection; }
-            else if (entry.stage == crd::kir::KStage::Callable) { stage = ShaderStage::Callable; }
+            else if (entry.stage == crd::kir::KStage::Intersection)
+            {
+                stage = ShaderStage::Intersection;
+            }
+            else if (entry.stage == crd::kir::KStage::Callable)
+            {
+                stage = ShaderStage::Callable;
+            }
             const auto spv = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_rt", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok)
+            {
+                return nullptr;
+            }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
         if (entry.stage == crd::kir::KStage::Mesh)
         {
-            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            if (!crd::kir::entry_valid(graph, entry))
+            {
+                return nullptr;
+            }
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_mesh_glsl(graph, entry, a, kern)) { return nullptr; }
+            if (!crd::kir::emit_mesh_glsl(graph, entry, a, kern))
+            {
+                return nullptr;
+            }
             const auto spv = compile_glsl_to_spirv(ShaderStage::Mesh, crd::containers::to_view(kern.source), "ckir_mesh", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok)
+            {
+                return nullptr;
+            }
             return create_program(ShaderStage::Mesh, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
@@ -203,26 +257,44 @@ public:
         // mesh shader (create_task_mesh_program) and drives how many mesh workgroups launch (EmitMeshTasksEXT) + the payload.
         if (entry.stage == crd::kir::KStage::Task)
         {
-            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            if (!crd::kir::entry_valid(graph, entry))
+            {
+                return nullptr;
+            }
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_task_glsl(graph, entry, a, kern)) { return nullptr; }
+            if (!crd::kir::emit_task_glsl(graph, entry, a, kern))
+            {
+                return nullptr;
+            }
             const auto spv = compile_glsl_to_spirv(ShaderStage::Task, crd::containers::to_view(kern.source), "ckir_task", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok)
+            {
+                return nullptr;
+            }
             return create_program(ShaderStage::Task, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
         // B4-tess: TESS-CONTROL (hull) / TESS-EVAL (domain) — the portable displacement path. Emit the tess GLSL → SPIR-V.
         if (entry.stage == crd::kir::KStage::TessControl || entry.stage == crd::kir::KStage::TessEval)
         {
-            if (!crd::kir::entry_valid(graph, entry)) { return nullptr; }
+            if (!crd::kir::entry_valid(graph, entry))
+            {
+                return nullptr;
+            }
             const bool           is_tcs = entry.stage == crd::kir::KStage::TessControl;
             crd::kir::GlslKernel kern(a);
             const bool           ok = is_tcs ? crd::kir::emit_tesc_glsl(graph, entry, a, kern)
                                              : crd::kir::emit_tese_glsl(graph, entry, a, kern);
-            if (!ok) { return nullptr; }
+            if (!ok)
+            {
+                return nullptr;
+            }
             const ShaderStage stage = is_tcs ? ShaderStage::TessControl : ShaderStage::TessEval;
             const auto        spv   = compile_glsl_to_spirv(stage, crd::containers::to_view(kern.source), "ckir_tess", a);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok)
+            {
+                return nullptr;
+            }
             return create_program(stage, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
@@ -230,25 +302,47 @@ public:
         if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {
             crd::kir::GlslKernel kern(a);
-            if (!crd::kir::emit_compute_kernel_glsl(graph, entry, a, kern)) { diag("cmpk.emit", &kern, nullptr); return nullptr; }
+            if (!crd::kir::emit_compute_kernel_glsl(graph, entry, a, kern))
+            {
+                diag("cmpk.emit", &kern, nullptr);
+                return nullptr;
+            }
             const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir_kernel", a);
-            if (!spv.ok) { diag("cmpk.spv", &kern, &spv); return nullptr; }
+            if (!spv.ok)
+            {
+                diag("cmpk.spv", &kern, &spv);
+                return nullptr;
+            }
             return create_program(ShaderStage::Compute, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
         }
 
         // Compute: the fused elementwise / vec-aware kernel path.
-        if (entry.stage != crd::kir::KStage::Compute || entry.n_out < 1) { return nullptr; }
+        if (entry.stage != crd::kir::KStage::Compute || entry.n_out < 1)
+        {
+            return nullptr;
+        }
         const int output = entry.out[0].node;
-        if (output < 0 || output >= graph.size()) { return nullptr; }
+        if (output < 0 || output >= graph.size())
+        {
+            return nullptr;
+        }
 
         crd::kir::GlslKernel kern(a);
         const bool           ok = crd::kir::graph_uses_vec(graph, output, a)
                                       ? crd::kir::emit_vec_glsl(graph, output, a, kern)
                                       : crd::kir::emit_elementwise_glsl(graph, output, a, kern);
-        if (!ok) { diag("elem.emit", &kern, nullptr); return nullptr; } // a compute class this backend's emitter does not lower yet
+        if (!ok) // a compute class this backend's emitter does not lower yet
+        {
+            diag("elem.emit", &kern, nullptr);
+            return nullptr;
+        }
 
         const auto spv = compile_glsl_to_spirv(ShaderStage::Compute, crd::containers::to_view(kern.source), "ckir", a);
-        if (!spv.ok) { diag("elem.spv", &kern, &spv); return nullptr; }
+        if (!spv.ok)
+        {
+            diag("elem.spv", &kern, &spv);
+            return nullptr;
+        }
         return create_program(ShaderStage::Compute,
                               crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()));
     }
@@ -267,7 +361,11 @@ private:
         // DIAG.7a(f): ANY requested validation mode (core/sync/GPU-assisted) needs the validation layer loaded.
         const bool any_validation =
             config.enable_validation || config.enable_sync_validation || config.enable_gpu_assisted_validation;
-        if (any_validation) { ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = layers; }
+        if (any_validation)
+        {
+            ici.enabledLayerCount = 1;
+            ici.ppEnabledLayerNames = layers;
+        }
 
         // C2-a: a WINDOWED context enables the surface instance extensions so the ONE device can present (ADR-0099).
         // Guarded + additive — headless (compute) leaves the instance byte-for-byte unchanged. Only enabled if available.
@@ -297,14 +395,26 @@ private:
             bool has_dbg      = false;
             for (std::uint32_t i = 0; i < nie; ++i)
             {
-                if (std::strcmp(iavail[i].extensionName, "VK_KHR_surface") == 0) { has_surf = true; }
+                if (std::strcmp(iavail[i].extensionName, "VK_KHR_surface") == 0)
+                {
+                    has_surf = true;
+                }
                 if (platform_surface != nullptr && std::strcmp(iavail[i].extensionName, platform_surface) == 0)
                 {
                     has_plat = true;
                 }
-                if (std::strcmp(iavail[i].extensionName, "VK_EXT_headless_surface") == 0) { has_headless = true; }
-                if (std::strcmp(iavail[i].extensionName, "VK_EXT_debug_utils") == 0) { has_dbg = true; }
-                if (std::strcmp(iavail[i].extensionName, "VK_EXT_validation_features") == 0) { has_valfeat = true; }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_headless_surface") == 0)
+                {
+                    has_headless = true;
+                }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_debug_utils") == 0)
+                {
+                    has_dbg = true;
+                }
+                if (std::strcmp(iavail[i].extensionName, "VK_EXT_validation_features") == 0)
+                {
+                    has_valfeat = true;
+                }
             }
             if (has_surf)
             {
@@ -323,7 +433,10 @@ private:
             }
             // RET-4: debug_utils enabled EXPLICITLY with validation (ValidationCapture's messenger rides it — the
             // layer resolving the entry points anyway is an accident, never a contract)
-            if (any_validation && has_dbg) { inst_exts[n_inst_exts++] = "VK_EXT_debug_utils"; }
+            if (any_validation && has_dbg)
+            {
+                inst_exts[n_inst_exts++] = "VK_EXT_debug_utils";
+            }
             // DIAG.7a(f): VK_EXT_validation_features is provided by the VALIDATION LAYER, not the loader, so it does
             // NOT appear in the null-layer enumeration above -- enumerate the layer explicitly to detect it.
             if (any_validation)
@@ -334,12 +447,18 @@ private:
                 vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &nle, lavail.get());
                 for (std::uint32_t li = 0; li < nle; ++li)
                 {
-                    if (std::strcmp(lavail[li].extensionName, "VK_EXT_validation_features") == 0) { has_valfeat = true; }
+                    if (std::strcmp(lavail[li].extensionName, "VK_EXT_validation_features") == 0)
+                    {
+                        has_valfeat = true;
+                    }
                 }
             }
             // DIAG.7a(f): sync / GPU-assisted enables ride VkValidationFeaturesEXT, which needs this instance ext.
             const bool want_valfeat = config.enable_sync_validation || config.enable_gpu_assisted_validation;
-            if (want_valfeat && has_valfeat) { inst_exts[n_inst_exts++] = "VK_EXT_validation_features"; }
+            if (want_valfeat && has_valfeat)
+            {
+                inst_exts[n_inst_exts++] = "VK_EXT_validation_features";
+            }
         }
         if (n_inst_exts > 0U)
         {
@@ -350,8 +469,14 @@ private:
         // confirmed later against device features -- the layer accepts the enable but only instruments if present.
         VkValidationFeatureEnableEXT vf_enables[2];
         crd::u32                     n_vf = 0U;
-        if (config.enable_sync_validation && has_valfeat) { vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT; }
-        if (config.enable_gpu_assisted_validation && has_valfeat) { vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT; }
+        if (config.enable_sync_validation && has_valfeat)
+        {
+            vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+        }
+        if (config.enable_gpu_assisted_validation && has_valfeat)
+        {
+            vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT;
+        }
         VkValidationFeaturesEXT vfeat{};
         vfeat.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
         if (n_vf > 0U)
@@ -362,7 +487,10 @@ private:
             ici.pNext                           = &vfeat;
         }
         m_surface_ext = surface_ok;
-        if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS) { return; }
+        if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS)
+        {
+            return;
+        }
         // DIAG.7a(f): record activation. Core + Sync known now (layer loaded == vkCreateInstance succeeded);
         // GPU-assisted is provisional (FeatureAbsent) until the device features are queried below.
         {
@@ -391,17 +519,27 @@ private:
 
         std::uint32_t    npd = 16;
         VkPhysicalDevice pds[16];
-        if (vkEnumeratePhysicalDevices(m_instance, &npd, pds) != VK_SUCCESS || npd == 0) { return; }
+        if (vkEnumeratePhysicalDevices(m_instance, &npd, pds) != VK_SUCCESS || npd == 0)
+        {
+            return;
+        }
         m_physical = pds[0];
         for (std::uint32_t i = 0; i < npd; ++i)
         {
             VkPhysicalDeviceProperties pr{};
             vkGetPhysicalDeviceProperties(pds[i], &pr);
-            if (pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { m_physical = pds[i]; break; }
+            if (pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+            {
+                m_physical = pds[i];
+                break;
+            }
         }
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_physical, &props);
-        for (int i = 0; i < 255 && props.deviceName[i] != '\0'; ++i) { m_name[i] = props.deviceName[i]; } // m_name zero-init
+        for (int i = 0; i < 255 && props.deviceName[i] != '\0'; ++i) // m_name zero-init
+        {
+            m_name[i] = props.deviceName[i];
+        }
 
         // Compute queue family — prefer a DEDICATED compute family (async vs a renderer), else any compute-capable one.
         std::uint32_t           nqf = 16;
@@ -414,15 +552,27 @@ private:
         {
             if ((qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0U)
             {
-                if (any_compute == UINT32_MAX) { any_compute = i; }
-                if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0U && dedicated == UINT32_MAX) { dedicated = i; }
+                if (any_compute == UINT32_MAX)
+                {
+                    any_compute = i;
+                }
+                if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0U && dedicated == UINT32_MAX)
+                {
+                    dedicated = i;
+                }
             }
             // D-008 C1: a GRAPHICS family for IRasterContext (distinct from the async-compute queue where possible).
-            if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0U && any_graphics == UINT32_MAX) { any_graphics = i; }
+            if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0U && any_graphics == UINT32_MAX)
+            {
+                any_graphics = i;
+            }
         }
         m_compute_family  = (dedicated != UINT32_MAX) ? dedicated : any_compute;
         m_graphics_family = any_graphics; // UINT32_MAX ⇒ compute-only adapter; raster disabled but compute still works
-        if (m_compute_family == UINT32_MAX) { return; }
+        if (m_compute_family == UINT32_MAX)
+        {
+            return;
+        }
 
         // Cooperative matrix (tensor cores) — enable coopmat + coopmat2 + fp16/16-bit/memory-model IF the adapter has them.
         std::uint32_t ne = 0;
@@ -456,31 +606,106 @@ private:
         bool has_maint5    = false; // CEIR-20c-2: VK_KHR_maintenance5 (VkBufferUsageFlags2 — the DGC preprocess-buffer usage bit)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
-            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands") == 0) { has_dgc = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands_compute") == 0) { has_dgc_comp = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_EXT_device_generated_commands") == 0) { has_dgc_ext = true; } // CEIR-20c-2
-            if (std::strcmp(exts[i].extensionName, "VK_KHR_maintenance5") == 0) { has_maint5 = true; }             // CEIR-20c-2
-            if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0) { has_omm = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0) { has_rtpipe = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0) { has_ser = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_cluster_acceleration_structure") == 0) { has_cluster = true; }
-            if (std::strcmp(exts[i].extensionName, VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME) == 0) { has_lss = true; }
-            if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) { has_mesh = true; } // B4
-            if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0) { has_cm1 = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0) { has_cm2 = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_vector") == 0) { has_coopvec = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0) { has_sgpart = true; }
-            if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0) { has_shobj = true; }
-            if (std::strcmp(exts[i].extensionName, "VK_KHR_draw_indirect_count") == 0) { has_dic = true; }
-            if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) { has_swapchain = true; }
-            if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0) { has_vrs = true; }
-            if (std::strcmp(exts[i].extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0) { has_conserv = true; }
-            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) == 0) { has_eds3 = true; }
-            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME) == 0) { has_eds2 = true; } // B4-tess
-            if (std::strcmp(exts[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0) { has_interlock = true; }
-            if (std::strcmp(exts[i].extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0) { has_accel = true; }
-            if (std::strcmp(exts[i].extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0) { has_rayquery = true; }
-            if (std::strcmp(exts[i].extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0) { has_defhost = true; }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands") == 0)
+            {
+                has_dgc = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands_compute") == 0)
+            {
+                has_dgc_comp = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_EXT_device_generated_commands") == 0) // CEIR-20c-2
+            {
+                has_dgc_ext = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_maintenance5") == 0) // CEIR-20c-2
+            {
+                has_maint5 = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_EXT_opacity_micromap") == 0)
+            {
+                has_omm = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_ray_tracing_pipeline") == 0)
+            {
+                has_rtpipe = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_ray_tracing_invocation_reorder") == 0)
+            {
+                has_ser = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_cluster_acceleration_structure") == 0)
+            {
+                has_cluster = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME) == 0)
+            {
+                has_lss = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) // B4
+            {
+                has_mesh = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_cooperative_matrix") == 0)
+            {
+                has_cm1 = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_matrix2") == 0)
+            {
+                has_cm2 = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_cooperative_vector") == 0)
+            {
+                has_coopvec = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_NV_shader_subgroup_partitioned") == 0)
+            {
+                has_sgpart = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_SHADER_OBJECT_EXTENSION_NAME) == 0)
+            {
+                has_shobj = true;
+            }
+            if (std::strcmp(exts[i].extensionName, "VK_KHR_draw_indirect_count") == 0)
+            {
+                has_dic = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0)
+            {
+                has_swapchain = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0)
+            {
+                has_vrs = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME) == 0)
+            {
+                has_conserv = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) == 0)
+            {
+                has_eds3 = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME) == 0) // B4-tess
+            {
+                has_eds2 = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME) == 0)
+            {
+                has_interlock = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0)
+            {
+                has_accel = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0)
+            {
+                has_rayquery = true;
+            }
+            if (std::strcmp(exts[i].extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0)
+            {
+                has_defhost = true;
+            }
         }
         m_coopmat2      = has_cm1 && has_cm2;
         m_shader_object = has_shobj && m_graphics_family != UINT32_MAX; // no point on a compute-only adapter
@@ -584,26 +809,44 @@ private:
         // which REQUIRES this device feature — without it, creating the shader is a validation error (a lenient driver may
         // still run it, but a strict one rejects it). A raster-only feature ⇒ enabled only for a graphics-capable context,
         // leaving a pure-compute device unchanged (the C2 convergence keeps that device minimal).
-        if (m_graphics_family != UINT32_MAX) { enabled_feats.sampleRateShading = avail_feats.sampleRateShading; }
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.sampleRateShading = avail_feats.sampleRateShading;
+        }
         // B1-f: a fragment shader that WRITES a storage buffer (the interlock RMW / OIT path) needs this feature — without
         // it the SPIR-V must mark every fragment-stage storage variable NonWritable (VUID-RuntimeSpirv-NonWritable-06340).
-        if (m_graphics_family != UINT32_MAX) { enabled_feats.fragmentStoresAndAtomics = avail_feats.fragmentStoresAndAtomics; }
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.fragmentStoresAndAtomics = avail_feats.fragmentStoresAndAtomics;
+        }
         // B2-c: a CUBE-ARRAY texture (view + the SampledCubeArray SPIR-V capability) needs this feature (VUID-...-viewType-01004
         // / VUID-...-pCode-08740). Graphics-capable only.
-        if (m_graphics_family != UINT32_MAX) { enabled_feats.imageCubeArray = avail_feats.imageCubeArray; }
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.imageCubeArray = avail_feats.imageCubeArray;
+        }
         // ⛔ REN-38-A11: a FRAGMENT shader that reads `gl_PrimitiveID` — which is the ENTIRE POINT of a visibility
         // buffer — lowers to SPIR-V declaring the GEOMETRY capability, and that capability REQUIRES this feature
         // (VUID-VkShaderCreateInfoEXT-pCode-08740). Without it a strict driver refuses to create the shader and a
         // lenient one runs it anyway, so the visibility-buffer path worked on this machine while emitting a
         // validation error on every program creation — found when the A11 gate ran it under a capture.
-        if (m_graphics_family != UINT32_MAX) { enabled_feats.geometryShader = avail_feats.geometryShader; }
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.geometryShader = avail_feats.geometryShader;
+        }
         m_geometry_shader = m_graphics_family != UINT32_MAX && avail_feats.geometryShader == VK_TRUE;
         // B4-tess: the tessellation control/eval stages need this core feature (the portable displacement path). Graphics-only.
-        if (m_graphics_family != UINT32_MAX) { enabled_feats.tessellationShader = avail_feats.tessellationShader; }
+        if (m_graphics_family != UINT32_MAX)
+        {
+            enabled_feats.tessellationShader = avail_feats.tessellationShader;
+        }
         m_tessellation = m_tessellation && avail_feats.tessellationShader == VK_TRUE; // finalise: EDS2 + shader-obj + the feature
         // C2-c: a WINDOWED context matches what rhi-vulkan's own device enables so the renderer runs on the adopted
         // device unchanged — fillModeNonSolid (wireframe) here + synchronization2 in the feature chain below.
-        if (m_windowed) { enabled_feats.fillModeNonSolid = avail_feats.fillModeNonSolid; }
+        if (m_windowed)
+        {
+            enabled_feats.fillModeNonSolid = avail_feats.fillModeNonSolid;
+        }
         // ⛔ REN-39-A2: ONE vkCmdDraw(Indexed)Indirect with drawCount > 1 REQUIRES this core feature
         // (VUID-…-drawCount-02718). The 38-4 non-indexed multi-draw had issued drawCount = N WITHOUT it since it
         // shipped — a lenient driver ran it while emitting a validation error nobody captured (the 38-4 gate
@@ -872,11 +1115,31 @@ private:
         if (m_opacity_micromap || m_rt_pipeline || m_invocation_reorder || m_cluster_as || m_lss)
         {
             void* pf = nullptr;
-            if (m_opacity_micromap) { omm_feat.pNext = pf; pf = &omm_feat; }
-            if (m_rt_pipeline) { rtp_feat.pNext = pf; pf = &rtp_feat; }
-            if (m_invocation_reorder) { ser_feat.pNext = pf; pf = &ser_feat; }
-            if (m_cluster_as) { clu_feat.pNext = pf; pf = &clu_feat; }
-            if (m_lss) { lss_feat.pNext = pf; pf = &lss_feat; }
+            if (m_opacity_micromap)
+            {
+                omm_feat.pNext = pf;
+                pf = &omm_feat;
+            }
+            if (m_rt_pipeline)
+            {
+                rtp_feat.pNext = pf;
+                pf = &rtp_feat;
+            }
+            if (m_invocation_reorder)
+            {
+                ser_feat.pNext = pf;
+                pf = &ser_feat;
+            }
+            if (m_cluster_as)
+            {
+                clu_feat.pNext = pf;
+                pf = &clu_feat;
+            }
+            if (m_lss)
+            {
+                lss_feat.pNext = pf;
+                pf = &lss_feat;
+            }
             VkPhysicalDeviceFeatures2 f2{}; f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2; f2.pNext = pf;
             vkGetPhysicalDeviceFeatures2(m_physical, &f2);
             m_opacity_micromap   = m_opacity_micromap && omm_feat.micromap == VK_TRUE;
@@ -894,69 +1157,212 @@ private:
 
         // Build the pNext chain head-first: dyn → [demote] → [vrs] → [eds3] → [sync2] → [sho] → [mesh] → [coopmat…] → [RT].
         void* chain = &dyn;
-        if (m_graphics_family != UINT32_MAX) { demote.pNext = chain; chain = &demote; } // raster `discard` support
-        if (m_fragment_shading_rate) { vrs.pNext = chain; chain = &vrs; }
-        if (m_conservative_raster) { eds3.pNext = chain; chain = &eds3; }
-        if (m_tessellation) { eds2.pNext = chain; chain = &eds2; } // B4-tess: patch-control-points dynamic state
-        if (m_fragment_interlock) { interlock.pNext = chain; chain = &interlock; }
-        if (m_bindless) { descidx.pNext = chain; chain = &descidx; }
+        if (m_graphics_family != UINT32_MAX) // raster `discard` support
+        {
+            demote.pNext = chain;
+            chain = &demote;
+        }
+        if (m_fragment_shading_rate)
+        {
+            vrs.pNext = chain;
+            chain = &vrs;
+        }
+        if (m_conservative_raster)
+        {
+            eds3.pNext = chain;
+            chain = &eds3;
+        }
+        if (m_tessellation) // B4-tess: patch-control-points dynamic state
+        {
+            eds2.pNext = chain;
+            chain = &eds2;
+        }
+        if (m_fragment_interlock)
+        {
+            interlock.pNext = chain;
+            chain = &interlock;
+        }
+        if (m_bindless)
+        {
+            descidx.pNext = chain;
+            chain = &descidx;
+        }
         // REN-38: gl_DrawID for the batched scene VS — chained whenever the device offers it
-        if (sdp.shaderDrawParameters == VK_TRUE) { sdp.pNext = chain; chain = &sdp; }
+        if (sdp.shaderDrawParameters == VK_TRUE)
+        {
+            sdp.pNext = chain;
+            chain = &sdp;
+        }
         // REN-40-A: the device-side draw COUNT — core command, feature-gated bit (see the query above)
-        if (m_windowed) { sync2.pNext = chain; chain = &sync2; }
-        if (m_shader_object) { sho.pNext = chain; chain = &sho; }
-        if (m_mesh_shader) { mesh.pNext = chain; chain = &mesh; maint4.pNext = chain; chain = &maint4; }
-        if (m_coopmat2) { cm2.pNext = chain; cmk.pNext = &cm2; chain = &cmk; }
-        if (m_coopvec) { cv.pNext = chain; chain = &cv; } // C6: cooperative-vector inference (+ training when supported)
-        if (m_ray_query) { accel_feat.pNext = chain; chain = &accel_feat; rq_feat.pNext = chain; chain = &rq_feat; }
-        if (m_ray_query || m_dgc || m_dgc_ext) { bda_feat.pNext = chain; chain = &bda_feat; } // BDA: RT (AS build) + DGC/DGC-EXT (device addrs) — chained ONCE
-        if (m_dgc) { dgc_feat.pNext = chain; chain = &dgc_feat; dgcc_feat.pNext = chain; chain = &dgcc_feat; } // C5
-        if (m_dgc_ext) { dgce_feat.pNext = chain; chain = &dgce_feat; maint5_feat.pNext = chain; chain = &maint5_feat; } // CEIR-20c-2
-        if (m_opacity_micromap) { omm_feat.pNext = chain; chain = &omm_feat; }
-        if (m_rt_pipeline) { rtp_feat.pNext = chain; chain = &rtp_feat; }
-        if (m_invocation_reorder) { ser_feat.pNext = chain; chain = &ser_feat; }
-        if (m_cluster_as) { clu_feat.pNext = chain; chain = &clu_feat; }
-        if (m_lss) { lss_feat.pNext = chain; chain = &lss_feat; }
+        if (m_windowed)
+        {
+            sync2.pNext = chain;
+            chain = &sync2;
+        }
+        if (m_shader_object)
+        {
+            sho.pNext = chain;
+            chain = &sho;
+        }
+        if (m_mesh_shader)
+        {
+            mesh.pNext = chain;
+            chain = &mesh;
+            maint4.pNext = chain;
+            chain = &maint4;
+        }
+        if (m_coopmat2)
+        {
+            cm2.pNext = chain;
+            cmk.pNext = &cm2;
+            chain = &cmk;
+        }
+        if (m_coopvec) // C6: cooperative-vector inference (+ training when supported)
+        {
+            cv.pNext = chain;
+            chain = &cv;
+        }
+        if (m_ray_query)
+        {
+            accel_feat.pNext = chain;
+            chain = &accel_feat;
+            rq_feat.pNext = chain;
+            chain = &rq_feat;
+        }
+        if (m_ray_query || m_dgc || m_dgc_ext) // BDA: RT (AS build) + DGC/DGC-EXT (device addrs) — chained ONCE
+        {
+            bda_feat.pNext = chain;
+            chain = &bda_feat;
+        }
+        if (m_dgc) // C5
+        {
+            dgc_feat.pNext = chain;
+            chain = &dgc_feat;
+            dgcc_feat.pNext = chain;
+            chain = &dgcc_feat;
+        }
+        if (m_dgc_ext) // CEIR-20c-2
+        {
+            dgce_feat.pNext = chain;
+            chain = &dgce_feat;
+            maint5_feat.pNext = chain;
+            chain = &maint5_feat;
+        }
+        if (m_opacity_micromap)
+        {
+            omm_feat.pNext = chain;
+            chain = &omm_feat;
+        }
+        if (m_rt_pipeline)
+        {
+            rtp_feat.pNext = chain;
+            chain = &rtp_feat;
+        }
+        if (m_invocation_reorder)
+        {
+            ser_feat.pNext = chain;
+            chain = &ser_feat;
+        }
+        if (m_cluster_as)
+        {
+            clu_feat.pNext = chain;
+            chain = &clu_feat;
+        }
+        if (m_lss)
+        {
+            lss_feat.pNext = chain;
+            chain = &lss_feat;
+        }
 
         const char* devexts[32];
         crd::u32    ndevext = 0;
         // B-cmp: hardware subgroup partition (match_any) — the radix-sort rank's cheap deterministic match. Shader-only
         // capability (no feature struct); enabling the extension unlocks the SPIR-V GroupNonUniformPartitionedNV cap.
-        if (has_sgpart) { devexts[ndevext++] = "VK_NV_shader_subgroup_partitioned"; }
+        if (has_sgpart)
+        {
+            devexts[ndevext++] = "VK_NV_shader_subgroup_partitioned";
+        }
         if (m_coopmat2)
         {
             devexts[ndevext++] = "VK_KHR_cooperative_matrix";
             devexts[ndevext++] = "VK_NV_cooperative_matrix2";
         }
-        if (m_coopvec) { devexts[ndevext++] = "VK_NV_cooperative_vector"; } // C6: per-invocation MLP inference
-        if (m_dgc) { devexts[ndevext++] = "VK_NV_device_generated_commands"; devexts[ndevext++] = "VK_NV_device_generated_commands_compute"; } // C5
-        if (m_dgc_ext) { devexts[ndevext++] = "VK_EXT_device_generated_commands"; devexts[ndevext++] = "VK_KHR_maintenance5"; } // CEIR-20c-2 (cross-vendor)
-        if (m_shader_object) { devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME; }
+        if (m_coopvec) // C6: per-invocation MLP inference
+        {
+            devexts[ndevext++] = "VK_NV_cooperative_vector";
+        }
+        if (m_dgc) // C5
+        {
+            devexts[ndevext++] = "VK_NV_device_generated_commands";
+            devexts[ndevext++] = "VK_NV_device_generated_commands_compute";
+        }
+        if (m_dgc_ext) // CEIR-20c-2 (cross-vendor)
+        {
+            devexts[ndevext++] = "VK_EXT_device_generated_commands";
+            devexts[ndevext++] = "VK_KHR_maintenance5";
+        }
+        if (m_shader_object)
+        {
+            devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME;
+        }
         // RET-2: swapchain enablement follows AVAILABILITY (given the instance enabled VK_KHR_surface) — a headless
         // context presents to a headless surface, a windowed one to a window; one extension, both paths.
-        if (m_surface_ext && has_swapchain) { devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME; }
+        if (m_surface_ext && has_swapchain)
+        {
+            devexts[ndevext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        }
         // REN-40-A: the extension form of the device-side draw count (see the 02830 note above).
-        if (m_draw_indirect_count) { devexts[ndevext++] = "VK_KHR_draw_indirect_count"; }
-        if (m_fragment_shading_rate) { devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME; }
+        if (m_draw_indirect_count)
+        {
+            devexts[ndevext++] = "VK_KHR_draw_indirect_count";
+        }
+        if (m_fragment_shading_rate)
+        {
+            devexts[ndevext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
+        }
         if (m_conservative_raster)
         {
             devexts[ndevext++] = VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME;
             devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
         }
-        if (m_tessellation) { devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME; } // B4-tess
-        if (m_fragment_interlock) { devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME; }
-        if (m_mesh_shader) { devexts[ndevext++] = VK_EXT_MESH_SHADER_EXTENSION_NAME; } // B4
+        if (m_tessellation) // B4-tess
+        {
+            devexts[ndevext++] = VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME;
+        }
+        if (m_fragment_interlock)
+        {
+            devexts[ndevext++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME;
+        }
+        if (m_mesh_shader) // B4
+        {
+            devexts[ndevext++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;
+        }
         if (m_ray_query) // B9/RT: inline ray query — the AS + ray-query + deferred-host-ops trio
         {
             devexts[ndevext++] = VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME;
             devexts[ndevext++] = VK_KHR_RAY_QUERY_EXTENSION_NAME;
             devexts[ndevext++] = VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME;
         }
-        if (m_opacity_micromap) { devexts[ndevext++] = "VK_EXT_opacity_micromap"; }                      // FA-1
-        if (m_rt_pipeline) { devexts[ndevext++] = "VK_KHR_ray_tracing_pipeline"; }                        // FA-2
-        if (m_invocation_reorder) { devexts[ndevext++] = "VK_NV_ray_tracing_invocation_reorder"; }        // FA-2 SER
-        if (m_cluster_as) { devexts[ndevext++] = "VK_NV_cluster_acceleration_structure"; }                // FA-3
-        if (m_lss) { devexts[ndevext++] = VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME; }        // B18-f
+        if (m_opacity_micromap) // FA-1
+        {
+            devexts[ndevext++] = "VK_EXT_opacity_micromap";
+        }
+        if (m_rt_pipeline) // FA-2
+        {
+            devexts[ndevext++] = "VK_KHR_ray_tracing_pipeline";
+        }
+        if (m_invocation_reorder) // FA-2 SER
+        {
+            devexts[ndevext++] = "VK_NV_ray_tracing_invocation_reorder";
+        }
+        if (m_cluster_as) // FA-3
+        {
+            devexts[ndevext++] = "VK_NV_cluster_acceleration_structure";
+        }
+        if (m_lss) // B18-f
+        {
+            devexts[ndevext++] = VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME;
+        }
 
         VkDeviceCreateInfo dci{};
         dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -967,7 +1373,10 @@ private:
         dci.enabledExtensionCount   = ndevext;
         dci.ppEnabledExtensionNames = (ndevext != 0U) ? devexts : nullptr;
 
-        if (vkCreateDevice(m_physical, &dci, nullptr, &m_device) != VK_SUCCESS) { return; }
+        if (vkCreateDevice(m_physical, &dci, nullptr, &m_device) != VK_SUCCESS)
+        {
+            return;
+        }
         vkGetDeviceQueue(m_device, m_compute_family, 0, &m_compute_queue);
         if (m_graphics_family != UINT32_MAX)
         {
@@ -1027,9 +1436,15 @@ private:
 
 std::unique_ptr<IGpuContext> create_vulkan_gpu_context(const GpuContextConfig& config)
 {
-    if (config.backend != GpuBackend::Vulkan) { return nullptr; }
+    if (config.backend != GpuBackend::Vulkan)
+    {
+        return nullptr;
+    }
     auto ctx = std::make_unique<VulkanGpuContextImpl>(config);
-    if (!ctx->valid()) { return nullptr; }
+    if (!ctx->valid())
+    {
+        return nullptr;
+    }
     return ctx;
 }
 
@@ -1039,13 +1454,19 @@ std::unique_ptr<IGpuContext> create_vulkan_gpu_context(const GpuContextConfig& c
 std::unique_ptr<IGpuProgram>
 make_vulkan_program(VkDevice device, ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked)
 {
-    if (device == VK_NULL_HANDLE || cooked.size() < 4U || (cooked.size() % 4U) != 0U) { return nullptr; }
+    if (device == VK_NULL_HANDLE || cooked.size() < 4U || (cooked.size() % 4U) != 0U)
+    {
+        return nullptr;
+    }
     VkShaderModuleCreateInfo ci{};
     ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     ci.codeSize = cooked.size();
     ci.pCode    = reinterpret_cast<const std::uint32_t*>(cooked.data()); // SPIR-V is 4-byte aligned by construction
     VkShaderModule module = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(device, &ci, nullptr, &module) != VK_SUCCESS) { return nullptr; }
+    if (vkCreateShaderModule(device, &ci, nullptr, &module) != VK_SUCCESS)
+    {
+        return nullptr;
+    }
     return std::make_unique<VulkanGpuProgramImpl>(device, module, stage, cooked);
 }
 

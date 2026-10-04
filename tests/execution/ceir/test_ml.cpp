@@ -47,7 +47,11 @@ TypeId tt(Context& ctx, TypeId elem, TypeId shape) { return ctx.type_tensor(elem
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -64,7 +68,10 @@ Operation* mlp(Context& ctx, const Kit& k, Block* b, Value* input, ConstSpan<Val
 {
     Value* ops[8] = {};
     ops[0] = input;
-    for (u32 i = 0; i < weights.size(); ++i) { ops[1U + i] = weights[i]; }
+    for (u32 i = 0; i < weights.size(); ++i)
+    {
+        ops[1U + i] = weights[i];
+    }
     Operation* const op = ctx.create_operation(k.mlp, ConstSpan<Value*>(ops, 1U + weights.size()), 1U, result, 0U);
     ctx.set_attr(op, "activation", ctx.attr_string(act));
     b->append(op);

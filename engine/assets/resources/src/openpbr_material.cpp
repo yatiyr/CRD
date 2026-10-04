@@ -27,20 +27,38 @@ void* OpenPbrMaterialLoader::load(const LoadContext& ctx)
 {
     // parse SCRATCH on the owned heap; only the RESIDENT payload charges m_payload (the streaming-category rule)
     CrdrFile file(&m_owned);
-    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok) { return nullptr; }
-    if (file.type_fourcc != kFourCC_PBRM) { return nullptr; }
+    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok)
+    {
+        return nullptr;
+    }
+    if (file.type_fourcc != kFourCC_PBRM)
+    {
+        return nullptr;
+    }
 
     const CrdrChunk* prms = crdr_find_chunk(file, kFourCC_PbrmPrms);
     const CrdrChunk* texs = crdr_find_chunk(file, kFourCC_PbrmTexs);
-    if (prms == nullptr || prms->payload.size() < sizeof(PbrmParams)) { return nullptr; }
-    if (texs == nullptr || texs->payload.size() < sizeof(PbrmTextures)) { return nullptr; }
+    if (prms == nullptr || prms->payload.size() < sizeof(PbrmParams))
+    {
+        return nullptr;
+    }
+    if (texs == nullptr || texs->payload.size() < sizeof(PbrmTextures))
+    {
+        return nullptr;
+    }
 
     PbrmParams params;
     std::memcpy(&params, prms->payload.data(), sizeof(params));
-    if (params.version != kPbrmVersion) { return nullptr; } // unknown version — never a silently-misread material
+    if (params.version != kPbrmVersion) // unknown version — never a silently-misread material
+    {
+        return nullptr;
+    }
 
     void* raw = m_payload->try_allocate(sizeof(OpenPbrMaterial), alignof(OpenPbrMaterial));
-    if (raw == nullptr) { return nullptr; } // over-budget on a streaming heap — graceful, never fatal
+    if (raw == nullptr) // over-budget on a streaming heap — graceful, never fatal
+    {
+        return nullptr;
+    }
     auto* mat   = new (raw) OpenPbrMaterial();
     mat->params = params;
     std::memcpy(&mat->textures, texs->payload.data(), sizeof(mat->textures));
@@ -49,7 +67,10 @@ void* OpenPbrMaterialLoader::load(const LoadContext& ctx)
 
 void OpenPbrMaterialLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto* mat = static_cast<OpenPbrMaterial*>(payload);
     mat->~OpenPbrMaterial();
     m_payload->deallocate(mat);

@@ -36,14 +36,23 @@ struct AudioPcm
     [[nodiscard]] bool is_float() const noexcept { return bits_per_sample == 0; }
     [[nodiscard]] crd::u64 frame_count() const noexcept
     {
-        if (channels == 0) { return 0; }
+        if (channels == 0)
+        {
+            return 0;
+        }
         const crd::usize n = is_float() ? fsamples.size() : isamples.size();
         return static_cast<crd::u64>(n) / channels;
     }
     [[nodiscard]] bool valid() const noexcept
     {
-        if (sample_rate == 0 || channels == 0) { return false; }
-        if (is_float()) { return fsamples.size() > 0 && fsamples.size() % channels == 0; }
+        if (sample_rate == 0 || channels == 0)
+        {
+            return false;
+        }
+        if (is_float())
+        {
+            return fsamples.size() > 0 && fsamples.size() % channels == 0;
+        }
         if (bits_per_sample != 8 && bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32)
         {
             return false;

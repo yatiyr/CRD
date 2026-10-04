@@ -69,25 +69,33 @@ public:
     void rhs(f64, cont::ConstSpan<f64> y, cont::Span<f64> d) const override
     {
         for (int i = 0; i < p_.n; ++i)
+        {
             d[i] = adv(y.data(), i, p_) + dif(y.data(), i, p_);
+        }
     }
     [[nodiscard]] bool rhs_explicit(f64, cont::ConstSpan<f64> y, cont::Span<f64> d) const override
     {
         for (int i = 0; i < p_.n; ++i)
+        {
             d[i] = adv(y.data(), i, p_);
+        }
         return true;
     }
     [[nodiscard]] bool rhs_implicit(f64, cont::ConstSpan<f64> y, cont::Span<f64> d) const override
     {
         for (int i = 0; i < p_.n; ++i)
+        {
             d[i] = dif(y.data(), i, p_);
+        }
         return true;
     }
     [[nodiscard]] bool jacobian_implicit(f64, cont::ConstSpan<f64>, cont::Span<f64> j) const override
     {
         const int n = p_.n;
         for (int k = 0; k < n * n; ++k)
+        {
             j[k] = 0.0;
+        }
         const double co = p_.nu / (p_.dx * p_.dx);
         for (int i = 0; i < n; ++i)
         {
@@ -113,7 +121,9 @@ template <typename Fn> double time_best_ms(int reps, Fn&& fn)
         const auto t1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (ms < best)
+        {
             best = ms;
+        }
     }
     return best;
 }
@@ -125,7 +135,9 @@ int ark_fe(sunrealtype, N_Vector y, N_Vector ydot, void* ud)
     const double* u = N_VGetArrayPointer(y);
     double* d = N_VGetArrayPointer(ydot);
     for (int i = 0; i < p.n; ++i)
+    {
         d[i] = adv(u, i, p);
+    }
     return 0;
 }
 int ark_fi(sunrealtype, N_Vector y, N_Vector ydot, void* ud)
@@ -134,7 +146,9 @@ int ark_fi(sunrealtype, N_Vector y, N_Vector ydot, void* ud)
     const double* u = N_VGetArrayPointer(y);
     double* d = N_VGetArrayPointer(ydot);
     for (int i = 0; i < p.n; ++i)
+    {
         d[i] = dif(u, i, p);
+    }
     return 0;
 }
 int ark_jac(sunrealtype, N_Vector, N_Vector, SUNMatrix J, void* ud, N_Vector, N_Vector, N_Vector)
@@ -163,13 +177,17 @@ int main()
     cont::Array<f64> u0(&alloc);
     u0.resize(n);
     for (int i = 0; i < n; ++i)
+    {
         u0[i] = std::sin(static_cast<double>(i) * p.dx);
+    }
 
     // Tight reference (DOP853 of the same discrete combined system).
     cont::Array<f64> uref(&alloc);
     uref.resize(n);
     for (int i = 0; i < n; ++i)
+    {
         uref[i] = u0[i];
+    }
     AdvDiff f(p);
     {
         ode::OdeOptions<f64> o;
@@ -182,7 +200,9 @@ int main()
     {
         double m = 0.0;
         for (int i = 0; i < n; ++i)
+        {
             m = std::max(m, std::abs(u[i] - uref[i]));
+        }
         return m;
     };
 
@@ -203,7 +223,9 @@ int main()
                                  [&]
                                  {
                                      for (int i = 0; i < n; ++i)
+                                     {
                                          uc[i] = u0[i];
+                                     }
                                      ode::OdeOptions<f64> o;
                                      o.rtol = rtol;
                                      o.atol = rtol * 1e-3;
@@ -227,7 +249,9 @@ int main()
                                      N_Vector y = N_VNew_Serial(n, ctx);
                                      double* yd = N_VGetArrayPointer(y);
                                      for (int i = 0; i < n; ++i)
+                                     {
                                          yd[i] = u0[i];
+                                     }
                                      void* ark = ARKStepCreate(ark_fe, ark_fi, 0.0, y, ctx);
                                      ARKStepSStolerances(ark, rtol, rtol * 1e-3);
                                      ARKStepSetUserData(ark, &p);
@@ -241,7 +265,9 @@ int main()
                                      ARKStepGetNumRhsEvals(ark, &afe, &afi);
                                      double* yo = N_VGetArrayPointer(y);
                                      for (int i = 0; i < n; ++i)
+                                     {
                                          ua[i] = yo[i];
+                                     }
                                      ARKStepFree(&ark);
                                      SUNLinSolFree(LS);
                                      SUNMatDestroy(A);
@@ -270,11 +296,19 @@ int main()
     {
         int ci = -1, ai = -1;
         for (int i = 0; i < kN; ++i)
+        {
             if (c_err[i] <= target && (ci < 0 || c_ms[i] < c_ms[ci]))
+            {
                 ci = i;
+            }
+        }
         for (int i = 0; i < kN; ++i)
+        {
             if (a_err[i] <= target && (ai < 0 || a_ms[i] < a_ms[ai]))
+            {
                 ai = i;
+            }
+        }
         if (ci < 0 || ai < 0)
         {
             std::printf("%-10.0e | (not reached in sweep)\n", target);

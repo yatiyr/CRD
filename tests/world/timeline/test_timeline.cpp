@@ -147,7 +147,10 @@ timeline::TimelineResource make_gate_timeline()
     tl.auto_ticks.push_back(0);
     tl.auto_ticks.push_back(96);
     const f32 fov_vals[6] = {5.0F, 40.0F, 5.0F, 5.0F, 60.0F, 5.0F}; // [in·value·out] per key, tangents /second
-    for (f32 v : fov_vals) { tl.auto_values.push_back(v); }
+    for (f32 v : fov_vals)
+    {
+        tl.auto_values.push_back(v);
+    }
     tl.automation.push_back(fov);
 
     timeline::AutomationRec intensity;
@@ -307,7 +310,10 @@ TEST_CASE("timeline builder refuses every malformed class", "[timeline]")
         a.key_count  = 2;
         tl.auto_ticks.push_back(0);
         tl.auto_ticks.push_back(1);
-        for (int i = 0; i < 4; ++i) { tl.auto_values.push_back(0.0F); } // needs 6
+        for (int i = 0; i < 4; ++i) // needs 6
+        {
+            tl.auto_values.push_back(0.0F);
+        }
         tl.automation.push_back(a);
         CHECK(build_of(tl) == 0);
     }
@@ -322,7 +328,10 @@ TEST_CASE("timeline builder refuses every malformed class", "[timeline]")
         {
             if (std::memcmp(bytes.data() + i, "TMTK", 4) == 0)
             {
-                for (usize k = 16; k < 44; ++k) { bytes[i + k] ^= 0x7FU; }
+                for (usize k = 16; k < 44; ++k)
+                {
+                    bytes[i + k] ^= 0x7FU;
+                }
                 corrupted = true;
                 break;
             }
@@ -526,9 +535,18 @@ bool resolve_take(void* user, const timeline::TimelineResource& tl, const timeli
     const auto& item = tl.items[clip.item_index];
     const char* name = tl.str(item.name_off);
     const f32*  c    = nullptr;
-    if (std::strcmp(name, "takeA") == 0) { c = res->color_a; }
-    else if (std::strcmp(name, "takeB") == 0) { c = res->color_b; }
-    if (c == nullptr) { return false; }
+    if (std::strcmp(name, "takeA") == 0)
+    {
+        c = res->color_a;
+    }
+    else if (std::strcmp(name, "takeB") == 0)
+    {
+        c = res->color_b;
+    }
+    if (c == nullptr)
+    {
+        return false;
+    }
     for (u32 y = 0; y < out.height; ++y)
     {
         for (u32 x = 0; x < out.width; ++x)
@@ -552,7 +570,10 @@ bool capture_frame(void* user, i64 frame_index, containers::ConstSpan<u8> exr_by
     auto* cap = static_cast<FrameCapture*>(user);
     (void)frame_index;
     containers::Array<u8> copy(cap->alloc);
-    for (usize i = 0; i < exr_bytes.size(); ++i) { copy.push_back(exr_bytes[i]); }
+    for (usize i = 0; i < exr_bytes.size(); ++i)
+    {
+        copy.push_back(exr_bytes[i]);
+    }
     cap->frames->push_back(std::move(copy));
     return true;
 }

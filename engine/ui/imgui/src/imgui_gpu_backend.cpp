@@ -42,7 +42,10 @@ ImGuiGpuBackend::ImGuiGpuBackend(crd::gpu::VulkanGpuContext& ctx, const crd::gpu
     pool_info.pPoolSizes    = pool_sizes;
 
     VkDescriptorPool pool = VK_NULL_HANDLE;
-    if (vkCreateDescriptorPool(ctx.vk_device(), &pool_info, nullptr, &pool) != VK_SUCCESS) { return; }
+    if (vkCreateDescriptorPool(ctx.vk_device(), &pool_info, nullptr, &pool) != VK_SUCCESS)
+    {
+        return;
+    }
     m_device          = ctx.vk_device();
     m_descriptor_pool = pool;
 
@@ -85,23 +88,35 @@ ImGuiGpuBackend::ImGuiGpuBackend(crd::gpu::VulkanGpuContext& ctx, const crd::gpu
 ImGuiGpuBackend::ImGuiGpuBackend(crd::gpu::IGpuContext& ctx, crd::gpu::IRasterContext& raster,
                                  const crd::gpu::IPresentSurface& surface)
 {
-    if (ctx.backend() != crd::gpu::GpuBackend::Dx12) { return; } // Vulkan uses the other ctor — never guess
+    if (ctx.backend() != crd::gpu::GpuBackend::Dx12) // Vulkan uses the other ctor — never guess
+    {
+        return;
+    }
     auto* device = static_cast<ID3D12Device*>(crd::gpu::dx12_device_raw(raster));
     auto* queue  = static_cast<ID3D12CommandQueue*>(crd::gpu::dx12_graphics_queue_raw(raster));
-    if (device == nullptr || queue == nullptr) { return; }
+    if (device == nullptr || queue == nullptr)
+    {
+        return;
+    }
 
     ID3D12DescriptorHeap*      heap = nullptr;
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = 1;
     hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)))) { return; }
+    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap))))
+    {
+        return;
+    }
 
     ImGui_ImplDX12_InitInfo info{};
     info.Device            = device;
     info.CommandQueue      = queue;
     info.NumFramesInFlight = static_cast<int>(crd::gpu::dx12_present_image_count(surface));
-    if (info.NumFramesInFlight < 2) { info.NumFramesInFlight = 2; }
+    if (info.NumFramesInFlight < 2)
+    {
+        info.NumFramesInFlight = 2;
+    }
     info.RTVFormat         = static_cast<DXGI_FORMAT>(crd::gpu::dx12_present_color_format_raw(surface));
     info.DSVFormat         = DXGI_FORMAT_UNKNOWN; // the overlay binds NO depth (present-seam composition)
     info.SrvDescriptorHeap = heap;
@@ -158,7 +173,10 @@ ImGuiGpuBackend::~ImGuiGpuBackend()
 
 void ImGuiGpuBackend::new_frame()
 {
-    if (!m_attached) { return; }
+    if (!m_attached)
+    {
+        return;
+    }
 #if defined(_WIN32)
     if (m_is_dx12)
     {
@@ -171,9 +189,15 @@ void ImGuiGpuBackend::new_frame()
 
 void ImGuiGpuBackend::render(void* backend_cmd)
 {
-    if (!m_attached || backend_cmd == nullptr) { return; }
+    if (!m_attached || backend_cmd == nullptr)
+    {
+        return;
+    }
     ImDrawData* draw_data = ImGui::GetDrawData();
-    if (draw_data == nullptr) { return; }
+    if (draw_data == nullptr)
+    {
+        return;
+    }
 #if defined(_WIN32)
     if (m_is_dx12)
     {
@@ -182,7 +206,10 @@ void ImGuiGpuBackend::render(void* backend_cmd)
         // knowledge of ImGui at zero.
         auto* list = static_cast<ID3D12GraphicsCommandList*>(backend_cmd);
         auto* heap = static_cast<ID3D12DescriptorHeap*>(m_descriptor_pool);
-        if (heap != nullptr) { list->SetDescriptorHeaps(1, &heap); }
+        if (heap != nullptr)
+        {
+            list->SetDescriptorHeaps(1, &heap);
+        }
         ImGui_ImplDX12_RenderDrawData(draw_data, list);
         return;
     }

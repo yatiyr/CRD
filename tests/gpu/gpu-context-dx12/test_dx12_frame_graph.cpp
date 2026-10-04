@@ -187,7 +187,10 @@ TEST_CASE("REN-1 GATE (DX12): frame graph composes two pull passes in ONE submis
           "[dx12][raster][frame-graph][ren1][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -199,7 +202,10 @@ TEST_CASE("REN-1 GATE (DX12): frame graph composes two pull passes in ONE submis
     kir::KEntry fe;
     build_pull_depth_fs(fgg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto fs = gctx->create_program(fgg, fe);
     REQUIRE(fs != nullptr);
     auto prog = raster->create_raster_program(*vs, *fs);
@@ -268,7 +274,10 @@ TEST_CASE("REN-1 (DX12): transient resources ALIAS a placed-resource heap across
           "[dx12][raster][frame-graph][ren1][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -319,7 +328,10 @@ TEST_CASE("REN-2 GATE (DX12): render-to-texture -- a pass renders a transient, a
           "[dx12][raster][frame-graph][ren2][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -332,7 +344,10 @@ TEST_CASE("REN-2 GATE (DX12): render-to-texture -- a pass renders a transient, a
     kir::KEntry tfe;
     crd::gputest::build_triangle_fs(tfg, tfe);
     auto tvs = gctx->create_program(tvg, tve);
-    if (tvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (tvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto tfs      = gctx->create_program(tfg, tfe);
     auto tri_prog = raster->create_raster_program(*tvs, *tfs);
     // compose: a FULL-SCREEN quad sampling the bound texture at UV
@@ -387,7 +402,10 @@ TEST_CASE("REN-2 Half B (DX12): the textured scene draw SAMPLES the material bas
           "[dx12][raster][ren2][material][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -399,7 +417,10 @@ TEST_CASE("REN-2 Half B (DX12): the textured scene draw SAMPLES the material bas
     kir::KEntry fe;
     crd::gputest::build_pull_textured_fs(fg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto fs   = gctx->create_program(fg, fe);
     auto prog = raster->create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
@@ -442,7 +463,10 @@ TEST_CASE("REN-3.1 GATE (DX12): a depth-only pass RENDERS a shadow map, a later 
           "[dx12][raster][frame-graph][ren3][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -456,7 +480,10 @@ TEST_CASE("REN-3.1 GATE (DX12): a depth-only pass RENDERS a shadow map, a later 
     kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto dfs        = gctx->create_program(dfg, dfe);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
 
@@ -522,7 +549,10 @@ TEST_CASE("REN-3.2 GATE (DX12): four cascade passes write four SLICES of a depth
           "[dx12][raster][frame-graph][ren3][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -535,7 +565,10 @@ TEST_CASE("REN-3.2 GATE (DX12): four cascade passes write four SLICES of a depth
     kir::KEntry dve;
     crd::gputest::build_fullscreen_vs(dvg, dve);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
 
     crd::containers::Array<std::unique_ptr<g::IRasterProgram>> cascade_progs(&alloc);
     crd::containers::Array<std::unique_ptr<g::IGpuProgram>>    cascade_fs(&alloc);
@@ -709,7 +742,10 @@ TEST_CASE("DX12 authored fullscreen clears survive cooking and reach uncovered p
         TestHostDx12 host(target.get(), nullptr, program.get(), nullptr);
         fc::FrameGraphBuilder builder(&alloc, SV("authored_clear"));
         builder.add_image(SV("paint"), g::FgImageFormat::RGBA8Unorm, 32U, 32U);
-        if (persistent) { builder.desc().resources[0].kind = fc::FrameResourceKind::PersistentImage; }
+        if (persistent)
+        {
+            builder.desc().resources[0].kind = fc::FrameResourceKind::PersistentImage;
+        }
         const auto draw = builder.add_pass(SV("paint_pass"), SV("raster.fullscreen"));
         builder.pass_writes(draw, SV("paint"));
         builder.pass_shader(draw, SV("test://triangle"));
@@ -747,7 +783,10 @@ TEST_CASE("REN-36.2 GATE (DX12): the SAME cooked asset renders BIT-IDENTICALLY t
           "[dx12][raster][frame-graph][ren36][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -761,7 +800,10 @@ TEST_CASE("REN-36.2 GATE (DX12): the SAME cooked asset renders BIT-IDENTICALLY t
     kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto dfs        = gctx->create_program(dfg, dfe);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
 
@@ -819,7 +861,10 @@ TEST_CASE("REN-36.2 GATE (DX12): the SAME cooked asset renders BIT-IDENTICALLY t
     {
         for (crd::u32 x = 0; x < dim; ++x)
         {
-            if (ref->read_pixel(x, y) != out->read_pixel(x, y)) { ++diffs; }
+            if (ref->read_pixel(x, y) != out->read_pixel(x, y))
+            {
+                ++diffs;
+            }
         }
     }
     CHECK(diffs == 0U);
@@ -832,7 +877,10 @@ TEST_CASE("REN-36.2 GATE (DX12): the SAME cooked asset renders BIT-IDENTICALLY t
 TEST_CASE("REN-3.1 BENCH (DX12): depth-only pre-pass cost vs the equivalent colour pass", "[.][ren3-bench][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -844,7 +892,10 @@ TEST_CASE("REN-3.1 BENCH (DX12): depth-only pre-pass cost vs the equivalent colo
     kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto dfs        = gctx->create_program(dfg, dfe);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
 
@@ -915,8 +966,20 @@ TEST_CASE("REN-3.1 BENCH (DX12): depth-only pre-pass cost vs the equivalent colo
                         fgraph->reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
-                    if (arm == 0) { if (ms < best_d) { best_d = ms; } }
-                    else { if (ms < best_c) { best_c = ms; } }
+                    if (arm == 0)
+                    {
+                        if (ms < best_d)
+                        {
+                            best_d = ms;
+                        }
+                    }
+                    else
+                    {
+                        if (ms < best_c)
+                        {
+                            best_c = ms;
+                        }
+                    }
                 }
             }
             std::printf("  %4u %8u | %10.4f | %13.4f | %6.2fx\n", res, n, best_d, best_c, best_c / best_d);
@@ -928,7 +991,10 @@ TEST_CASE("REN-3.1 BENCH (DX12): depth-only pre-pass cost vs the equivalent colo
 TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-draw substrate", "[.][ren1-bench][dx12][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -940,7 +1006,10 @@ TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-dr
     kir::KEntry fe;
     build_pull_depth_fs(fgg, fe);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto fs   = gctx->create_program(fgg, fe);
     auto prog = raster->create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
@@ -958,7 +1027,10 @@ TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-dr
         auto& t = *ctx.image(s->img);
         auto& b = *ctx.buffer(s->buf);
         crd::gputest::enc_draw_storage_depth(r, t, *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, b, 3U);
-        for (crd::u32 i = 1; i < s->n; ++i) { crd::gputest::enc_draw_storage_depth_load(r, t, *s->prog, g::DepthCompare::Always, b, 3U); }
+        for (crd::u32 i = 1; i < s->n; ++i)
+        {
+            crd::gputest::enc_draw_storage_depth_load(r, t, *s->prog, g::DepthCompare::Always, b, 3U);
+        }
     };
 
     constexpr crd::u32 frames = 20U;
@@ -970,7 +1042,10 @@ TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-dr
         for (crd::u32 f = 0; f < frames; ++f)
         {
             crd::gputest::enc_draw_storage_depth(*raster, *tgt, *prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, *sb, 3U);
-            for (crd::u32 i = 1; i < n; ++i) { crd::gputest::enc_draw_storage_depth_load(*raster, *tgt, *prog, g::DepthCompare::Always, *sb, 3U); }
+            for (crd::u32 i = 1; i < n; ++i)
+            {
+                crd::gputest::enc_draw_storage_depth_load(*raster, *tgt, *prog, g::DepthCompare::Always, *sb, 3U);
+            }
         }
         const double sync_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count() / frames;
 
@@ -992,7 +1067,11 @@ TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-dr
 
         WARN("[ren1-bench dx12] N=" << n << " draws/frame  sync=" << sync_ms << "ms/frame  graph=" << graph_ms
                                     << "ms/frame  speedup=" << (graph_ms > 0.0 ? sync_ms / graph_ms : 0.0) << "x");
-        if (n == 64U) { graph_ms_at_64 = graph_ms; sync_ms_at_64 = sync_ms; }
+        if (n == 64U)
+        {
+            graph_ms_at_64 = graph_ms;
+            sync_ms_at_64 = sync_ms;
+        }
     }
     CHECK(graph_ms_at_64 <= sync_ms_at_64);
 }
@@ -1074,7 +1153,10 @@ TEST_CASE("REN-36.3 GATE (DX12): ONE authored pass declaration expands to FOUR c
           "[dx12][raster][frame-graph][ren36][ren3][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -1087,7 +1169,10 @@ TEST_CASE("REN-36.3 GATE (DX12): ONE authored pass declaration expands to FOUR c
     kir::KEntry dve;
     crd::gputest::build_fullscreen_vs(dvg, dve);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
 
     crd::containers::Array<std::unique_ptr<g::IRasterProgram>> cprogs(&alloc);
     crd::containers::Array<std::unique_ptr<g::IGpuProgram>>    cfs(&alloc);
@@ -1158,7 +1243,10 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
           "[dx12][raster][frame-graph][ren8][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -1172,7 +1260,10 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
     kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto dfs        = gctx->create_program(dfg, dfe);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
 
@@ -1193,7 +1284,10 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
 
     auto fgraph = raster->create_frame_graph();
     REQUIRE(fgraph != nullptr);
-    if (!fgraph->gpu_timing_available()) { SKIP("queue does not support timestamp queries"); }
+    if (!fgraph->gpu_timing_available())
+    {
+        SKIP("queue does not support timestamp queries");
+    }
 
     g::FgImageDesc ddesc{};
     ddesc.width   = dim;
@@ -1279,7 +1373,10 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
     for (crd::u32 t = 0U; t < eview.thread_count(); ++t)
     {
         const char* const nm = eview.thread_name(t);
-        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0) { q0 = t; }
+        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0)
+        {
+            q0 = t;
+        }
     }
     REQUIRE(q0 != 0xFFFF'FFFFU);
     const auto esamps = eview.thread_samples(q0);
@@ -1312,7 +1409,10 @@ TEST_CASE("REN-1 GATE (DX12): a pass declared AFTER its consumer still executes 
           "[dx12][raster][frame-graph][ren1][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -1326,7 +1426,10 @@ TEST_CASE("REN-1 GATE (DX12): a pass declared AFTER its consumer still executes 
     kir::KEntry dfe;
     crd::gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = gctx->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto dfs        = gctx->create_program(dfg, dfe);
     auto depth_prog = raster->create_raster_program(*dvs, *dfs);
 
@@ -1382,7 +1485,10 @@ TEST_CASE("REN-1 GATE (DX12): a pass declared AFTER its consumer still executes 
 TEST_CASE("REN-1 GATE (DX12): build() REJECTS a dependency cycle", "[dx12][raster][frame-graph][ren1][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
     auto a_t = raster->create_color_target(16U, 16U);
@@ -1412,7 +1518,10 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
           "[dx12][raster][frame-graph][ren37][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 
@@ -1424,7 +1533,10 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     kir::KEntry tfe;
     crd::gputest::build_triangle_fs(tfg, tfe);
     auto tvs = gctx->create_program(tvg, tve);
-    if (tvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (tvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto tfs      = gctx->create_program(tfg, tfe);
     auto tri_prog = raster->create_raster_program(*tvs, *tfs);
     kir::KGraph svg(&alloc);
@@ -1516,17 +1628,26 @@ TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared read
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_bindless()) { SKIP("device does not support bindless"); }
+    if (!raster->supports_bindless())
+    {
+        SKIP("device does not support bindless");
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     kir::KGraph                fvg(&alloc);
     kir::KEntry                fve;
     crd::gputest::build_textured_vs(fvg, fve);
     auto fvs = gctx->create_program(fvg, fve);
-    if (fvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (fvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
 
     std::unique_ptr<g::IGpuProgram> solid_fs[2];
     const auto solid_prog = [&](int slot, double r, double gg, double b) {
@@ -1595,7 +1716,10 @@ TEST_CASE("REN-38-A1a GATE (DX12): a fullscreen pass binds ALL its declared read
     const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s    = static_cast<Compose*>(user);
         g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
-        if (t[0] == nullptr || t[1] == nullptr) { return; }
+        if (t[0] == nullptr || t[1] == nullptr)
+        {
+            return;
+        }
         crd::gputest::enc_draw_bindless(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
                                         static_cast<g::ITexture* const*>(t), 2U, 3U);
     };
@@ -1701,11 +1825,17 @@ TEST_CASE("REN-38-A4 GATE (DX12): a DEFERRED renderer, authored as an asset only
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless");
+    }
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -1714,7 +1844,10 @@ TEST_CASE("REN-38-A4 GATE (DX12): a DEFERRED renderer, authored as an asset only
     kir::KEntry gve;
     crd::gputest::build_textured_vs(gvg, gve);
     auto gvs = gctx->create_program(gvg, gve);
-    if (gvs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (gvs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     kir::KGraph gfg(&alloc);
     kir::KEntry gfe;
     crd::gputest::build_gbuffer_two_output_fs(gfg, gfe);
@@ -1821,7 +1954,10 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -1829,7 +1965,10 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
     // ⛔ DXGI has NO headless surface, so this gate needs a REAL window — the same isolated <windows.h> helper
     // RET-2's DX12 present gate uses. Skipping when none exists is honest; presenting to nothing would not be.
     void* native = crd::gputest::create_test_window(256U, 256U);
-    if (native == nullptr) { SKIP("no platform window available"); }
+    if (native == nullptr)
+    {
+        SKIP("no platform window available");
+    }
     constexpr crd::u32 dim = 256U;
     auto surface = raster.create_present_surface(native, dim, dim, g::PresentMode::Fifo);
     REQUIRE(surface != nullptr);
@@ -1842,7 +1981,10 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
     crd::kir::KEntry           ve;
     crd::gputest::build_triangle_vs(vg, ve);
     auto vs = gctx->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     crd::kir::KGraph fg2(&alloc);
     crd::kir::KEntry fe;
     crd::gputest::build_triangle_fs(fg2, fe);
@@ -2022,7 +2164,10 @@ public:
     [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
     [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
     {
-        if (m_buf == nullptr || m_prog == nullptr) { return false; }
+        if (m_buf == nullptr || m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = crd::framecook::DrawItem{m_buf, m_prog, 3U, nullptr};
         out.resolved = 1U;
         return true;
@@ -2040,7 +2185,10 @@ TEST_CASE("REN-38-A6 GATE (DX12): authored CLEAR / COPY / BLIT move pixels insid
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -2077,7 +2225,10 @@ TEST_CASE("REN-38-A6 GATE (DX12): authored CLEAR / COPY / BLIT move pixels insid
         crd::kir::KEntry ve;
         crd::gputest::build_triangle_vs(vg, ve);
         auto vs = gctx->create_program(vg, ve);
-        if (vs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+        if (vs == nullptr)
+        {
+            SKIP("dxc/DXIL unavailable");
+        }
         crd::kir::KGraph fg2(&alloc);
         crd::kir::KEntry fe;
         crd::gputest::build_triangle_fs(fg2, fe);
@@ -2171,7 +2322,10 @@ public:
     // dispatch count — patches for tess, task/mesh workgroups for mesh.
     [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
     {
-        if (m_prog == nullptr) { return false; }
+        if (m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = crd::framecook::DrawItem{nullptr, m_prog, 6U, nullptr}; // six meshlets, tiled left → right
         out.items[1] = crd::framecook::DrawItem{nullptr, m_prog, 1U, nullptr}; // one meshlet, leftmost only
         out.resolved = 2U;
@@ -2189,7 +2343,10 @@ TEST_CASE("REN-38-A7/A8 GATE (DX12): authored TESSELLATION and MESH+TASK passes 
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -2215,9 +2372,15 @@ TEST_CASE("REN-38-A7/A8 GATE (DX12): authored TESSELLATION and MESH+TASK passes 
         auto tcs = gctx->create_program(cg, ce);
         auto tes = gctx->create_program(eg, ee);
         auto fs  = gctx->create_program(fg2, fe);
-        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr)
+        {
+            SKIP("dxc/DXIL unavailable");
+        }
         auto prog = raster.create_tess_program(*vs, *tcs, *tes, *fs);
-        if (prog == nullptr) { SKIP("no tessellation support on this device"); }
+        if (prog == nullptr)
+        {
+            SKIP("no tessellation support on this device");
+        }
 
         auto dst = raster.create_color_target(dim, dim);
         REQUIRE(dst != nullptr);
@@ -2251,9 +2414,15 @@ TEST_CASE("REN-38-A7/A8 GATE (DX12): authored TESSELLATION and MESH+TASK passes 
         crd::gputest::build_amplify_fs(fg2, fe);
         auto ms = gctx->create_program(mg, me);
         auto fs = gctx->create_program(fg2, fe);
-        if (ms == nullptr || fs == nullptr) { SKIP("mesh shader dxc/DXIL unavailable"); }
+        if (ms == nullptr || fs == nullptr)
+        {
+            SKIP("mesh shader dxc/DXIL unavailable");
+        }
         auto prog = raster.create_mesh_program(*ms, *fs);
-        if (prog == nullptr) { SKIP("no mesh-shader support on this device"); }
+        if (prog == nullptr)
+        {
+            SKIP("no mesh-shader support on this device");
+        }
 
         auto dst = raster.create_color_target(dim, dim);
         REQUIRE(dst != nullptr);
@@ -2375,7 +2544,10 @@ public:
     {
         for (crd::u32 i = 0; i < m_n; ++i)
         {
-            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == crd::containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -2384,7 +2556,10 @@ public:
     {
         for (crd::u32 i = 0; i < m_nb; ++i)
         {
-            if (name == crd::containers::StringView(m_bnames[i])) { return m_bufs[i]; }
+            if (name == crd::containers::StringView(m_bnames[i]))
+            {
+                return m_bufs[i];
+            }
         }
         return nullptr;
     }
@@ -2409,13 +2584,19 @@ TEST_CASE("REN-38-A9 GATE (DX12): an authored RAY-TRACING pass traces inside the
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
 
     g::Dx12RayTracingContext rt;
-    if (!rt.valid()) { SKIP("no DXR 1.1 inline ray query on this adapter"); }
+    if (!rt.valid())
+    {
+        SKIP("no DXR 1.1 inline ray query on this adapter");
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -2427,7 +2608,10 @@ TEST_CASE("REN-38-A9 GATE (DX12): an authored RAY-TRACING pass traces inside the
     crd::kir::KGraph kg(&alloc);
     crd::kir::KEntry ke     = crd::gputest::build_trace_kernel_shared(kg, 4);
     auto        kernel = gctx->create_program(kg, ke);
-    if (kernel == nullptr) { SKIP("ray-query kernel dxc/DXIL unavailable"); }
+    if (kernel == nullptr)
+    {
+        SKIP("ray-query kernel dxc/DXIL unavailable");
+    }
 
     constexpr crd::u32 n_rays = 4U;
     auto          rays   = raster.create_storage_buffer(n_rays * 6U * 4U);
@@ -2510,7 +2694,10 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -2550,7 +2737,10 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
     }
     auto cull = gctx->create_program(cg, ce);
     auto work = gctx->create_program(wg, we);
-    if (cull == nullptr || work == nullptr) { SKIP("compute shader dxc/DXIL unavailable"); }
+    if (cull == nullptr || work == nullptr)
+    {
+        SKIP("compute shader dxc/DXIL unavailable");
+    }
 
     auto marks = raster.create_storage_buffer(slot_count * 4U);
     REQUIRE(marks != nullptr);
@@ -2575,13 +2765,22 @@ TEST_CASE("REN-38-A10 GATE (DX12): an authored INDIRECT pass takes its workgroup
 
     REQUIRE(raster.download_storage(*marks));
     crd::u32 m[slot_count]{};
-    for (crd::u32 i = 0; i < slot_count; ++i) { m[i] = marks->read_u32(i); }
+    for (crd::u32 i = 0; i < slot_count; ++i)
+    {
+        m[i] = marks->read_u32(i);
+    }
     UNSCOPED_INFO("marks: " << m[0] << " " << m[1] << " " << m[2] << " " << m[3] << " " << m[4]);
     // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `survivor_count` reaches the GPU only as a value a SHADER wrote into the args
     // buffer, so the exact SET of workgroups that ran is the proof: 0..2 stamped, 3 and beyond untouched. If the
     // dispatch had taken a CPU-side count, or read the args before the cull pass wrote them, the boundary moves.
-    for (crd::u32 i = 0; i < survivor_count; ++i) { CHECK(m[i] == i + 1U); }
-    for (crd::u32 i = survivor_count; i < slot_count; ++i) { CHECK(m[i] == 0U); }
+    for (crd::u32 i = 0; i < survivor_count; ++i)
+    {
+        CHECK(m[i] == i + 1U);
+    }
+    for (crd::u32 i = survivor_count; i < slot_count; ++i)
+    {
+        CHECK(m[i] == 0U);
+    }
 
 }
 // ── REN-38-A11 / A12 GATE: the VISIBILITY BUFFER and ORDER-INDEPENDENT TRANSPARENCY, authored. ─────────────────
@@ -2681,7 +2880,10 @@ public:
     [[nodiscard]] g::IRasterProgram* program(crd::containers::StringView) override { return m_prog; }
     [[nodiscard]] bool draw_list(crd::containers::StringView, crd::framecook::DrawListBinding& out) override
     {
-        if (m_prog == nullptr) { return false; }
+        if (m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = crd::framecook::DrawItem{m_buf, m_prog, m_n0, nullptr};
         out.resolved = 1U;
         if (m_n1 != 0U)
@@ -2705,7 +2907,10 @@ TEST_CASE("REN-38-A11 GATE (DX12): an authored VISIBILITY-BUFFER pass keeps EVER
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -2719,7 +2924,10 @@ TEST_CASE("REN-38-A11 GATE (DX12): an authored VISIBILITY-BUFFER pass keeps EVER
     crd::gputest::build_visbuffer_fs(fg2, fe);
     auto vs = gctx->create_program(vg, ve);
     auto fs = gctx->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -2754,13 +2962,19 @@ TEST_CASE("REN-38-A12 GATE (DX12): authored WBOIT composites OVER the background
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
 
     // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
     // show is that the composite READ the background instead of erasing it.
@@ -2788,7 +3002,10 @@ TEST_CASE("REN-38-A12 GATE (DX12): authored WBOIT composites OVER the background
     auto tfs = gctx->create_program(tfg, tfe);
     auto cvs = gctx->create_program(cvg, cve);
     auto cfs = gctx->create_program(cfg, cfe);
-    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto accum_prog = raster.create_raster_program(*tvs, *tfs);
     auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(accum_prog != nullptr);
@@ -2859,12 +3076,18 @@ TEST_CASE("REN-38-A12 ORACLE (DX12): frame-graph WBOIT is exact vs the oracle on
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
     crd::memory::TlsfAllocator alloc(16U << 20U);
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
 
     // the shared asymmetric 4-quad scene, its background matched to kOitGraphDx's blue @output clear so the composited
     // result equals wboit_oracle_pixel (which resolves over scene.background).
@@ -2879,7 +3102,10 @@ TEST_CASE("REN-38-A12 ORACLE (DX12): frame-graph WBOIT is exact vs the oracle on
     auto tfs = gctx->create_program(tfg, tfe);
     auto cvs = gctx->create_program(cvg, cve);
     auto cfs = gctx->create_program(cfg, cfe);
-    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto accum_prog = raster.create_raster_program(*tvs, *tfs);
     auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(accum_prog != nullptr);
@@ -2935,7 +3161,10 @@ TEST_CASE("REN-38-A12 ORACLE (DX12): frame-graph WBOIT is exact vs the oracle on
         for (crd::u32 x = 0U; x < dim; ++x)
         {
             const crd::u32 d = crd::gputest::rgba8_max_channel_diff(dst->read_pixel(x, y), expect);
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
         }
     }
     INFO("frame-graph WBOIT worst per-channel LSB diff vs oracle = " << worst);
@@ -2948,7 +3177,10 @@ TEST_CASE("REN-38-B7 GATE (DX12): every declared format creates a real transient
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -2992,7 +3224,10 @@ TEST_CASE("REN-38-B2 GATE (DX12): cube, volume and mip-chain transients create o
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -3074,7 +3309,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: an authored FACE CULL reaches the rasterizer
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster_p = g::create_dx12_raster_context();
     REQUIRE(raster_p != nullptr);
     auto& raster = *raster_p;
@@ -3088,7 +3326,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: an authored FACE CULL reaches the rasterizer
     crd::gputest::build_triangle_fs(fg2, fe);
     auto vs = gctx->create_program(vg, ve);
     auto fs = gctx->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -3129,7 +3370,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: depth_write = false leaves the depth buffer 
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster_p = g::create_dx12_raster_context();
     REQUIRE(raster_p != nullptr);
     auto& raster = *raster_p;
@@ -3147,7 +3391,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: depth_write = false leaves the depth buffer 
     auto vs   = gctx->create_program(vg, ve);
     auto fsr  = gctx->create_program(rg2, rfe);
     auto fsg  = gctx->create_program(gg, gfe);
-    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto red   = raster.create_raster_program(*vs, *fsr);
     auto green = raster.create_raster_program(*vs, *fsg);
     REQUIRE(red != nullptr);
@@ -3180,7 +3427,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: a declared DEPTH BIAS moves what the depth b
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster_p = g::create_dx12_raster_context();
     REQUIRE(raster_p != nullptr);
     auto& raster = *raster_p;
@@ -3198,7 +3448,10 @@ TEST_CASE("REN-38 STATE GATE: DX12: a declared DEPTH BIAS moves what the depth b
     auto vs  = gctx->create_program(vg, ve);
     auto fsr = gctx->create_program(rg2, rfe);
     auto fsg = gctx->create_program(gg, gfe);
-    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto red   = raster.create_raster_program(*vs, *fsr);
     auto green = raster.create_raster_program(*vs, *fsg);
     REQUIRE(red != nullptr);
@@ -3275,7 +3528,10 @@ public:
     {
         for (crd::u32 i = 0; i < m_n; ++i)
         {
-            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == crd::containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -3299,13 +3555,22 @@ TEST_CASE("REN-38 RT GATE (DX12): the authored pipeline traces and the ANY-HIT c
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster = g::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
-    if (!raster->supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+    if (!raster->supports_rt_pipeline())
+    {
+        SKIP("adapter has no DXR ray-tracing pipeline");
+    }
 
     g::Dx12RayTracingContext rt;
-    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    if (!rt.valid())
+    {
+        SKIP("no DXR-capable device");
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
     const float tri[9] = {-1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, 0.0F, 1.0F, 1.0F};
@@ -3322,7 +3587,10 @@ TEST_CASE("REN-38 RT GATE (DX12): the authored pipeline traces and the ANY-HIT c
     kir::KEntry che;
     crd::gputest::build_rt_pipeline_trio(rgg, rge, msg, mse, chg, che);
     auto rgp = gctx->create_program(rgg, rge);
-    if (rgp == nullptr) { SKIP("dxc/DXIL RT-stage compile unavailable"); }
+    if (rgp == nullptr)
+    {
+        SKIP("dxc/DXIL RT-stage compile unavailable");
+    }
     auto msp = gctx->create_program(msg, mse);
     auto chp = gctx->create_program(chg, che);
     REQUIRE(msp != nullptr);
@@ -3463,7 +3731,10 @@ TEST_CASE("REN-38-F11 GATE (DX12): an authored stencil MASK-then-TEST pass pair 
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster_p = g::create_dx12_raster_context();
     REQUIRE(raster_p != nullptr);
     auto& raster = *raster_p;
@@ -3485,7 +3756,10 @@ TEST_CASE("REN-38-F11 GATE (DX12): an authored stencil MASK-then-TEST pass pair 
     auto mfs = gctx->create_program(mfg, mfe);
     auto cvs = gctx->create_program(cvg, cve);
     auto cfs = gctx->create_program(cfg2, cfe);
-    if (mvs == nullptr || mfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("dxc/DXIL unavailable"); }
+    if (mvs == nullptr || mfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("dxc/DXIL unavailable");
+    }
     auto mask_prog  = raster.create_raster_program(*mvs, *mfs);
     auto cover_prog = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(mask_prog != nullptr);
@@ -3498,7 +3772,10 @@ TEST_CASE("REN-38-F11 GATE (DX12): an authored stencil MASK-then-TEST pass pair 
         REQUIRE(sb != nullptr);
         crd::containers::String toml(&alloc);
         toml.append(kStencilGraphDx);
-        if (stencil_on) { toml.append(kStencilCoverOnDx); }
+        if (stencil_on)
+        {
+            toml.append(kStencilCoverOnDx);
+        }
         crd::framecook::FrameGraphDesc desc(&alloc);
         crd::containers::String        where(&alloc);
         REQUIRE(crd::framecook::parse_frame_toml(crd::containers::StringView(toml.c_str(), toml.size()), desc, &where)
@@ -3607,7 +3884,10 @@ public:
     {
         for (crd::u32 i = 0; i < m_n; ++i)
         {
-            if (id == crd::containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == crd::containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -3636,14 +3916,23 @@ TEST_CASE("REN-38-F13 GATE (DX12): authored INTERSECTION + CALLABLE stages trace
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto raster_p = g::create_dx12_raster_context();
     REQUIRE(raster_p != nullptr);
     auto& raster = *raster_p;
-    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no DXR ray-tracing pipeline"); }
+    if (!raster.supports_rt_pipeline())
+    {
+        SKIP("adapter has no DXR ray-tracing pipeline");
+    }
 
     g::Dx12RayTracingContext rt;
-    if (!rt.valid()) { SKIP("no DXR-capable device"); }
+    if (!rt.valid())
+    {
+        SKIP("no DXR-capable device");
+    }
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
     // ONE degenerate curve segment at the origin, radius 0.5 → one AABB [-0.5-eps, +0.5+eps]^3. The AABB only
@@ -3698,7 +3987,10 @@ TEST_CASE("REN-38-F13 GATE (DX12): authored INTERSECTION + CALLABLE stages trace
         host.add_kernel("crd://f13/miss", ms.get());
         host.add_kernel("crd://f13/chit", ch.get());
         host.add_kernel("crd://f13/isect", is.get());
-        if (with_call) { host.add_kernel("crd://f13/call", cl.get()); }
+        if (with_call)
+        {
+            host.add_kernel("crd://f13/call", cl.get());
+        }
         host.set_accel(scene.get());
         host.set_buffer(hits.get());
         crd::framecook::FrameExecError err = crd::framecook::FrameExecError::Ok;
@@ -3803,15 +4095,24 @@ void fill_tess_pull_buffer_dx(crd::containers::Array<crd::u32>& w, float h)
 {
     w.clear();
     w.resize(140U);
-    for (crd::usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    for (crd::usize i = 0; i < w.size(); ++i)
+    {
+        w[i] = 0U;
+    }
     const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
     w[0] = 4U;   // index COUNT (per instance)
     w[2] = 32U;  // indices at word 32
     w[3] = 36U;  // vertices at word 36
     w[4] = 100U; // instance record at word 100
     w[5] = 120U; // visible slot list at word 120
-    for (crd::u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
-    for (crd::u32 i = 0; i < 4U; ++i) { w[32U + i] = i; }                    // identity index list
+    for (crd::u32 c = 0; c < 4U; ++c) // identity view_proj (column-major)
+    {
+        w[6U + c * 4U + c] = fbits(1.0F);
+    }
+    for (crd::u32 i = 0; i < 4U; ++i) // identity index list
+    {
+        w[32U + i] = i;
+    }
     const float cx[4] = {-h, h, h, -h};
     const float cy[4] = {-h, -h, h, h};
     for (crd::u32 i = 0; i < 4U; ++i)
@@ -3820,7 +4121,10 @@ void fill_tess_pull_buffer_dx(crd::containers::Array<crd::u32>& w, float h)
         w[36U + i * 3U + 1U] = fbits(cy[i]);
         w[36U + i * 3U + 2U] = fbits(0.0F);
     }
-    for (crd::u32 c = 0; c < 4U; ++c) { w[100U + c * 4U + c] = fbits(1.0F); } // identity instance matrix
+    for (crd::u32 c = 0; c < 4U; ++c) // identity instance matrix
+    {
+        w[100U + c * 4U + c] = fbits(1.0F);
+    }
     w[120] = 0U;                                                              // visible slot 0
 }
 } // namespace
@@ -3829,7 +4133,10 @@ TEST_CASE("REN-38-F6+ GATE (DX12): storage-bound tessellation PULLS its control 
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -3856,7 +4163,10 @@ TEST_CASE("REN-38-F6+ GATE (DX12): storage-bound tessellation PULLS its control 
     crd::kir::KEntry fe;
     crd::gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
     auto fs = gctx->create_program(fg2, fe);
-    if (vs == nullptr || hs == nullptr || ds == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || hs == nullptr || ds == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_tess_program(*vs, *hs, *ds, *fs);
     REQUIRE(prog != nullptr);
 
@@ -4033,16 +4343,25 @@ void fill_mesh_fetch_buffer_dx(crd::containers::Array<crd::u32>& w, float h, crd
 {
     w.clear();
     w.resize(140U);
-    for (crd::usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    for (crd::usize i = 0; i < w.size(); ++i)
+    {
+        w[i] = 0U;
+    }
     const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
     w[0] = 6U;   // index COUNT (per instance)
     w[2] = 32U;  // indices at word 32
     w[3] = 40U;  // vertices at word 40
     w[4] = 60U;  // instance records at word 60 (stride 20)
     w[5] = 110U; // visible slot list at word 110
-    for (crd::u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
+    for (crd::u32 c = 0; c < 4U; ++c) // identity view_proj (column-major)
+    {
+        w[6U + c * 4U + c] = fbits(1.0F);
+    }
     const crd::u32 idx[6] = {0U, 1U, 2U, 0U, 2U, 3U};
-    for (crd::u32 i = 0; i < 6U; ++i) { w[32U + i] = idx[i]; }
+    for (crd::u32 i = 0; i < 6U; ++i)
+    {
+        w[32U + i] = idx[i];
+    }
     const float cx[4] = {-h, h, h, -h};
     const float cy[4] = {-h, -h, h, h};
     for (crd::u32 i = 0; i < 4U; ++i)
@@ -4054,7 +4373,10 @@ void fill_mesh_fetch_buffer_dx(crd::containers::Array<crd::u32>& w, float h, crd
     for (crd::u32 inst = 0; inst < 2U; ++inst) // identity + a translation: instance 0 left, instance 1 right
     {
         const crd::u32 base = 60U + inst * 20U;
-        for (crd::u32 c = 0; c < 4U; ++c) { w[base + c * 4U + c] = fbits(1.0F); }
+        for (crd::u32 c = 0; c < 4U; ++c)
+        {
+            w[base + c * 4U + c] = fbits(1.0F);
+        }
         w[base + 12U] = fbits(inst == 0U ? -0.5F : 0.5F); // column-major translation x
     }
     w[110] = 0U;
@@ -4067,7 +4389,10 @@ TEST_CASE("REN-38-F6+ GATE (DX12): a FETCH mesh stage renders the buffer's geome
           "[dx12][raster][frame-graph][ren38][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -4095,7 +4420,10 @@ TEST_CASE("REN-38-F6+ GATE (DX12): a FETCH mesh stage renders the buffer's geome
     crd::kir::KEntry fe;
     crd::gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
     auto fs = gctx->create_program(fg2, fe);
-    if (ms == nullptr || msp == nullptr || tk == nullptr || fs == nullptr) { SKIP("mesh shader compile unavailable"); }
+    if (ms == nullptr || msp == nullptr || tk == nullptr || fs == nullptr)
+    {
+        SKIP("mesh shader compile unavailable");
+    }
     auto mesh_prog = raster.create_mesh_program(*ms, *fs);
     auto task_prog = raster.create_task_mesh_program(*tk, *msp, *fs);
     if (mesh_prog == nullptr || task_prog == nullptr)
@@ -4174,7 +4502,10 @@ TEST_CASE("REN-40-A GATE (DX12): the geometry indirect draw takes its args AND i
           "[dx12][raster][frame-graph][ren40][indirect][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -4202,7 +4533,10 @@ TEST_CASE("REN-40-A GATE (DX12): the geometry indirect draw takes its args AND i
     {
         rec[r * 12U + 0U] = 2.0F;
         rec[r * 12U + 1U] = 2.0F;
-        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+        for (crd::u32 w = 2U; w < 12U; ++w)
+        {
+            rec[r * 12U + w] = 0.0F;
+        }
     }
     const auto put = [&](crd::u32 r, float x, float y, float z) {
         rec[r * 12U + 0U] = x;
@@ -4231,7 +4565,10 @@ TEST_CASE("REN-40-A GATE (DX12): the geometry indirect draw takes its args AND i
     {
         const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U};
         std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
-        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+        if (arg_off != 0U)
+        {
+            std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U);
+        }
     }
     REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
 
@@ -4295,7 +4632,10 @@ TEST_CASE("REN-40-A GATE (DX12): indirect draw takes its args AND its count from
           "[dx12][raster][frame-graph][ren40][indirect][gpu]")
 {
     auto gctx = g::create_dx12_gpu_context();
-    if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+    if (gctx == nullptr || !gctx->valid())
+    {
+        SKIP("no D3D12 device available");
+    }
     auto rasterp = g::create_dx12_raster_context();
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
@@ -4333,7 +4673,10 @@ TEST_CASE("REN-40-A GATE (DX12): indirect draw takes its args AND its count from
     {
         rec[r * 12U + 0U] = 2.0F; // offscreen by default
         rec[r * 12U + 1U] = 2.0F;
-        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+        for (crd::u32 w = 2U; w < 12U; ++w)
+        {
+            rec[r * 12U + w] = 0.0F;
+        }
     }
     const auto put = [&](crd::u32 r, float x, float y, float z) {
         rec[r * 12U + 0U] = x;
@@ -4367,7 +4710,10 @@ TEST_CASE("REN-40-A GATE (DX12): indirect draw takes its args AND its count from
     {
         const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U}; // index_count, instance_count, first_index, 0, 0
         std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
-        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+        if (arg_off != 0U)
+        {
+            std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U);
+        }
     }
     REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
 
@@ -4453,7 +4799,10 @@ TEST_CASE("D2c-dx12: a frame-graph pass mints one Pass identity, retired on rese
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Pass); // before any graph exists
     {
         auto gctx = g::create_dx12_gpu_context();
-        if (gctx == nullptr || !gctx->valid()) { SKIP("no D3D12 device available"); }
+        if (gctx == nullptr || !gctx->valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         auto raster = g::create_dx12_raster_context();
         REQUIRE(raster != nullptr);
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before);

@@ -55,7 +55,10 @@ public:
     // generation so every outstanding copy of this identity goes stale at once.
     bool retire(const ObjectIdentity& id)
     {
-        if (!id.valid()) { return false; }
+        if (!id.valid())
+        {
+            return false;
+        }
         const std::lock_guard<std::mutex> lock(m_mutex);
         return map(id.kind).erase(handle_of(id));
     }
@@ -63,7 +66,10 @@ public:
     // True iff `id` still names a live slot at its generation.
     [[nodiscard]] bool alive(const ObjectIdentity& id) const
     {
-        if (!id.valid()) { return false; }
+        if (!id.valid())
+        {
+            return false;
+        }
         const std::lock_guard<std::mutex> lock(m_mutex);
         return map(id.kind).contains(handle_of(id));
     }

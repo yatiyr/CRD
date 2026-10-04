@@ -57,12 +57,18 @@ namespace detail
 template <int MaxN>
 constexpr void hp_or_grad(HessPattern<MaxN>& r, const HessPattern<MaxN>& a) noexcept
 {
-    for (int w = 0; w < HessPattern<MaxN>::gw; ++w) { r.grad[w] |= a.grad[w]; }
+    for (int w = 0; w < HessPattern<MaxN>::gw; ++w)
+    {
+        r.grad[w] |= a.grad[w];
+    }
 }
 template <int MaxN>
 constexpr void hp_or_hess(HessPattern<MaxN>& r, const HessPattern<MaxN>& a) noexcept
 {
-    for (int w = 0; w < HessPattern<MaxN>::hw; ++w) { r.hess[w] |= a.hess[w]; }
+    for (int w = 0; w < HessPattern<MaxN>::hw; ++w)
+    {
+        r.hess[w] |= a.hess[w];
+    }
 }
 template <int MaxN>
 constexpr void hp_set_pair(HessPattern<MaxN>& r, int i, int j) noexcept

@@ -133,8 +133,14 @@ struct Rng
         // composition is always valid) and whose SHAPE is a small mix of static/symbolic/dynamic dims.
         TypeId    dm   = ctx.type_dim_dynamic();
         const u32 pick = rng.range(3U);
-        if (pick == 0U) { dm = ctx.type_dim_static(rng.range(8U)); }
-        else if (pick == 1U) { dm = ctx.type_dim_symbolic(StringView("N")); }
+        if (pick == 0U)
+        {
+            dm = ctx.type_dim_static(rng.range(8U));
+        }
+        else if (pick == 1U)
+        {
+            dm = ctx.type_dim_symbolic(StringView("N"));
+        }
         const TypeId dm2[2] = {dm, ctx.type_dim_static(1U + rng.range(4U))};
         const TypeId shp    = ctx.type_shape(ConstSpan<TypeId>(dm2, rng.chance(50U) ? 2U : 1U));
         return rng.chance(50U) ? ctx.type_tensor(e, shp) : ctx.type_sparse_tensor(e, shp);
@@ -164,13 +170,19 @@ struct Rng
 [[nodiscard]] AttrId random_attr(Context& ctx, Rng& rng)
 {
     const u32 pick = rng.range(6U);
-    if (pick == 0U) { return ctx.attr_int(static_cast<i64>(rng.next())); } // full-range incl negative
+    if (pick == 0U) // full-range incl negative
+    {
+        return ctx.attr_int(static_cast<i64>(rng.next()));
+    }
     if (pick == 1U)
     {
         const f64 vals[] = {0.0, -0.0, 1.0, -1.0, 4.5, 4.0, 0.5, -3.25, 1.0e20, 1.0e-20};
         return ctx.attr_float(vals[rng.range(10U)]);
     }
-    if (pick == 2U) { return ctx.attr_bool(rng.chance(50U)); }
+    if (pick == 2U)
+    {
+        return ctx.attr_bool(rng.chance(50U));
+    }
     if (pick == 3U)
     {
         const char* const strs[] = {"plain", "with space", R"(q"uote)", R"(back\slash)", "brace{}", ""};
@@ -198,29 +210,44 @@ void gen_ops(ModuleBuilder& mb, Rng& rng, Array<Value*>& live, u32 count, u32 de
         OpBuilder ob = mb.op(StringView(kDialects[rng.range(5U)]), StringView(kOpNames[rng.range(10U)]));
 
         const u32 nops = live.size() == 0U ? 0U : rng.range(4U);
-        for (u32 i = 0; i < nops; ++i) { ob.operand(live[rng.range(static_cast<u32>(live.size()))]); }
+        for (u32 i = 0; i < nops; ++i)
+        {
+            ob.operand(live[rng.range(static_cast<u32>(live.size()))]);
+        }
 
         const u32 nres = rng.range(3U);
         ob.results(nres, random_value_type(ctx, rng)); // uniform result type (sometimes none)
 
         const u32 nattrs = rng.range(4U);
-        for (u32 i = 0; i < nattrs; ++i) { ob.attr(StringView(kAttrKeys[rng.range(8U)]), random_attr(ctx, rng)); }
+        for (u32 i = 0; i < nattrs; ++i)
+        {
+            ob.attr(StringView(kAttrKeys[rng.range(8U)]), random_attr(ctx, rng));
+        }
 
         // 0, 1, OR 2 regions — a 2-region op (scf.if/scf.for in CEIR-5) exercises the multi-region paths:
         // count_trailing_regions counting several groups, the parser's per-i region parse, the binary region loops.
         u32 nregions = 0U;
-        if (depth < 2U && rng.chance(30U)) { nregions = 1U + rng.range(2U); }
+        if (depth < 2U && rng.chance(30U))
+        {
+            nregions = 1U + rng.range(2U);
+        }
         ob.regions(nregions);
 
         Operation* const op = ob.build();
-        for (u32 i = 0; i < nres; ++i) { live.push_back(op->result(i)); }
+        for (u32 i = 0; i < nres; ++i)
+        {
+            live.push_back(op->result(i));
+        }
 
         for (u32 ri = 0; ri < nregions; ++ri)
         {
             InsertionGuard g(mb); // each region fills independently, restoring the parent insertion point after
             const u32      rnargs = rng.range(3U);
             Block* const   rb     = mb.add_block(rnargs, random_value_type(ctx, rng), op->region(ri));
-            for (u32 i = 0; i < rnargs; ++i) { live.push_back(rb->arg(i)); }
+            for (u32 i = 0; i < rnargs; ++i)
+            {
+                live.push_back(rb->arg(i));
+            }
             gen_ops(mb, rng, live, rng.range(4U), depth + 1U); // may be 0 ops — empty-block round-trip coverage
         }
     }
@@ -235,7 +262,10 @@ void gen_ops(ModuleBuilder& mb, Rng& rng, Array<Value*>& live, u32 count, u32 de
     {
         const u32    nargs = rng.range(3U);
         Block* const blk   = mb.add_block(nargs, random_value_type(ctx, rng));
-        for (u32 i = 0; i < nargs; ++i) { live.push_back(blk->arg(i)); }
+        for (u32 i = 0; i < nargs; ++i)
+        {
+            live.push_back(blk->arg(i));
+        }
         gen_ops(mb, rng, live, rng.range(5U), 0U); // may be 0 ops (zero-op block round-trip coverage)
     }
     return mb.module();
@@ -270,7 +300,10 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
 {
     Array<u8> b(alloc);
     b.reserve(count);
-    for (usize i = 0U; i < count; ++i) { b.push_back(src[i]); }
+    for (usize i = 0U; i < count; ++i)
+    {
+        b.push_back(src[i]);
+    }
     return b;
 }
 
@@ -301,7 +334,10 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
         b.reserve(n - 1U);
         for (usize i = 0U; i < n; ++i)
         {
-            if (i != pos) { b.push_back(src[i]); }
+            if (i != pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     case 2U: // insert an arbitrary byte before pos
@@ -310,7 +346,10 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
         b.reserve(n + 1U);
         for (usize i = 0U; i < n; ++i)
         {
-            if (i == pos) { b.push_back(v); }
+            if (i == pos)
+            {
+                b.push_back(v);
+            }
             b.push_back(src[i]);
         }
         break;
@@ -320,7 +359,10 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
         for (usize i = 0U; i < n; ++i)
         {
             b.push_back(src[i]);
-            if (i == pos) { b.push_back(src[i]); }
+            if (i == pos)
+            {
+                b.push_back(src[i]);
+            }
         }
         break;
     default: // swap two bytes
@@ -330,8 +372,14 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
         for (usize i = 0U; i < n; ++i)
         {
             u8 v = src[i];
-            if (i == pos) { v = src[q]; }
-            else if (i == q) { v = src[pos]; }
+            if (i == pos)
+            {
+                v = src[q];
+            }
+            else if (i == q)
+            {
+                v = src[pos];
+            }
             b.push_back(v);
         }
         break;
@@ -345,7 +393,10 @@ void check_roundtrips(Context& ctx, Module& m, crd::memory::IAllocator* root)
 // by the harness not wrapping the call: an exception or a memory fault fails the run under ASan.)
 [[nodiscard]] bool load_result_well_formed(const ParseResult& r, usize input_size) noexcept
 {
-    if (r.ok) { return r.module != nullptr; }
+    if (r.ok)
+    {
+        return r.module != nullptr;
+    }
     return r.module == nullptr && r.error_offset <= input_size && r.error != nullptr && r.error[0] != '\0';
 }
 } // namespace
@@ -439,7 +490,10 @@ TEST_CASE("ceir fuzz: the text parser survives byte mutation and never crashes",
             REQUIRE(r2.module != nullptr);
             CHECK(text_equal(p1, print(c2, *r2.module, &root)));
         }
-        else { ++rejects; }
+        else
+        {
+            ++rejects;
+        }
         return (static_cast<u64>(r.ok) << 63U) ^ static_cast<u64>(r.error_offset);
     };
 
@@ -502,7 +556,10 @@ TEST_CASE("ceir fuzz: the binary deserializer survives byte mutation and never c
             REQUIRE(r2.module != nullptr);
             CHECK(blob_equal(b2, serialize(c2, *r2.module, &root)));
         }
-        else { ++rejects; }
+        else
+        {
+            ++rejects;
+        }
         return (static_cast<u64>(r.ok) << 63U) ^ static_cast<u64>(r.error_offset);
     };
 
@@ -538,7 +595,10 @@ TEST_CASE("ceir fuzz: the binary deserializer survives byte mutation and never c
         for (u32 val : hostile)
         {
             Array<u8> b = mutant_prefix(seed, seed.size(), &root);
-            for (u32 k = 0U; k < 4U; ++k) { b[off + k] = static_cast<u8>((val >> (8U * k)) & 0xFFU); }
+            for (u32 k = 0U; k < 4U; ++k)
+            {
+                b[off + k] = static_cast<u8>((val >> (8U * k)) & 0xFFU);
+            }
             Context           c(&root);
             const ParseResult r = deserialize(c, span(b));
             CHECK(load_result_well_formed(r, b.size()));

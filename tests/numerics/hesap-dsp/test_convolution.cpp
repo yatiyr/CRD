@@ -36,7 +36,11 @@ TEST_CASE("dsp conv: correlate matches scipy.signal.correlate", "[v11-j][dsp][co
     const usize nb = sizeof(ref_conv_b)/sizeof(double);
     const auto corr = dsp::correlate<f64>(&alloc, cont::ConstSpan<f64>(ref_conv_a,na), cont::ConstSpan<f64>(ref_conv_b,nb));
     REQUIRE(corr.size() == na+nb-1);
-    for (usize i = 0; i < corr.size(); ++i) { INFO("[" << i << "]"); CHECK_THAT(corr[i], WithinAbs(ref_corr_full[i], 1e-10)); }
+    for (usize i = 0; i < corr.size(); ++i)
+    {
+        INFO("[" << i << "]");
+        CHECK_THAT(corr[i], WithinAbs(ref_corr_full[i], 1e-10));
+    }
 }
 
 TEST_CASE("dsp conv: FftConvolver (plan-cached, reusable) == direct == scipy", "[v11-j][dsp][conv]")
@@ -76,5 +80,9 @@ TEST_CASE("dsp conv: oaconvolve == scipy + deconvolve recovers quotient", "[v11-
     cont::Array<f64> rem(&alloc);
     const auto q = dsp::deconvolve<f64>(&alloc, cont::ConstSpan<f64>(ref_deconv_sig,ns), cont::ConstSpan<f64>(ref_deconv_div,nd), rem);
     REQUIRE(q.size() == nq);
-    for (usize i = 0; i < nq; ++i) { INFO("q[" << i << "]"); CHECK_THAT(q[i], WithinAbs(ref_deconv_q[i], 1e-10)); }
+    for (usize i = 0; i < nq; ++i)
+    {
+        INFO("q[" << i << "]");
+        CHECK_THAT(q[i], WithinAbs(ref_deconv_q[i], 1e-10));
+    }
 }

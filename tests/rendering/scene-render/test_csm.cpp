@@ -143,9 +143,18 @@ TEST_CASE("REN-3.2-b GATE: panning moves the shadow projection in WHOLE TEXELS o
         const m::Vec3f ndc = project(c.light_vp[0], probe);
         const float    tex_x = (ndc.x * 0.5F + 0.5F) * static_cast<float>(cfg.map_size);
         float          frac  = tex_x - m::floor(tex_x);
-        if (frac < 0.0F) { frac += 1.0F; }
-        if (frac > max_frac) { max_frac = frac; }
-        if (frac < min_frac) { min_frac = frac; }
+        if (frac < 0.0F)
+        {
+            frac += 1.0F;
+        }
+        if (frac > max_frac)
+        {
+            max_frac = frac;
+        }
+        if (frac < min_frac)
+        {
+            min_frac = frac;
+        }
     }
     // ⛔ With the snap, the sub-texel phase is CONSTANT: the projection only ever jumps whole texels, so a fixed
     // world point keeps the same position WITHIN its texel. Measured spread here is under 1% of a texel; an
@@ -243,7 +252,10 @@ TEST_CASE("REN-40-E GATE: a moving camera produces DIFFERENT cascade matrices",
     crd::u32 changed = 0;
     for (crd::u32 i = 0; i < frame0.count; ++i)
     {
-        if (!(frame0.light_vp[i] == frame1.light_vp[i])) { ++changed; }
+        if (!(frame0.light_vp[i] == frame1.light_vp[i]))
+        {
+            ++changed;
+        }
     }
     CHECK(changed > 0U);
 }
@@ -279,7 +291,10 @@ TEST_CASE("REN-40-E2 GATE: round-robin schedule alternates far cascades",
     // frame 1 (odd):  cascade 2 NOT,            cascade 3 scheduled (odd)
     auto scheduled = [](crd::u32 frame, crd::u32 index) -> bool
     {
-        if (index < 2U) { return true; }
+        if (index < 2U)
+        {
+            return true;
+        }
         return (frame & 1U) == (index & 1U);
     };
 
@@ -327,9 +342,15 @@ TEST_CASE("REN-40-E GATE: a moved light updates every cascade within the round-r
     auto should_cache = [](crd::u32 index, const m::Mat4f& prev, const m::Mat4f& current,
                            crd::u32 csm_frame) -> bool
     {
-        if (prev == current) { return true; }
+        if (prev == current)
+        {
+            return true;
+        }
         const bool scheduled = index < 2U || ((csm_frame & 1U) == (index & 1U));
-        if (index >= 2U && csm_frame > 1U && !scheduled) { return true; }
+        if (index >= 2U && csm_frame > 1U && !scheduled)
+        {
+            return true;
+        }
         return false;
     };
 
@@ -352,8 +373,14 @@ TEST_CASE("REN-40-E GATE: a moved light updates every cascade within the round-r
     crd::u32 updated_3 = 0;
     for (crd::u32 frame = 2; frame <= 3; ++frame)
     {
-        if (!should_cache(2U, casc_a.light_vp[2], casc_b.light_vp[2], frame)) { ++updated_2; }
-        if (!should_cache(3U, casc_a.light_vp[3], casc_b.light_vp[3], frame)) { ++updated_3; }
+        if (!should_cache(2U, casc_a.light_vp[2], casc_b.light_vp[2], frame))
+        {
+            ++updated_2;
+        }
+        if (!should_cache(3U, casc_a.light_vp[3], casc_b.light_vp[3], frame))
+        {
+            ++updated_3;
+        }
     }
     CHECK(updated_2 >= 1U);
     CHECK(updated_3 >= 1U);

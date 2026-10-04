@@ -26,7 +26,15 @@ using Catch::Matchers::WithinRel;
 namespace
 {
 f64 qfunc(f64 x) { return 0.5 * std::erfc(x / std::numbers::sqrt2_v<f64>); }
-int popcount(u32 x) { int c = 0; while (x) { c += static_cast<int>(x & 1U); x >>= 1U; } return c; }
+int popcount(u32 x)
+{
+    int c = 0;
+    while (x)
+    {
+        c += static_cast<int>(x & 1U);
+        x >>= 1U;
+    }
+    return c; }
 } // namespace
 
 TEST_CASE("comms modulation: Gray code round trip + 1-bit adjacency", "[v11c-a][comms][modulation]")

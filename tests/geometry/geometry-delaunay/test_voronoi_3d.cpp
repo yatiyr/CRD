@@ -71,9 +71,16 @@ bool defining_property_holds(const crd::containers::Array<Vec3<T>>& sites,
             const T dy = sample.y - sites[s].y;
             const T dz = sample.z - sites[s].z;
             const T d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < best_d2) { best_d2 = d2; best_s = s; }
+            if (d2 < best_d2)
+            {
+                best_d2 = d2;
+                best_s = s;
+            }
         }
-        if (best_s != cell.site_index) { return false; }
+        if (best_s != cell.site_index)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -90,7 +97,10 @@ bool face_normals_outward(const crd::containers::Array<Vec3<T>>& sites,
         const Vec3<T> site = sites[cell.site_index];
         for (const auto& face : cell.faces)
         {
-            if (face.vertex_indices.size() < 3U) { continue; } // degenerate/unbounded
+            if (face.vertex_indices.size() < 3U) // degenerate/unbounded
+            {
+                continue;
+            }
             const Vec3<T> nbr = sites[face.neighbor_site_index];
             const Vec3<T> outward{nbr.x - site.x, nbr.y - site.y, nbr.z - site.z};
 
@@ -114,7 +124,10 @@ bool face_normals_outward(const crd::containers::Array<Vec3<T>>& sites,
                 avg_nz += ax * by - ay * bx;
             }
             const T dotp = avg_nx * outward.x + avg_ny * outward.y + avg_nz * outward.z;
-            if (dotp <= static_cast<T>(0)) { return false; }
+            if (dotp <= static_cast<T>(0))
+            {
+                return false;
+            }
         }
     }
     return true;
@@ -220,7 +233,10 @@ TEST_CASE("voronoi_3d: 5-site tet + center (1 bounded cell)",
     u32 bounded_count = 0;
     for (const auto& cell : r.cells)
     {
-        if (cell.is_bounded) { ++bounded_count; }
+        if (cell.is_bounded)
+        {
+            ++bounded_count;
+        }
     }
     CHECK(bounded_count == 1U);
     CHECK(r.cells[4].is_bounded);

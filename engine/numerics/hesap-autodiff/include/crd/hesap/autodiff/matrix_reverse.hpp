@@ -37,7 +37,10 @@ inline void gemm_nt(const crd::f64* a, const crd::f64* b, crd::f64* c, int m, in
         for (int j = 0; j < n; ++j)
         {
             crd::f64 s = 0.0;
-            for (int t = 0; t < k; ++t) { s += a[i * k + t] * b[j * k + t]; }
+            for (int t = 0; t < k; ++t)
+            {
+                s += a[i * k + t] * b[j * k + t];
+            }
             c[i * n + j] = s;
         }
     }
@@ -58,12 +61,21 @@ inline void solve_lu_vjp(const crd::f64* a_lu, const int* piv, const crd::f64* x
 {
     for (int j = 0; j < p; ++j) // B̄[:,j] = A⁻ᵀ·X̄[:,j]
     {
-        for (int i = 0; i < n; ++i) { rhs[i] = xbar[i * p + j]; }
+        for (int i = 0; i < n; ++i)
+        {
+            rhs[i] = xbar[i * p + j];
+        }
         sp::dense_lu_solve_t(a_lu, piv, rhs, sol, n, tmp);
-        for (int i = 0; i < n; ++i) { gb[i * p + j] = sol[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            gb[i * p + j] = sol[i];
+        }
     }
     gemm_nt(gb, x, ga, n, p, n);                       // ga = B̄·Xᵀ (n×n)
-    for (int i = 0; i < n * n; ++i) { ga[i] = -ga[i]; } // Ā = −B̄·Xᵀ
+    for (int i = 0; i < n * n; ++i) // Ā = −B̄·Xᵀ
+    {
+        ga[i] = -ga[i];
+    }
 }
 
 // ---- SPD solve  X = A⁻¹B  (A = L·Lᵀ, X/B n×p) -----------------------------------------------------------------
@@ -76,7 +88,10 @@ inline void solve_spd_vjp(const crd::f64* l, const crd::f64* x, const crd::f64* 
     gemm_nt(gb, x, m1, n, p, n);             // m1 = B̄·Xᵀ
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { ga[i * n + j] = -0.5 * (m1[i * n + j] + m1[j * n + i]); } // −sym
+        for (int j = 0; j < n; ++j) // −sym
+        {
+            ga[i * n + j] = -0.5 * (m1[i * n + j] + m1[j * n + i]);
+        }
     }
 }
 
@@ -90,19 +105,31 @@ inline void cholesky_vjp(const crd::f64* l, const crd::f64* lbar, crd::f64* ga, 
     {
         for (int j = 0; j < n; ++j)
         {
-            if (j > i) { s[i * n + j] = 0.0; }
-            else if (j == i) { s[i * n + j] *= 0.5; }
+            if (j > i)
+            {
+                s[i * n + j] = 0.0;
+            }
+            else if (j == i)
+            {
+                s[i * n + j] *= 0.5;
+            }
         }
     }
     mj::trisolve_lower_t(l, s, y, n, n); // y = L⁻ᵀ·Φ(s)   (adjoint of dA↦L⁻¹dA L⁻ᵀ is N↦L⁻ᵀ N L⁻¹)
     for (int i = 0; i < n; ++i)          // w = yᵀ  (so L⁻ᵀ·yᵀ = (y·L⁻¹)ᵀ = Ā_rawᵀ)
     {
-        for (int j = 0; j < n; ++j) { w[i * n + j] = y[j * n + i]; }
+        for (int j = 0; j < n; ++j)
+        {
+            w[i * n + j] = y[j * n + i];
+        }
     }
     mj::trisolve_lower_t(l, w, s, n, n); // s = L⁻ᵀ·yᵀ = Ā_rawᵀ  (Ā_raw = L⁻ᵀ·Φ(Lᵀ·L̄)·L⁻¹)
     for (int i = 0; i < n; ++i)          // Ā = sym(Ā_raw) = ½(sᵀ + s)
     {
-        for (int j = 0; j < n; ++j) { ga[i * n + j] = 0.5 * (s[j * n + i] + s[i * n + j]); }
+        for (int j = 0; j < n; ++j)
+        {
+            ga[i * n + j] = 0.5 * (s[j * n + i] + s[i * n + j]);
+        }
     }
 }
 
@@ -110,11 +137,20 @@ inline void cholesky_vjp(const crd::f64* l, const crd::f64* lbar, crd::f64* ga, 
 // SPD A = L·Lᵀ, scalar ḡ : Ā = ḡ·A⁻¹ (symmetric). scratch eye,y each n×n. (Ā = A⁻¹ is computed via the factor.)
 inline void logdet_spd_vjp(const crd::f64* l, crd::f64 gbar, crd::f64* ga, int n, crd::f64* eye, crd::f64* y) noexcept
 {
-    for (int i = 0; i < n * n; ++i) { eye[i] = 0.0; }
-    for (int i = 0; i < n; ++i) { eye[i * n + i] = 1.0; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        eye[i] = 0.0;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        eye[i * n + i] = 1.0;
+    }
     mj::trisolve_lower(l, eye, y, n, n);  // y = L⁻¹
     mj::trisolve_lower_t(l, y, ga, n, n); // ga = A⁻¹
-    for (int i = 0; i < n * n; ++i) { ga[i] *= gbar; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        ga[i] *= gbar;
+    }
 }
 // GENERAL A (LU factor a_lu/piv), scalar ḡ : Ā = ḡ·A⁻ᵀ. scratch e,x each n.
 inline void logdet_lu_vjp(const crd::f64* a_lu, const int* piv, crd::f64 gbar, crd::f64* ga, int n, crd::f64* e,
@@ -122,9 +158,15 @@ inline void logdet_lu_vjp(const crd::f64* a_lu, const int* piv, crd::f64 gbar, c
 {
     for (int kcol = 0; kcol < n; ++kcol) // Ā[:,k] = ḡ·(A⁻ᵀ)_{:,k} = ḡ·solve(Aᵀ, e_k)
     {
-        for (int i = 0; i < n; ++i) { e[i] = (i == kcol) ? 1.0 : 0.0; }
+        for (int i = 0; i < n; ++i)
+        {
+            e[i] = (i == kcol) ? 1.0 : 0.0;
+        }
         sp::dense_lu_solve_t(a_lu, piv, e, x, n, tmp);
-        for (int i = 0; i < n; ++i) { ga[i * n + kcol] = gbar * x[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            ga[i * n + kcol] = gbar * x[i];
+        }
     }
 }
 
@@ -135,7 +177,10 @@ inline void eigvals_sym_vjp(const crd::f64* q, const crd::f64* lbar, crd::f64* g
 {
     for (int a = 0; a < n; ++a)
     {
-        for (int i = 0; i < n; ++i) { tmp[a * n + i] = q[a * n + i] * lbar[i]; } // tmp = Q·diag(λ̄)
+        for (int i = 0; i < n; ++i) // tmp = Q·diag(λ̄)
+        {
+            tmp[a * n + i] = q[a * n + i] * lbar[i];
+        }
     }
     gemm_nt(tmp, q, ga, n, n, n); // Ā = tmp·Qᵀ
 }
@@ -147,7 +192,10 @@ inline void svdvals_vjp(const crd::f64* u, const crd::f64* v, const crd::f64* sb
 {
     for (int a = 0; a < m; ++a)
     {
-        for (int i = 0; i < n; ++i) { tmp[a * n + i] = u[a * n + i] * sbar[i]; } // tmp = U·diag(σ̄)
+        for (int i = 0; i < n; ++i) // tmp = U·diag(σ̄)
+        {
+            tmp[a * n + i] = u[a * n + i] * sbar[i];
+        }
     }
     gemm_nt(tmp, v, ga, m, n, n); // Ā = tmp·Vᵀ
 }

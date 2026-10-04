@@ -68,10 +68,20 @@ bool is_boundary_vertex(const HalfEdgeMesh<T>& m, crd::u32 v) noexcept
 {
     bool b = false;
     m.for_each_outgoing_he(v, [&](crd::u32 ho) {
-        if (b) { return; }
-        if (m.he_is_boundary(ho)) { b = true; return; }
+        if (b)
+        {
+            return;
+        }
+        if (m.he_is_boundary(ho))
+        {
+            b = true;
+            return;
+        }
         const crd::u32 t = m.he(ho).twin;
-        if (t != k_null_he && m.he_is_boundary(t)) { b = true; }
+        if (t != k_null_he && m.he_is_boundary(t))
+        {
+            b = true;
+        }
     });
     return b;
 }
@@ -111,14 +121,20 @@ crd::u32 apply_taubin_pass(HalfEdgeMesh<T>&                            m,
         const bool         vb  = is_boundary[v] != 0U;
         m.for_each_outgoing_he(v, [&](crd::u32 ho) {
             const crd::u32 dest = m.he_dest(ho);
-            if (dest == k_null_vertex) { return; }
+            if (dest == k_null_vertex)
+            {
+                return;
+            }
             if (vb)
             {
                 // Only count boundary-edge neighbours.
                 const bool       ho_is_b = m.he_is_boundary(ho);
                 const crd::u32   t        = m.he(ho).twin;
                 const bool       t_is_b   = (t != k_null_he) && m.he_is_boundary(t);
-                if (!ho_is_b && !t_is_b) { return; }
+                if (!ho_is_b && !t_is_b)
+                {
+                    return;
+                }
             }
             sum = sum + m.vertex(dest).position;
             ++n;
@@ -141,7 +157,10 @@ crd::u32 apply_taubin_pass(HalfEdgeMesh<T>&                            m,
     // Apply atomically.
     for (crd::u32 v = 0; v < pool; ++v)
     {
-        if (!m.vertex_alive(v)) { continue; }
+        if (!m.vertex_alive(v))
+        {
+            continue;
+        }
         m.set_vertex_position(v, scratch[v]);
     }
     return moved;
@@ -156,7 +175,10 @@ HalfEdgeMesh<T> taubin_smooth(const HalfEdgeMesh<T>&             input,
 {
     TaubinSmoothReport report{};
     auto                report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr
@@ -198,7 +220,10 @@ HalfEdgeMesh<T> taubin_smooth(const HalfEdgeMesh<T>&             input,
     is_boundary.resize(output.vertex_pool_size(), crd::u8{0});
     for (crd::u32 v = 0; v < output.vertex_pool_size(); ++v)
     {
-        if (!output.vertex_alive(v)) { continue; }
+        if (!output.vertex_alive(v))
+        {
+            continue;
+        }
         if (is_boundary_vertex(output, v))
         {
             is_boundary[v] = 1U;

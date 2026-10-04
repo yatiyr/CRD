@@ -34,9 +34,15 @@ struct Arrowhead
     void operator()(const T* x, int n, T* y, int /*m*/) const
     {
         T s = g_a[0] * sin(x[0]);
-        for (int j = 1; j < n; ++j) { s = s + g_a[j] * sin(x[j]); }
+        for (int j = 1; j < n; ++j)
+        {
+            s = s + g_a[j] * sin(x[j]);
+        }
         y[0] = s;
-        for (int i = 1; i < n; ++i) { y[i] = x[i] * x[i] + g_b[i] * x[0]; }
+        for (int i = 1; i < n; ++i)
+        {
+            y[i] = x[i] * x[i] + g_b[i] * x[0];
+        }
     }
 };
 
@@ -46,7 +52,10 @@ struct Diag
     template <class T>
     void operator()(const T* x, int /*n*/, T* y, int m) const
     {
-        for (int i = 0; i < m; ++i) { y[i] = sin(x[i]); }
+        for (int i = 0; i < m; ++i)
+        {
+            y[i] = sin(x[i]);
+        }
     }
 };
 } // namespace
@@ -60,7 +69,10 @@ TEST_CASE("v16-c: bicoloring crushes unidirectional on an arrowhead Jacobian, ex
     }
     constexpr int w = 1; // w*64 >= max(n,m) = 17
     f64           x[kN];
-    for (int i = 0; i < kN; ++i) { x[i] = 0.4 * std::sin(0.7 + 1.1 * i); }
+    for (int i = 0; i < kN; ++i)
+    {
+        x[i] = 0.4 * std::sin(0.7 + 1.1 * i);
+    }
 
     // trace the structural pattern
     fwd::JacPattern<w> rows[kN];
@@ -104,7 +116,10 @@ TEST_CASE("v16-c: bicoloring crushes unidirectional on an arrowhead Jacobian, ex
 
     // analytic Jacobian (independent oracle): row 0 dense = a_j cos(x_j); rows i>0 = {col 0: b_i, col i: 2 x_i}.
     f64 an[kN * kN] = {};
-    for (int j = 0; j < kN; ++j) { an[0 * kN + j] = g_a[j] * std::cos(x[j]); }
+    for (int j = 0; j < kN; ++j)
+    {
+        an[0 * kN + j] = g_a[j] * std::cos(x[j]);
+    }
     for (int i = 1; i < kN; ++i)
     {
         an[i * kN + 0] = g_b[i];
@@ -112,14 +127,20 @@ TEST_CASE("v16-c: bicoloring crushes unidirectional on an arrowhead Jacobian, ex
     }
     for (int i = 0; i < kN; ++i)
     {
-        for (int k = 0; k < kN; ++k) { CHECK_THAT(jac[i * kN + k], WithinAbs(an[i * kN + k], 1e-10)); }
+        for (int k = 0; k < kN; ++k)
+        {
+            CHECK_THAT(jac[i * kN + k], WithinAbs(an[i * kN + k], 1e-10));
+        }
     }
 
     // determinism: recover again, bit-identical
     rev::bicolor_recover<w>(Arrowhead{}, {x, kN}, kN, rows, is_dense, row_color, col_color, ncol, nrow,
                             {jac2, kN * kN}, {v, kN}, {bcol, kN}, {bmat_f, kN * kN}, {ds, kN}, {dy, kN}, tape,
                             {xs, kN}, {ys, kN}, {bmat_r, kN * kN});
-    for (int i = 0; i < kN * kN; ++i) { CHECK(jac[i] == jac2[i]); }
+    for (int i = 0; i < kN * kN; ++i)
+    {
+        CHECK(jac[i] == jac2[i]);
+    }
 }
 
 TEST_CASE("v16-c: bicoloring degrades gracefully to unidirectional on a diagonal Jacobian", "[autodiff][reverse][bicolor]")
@@ -127,7 +148,10 @@ TEST_CASE("v16-c: bicoloring degrades gracefully to unidirectional on a diagonal
     constexpr int w = 1;
     constexpr int n = 12;
     f64           x[n];
-    for (int i = 0; i < n; ++i) { x[i] = 0.5 * std::cos(0.3 + i); }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = 0.5 * std::cos(0.3 + i);
+    }
 
     fwd::JacPattern<w> rows[n];
     fwd::JacPattern<w> scratch[n];

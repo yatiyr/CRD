@@ -176,7 +176,10 @@ Rig make_rig()
     cfg.enable_validation = true;
     r.ctx = g::create_vulkan_gpu_context(cfg);
     r.vk  = r.ctx != nullptr ? static_cast<g::VulkanGpuContext*>(r.ctx.get()) : nullptr;
-    if (r.vk == nullptr || !r.vk->graphics_capable() || !r.vk->shader_object()) { return r; }
+    if (r.vk == nullptr || !r.vk->graphics_capable() || !r.vk->shader_object())
+    {
+        return r;
+    }
     r.raster = g::create_vulkan_raster_context(*r.vk);
     return r;
 }
@@ -187,7 +190,10 @@ TEST_CASE("REN-1 GATE: frame graph composes scene + overlay in ONE submission, r
           "[gpu-context][vulkan][frame-graph][ren1][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -244,7 +250,10 @@ TEST_CASE("REN-1 GATE: frame graph composes scene + overlay in ONE submission, r
         crd::u32   shown = 0;
         for (usize i = 0; i < msgs.size() && shown < 4U; ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren1 capture] id=" << msgs[i].message_id_number << " " << msgs[i].message_text.c_str());
             ++shown;
         }
@@ -266,7 +275,10 @@ TEST_CASE("REN-1 GATE: frame graph composes scene + overlay in ONE submission, r
 TEST_CASE("REN-1: transient resources ALIAS memory across disjoint lifetimes", "[gpu-context][vulkan][frame-graph][ren1][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     g::FgImageDesc desc{};
@@ -321,7 +333,10 @@ TEST_CASE("REN-2 GATE: render-to-texture -- a pass renders a transient, a LATER 
           "[gpu-context][vulkan][frame-graph][ren2][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -333,7 +348,10 @@ TEST_CASE("REN-2 GATE: render-to-texture -- a pass renders a transient, a LATER 
     kir::KEntry tfe;
     gputest::build_triangle_fs(tfg, tfe);
     auto tvs = rig.vk->create_program(tvg, tve);
-    if (tvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (tvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto tfs      = rig.vk->create_program(tfg, tfe);
     auto tri_prog = raster.create_raster_program(*tvs, *tfs);
     // compose program: a FULL-SCREEN quad sampling the bound texture at UV (build_textured_vs + build_sample_fs)
@@ -389,7 +407,10 @@ TEST_CASE("REN-2 GATE: render-to-texture -- a pass renders a transient, a LATER 
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren2 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -401,7 +422,10 @@ TEST_CASE("REN-2 Half B: the textured scene draw SAMPLES the material base-color
           "[gpu-context][vulkan][ren2][material][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     // the material shader: vertex-pull {x,y,z,u,v} + sample the base-color map at UV
@@ -413,7 +437,10 @@ TEST_CASE("REN-2 Half B: the textured scene draw SAMPLES the material base-color
     kir::KEntry fe;
     gputest::build_pull_textured_fs(fg, fe);
     auto vs = rig.vk->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto fs   = rig.vk->create_program(fg, fe);
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
@@ -460,7 +487,10 @@ TEST_CASE("REN-3.1 GATE: a depth-only pass RENDERS a shadow map, a later pass SA
           "[gpu-context][vulkan][frame-graph][ren3][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -474,7 +504,10 @@ TEST_CASE("REN-3.1 GATE: a depth-only pass RENDERS a shadow map, a later pass SA
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5); // render the SAME 0.5 map the old tests uploaded
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -536,7 +569,10 @@ TEST_CASE("REN-3.1 GATE: a depth-only pass RENDERS a shadow map, a later pass SA
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren3 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -558,7 +594,10 @@ TEST_CASE("REN-3.2 GATE: four cascade passes write four SLICES of a depth-array 
           "[gpu-context][vulkan][frame-graph][ren3][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
@@ -571,7 +610,10 @@ TEST_CASE("REN-3.2 GATE: four cascade passes write four SLICES of a depth-array 
     kir::KEntry dve;
     gputest::build_fullscreen_vs(dvg, dve);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
 
     containers::Array<std::unique_ptr<g::IRasterProgram>> cascade_progs(&alloc);
     containers::Array<std::unique_ptr<g::IGpuProgram>>    cascade_fs(&alloc);
@@ -664,7 +706,10 @@ TEST_CASE("REN-3.2 GATE: four cascade passes write four SLICES of a depth-array 
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren3.2 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -678,7 +723,10 @@ TEST_CASE("REN-3.1: a non-sampled depth transient still serves as a plain depth 
           "[gpu-context][vulkan][frame-graph][ren3][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     auto  fgraph = raster.create_frame_graph();
     REQUIRE(fgraph != nullptr);
@@ -842,7 +890,10 @@ TEST_CASE("REN-36.2 GATE: a COOKED frame asset renders BIT-IDENTICALLY to the ha
           "[gpu-context][vulkan][frame-graph][ren36][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -855,7 +906,10 @@ TEST_CASE("REN-36.2 GATE: a COOKED frame asset renders BIT-IDENTICALLY to the ha
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -915,7 +969,10 @@ TEST_CASE("REN-36.2 GATE: a COOKED frame asset renders BIT-IDENTICALLY to the ha
     {
         for (u32 x = 0; x < dim; ++x)
         {
-            if (ref->read_pixel(x, y) != out->read_pixel(x, y)) { ++diffs; }
+            if (ref->read_pixel(x, y) != out->read_pixel(x, y))
+            {
+                ++diffs;
+            }
         }
     }
     CHECK(diffs == 0U);
@@ -972,7 +1029,10 @@ TEST_CASE("REN-36.2: a failing authored graph REPORTS and falls back to the ERRO
           "[gpu-context][vulkan][frame-graph][ren36][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -985,7 +1045,10 @@ TEST_CASE("REN-36.2: a failing authored graph REPORTS and falls back to the ERRO
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
     auto sb         = raster.create_storage_buffer(16U);
@@ -1071,7 +1134,10 @@ TEST_CASE("REN-36.2: a PROGRAMMATIC graph renders identically to the authored an
           "[gpu-context][vulkan][frame-graph][ren36][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1084,7 +1150,10 @@ TEST_CASE("REN-36.2: a PROGRAMMATIC graph renders identically to the authored an
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -1150,7 +1219,10 @@ TEST_CASE("REN-36.2: a PROGRAMMATIC graph renders identically to the authored an
     {
         for (u32 x = 0; x < dim; ++x)
         {
-            if (from_toml->read_pixel(x, y) != from_code->read_pixel(x, y)) { ++diffs; }
+            if (from_toml->read_pixel(x, y) != from_code->read_pixel(x, y))
+            {
+                ++diffs;
+            }
         }
     }
     CHECK(diffs == 0U);
@@ -1196,7 +1268,10 @@ TEST_CASE("REN-36.2: a programmatically-built graph is rejected by the SAME vali
 TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass", "[.][ren3-bench][gpu][vulkan]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1207,7 +1282,10 @@ TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -1281,7 +1359,10 @@ TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass
                         fgraph->reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
-                    if (ms < best_d) { best_d = ms; }
+                    if (ms < best_d)
+                    {
+                        best_d = ms;
+                    }
                 }
                 {   // the equivalent colour+depth pass — same target, same graph shape, same draw count
                     auto fgraph = raster.create_frame_graph();
@@ -1298,7 +1379,10 @@ TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass
                         fgraph->reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
-                    if (ms < best_c) { best_c = ms; }
+                    if (ms < best_c)
+                    {
+                        best_c = ms;
+                    }
                 }
             }
             std::printf("  %4u %8u | %10.4f | %13.4f | %6.2fx\n", res, n, best_d, best_c, best_c / best_d);
@@ -1311,7 +1395,10 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
           "[.][ren1-bench][gpu][vulkan]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1322,7 +1409,10 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
     kir::KEntry fe;
     gputest::build_triangle_fs(fgg, fe);
     auto vs = rig.vk->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto fs   = rig.vk->create_program(fgg, fe);
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
@@ -1339,7 +1429,10 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
         auto& t = *ctx.image(s->img);
         auto& b = *ctx.buffer(s->buf);
         crd::gputest::enc_draw_storage_depth(r, t, *s->prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, b, 3U);
-        for (crd::u32 i = 1; i < s->n; ++i) { crd::gputest::enc_draw_storage_depth_load(r, t, *s->prog, g::DepthCompare::Always, b, 3U); }
+        for (crd::u32 i = 1; i < s->n; ++i)
+        {
+            crd::gputest::enc_draw_storage_depth_load(r, t, *s->prog, g::DepthCompare::Always, b, 3U);
+        }
     };
 
     constexpr crd::u32 frames = 20U;
@@ -1352,7 +1445,10 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
         for (crd::u32 f = 0; f < frames; ++f)
         {
             crd::gputest::enc_draw_storage_depth(raster, *tgt, *prog, g::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, 0.0F, g::DepthCompare::Always, *sb, 3U);
-            for (crd::u32 i = 1; i < n; ++i) { crd::gputest::enc_draw_storage_depth_load(raster, *tgt, *prog, g::DepthCompare::Always, *sb, 3U); }
+            for (crd::u32 i = 1; i < n; ++i)
+            {
+                crd::gputest::enc_draw_storage_depth_load(raster, *tgt, *prog, g::DepthCompare::Always, *sb, 3U);
+            }
         }
         const double sync_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count() / frames;
 
@@ -1375,7 +1471,11 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
 
         WARN("[ren1-bench] N=" << n << " draws/frame  sync=" << sync_ms << "ms/frame  graph=" << graph_ms
                                << "ms/frame  speedup=" << (graph_ms > 0.0 ? sync_ms / graph_ms : 0.0) << "x");
-        if (n == 64U) { graph_ms_at_64 = graph_ms; sync_ms_at_64 = sync_ms; }
+        if (n == 64U)
+        {
+            graph_ms_at_64 = graph_ms;
+            sync_ms_at_64 = sync_ms;
+        }
     }
     // The batching must never be a REGRESSION at scale: one submit for 64 draws is not slower than 64 submits.
     CHECK(graph_ms_at_64 <= sync_ms_at_64);
@@ -1392,7 +1492,10 @@ TEST_CASE("REN-36.3 GATE: ONE authored pass declaration expands to FOUR cascades
           "[gpu-context][vulkan][frame-graph][ren36][ren3][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
@@ -1404,7 +1507,10 @@ TEST_CASE("REN-36.3 GATE: ONE authored pass declaration expands to FOUR cascades
     kir::KEntry dve;
     gputest::build_fullscreen_vs(dvg, dve);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
 
     containers::Array<std::unique_ptr<g::IRasterProgram>> cprogs(&alloc);
     containers::Array<std::unique_ptr<g::IGpuProgram>>    cfs(&alloc);
@@ -1485,7 +1591,10 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
           "[gpu-context][vulkan][frame-graph][ren8][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1498,7 +1607,10 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -1519,7 +1631,10 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
 
     auto fgraph = raster.create_frame_graph();
     REQUIRE(fgraph != nullptr);
-    if (!fgraph->gpu_timing_available()) { SKIP("device does not support timestamp queries"); }
+    if (!fgraph->gpu_timing_available())
+    {
+        SKIP("device does not support timestamp queries");
+    }
 
     g::FgImageDesc ddesc{};
     ddesc.width   = dim;
@@ -1613,7 +1728,10 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
     for (crd::u32 t = 0U; t < eview.thread_count(); ++t)
     {
         const char* const nm = eview.thread_name(t);
-        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0) { q0 = t; }
+        if (nm != nullptr && std::strcmp(nm, "gpu d0 q0") == 0)
+        {
+            q0 = t;
+        }
     }
     REQUIRE(q0 != 0xFFFF'FFFFU);
     const auto esamps = eview.thread_samples(q0);
@@ -1648,7 +1766,10 @@ TEST_CASE("REN-1 GATE: a pass declared AFTER its consumer still executes FIRST (
           "[gpu-context][vulkan][frame-graph][ren1][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1661,7 +1782,10 @@ TEST_CASE("REN-1 GATE: a pass declared AFTER its consumer still executes FIRST (
     kir::KEntry dfe;
     gputest::build_depth_only_const_fs(dfg, dfe, 0.5);
     auto dvs = rig.vk->create_program(dvg, dve);
-    if (dvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (dvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto dfs        = rig.vk->create_program(dfg, dfe);
     auto depth_prog = raster.create_raster_program(*dvs, *dfs);
 
@@ -1722,7 +1846,10 @@ TEST_CASE("REN-1 GATE: a pass declared AFTER its consumer still executes FIRST (
 TEST_CASE("REN-1 GATE: build() REJECTS a dependency cycle", "[gpu-context][vulkan][frame-graph][ren1][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     auto a_t = raster.create_color_target(16U, 16U);
@@ -1749,7 +1876,10 @@ TEST_CASE("REN-37.1 DIAG: a vec3 varying transports VS->FS (and survives unmatch
           "[gpu-context][vulkan][ren37][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1765,7 +1895,10 @@ TEST_CASE("REN-37.1 DIAG: a vec3 varying transports VS->FS (and survives unmatch
         gputest::build_varying_probe_fs(fg, fe);
 
         auto vs = rig.vk->create_program(vg, ve);
-        if (vs == nullptr) { SKIP("shader compile unavailable"); }
+        if (vs == nullptr)
+        {
+            SKIP("shader compile unavailable");
+        }
         auto fs   = rig.vk->create_program(fg, fe);
         auto prog = raster.create_raster_program(*vs, *fs);
         REQUIRE(prog != nullptr);
@@ -1792,7 +1925,10 @@ TEST_CASE("REN-37.1 DIAG: the same varying through draw_storage_depth (the verte
           "[gpu-context][vulkan][ren37][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1806,7 +1942,10 @@ TEST_CASE("REN-37.1 DIAG: the same varying through draw_storage_depth (the verte
     gputest::build_varying_probe_fs(fg, fe);
 
     auto vs = rig.vk->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto fs   = rig.vk->create_program(fg, fe);
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
@@ -1848,7 +1987,10 @@ TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() a
           "[gpu-context][vulkan][frame-graph][ren37][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -1859,7 +2001,10 @@ TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() a
     kir::KEntry tfe;
     gputest::build_triangle_fs(tfg, tfe);
     auto tvs = rig.vk->create_program(tvg, tve);
-    if (tvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (tvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto tfs      = rig.vk->create_program(tfg, tfe);
     auto tri_prog = raster.create_raster_program(*tvs, *tfs);
     kir::KGraph svg(&alloc);
@@ -1945,7 +2090,10 @@ TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() a
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren37.5 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -1961,7 +2109,10 @@ TEST_CASE("REN-37.5 GATE: a PING-PONG pair alternates prev/curr without the auth
           "[gpu-context][vulkan][frame-graph][ren37][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     auto fgraph = raster.create_frame_graph();
@@ -2010,16 +2161,25 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
     memory::TlsfAllocator alloc(8U << 20U);
     // two offscreen "G-buffer" writers: a solid RED one and a solid GREEN one
     kir::KGraph fvg(&alloc);
     kir::KEntry fve;
     gputest::build_textured_vs(fvg, fve); // fullscreen triangle with UV
     auto fvs = rig.vk->create_program(fvg, fve);
-    if (fvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (fvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
 
     // ⛔ The FRAGMENT programs must OUTLIVE the raster programs built from them. Building them inside a lambda
     // that returned only the raster program let each `IGpuProgram` die at the end of the call, leaving the raster
@@ -2090,7 +2250,10 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
     const auto rec_compose = [](g::IFrameContext& ctx, void* user) {
         auto*        s = static_cast<Compose*>(user);
         g::ITexture* t[2] = {ctx.texture(s->a), ctx.texture(s->b)};
-        if (t[0] == nullptr || t[1] == nullptr) { return; }
+        if (t[0] == nullptr || t[1] == nullptr)
+        {
+            return;
+        }
         gputest::enc_draw_bindless(ctx.raster(), *ctx.image(s->dst), *s->prog, g::ClearColor{0.0F, 0.0F, 1.0F, 1.0F},
                                    static_cast<g::ITexture* const*>(t), 2U, 3U);
     };
@@ -2120,7 +2283,10 @@ TEST_CASE("REN-38-A3 GATE: a fullscreen pass binds ALL its declared reads, in or
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a3 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -2142,7 +2308,10 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -2167,7 +2336,10 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
         ke.kernel_body_count = kg.stmt_count() - mark;
     }
     auto kernel = rig.vk->create_program(kg, ke);
-    if (kernel == nullptr) { SKIP("compute shader compile unavailable"); }
+    if (kernel == nullptr)
+    {
+        SKIP("compute shader compile unavailable");
+    }
 
     constexpr u32 elem_count = 64U;
     auto          out    = raster.create_storage_buffer(elem_count * 4U);
@@ -2175,7 +2347,10 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
     // ⛔ Seed with a SENTINEL. If the dispatch silently does not run, the readback shows these values — which is
     // exactly what the old `break` did, and exactly what a "did it compile" test would have missed.
     u32 seed[elem_count];
-    for (u32 i = 0; i < elem_count; ++i) { seed[i] = 0xDEADU; }
+    for (u32 i = 0; i < elem_count; ++i)
+    {
+        seed[i] = 0xDEADU;
+    }
     REQUIRE(raster.upload_storage(*out, 0U, static_cast<const void*>(seed), sizeof(seed)));
 
     g::ValidationCapture capture(*rig.vk);
@@ -2192,7 +2367,10 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
     const auto rec_kernel = [](g::IFrameContext& ctx, void* user) {
         auto*              s  = static_cast<Kern*>(user);
         g::IStorageBuffer* sb = ctx.buffer(s->buf);
-        if (sb == nullptr) { return; }
+        if (sb == nullptr)
+        {
+            return;
+        }
         g::IStorageBuffer* bufs[1] = {sb};
         gputest::enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
     };
@@ -2214,7 +2392,10 @@ TEST_CASE("REN-38-A2 GATE: an authored COMPUTE pass dispatches inside the frame 
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a2 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -2304,9 +2485,15 @@ TEST_CASE("REN-38-A4 GATE: a DEFERRED renderer, authored as an asset only",
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
 
     memory::TlsfAllocator alloc(16U << 20U);
 
@@ -2315,7 +2502,10 @@ TEST_CASE("REN-38-A4 GATE: a DEFERRED renderer, authored as an asset only",
     kir::KEntry gve;
     gputest::build_textured_vs(gvg, gve);
     auto gvs = rig.vk->create_program(gvg, gve);
-    if (gvs == nullptr) { SKIP("shader compile unavailable"); }
+    if (gvs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     kir::KGraph gfg(&alloc);
     kir::KEntry gfe;
     gputest::build_gbuffer_two_output_fs(gfg, gfe);
@@ -2360,7 +2550,10 @@ TEST_CASE("REN-38-A4 GATE: a DEFERRED renderer, authored as an asset only",
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a4 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -2439,7 +2632,10 @@ TEST_CASE("REN-38-A5: a PRESENT pass's shape is settled at COOK time", "[frame-c
         containers::String        where(&alloc);
         const framecook::FrameCookError e =
             framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -2530,13 +2726,22 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     cfg.headless          = false;
     cfg.enable_validation = true;
     auto ctx              = g::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { SKIP("no Vulkan device"); }
+    if (ctx == nullptr)
+    {
+        SKIP("no Vulkan device");
+    }
     auto* vkc = static_cast<g::VulkanGpuContext*>(ctx.get());
-    if (!vkc->graphics_capable() || !vkc->shader_object()) { SKIP("no graphics/shader-object support"); }
+    if (!vkc->graphics_capable() || !vkc->shader_object())
+    {
+        SKIP("no graphics/shader-object support");
+    }
     auto rasterp = g::create_vulkan_raster_context(*vkc);
     REQUIRE(rasterp != nullptr);
     auto& raster = *rasterp;
-    if (!vkc->present_capable()) { SKIP("no present capability"); }
+    if (!vkc->present_capable())
+    {
+        SKIP("no present capability");
+    }
 
     // ⛔ A HEADLESS surface when the loader offers one (VK_EXT_headless_surface), else a REAL Win32 window —
     // the SAME two-way fallback RET-2's present gate uses. Taking only the headless path would have made this
@@ -2546,7 +2751,10 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     if (!vkc->headless_surface())
     {
         native = crd::gputest::create_test_window(256U, 256U);
-        if (native == nullptr) { SKIP("no VK_EXT_headless_surface and no platform window"); }
+        if (native == nullptr)
+        {
+            SKIP("no VK_EXT_headless_surface and no platform window");
+        }
     }
     constexpr u32 dim = 256U;
     auto surface = raster.create_present_surface(native, dim, dim, g::PresentMode::Fifo);
@@ -2560,7 +2768,10 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     kir::KEntry           ve;
     gputest::build_triangle_vs(vg, ve);
     auto vs = vkc->create_program(vg, ve);
-    if (vs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     kir::KGraph fg2(&alloc);
     kir::KEntry fe;
     gputest::build_triangle_fs(fg2, fe);
@@ -2640,13 +2851,19 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a5 capture] " << msgs[i].message_text.c_str());
         }
     }
     CHECK(capture.error_count() == 0U);
     surface.reset(); // the surface dies BEFORE its window
-    if (native != nullptr) { crd::gputest::destroy_test_window(native); }
+    if (native != nullptr)
+    {
+        crd::gputest::destroy_test_window(native);
+    }
 }
 
 // ── REN-38-A6 GATE: CLEAR · COPY · BLIT · RESOLVE, authored as passes. ─────────────────────────────────────────
@@ -2749,7 +2966,10 @@ public:
     [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
     [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
     {
-        if (m_buf == nullptr || m_prog == nullptr) { return false; }
+        if (m_buf == nullptr || m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = framecook::DrawItem{m_buf, m_prog, 3U, nullptr};
         out.resolved = 1U;
         return true;
@@ -2770,7 +2990,10 @@ TEST_CASE("REN-38-A6: a UTILITY pass's shape is settled at COOK time", "[frame-c
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -2882,7 +3105,10 @@ TEST_CASE("REN-38-A6 GATE: authored CLEAR / COPY / BLIT move pixels inside one f
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -2918,7 +3144,10 @@ TEST_CASE("REN-38-A6 GATE: authored CLEAR / COPY / BLIT move pixels inside one f
         kir::KEntry ve;
         gputest::build_triangle_vs(vg, ve);
         auto vs = rig.vk->create_program(vg, ve);
-        if (vs == nullptr) { SKIP("shader compile unavailable"); }
+        if (vs == nullptr)
+        {
+            SKIP("shader compile unavailable");
+        }
         kir::KGraph fg2(&alloc);
         kir::KEntry fe;
         gputest::build_triangle_fs(fg2, fe);
@@ -2955,7 +3184,10 @@ TEST_CASE("REN-38-A6 GATE: authored CLEAR / COPY / BLIT move pixels inside one f
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a6 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -3022,7 +3254,10 @@ public:
     // dispatch count — patches for tess, task/mesh workgroups for mesh.
     [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
     {
-        if (m_prog == nullptr) { return false; }
+        if (m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = framecook::DrawItem{nullptr, m_prog, 6U, nullptr}; // six meshlets, tiled left → right
         out.items[1] = framecook::DrawItem{nullptr, m_prog, 1U, nullptr}; // one meshlet, leftmost only
         out.resolved = 2U;
@@ -3043,7 +3278,10 @@ TEST_CASE("REN-38-A7/A8: an AMPLIFICATION pass's shape is settled at COOK time",
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -3096,7 +3334,10 @@ TEST_CASE("REN-38-A7/A8 GATE: authored TESSELLATION and MESH+TASK passes amplify
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
@@ -3121,9 +3362,15 @@ TEST_CASE("REN-38-A7/A8 GATE: authored TESSELLATION and MESH+TASK passes amplify
         auto tcs = rig.vk->create_program(cg, ce);
         auto tes = rig.vk->create_program(eg, ee);
         auto fs  = rig.vk->create_program(fg2, fe);
-        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+        if (vs == nullptr || tcs == nullptr || tes == nullptr || fs == nullptr)
+        {
+            SKIP("shader compile unavailable");
+        }
         auto prog = raster.create_tess_program(*vs, *tcs, *tes, *fs);
-        if (prog == nullptr) { SKIP("no tessellation support on this device"); }
+        if (prog == nullptr)
+        {
+            SKIP("no tessellation support on this device");
+        }
 
         auto dst = raster.create_color_target(dim, dim);
         REQUIRE(dst != nullptr);
@@ -3157,9 +3404,15 @@ TEST_CASE("REN-38-A7/A8 GATE: authored TESSELLATION and MESH+TASK passes amplify
         gputest::build_amplify_fs(fg2, fe);
         auto ms = rig.vk->create_program(mg, me);
         auto fs = rig.vk->create_program(fg2, fe);
-        if (ms == nullptr || fs == nullptr) { SKIP("mesh shader compile unavailable"); }
+        if (ms == nullptr || fs == nullptr)
+        {
+            SKIP("mesh shader compile unavailable");
+        }
         auto prog = raster.create_mesh_program(*ms, *fs);
-        if (prog == nullptr) { SKIP("no mesh-shader support on this device"); }
+        if (prog == nullptr)
+        {
+            SKIP("no mesh-shader support on this device");
+        }
 
         auto dst = raster.create_color_target(dim, dim);
         REQUIRE(dst != nullptr);
@@ -3190,7 +3443,10 @@ TEST_CASE("REN-38-A7/A8 GATE: authored TESSELLATION and MESH+TASK passes amplify
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a78 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -3292,7 +3548,10 @@ public:
     {
         for (u32 i = 0; i < m_n; ++i)
         {
-            if (id == containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -3301,7 +3560,10 @@ public:
     {
         for (u32 i = 0; i < m_nb; ++i)
         {
-            if (name == containers::StringView(m_bnames[i])) { return m_bufs[i]; }
+            if (name == containers::StringView(m_bnames[i]))
+            {
+                return m_bufs[i];
+            }
         }
         return nullptr;
     }
@@ -3329,7 +3591,10 @@ TEST_CASE("REN-38-A9/A10: a RAY-TRACING and an INDIRECT pass's shape is settled 
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -3427,9 +3692,15 @@ clear_color = [0.0, 0.0, 0.0, 1.0]
         REQUIRE(framecook::parse_frame_toml(containers::StringView(text.c_str(), text.size()), b, &where)
                 == framecook::FrameCookError::Ok);
         REQUIRE(b.resources.size() == a.resources.size());
-        for (usize i = 0; i < a.resources.size(); ++i) { CHECK(b.resources[i].kind == a.resources[i].kind); }
+        for (usize i = 0; i < a.resources.size(); ++i)
+        {
+            CHECK(b.resources[i].kind == a.resources[i].kind);
+        }
         REQUIRE(b.passes.size() == a.passes.size());
-        for (usize i = 0; i < a.passes.size(); ++i) { CHECK(same_pass_mechanic(a.passes[i], b.passes[i])); }
+        for (usize i = 0; i < a.passes.size(); ++i)
+        {
+            CHECK(same_pass_mechanic(a.passes[i], b.passes[i]));
+        }
     }
 }
 
@@ -3438,8 +3709,14 @@ TEST_CASE("REN-38-A9 GATE: an authored RAY-TRACING pass traces inside the frame'
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
-    if (!rig.vk->ray_query()) { SKIP("adapter has no VK_KHR_ray_query"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
+    if (!rig.vk->ray_query())
+    {
+        SKIP("adapter has no VK_KHR_ray_query");
+    }
     auto& raster = *rig.raster;
 
     g::VulkanRayTracingContext rt(*rig.vk);
@@ -3455,7 +3732,10 @@ TEST_CASE("REN-38-A9 GATE: an authored RAY-TRACING pass traces inside the frame'
     kir::KGraph kg(&alloc);
     kir::KEntry ke     = gputest::build_trace_kernel_shared(kg, 4);
     auto        kernel = rig.vk->create_program(kg, ke);
-    if (kernel == nullptr) { SKIP("ray-query kernel compile unavailable"); }
+    if (kernel == nullptr)
+    {
+        SKIP("ray-query kernel compile unavailable");
+    }
 
     constexpr u32 n_rays = 4U;
     auto          rays   = raster.create_storage_buffer(n_rays * 6U * 4U);
@@ -3538,7 +3818,10 @@ TEST_CASE("REN-38-A9 GATE: an authored RAY-TRACING pass traces inside the frame'
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a9 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -3549,7 +3832,10 @@ TEST_CASE("REN-38-A10 GATE: an authored INDIRECT pass takes its workgroup count 
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -3587,7 +3873,10 @@ TEST_CASE("REN-38-A10 GATE: an authored INDIRECT pass takes its workgroup count 
     }
     auto cull = rig.vk->create_program(cg, ce);
     auto work = rig.vk->create_program(wg, we);
-    if (cull == nullptr || work == nullptr) { SKIP("compute shader compile unavailable"); }
+    if (cull == nullptr || work == nullptr)
+    {
+        SKIP("compute shader compile unavailable");
+    }
 
     auto marks = raster.create_storage_buffer(slot_count * 4U);
     REQUIRE(marks != nullptr);
@@ -3613,20 +3902,32 @@ TEST_CASE("REN-38-A10 GATE: an authored INDIRECT pass takes its workgroup count 
 
     REQUIRE(raster.download_storage(*marks));
     u32 m[slot_count]{};
-    for (u32 i = 0; i < slot_count; ++i) { m[i] = marks->read_u32(i); }
+    for (u32 i = 0; i < slot_count; ++i)
+    {
+        m[i] = marks->read_u32(i);
+    }
     UNSCOPED_INFO("marks: " << m[0] << " " << m[1] << " " << m[2] << " " << m[3] << " " << m[4]);
     // ⭐⭐ THE CPU NEVER KNEW THE COUNT. `survivor_count` reaches the GPU only as a value a SHADER wrote into the args
     // buffer, so the exact SET of workgroups that ran is the proof: 0..2 stamped, 3 and beyond untouched. If the
     // dispatch had taken a CPU-side count, or read the args before the cull pass wrote them, the boundary moves.
-    for (u32 i = 0; i < survivor_count; ++i) { CHECK(m[i] == i + 1U); }
-    for (u32 i = survivor_count; i < slot_count; ++i) { CHECK(m[i] == 0U); }
+    for (u32 i = 0; i < survivor_count; ++i)
+    {
+        CHECK(m[i] == i + 1U);
+    }
+    for (u32 i = survivor_count; i < slot_count; ++i)
+    {
+        CHECK(m[i] == 0U);
+    }
 
     if (capture.error_or_warning_count() > 0U)
     {
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a10 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -3724,7 +4025,10 @@ TEST_CASE("REN-38-A11/A12: a VISBUFFER and a COMPOSITE pass's shape is settled a
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -3824,7 +4128,10 @@ public:
     [[nodiscard]] g::IRasterProgram* program(containers::StringView) override { return m_prog; }
     [[nodiscard]] bool draw_list(containers::StringView, framecook::DrawListBinding& out) override
     {
-        if (m_prog == nullptr) { return false; }
+        if (m_prog == nullptr)
+        {
+            return false;
+        }
         out.items[0] = framecook::DrawItem{m_buf, m_prog, m_n0, nullptr};
         out.resolved = 1U;
         if (m_n1 != 0U)
@@ -3848,7 +4155,10 @@ TEST_CASE("REN-38-A11 GATE: an authored VISIBILITY-BUFFER pass keeps EVERY draw'
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -3860,7 +4170,10 @@ TEST_CASE("REN-38-A11 GATE: an authored VISIBILITY-BUFFER pass keeps EVERY draw'
     gputest::build_visbuffer_fs(fg2, fe);
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -3895,7 +4208,10 @@ TEST_CASE("REN-38-A11 GATE: an authored VISIBILITY-BUFFER pass keeps EVERY draw'
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a11 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -3906,11 +4222,17 @@ TEST_CASE("REN-38-A12 GATE: authored WBOIT composites OVER the background, not t
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
 
     // ONE half-transparent RED quad over the whole screen. Order-independence is B17-a's gate; what THIS row must
     // show is that the composite READ the background instead of erasing it.
@@ -3940,7 +4262,10 @@ TEST_CASE("REN-38-A12 GATE: authored WBOIT composites OVER the background, not t
     auto tfs = rig.vk->create_program(tfg, tfe);
     auto cvs = rig.vk->create_program(cvg, cve);
     auto cfs = rig.vk->create_program(cfg, cfe);
-    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("shader compile unavailable"); }
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto accum_prog = raster.create_raster_program(*tvs, *tfs);
     auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(accum_prog != nullptr);
@@ -4005,7 +4330,10 @@ TEST_CASE("REN-38-A12 GATE: authored WBOIT composites OVER the background, not t
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a12 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4022,11 +4350,17 @@ TEST_CASE("REN-38-A12 ORACLE: frame-graph WBOIT is exact vs the oracle on an asy
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
-    if (!raster.supports_bindless()) { SKIP("device does not support bindless texture arrays"); }
+    if (!raster.supports_bindless())
+    {
+        SKIP("device does not support bindless texture arrays");
+    }
 
     // the shared asymmetric 4-quad scene, its background matched to kOitGraph's blue @output clear so the composited
     // result equals wboit_oracle_pixel (which resolves over scene.background).
@@ -4041,7 +4375,10 @@ TEST_CASE("REN-38-A12 ORACLE: frame-graph WBOIT is exact vs the oracle on an asy
     auto tfs = rig.vk->create_program(tfg, tfe);
     auto cvs = rig.vk->create_program(cvg, cve);
     auto cfs = rig.vk->create_program(cfg, cfe);
-    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("shader compile unavailable"); }
+    if (tvs == nullptr || tfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto accum_prog = raster.create_raster_program(*tvs, *tfs);
     auto comp_prog  = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(accum_prog != nullptr);
@@ -4098,7 +4435,10 @@ TEST_CASE("REN-38-A12 ORACLE: frame-graph WBOIT is exact vs the oracle on an asy
         for (u32 x = 0U; x < dim; ++x)
         {
             const u32 d = crd::gputest::rgba8_max_channel_diff(dst->read_pixel(x, y), expect);
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
         }
     }
     INFO("frame-graph WBOIT worst per-channel LSB diff vs oracle = " << worst);
@@ -4195,7 +4535,10 @@ TEST_CASE("REN-38-A13/A14/A16: render state, queue placement and the RT pipeline
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         const framecook::FrameCookError e = framecook::parse_frame_toml(containers::StringView(toml), desc, &where);
-        if (e != framecook::FrameCookError::Ok) { return e; }
+        if (e != framecook::FrameCookError::Ok)
+        {
+            return e;
+        }
         return framecook::validate_frame_graph(desc, &where);
     };
 
@@ -4312,7 +4655,10 @@ inline int count_equal_even_pairs_fg(g::IRasterTarget& t, u32 dim)
     {
         for (u32 i = 0; i + 1U < dim; i += 2U)
         {
-            if ((t.read_pixel(i, y) & 0xFFU) == (t.read_pixel(i + 1U, y) & 0xFFU)) { ++n; }
+            if ((t.read_pixel(i, y) & 0xFFU) == (t.read_pixel(i + 1U, y) & 0xFFU))
+            {
+                ++n;
+            }
         }
     }
     return n;
@@ -4329,7 +4675,10 @@ public:
     {
         for (u32 i = 0; i < m_n; ++i)
         {
-            if (id == containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -4358,9 +4707,15 @@ TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_vrs()) { SKIP("adapter has no variable-rate shading"); }
+    if (!raster.supports_vrs())
+    {
+        SKIP("adapter has no variable-rate shading");
+    }
 
     memory::TlsfAllocator alloc(8U << 20U);
     kir::KGraph           vg(&alloc);
@@ -4371,7 +4726,10 @@ TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
     gputest::build_vrs_ramp_fs(fg2, fe); // a per-pixel ramp: adjacent pixels DIFFER at 1x1
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -4397,7 +4755,10 @@ TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
         framecook::FrameGraphDesc plain(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(kVrsGraph), plain, &where)
                 == framecook::FrameCookError::Ok);
-        for (usize i = 0; i < plain.passes.size(); ++i) { framecook::set_pass_enum(plain.passes[i], containers::StringView(framecook::pp::kShadingRate), static_cast<crd::u32>(g::ShadingRate::Rate1x1)); }
+        for (usize i = 0; i < plain.passes.size(); ++i)
+        {
+            framecook::set_pass_enum(plain.passes[i], containers::StringView(framecook::pp::kShadingRate), static_cast<crd::u32>(g::ShadingRate::Rate1x1));
+        }
         auto dst2 = raster.create_color_target(dim, dim);
         REQUIRE(dst2 != nullptr);
         StateHost host2(*dst2);
@@ -4419,7 +4780,10 @@ TEST_CASE("REN-38-A13 GATE: an authored SHADING RATE actually coarsens shading",
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a13 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4430,7 +4794,10 @@ TEST_CASE("REN-38-A14 GATE: an authored ASYNC-COMPUTE pass runs on the compute q
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -4449,7 +4816,10 @@ TEST_CASE("REN-38-A14 GATE: an authored ASYNC-COMPUTE pass runs on the compute q
         we.kernel_body_count = static_cast<int>(wg.serial_stmts().size());
     }
     auto work = rig.vk->create_program(wg, we);
-    if (work == nullptr) { SKIP("compute shader compile unavailable"); }
+    if (work == nullptr)
+    {
+        SKIP("compute shader compile unavailable");
+    }
 
     auto out = raster.create_storage_buffer(slot_count * 4U);
     REQUIRE(out != nullptr);
@@ -4479,8 +4849,14 @@ TEST_CASE("REN-38-A14 GATE: an authored ASYNC-COMPUTE pass runs on the compute q
 
     // ⭐ THE WORK IS CORRECT WHEREVER IT RAN. That is the first claim, and it must hold on a one-queue adapter too.
     REQUIRE(raster.download_storage(*out));
-    for (u32 i = 0; i < 4U; ++i) { CHECK(out->read_u32(i) == i + 1U); }
-    for (u32 i = 4U; i < slot_count; ++i) { CHECK(out->read_u32(i) == 0U); }
+    for (u32 i = 0; i < 4U; ++i)
+    {
+        CHECK(out->read_u32(i) == i + 1U);
+    }
+    for (u32 i = 4U; i < slot_count; ++i)
+    {
+        CHECK(out->read_u32(i) == 0U);
+    }
 
     // ⭐⭐ AND THE GRAPH SAYS WHERE IT RAN. ⛔ `last_async_pass_count()` is 1 only when the adapter HAS a distinct
     // compute family and the pass consumes nothing a graphics pass produces; otherwise it is 0 and the frame ran
@@ -4496,7 +4872,10 @@ TEST_CASE("REN-38-A14 GATE: an authored ASYNC-COMPUTE pass runs on the compute q
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a14 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4507,9 +4886,15 @@ TEST_CASE("REN-38-A16 GATE: an authored RAY-TRACING PIPELINE traces through a sh
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+    if (!raster.supports_rt_pipeline())
+    {
+        SKIP("adapter has no ray-tracing pipeline");
+    }
 
     g::VulkanRayTracingContext rt(*rig.vk);
     REQUIRE(rt.valid());
@@ -4529,7 +4914,10 @@ TEST_CASE("REN-38-A16 GATE: an authored RAY-TRACING PIPELINE traces through a sh
     auto rgp = rig.vk->create_program(rgg, rge);
     auto msp = rig.vk->create_program(msg, mse);
     auto chp = rig.vk->create_program(chg, che);
-    if (rgp == nullptr || msp == nullptr || chp == nullptr) { SKIP("RT-stage compile unavailable"); }
+    if (rgp == nullptr || msp == nullptr || chp == nullptr)
+    {
+        SKIP("RT-stage compile unavailable");
+    }
 
     constexpr u32 ray_count = 4U;
     auto          hits  = raster.create_storage_buffer(ray_count * 4U);
@@ -4586,7 +4974,10 @@ TEST_CASE("REN-38-A16 GATE: an authored RAY-TRACING PIPELINE traces through a sh
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-a16 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4669,7 +5060,10 @@ TEST_CASE("REN-38-B7 GATE: every declared format creates a real transient on the
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -4704,7 +5098,10 @@ TEST_CASE("REN-38-B7 GATE: every declared format creates a real transient on the
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b7 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4722,7 +5119,10 @@ TEST_CASE("REN-38-B2 GATE: cube, volume and mip-chain transients create on the d
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     g::ValidationCapture capture(*rig.vk);
     auto                 fgraph = raster.create_frame_graph();
@@ -4752,7 +5152,10 @@ TEST_CASE("REN-38-B2 GATE: cube, volume and mip-chain transients create on the d
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b2 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -4920,7 +5323,10 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -4933,7 +5339,10 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
     gputest::build_sample_fs(fg2, fe); // samples its one read and writes it straight back out
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -4981,7 +5390,10 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b1 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5081,7 +5493,10 @@ TEST_CASE("REN-38-B3 GATE: an authored COUNTER buffer is ZEROED every frame",
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5107,7 +5522,10 @@ TEST_CASE("REN-38-B3 GATE: an authored COUNTER buffer is ZEROED every frame",
         ke.kernel_body_count = static_cast<int>(kg.serial_stmts().size());
     }
     auto kernel = rig.vk->create_program(kg, ke);
-    if (kernel == nullptr) { SKIP("append kernel compile unavailable"); }
+    if (kernel == nullptr)
+    {
+        SKIP("append kernel compile unavailable");
+    }
 
     auto dst   = raster.create_color_target(64U, 64U);
     auto slots = raster.create_storage_buffer(16U * 4U);
@@ -5144,7 +5562,10 @@ TEST_CASE("REN-38-B3 GATE: an authored COUNTER buffer is ZEROED every frame",
         // three workgroups, so the three slots handed out are 0,1,2 IN SOME ORDER (the atomic decides which
         // workgroup gets which) — what matters is the SET, and that it is identical on the second frame.
         u32 mask = 0U;
-        for (u32 k = 0; k < 3U; ++k) { mask |= (got[k] < 3U) ? (1U << got[k]) : 0x80U; }
+        for (u32 k = 0; k < 3U; ++k)
+        {
+            mask |= (got[k] < 3U) ? (1U << got[k]) : 0x80U;
+        }
         UNSCOPED_INFO("frame " << frame << " slots: " << got[0] << " " << got[1] << " " << got[2]);
         CHECK(mask == 0x7U); // exactly {0,1,2}
     }
@@ -5154,7 +5575,10 @@ TEST_CASE("REN-38-B3 GATE: an authored COUNTER buffer is ZEROED every frame",
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b3 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5232,7 +5656,10 @@ TEST_CASE("REN-38-B5 GATE: an authored EXTERNAL texture is sampled by the frame"
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5244,14 +5671,20 @@ TEST_CASE("REN-38-B5 GATE: an authored EXTERNAL texture is sampled by the frame"
     gputest::build_sample_fs(fg2, fe);
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
     // an APP-OWNED texture, filled by the application — a uniform magenta "atlas"
     constexpr u32 dim = 4U;
     u32           px[dim * dim];
-    for (u32 i = 0; i < dim * dim; ++i) { px[i] = 0xFFFF00FFU; } // ABGR: R=255 B=255
+    for (u32 i = 0; i < dim * dim; ++i) // ABGR: R=255 B=255
+    {
+        px[i] = 0xFFFF00FFU;
+    }
     auto atlas = raster.create_texture(dim, dim, static_cast<const void*>(px));
     REQUIRE(atlas != nullptr);
 
@@ -5296,7 +5729,10 @@ TEST_CASE("REN-38-B5 GATE: an authored EXTERNAL texture is sampled by the frame"
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b5 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5408,7 +5844,10 @@ TEST_CASE("REN-38-B8 GATE: an authored CLAMP sampler changes what the frame samp
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5420,7 +5859,10 @@ TEST_CASE("REN-38-B8 GATE: an authored CLAMP sampler changes what the frame samp
     gputest::build_sample_fs(fg2, fe);
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -5465,7 +5907,10 @@ TEST_CASE("REN-38-B8 GATE: an authored CLAMP sampler changes what the frame samp
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b8 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5535,7 +5980,10 @@ TEST_CASE("REN-38-B6 GATE: a PINNED transient stops aliasing, and a BUDGET fails
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5549,7 +5997,13 @@ TEST_CASE("REN-38-B6 GATE: a PINNED transient stops aliasing, and a BUDGET fails
         containers::String        where(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(kAliasGraph), desc, &where)
                 == framecook::FrameCookError::Ok);
-        if (pin) { for (usize i = 0; i < desc.resources.size(); ++i) { desc.resources[i].no_alias = true; } }
+        if (pin)
+        {
+            for (usize i = 0; i < desc.resources.size(); ++i)
+            {
+                desc.resources[i].no_alias = true;
+            }
+        }
         desc.memory_budget_bytes = budget;
         StateHost                 host(*dst);
         auto                      fgraph = raster.create_frame_graph();
@@ -5559,8 +6013,14 @@ TEST_CASE("REN-38-B6 GATE: a PINNED transient stops aliasing, and a BUDGET fails
         framecook::FrameExecError err = framecook::FrameExecError::Ok;
         REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
         const bool built = fgraph->build();
-        if (built_out != nullptr) { *built_out = built; }
-        if (!built) { CHECK(fgraph->last_build_exceeded_budget()); }
+        if (built_out != nullptr)
+        {
+            *built_out = built;
+        }
+        if (!built)
+        {
+            CHECK(fgraph->last_build_exceeded_budget());
+        }
         return built ? fgraph->transient_memory_bytes() : 0U;
     };
 
@@ -5591,7 +6051,10 @@ TEST_CASE("REN-38-B6 GATE: a PINNED transient stops aliasing, and a BUDGET fails
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b6 capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5604,7 +6067,10 @@ TEST_CASE("REN-38-B2/B6: an authored SHAPE and ALIAS PIN reach the device throug
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5664,7 +6130,10 @@ clear_color = [0.0, 0.0, 0.0, 1.0]
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-b2asset capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -5724,7 +6193,10 @@ TEST_CASE("REN-38 STATE GATE: an authored FACE CULL reaches the rasterizer throu
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5736,7 +6208,10 @@ TEST_CASE("REN-38 STATE GATE: an authored FACE CULL reaches the rasterizer throu
     gputest::build_triangle_fs(fg2, fe);
     auto vs = rig.vk->create_program(vg, ve);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_raster_program(*vs, *fs);
     REQUIRE(prog != nullptr);
 
@@ -5779,7 +6254,10 @@ TEST_CASE("REN-38 STATE GATE: depth_write = false leaves the depth buffer UNTOUC
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5795,7 +6273,10 @@ TEST_CASE("REN-38 STATE GATE: depth_write = false leaves the depth buffer UNTOUC
     auto vs   = rig.vk->create_program(vg, ve);
     auto fsr  = rig.vk->create_program(rg2, rfe);
     auto fsg  = rig.vk->create_program(gg, gfe);
-    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto red   = raster.create_raster_program(*vs, *fsr);
     auto green = raster.create_raster_program(*vs, *fsg);
     REQUIRE(red != nullptr);
@@ -5830,7 +6311,10 @@ TEST_CASE("REN-38 STATE GATE: a declared DEPTH BIAS moves what the depth buffer 
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -5846,7 +6330,10 @@ TEST_CASE("REN-38 STATE GATE: a declared DEPTH BIAS moves what the depth buffer 
     auto vs  = rig.vk->create_program(vg, ve);
     auto fsr = rig.vk->create_program(rg2, rfe);
     auto fsg = rig.vk->create_program(gg, gfe);
-    if (vs == nullptr || fsr == nullptr || fsg == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || fsr == nullptr || fsg == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto red   = raster.create_raster_program(*vs, *fsr);
     auto green = raster.create_raster_program(*vs, *fsg);
     REQUIRE(red != nullptr);
@@ -5919,9 +6406,15 @@ TEST_CASE("REN-38 RT GATE: an authored ANY-HIT joins the hit group and can IGNOR
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+    if (!raster.supports_rt_pipeline())
+    {
+        SKIP("adapter has no ray-tracing pipeline");
+    }
 
     g::VulkanRayTracingContext rt(*rig.vk);
     REQUIRE(rt.valid());
@@ -5944,7 +6437,10 @@ TEST_CASE("REN-38 RT GATE: an authored ANY-HIT joins the hit group and can IGNOR
     auto rgp = rig.vk->create_program(rgg, rge);
     auto msp = rig.vk->create_program(msg, mse);
     auto chp = rig.vk->create_program(chg, che);
-    if (rgp == nullptr || msp == nullptr || chp == nullptr) { SKIP("RT-stage compile unavailable"); }
+    if (rgp == nullptr || msp == nullptr || chp == nullptr)
+    {
+        SKIP("RT-stage compile unavailable");
+    }
 
     g::ValidationCapture capture(*rig.vk);
     const auto           run = [&](double cutoff, float out[4]) {
@@ -6016,7 +6512,10 @@ TEST_CASE("REN-38 RT GATE: an authored ANY-HIT joins the hit group and can IGNOR
         const auto msgs = capture.messages();
         for (usize i = 0; i < msgs.size(); ++i)
         {
-            if (msgs[i].severity == g::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == g::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ren38-anyhit capture] " << msgs[i].message_text.c_str());
         }
     }
@@ -6097,7 +6596,10 @@ TEST_CASE("REN-38-F11 GATE: an authored stencil MASK-then-TEST pass pair draws t
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -6119,7 +6621,10 @@ TEST_CASE("REN-38-F11 GATE: an authored stencil MASK-then-TEST pass pair draws t
     auto mfs = rig.vk->create_program(mfg, mfe);
     auto cvs = rig.vk->create_program(cvg, cve);
     auto cfs = rig.vk->create_program(cfg2, cfe);
-    if (mvs == nullptr || mfs == nullptr || cvs == nullptr || cfs == nullptr) { SKIP("shader compile unavailable"); }
+    if (mvs == nullptr || mfs == nullptr || cvs == nullptr || cfs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto mask_prog  = raster.create_raster_program(*mvs, *mfs);
     auto cover_prog = raster.create_raster_program(*cvs, *cfs);
     REQUIRE(mask_prog != nullptr);
@@ -6133,7 +6638,10 @@ TEST_CASE("REN-38-F11 GATE: an authored stencil MASK-then-TEST pass pair draws t
         REQUIRE(sb != nullptr);
         containers::String toml(&alloc);
         toml.append(kStencilGraphA);
-        if (stencil_on) { toml.append(kStencilCoverOn); }
+        if (stencil_on)
+        {
+            toml.append(kStencilCoverOn);
+        }
         framecook::FrameGraphDesc desc(&alloc);
         containers::String        where(&alloc);
         REQUIRE(framecook::parse_frame_toml(containers::StringView(toml.c_str(), toml.size()), desc, &where)
@@ -6246,7 +6754,10 @@ public:
     {
         for (u32 i = 0; i < m_n; ++i)
         {
-            if (id == containers::StringView(m_names[i])) { return m_kernels[i]; }
+            if (id == containers::StringView(m_names[i]))
+            {
+                return m_kernels[i];
+            }
         }
         return nullptr;
     }
@@ -6275,9 +6786,15 @@ TEST_CASE("REN-38-F13 GATE: authored INTERSECTION + CALLABLE stages trace a proc
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
-    if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+    if (!raster.supports_rt_pipeline())
+    {
+        SKIP("adapter has no ray-tracing pipeline");
+    }
 
     g::VulkanRayTracingContext rt(*rig.vk);
     REQUIRE(rt.valid());
@@ -6335,7 +6852,10 @@ TEST_CASE("REN-38-F13 GATE: authored INTERSECTION + CALLABLE stages trace a proc
         host.add_kernel("crd://f13/miss", ms.get());
         host.add_kernel("crd://f13/chit", ch.get());
         host.add_kernel("crd://f13/isect", is.get());
-        if (with_call) { host.add_kernel("crd://f13/call", cl.get()); }
+        if (with_call)
+        {
+            host.add_kernel("crd://f13/call", cl.get());
+        }
         host.set_accel(scene.get());
         host.set_buffer(hits.get());
         framecook::FrameExecError err = framecook::FrameExecError::Ok;
@@ -6443,15 +6963,24 @@ void fill_tess_pull_buffer(containers::Array<u32>& w, float h)
 {
     w.clear();
     w.resize(140U);
-    for (usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    for (usize i = 0; i < w.size(); ++i)
+    {
+        w[i] = 0U;
+    }
     const auto fbits = [](float f) { u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
     w[0] = 4U;   // index COUNT (per instance)
     w[2] = 32U;  // indices at word 32
     w[3] = 36U;  // vertices at word 36
     w[4] = 100U; // instance record at word 100
     w[5] = 120U; // visible slot list at word 120
-    for (u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
-    for (u32 i = 0; i < 4U; ++i) { w[32U + i] = i; }                    // identity index list
+    for (u32 c = 0; c < 4U; ++c) // identity view_proj (column-major)
+    {
+        w[6U + c * 4U + c] = fbits(1.0F);
+    }
+    for (u32 i = 0; i < 4U; ++i) // identity index list
+    {
+        w[32U + i] = i;
+    }
     const float cx[4] = {-h, h, h, -h};
     const float cy[4] = {-h, -h, h, h};
     for (u32 i = 0; i < 4U; ++i)
@@ -6460,7 +6989,10 @@ void fill_tess_pull_buffer(containers::Array<u32>& w, float h)
         w[36U + i * 3U + 1U] = fbits(cy[i]);
         w[36U + i * 3U + 2U] = fbits(0.0F);
     }
-    for (u32 c = 0; c < 4U; ++c) { w[100U + c * 4U + c] = fbits(1.0F); } // identity instance matrix
+    for (u32 c = 0; c < 4U; ++c) // identity instance matrix
+    {
+        w[100U + c * 4U + c] = fbits(1.0F);
+    }
     w[120] = 0U;                                                         // visible slot 0
 }
 } // namespace
@@ -6469,7 +7001,10 @@ TEST_CASE("REN-38-F6+ GATE: storage-bound tessellation PULLS its control points 
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
@@ -6494,7 +7029,10 @@ TEST_CASE("REN-38-F6+ GATE: storage-bound tessellation PULLS its control points 
     kir::KEntry fe;
     gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (vs == nullptr || hs == nullptr || ds == nullptr || fs == nullptr) { SKIP("shader compile unavailable"); }
+    if (vs == nullptr || hs == nullptr || ds == nullptr || fs == nullptr)
+    {
+        SKIP("shader compile unavailable");
+    }
     auto prog = raster.create_tess_program(*vs, *hs, *ds, *fs);
     REQUIRE(prog != nullptr);
 
@@ -6675,16 +7213,25 @@ void fill_mesh_fetch_buffer(containers::Array<u32>& w, float h, u32 task_count)
 {
     w.clear();
     w.resize(140U);
-    for (usize i = 0; i < w.size(); ++i) { w[i] = 0U; }
+    for (usize i = 0; i < w.size(); ++i)
+    {
+        w[i] = 0U;
+    }
     const auto fbits = [](float f) { u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
     w[0] = 6U;   // index COUNT (per instance)
     w[2] = 32U;  // indices at word 32
     w[3] = 40U;  // vertices at word 40
     w[4] = 60U;  // instance records at word 60 (stride 20)
     w[5] = 110U; // visible slot list at word 110
-    for (u32 c = 0; c < 4U; ++c) { w[6U + c * 4U + c] = fbits(1.0F); } // identity view_proj (column-major)
+    for (u32 c = 0; c < 4U; ++c) // identity view_proj (column-major)
+    {
+        w[6U + c * 4U + c] = fbits(1.0F);
+    }
     const u32 idx[6] = {0U, 1U, 2U, 0U, 2U, 3U};
-    for (u32 i = 0; i < 6U; ++i) { w[32U + i] = idx[i]; }
+    for (u32 i = 0; i < 6U; ++i)
+    {
+        w[32U + i] = idx[i];
+    }
     const float cx[4] = {-h, h, h, -h};
     const float cy[4] = {-h, -h, h, h};
     for (u32 i = 0; i < 4U; ++i)
@@ -6696,7 +7243,10 @@ void fill_mesh_fetch_buffer(containers::Array<u32>& w, float h, u32 task_count)
     for (u32 inst = 0; inst < 2U; ++inst) // identity + a translation: instance 0 left, instance 1 right
     {
         const u32 base = 60U + inst * 20U;
-        for (u32 c = 0; c < 4U; ++c) { w[base + c * 4U + c] = fbits(1.0F); }
+        for (u32 c = 0; c < 4U; ++c)
+        {
+            w[base + c * 4U + c] = fbits(1.0F);
+        }
         w[base + 12U] = fbits(inst == 0U ? -0.5F : 0.5F); // column-major translation x
     }
     w[110] = 0U;
@@ -6709,7 +7259,10 @@ TEST_CASE("REN-38-F6+ GATE: a FETCH mesh stage renders the buffer's geometry and
           "[gpu-context][vulkan][frame-graph][ren38][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(16U << 20U);
@@ -6735,10 +7288,16 @@ TEST_CASE("REN-38-F6+ GATE: a FETCH mesh stage renders the buffer's geometry and
     kir::KEntry fe;
     gputest::build_solid_fs(fg2, fe, 1.0, 0.3, 0.1);
     auto fs = rig.vk->create_program(fg2, fe);
-    if (ms == nullptr || msp == nullptr || tk == nullptr || fs == nullptr) { SKIP("mesh shader compile unavailable"); }
+    if (ms == nullptr || msp == nullptr || tk == nullptr || fs == nullptr)
+    {
+        SKIP("mesh shader compile unavailable");
+    }
     auto mesh_prog = raster.create_mesh_program(*ms, *fs);
     auto task_prog = raster.create_task_mesh_program(*tk, *msp, *fs);
-    if (mesh_prog == nullptr || task_prog == nullptr) { SKIP("no mesh-shader support on this device"); }
+    if (mesh_prog == nullptr || task_prog == nullptr)
+    {
+        SKIP("no mesh-shader support on this device");
+    }
 
     g::ValidationCapture capture(*rig.vk);
     // probe pixels sit 0.2 NDC RIGHT of each quad centre (-0.5 / +0.5): inside an h = 0.35 quad, outside an
@@ -6791,7 +7350,10 @@ TEST_CASE("REN-38-F6+ GATE: a FETCH mesh stage renders the buffer's geometry and
     if (capture.error_count() > 0U) // print WHAT before failing — a bare count diagnoses nothing
     {
         const auto msgs = capture.messages();
-        for (usize i = 0; i < msgs.size(); ++i) { WARN("[fetch-gate capture] " << msgs[i].message_text.c_str()); }
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            WARN("[fetch-gate capture] " << msgs[i].message_text.c_str());
+        }
     }
     CHECK(capture.error_count() == 0U);
 }
@@ -6833,7 +7395,10 @@ TEST_CASE("REN-38 GATE: multi-draw batches N draws into ONE indirect command, bi
           "[gpu-context][vulkan][frame-graph][ren38][multidraw][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
 
     memory::TlsfAllocator alloc(8U << 20U);
@@ -6853,7 +7418,10 @@ TEST_CASE("REN-38 GATE: multi-draw batches N draws into ONE indirect command, bi
     REQUIRE(sb != nullptr);
 
     crd::u32 counts[8];
-    for (crd::u32 i = 0; i < 8U; ++i) { counts[i] = 3U; } // the same triangle, drawn 8 times
+    for (crd::u32 i = 0; i < 8U; ++i) // the same triangle, drawn 8 times
+    {
+        counts[i] = 3U;
+    }
 
     // ── the CLASSIC reference: a frame of per-draw calls through the graph ──
     auto ref = raster.create_color_depth_target(64U, 64U);
@@ -6898,8 +7466,14 @@ TEST_CASE("REN-38 GATE: multi-draw batches N draws into ONE indirect command, bi
         {
             const crd::u32 a = ref->read_pixel(x, y);
             const crd::u32 b = tgt->read_pixel(x, y);
-            if (a != b) { ++diffs; }
-            if ((b & 0x00FFFFFFU) != 0U) { ++covered; }
+            if (a != b)
+            {
+                ++diffs;
+            }
+            if ((b & 0x00FFFFFFU) != 0U)
+            {
+                ++covered;
+            }
         }
     }
     CHECK(diffs == 0U);
@@ -7450,7 +8024,10 @@ TEST_CASE("REN-40-A GATE: indirect draw takes its args AND its count from device
           "[gpu-context][vulkan][frame-graph][ren40][indirect][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     g::ValidationCapture capture(*rig.vk);
     REQUIRE(raster.indirect_count_supported()); // Vulkan 1.3 => vkCmdDrawIndexedIndirectCount is CORE
@@ -7485,7 +8062,10 @@ TEST_CASE("REN-40-A GATE: indirect draw takes its args AND its count from device
     {
         rec[r * 12U + 0U] = 2.0F; // offscreen by default
         rec[r * 12U + 1U] = 2.0F;
-        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+        for (crd::u32 w = 2U; w < 12U; ++w)
+        {
+            rec[r * 12U + w] = 0.0F;
+        }
     }
     const auto put = [&](crd::u32 r, float x, float y, float z) {
         rec[r * 12U + 0U] = x;
@@ -7519,7 +8099,10 @@ TEST_CASE("REN-40-A GATE: indirect draw takes its args AND its count from device
     {
         const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U}; // index_count, instance_count, first_index, 0, 0
         std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
-        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+        if (arg_off != 0U)
+        {
+            std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U);
+        }
     }
     REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
 
@@ -7614,7 +8197,10 @@ TEST_CASE("REN-40-A GATE: the geometry indirect draw takes its args AND its coun
           "[gpu-context][vulkan][frame-graph][ren40][indirect][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     g::ValidationCapture capture(*rig.vk);
     REQUIRE(raster.indirect_count_supported());
@@ -7641,7 +8227,10 @@ TEST_CASE("REN-40-A GATE: the geometry indirect draw takes its args AND its coun
     {
         rec[r * 12U + 0U] = 2.0F; // offscreen by default
         rec[r * 12U + 1U] = 2.0F;
-        for (crd::u32 w = 2U; w < 12U; ++w) { rec[r * 12U + w] = 0.0F; }
+        for (crd::u32 w = 2U; w < 12U; ++w)
+        {
+            rec[r * 12U + w] = 0.0F;
+        }
     }
     const auto put = [&](crd::u32 r, float x, float y, float z) {
         rec[r * 12U + 0U] = x;
@@ -7670,7 +8259,10 @@ TEST_CASE("REN-40-A GATE: the geometry indirect draw takes its args AND its coun
     {
         const crd::u32 cmd[5] = {3U, 1U, i * 3U, 0U, 0U};
         std::memcpy(args_bytes.data() + i * stride + arg_off, static_cast<const void*>(cmd), sizeof(cmd));
-        if (arg_off != 0U) { std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U); }
+        if (arg_off != 0U)
+        {
+            std::memcpy(args_bytes.data() + i * stride, static_cast<const void*>(&i), 4U);
+        }
     }
     REQUIRE(raster.upload_storage(*args_sb, 0U, args_bytes.data(), static_cast<crd::u32>(args_bytes.size())));
 
@@ -7731,7 +8323,10 @@ TEST_CASE("REN-40-A GATE: the geometry indirect draw takes its args AND its coun
     if (capture.error_count() > 0U)
     {
         const auto msgs = capture.messages();
-        for (usize i = 0; i < msgs.size(); ++i) { WARN("[ren40-geo capture] " << msgs[i].message_text.c_str()); }
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            WARN("[ren40-geo capture] " << msgs[i].message_text.c_str());
+        }
     }
     CHECK(capture.error_count() == 0U);
 }
@@ -7749,7 +8344,10 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
           "[gpu-context][vulkan][ren40][cull][compute][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     g::ValidationCapture capture(*rig.vk);
 
@@ -7808,7 +8406,10 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
     };
     // header: view_proj at 6 (column-major), instance_count at 100, bounds_off at 104
     const float* vpf = reinterpret_cast<const float*>(&vpm);
-    for (crd::u32 e = 0; e < 16U; ++e) { putf(6U + e, vpf[e]); }
+    for (crd::u32 e = 0; e < 16U; ++e)
+    {
+        putf(6U + e, vpf[e]);
+    }
     words[100U] = n_boxes;
     words[104U] = bounds_off;
     words[5U]   = visible_off; // the visible-list base the kernel writes into
@@ -7844,7 +8445,10 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
     crd::containers::Array<crd::u32> cpu(&alloc);
     for (crd::u32 i = 0; i < n_boxes; ++i)
     {
-        if (crd::scenerender::aabb_in_frustum(boxes[i], planes)) { cpu.push_back(i); }
+        if (crd::scenerender::aabb_in_frustum(boxes[i], planes))
+        {
+            cpu.push_back(i);
+        }
     }
     // the cull must be doing REAL work: not everything, not nothing
     CHECK(cpu.size() > 8U);
@@ -7910,7 +8514,10 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
 
         // poison the command: a reset that does not run leaves these
         crd::u32 poison[16];
-        for (crd::u32 i = 0; i < 16U; ++i) { poison[i] = 0xDEADBEEFU; }
+        for (crd::u32 i = 0; i < 16U; ++i)
+        {
+            poison[i] = 0xDEADBEEFU;
+        }
         REQUIRE(raster.upload_storage(*args, 0U, static_cast<const void*>(poison), sizeof(poison)));
         REQUIRE(raster.upload_storage(*scene, visible_off * 4U, static_cast<const void*>(zero_list),
                                       sizeof(zero_list)));
@@ -8013,9 +8620,23 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
         crd::usize j = 0;
         while (i < gpu.size() && j < cpu.size())
         {
-            if (gpu[i] == cpu[j]) { ++i; ++j; }
-            else if (gpu[i] < cpu[j]) { ++only_gpu; UNSCOPED_INFO("GPU-only instance " << gpu[i]); ++i; }
-            else { ++only_cpu; UNSCOPED_INFO("CPU-only instance " << cpu[j]); ++j; }
+            if (gpu[i] == cpu[j])
+            {
+                ++i;
+                ++j;
+            }
+            else if (gpu[i] < cpu[j])
+            {
+                ++only_gpu;
+                UNSCOPED_INFO("GPU-only instance " << gpu[i]);
+                ++i;
+            }
+            else
+            {
+                ++only_cpu;
+                UNSCOPED_INFO("CPU-only instance " << cpu[j]);
+                ++j;
+            }
         }
         only_gpu += static_cast<crd::u32>(gpu.size() - i);
         only_cpu += static_cast<crd::u32>(cpu.size() - j);
@@ -8026,7 +8647,10 @@ TEST_CASE("REN-40-A GATE: the compacting cull kernel reproduces the CPU frustum 
     if (capture.error_count() > 0U)
     {
         const auto msgs = capture.messages();
-        for (usize i = 0; i < msgs.size(); ++i) { WARN("[ren40-cull capture] " << msgs[i].message_text.c_str()); }
+        for (usize i = 0; i < msgs.size(); ++i)
+        {
+            WARN("[ren40-cull capture] " << msgs[i].message_text.c_str());
+        }
     }
     CHECK(capture.error_count() == 0U);
 }
@@ -8048,7 +8672,10 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
           "[gpu-context][vulkan][ren40][lod][cull][compute][gpu]")
 {
     Rig rig = make_rig();
-    if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+    if (rig.raster == nullptr)
+    {
+        SKIP("no graphics-capable Vulkan device with shader objects");
+    }
     auto& raster = *rig.raster;
     g::ValidationCapture capture(*rig.vk);
 
@@ -8110,7 +8737,10 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
         words[idx] = bits;
     };
     const auto* vpf = reinterpret_cast<const float*>(&vpm);
-    for (crd::u32 e = 0; e < 16U; ++e) { putf(6U + e, vpf[e]); }
+    for (crd::u32 e = 0; e < 16U; ++e)
+    {
+        putf(6U + e, vpf[e]);
+    }
     words[100U] = n_boxes;
     words[104U] = bounds_off;
     words[5U]   = visible_off;
@@ -8153,7 +8783,10 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
         crd::u32    s  = 0U;
         for (crd::u32 k = 1; k < lod_slots; ++k)
         {
-            if (px < heights[k]) { s = k; }
+            if (px < heights[k])
+            {
+                s = k;
+            }
         }
         want_slot.push_back(s);
     }
@@ -8161,7 +8794,10 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
     for (crd::u32 s = 0; s < lod_slots; ++s)
     {
         crd::u32 c = 0U;
-        for (crd::u32 i = 0; i < n_boxes; ++i) { c += want_slot[i] == s ? 1U : 0U; }
+        for (crd::u32 i = 0; i < n_boxes; ++i)
+        {
+            c += want_slot[i] == s ? 1U : 0U;
+        }
         INFO("slot " << s << " expects " << c);
         CHECK(c > 0U);
     }
@@ -8213,7 +8849,10 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
     for (crd::u32 s = 0; s < lod_slots; ++s)
     {
         crd::u32 want = 0U;
-        for (crd::u32 i = 0; i < n_boxes; ++i) { want += want_slot[i] == s ? 1U : 0U; }
+        for (crd::u32 i = 0; i < n_boxes; ++i)
+        {
+            want += want_slot[i] == s ? 1U : 0U;
+        }
         const crd::u32 got = args->read_u32(argw + (s * stride_w) + 1U);
         INFO("slot " << s);
         CHECK(got == want);
@@ -8273,7 +8912,10 @@ TEST_CASE("D2b-vk: the multi-draw arg rings each mint one Resource identity (con
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Resource); // BEFORE any context exists
     {
         Rig rig = make_rig();
-        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        if (rig.raster == nullptr)
+        {
+            SKIP("no graphics-capable Vulkan device with shader objects");
+        }
         auto& raster = *rig.raster;
         // Init mints NO Resource (only a default sampler, not an ObjectKind::Resource).
         CHECK(g::identity_registry().live_count(g::ObjectKind::Resource) == before);
@@ -8296,8 +8938,15 @@ TEST_CASE("D2b-vk: the multi-draw arg rings each mint one Resource identity (con
         auto sb = raster.create_storage_buffer(600U);
         REQUIRE(sb != nullptr);
         float rec[144];
-        for (crd::u32 i = 0; i < 144U; ++i) { rec[i] = 0.0F; }
-        for (crd::u32 r = 0; r < 12U; ++r) { rec[r * 12U + 0U] = 2.0F; rec[r * 12U + 1U] = 2.0F; }
+        for (crd::u32 i = 0; i < 144U; ++i)
+        {
+            rec[i] = 0.0F;
+        }
+        for (crd::u32 r = 0; r < 12U; ++r)
+        {
+            rec[r * 12U + 0U] = 2.0F;
+            rec[r * 12U + 1U] = 2.0F;
+        }
         rec[4U * 12U + 1U] = -0.8F; rec[5U * 12U + 0U] = 0.8F; rec[5U * 12U + 1U] = 0.8F; rec[6U * 12U + 0U] = -0.8F;
         rec[6U * 12U + 1U] = 0.8F;
         REQUIRE(raster.upload_storage(*sb, 0U, static_cast<const void*>(rec), sizeof(rec)));
@@ -8379,7 +9028,10 @@ TEST_CASE("D2b-vk: raster programs mint one Program identity per compiled stage 
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // BEFORE any context exists
     {
         Rig rig = make_rig();
-        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        if (rig.raster == nullptr)
+        {
+            SKIP("no graphics-capable Vulkan device with shader objects");
+        }
         auto& raster = *rig.raster;
         CHECK(g::identity_registry().live_count(g::ObjectKind::Program) == before); // init compiles nothing (k0=0)
 
@@ -8423,9 +9075,15 @@ TEST_CASE("D2b-vk: an RT trace mints one Program identity per cached RT pipeline
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // before any context exists
     {
         Rig rig = make_rig();
-        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        if (rig.raster == nullptr)
+        {
+            SKIP("no graphics-capable Vulkan device with shader objects");
+        }
         auto& raster = *rig.raster;
-        if (!raster.supports_rt_pipeline()) { SKIP("adapter has no ray-tracing pipeline"); }
+        if (!raster.supports_rt_pipeline())
+        {
+            SKIP("adapter has no ray-tracing pipeline");
+        }
 
         g::VulkanRayTracingContext rt(*rig.vk);
         REQUIRE(rt.valid());
@@ -8442,7 +9100,10 @@ TEST_CASE("D2b-vk: an RT trace mints one Program identity per cached RT pipeline
         auto rgp = rig.vk->create_program(rgg, rge);
         auto msp = rig.vk->create_program(msg, mse);
         auto chp = rig.vk->create_program(chg, che);
-        if (rgp == nullptr || msp == nullptr || chp == nullptr) { SKIP("RT-stage compile unavailable"); }
+        if (rgp == nullptr || msp == nullptr || chp == nullptr)
+        {
+            SKIP("RT-stage compile unavailable");
+        }
 
         constexpr u32 ray_count = 4U;
         auto          hits = raster.create_storage_buffer(ray_count * 4U);
@@ -8497,7 +9158,10 @@ TEST_CASE("D2b-vk: a compute dispatch mints one Program identity per cached kern
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Program); // before any context exists
     {
         Rig rig = make_rig();
-        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        if (rig.raster == nullptr)
+        {
+            SKIP("no graphics-capable Vulkan device with shader objects");
+        }
         auto& raster = *rig.raster;
 
         memory::TlsfAllocator alloc(8U << 20U);
@@ -8520,7 +9184,10 @@ TEST_CASE("D2b-vk: a compute dispatch mints one Program identity per cached kern
         kir::KGraph kg2(&alloc); kir::KEntry ke2; build_kernel(kg2, ke2, 3U);
         auto kern1 = rig.vk->create_program(kg1, ke1);
         auto kern2 = rig.vk->create_program(kg2, ke2);
-        if (kern1 == nullptr || kern2 == nullptr) { SKIP("compute shader compile unavailable"); }
+        if (kern1 == nullptr || kern2 == nullptr)
+        {
+            SKIP("compute shader compile unavailable");
+        }
 
         // Baseline AFTER create_program: the two P2 stage identities are already counted, so every delta below is the
         // kernel-pipeline cache ALONE (a pure Compute frame-graph pass mints no raster program).
@@ -8538,7 +9205,10 @@ TEST_CASE("D2b-vk: a compute dispatch mints one Program identity per cached kern
         const auto rec = [](g::IFrameContext& ctx, void* user) {
             auto*              s  = static_cast<Kern*>(user);
             g::IStorageBuffer* sb = ctx.buffer(s->buf);
-            if (sb == nullptr) { return; }
+            if (sb == nullptr)
+            {
+                return;
+            }
             g::IStorageBuffer* bufs[1] = {sb};
             gputest::enc_dispatch(ctx.raster(), *s->prog, 1U, 1U, 1U, static_cast<g::IStorageBuffer* const*>(bufs), 1U);
         };
@@ -8572,7 +9242,10 @@ TEST_CASE("D2c-vk: a frame-graph pass mints one Pass identity, retired on reset 
     const crd::usize before = g::identity_registry().live_count(g::ObjectKind::Pass); // before any graph exists
     {
         Rig rig = make_rig();
-        if (rig.raster == nullptr) { SKIP("no graphics-capable Vulkan device with shader objects"); }
+        if (rig.raster == nullptr)
+        {
+            SKIP("no graphics-capable Vulkan device with shader objects");
+        }
         auto& raster = *rig.raster;
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before);
         g::ValidationCapture capture(*rig.vk); // DIAG.7a(d2c-vk label): the pass labels' partial oracle -- End-without-Begin is a VUID

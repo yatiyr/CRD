@@ -458,7 +458,10 @@ inline constexpr double kLtcLutBias  = 0.5 / kLtcLutSize;                 // 0.5
     vsum = nd::detail::bin(g, KOp::Add, vsum, integrate_edge_vec(g, l3, l0));
     const int len = g.vlength(vsum);
     int       sum = g.binary(KOp::Mul, len, scale);
-    if (!two_sided) { sum = g.select(behind, ks(0.0), sum); }
+    if (!two_sided)
+    {
+        sum = g.select(behind, ks(0.0), sum);
+    }
     return sum;
 }
 // The ltc_2 LUT coordinate for a rect: uv = (z·0.5 + 0.5, len)·LUT_SCALE + LUT_BIAS where z = ±vsum.z/len. Kept as a helper
@@ -666,7 +669,10 @@ namespace detail
     const int  ffac = g.binary(KOp::Mul, g.binary(KOp::Mul, ll1r, ll2r), g.unary(KOp::Rsqrt, g.binary(KOp::Mul, g.binary(KOp::Add, ks(1.0), g.binary(KOp::Mul, ll1r, ll1r)), g.binary(KOp::Add, ks(1.0), g.binary(KOp::Mul, ll2r, ll2r)))));
     int        spec = g.binary(KOp::Mul, ffac, scale);
     (void)avg; // avgDir.z drives the ltc_2 uv; the renderer samples it — `scale` carries the sampled magnitude here.
-    if (!two_sided) { spec = g.select(cull, ks(0.0), spec); }
+    if (!two_sided)
+    {
+        spec = g.select(cull, ks(0.0), spec);
+    }
     return spec;
 }
 // the ltc_2 LUT coord for a disk: uv = (avgDir.z·0.5 + 0.5, formFactor)·LUT_SCALE + LUT_BIAS. Exposed so the renderer can

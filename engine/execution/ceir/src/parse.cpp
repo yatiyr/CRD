@@ -30,10 +30,16 @@ constexpr u32 kMaxTypeDepth = 64U;
 
 [[nodiscard]] bool sv_all_digits(containers::StringView s, usize from) noexcept
 {
-    if (from >= s.size()) { return false; }
+    if (from >= s.size())
+    {
+        return false;
+    }
     for (usize i = from; i < s.size(); ++i)
     {
-        if (!is_digit(s[i])) { return false; }
+        if (!is_digit(s[i]))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -41,7 +47,10 @@ constexpr u32 kMaxTypeDepth = 64U;
 [[nodiscard]] u32 sv_to_uint(containers::StringView s, usize from) noexcept
 {
     u32 v = 0U;
-    for (usize i = from; i < s.size(); ++i) { v = (v * 10U) + static_cast<u32>(s[i] - '0'); }
+    for (usize i = from; i < s.size(); ++i)
+    {
+        v = (v * 10U) + static_cast<u32>(s[i] - '0');
+    }
     return v;
 }
 
@@ -91,9 +100,15 @@ public:
         expect_keyword("module");
         parse_region_body(m->body());
         skip_ws();
-        if (m_ok && m_cur != m_end) { fail("trailing characters after top-level module"); }
+        if (m_ok && m_cur != m_end)
+        {
+            fail("trailing characters after top-level module");
+        }
         resolve_fixups();
-        if (!m_ok) { return ParseResult{nullptr, false, m_err_off, m_err}; }
+        if (!m_ok)
+        {
+            return ParseResult{nullptr, false, m_err_off, m_err};
+        }
         return ParseResult{m, true, 0U, ""};
     }
 
@@ -102,7 +117,10 @@ private:
     [[nodiscard]] usize offset() const noexcept { return static_cast<usize>(m_cur - m_begin); }
     void                skip_ws() noexcept
     {
-        while (m_cur < m_end && is_ws(*m_cur)) { ++m_cur; }
+        while (m_cur < m_end && is_ws(*m_cur))
+        {
+            ++m_cur;
+        }
     }
     // Lookahead: the next significant char (whitespace skipped), or '\0' at end. Does not consume the char itself.
     [[nodiscard]] char la() noexcept
@@ -121,7 +139,10 @@ private:
     }
     void expect(char c, const char* msg) noexcept
     {
-        if (!accept(c)) { fail(msg); }
+        if (!accept(c))
+        {
+            fail(msg);
+        }
     }
     void fail(const char* msg) noexcept
     {
@@ -136,7 +157,10 @@ private:
     void expect_keyword(const char* kw) noexcept
     {
         const containers::StringView id = parse_ident("expected keyword");
-        if (m_ok && !sv_eq(id, kw)) { fail("unexpected keyword"); }
+        if (m_ok && !sv_eq(id, kw))
+        {
+            fail("unexpected keyword");
+        }
     }
 
     // An identifier: [A-Za-z_][A-Za-z0-9_.]* — a view INTO the source text (stable for the parse; interned by the
@@ -150,7 +174,10 @@ private:
             fail(msg);
             return {};
         }
-        while (m_cur < m_end && is_ident_char(*m_cur)) { ++m_cur; }
+        while (m_cur < m_end && is_ident_char(*m_cur))
+        {
+            ++m_cur;
+        }
         return containers::StringView(s, static_cast<usize>(m_cur - s));
     }
 
@@ -182,22 +209,52 @@ private:
         }
         expect('!', "expected '!' starting a type");
         const containers::StringView head = parse_ident("expected a type keyword after '!'");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         // scalars
-        if (sv_eq(head, "bool")) { return m_ctx.type_bool(); }
-        if (sv_eq(head, "index")) { return m_ctx.type_index(); }
-        if (sv_eq(head, "f16")) { return m_ctx.type_float(FloatKind::F16); }
-        if (sv_eq(head, "bf16")) { return m_ctx.type_float(FloatKind::BF16); }
-        if (sv_eq(head, "f32")) { return m_ctx.type_float(FloatKind::F32); }
-        if (sv_eq(head, "f64")) { return m_ctx.type_float(FloatKind::F64); }
-        if (sv_eq(head, "f8e4m3")) { return m_ctx.type_float(FloatKind::F8E4M3); }
-        if (sv_eq(head, "f8e5m2")) { return m_ctx.type_float(FloatKind::F8E5M2); }
+        if (sv_eq(head, "bool"))
+        {
+            return m_ctx.type_bool();
+        }
+        if (sv_eq(head, "index"))
+        {
+            return m_ctx.type_index();
+        }
+        if (sv_eq(head, "f16"))
+        {
+            return m_ctx.type_float(FloatKind::F16);
+        }
+        if (sv_eq(head, "bf16"))
+        {
+            return m_ctx.type_float(FloatKind::BF16);
+        }
+        if (sv_eq(head, "f32"))
+        {
+            return m_ctx.type_float(FloatKind::F32);
+        }
+        if (sv_eq(head, "f64"))
+        {
+            return m_ctx.type_float(FloatKind::F64);
+        }
+        if (sv_eq(head, "f8e4m3"))
+        {
+            return m_ctx.type_float(FloatKind::F8E4M3);
+        }
+        if (sv_eq(head, "f8e5m2"))
+        {
+            return m_ctx.type_float(FloatKind::F8E5M2);
+        }
         if (head.size() > 1U && (head[0] == 'i' || head[0] == 'u') && sv_all_digits(head, 1U))
         {
             return m_ctx.type_int(sv_to_uint(head, 1U), head[0] == 'i');
         }
         // CEIR-8a open-world custom type (ADR-0111): the generic canonical form, parseable WITHOUT the class registered.
-        if (sv_eq(head, "extern")) { return parse_extern(depth); }
+        if (sv_eq(head, "extern"))
+        {
+            return parse_extern(depth);
+        }
         // numeric aggregates
         if (sv_eq(head, "vec"))
         {
@@ -219,9 +276,18 @@ private:
             expect('>', "expected '>'");
             return m_ctx.type_matrix(e, r, c);
         }
-        if (sv_eq(head, "complex")) { return m_ctx.type_complex(parse_wrapped(depth)); }
-        if (sv_eq(head, "quat")) { return m_ctx.type_quaternion(parse_wrapped(depth)); }
-        if (sv_eq(head, "option")) { return m_ctx.type_option(parse_wrapped(depth)); }
+        if (sv_eq(head, "complex"))
+        {
+            return m_ctx.type_complex(parse_wrapped(depth));
+        }
+        if (sv_eq(head, "quat"))
+        {
+            return m_ctx.type_quaternion(parse_wrapped(depth));
+        }
+        if (sv_eq(head, "option"))
+        {
+            return m_ctx.type_option(parse_wrapped(depth));
+        }
         if (sv_eq(head, "array"))
         {
             expect('<', "expected '<'");
@@ -246,7 +312,10 @@ private:
             expect('<', "expected '<'");
             containers::Array<TypeId> elems(m_ctx.allocator());
             elems.push_back(parse_type(depth + 1U));
-            while (accept(',')) { elems.push_back(parse_type(depth + 1U)); }
+            while (accept(','))
+            {
+                elems.push_back(parse_type(depth + 1U));
+            }
             expect('>', "expected '>'");
             const containers::ConstSpan<TypeId> sp(elems.data(), elems.size());
             return is_tuple ? m_ctx.type_tuple(sp) : m_ctx.type_variant(sp);
@@ -272,7 +341,10 @@ private:
             expect('<', "expected '<'");
             const containers::StringView              name = parse_ident("expected enum name");
             containers::Array<containers::StringView> cases(m_ctx.allocator());
-            while (accept(',')) { cases.push_back(parse_ident("expected enum case name")); }
+            while (accept(','))
+            {
+                cases.push_back(parse_ident("expected enum case name"));
+            }
             expect('>', "expected '>'");
             return m_ctx.type_enum(name, containers::ConstSpan<containers::StringView>(cases.data(), cases.size()));
         }
@@ -283,7 +355,10 @@ private:
             expect('<', "expected '<'");
             const containers::StringView name = parse_ident(is_param ? "expected type-param name" : "expected trait name");
             containers::Array<TypeId>    ms(m_ctx.allocator());
-            while (accept(',')) { ms.push_back(parse_type(depth + 1U)); }
+            while (accept(','))
+            {
+                ms.push_back(parse_type(depth + 1U));
+            }
             expect('>', "expected '>'");
             const containers::ConstSpan<TypeId> sp(ms.data(), ms.size());
             return is_param ? m_ctx.type_param(name, sp) : m_ctx.type_trait(name, sp);
@@ -308,10 +383,22 @@ private:
             expect('<', "expected '<'");
             const containers::StringView mode = parse_ident("expected buffer mode");
             BufferMode                   bm    = BufferMode::Raw;
-            if (sv_eq(mode, "raw")) { bm = BufferMode::Raw; }
-            else if (sv_eq(mode, "plain")) { bm = BufferMode::Plain; }
-            else if (sv_eq(mode, "structured")) { bm = BufferMode::Structured; }
-            else if (sv_eq(mode, "typed")) { bm = BufferMode::Typed; }
+            if (sv_eq(mode, "raw"))
+            {
+                bm = BufferMode::Raw;
+            }
+            else if (sv_eq(mode, "plain"))
+            {
+                bm = BufferMode::Plain;
+            }
+            else if (sv_eq(mode, "structured"))
+            {
+                bm = BufferMode::Structured;
+            }
+            else if (sv_eq(mode, "typed"))
+            {
+                bm = BufferMode::Typed;
+            }
             else
             {
                 fail("unknown buffer mode");
@@ -331,10 +418,22 @@ private:
             expect('<', "expected '<'");
             const containers::StringView dim = parse_ident("expected image dim");
             ImageDim                     id   = ImageDim::Dim1D;
-            if (sv_eq(dim, "d1")) { id = ImageDim::Dim1D; }
-            else if (sv_eq(dim, "d2")) { id = ImageDim::Dim2D; }
-            else if (sv_eq(dim, "d3")) { id = ImageDim::Dim3D; }
-            else if (sv_eq(dim, "cube")) { id = ImageDim::Cube; }
+            if (sv_eq(dim, "d1"))
+            {
+                id = ImageDim::Dim1D;
+            }
+            else if (sv_eq(dim, "d2"))
+            {
+                id = ImageDim::Dim2D;
+            }
+            else if (sv_eq(dim, "d3"))
+            {
+                id = ImageDim::Dim3D;
+            }
+            else if (sv_eq(dim, "cube"))
+            {
+                id = ImageDim::Cube;
+            }
             else
             {
                 fail("unknown image dim");
@@ -350,8 +449,14 @@ private:
             expect('<', "expected '<'");
             const containers::StringView k = parse_ident("expected sampler kind");
             bool                         cmp = false;
-            if (sv_eq(k, "plain")) { cmp = false; }
-            else if (sv_eq(k, "cmp")) { cmp = true; }
+            if (sv_eq(k, "plain"))
+            {
+                cmp = false;
+            }
+            else if (sv_eq(k, "cmp"))
+            {
+                cmp = true;
+            }
             else
             {
                 fail("unknown sampler kind");
@@ -360,11 +465,26 @@ private:
             expect('>', "expected '>'");
             return m_ctx.type_sampler(cmp);
         }
-        if (sv_eq(head, "restable")) { return m_ctx.type_resource_table(parse_wrapped(depth)); }
-        if (sv_eq(head, "accel")) { return m_ctx.type_accel_struct(); }
-        if (sv_eq(head, "video")) { return m_ctx.type_video_frame(); }
-        if (sv_eq(head, "audio")) { return m_ctx.type_audio_buffer(); }
-        if (sv_eq(head, "external")) { return m_ctx.type_external_resource(); }
+        if (sv_eq(head, "restable"))
+        {
+            return m_ctx.type_resource_table(parse_wrapped(depth));
+        }
+        if (sv_eq(head, "accel"))
+        {
+            return m_ctx.type_accel_struct();
+        }
+        if (sv_eq(head, "video"))
+        {
+            return m_ctx.type_video_frame();
+        }
+        if (sv_eq(head, "audio"))
+        {
+            return m_ctx.type_audio_buffer();
+        }
+        if (sv_eq(head, "external"))
+        {
+            return m_ctx.type_external_resource();
+        }
         if (sv_eq(head, "view"))
         {
             expect('<', "expected '<'");
@@ -373,11 +493,26 @@ private:
             while (accept(','))
             {
                 const containers::StringView r = parse_ident("expected view range dimension");
-                if (sv_eq(r, "byte")) { mask |= static_cast<u32>(ViewRange::Byte); }
-                else if (sv_eq(r, "element")) { mask |= static_cast<u32>(ViewRange::Element); }
-                else if (sv_eq(r, "mip")) { mask |= static_cast<u32>(ViewRange::Mip); }
-                else if (sv_eq(r, "layer")) { mask |= static_cast<u32>(ViewRange::Layer); }
-                else if (sv_eq(r, "aspect")) { mask |= static_cast<u32>(ViewRange::Aspect); }
+                if (sv_eq(r, "byte"))
+                {
+                    mask |= static_cast<u32>(ViewRange::Byte);
+                }
+                else if (sv_eq(r, "element"))
+                {
+                    mask |= static_cast<u32>(ViewRange::Element);
+                }
+                else if (sv_eq(r, "mip"))
+                {
+                    mask |= static_cast<u32>(ViewRange::Mip);
+                }
+                else if (sv_eq(r, "layer"))
+                {
+                    mask |= static_cast<u32>(ViewRange::Layer);
+                }
+                else if (sv_eq(r, "aspect"))
+                {
+                    mask |= static_cast<u32>(ViewRange::Aspect);
+                }
                 else
                 {
                     fail("unknown view range dimension");
@@ -388,7 +523,10 @@ private:
             // the tri-split's PARSER arm: a grammatically-valid but semantically-invalid combination fails with a
             // pointing diagnostic. ⛔ Must bail on a prior error FIRST — else `underlying` is unreliable and the
             // asserting factory would be reached on an already-failed parse (a corrupt-input abort).
-            if (!m_ok) { return {}; }
+            if (!m_ok)
+            {
+                return {};
+            }
             if (!m_ctx.view_combination_valid(underlying, mask))
             {
                 fail("invalid view/resource combination");
@@ -401,11 +539,17 @@ private:
         {
             expect('<', "expected '<'");
             TypeId d;
-            if (is_digit(la())) { d = m_ctx.type_dim_static(parse_uint()); } // a static extent
+            if (is_digit(la())) // a static extent
+            {
+                d = m_ctx.type_dim_static(parse_uint());
+            }
             else
             {
                 const containers::StringView nm = parse_ident("expected a dim name or 'dyn'");
-                if (!m_ok) { return {}; } // ⛔ bail before the asserting symbolic-dim factory
+                if (!m_ok) // ⛔ bail before the asserting symbolic-dim factory
+                {
+                    return {};
+                }
                 d = sv_eq(nm, "dyn") ? m_ctx.type_dim_dynamic() : m_ctx.type_dim_symbolic(nm);
             }
             expect('>', "expected '>'");
@@ -418,10 +562,16 @@ private:
             if (la() != '>')
             {
                 dims.push_back(parse_type(depth + 1U));
-                while (accept(',')) { dims.push_back(parse_type(depth + 1U)); }
+                while (accept(','))
+                {
+                    dims.push_back(parse_type(depth + 1U));
+                }
             }
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; } // ⛔ bail before the asserting shape factory
+            if (!m_ok) // ⛔ bail before the asserting shape factory
+            {
+                return {};
+            }
             const containers::ConstSpan<TypeId> sp(dims.data(), dims.size());
             if (!m_ctx.shape_members_valid(sp))
             {
@@ -438,7 +588,10 @@ private:
             expect(',', "expected ','");
             const TypeId shp = parse_type(depth + 1U);
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; } // ⛔ bail before the asserting tensor factory
+            if (!m_ok) // ⛔ bail before the asserting tensor factory
+            {
+                return {};
+            }
             if (!m_ctx.tensor_composition_valid(elem, shp))
             {
                 fail("invalid tensor element/shape composition");
@@ -454,7 +607,10 @@ private:
             expect(',', "expected ','");
             const QuantityDim dim = parse_dimension();
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; } // ⛔ bail before the asserting quantity factory
+            if (!m_ok) // ⛔ bail before the asserting quantity factory
+            {
+                return {};
+            }
             if (!m_ctx.quantity_composition_valid(underlying))
             {
                 fail("a quantity's underlying type must be numeric");
@@ -470,15 +626,42 @@ private:
             expect('<', "expected '<'");
             const containers::StringView kw = parse_ident("expected an ownership keyword");
             OwnershipKind                own = OwnershipKind::ImmutableValue;
-            if (sv_eq(kw, "imm")) { own = OwnershipKind::ImmutableValue; }
-            else if (sv_eq(kw, "mut")) { own = OwnershipKind::MutableValue; }
-            else if (sv_eq(kw, "borrow")) { own = OwnershipKind::BorrowedView; }
-            else if (sv_eq(kw, "own")) { own = OwnershipKind::OwnedResource; }
-            else if (sv_eq(kw, "shared")) { own = OwnershipKind::SharedHandle; }
-            else if (sv_eq(kw, "weak")) { own = OwnershipKind::WeakHandle; }
-            else if (sv_eq(kw, "state")) { own = OwnershipKind::StateSlot; }
-            else if (sv_eq(kw, "ext")) { own = OwnershipKind::ExternalHandle; }
-            else if (sv_eq(kw, "transient")) { own = OwnershipKind::TransientArena; }
+            if (sv_eq(kw, "imm"))
+            {
+                own = OwnershipKind::ImmutableValue;
+            }
+            else if (sv_eq(kw, "mut"))
+            {
+                own = OwnershipKind::MutableValue;
+            }
+            else if (sv_eq(kw, "borrow"))
+            {
+                own = OwnershipKind::BorrowedView;
+            }
+            else if (sv_eq(kw, "own"))
+            {
+                own = OwnershipKind::OwnedResource;
+            }
+            else if (sv_eq(kw, "shared"))
+            {
+                own = OwnershipKind::SharedHandle;
+            }
+            else if (sv_eq(kw, "weak"))
+            {
+                own = OwnershipKind::WeakHandle;
+            }
+            else if (sv_eq(kw, "state"))
+            {
+                own = OwnershipKind::StateSlot;
+            }
+            else if (sv_eq(kw, "ext"))
+            {
+                own = OwnershipKind::ExternalHandle;
+            }
+            else if (sv_eq(kw, "transient"))
+            {
+                own = OwnershipKind::TransientArena;
+            }
             else
             {
                 fail("unknown ownership qualifier");
@@ -487,7 +670,10 @@ private:
             expect(',', "expected ','");
             const TypeId underlying = parse_type(depth + 1U);
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; } // ⛔ bail before the asserting qualified factory
+            if (!m_ok) // ⛔ bail before the asserting qualified factory
+            {
+                return {};
+            }
             if (!m_ctx.qualified_composition_valid(underlying))
             {
                 fail("this type cannot be ownership-qualified");
@@ -503,7 +689,10 @@ private:
     [[nodiscard]] TypeClassId parse_type_class_id() noexcept
     {
         const containers::StringView full = parse_ident("expected a type-class name (dialect.class)");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         usize dot   = 0;
         bool  found = false;
         for (usize i = 0; i < full.size(); ++i)
@@ -595,7 +784,10 @@ private:
             labs.push_back(parse_quoted());
         }
         expect('>', "expected '>'");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         if (signd > 1U || fkindv > static_cast<u32>(FloatKind::F8E5M2))
         {
             fail("extern: signed/fkind field out of range");
@@ -673,7 +865,10 @@ private:
         for (;;)
         {
             const int base = base_dim_index(la());
-            if (base < 0) { break; } // not a base letter ⇒ end of the dimension (the caller expects '>')
+            if (base < 0) // not a base letter ⇒ end of the dimension (the caller expects '>')
+            {
+                break;
+            }
             ++m_cur;                 // consume the letter (la() left m_cur on it)
             if (base <= last)
             {
@@ -682,7 +877,10 @@ private:
             }
             last          = base;
             const i32 e   = parse_signed_int();
-            if (!m_ok) { return d; }
+            if (!m_ok)
+            {
+                return d;
+            }
             if (e > 127 || e < -128)
             {
                 fail("dimension exponent out of range");
@@ -691,7 +889,10 @@ private:
             d.exp[base] = static_cast<i8>(e);
             ++terms;
         }
-        if (terms == 0) { fail("a dimension needs '1' (dimensionless) or at least one base-exponent term"); }
+        if (terms == 0)
+        {
+            fail("a dimension needs '1' (dimensionless) or at least one base-exponent term");
+        }
         return d;
     }
 
@@ -702,7 +903,10 @@ private:
         if (la() != ')')
         {
             out.push_back(parse_type(depth + 1U));
-            while (accept(',')) { out.push_back(parse_type(depth + 1U)); }
+            while (accept(','))
+            {
+                out.push_back(parse_type(depth + 1U));
+            }
         }
         expect(')', "expected ')'");
     }
@@ -719,7 +923,10 @@ private:
     // ── SSA value id -> Value* map (dense in the printer's pre-order; a gap-tolerant Array keyed by id) ──
     void ensure_id(u32 id) noexcept
     {
-        while (m_values.size() <= static_cast<usize>(id)) { m_values.push_back(nullptr); }
+        while (m_values.size() <= static_cast<usize>(id))
+        {
+            m_values.push_back(nullptr);
+        }
     }
     void register_value(u32 id, Value* v) noexcept
     {
@@ -754,7 +961,10 @@ private:
         }
         ++m_region_depth;
         expect('{', "expected '{' opening a region");
-        while (m_ok && la() == '^') { parse_block(r); }
+        while (m_ok && la() == '^')
+        {
+            parse_block(r);
+        }
         expect('}', "expected '}' closing a region");
         --m_region_depth;
     }
@@ -780,26 +990,41 @@ private:
                     accept(':');
                     t = parse_type();
                 }
-                if (num_args == 0U) { first_arg_type = t; }
+                if (num_args == 0U)
+                {
+                    first_arg_type = t;
+                }
                 arg_ids.push_back(id);
                 ++num_args;
-                if (!accept(',')) { break; }
+                if (!accept(','))
+                {
+                    break;
+                }
             }
             expect(')', "expected ')' closing block arguments");
         }
         expect(':', "expected ':' after a block header");
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
 
         // create_block applies ONE type to all args (the CEIR-1a block model); the printer prints them individually
         // but they are always identical, so the first arg's type reconstructs the block faithfully.
         Block* const b = m_ctx.create_block(num_args, first_arg_type);
         r->append(b);
-        for (u32 i = 0; i < num_args; ++i) { register_value(arg_ids[i], b->arg(i)); }
+        for (u32 i = 0; i < num_args; ++i)
+        {
+            register_value(arg_ids[i], b->arg(i));
+        }
 
         for (;;)
         {
             const char c = la();
-            if (!m_ok || c == '^' || c == '}' || c == '\0') { break; }
+            if (!m_ok || c == '^' || c == '}' || c == '\0')
+            {
+                break;
+            }
             parse_op(b);
         }
     }
@@ -816,7 +1041,10 @@ private:
             {
                 expect('%', "expected '%' starting a result");
                 result_ids.push_back(parse_uint());
-                if (!accept(',')) { break; }
+                if (!accept(','))
+                {
+                    break;
+                }
             }
             expect('=', "expected '=' after op results");
         }
@@ -847,7 +1075,10 @@ private:
             {
                 expect('%', "expected '%' starting an operand");
                 operand_ids.push_back(parse_uint());
-                if (!accept(',')) { break; }
+                if (!accept(','))
+                {
+                    break;
+                }
             }
         }
         expect(')', "expected ')' closing operands");
@@ -855,7 +1086,10 @@ private:
         // optional attribute dict "{name = value, ...}" — disambiguated from a region '{' by lookahead
         containers::Array<containers::StringView> attr_names(m_ctx.allocator());
         containers::Array<AttrId>                 attr_vals(m_ctx.allocator());
-        if (la() == '{' && brace_opens_attrs()) { parse_attrs(attr_names, attr_vals); }
+        if (la() == '{' && brace_opens_attrs())
+        {
+            parse_attrs(attr_names, attr_vals);
+        }
 
         // optional single result type ": !tN"
         TypeId result_type{};
@@ -867,25 +1101,43 @@ private:
 
         // trailing region groups — COUNT them before creating the op (create_operation needs num_regions upfront)
         const u32 num_regions = count_trailing_regions();
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
 
         containers::Array<Value*> operand_vals(m_ctx.allocator());
-        for (usize i = 0; i < operand_ids.size(); ++i) { operand_vals.push_back(resolve(operand_ids[i])); }
+        for (usize i = 0; i < operand_ids.size(); ++i)
+        {
+            operand_vals.push_back(resolve(operand_ids[i]));
+        }
         Operation* const op = m_ctx.create_operation(
             kind, containers::ConstSpan<Value*>(operand_vals.data(), operand_vals.size()), num_results, result_type,
             num_regions);
         b->append(op);
 
-        for (u32 i = 0; i < num_results; ++i) { register_value(result_ids[i], op->result(i)); }
+        for (u32 i = 0; i < num_results; ++i)
+        {
+            register_value(result_ids[i], op->result(i));
+        }
         for (usize i = 0; i < operand_ids.size(); ++i)
         {
-            if (operand_vals[i] == nullptr) { m_fixups.push_back(Fixup{op, static_cast<u32>(i), operand_ids[i], op_off}); }
+            if (operand_vals[i] == nullptr)
+            {
+                m_fixups.push_back(Fixup{op, static_cast<u32>(i), operand_ids[i], op_off});
+            }
         }
-        for (usize i = 0; i < attr_names.size(); ++i) { m_ctx.set_attr(op, attr_names[i], attr_vals[i]); }
+        for (usize i = 0; i < attr_names.size(); ++i)
+        {
+            m_ctx.set_attr(op, attr_names[i], attr_vals[i]);
+        }
 
         register_symbol(op); // symbol-defining ops (a `sym_name` attr) re-enter the module's SymbolTable
 
-        for (u32 i = 0; i < num_regions; ++i) { parse_region_body(op->region(i)); }
+        for (u32 i = 0; i < num_regions; ++i)
+        {
+            parse_region_body(op->region(i));
+        }
     }
 
     // A symbol-defining op carries its identity as a `sym_name` string attr (MLIR's model — the SymbolTable is an
@@ -893,7 +1145,10 @@ private:
     // Shared with the binary deserializer (detail::register_symbol) so the two loaders never drift.
     void register_symbol(Operation* op) noexcept
     {
-        if (!detail::register_symbol(m_ctx, *m_module, op)) { fail("duplicate symbol definition"); }
+        if (!detail::register_symbol(m_ctx, *m_module, op))
+        {
+            fail("duplicate symbol definition");
+        }
     }
 
     void parse_attrs(containers::Array<containers::StringView>& names, containers::Array<AttrId>& vals) noexcept
@@ -907,11 +1162,17 @@ private:
             // set_attr forbids a nameless attr (a builder can't make one), so admitting `"" = v` through text would be
             // a re-parse the builder can't round-trip + a fuzz crash path — REJECT with an offset, don't push it.
             const containers::StringView an = (la() == '"') ? parse_quoted() : parse_ident("expected an attribute name");
-            if (m_ok && an.size() == 0U) { fail("empty attribute name"); }
+            if (m_ok && an.size() == 0U)
+            {
+                fail("empty attribute name");
+            }
             names.push_back(an);
             expect('=', "expected '=' in an attribute entry");
             vals.push_back(parse_attr_value());
-            if (!accept(',')) { break; }
+            if (!accept(','))
+            {
+                break;
+            }
         }
         expect('}', "expected '}' closing an attribute dict");
     }
@@ -924,7 +1185,10 @@ private:
             return {};
         }
         const char c = la();
-        if (c == '"') { return parse_string_attr(); }
+        if (c == '"')
+        {
+            return parse_string_attr();
+        }
         if (c == '@')
         {
             accept('@');
@@ -932,18 +1196,42 @@ private:
             // id) that a bare @ident cannot; a plain identifier still parses bare. Symmetric with the printer's
             // sym_needs_quote — print(parse(@"engine://x")) == @"engine://x", print(parse(@name)) == @name.
             const containers::StringView s = (la() == '"') ? parse_quoted() : parse_ident("expected a symbol name after '@'");
-            if (m_ok && s.size() == 0U) { fail("empty symbol name"); } // @"" — a nameless symbol ref, REJECT (never printable)
+            if (m_ok && s.size() == 0U) // @"" — a nameless symbol ref, REJECT (never printable)
+            {
+                fail("empty symbol name");
+            }
             return m_ctx.attr_symbol(s);
         }
-        if (c == '!') { return m_ctx.attr_type(parse_type()); }
-        if (c == '[') { return parse_array_attr(depth); }   // CEIR-8b
-        if (c == '{') { return parse_dict_attr(depth); }    // CEIR-8b
-        if (c == '#') { return parse_wrapper_attr(depth); } // CEIR-8b (#typed / #extern)
-        if (c == '-' || c == '+' || c == '.' || is_digit(c)) { return parse_number_attr(); }
+        if (c == '!')
+        {
+            return m_ctx.attr_type(parse_type());
+        }
+        if (c == '[') // CEIR-8b
+        {
+            return parse_array_attr(depth);
+        }
+        if (c == '{') // CEIR-8b
+        {
+            return parse_dict_attr(depth);
+        }
+        if (c == '#') // CEIR-8b (#typed / #extern)
+        {
+            return parse_wrapper_attr(depth);
+        }
+        if (c == '-' || c == '+' || c == '.' || is_digit(c))
+        {
+            return parse_number_attr();
+        }
         // an identifier: true / false, or a bare float word (nan / inf) the printer can emit
         const containers::StringView w = parse_ident("expected an attribute value");
-        if (sv_eq(w, "true")) { return m_ctx.attr_bool(true); }
-        if (sv_eq(w, "false")) { return m_ctx.attr_bool(false); }
+        if (sv_eq(w, "true"))
+        {
+            return m_ctx.attr_bool(true);
+        }
+        if (sv_eq(w, "false"))
+        {
+            return m_ctx.attr_bool(false);
+        }
         return float_from_word(w); // nan / inf
     }
 
@@ -956,10 +1244,16 @@ private:
         if (la() != ']')
         {
             elems.push_back(parse_attr_value(depth + 1U));
-            while (accept(',')) { elems.push_back(parse_attr_value(depth + 1U)); }
+            while (accept(','))
+            {
+                elems.push_back(parse_attr_value(depth + 1U));
+            }
         }
         expect(']', "expected ']'");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         return m_ctx.attr_array(containers::ConstSpan<AttrId>(elems.data(), elems.size()));
     }
     [[nodiscard]] AttrId parse_dict_attr(u32 depth) noexcept
@@ -976,21 +1270,31 @@ private:
             } while (accept(','));
         }
         expect('}', "expected '}'");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         // The CANONICAL text form has keys byte-order SORTED + UNIQUE (the printer emits exactly this). Build of_dict RAW
         // and REJECT a non-canonical (unsorted / duplicate-key) dict GRACEFULLY, mirroring the binary decoder arm — NEVER
         // route hostile text through attr_dict->intern_attr, whose canonical ASSERT would fire on a duplicate key (a crash
         // on malformed input violates the reject-not-assert triple).
         const AttrValue av = AttrValue::of_dict(containers::ConstSpan<containers::StringView>(keys.data(), keys.size()),
                                                 containers::ConstSpan<AttrId>(vals.data(), vals.size()));
-        if (!attr_is_canonical(av)) { fail("dict keys must be byte-order sorted and unique"); return {}; }
+        if (!attr_is_canonical(av))
+        {
+            fail("dict keys must be byte-order sorted and unique");
+            return {};
+        }
         return m_ctx.intern_attr(av);
     }
     [[nodiscard]] AttrId parse_wrapper_attr(u32 depth) noexcept
     {
         expect('#', "expected '#'");
         const containers::StringView head = parse_ident("expected 'typed' or 'extern' after '#'");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         if (sv_eq(head, "typed"))
         {
             expect('<', "expected '<'");
@@ -998,9 +1302,16 @@ private:
             expect(',', "expected ','");
             const AttrId payload = parse_attr_value(depth + 1U);
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; }
+            if (!m_ok)
+            {
+                return {};
+            }
             const AttrValue av = AttrValue::of_typed_const(ty, payload);
-            if (!m_ctx.verify_attr_extern(av)) { fail("typed: the payload must not itself be a wrapper"); return {}; }
+            if (!m_ctx.verify_attr_extern(av))
+            {
+                fail("typed: the payload must not itself be a wrapper");
+                return {};
+            }
             return m_ctx.intern_attr(av);
         }
         if (sv_eq(head, "extern"))
@@ -1012,7 +1323,10 @@ private:
             expect(',', "expected ','");
             const AttrId payload = parse_attr_value(depth + 1U);
             expect('>', "expected '>'");
-            if (!m_ok) { return {}; }
+            if (!m_ok)
+            {
+                return {};
+            }
             // version range-check, SYMMETRIC with the binary decoder arm: a REGISTERED class rejects a record NEWER than
             // this loader's schema (a v5 text loaded by a v1 loader is the future — declared-words-validated).
             if (const AttrClassInfo* const info = m_ctx.attr_class_info(cls); info != nullptr && ver > info->version)
@@ -1021,7 +1335,11 @@ private:
                 return {};
             }
             const AttrValue av = AttrValue::of_extern(cls, ver, payload);
-            if (!m_ctx.verify_attr_extern(av)) { fail("extern: the class verify hook rejected the value"); return {}; }
+            if (!m_ctx.verify_attr_extern(av))
+            {
+                fail("extern: the class verify hook rejected the value");
+                return {};
+            }
             return m_ctx.intern_attr(av);
         }
         fail("unknown attribute wrapper (expected 'typed' or 'extern')");
@@ -1031,12 +1349,20 @@ private:
     [[nodiscard]] AttrClassId parse_attr_class_id() noexcept
     {
         const containers::StringView full = parse_ident("expected an attribute-class name (dialect.attr)");
-        if (!m_ok) { return {}; }
+        if (!m_ok)
+        {
+            return {};
+        }
         usize dot   = 0;
         bool  found = false;
         for (usize i = 0; i < full.size(); ++i)
         {
-            if (full[i] == '.') { dot = i; found = true; break; }
+            if (full[i] == '.')
+            {
+                dot = i;
+                found = true;
+                break;
+            }
         }
         if (!found || dot == 0U || dot + 1U >= full.size())
         {
@@ -1056,7 +1382,10 @@ private:
         while (m_cur < m_end && *m_cur != '"')
         {
             char ch = *m_cur++;
-            if (ch == '\\' && m_cur < m_end) { ch = *m_cur++; } // the escaped byte is emitted verbatim
+            if (ch == '\\' && m_cur < m_end) // the escaped byte is emitted verbatim
+            {
+                ch = *m_cur++;
+            }
             buf.push_back(ch);
         }
         expect('"', "unterminated string literal");
@@ -1070,17 +1399,30 @@ private:
         while (m_cur < m_end)
         {
             const char c = *m_cur;
-            if (is_alpha(c) || is_digit(c) || c == '.' || c == '+' || c == '-') { ++m_cur; }
-            else { break; }
+            if (is_alpha(c) || is_digit(c) || c == '.' || c == '+' || c == '-')
+            {
+                ++m_cur;
+            }
+            else
+            {
+                break;
+            }
         }
         const containers::StringView run(s, static_cast<usize>(m_cur - s));
         bool                         is_float = false;
         for (usize i = 0; i < run.size(); ++i)
         {
             const char c = run[i];
-            if (c == '.' || c == 'e' || c == 'E' || is_alpha(c)) { is_float = true; break; }
+            if (c == '.' || c == 'e' || c == 'E' || is_alpha(c))
+            {
+                is_float = true;
+                break;
+            }
         }
-        if (is_float) { return float_from_word(run); }
+        if (is_float)
+        {
+            return float_from_word(run);
+        }
         i64        v   = 0;
         const auto res = std::from_chars(run.data(), run.data() + run.size(), v);
         if (res.ec != std::errc{} || res.ptr != run.data() + run.size())
@@ -1127,8 +1469,14 @@ private:
         for (;;)
         {
             skip_ws();
-            if (m_cur >= m_end || *m_cur != '{') { break; }
-            if (!skip_balanced_braces()) { break; }
+            if (m_cur >= m_end || *m_cur != '{')
+            {
+                break;
+            }
+            if (!skip_balanced_braces())
+            {
+                break;
+            }
             ++n;
         }
         m_cur = save;
@@ -1148,8 +1496,14 @@ private:
                 skip_string_literal();
                 continue;
             }
-            if (c == '{') { ++depth; }
-            else if (c == '}') { --depth; }
+            if (c == '{')
+            {
+                ++depth;
+            }
+            else if (c == '}')
+            {
+                --depth;
+            }
             ++m_cur;
         }
         return depth == 0;
@@ -1160,15 +1514,27 @@ private:
         ++m_cur; // opening '"'
         while (m_cur < m_end && *m_cur != '"')
         {
-            if (*m_cur == '\\' && (m_cur + 1) < m_end) { m_cur += 2; }
-            else { ++m_cur; }
+            if (*m_cur == '\\' && (m_cur + 1) < m_end)
+            {
+                m_cur += 2;
+            }
+            else
+            {
+                ++m_cur;
+            }
         }
-        if (m_cur < m_end) { ++m_cur; } // closing '"'
+        if (m_cur < m_end) // closing '"'
+        {
+            ++m_cur;
+        }
     }
 
     void resolve_fixups() noexcept
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         for (usize i = 0; i < m_fixups.size(); ++i)
         {
             const Fixup& f = m_fixups[i];

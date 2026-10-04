@@ -41,7 +41,10 @@ kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size, crd::u32 n_rays =
     const int t    = g.trace_ray_closest(as, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
     g.stmt_buffer_store(out, tid, t);
 
-    if (guard >= 0) { g.stmt_if_end(guard); }
+    if (guard >= 0)
+    {
+        g.stmt_if_end(guard);
+    }
     kir::KEntry e;
     e.stage             = kir::KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(local_size);
@@ -79,7 +82,10 @@ TEST_CASE("B9/RT-1a: CKIR inline rayQuery oracle == hand-computed ray-triangle h
     };
     for (int r = 0; r < k_n_rays; ++r)
     {
-        for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = ray_data[r][c]; }
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = ray_data[r][c];
+        }
     }
     crd::containers::Array<crd::f64> out(&alloc);
     out.resize(static_cast<crd::usize>(k_n_rays), 0.0);
@@ -134,7 +140,10 @@ double run_pt_strategy(crd::memory::TlsfAllocator& alloc, kir::rt::PtStrategy st
     geo[0] = 4.0;
     for (int t = 0; t < 4; ++t)
     {
-        for (int c = 0; c < 9; ++c) { geo[1U + static_cast<crd::usize>(t) * 9U + static_cast<crd::usize>(c)] = tris[t][c]; }
+        for (int c = 0; c < 9; ++c)
+        {
+            geo[1U + static_cast<crd::usize>(t) * 9U + static_cast<crd::usize>(c)] = tris[t][c];
+        }
     }
     // per-triangle flat normals: occluder faces up (its lit top bounces GI), light faces down.
     const double tn_data[12] = {0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0};
@@ -149,7 +158,10 @@ double run_pt_strategy(crd::memory::TlsfAllocator& alloc, kir::rt::PtStrategy st
     nrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     tn.resize(12U, 0.0);
     rad.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
-    for (int i = 0; i < 12; ++i) { tn[static_cast<crd::usize>(i)] = tn_data[i]; }
+    for (int i = 0; i < 12; ++i)
+    {
+        tn[static_cast<crd::usize>(i)] = tn_data[i];
+    }
     for (crd::u32 j = 0; j < 4U; ++j)
     {
         for (crd::u32 i = 0; i < 4U; ++i)
@@ -164,7 +176,10 @@ double run_pt_strategy(crd::memory::TlsfAllocator& alloc, kir::rt::PtStrategy st
     kir::eval_cpu_kernel(g, e, bufs, 5, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; } // channel 0 (grey scene ⇒ all channels equal)
+    for (crd::u32 p = 0; p < k_n; ++p) // channel 0 (grey scene ⇒ all channels equal)
+    {
+        mean += rad[p * 3U];
+    }
     return mean / static_cast<double>(k_n);
 }
 
@@ -194,7 +209,10 @@ double run_restir(crd::memory::TlsfAllocator& alloc, crd::u32 frames, crd::u32 c
     geo[0] = 4.0;
     for (int t = 0; t < 4; ++t)
     {
-        for (int c = 0; c < 9; ++c) { geo[1U + static_cast<crd::usize>(t) * 9U + static_cast<crd::usize>(c)] = tris[t][c]; }
+        for (int c = 0; c < 9; ++c)
+        {
+            geo[1U + static_cast<crd::usize>(t) * 9U + static_cast<crd::usize>(c)] = tris[t][c];
+        }
     }
     constexpr crd::u32 k_n = 16U;
     crd::containers::Array<crd::f64> pos(&alloc);
@@ -217,7 +235,10 @@ double run_restir(crd::memory::TlsfAllocator& alloc, crd::u32 frames, crd::u32 c
     kir::eval_cpu_kernel(g, e, bufs, 4, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; }
+    for (crd::u32 p = 0; p < k_n; ++p)
+    {
+        mean += rad[p * 3U];
+    }
     return mean / static_cast<double>(k_n);
 }
 } // namespace
@@ -273,7 +294,10 @@ double run_manylight(crd::memory::TlsfAllocator& alloc, const double* lights, cr
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
     const double dumb[9] = {-1.0, -10.0, -1.0, 1.0, -10.0, -1.0, 0.0, -10.0, 1.0};
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = dumb[i]; }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = dumb[i];
+    }
 
     constexpr crd::u32 k_n = 16U;
     crd::containers::Array<crd::f64> pos(&alloc);
@@ -284,7 +308,10 @@ double run_manylight(crd::memory::TlsfAllocator& alloc, const double* lights, cr
     nrm.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
     lbuf.resize(static_cast<crd::usize>(nlights) * 15U, 0.0);
     rad.resize(static_cast<crd::usize>(k_n) * 3U, 0.0);
-    for (crd::u32 i = 0; i < nlights * 15U; ++i) { lbuf[i] = lights[i]; }
+    for (crd::u32 i = 0; i < nlights * 15U; ++i)
+    {
+        lbuf[i] = lights[i];
+    }
     for (crd::u32 j = 0; j < 4U; ++j)
     {
         for (crd::u32 i = 0; i < 4U; ++i)
@@ -299,7 +326,10 @@ double run_manylight(crd::memory::TlsfAllocator& alloc, const double* lights, cr
     kir::eval_cpu_kernel(g, e, bufs, 5, cfg.local_size, &alloc, 1U);
 
     double mean = 0.0;
-    for (crd::u32 p = 0; p < k_n; ++p) { mean += rad[p * 3U]; }
+    for (crd::u32 p = 0; p < k_n; ++p)
+    {
+        mean += rad[p * 3U];
+    }
     return mean / static_cast<double>(k_n);
 }
 } // namespace
@@ -322,7 +352,10 @@ TEST_CASE("B9/RT many-lights: uniform light-selection NEE == sum of per-light di
     // 15-float light-buffer reads, the |eu×ev| area) and lands in the right ballpark vs the per-light sum at a modest spp. The
     // rigorous high-spp unbiasedness (N-light == Σ per-light to a few %) runs on the fast GPU — see the Vulkan RT-7 test.
     double sum_of_lights = 0.0;
-    for (crd::u32 l = 0; l < 4U; ++l) { sum_of_lights += run_manylight(alloc, &lights[l * 15U], 1U, 64U); }
+    for (crd::u32 l = 0; l < 4U; ++l)
+    {
+        sum_of_lights += run_manylight(alloc, &lights[l * 15U], 1U, 64U);
+    }
     const double all = run_manylight(alloc, lights, 4U, 128U);
 
     INFO("many-lights (smoke): Σ per-light=" << sum_of_lights << "  N-light kernel=" << all);

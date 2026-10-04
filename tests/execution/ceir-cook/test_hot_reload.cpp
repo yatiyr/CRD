@@ -64,7 +64,10 @@ void ret(Context& c, Block* b, Value* v)
 }
 void module_block(Context& c, Module& m)
 {
-    if (m.body()->first_block() == nullptr) { m.body()->append(c.create_block(0U)); }
+    if (m.body()->first_block() == nullptr)
+    {
+        m.body()->append(c.create_block(0U));
+    }
 }
 ConstSpan<u8> span_of(const Array<u8>& b) { return ConstSpan<u8>(b.data(), b.size()); }
 
@@ -97,7 +100,10 @@ Array<u8> cook_counter(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, i
     Value* const nxt  = konst(c, r, b, nextval, c.type_i32())->result(0U);
     Value* seed[2] = {init, nxt};
     Operation* const s = c.create_operation(r.state, ConstSpan<Value*>(seed, 2U), 1U, c.type_i32());
-    if (depth != 1U) { c.set_attr(s, "depth", c.attr_int(static_cast<i64>(depth))); }
+    if (depth != 1U)
+    {
+        c.set_attr(s, "depth", c.attr_int(static_cast<i64>(depth)));
+    }
     b->append(s);
     ret(c, b, s->result(0U));
     CookResult cr = cook_program(c, *m, asset_id, &root, &root);
@@ -529,7 +535,10 @@ TEST_CASE("ceir 10a: hot-reload SOAK - rapid decision-table cycles stay generati
         }
         set.drain();             // retire the zombie generation every cycle
         CHECK(set.size() == 1U); // the set never accumulates generations
-        if (i + 1U == warmup) { warmup_chunks = root.num_chunks(); } // steady-state high-water reached
+        if (i + 1U == warmup) // steady-state high-water reached
+        {
+            warmup_chunks = root.num_chunks();
+        }
     }
 
     // COARSE no-leak growth bound: 256 recycled generations must not grow the arena past its warmup high-water by more than

@@ -67,7 +67,10 @@ kir::KEntry build_trace_kernel(kir::KGraph& g, int local_size, crd::u32 n_rays =
     const auto       ld   = [&](crd::u32 k) { return g.buffer_load(rays, g.binary(kir::KOp::Add, base, cu(k))); };
     const int        t    = g.trace_ray_closest(as, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
     g.stmt_buffer_store(out, tid, t);
-    if (guard >= 0) { g.stmt_if_end(guard); }
+    if (guard >= 0)
+    {
+        g.stmt_if_end(guard);
+    }
     kir::KEntry e;
     e.stage             = kir::KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(local_size);
@@ -84,9 +87,17 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping the RT trace"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping the RT trace");
+        return;
+    }
 
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
@@ -118,12 +129,18 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(num_rays) * 6U, 0.0);
     for (crd::u32 r = 0; r < num_rays; ++r)
     {
-        for (int c = 0; c < 6; ++c) { rays64[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = static_cast<crd::f64>(rays[r][c]); }
+        for (int c = 0; c < 6; ++c)
+        {
+            rays64[static_cast<crd::usize>(r) * 6U + static_cast<crd::usize>(c)] = static_cast<crd::f64>(rays[r][c]);
+        }
     }
     crd::containers::Array<crd::f64> ref(&alloc);
     ref.resize(num_rays, 0.0);
@@ -148,7 +165,10 @@ TEST_CASE("D-007 RT-1: inline rayQuery on Vulkan (GPU BLAS/TLAS build + trace) =
         const bool cpu_hit = ref[r] < 1.0e29;
         const bool gpu_hit = static_cast<double>(gpu_t[r]) < 1.0e29;
         CHECK(gpu_hit == cpu_hit); // same hit/miss decision
-        if (cpu_hit) { CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref[r]) < 1.0e-3); } // hit distance within tolerance
+        if (cpu_hit) // hit distance within tolerance
+        {
+            CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref[r]) < 1.0e-3);
+        }
     }
 }
 
@@ -161,9 +181,17 @@ TEST_CASE("D-007 RT-2: RT hard shadows on Vulkan (per-point shadow ray) == CPU r
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -200,10 +228,16 @@ TEST_CASE("D-007 RT-2: RT hard shadows on Vulkan (per-point shadow ray) == CPU r
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
-    for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); }
+    for (crd::usize i = 0; i < pos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(pos[i]);
+    }
     crd::containers::Array<crd::f64> refv(&alloc);
     refv.resize(num_pts, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {refv.data(), static_cast<int>(num_pts), 0, 2}};
@@ -226,8 +260,18 @@ TEST_CASE("D-007 RT-2: RT hard shadows on Vulkan (per-point shadow ray) == CPU r
     int mism = 0;
     for (crd::u32 p = 0; p < num_pts; ++p)
     {
-        if (crd::math::abs(static_cast<double>(gpu_v[p]) - refv[p]) > 1.0e-6) { ++mism; }
-        if (refv[p] > 0.5) { ++lit; } else { ++shadowed; }
+        if (crd::math::abs(static_cast<double>(gpu_v[p]) - refv[p]) > 1.0e-6)
+        {
+            ++mism;
+        }
+        if (refv[p] > 0.5)
+        {
+            ++lit;
+        }
+        else
+        {
+            ++shadowed;
+        }
     }
     INFO("shadow: mismatches=" << mism << "  lit=" << lit << "  shadowed=" << shadowed);
     CHECK(mism == 0);       // GPU visibility == CPU ray-triangle reference for every point
@@ -244,9 +288,17 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -289,12 +341,19 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tri);
-    for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 18; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
     pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
-    for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); nrm64[i] = static_cast<crd::f64>(nrm[i]); }
+    for (crd::usize i = 0; i < pos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(pos[i]);
+        nrm64[i] = static_cast<crd::f64>(nrm[i]);
+    }
     crd::containers::Array<crd::f64> refv(&alloc);
     refv.resize(num_pts, 0.0);
     kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {refv.data(), static_cast<int>(num_pts), 0, 3}};
@@ -321,11 +380,20 @@ TEST_CASE("D-007 RT-2: RT ambient occlusion on Vulkan (hemisphere batch trace) =
     for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_ao[p]) - refv[p]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
         sum_gpu += static_cast<double>(gpu_ao[p]);
         sum_ref += refv[p];
-        if (refv[p] < ao_min) { ao_min = refv[p]; }
-        if (refv[p] > ao_max) { ao_max = refv[p]; }
+        if (refv[p] < ao_min)
+        {
+            ao_min = refv[p];
+        }
+        if (refv[p] > ao_max)
+        {
+            ao_max = refv[p];
+        }
     }
     INFO("RTAO: worst |GPU-ref|=" << worst << "  mean GPU=" << sum_gpu / num_pts << " ref=" << sum_ref / num_pts << "  AO range=[" << ao_min << ", " << ao_max << "]");
     CHECK(worst < 0.12);                                    // per-point AO matches (deterministic sampling; ≤~3/32 grazing-edge ray flips)
@@ -347,9 +415,17 @@ TEST_CASE("D-007 RT-2: RT reflections on Vulkan (reflected ray + primId shade) =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -394,15 +470,25 @@ TEST_CASE("D-007 RT-2: RT reflections on Vulkan (reflected ray + primId shade) =
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tri);
-    for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 18; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
     crd::containers::Array<crd::f64> tn64(&alloc);
     pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(6U, 0.0);
-    for (crd::usize i = 0; i < pos.size(); ++i) { pos64[i] = static_cast<crd::f64>(pos[i]); nrm64[i] = static_cast<crd::f64>(nrm[i]); }
-    for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
+    for (crd::usize i = 0; i < pos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(pos[i]);
+        nrm64[i] = static_cast<crd::f64>(nrm[i]);
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]);
+    }
     crd::containers::Array<crd::f64> refc(&alloc);
     refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
@@ -428,11 +514,21 @@ TEST_CASE("D-007 RT-2: RT reflections on Vulkan (reflected ray + primId shade) =
     for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     for (crd::u32 p = 0; p < num_pts; ++p) // classify by the blue channel: sky (~0.8) vs shaded ceiling (~0.2)
     {
-        if (refc[p * 3U + 2U] > 0.6) { ++sky_col; } else { ++hit_col; }
+        if (refc[p * 3U + 2U] > 0.6)
+        {
+            ++sky_col;
+        }
+        else
+        {
+            ++hit_col;
+        }
     }
     INFO("reflect: worst |GPU-ref|=" << worst << "  hit(ceiling)=" << hit_col << "  miss(sky)=" << sky_col);
     CHECK(worst < 1.0e-3); // GPU reflection colour == CPU ray-triangle+primId reference (deterministic hit shading)
@@ -449,9 +545,17 @@ TEST_CASE("D-007 RT-2: path-tracing megakernel on Vulkan (multi-bounce diffuse G
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -498,15 +602,25 @@ TEST_CASE("D-007 RT-2: path-tracing megakernel on Vulkan (multi-bounce diffuse G
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tri);
-    for (int i = 0; i < 18; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 18; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
     crd::containers::Array<crd::f64> tn64(&alloc);
     pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(6U, 0.0);
-    for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-    for (int i = 0; i < 6; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
+    for (crd::usize i = 0; i < ppos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(ppos[i]);
+        nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]);
+    }
     crd::containers::Array<crd::f64> refc(&alloc);
     refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
@@ -533,14 +647,23 @@ TEST_CASE("D-007 RT-2: path-tracing megakernel on Vulkan (multi-bounce diffuse G
     for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
         sumd += d;
     }
     for (crd::u32 p = 0; p < num_pts; ++p) // luminance of the ref radiance, to check GI spatial variation
     {
         const double lum = 0.3 * refc[p * 3U] + 0.6 * refc[p * 3U + 1U] + 0.1 * refc[p * 3U + 2U];
-        if (lum < lmin) { lmin = lum; }
-        if (lum > lmax) { lmax = lum; }
+        if (lum < lmin)
+        {
+            lmin = lum;
+        }
+        if (lum > lmax)
+        {
+            lmax = lum;
+        }
     }
     INFO("pathtrace: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance lum range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.06);              // GPU path radiance == CPU path-tracer oracle (transcendental ULP + rare grazing flips)
@@ -558,9 +681,17 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -616,7 +747,10 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tri);
-    for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 36; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
     crd::containers::Array<crd::f64> tn64(&alloc);
@@ -625,8 +759,15 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
     nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     tn64.resize(12U, 0.0);
     refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
-    for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-    for (int i = 0; i < 12; ++i) { tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]); }
+    for (crd::usize i = 0; i < ppos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(ppos[i]);
+        nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+    }
+    for (int i = 0; i < 12; ++i)
+    {
+        tn64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(tri_n[i]);
+    }
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {refc.data(), static_cast<int>(refc.size()), 0, 4}};
     kir::eval_cpu_kernel(g, e, bufs, 5, pcfg.local_size, &alloc, (num_pts + pcfg.local_size - 1U) / pcfg.local_size);
 
@@ -651,14 +792,23 @@ TEST_CASE("D-007 RT-4: NEE+MIS area-light path tracer on Vulkan (soft shadows) =
     for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
         sumd += d;
     }
     for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double v = refc[p * 3U];
-        if (v < lmin) { lmin = v; }
-        if (v > lmax) { lmax = v; }
+        if (v < lmin)
+        {
+            lmin = v;
+        }
+        if (v > lmax)
+        {
+            lmax = v;
+        }
     }
     INFO("nee/mis: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.05);             // GPU MIS radiance == CPU oracle (transcendental ULP + rare grazing shadow-ray flips)
@@ -676,9 +826,17 @@ TEST_CASE("D-007 RT-5: ReSTIR DI RIS reservoir on Vulkan (soft shadows) == CPU r
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -727,14 +885,21 @@ TEST_CASE("D-007 RT-5: ReSTIR DI RIS reservoir on Vulkan (soft shadows) == CPU r
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tri);
-    for (int i = 0; i < 36; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 36; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> pos64(&alloc);
     crd::containers::Array<crd::f64> nrm64(&alloc);
     crd::containers::Array<crd::f64> refc(&alloc);
     pos64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     nrm64.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
     refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
-    for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
+    for (crd::usize i = 0; i < ppos.size(); ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(ppos[i]);
+        nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+    }
     kir::KernelBuffer bufs[4] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {refc.data(), static_cast<int>(refc.size()), 0, 3}};
     kir::eval_cpu_kernel(g, e, bufs, 4, rcfg.local_size, &alloc, (num_pts + rcfg.local_size - 1U) / rcfg.local_size);
 
@@ -758,14 +923,23 @@ TEST_CASE("D-007 RT-5: ReSTIR DI RIS reservoir on Vulkan (soft shadows) == CPU r
     for (crd::u32 p = 0; p < num_pts * 3U; ++p)
     {
         const double d = crd::math::abs(static_cast<double>(gpu_c[p]) - refc[p]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
         sumd += d;
     }
     for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double v = refc[p * 3U];
-        if (v < lmin) { lmin = v; }
-        if (v > lmax) { lmax = v; }
+        if (v < lmin)
+        {
+            lmin = v;
+        }
+        if (v > lmax)
+        {
+            lmax = v;
+        }
     }
     INFO("restir-di: worst |GPU-ref|=" << worst << "  mean|Δ|=" << sumd / (num_pts * 3U) << "  radiance range=[" << lmin << ", " << lmax << "]");
     CHECK(worst < 0.05);             // GPU ReSTIR radiance == CPU reservoir oracle (deterministic WRS; rare grazing shadow flips)
@@ -785,9 +959,17 @@ TEST_CASE("D-007 RT-5b: ReSTIR DI temporal reuse on Vulkan (unbiased + variance 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -828,7 +1010,11 @@ TEST_CASE("D-007 RT-5b: ReSTIR DI temporal reuse on Vulkan (unbiased + variance 
     };
     const auto rms = [&](const crd::containers::Array<float>& a, const crd::containers::Array<float>& b) {
         double s = 0.0;
-        for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]); s += d * d; }
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+            s += d * d;
+        }
         return crd::math::sqrt(s / static_cast<double>(a.size()));
     };
     using B = gpu::VulkanRayTracingContext::Binding;
@@ -896,17 +1082,35 @@ TEST_CASE("D-007 RT-5b: ReSTIR DI temporal reuse on Vulkan (unbiased + variance 
                    {rcur.data(), nullptr, res_bytes, 3U}, {nullptr, rad.data(), pos_bytes, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()),
                                   crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { accum[i] += rad[i]; }
-        for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rcur[i]; } // temporal feedback
-        if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            accum[i] += rad[i];
+        }
+        for (crd::usize i = 0; i < rprev.size(); ++i) // temporal feedback
+        {
+            rprev[i] = rcur[i];
+        }
+        if (f == n_frames - 1U)
+        {
+            for (crd::usize i = 0; i < rad.size(); ++i)
+            {
+                last[i] = rad[i];
+            }
+        }
     }
     crd::containers::Array<float> mean(&alloc);
     mean.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(n_frames); }
+    for (crd::usize i = 0; i < mean.size(); ++i)
+    {
+        mean[i] = accum[i] / static_cast<float>(n_frames);
+    }
 
     const auto spatial_mean = [&](const crd::containers::Array<float>& a) {
         double s = 0.0;
-        for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); }
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            s += static_cast<double>(a[i]);
+        }
         return s / static_cast<double>(a.size());
     };
     const double ref_mean   = spatial_mean(ref);
@@ -933,9 +1137,17 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -975,12 +1187,19 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
     };
     const auto rms = [&](const crd::containers::Array<float>& a, const crd::containers::Array<float>& b) {
         double s = 0.0;
-        for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]); s += d * d; }
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+            s += d * d;
+        }
         return crd::math::sqrt(s / static_cast<double>(a.size()));
     };
     const auto spatial_mean = [&](const crd::containers::Array<float>& a) {
         double s = 0.0;
-        for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); }
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            s += static_cast<double>(a[i]);
+        }
         return s / static_cast<double>(a.size());
     };
     using B = gpu::VulkanRayTracingContext::Binding;
@@ -1040,16 +1259,31 @@ TEST_CASE("D-007 RT-5c: full spatiotemporal ReSTIR DI on Vulkan (soft shadow, un
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pb, 5), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {rspa.data(), nullptr, res_bytes, 3U}, {nullptr, rad.data(), pos_bytes, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { accum[i] += rad[i]; }
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            accum[i] += rad[i];
+        }
         // Feed back the PRE-spatial (temporal) reservoir. Feeding the post-spatial reservoir back would compound spatially-borrowed
         // samples across frames and DARKEN the estimate (the classic ReSTIR bias that only GRIS / pairwise-MIS weights fix); the
         // clean-temporal-history choice keeps the pipeline provably unbiased. Spatial reuse then acts as a per-frame refinement.
-        for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rtmp[i]; }
-        if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { last[i] = rad[i]; } }
+        for (crd::usize i = 0; i < rprev.size(); ++i)
+        {
+            rprev[i] = rtmp[i];
+        }
+        if (f == n_frames - 1U)
+        {
+            for (crd::usize i = 0; i < rad.size(); ++i)
+            {
+                last[i] = rad[i];
+            }
+        }
     }
     crd::containers::Array<float> mean(&alloc);
     mean.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < mean.size(); ++i) { mean[i] = accum[i] / static_cast<float>(n_frames); }
+    for (crd::usize i = 0; i < mean.size(); ++i)
+    {
+        mean[i] = accum[i] / static_cast<float>(n_frames);
+    }
 
     const double ref_mean   = spatial_mean(ref);
     const double st_mean    = spatial_mean(mean);
@@ -1074,9 +1308,17 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1096,7 +1338,13 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
                             {2.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // → instance 1 (t=2)
                             {4.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F},   // → instance 2 (t=2)
                             {6.2F, 0.2F, 0.0F, 0.0F, 0.0F, 1.0F}};  // → nothing (miss)
-    for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c];
+        }
+    }
 
     // ── CPU oracle: the 3 instances pre-baked to world space (translate each local triangle) ──
     crd::containers::Array<crd::f64> geo(&alloc);
@@ -1115,7 +1363,10 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
         }
     }
     rays64.resize(rays.size(), 0.0);
-    for (crd::usize i = 0; i < rays.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     oref.resize(num_pts, 0.0);
     kir::KernelBuffer bufs[3] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {rays64.data(), static_cast<int>(rays64.size()), 0, 1}, {oref.data(), static_cast<int>(oref.size()), 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, 64U, &alloc, 1U);
@@ -1133,9 +1384,15 @@ TEST_CASE("D-007 RT-6: multi-instance TLAS on Vulkan (per-instance transforms) =
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
 
     INFO("instanced t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
-    for (int r = 0; r < 3; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - 2.0) < 1.0e-4); } // each instance hit at t=2
+    for (int r = 0; r < 3; ++r) // each instance hit at t=2
+    {
+        CHECK(crd::math::abs(static_cast<double>(got[r]) - 2.0) < 1.0e-4);
+    }
     CHECK(got[3] > 1.0e29F);                                                                             // the gap ⇒ miss
-    for (int r = 0; r < 4; ++r) { CHECK(crd::math::abs(static_cast<double>(got[r]) - oref[r]) < 1.0e-4); } // GPU == oracle
+    for (int r = 0; r < 4; ++r) // GPU == oracle
+    {
+        CHECK(crd::math::abs(static_cast<double>(got[r]) - oref[r]) < 1.0e-4);
+    }
 }
 
 // D-007 RT-7: MANY-LIGHTS NEE on Vulkan — the integrator-breadth capability RIS/ReSTIR exist for. The N lights live in a runtime
@@ -1148,9 +1405,17 @@ TEST_CASE("D-007 RT-7: many-lights uniform-selection NEE on Vulkan == sum of per
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1196,23 +1461,48 @@ TEST_CASE("D-007 RT-7: many-lights uniform-selection NEE on Vulkan == sum of per
         B bind[4] = {{ppos.data(), nullptr, pos_bytes, 1U}, {pnrm.data(), nullptr, pos_bytes, 2U}, {lp, nullptr, static_cast<crd::u64>(nl) * 15U * sizeof(float), 3U}, {nullptr, img.data(), pos_bytes, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 4), num_pts / 64U));
         double mean = 0.0;
-        for (crd::u32 p = 0; p < num_pts; ++p) { mean += static_cast<double>(img[p * 3U]); }
+        for (crd::u32 p = 0; p < num_pts; ++p)
+        {
+            mean += static_cast<double>(img[p * 3U]);
+        }
         return mean / static_cast<double>(num_pts);
     };
     crd::containers::Array<float> ref_img(&alloc);
     crd::containers::Array<float> uni_img(&alloc);
     crd::containers::Array<float> pow_img(&alloc);
     ref_img.resize(img.size(), 0.0F); uni_img.resize(img.size(), 0.0F); pow_img.resize(img.size(), 0.0F);
-    const auto rmsv = [&](const crd::containers::Array<float>& a) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) - static_cast<double>(ref_img[i]); s += d * d; } return crd::math::sqrt(s / static_cast<double>(a.size())); };
+    const auto rmsv = [&](const crd::containers::Array<float>& a)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            const double d = static_cast<double>(a[i]) - static_cast<double>(ref_img[i]);
+            s += d * d;
+        }
+        return crd::math::sqrt(s / static_cast<double>(a.size())); };
 
     double sum_per = 0.0;
-    for (crd::u32 l = 0; l < 4U; ++l) { sum_per += run(&lights[l * 15U], 1U, 2048U, false); }
+    for (crd::u32 l = 0; l < 4U; ++l)
+    {
+        sum_per += run(&lights[l * 15U], 1U, 2048U, false);
+    }
     const double all = run(lights, 4U, 8192U, false);
-    for (crd::usize i = 0; i < img.size(); ++i) { ref_img[i] = img[i]; }   // converged reference (uniform, 8192 spp)
+    for (crd::usize i = 0; i < img.size(); ++i) // converged reference (uniform, 8192 spp)
+    {
+        ref_img[i] = img[i];
+    }
     const double all_pow = run(lights, 4U, 8192U, true);
     // low-spp images for the variance comparison (equal budget):
-    run(lights, 4U, 64U, false); for (crd::usize i = 0; i < img.size(); ++i) { uni_img[i] = img[i]; }
-    run(lights, 4U, 64U, true);  for (crd::usize i = 0; i < img.size(); ++i) { pow_img[i] = img[i]; }
+    run(lights, 4U, 64U, false);
+    for (crd::usize i = 0; i < img.size(); ++i)
+    {
+        uni_img[i] = img[i];
+    }
+    run(lights, 4U, 64U, true);
+    for (crd::usize i = 0; i < img.size(); ++i)
+    {
+        pow_img[i] = img[i];
+    }
     const double e_uni = rmsv(uni_img);
     const double e_pow = rmsv(pow_img);
     INFO("many-lights: Σ per-light=" << sum_per << "  uniform=" << all << "  power=" << all_pow << "  rms64 uniform=" << e_uni << " power=" << e_pow);
@@ -1232,9 +1522,17 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1285,7 +1583,14 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<B>(bind, 5), num_pts / 64U));
         return e;
     };
-    const auto smean = [&](const crd::containers::Array<float>& a) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()); };
+    const auto smean = [&](const crd::containers::Array<float>& a)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            s += static_cast<double>(a[i]);
+        }
+        return s / static_cast<double>(a.size()); };
 
     // ── GPU==oracle at low spp (RR on) ──
     crd::containers::Array<float> gpu16(&alloc);
@@ -1303,15 +1608,31 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
         crd::containers::Array<crd::f64> refc(&alloc);
         geo.resize(1U + static_cast<crd::usize>(num_tri) * 9U, 0.0);
         geo[0] = static_cast<crd::f64>(num_tri);
-        for (crd::u32 i = 0; i < num_tri * 9U; ++i) { geo[i + 1U] = static_cast<crd::f64>(verts[i]); }
+        for (crd::u32 i = 0; i < num_tri * 9U; ++i)
+        {
+            geo[i + 1U] = static_cast<crd::f64>(verts[i]);
+        }
         pos64.resize(ppos.size(), 0.0); nrm64.resize(pnrm.size(), 0.0); tn64.resize(num_tri * 3U, 0.0); lt64.resize(2U * 15U, 0.0); refc.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0);
-        for (crd::usize i = 0; i < ppos.size(); ++i) { pos64[i] = static_cast<crd::f64>(ppos[i]); nrm64[i] = static_cast<crd::f64>(pnrm[i]); }
-        for (crd::u32 i = 0; i < num_tri * 3U; ++i) { tn64[i] = static_cast<crd::f64>(tri_n[i]); }
-        for (crd::u32 i = 0; i < 2U * 15U; ++i) { lt64[i] = static_cast<crd::f64>(lights[i]); }
+        for (crd::usize i = 0; i < ppos.size(); ++i)
+        {
+            pos64[i] = static_cast<crd::f64>(ppos[i]);
+            nrm64[i] = static_cast<crd::f64>(pnrm[i]);
+        }
+        for (crd::u32 i = 0; i < num_tri * 3U; ++i)
+        {
+            tn64[i] = static_cast<crd::f64>(tri_n[i]);
+        }
+        for (crd::u32 i = 0; i < 2U * 15U; ++i)
+        {
+            lt64[i] = static_cast<crd::f64>(lights[i]);
+        }
         kir::KernelBuffer bufs[6] = {{geo.data(), static_cast<int>(geo.size()), 0, 0}, {pos64.data(), static_cast<int>(pos64.size()), 0, 1}, {nrm64.data(), static_cast<int>(nrm64.size()), 0, 2}, {tn64.data(), static_cast<int>(tn64.size()), 0, 3}, {lt64.data(), static_cast<int>(lt64.size()), 0, 4}, {refc.data(), static_cast<int>(refc.size()), 0, 5}};
         kir::eval_cpu_kernel(g, e, bufs, 6, 64U, &alloc, 1U);
         double worst = 0.0;
-        for (crd::u32 p = 0; p < num_pts * 3U; ++p) { worst = crd::math::max(worst, crd::math::abs(static_cast<double>(gpu16[p]) - refc[p])); }
+        for (crd::u32 p = 0; p < num_pts * 3U; ++p)
+        {
+            worst = crd::math::max(worst, crd::math::abs(static_cast<double>(gpu16[p]) - refc[p]));
+        }
         INFO("full-pt GPU==oracle worst=" << worst);
         CHECK(worst < 0.05); // GPU == CPU oracle (deterministic, incl. the RR hash decisions + emissive MIS)
     }
@@ -1324,7 +1645,14 @@ TEST_CASE("D-007 IB-1: full path tracer on Vulkan (many-lights+emissive+RR+GI, u
     const double m_on = smean(rr_on);
     const double m_off = smean(rr_off);
     double mxv = 0.0; crd::u32 mxi = 0;
-    for (crd::u32 i = 0; i < rr_off.size(); ++i) { if (static_cast<double>(rr_off[i]) > mxv) { mxv = static_cast<double>(rr_off[i]); mxi = i; } }
+    for (crd::u32 i = 0; i < rr_off.size(); ++i)
+    {
+        if (static_cast<double>(rr_off[i]) > mxv)
+        {
+            mxv = static_cast<double>(rr_off[i]);
+            mxi = i;
+        }
+    }
     INFO("full-pt  RR-on mean=" << m_on << "  RR-off mean=" << m_off << "  max=" << mxv << " @elem " << mxi << "  pt0=[" << rr_off[0] << "," << rr_off[1] << "," << rr_off[2] << "]");
     CHECK(m_off > 0.05);                                  // the lights illuminate the floor (emissive + many-lights direct)
     CHECK(crd::math::abs(m_on - m_off) / m_off < 0.04);     // Russian roulette is UNBIASED (survivors ÷p keep the mean)
@@ -1342,9 +1670,17 @@ TEST_CASE("D-007 IB-2: ReSTIR GI temporal reuse on Vulkan (indirect, unbiased + 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1409,23 +1745,78 @@ TEST_CASE("D-007 IB-2: ReSTIR GI temporal reuse on Vulkan (indirect, unbiased + 
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rcur.data(), nullptr, rbytes, 3U}, {nullptr, outRad.data(), pb, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
-        if (feedback) { for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rcur[i]; } }
+        if (feedback)
+        {
+            for (crd::usize i = 0; i < rprev.size(); ++i)
+            {
+                rprev[i] = rcur[i];
+            }
+        }
     };
     // reference: NO reuse (rprev stays 0) averaged over many frames.
     constexpr crd::u32 k_ref = 96U;
-    for (crd::u32 f = 0; f < k_ref; ++f) { frame_step(f, false, rad); for (crd::usize i = 0; i < rad.size(); ++i) { acc_ref[i] += rad[i]; } if (f == 0) { for (crd::usize i = 0; i < rad.size(); ++i) { single[i] = rad[i]; } } }
+    for (crd::u32 f = 0; f < k_ref; ++f)
+    {
+        frame_step(f, false, rad);
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            acc_ref[i] += rad[i];
+        }
+        if (f == 0)
+        {
+            for (crd::usize i = 0; i < rad.size(); ++i)
+            {
+                single[i] = rad[i];
+            }
+        }
+    }
     // ReSTIR GI: temporal reuse.
-    for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = 0.0F; }
+    for (crd::usize i = 0; i < rprev.size(); ++i)
+    {
+        rprev[i] = 0.0F;
+    }
     constexpr crd::u32 n_frames = 64U;
-    for (crd::u32 f = 0; f < n_frames; ++f) { frame_step(f, true, rad); for (crd::usize i = 0; i < rad.size(); ++i) { acc_r[i] += rad[i]; } if (f == n_frames - 1U) { for (crd::usize i = 0; i < rad.size(); ++i) { warm[i] = rad[i]; } } }
+    for (crd::u32 f = 0; f < n_frames; ++f)
+    {
+        frame_step(f, true, rad);
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            acc_r[i] += rad[i];
+        }
+        if (f == n_frames - 1U)
+        {
+            for (crd::usize i = 0; i < rad.size(); ++i)
+            {
+                warm[i] = rad[i];
+            }
+        }
+    }
 
-    const auto smean = [&](const crd::containers::Array<float>& a, double sc2) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()) * sc2; };
-    const auto rms = [&](const crd::containers::Array<float>& a, const crd::containers::Array<float>& b, double sca) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { const double d = static_cast<double>(a[i]) * sca - static_cast<double>(b[i]); s += d * d; } return crd::math::sqrt(s / static_cast<double>(a.size())); };
+    const auto smean = [&](const crd::containers::Array<float>& a, double sc2)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            s += static_cast<double>(a[i]);
+        }
+        return s / static_cast<double>(a.size()) * sc2; };
+    const auto rms = [&](const crd::containers::Array<float>& a, const crd::containers::Array<float>& b, double sca)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            const double d = static_cast<double>(a[i]) * sca - static_cast<double>(b[i]);
+            s += d * d;
+        }
+        return crd::math::sqrt(s / static_cast<double>(a.size())); };
     const double ref_mean = smean(acc_ref, 1.0 / k_ref);
     const double r_mean   = smean(acc_r, 1.0 / n_frames);
     // ref image (per-pixel) for rms:
     crd::containers::Array<float> ref_img(&alloc); ref_img.resize(rad.size(), 0.0F);
-    for (crd::usize i = 0; i < ref_img.size(); ++i) { ref_img[i] = acc_ref[i] / static_cast<float>(k_ref); }
+    for (crd::usize i = 0; i < ref_img.size(); ++i)
+    {
+        ref_img[i] = acc_ref[i] / static_cast<float>(k_ref);
+    }
     const double err_warm = rms(warm, ref_img, 1.0);
     const double err_single = rms(single, ref_img, 1.0);
     INFO("ReSTIR GI  ref_mean=" << ref_mean << "  reuseMean=" << r_mean << "  rms(warm)=" << err_warm << "  rms(single)=" << err_single);
@@ -1441,9 +1832,17 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1457,7 +1856,16 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
     crd::containers::Array<float> ppos(&alloc);
     crd::containers::Array<float> pnrm(&alloc);
     ppos.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F); pnrm.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F);
-    for (crd::u32 j = 0; j < img_h; ++j) { for (crd::u32 i = 0; i < img_w; ++i) { const crd::u32 p = j * img_w + i; ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i); ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j); pnrm[p * 3U + 1U] = 1.0F; } }
+    for (crd::u32 j = 0; j < img_h; ++j)
+    {
+        for (crd::u32 i = 0; i < img_w; ++i)
+        {
+            const crd::u32 p = j * img_w + i;
+            ppos[p * 3U + 0U] = -3.0F + 6.0F / static_cast<float>(img_w - 1U) * static_cast<float>(i);
+            ppos[p * 3U + 2U] = -3.0F + 6.0F / static_cast<float>(img_h - 1U) * static_cast<float>(j);
+            pnrm[p * 3U + 1U] = 1.0F;
+        }
+    }
     auto scene = rt.build_scene(verts, 2U);
     REQUIRE(scene != nullptr);
     using B = gpu::VulkanRayTracingContext::Binding;
@@ -1484,7 +1892,14 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
     crd::containers::Array<float> acc_st(&alloc);
     rprev.resize(static_cast<crd::usize>(num_pts) * kir::rt::kRestirGiStride, 0.0F); rtmp.resize(rprev.size(), 0.0F); rspa.resize(rprev.size(), 0.0F);
     rad.resize(static_cast<crd::usize>(num_pts) * 3U, 0.0F); acc_ref.resize(rad.size(), 0.0F); acc_st.resize(rad.size(), 0.0F);
-    const auto smean = [&](const crd::containers::Array<float>& a, double s2) { double s = 0.0; for (crd::usize i = 0; i < a.size(); ++i) { s += static_cast<double>(a[i]); } return s / static_cast<double>(a.size()) * s2; };
+    const auto smean = [&](const crd::containers::Array<float>& a, double s2)
+    {
+        double s = 0.0;
+        for (crd::usize i = 0; i < a.size(); ++i)
+        {
+            s += static_cast<double>(a[i]);
+        }
+        return s / static_cast<double>(a.size()) * s2; };
 
     // reference: temporal-only, NO feedback, averaged (brute-force indirect).
     constexpr crd::u32 k_ref = 96U;
@@ -1495,10 +1910,16 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(tspv.spirv.data(), tspv.spirv.size()), crd::containers::ConstSpan<B>(tb, 7), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rtmp.data(), nullptr, rbytes, 3U}, {nullptr, rad.data(), pb, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { acc_ref[i] += rad[i]; }
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            acc_ref[i] += rad[i];
+        }
     }
     // spatiotemporal: temporal → spatial(Jacobian) → shade, feed back the pre-spatial reservoir.
-    for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = 0.0F; }
+    for (crd::usize i = 0; i < rprev.size(); ++i)
+    {
+        rprev[i] = 0.0F;
+    }
     constexpr crd::u32 n_frames = 64U;
     for (crd::u32 f = 0; f < n_frames; ++f)
     {
@@ -1509,8 +1930,14 @@ TEST_CASE("D-007 IB-2b: ReSTIR GI spatiotemporal on Vulkan (Jacobian reconnectio
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(pspv.spirv.data(), pspv.spirv.size()), crd::containers::ConstSpan<B>(pbnd, 5), num_pts / 64U));
         B sb[4] = {{ppos.data(), nullptr, pb, 1U}, {pnrm.data(), nullptr, pb, 2U}, {rspa.data(), nullptr, rbytes, 3U}, {nullptr, rad.data(), pb, 4U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(sspv.spirv.data(), sspv.spirv.size()), crd::containers::ConstSpan<B>(sb, 4), num_pts / 64U));
-        for (crd::usize i = 0; i < rad.size(); ++i) { acc_st[i] += rad[i]; }
-        for (crd::usize i = 0; i < rprev.size(); ++i) { rprev[i] = rtmp[i]; }
+        for (crd::usize i = 0; i < rad.size(); ++i)
+        {
+            acc_st[i] += rad[i];
+        }
+        for (crd::usize i = 0; i < rprev.size(); ++i)
+        {
+            rprev[i] = rtmp[i];
+        }
     }
     const double ref_mean = smean(acc_ref, 1.0 / k_ref);
     const double st_mean = smean(acc_st, 1.0 / n_frames);
@@ -1528,10 +1955,22 @@ TEST_CASE("D-007 FA-1: opacity micromap on Vulkan (alpha-tested traversal)", "[g
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
-    if (!vk->opacity_micromap()) { WARN("adapter has no VK_EXT_opacity_micromap; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
+    if (!vk->opacity_micromap())
+    {
+        WARN("adapter has no VK_EXT_opacity_micromap; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1564,7 +2003,10 @@ TEST_CASE("D-007 FA-1: opacity micromap on Vulkan (alpha-tested traversal)", "[g
             const float y = 0.15F + 1.7F / 7.0F * static_cast<float>(j);
             rays[p * 6U + 0U] = x; rays[p * 6U + 1U] = y; rays[p * 6U + 2U] = 0.0F;
             rays[p * 6U + 5U] = 1.0F; // dir +z
-            if (x + y < 1.9F) { ++interior; }
+            if (x + y < 1.9F)
+            {
+                ++interior;
+            }
         }
     }
     gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
@@ -1575,8 +2017,14 @@ TEST_CASE("D-007 FA-1: opacity micromap on Vulkan (alpha-tested traversal)", "[g
     for (crd::u32 p = 0; p < num_pts; ++p)
     {
         const double t = static_cast<double>(got[p]);
-        if (t > 0.9 && t < 1.1) { ++front_hits; }
-        else if (t > 1.9 && t < 2.1) { ++back_hits; }
+        if (t > 0.9 && t < 1.1)
+        {
+            ++front_hits;
+        }
+        else if (t > 1.9 && t < 2.1)
+        {
+            ++back_hits;
+        }
     }
     INFO("OMM: interior rays=" << interior << "  front(opaque)=" << front_hits << "  back(passed-through)=" << back_hits);
     CHECK(front_hits > 3);                       // some rays hit the OPAQUE micro-triangles (front)
@@ -1592,10 +2040,22 @@ TEST_CASE("D-007 FA-2: RT pipeline + SER on Vulkan == CPU reference", "[gpu-cont
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
-    if (!vk->rt_pipeline()) { WARN("adapter has no VK_KHR_ray_tracing_pipeline; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
+    if (!vk->rt_pipeline())
+    {
+        WARN("adapter has no VK_KHR_ray_tracing_pipeline; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
     const bool ser = vk->invocation_reorder();
@@ -1635,7 +2095,13 @@ TEST_CASE("D-007 FA-2: RT pipeline + SER on Vulkan == CPU reference", "[gpu-cont
     crd::containers::Array<float> rays(&alloc);
     crd::containers::Array<float> got(&alloc);
     rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
-    for (crd::u32 i = 0; i < num_pts; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
+    for (crd::u32 i = 0; i < num_pts; ++i)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[i * 6U + c] = rd[i][c];
+        }
+    }
     gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(rg.spirv.data(), rg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(ms.spirv.data(), ms.spirv.size()),
@@ -1655,10 +2121,22 @@ TEST_CASE("D-007 FA-3: cluster acceleration structure on Vulkan == CPU reference
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
-    if (!vk->cluster_as()) { WARN("adapter has no VK_NV_cluster_acceleration_structure; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
+    if (!vk->cluster_as())
+    {
+        WARN("adapter has no VK_NV_cluster_acceleration_structure; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1679,7 +2157,13 @@ TEST_CASE("D-007 FA-3: cluster acceleration structure on Vulkan == CPU reference
     crd::containers::Array<float> got(&alloc);
     rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
     const float rd[4][6] = {{0.2F,0.2F,0,0,0,1}, {0.2F,0.2F,0,0,0,-1}, {5,5,0,0,0,1}, {0.1F,0.1F,1,0,0,1}};
-    for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c];
+        }
+    }
     gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
 
@@ -1696,9 +2180,17 @@ TEST_CASE("D-007 P1: RtCapabilities query reports the adapter's RT feature set",
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
     const gpu::RtCapabilities c = rt.capabilities();
@@ -1727,9 +2219,17 @@ TEST_CASE("B18-f: procedural curve BLAS builds on Vulkan", "[gpu-context][vulkan
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -1791,9 +2291,17 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
     crd::memory::TlsfAllocator alloc(64U << 20U);
@@ -1822,7 +2330,10 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
             q[7] = 0.09F * (1.0F - t1) + 0.02F;
         }
     }
-    for (int i = 0; i < nseg * 8; ++i) { segd[uz(i)] = static_cast<double>(segf[uz(i)]); }
+    for (int i = 0; i < nseg * 8; ++i)
+    {
+        segd[uz(i)] = static_cast<double>(segf[uz(i)]);
+    }
 
     crd::containers::Array<float>  rayf(&alloc);
     crd::containers::Array<double> rayd(&alloc);
@@ -1840,7 +2351,10 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
         r[4] = static_cast<float>(rnd() * 0.2 - 0.1);
         r[5] = 1.0F;
     }
-    for (int i = 0; i < nray * 6; ++i) { rayd[uz(i)] = static_cast<double>(rayf[uz(i)]); }
+    for (int i = 0; i < nray * 6; ++i)
+    {
+        rayd[uz(i)] = static_cast<double>(rayf[uz(i)]);
+    }
 
     // ── the kernel: one TraceRayCurves per lane ──
     kir::KGraph      g(&alloc);
@@ -1921,7 +2435,14 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
         if (ch != gh)
         {
             ++disagree;
-            if (ch) { ++cpu_only; } else { ++gpu_only; }
+            if (ch)
+            {
+                ++cpu_only;
+            }
+            else
+            {
+                ++gpu_only;
+            }
             if (disagree <= 6)
             {
                 std::printf("      miss #%d: ray %d  oracle t=%.4f u=%.3f  device t=%.4f  ray=(%.3f,%.3f,%.3f)\n",
@@ -1931,7 +2452,10 @@ TEST_CASE("B18-f: CKIR TraceRayCurves runs on Vulkan hardware traversal == CPU o
             }
             continue;
         }
-        if (!ch) { continue; }
+        if (!ch)
+        {
+            continue;
+        }
         ++hits;
         worst = std::max(worst, std::fabs(static_cast<double>(outf[uz(i * 2)]) - ref[uz(i * 2)]));
         worst = std::max(worst, std::fabs(static_cast<double>(outf[uz(i * 2 + 1)]) - ref[uz(i * 2 + 1)]));
@@ -1959,12 +2483,24 @@ TEST_CASE("D-007 P2: CKIR-authored RT pipeline (+ SER hint) on Vulkan == CPU ref
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
-    if (!rt.capabilities().has(gpu::RtFeature::RtPipeline)) { WARN("no RT pipeline; skipping"); return; }
+    if (!rt.capabilities().has(gpu::RtFeature::RtPipeline))
+    {
+        WARN("no RT pipeline; skipping");
+        return;
+    }
     const bool ser = rt.capabilities().has(gpu::RtFeature::ShaderReorder);
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
@@ -1995,7 +2531,13 @@ TEST_CASE("D-007 P2: CKIR-authored RT pipeline (+ SER hint) on Vulkan == CPU ref
     crd::containers::Array<float> rays(&alloc);
     crd::containers::Array<float> got(&alloc);
     rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
-    for (crd::u32 i = 0; i < num_pts; ++i) { for (int c = 0; c < 6; ++c) { rays[i * 6U + c] = rd[i][c]; } }
+    for (crd::u32 i = 0; i < num_pts; ++i)
+    {
+        for (int c = 0; c < 6; ++c)
+        {
+            rays[i * 6U + c] = rd[i][c];
+        }
+    }
     gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(crg.spirv.data(), crg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cms.spirv.data(), cms.spirv.size()),
@@ -2016,12 +2558,24 @@ TEST_CASE("D-007 P4: portable OMM + CKIR any-hit alpha fallback on Vulkan", "[gp
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
-    if (!rt.capabilities().has(gpu::RtFeature::RtPipeline)) { WARN("no RT pipeline; skipping"); return; }
+    if (!rt.capabilities().has(gpu::RtFeature::RtPipeline))
+    {
+        WARN("no RT pipeline; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(16U << 20U);
     const float verts[9] = {0.0F, 0.0F, 1.0F, 2.0F, 0.0F, 1.0F, 0.0F, 2.0F, 1.0F};
@@ -2059,9 +2613,18 @@ TEST_CASE("D-007 P4: portable OMM + CKIR any-hit alpha fallback on Vulkan", "[gp
     crd::containers::Array<float> got(&alloc);
     rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
     crd::u32 interior = 0;
-    for (crd::u32 j = 0; j < 8U; ++j) { for (crd::u32 i = 0; i < 8U; ++i) {
+    for (crd::u32 j = 0; j < 8U; ++j)
+    {
+        for (crd::u32 i = 0; i < 8U; ++i)
+        {
         const crd::u32 p = j * 8U + i; const float x = 0.15F + 1.7F / 7.0F * static_cast<float>(i); const float y = 0.15F + 1.7F / 7.0F * static_cast<float>(j);
-        rays[p * 6U + 0U] = x; rays[p * 6U + 1U] = y; rays[p * 6U + 5U] = 1.0F; if (x + y < 1.9F) { ++interior; } } }
+        rays[p * 6U + 0U] = x; rays[p * 6U + 1U] = y; rays[p * 6U + 5U] = 1.0F;
+            if (x + y < 1.9F)
+            {
+                ++interior;
+            }
+        }
+    }
     gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
     REQUIRE(rt.trace_rays_pipeline(*scene, crd::containers::ConstSpan<crd::u8>(crg.spirv.data(), crg.spirv.size()),
                                    crd::containers::ConstSpan<crd::u8>(cms.spirv.data(), cms.spirv.size()),
@@ -2070,7 +2633,17 @@ TEST_CASE("D-007 P4: portable OMM + CKIR any-hit alpha fallback on Vulkan", "[gp
                                    crd::containers::ConstSpan<crd::u8>(cah.spirv.data(), cah.spirv.size())));
     crd::u32 hit = 0;
     crd::u32 pass = 0;
-    for (crd::u32 p = 0; p < num_pts; ++p) { if (static_cast<double>(got[p]) > 0.9 && static_cast<double>(got[p]) < 1.1) { ++hit; } else if (static_cast<double>(got[p]) > 1.0e29) { ++pass; } }
+    for (crd::u32 p = 0; p < num_pts; ++p)
+    {
+        if (static_cast<double>(got[p]) > 0.9 && static_cast<double>(got[p]) < 1.1)
+        {
+            ++hit;
+        }
+        else if (static_cast<double>(got[p]) > 1.0e29)
+        {
+            ++pass;
+        }
+    }
     INFO("any-hit alpha: interior=" << interior << " hit(u+v>=0.5)=" << hit << " passed-through(u+v<0.5)=" << pass);
     CHECK(hit > 3);   // the opaque half (u+v>=0.5) hits
     CHECK(pass > 3);  // the transparent half (u+v<0.5) PASSES THROUGH — the any-hit alpha fallback works
@@ -2082,9 +2655,17 @@ TEST_CASE("D-007 P5: portable scalable scene-build (cluster or standard-BLAS fal
 {
     gpu::GpuContextConfig cfg; cfg.backend = gpu::GpuBackend::Vulkan; cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2107,7 +2688,13 @@ TEST_CASE("D-007 P5: portable scalable scene-build (cluster or standard-BLAS fal
         crd::containers::Array<float> rays(&alloc);
         crd::containers::Array<float> got(&alloc);
         rays.resize(static_cast<crd::usize>(num_pts) * 6U, 0.0F); got.resize(num_pts, 0.0F);
-        for (int r = 0; r < 4; ++r) { for (int c = 0; c < 6; ++c) { rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c]; } }
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 6; ++c)
+            {
+                rays[static_cast<crd::usize>(r) * 6U + c] = rd[r][c];
+            }
+        }
         gpu::VulkanRayTracingContext::Binding bind[2] = {{rays.data(), nullptr, rays.size() * sizeof(float), 1U}, {nullptr, got.data(), static_cast<crd::u64>(num_pts) * sizeof(float), 2U}};
         REQUIRE(rt.trace_dispatch(*scene, crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), crd::containers::ConstSpan<gpu::VulkanRayTracingContext::Binding>(bind, 2), 1U));
         INFO("scalable mode=" << mode << " fell_back=" << fell << " t=[" << got[0] << ", " << got[1] << ", " << got[2] << ", " << got[3] << "]");
@@ -2155,7 +2742,10 @@ crd::u32 rt_fold(crd::u32 h, crd::u32 v) { return rt_tri32(h ^ v); }
 cg::RtSceneHandle rt_gate_build_scene(const ceir::Operation* /*accel_op*/, void* user)
 {
     auto* s = static_cast<RtGateState*>(user);
-    if (s->scene == nullptr) { s->scene = s->rt->build_scene(s->verts, s->ntris); } // fused: build once on the first AccelBuild
+    if (s->scene == nullptr) // fused: build once on the first AccelBuild
+    {
+        s->scene = s->rt->build_scene(s->verts, s->ntris);
+    }
     return (s->scene != nullptr) ? cg::RtSceneHandle{1U} : cg::RtSceneHandle{0U};
 }
 crd::containers::ConstSpan<crd::u8> rt_gate_kernel_bytes(const ceir::Operation* /*ray_query*/, void* user)
@@ -2168,7 +2758,10 @@ bool rt_gate_trace_dispatch(cg::RtSceneHandle tlas, crd::containers::ConstSpan<c
                             crd::u32 /*gz*/, void* user)
 {
     auto* s = static_cast<RtGateState*>(user);
-    if (tlas == 0U || s->scene == nullptr) { return false; }
+    if (tlas == 0U || s->scene == nullptr)
+    {
+        return false;
+    }
     s->last_gx = gx; // pin: the harness CHECKs the shade dispatch's gx == the compact's hit_count readback
     gpu::VulkanRayTracingContext::Binding vb[8];
     const crd::u32                        n = static_cast<crd::u32>(binds.size() < 8U ? binds.size() : 8U);
@@ -2191,9 +2784,17 @@ TEST_CASE("CEIR-19c: the ceir.rt->gpu bridge (execute_rt_lowered) traces the aut
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2234,7 +2835,10 @@ TEST_CASE("CEIR-19c: the ceir.rt->gpu bridge (execute_rt_lowered) traces the aut
     {
         if (r < 4U)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col];
+            }
         }
         else
         {
@@ -2313,10 +2917,16 @@ TEST_CASE("CEIR-19c: the ceir.rt->gpu bridge (execute_rt_lowered) traces the aut
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> ref_t(&alloc);
     crd::containers::Array<crd::f64> ref_p(&alloc);
     ref_t.resize(nrays, 0.0);
@@ -2337,7 +2947,11 @@ TEST_CASE("CEIR-19c: the ceir.rt->gpu bridge (execute_rt_lowered) traces the aut
                     << gpu_t[r] << " ref_t=" << ref_t[r]);
         CHECK(gpu_hit == cpu_hit);                             // hit/miss decision BIT-EXACT
         CHECK(gpu_prim[r] == static_cast<crd::u32>(ref_p[r])); // prim-id BIT-EXACT (the decision-derived integer)
-        if (cpu_hit) { CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref_t[r]) < 1.0e-3); ++checked_hits; }
+        if (cpu_hit)
+        {
+            CHECK(crd::math::abs(static_cast<double>(gpu_t[r]) - ref_t[r]) < 1.0e-3);
+            ++checked_hits;
+        }
     }
     CHECK(checked_hits >= 2U); // the two analytic hits actually exercised the tolerance compare
 
@@ -2362,9 +2976,17 @@ TEST_CASE("CEIR-19c: the authored serial-compact kernel compacts hit-flags == or
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2464,7 +3086,10 @@ TEST_CASE("CEIR-19c: the authored serial-compact kernel compacts hit-flags == or
     geo.resize(1U, 0.0);
     crd::containers::Array<crd::f64> flags64(&alloc);
     flags64.resize(k_n, 0.0);
-    for (crd::u32 i = 0; i < k_n; ++i) { flags64[i] = static_cast<crd::f64>(flags[i]); }
+    for (crd::u32 i = 0; i < k_n; ++i)
+    {
+        flags64[i] = static_cast<crd::f64>(flags[i]);
+    }
     crd::containers::Array<crd::f64> comp_ref(&alloc);
     crd::containers::Array<crd::f64> count_ref(&alloc);
     comp_ref.resize(k_n, 0.0);
@@ -2498,9 +3123,17 @@ TEST_CASE("CEIR-19c: the authored wavefront trace kernel writes hit-flags == ora
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2537,7 +3170,10 @@ TEST_CASE("CEIR-19c: the authored wavefront trace kernel writes hit-flags == ora
     {
         if (r < 4U)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r][col];
+            }
         }
         else
         {
@@ -2614,10 +3250,16 @@ TEST_CASE("CEIR-19c: the authored wavefront trace kernel writes hit-flags == ora
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nrays) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> flag_ref(&alloc);
     crd::containers::Array<crd::f64> t_ref(&alloc);
     flag_ref.resize(nrays, 0.0);
@@ -2655,9 +3297,17 @@ TEST_CASE("CEIR-19c: the authored wavefront shade kernel writes lit/shadowed == 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2757,17 +3407,29 @@ TEST_CASE("CEIR-19c: the authored wavefront shade kernel writes lit/shadowed == 
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(10U, 0.0);
     geo[0] = 1.0;
-    for (int i = 0; i < 9; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 9; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> comp64(&alloc);
     crd::containers::Array<crd::f64> rays64(&alloc);
     crd::containers::Array<crd::f64> hitt64(&alloc);
     crd::containers::Array<crd::f64> dec_ref(&alloc);
     comp64.resize(2U, 0.0);
-    for (crd::u32 i = 0; i < 2U; ++i) { comp64[i] = static_cast<crd::f64>(compacted[i]); }
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        comp64[i] = static_cast<crd::f64>(compacted[i]);
+    }
     rays64.resize(12U, 0.0);
-    for (crd::u32 i = 0; i < 12U; ++i) { rays64[i] = static_cast<crd::f64>(rays_in[i]); }
+    for (crd::u32 i = 0; i < 12U; ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays_in[i]);
+    }
     hitt64.resize(2U, 0.0);
-    for (crd::u32 i = 0; i < 2U; ++i) { hitt64[i] = static_cast<crd::f64>(hitt_in[i]); }
+    for (crd::u32 i = 0; i < 2U; ++i)
+    {
+        hitt64[i] = static_cast<crd::f64>(hitt_in[i]);
+    }
     dec_ref.resize(2U, 0.0);
     kir::KernelBuffer bufs[5] = {{geo.data(), static_cast<int>(geo.size()), 0, 0},
                                  {comp64.data(), 2, 0, 1},
@@ -2802,9 +3464,17 @@ TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) ==
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
     REQUIRE(rt.valid());
 
@@ -2837,7 +3507,10 @@ TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) ==
         INFO(r.error_message.c_str());
         REQUIRE(r.ok);
         spv.resize(r.spirv.size(), 0U);
-        for (crd::usize i = 0; i < r.spirv.size(); ++i) { spv[i] = r.spirv[i]; }
+        for (crd::usize i = 0; i < r.spirv.size(); ++i)
+        {
+            spv[i] = r.spirv[i];
+        }
     };
     load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_trace.ckir", "wf_trace", kg_tr, ke_tr, spv_tr);
     load_kernel(CRD_REPO_DIR "/assets/ckir/wavefront_compact.ckir", "wf_compact", kg_co, ke_co, spv_co);
@@ -2867,7 +3540,10 @@ TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) ==
     {
         if (r < nrays)
         {
-            for (int col = 0; col < 6; ++col) { rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)]; }
+            for (int col = 0; col < 6; ++col)
+            {
+                rays[r * 6U + static_cast<crd::u32>(col)] = seed[r * 6U + static_cast<crd::u32>(col)];
+            }
         }
         else
         {
@@ -2959,10 +3635,16 @@ TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) ==
     crd::containers::Array<crd::f64> geo(&alloc);
     geo.resize(1U + 27U, 0.0);
     geo[0] = static_cast<crd::f64>(num_tris);
-    for (int i = 0; i < 27; ++i) { geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]); }
+    for (int i = 0; i < 27; ++i)
+    {
+        geo[static_cast<crd::usize>(i) + 1U] = static_cast<crd::f64>(verts[i]);
+    }
     crd::containers::Array<crd::f64> rays64(&alloc);
     rays64.resize(static_cast<crd::usize>(nbuf) * 6U, 0.0);
-    for (crd::usize i = 0; i < rays64.size(); ++i) { rays64[i] = static_cast<crd::f64>(rays[i]); }
+    for (crd::usize i = 0; i < rays64.size(); ++i)
+    {
+        rays64[i] = static_cast<crd::f64>(rays[i]);
+    }
     crd::containers::Array<crd::f64> hf_ref(&alloc);
     crd::containers::Array<crd::f64> ht_ref(&alloc);
     crd::containers::Array<crd::f64> comp_ref(&alloc);
@@ -3058,10 +3740,22 @@ TEST_CASE("CEIR-19c: the AUTHORED wavefront host-loop (trace->compact->shade) ==
         // HOST triple32 fold over DECISION INTS ONLY, [0..count-1], identical order both sides.
         gpu_hash    = rt_fold(gpu_hash, hit_count);
         oracle_hash = rt_fold(oracle_hash, ohc);
-        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, compacted[j]); }
-        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j])); }
-        for (crd::u32 j = 0; j < hit_count; ++j) { gpu_hash = rt_fold(gpu_hash, decisions[j]); }
-        for (crd::u32 j = 0; j < ohc; ++j) { oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j])); }
+        for (crd::u32 j = 0; j < hit_count; ++j)
+        {
+            gpu_hash = rt_fold(gpu_hash, compacted[j]);
+        }
+        for (crd::u32 j = 0; j < ohc; ++j)
+        {
+            oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(comp_ref[j]));
+        }
+        for (crd::u32 j = 0; j < hit_count; ++j)
+        {
+            gpu_hash = rt_fold(gpu_hash, decisions[j]);
+        }
+        for (crd::u32 j = 0; j < ohc; ++j)
+        {
+            oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(dec_ref[j]));
+        }
         gpu_hash    = rt_fold(gpu_hash, next_count);
         oracle_hash = rt_fold(oracle_hash, static_cast<crd::u32>(nc_ref[0]));
         CHECK(gpu_hash == oracle_hash); // ⭐ per-iteration decision-hash GPU == oracle
@@ -3514,11 +4208,23 @@ TEST_CASE("D2b-vk: build_scene mints one Resource identity per acceleration-stru
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->ray_query()) { WARN("adapter has no VK_KHR_ray_query; skipping"); return; }
+    if (!vk->ray_query())
+    {
+        WARN("adapter has no VK_KHR_ray_query; skipping");
+        return;
+    }
     gpu::VulkanRayTracingContext rt(*vk);
-    if (!rt.valid()) { WARN("no valid Vulkan RT context; skipping"); return; }
+    if (!rt.valid())
+    {
+        WARN("no valid Vulkan RT context; skipping");
+        return;
+    }
 
     static const float kTriangle[9] = {0.0F, 0.5F, 0.0F, -0.5F, -0.5F, 0.0F, 0.5F, -0.5F, 0.0F};
     const crd::usize   before   = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);

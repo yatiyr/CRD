@@ -89,8 +89,12 @@ fs::path first_dump(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".dmp")
+        {
             return it->path();
+        }
+    }
     return {};
 }
 
@@ -99,7 +103,9 @@ cont::Array<crd::u8> read_bytes(const fs::path& p)
     cont::Array<crd::u8> out;
     std::FILE*           f = nullptr;
     if (_wfopen_s(&f, p.wstring().c_str(), L"rb") != 0 || f == nullptr)
+    {
         return out;
+    }
     std::fseek(f, 0, SEEK_END);
     const long sz = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
@@ -119,7 +125,9 @@ cont::Array<crd::u8> read_stream(const fs::path& dmp, std::uint32_t stream_type)
     cont::Array<crd::u8> out;
     const std::size_t    sz = crd::crash::read_dump_stream(dmp.wstring().c_str(), stream_type, nullptr, 0);
     if (sz == 0)
+    {
         return out;
+    }
     out.resize_uninitialized(sz);
     const std::size_t got = crd::crash::read_dump_stream(dmp.wstring().c_str(), stream_type, out.data(), sz);
     out.resize(got);
@@ -130,13 +138,17 @@ cont::Array<crd::u8> read_stream(const fs::path& dmp, std::uint32_t stream_type)
 bool name_matches(const cont::Array<crd::u8>& whole, DWORD rva, const char* want)
 {
     if (rva == 0 || static_cast<std::size_t>(rva) + sizeof(ULONG32) > whole.size())
+    {
         return false;
+    }
     ULONG32 nbytes = 0;
     std::memcpy(&nbytes, whole.data() + rva, sizeof(nbytes));
     const std::size_t soff  = static_cast<std::size_t>(rva) + sizeof(ULONG32);
     const std::size_t chars = nbytes / sizeof(wchar_t);
     if (soff + chars * sizeof(wchar_t) > whole.size())
+    {
         return false;
+    }
     cont::String name;
     for (std::size_t i = 0; i < chars; ++i)
     {
@@ -144,7 +156,9 @@ bool name_matches(const cont::Array<crd::u8>& whole, DWORD rva, const char* want
         std::memcpy(&wc, whole.data() + soff + i * sizeof(wchar_t), sizeof(wc));
         char c = (wc < 128) ? static_cast<char>(wc) : '?';
         if (c >= 'A' && c <= 'Z')
+        {
             c = static_cast<char>(c + 32);
+        }
         name.push_back(c);
     }
     std::string_view sv{name.c_str(), name.size()};
@@ -156,18 +170,24 @@ bool name_matches(const cont::Array<crd::u8>& whole, DWORD rva, const char* want
 bool loaded_list_has(const cont::Array<crd::u8>& whole, const cont::Array<crd::u8>& stream, const char* want)
 {
     if (stream.size() < sizeof(ULONG32))
+    {
         return false;
+    }
     ULONG32 count = 0;
     std::memcpy(&count, stream.data(), sizeof(count));
     for (ULONG32 i = 0; i < count; ++i)
     {
         const std::size_t off = sizeof(ULONG32) + static_cast<std::size_t>(i) * sizeof(MINIDUMP_MODULE);
         if (off + sizeof(MINIDUMP_MODULE) > stream.size())
+        {
             break;
+        }
         MINIDUMP_MODULE mod{};
         std::memcpy(&mod, stream.data() + off, sizeof(mod));
         if (name_matches(whole, mod.ModuleNameRva, want))
+        {
             return true;
+        }
     }
     return false;
 }
@@ -175,20 +195,28 @@ bool loaded_list_has(const cont::Array<crd::u8>& whole, const cont::Array<crd::u
 bool unloaded_list_has(const cont::Array<crd::u8>& whole, const cont::Array<crd::u8>& stream, const char* want)
 {
     if (stream.size() < sizeof(MINIDUMP_UNLOADED_MODULE_LIST))
+    {
         return false;
+    }
     MINIDUMP_UNLOADED_MODULE_LIST ul{};
     std::memcpy(&ul, stream.data(), sizeof(ul));
     if (ul.SizeOfHeader < sizeof(ul) || ul.SizeOfEntry < sizeof(MINIDUMP_UNLOADED_MODULE))
+    {
         return false;
+    }
     for (ULONG32 i = 0; i < ul.NumberOfEntries; ++i)
     {
         const std::size_t off = ul.SizeOfHeader + static_cast<std::size_t>(i) * ul.SizeOfEntry; // self-describing stride
         if (off + sizeof(MINIDUMP_UNLOADED_MODULE) > stream.size())
+        {
             break;
+        }
         MINIDUMP_UNLOADED_MODULE em{};
         std::memcpy(&em, stream.data() + off, sizeof(em));
         if (name_matches(whole, em.ModuleNameRva, want))
+        {
             return true;
+        }
     }
     return false;
 }

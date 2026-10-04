@@ -43,12 +43,36 @@ struct AudioDevice::Impl
 
     void release() noexcept
     {
-        if (render != nullptr) { render->Release(); render = nullptr; }
-        if (client != nullptr) { client->Release(); client = nullptr; }
-        if (mix != nullptr) { CoTaskMemFree(mix); mix = nullptr; }
-        if (device != nullptr) { device->Release(); device = nullptr; }
-        if (enumerator != nullptr) { enumerator->Release(); enumerator = nullptr; }
-        if (event != nullptr) { CloseHandle(event); event = nullptr; }
+        if (render != nullptr)
+        {
+            render->Release();
+            render = nullptr;
+        }
+        if (client != nullptr)
+        {
+            client->Release();
+            client = nullptr;
+        }
+        if (mix != nullptr)
+        {
+            CoTaskMemFree(mix);
+            mix = nullptr;
+        }
+        if (device != nullptr)
+        {
+            device->Release();
+            device = nullptr;
+        }
+        if (enumerator != nullptr)
+        {
+            enumerator->Release();
+            enumerator = nullptr;
+        }
+        if (event != nullptr)
+        {
+            CloseHandle(event);
+            event = nullptr;
+        }
         if (com_owner)
         {
             CoUninitialize();
@@ -65,24 +89,39 @@ void AudioDevice::Impl::run(Impl* impl)
         while (impl->running.load(std::memory_order_acquire))
         {
             const DWORD wait = WaitForSingleObject(impl->event, 2000);
-            if (!impl->running.load(std::memory_order_acquire)) { break; }
+            if (!impl->running.load(std::memory_order_acquire))
+            {
+                break;
+            }
             if (wait != WAIT_OBJECT_0)
             {
                 impl->xruns.fetch_add(1, std::memory_order_relaxed); // the device stopped signalling
                 continue;
             }
             UINT32 padding = 0;
-            if (FAILED(impl->client->GetCurrentPadding(&padding))) { continue; }
+            if (FAILED(impl->client->GetCurrentPadding(&padding)))
+            {
+                continue;
+            }
             if (padding == 0 && impl->frames_done.load(std::memory_order_relaxed) > 0)
             {
                 impl->xruns.fetch_add(1, std::memory_order_relaxed); // fully starved — a glitch happened
             }
             const UINT32 avail = impl->buffer_frames - padding;
-            if (avail == 0) { continue; }
+            if (avail == 0)
+            {
+                continue;
+            }
             BYTE* raw = nullptr;
-            if (FAILED(impl->render->GetBuffer(avail, &raw))) { continue; }
+            if (FAILED(impl->render->GetBuffer(avail, &raw)))
+            {
+                continue;
+            }
             auto* out = reinterpret_cast<float*>(raw);
-            for (UINT32 i = 0; i < avail * channels; ++i) { out[i] = 0.0F; }
+            for (UINT32 i = 0; i < avail * channels; ++i)
+            {
+                out[i] = 0.0F;
+            }
             if (impl->callback != nullptr && channels >= 2)
             {
                 impl->callback(impl->user, out, avail, impl->mix->nSamplesPerSec);
@@ -105,7 +144,10 @@ AudioDevice::~AudioDevice()
 bool AudioDevice::start(AudioRenderFn fn, void* user)
 {
     Impl& im = *m_impl;
-    if (im.running.load(std::memory_order_relaxed)) { return false; }
+    if (im.running.load(std::memory_order_relaxed))
+    {
+        return false;
+    }
 
     const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     im.com_owner     = SUCCEEDED(co) && co != S_FALSE ? true : SUCCEEDED(co);
@@ -171,11 +213,23 @@ bool AudioDevice::start(AudioRenderFn fn, void* user)
 void AudioDevice::stop()
 {
     Impl& im = *m_impl;
-    if (!im.running.load(std::memory_order_relaxed)) { return; }
+    if (!im.running.load(std::memory_order_relaxed))
+    {
+        return;
+    }
     im.running.store(false, std::memory_order_release);
-    if (im.event != nullptr) { SetEvent(im.event); }
-    if (im.thread.joinable()) { im.thread.join(); }
-    if (im.client != nullptr) { (void)im.client->Stop(); }
+    if (im.event != nullptr)
+    {
+        SetEvent(im.event);
+    }
+    if (im.thread.joinable())
+    {
+        im.thread.join();
+    }
+    if (im.client != nullptr)
+    {
+        (void)im.client->Stop();
+    }
 }
 
 crd::u32 AudioDevice::sample_rate() const noexcept

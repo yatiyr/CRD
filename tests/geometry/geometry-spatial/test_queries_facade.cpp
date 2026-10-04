@@ -65,7 +65,10 @@ TEST_CASE("queries facade: LooseOctree overlap matches native", "[geometry-spati
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
 
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: LooseOctree raycast matches native", "[geometry-spatial][queries][facade]")
@@ -109,7 +112,10 @@ TEST_CASE("queries facade: RTree overlap matches native", "[geometry-spatial][qu
     crd::geometry::overlap(tree, q, via_facade);
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: RTree raycast matches native", "[geometry-spatial][queries][facade]")
@@ -173,7 +179,10 @@ TEST_CASE("queries facade: SpatialHash overlap matches native", "[geometry-spati
     crd::geometry::overlap(tree, q, via_facade);
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: SpatialHash radius matches native", "[geometry-spatial][queries][facade]")
@@ -195,7 +204,10 @@ TEST_CASE("queries facade: SpatialHash radius matches native", "[geometry-spatia
     crd::geometry::radius(tree, q, 5.0F, via_facade);
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: SpatialHash raycast matches native", "[geometry-spatial][queries][facade]")
@@ -229,7 +241,10 @@ TEST_CASE("queries facade: SpatialHash find_overlapping_pairs matches native", "
     crd::containers::Array<crd::geometry::spatial::SpatialHashPair> via_facade(&f.alloc);
     crd::geometry::find_overlapping_pairs(tree, via_facade);
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 // =============================================================================
@@ -257,7 +272,10 @@ TEST_CASE("queries facade: UniformGrid overlap matches native", "[geometry-spati
     crd::geometry::overlap(tree, q, via_facade);
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: UniformGrid radius matches native", "[geometry-spatial][queries][facade]")
@@ -280,7 +298,10 @@ TEST_CASE("queries facade: UniformGrid radius matches native", "[geometry-spatia
     crd::geometry::radius(tree, q, 5.0F, via_facade);
     std::sort(via_facade.data(), via_facade.data() + via_facade.size());
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 TEST_CASE("queries facade: UniformGrid raycast matches native", "[geometry-spatial][queries][facade]")
@@ -316,7 +337,10 @@ TEST_CASE("queries facade: UniformGrid find_overlapping_pairs matches native", "
     crd::containers::Array<crd::geometry::spatial::UniformGridPair> via_facade(&f.alloc);
     crd::geometry::find_overlapping_pairs(tree, via_facade);
     REQUIRE(via_facade.size() == via_native.size());
-    for (usize i = 0; i < via_facade.size(); ++i) { REQUIRE(via_facade[i] == via_native[i]); }
+    for (usize i = 0; i < via_facade.size(); ++i)
+    {
+        REQUIRE(via_facade[i] == via_native[i]);
+    }
 }
 
 // =============================================================================
@@ -329,7 +353,10 @@ TEST_CASE("queries facade: KdTree radius matches native", "[geometry-spatial][qu
     crd::containers::Array<Vec3f> pts(&f.alloc);
     std::mt19937 rng(31U);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < 200U; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < 200U; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     auto tree = crd::geometry::spatial::kd_build<f32>(
         crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, &f.alloc);
     const Vec3f q{0, 0, 0};
@@ -353,7 +380,10 @@ TEST_CASE("queries facade: KdTree nearest_n matches native", "[geometry-spatial]
     crd::containers::Array<Vec3f> pts(&f.alloc);
     std::mt19937 rng(42U);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < 200U; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < 200U; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     auto tree = crd::geometry::spatial::kd_build<f32>(
         crd::containers::ConstSpan<Vec3f>{pts.data(), pts.size()}, &f.alloc);
     const Vec3f q{0, 0, 0};

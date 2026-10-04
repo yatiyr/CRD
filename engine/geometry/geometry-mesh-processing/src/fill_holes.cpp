@@ -107,7 +107,10 @@ crd::math::Vec3<T> triangle_normal(const crd::math::Vec3<T>& a,
 {
     const auto n = crd::math::cross(b - a, c - a);
     const T    len = crd::math::length(n);
-    if (len < static_cast<T>(1e-20)) { return crd::math::Vec3<T>{T{0}, T{0}, T{0}}; }
+    if (len < static_cast<T>(1e-20))
+    {
+        return crd::math::Vec3<T>{T{0}, T{0}, T{0}};
+    }
     return n * (T{1} / len);
 }
 
@@ -149,9 +152,18 @@ void detect_boundary_loops(const HalfEdgeMesh<T>&                              m
 
     for (crd::u32 h = 0; h < m.he_pool_size(); ++h)
     {
-        if (!m.he_alive(h)) { continue; }
-        if (!m.he_is_boundary(h)) { continue; }
-        if (visited[h] != 0U) { continue; }
+        if (!m.he_alive(h))
+        {
+            continue;
+        }
+        if (!m.he_is_boundary(h))
+        {
+            continue;
+        }
+        if (visited[h] != 0U)
+        {
+            continue;
+        }
 
         crd::containers::Array<crd::u32> loop(alloc);
         crd::u32 cur = h;
@@ -161,11 +173,20 @@ void detect_boundary_loops(const HalfEdgeMesh<T>&                              m
             visited[cur] = 1U;
             loop.push_back(m.he(cur).origin);
             const crd::u32 nxt = m.he(cur).next;
-            if (nxt == k_null_he) { break; }
-            if (nxt == h) { break; }
+            if (nxt == k_null_he)
+            {
+                break;
+            }
+            if (nxt == h)
+            {
+                break;
+            }
             cur = nxt;
         }
-        if (loop.size() >= 3U) { out_loops.push_back(std::move(loop)); }
+        if (loop.size() >= 3U)
+        {
+            out_loops.push_back(std::move(loop));
+        }
     }
 }
 
@@ -185,15 +206,33 @@ void precompute_outside_normals(const HalfEdgeMesh<T>&                  m,
         const crd::u32 v_b = loop[(i + 1U) % N];
         crd::u32       boundary_h = k_null_he;
         m.for_each_outgoing_he(v_a, [&](crd::u32 ho) {
-            if (boundary_h != k_null_he) { return; }
-            if (!m.he_is_boundary(ho)) { return; }
-            if (m.he_dest(ho) == v_b) { boundary_h = ho; }
+            if (boundary_h != k_null_he)
+            {
+                return;
+            }
+            if (!m.he_is_boundary(ho))
+            {
+                return;
+            }
+            if (m.he_dest(ho) == v_b)
+            {
+                boundary_h = ho;
+            }
         });
-        if (boundary_h == k_null_he) { continue; }
+        if (boundary_h == k_null_he)
+        {
+            continue;
+        }
         const crd::u32 t = m.he(boundary_h).twin;
-        if (t == k_null_he) { continue; }
+        if (t == k_null_he)
+        {
+            continue;
+        }
         const crd::u32 f = m.he(t).face;
-        if (f == k_null_face) { continue; }
+        if (f == k_null_face)
+        {
+            continue;
+        }
         const crd::u32 h0 = m.face(f).first_he;
         const crd::u32 h1 = m.he(h0).next;
         const crd::u32 h2 = m.he(h1).next;
@@ -290,7 +329,10 @@ void reconstruct_triangulation(const crd::containers::Array<crd::u32>& O,
                                 crd::u32                                k,
                                 crd::containers::Array<crd::u32>&       out_local_idx)
 {
-    if (k <= i + 1U) { return; }
+    if (k <= i + 1U)
+    {
+        return;
+    }
     const crd::u32 m = O[ix(i, k, N)];
     out_local_idx.push_back(i);
     out_local_idx.push_back(m);
@@ -317,7 +359,10 @@ void compute_loop_sigma(const HalfEdgeMesh<T>&                  input,
         crd::u32       count   = 0;
         input.for_each_outgoing_he(v, [&](crd::u32 ho) {
             const crd::u32 dest = input.he_dest(ho);
-            if (dest == k_null_vertex) { return; }
+            if (dest == k_null_vertex)
+            {
+                return;
+            }
             sum_len += edge_length(p, input.vertex(dest).position);
             ++count;
         });
@@ -372,10 +417,19 @@ bool delaunay_flip_recommended(const crd::math::Vec3<T>& pa,
         const auto v = other_b - vert;
         const T    lu = crd::math::length(u);
         const T    lv = crd::math::length(v);
-        if (lu < static_cast<T>(1e-20) || lv < static_cast<T>(1e-20)) { return T{0}; }
+        if (lu < static_cast<T>(1e-20) || lv < static_cast<T>(1e-20))
+        {
+            return T{0};
+        }
         T cos_v = crd::math::dot(u, v) / (lu * lv);
-        if (cos_v > T{1}) { cos_v = T{1}; }
-        if (cos_v < T{-1}) { cos_v = T{-1}; }
+        if (cos_v > T{1})
+        {
+            cos_v = T{1};
+        }
+        if (cos_v < T{-1})
+        {
+            cos_v = T{-1};
+        }
         return crd::math::deterministic::acos(cos_v);
     };
     const T angle_c = angle_at(pc, pa, pb);
@@ -398,25 +452,46 @@ crd::u32 delaunay_flip_pass(crd::containers::Array<crd::math::Vec3<T>>& patch_po
         crd::containers::ConstSpan<crd::math::Vec3<T>>{patch_positions.data(), patch_positions.size()},
         crd::containers::ConstSpan<crd::u32>{patch_indices.data(), patch_indices.size()});
     (void)bs;
-    if (!temp.is_manifold()) { return 0; } // bail; defensive
+    if (!temp.is_manifold()) // bail; defensive
+    {
+        return 0;
+    }
 
     // Snapshot canonical interior HEs.
     crd::containers::Array<crd::u32> snap(alloc);
     for (crd::u32 h = 0; h < temp.he_pool_size(); ++h)
     {
-        if (!temp.he_alive(h)) { continue; }
-        if (temp.he_is_boundary(h)) { continue; }
+        if (!temp.he_alive(h))
+        {
+            continue;
+        }
+        if (temp.he_is_boundary(h))
+        {
+            continue;
+        }
         const crd::u32 t = temp.he(h).twin;
-        if (t == k_null_he || temp.he_is_boundary(t)) { continue; }
-        if (h > t) { continue; }                  // canonical = smaller
+        if (t == k_null_he || temp.he_is_boundary(t))
+        {
+            continue;
+        }
+        if (h > t) // canonical = smaller
+        {
+            continue;
+        }
         snap.push_back(h);
     }
 
     auto vertices_connected = [&](crd::u32 u, crd::u32 w) {
         bool found = false;
         temp.for_each_outgoing_he(u, [&](crd::u32 ho) {
-            if (found) { return; }
-            if (temp.he_dest(ho) == w) { found = true; }
+            if (found)
+            {
+                return;
+            }
+            if (temp.he_dest(ho) == w)
+            {
+                found = true;
+            }
         });
         return found;
     };
@@ -425,21 +500,36 @@ crd::u32 delaunay_flip_pass(crd::containers::Array<crd::math::Vec3<T>>& patch_po
     for (crd::u32 si = 0; si < snap.size(); ++si)
     {
         const crd::u32 h = snap[si];
-        if (!temp.he_alive(h)) { continue; }
-        if (temp.he_is_boundary(h)) { continue; }
+        if (!temp.he_alive(h))
+        {
+            continue;
+        }
+        if (temp.he_is_boundary(h))
+        {
+            continue;
+        }
         const crd::u32 t = temp.he(h).twin;
-        if (t == k_null_he || temp.he_is_boundary(t)) { continue; }
+        if (t == k_null_he || temp.he_is_boundary(t))
+        {
+            continue;
+        }
         const crd::u32 va = temp.he(h).origin;
         const crd::u32 vb = temp.he_dest(h);
         const crd::u32 vc = temp.he(temp.he_prev(h)).origin;
         const crd::u32 vd = temp.he(temp.he_prev(t)).origin;
-        if (vertices_connected(vc, vd)) { continue; } // D36 guard
+        if (vertices_connected(vc, vd)) // D36 guard
+        {
+            continue;
+        }
         if (!delaunay_flip_recommended(patch_positions[va], patch_positions[vb],
                                          patch_positions[vc], patch_positions[vd]))
         {
             continue;
         }
-        if (temp.flip_edge(h)) { ++flips; }
+        if (temp.flip_edge(h))
+        {
+            ++flips;
+        }
     }
 
     if (flips > 0)
@@ -533,7 +623,10 @@ void refinement_loop(crd::containers::Array<crd::math::Vec3<T>>& patch_positions
         ++out_iterations;
 
         // Convergence: if no splits AND no flips happened, we're done.
-        if (splits_this_iter == 0U && flips_this_iter == 0U) { break; }
+        if (splits_this_iter == 0U && flips_this_iter == 0U)
+        {
+            break;
+        }
     }
     // Suppress unused-param lint (alpha is used inside the lambda).
     (void)loop_size;
@@ -547,8 +640,14 @@ crd::u32 fairing_pass(crd::containers::Array<crd::math::Vec3<T>>& patch_position
                        crd::u32                                    iterations,
                        crd::memory::IAllocator*                    alloc)
 {
-    if (iterations == 0U) { return 0; }
-    if (patch_positions.size() <= loop_size) { return 0; } // no Steiner vertices
+    if (iterations == 0U)
+    {
+        return 0;
+    }
+    if (patch_positions.size() <= loop_size) // no Steiner vertices
+    {
+        return 0;
+    }
 
     // Build adjacency once (patch topology doesn't change in fairing).
     HalfEdgeMesh<T> temp{alloc};
@@ -556,7 +655,10 @@ crd::u32 fairing_pass(crd::containers::Array<crd::math::Vec3<T>>& patch_position
         crd::containers::ConstSpan<crd::math::Vec3<T>>{patch_positions.data(), patch_positions.size()},
         crd::containers::ConstSpan<crd::u32>{patch_indices.data(), patch_indices.size()});
     (void)bs;
-    if (!temp.is_manifold()) { return 0; }
+    if (!temp.is_manifold())
+    {
+        return 0;
+    }
 
     crd::containers::Array<crd::math::Vec3<T>> new_positions(alloc);
     new_positions.resize(patch_positions.size(), crd::math::Vec3<T>{T{0}, T{0}, T{0}});
@@ -576,7 +678,10 @@ crd::u32 fairing_pass(crd::containers::Array<crd::math::Vec3<T>>& patch_position
             crd::u32           count = 0;
             temp.for_each_outgoing_he(v, [&](crd::u32 ho) {
                 const crd::u32 dest = temp.he_dest(ho);
-                if (dest == k_null_vertex) { return; }
+                if (dest == k_null_vertex)
+                {
+                    return;
+                }
                 sum = sum + patch_positions[dest];
                 ++count;
             });
@@ -608,7 +713,10 @@ HalfEdgeMesh<T> fill_holes(const HalfEdgeMesh<T>&        input,
 {
     FillHolesReport report{};
     auto            report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr
@@ -642,7 +750,10 @@ HalfEdgeMesh<T> fill_holes(const HalfEdgeMesh<T>&        input,
         const auto&    loop_globals = loops[li];
         // N = loop vertex count per Liepa 1997 §3 notation.
         const crd::u32 N            = static_cast<crd::u32>(loop_globals.size()); // NOLINT(readability-identifier-naming)
-        if (N < 3U) { continue; }
+        if (N < 3U)
+        {
+            continue;
+        }
         if (N > opts.max_hole_size)
         {
             ++report.holes_skipped_too_large;
@@ -702,7 +813,10 @@ HalfEdgeMesh<T> fill_holes(const HalfEdgeMesh<T>&        input,
 
         // Map local patch indices → global, append to global index buffer.
         auto local_to_global = [&](crd::u32 local) -> crd::u32 {
-            if (local < N) { return loop_globals[local]; }
+            if (local < N)
+            {
+                return loop_globals[local];
+            }
             return first_steiner_global + (local - N);
         };
         for (crd::u32 ti = 0; ti + 2 < patch_indices.size(); ti += 3)

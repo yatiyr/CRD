@@ -62,7 +62,10 @@ MortonGpuPipeline::MortonGpuPipeline(crd::gpu::IComputeContext&   ctx,
 
     // Kernel by name — the backend loads its own cooked kernel; no API, no file format named here.
     impl.pipeline = ctx.create_pipeline(shader_dir, crd::containers::StringView{"compute_morton_codes"}, 2, sizeof(MortonPushConstants));
-    if (impl.pipeline == nullptr) { return; }
+    if (impl.pipeline == nullptr)
+    {
+        return;
+    }
 
     impl.valid = true;
 }
@@ -169,7 +172,10 @@ MortonGpuPipeline::dispatch_morton_codes(
     const crd::geometry::primitives::AABB3<crd::f32>& scene_aabb,
     crd::memory::IAllocator* alloc) noexcept
 {
-    if (!is_valid()) { return crd::containers::Array<crd::u32>(alloc); }
+    if (!is_valid())
+    {
+        return crd::containers::Array<crd::u32>(alloc);
+    }
     return dispatch_inner(*m_impl, aabbs, scene_aabb, alloc);
 }
 
@@ -179,7 +185,10 @@ MortonGpuPipeline::dispatch_morton_codes_async(
     const crd::geometry::primitives::AABB3<crd::f32>& scene_aabb,
     crd::memory::IAllocator* alloc) noexcept
 {
-    if (!is_valid()) { return crd::containers::Array<crd::u32>(alloc); }
+    if (!is_valid())
+    {
+        return crd::containers::Array<crd::u32>(alloc);
+    }
     return dispatch_inner(*m_impl, aabbs, scene_aabb, alloc);
 }
 

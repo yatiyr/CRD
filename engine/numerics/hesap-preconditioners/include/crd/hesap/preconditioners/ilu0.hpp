@@ -59,7 +59,10 @@ public:
         CRD_ASSERT_MSG(a.rows() == a.cols(), "Ilu0Preconditioner: matrix must be square");
         CRD_ASSERT_MSG(a.pattern().is_compressed(), "Ilu0Preconditioner: requires a compressed CSR matrix");
         m_jpos.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { m_jpos[i] = -1; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_jpos[i] = -1;
+        }
         m_t.resize(m_n);
         factor(m_lu, m_diag);    // ILU(0) of A
         factor(m_luh, m_diag_h); // ILU(0) of Aᴴ (for the adjoint apply)
@@ -84,8 +87,14 @@ public:
 private:
     [[nodiscard]] static T ilu_conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
     // Copy A into a CSR with EVERY diagonal entry present (a zero is inserted where A's
     // pattern lacks (i,i)). ILU(0) needs an explicit diagonal in each row (D-pin: the factor
@@ -107,15 +116,31 @@ private:
         for (crd::u32 i = 0; i < n; ++i)
         {
             bool has_diag = false;
-            for (crd::u32 p = outer[i]; p < outer[i + 1]; ++p) { if (inner[p] == i) { has_diag = true; break; } }
+            for (crd::u32 p = outer[i]; p < outer[i + 1]; ++p)
+            {
+                if (inner[p] == i)
+                {
+                    has_diag = true;
+                    break;
+                }
+            }
             bool inserted = has_diag; // if already present, nothing to insert
             for (crd::u32 p = outer[i]; p < outer[i + 1]; ++p)
             {
-                if (!inserted && inner[p] > i) { pat.inner_idx.push_back(i); vals.values.push_back(T{}); inserted = true; }
+                if (!inserted && inner[p] > i)
+                {
+                    pat.inner_idx.push_back(i);
+                    vals.values.push_back(T{});
+                    inserted = true;
+                }
                 pat.inner_idx.push_back(inner[p]);
                 vals.values.push_back(av[p]);
             }
-            if (!inserted) { pat.inner_idx.push_back(i); vals.values.push_back(T{}); } // diagonal is the largest col
+            if (!inserted) // diagonal is the largest col
+            {
+                pat.inner_idx.push_back(i);
+                vals.values.push_back(T{});
+            }
             pat.outer_ptr.push_back(static_cast<crd::u32>(pat.inner_idx.size()));
         }
         pat.recompute_topology_hash();
@@ -126,14 +151,23 @@ private:
         Csr   aug  = augment_diag(a, alloc); // diagonals present before transpose ⇒ Aᴴ has them too
         Csr   at   = crd::hesap::sparse::transpose<T>(aug, alloc);
         auto& vals = at.values().values;
-        for (crd::usize k = 0; k < vals.size(); ++k) { vals[k] = ilu_conj(vals[k]); }
+        for (crd::usize k = 0; k < vals.size(); ++k)
+        {
+            vals[k] = ilu_conj(vals[k]);
+        }
         return at;
     }
 
     [[nodiscard]] static R ilu_mag(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     }
 
     // IKJ ILU(0) of `mat` (factored in place); fills `diag` with each row's diagonal position.
@@ -149,13 +183,24 @@ private:
         const auto* inner = mat.pattern().inner_idx.data();
         T*          lu    = mat.values().values.data();
         R           amax  = R(0);
-        for (crd::usize k = 0; k < mat.values().values.size(); ++k) { const R m = ilu_mag(lu[k]); amax = m > amax ? m : amax; }
+        for (crd::usize k = 0; k < mat.values().values.size(); ++k)
+        {
+            const R m = ilu_mag(lu[k]);
+            amax = m > amax ? m : amax;
+        }
         const R tau = std::sqrt(std::numeric_limits<R>::epsilon()) * amax + std::numeric_limits<R>::min();
         diag.resize(m_n);
         for (crd::u32 i = 0; i < m_n; ++i)
         {
             crd::i32 dp = -1;
-            for (crd::u32 p = outer[i]; p < outer[i + 1]; ++p) { if (inner[p] == i) { dp = static_cast<crd::i32>(p); break; } }
+            for (crd::u32 p = outer[i]; p < outer[i + 1]; ++p)
+            {
+                if (inner[p] == i)
+                {
+                    dp = static_cast<crd::i32>(p);
+                    break;
+                }
+            }
             CRD_ASSERT_MSG(dp >= 0, "Ilu0Preconditioner: missing diagonal entry (augment_diag should guarantee one)");
             diag[i] = dp;
         }
@@ -163,22 +208,37 @@ private:
         {
             const crd::u32 lo = outer[i];
             const crd::u32 hi = outer[i + 1];
-            for (crd::u32 p = lo; p < hi; ++p) { m_jpos[inner[p]] = static_cast<crd::i32>(p); }
+            for (crd::u32 p = lo; p < hi; ++p)
+            {
+                m_jpos[inner[p]] = static_cast<crd::i32>(p);
+            }
             for (crd::u32 p = lo; p < hi; ++p) // ascending columns
             {
                 const crd::u32 k = inner[p];
-                if (k >= i) { break; }                       // L part done (reached diagonal/upper)
+                if (k >= i) // L part done (reached diagonal/upper)
+                {
+                    break;
+                }
                 const T piv = lu[p] / lu[static_cast<crd::u32>(diag[k])]; // u_kk already floored when row k closed
                 lu[p]       = piv;
                 for (crd::u32 q = static_cast<crd::u32>(diag[k]) + 1; q < outer[k + 1]; ++q) // row k, cols > k
                 {
                     const crd::i32 jp = m_jpos[inner[q]];
-                    if (jp >= 0) { lu[static_cast<crd::u32>(jp)] = lu[static_cast<crd::u32>(jp)] - piv * lu[q]; }
+                    if (jp >= 0)
+                    {
+                        lu[static_cast<crd::u32>(jp)] = lu[static_cast<crd::u32>(jp)] - piv * lu[q];
+                    }
                 }
             }
             const crd::u32 dpi = static_cast<crd::u32>(diag[i]);
-            if (ilu_mag(lu[dpi]) < tau) { lu[dpi] = T(tau); } // floor a collapsed pivot
-            for (crd::u32 p = lo; p < hi; ++p) { m_jpos[inner[p]] = -1; }
+            if (ilu_mag(lu[dpi]) < tau) // floor a collapsed pivot
+            {
+                lu[dpi] = T(tau);
+            }
+            for (crd::u32 p = lo; p < hi; ++p)
+            {
+                m_jpos[inner[p]] = -1;
+            }
         }
     }
 
@@ -192,14 +252,20 @@ private:
         for (crd::u32 i = 0; i < m_n; ++i) // L y = r (unit diagonal)
         {
             T acc = r[i];
-            for (crd::u32 p = outer[i]; p < static_cast<crd::u32>(diag[i]); ++p) { acc = acc - lu[p] * m_t[inner[p]]; }
+            for (crd::u32 p = outer[i]; p < static_cast<crd::u32>(diag[i]); ++p)
+            {
+                acc = acc - lu[p] * m_t[inner[p]];
+            }
             m_t[i] = acc;
         }
         for (crd::u32 ii = 0; ii < m_n; ++ii) // U z = y
         {
             const crd::u32 i   = m_n - 1 - ii;
             T              acc = m_t[i];
-            for (crd::u32 p = static_cast<crd::u32>(diag[i]) + 1; p < outer[i + 1]; ++p) { acc = acc - lu[p] * z[inner[p]]; }
+            for (crd::u32 p = static_cast<crd::u32>(diag[i]) + 1; p < outer[i + 1]; ++p)
+            {
+                acc = acc - lu[p] * z[inner[p]];
+            }
             z[i] = acc / lu[static_cast<crd::u32>(diag[i])];
         }
     }

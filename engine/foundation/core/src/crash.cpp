@@ -53,7 +53,9 @@ bool w_append(wchar_t* buf, std::size_t cap, std::size_t& i, const wchar_t* s) n
     while (*s != L'\0')
     {
         if (i + 1 >= cap)
+        {
             return false;
+        }
         buf[i++] = *s++;
     }
     buf[i] = L'\0';
@@ -65,7 +67,9 @@ bool w_append_u32_dec(wchar_t* buf, std::size_t cap, std::size_t& i, unsigned v)
     wchar_t tmp[11];
     int     n = 0;
     if (v == 0U)
+    {
         tmp[n++] = L'0';
+    }
     while (v != 0U)
     {
         tmp[n++] = static_cast<wchar_t>(L'0' + (v % 10U));
@@ -74,7 +78,9 @@ bool w_append_u32_dec(wchar_t* buf, std::size_t cap, std::size_t& i, unsigned v)
     while (n > 0)
     {
         if (i + 1 >= cap)
+        {
             return false;
+        }
         buf[i++] = tmp[--n];
     }
     buf[i] = L'\0';
@@ -86,7 +92,9 @@ bool w_append_u64_hex(wchar_t* buf, std::size_t cap, std::size_t& i, unsigned lo
     wchar_t tmp[17];
     int     n = 0;
     if (v == 0ULL)
+    {
         tmp[n++] = L'0';
+    }
     while (v != 0ULL)
     {
         const unsigned d = static_cast<unsigned>(v & 0xFULL);
@@ -96,7 +104,9 @@ bool w_append_u64_hex(wchar_t* buf, std::size_t cap, std::size_t& i, unsigned lo
     while (n > 0)
     {
         if (i + 1 >= cap)
+        {
             return false;
+        }
         buf[i++] = tmp[--n];
     }
     buf[i] = L'\0';
@@ -109,17 +119,23 @@ bool build_prefixed(const wchar_t* full, wchar_t* out) noexcept
     std::size_t i = 0;
     // Already \\?\-prefixed: copy as-is.
     if (full[0] == L'\\' && full[1] == L'\\' && full[2] == L'?' && full[3] == L'\\')
+    {
         return w_append(out, kPathCap, i, full);
+    }
     // UNC \\server\share -> \\?\UNC\server\share
     if (full[0] == L'\\' && full[1] == L'\\')
     {
         if (!w_append(out, kPathCap, i, L"\\\\?\\UNC\\"))
+        {
             return false;
+        }
         return w_append(out, kPathCap, i, full + 2);
     }
     // Drive path C:\... -> \\?\C:\...
     if (!w_append(out, kPathCap, i, L"\\\\?\\"))
+    {
         return false;
+    }
     return w_append(out, kPathCap, i, full);
 }
 
@@ -143,7 +159,9 @@ void emit_cstr(HANDLE h, const char* s) noexcept
 {
     DWORD n = 0;
     while (s[n] != '\0')
+    {
         ++n;
+    }
     emit(h, s, n);
 }
 
@@ -152,7 +170,9 @@ void emit_u32_dec(HANDLE h, unsigned v) noexcept
     char tmp[10];
     int  n = 0;
     if (v == 0U)
+    {
         tmp[n++] = '0';
+    }
     while (v != 0U)
     {
         tmp[n++] = static_cast<char>('0' + (v % 10U));
@@ -160,7 +180,9 @@ void emit_u32_dec(HANDLE h, unsigned v) noexcept
     }
     char out[10];
     for (int j = 0; j < n; ++j)
+    {
         out[j] = tmp[n - 1 - j];
+    }
     emit(h, out, static_cast<DWORD>(n));
 }
 
@@ -170,7 +192,9 @@ void emit_hex(HANDLE h, unsigned long long v, int width) noexcept
     char        out[16];
     const char* digits = "0123456789ABCDEF";
     for (int j = 0; j < width; ++j)
+    {
         out[width - 1 - j] = digits[(v >> (j * 4)) & 0xFULL];
+    }
     emit(h, out, static_cast<DWORD>(width));
 }
 
@@ -183,7 +207,9 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
     using crd::crash::WriteResult;
 
     if (s_output_dir_w[0] == L'\0')
+    {
         return WriteResult::NotInstalled;
+    }
 
     const wchar_t* prefix = L"\\crash_";
     if (kind == crd::crash::DumpKind::Hang)
@@ -211,7 +237,9 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         !w_append(s_dump_path, kPathCap, base, L"_"))
     {
         if (out_last_error != nullptr)
+        {
             *out_last_error = ERROR_BUFFER_OVERFLOW;
+        }
         return WriteResult::OpenFailed;
     }
 
@@ -222,23 +250,33 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         if (!w_append_u32_dec(s_dump_path, kPathCap, i, attempt) || !w_append(s_dump_path, kPathCap, i, L".dmp"))
         {
             if (out_last_error != nullptr)
+            {
                 *out_last_error = ERROR_BUFFER_OVERFLOW;
+            }
             return WriteResult::OpenFailed;
         }
         file = CreateFileW(s_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file != INVALID_HANDLE_VALUE)
+        {
             break;
+        }
         const DWORD e = GetLastError();
         if (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS)
+        {
             continue; // collision: next attempt index
+        }
         if (out_last_error != nullptr)
+        {
             *out_last_error = e;
+        }
         return WriteResult::OpenFailed;
     }
     if (file == INVALID_HANDLE_VALUE)
     {
         if (out_last_error != nullptr)
+        {
             *out_last_error = ERROR_FILE_EXISTS;
+        }
         return WriteResult::OpenFailed;
     }
 
@@ -248,7 +286,9 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         (void)CloseHandle(file);
         (void)DeleteFileW(s_dump_path);
         if (out_last_error != nullptr)
+        {
             *out_last_error = ERROR_CANCELLED;
+        }
         return WriteResult::OpenFailed; // injected: exercise the open-failure cleanup path
     }
 #endif
@@ -290,13 +330,17 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         (void)CloseHandle(file);
         (void)DeleteFileW(s_dump_path); // no plausible partial left behind
         if (out_last_error != nullptr)
+        {
             *out_last_error = dump_err;
+        }
         return WriteResult::DumpFailed;
     }
     BOOL flushed = FlushFileBuffers(file);
 #if CRD_ENABLE_ASSERTS
     if (s_inject_step.load(std::memory_order_relaxed) == WriteResult::FlushFailed)
+    {
         flushed = FALSE;
+    }
 #endif
     if (flushed == FALSE)
     {
@@ -304,12 +348,16 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         (void)CloseHandle(file);
         (void)DeleteFileW(s_dump_path);
         if (out_last_error != nullptr)
+        {
             *out_last_error = e;
+        }
         return WriteResult::FlushFailed;
     }
     (void)CloseHandle(file);
     if (out_path != nullptr)
+    {
         *out_path = s_dump_path;
+    }
     return WriteResult::Ok;
 }
 
@@ -382,7 +430,9 @@ void do_fatal_dump() noexcept
         const int   pn = WideCharToMultiByte(CP_UTF8, 0, dump_path, -1, narrow_path, static_cast<int>(kPathCap),
                                              nullptr, nullptr);
         if (pn > 1)
+        {
             emit(herr, narrow_path, static_cast<DWORD>(pn - 1)); // pn includes the NUL
+        }
         emit_cstr(herr, "\n");
     }
     else
@@ -412,7 +462,9 @@ void do_fatal_dump() noexcept
     s_req_report        = report;
 
     if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+    {
         h(report, s_handler_user.load(std::memory_order_relaxed));
+    }
 }
 
 DWORD WINAPI handler_thread_proc(LPVOID) noexcept
@@ -462,7 +514,9 @@ crd::crash::CrashReport direct_fallback_dump(EXCEPTION_POINTERS* ep, DWORD tid) 
         r.write = WriteResult::HandlerTimeout; // a dump is already in progress under the lock
     }
     if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+    {
         h(r, s_handler_user.load(std::memory_order_relaxed));
+    }
     return r;
 }
 
@@ -499,7 +553,9 @@ crd::crash::CrashReport handle_fatal(EXCEPTION_POINTERS* ep, DWORD tid) noexcept
         s_req_tid = tid;
         SetEvent(s_req_event);
         if (WaitForSingleObject(s_done_event, kHandlerWaitMs) == WAIT_OBJECT_0)
+        {
             return s_req_report; // published by the handler thread before it set s_done_event
+        }
 
         emit_cstr(GetStdHandle(STD_ERROR_HANDLE), "[crd] crash handler timed out; direct fallback\n");
         return direct_fallback_dump(ep, tid);
@@ -514,7 +570,9 @@ crd::crash::CrashReport handle_fatal(EXCEPTION_POINTERS* ep, DWORD tid) noexcept
     r.code                      = (rec != nullptr) ? rec->ExceptionCode : 0UL;
     r.address                   = (rec != nullptr) ? rec->ExceptionAddress : nullptr;
     if (crd::crash::CrashReportHandler h = s_handler.load(std::memory_order_acquire); h != nullptr)
+    {
         h(r, s_handler_user.load(std::memory_order_relaxed));
+    }
     (void)WaitForSingleObject(s_done_event, kHandlerWaitMs);
     return r;
 }
@@ -549,21 +607,31 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept
 InstallResult install(const char* output_dir) noexcept
 {
     if (output_dir == nullptr)
+    {
         return InstallResult::OutputDirUnusable;
+    }
 
     const int wn = MultiByteToWideChar(CP_UTF8, 0, output_dir, -1, s_scratch_a, static_cast<int>(kPathCap));
     if (wn == 0)
+    {
         return InstallResult::OutputDirUnusable;
+    }
 
     const DWORD fn = GetFullPathNameW(s_scratch_a, static_cast<DWORD>(kPathCap), s_scratch_b, nullptr);
     if (fn == 0)
+    {
         return InstallResult::OutputDirUnusable;
+    }
     if (fn >= kPathCap)
+    {
         return InstallResult::PathTooLong;
+    }
 
     // Strip a single trailing separator (GetFullPathNameW rarely leaves one, but a user path may).
     if (fn >= 2 && s_scratch_b[fn - 1] == L'\\' && s_scratch_b[fn - 2] != L':')
+    {
         s_scratch_b[fn - 1] = L'\0';
+    }
 
     if (!build_prefixed(s_scratch_b, s_output_dir_w))
     {
@@ -598,11 +666,17 @@ InstallResult install(const char* output_dir) noexcept
         if (s_req_event == nullptr || s_done_event == nullptr || s_quit_event == nullptr)
         {
             if (s_req_event != nullptr)
+            {
                 (void)CloseHandle(s_req_event);
+            }
             if (s_done_event != nullptr)
+            {
                 (void)CloseHandle(s_done_event);
+            }
             if (s_quit_event != nullptr)
+            {
                 (void)CloseHandle(s_quit_event);
+            }
             s_req_event = s_done_event = s_quit_event = nullptr;
             s_output_dir_w[0]                         = L'\0';
             return InstallResult::FilterInstallFailed;
@@ -638,7 +712,9 @@ InstallResult install(const char* output_dir) noexcept
         return InstallResult::Ok;
     }
     if (prev == &crash_filter)
+    {
         return InstallResult::OkReinstalled; // still ours; keep the originally saved previous
+    }
     return InstallResult::OkReplacedForeignFilter; // a foreign filter had displaced us; do not adopt it
 }
 
@@ -676,10 +752,14 @@ void guard_current_thread_stack(std::uint32_t reserve_bytes) noexcept
 WriteResult capture_dump(const DumpNote& note, const wchar_t** out_path) noexcept
 {
     if (s_output_dir_w[0] == L'\0')
+    {
         return WriteResult::NotInstalled;
+    }
     // Bounded: a runaway observer cannot fill the disk with live dumps. The fatal single-shot gate is separate.
     if (s_live_dumps.fetch_add(1U, std::memory_order_relaxed) >= kMaxLiveDumps)
+    {
         return WriteResult::Suppressed;
+    }
 
     DWORD last_error = 0;
     AcquireSRWLockExclusive(&s_dump_lock);
@@ -696,11 +776,15 @@ WriteResult capture_dump(const wchar_t** out_path) noexcept
 std::size_t read_dump_stream(const wchar_t* dump_path, std::uint32_t stream_type, void* out, std::size_t cap) noexcept
 {
     if (dump_path == nullptr)
+    {
         return 0;
+    }
     HANDLE file = CreateFileW(dump_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
+    {
         return 0;
+    }
     HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
     if (mapping == nullptr)
     {
@@ -728,7 +812,9 @@ std::size_t read_dump_stream(const wchar_t* dump_path, std::uint32_t stream_type
             auto*       d = static_cast<unsigned char*>(out);
             const auto* s = static_cast<const unsigned char*>(stream);
             for (std::size_t i = 0; i < nc; ++i)
+            {
                 d[i] = s[i];
+            }
         }
     }
 
@@ -819,7 +905,9 @@ std::size_t extract_build_id(const ElfW(Phdr)* phdr, int phnum, ElfW(Addr) load_
     for (int i = 0; i < phnum; ++i)
     {
         if (phdr[i].p_type != PT_NOTE)
+        {
             continue;
+        }
         const unsigned char* p   = reinterpret_cast<const unsigned char*>(load_base + phdr[i].p_vaddr);
         std::size_t          rem = static_cast<std::size_t>(phdr[i].p_memsz);
         while (rem >= sizeof(ElfW(Nhdr)))
@@ -830,13 +918,17 @@ std::size_t extract_build_id(const ElfW(Phdr)* phdr, int phnum, ElfW(Addr) load_
             const std::size_t desc_pad = (static_cast<std::size_t>(nh.n_descsz) + 3U) & ~static_cast<std::size_t>(3);
             const std::size_t total    = sizeof(ElfW(Nhdr)) + name_pad + desc_pad;
             if (total > rem || total < sizeof(ElfW(Nhdr))) // second test guards a wrapped add
+            {
                 break;
+            }
             if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U &&
                 std::memcmp(p + sizeof(ElfW(Nhdr)), "GNU", 4) == 0)
             {
                 std::size_t take = nh.n_descsz;
                 if (take > out_cap)
+                {
                     take = out_cap;
+                }
                 std::memcpy(out, p + sizeof(ElfW(Nhdr)) + name_pad, take);
                 return take;
             }
@@ -866,11 +958,17 @@ int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
     const char* name = (info->dlpi_name != nullptr) ? info->dlpi_name : "";
     const char* bn   = name;
     for (const char* q = name; *q != '\0'; ++q)
+    {
         if (*q == '/')
+        {
             bn = q + 1;
+        }
+    }
     std::size_t j = 0;
     for (; bn[j] != '\0' && j + 1U < kModulePathCap; ++j)
+    {
         m.path[j] = bn[j];
+    }
     m.path[j] = '\0';
 
     if (name[0] == '\0' && idlen != 0U) // dlpi_name == "" is the main executable
@@ -925,7 +1023,9 @@ thread_local bool                      t_alt_owned     = false; // ...and it is 
 std::size_t ap_str(char* buf, std::size_t cap, std::size_t n, const char* s) noexcept
 {
     while (*s != '\0' && n + 1U < cap)
+    {
         buf[n++] = *s++;
+    }
     return n;
 }
 
@@ -935,14 +1035,18 @@ std::size_t ap_dec(char* buf, std::size_t cap, std::size_t n, std::uint64_t v) n
     char        tmp[20];
     std::size_t t = 0;
     if (v == 0U)
+    {
         tmp[t++] = '0';
+    }
     while (v != 0U)
     {
         tmp[t++] = static_cast<char>('0' + static_cast<int>(v % 10U));
         v /= 10U;
     }
     while (t != 0U && n + 1U < cap)
+    {
         buf[n++] = tmp[--t];
+    }
     return n;
 }
 
@@ -953,7 +1057,9 @@ std::size_t ap_hex(char* buf, std::size_t cap, std::size_t n, std::uint64_t v) n
     char        tmp[16];
     std::size_t t = 0;
     if (v == 0U)
+    {
         tmp[t++] = '0';
+    }
     while (v != 0U)
     {
         const int d = static_cast<int>(v & 0xFU);
@@ -961,7 +1067,9 @@ std::size_t ap_hex(char* buf, std::size_t cap, std::size_t n, std::uint64_t v) n
         v >>= 4U;
     }
     while (t != 0U && n + 1U < cap)
+    {
         buf[n++] = tmp[--t];
+    }
     return n;
 }
 
@@ -973,9 +1081,13 @@ std::size_t ap_hex_bytes(char* buf, std::size_t cap, std::size_t n, const unsign
         const int hi = (p[i] >> 4) & 0xF;
         const int lo = p[i] & 0xF;
         if (n + 1U < cap)
+        {
             buf[n++] = static_cast<char>(hi < 10 ? ('0' + hi) : ('a' + hi - 10));
+        }
         if (n + 1U < cap)
+        {
             buf[n++] = static_cast<char>(lo < 10 ? ('0' + lo) : ('a' + lo - 10));
+        }
     }
     return n;
 }
@@ -990,11 +1102,15 @@ bool write_all(int fd, const char* p, std::size_t n) noexcept
         if (w < 0)
         {
             if (errno == EINTR)
+            {
                 continue;
+            }
             return false;
         }
         if (w == 0)
+        {
             return false;
+        }
         off += static_cast<std::size_t>(w);
     }
     return true;
@@ -1067,7 +1183,9 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
     n             = ap_hex(rec, sizeof(rec), n, addr);
     n             = ap_str(rec, sizeof(rec), n, "\nexe ");
     if (s_exe_path_len != 0U)
+    {
         n = ap_str(rec, sizeof(rec), n, s_exe_path);
+    }
     n = ap_str(rec, sizeof(rec), n, "\nregs ");
 
     auto* uc = static_cast<ucontext_t*>(ctx);
@@ -1122,7 +1240,9 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
     n = ap_str(rec, sizeof(rec), n, "modules ");
     n = ap_dec(rec, sizeof(rec), n, s_module_count);
     if (s_modules_overflow)
+    {
         n = ap_str(rec, sizeof(rec), n, " truncated 1");
+    }
     n = ap_str(rec, sizeof(rec), n, "\n");
     for (std::size_t i = 0; i < s_module_count; ++i)
     {
@@ -1135,9 +1255,13 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
         n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(s_modules[i].base));
         n = ap_str(rec, sizeof(rec), n, " ");
         if (s_modules[i].id_len != 0U)
+        {
             n = ap_hex_bytes(rec, sizeof(rec), n, s_modules[i].id, s_modules[i].id_len);
+        }
         else
+        {
             n = ap_str(rec, sizeof(rec), n, "-"); // no build-id for this module (refuse, don't guess)
+        }
         n = ap_str(rec, sizeof(rec), n, " ");
         n = ap_str(rec, sizeof(rec), n, (s_modules[i].path[0] != '\0') ? s_modules[i].path : "(exe)");
         n = ap_str(rec, sizeof(rec), n, "\n");
@@ -1145,7 +1269,9 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
 
     const bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);
     if (!ok)
+    {
         err = errno; // capture the write/fsync errno before close() can change it
+    }
     (void)close(fd);
     if (!ok)
     {
@@ -1254,7 +1380,9 @@ void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
     default: break;
     }
     if (prev != nullptr)
+    {
         (void)sigaction(sig, prev, nullptr);
+    }
     (void)raise(sig);
 }
 
@@ -1272,11 +1400,15 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept
 InstallResult install(const char* output_dir) noexcept
 {
     if (output_dir == nullptr)
+    {
         return InstallResult::OutputDirUnusable;
+    }
 
     std::size_t di = 0; // bounded manual copy (avoids strncpy truncation diagnostics under -Werror)
     for (; output_dir[di] != '\0' && di + 1U < sizeof(s_output_dir); ++di)
+    {
         s_output_dir[di] = output_dir[di];
+    }
     s_output_dir[di] = '\0';
 
     if (mkdir(s_output_dir, 0755) != 0 && errno != EEXIST) // created ONCE here, never in the async-signal handler
@@ -1343,7 +1475,9 @@ InstallResult install(const char* output_dir) noexcept
     // Re-install without clobbering the originally saved previous handlers.
     if (sigaction(SIGSEGV, &sa, nullptr) != 0 || sigaction(SIGABRT, &sa, nullptr) != 0 ||
         sigaction(SIGFPE, &sa, nullptr) != 0 || sigaction(SIGILL, &sa, nullptr) != 0)
+    {
         return InstallResult::FilterInstallFailed;
+    }
     return InstallResult::OkReinstalled;
 }
 
@@ -1400,7 +1534,9 @@ void guard_current_thread_stack(std::uint32_t /*reserve_bytes*/) noexcept
     // fault -- workers/fibers included (wired in a later sub-unit) -- must call this, or a stack-exhausted fault on it
     // cannot be recorded (there is no separate handler thread as on Windows).
     if (t_alt_installed)
+    {
         return;
+    }
     // Keep an alternate stack another runtime already installed on this thread: it owns that stack's lifetime.
     // AddressSanitizer gives every thread an mmap'ed alternate stack and munmaps whatever stack is current at thread
     // exit, so replacing it with t_alt_stack made ASan die with "Failed to munmap" on every worker exit (hosted

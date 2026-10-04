@@ -37,8 +37,14 @@ GrowableTlsfAllocator::GrowableTlsfAllocator(usize chunk_bytes, IAllocator* pare
 {
     m_name                = name;
     const usize floor_cap = TlsfAllocator::min_pool_size();
-    if (m_chunk_bytes < floor_cap) { m_chunk_bytes = floor_cap; }
-    if (m_chunk_bytes > kMaxChunkBytes) { m_chunk_bytes = kMaxChunkBytes; }
+    if (m_chunk_bytes < floor_cap)
+    {
+        m_chunk_bytes = floor_cap;
+    }
+    if (m_chunk_bytes > kMaxChunkBytes)
+    {
+        m_chunk_bytes = kMaxChunkBytes;
+    }
 }
 
 GrowableTlsfAllocator::~GrowableTlsfAllocator()
@@ -58,7 +64,10 @@ GrowableTlsfAllocator::~GrowableTlsfAllocator()
 GrowableTlsfAllocator::Chunk* GrowableTlsfAllocator::grow(usize min_bytes)
 {
     usize cap = m_chunk_bytes;
-    if (min_bytes > cap) { cap = round_up(min_bytes, usize{4} << 10); } // 4 KB page granularity
+    if (min_bytes > cap) // 4 KB page granularity
+    {
+        cap = round_up(min_bytes, usize{4} << 10);
+    }
     CRD_ASSERT_MSG(cap <= kMaxChunkBytes,
                    "GrowableTlsfAllocator: single allocation exceeds the per-chunk TLSF cap (~4 GB)");
     // Pull the TLSF pool buffer, then the Chunk node, via try_allocate — so a
@@ -66,7 +75,10 @@ GrowableTlsfAllocator::Chunk* GrowableTlsfAllocator::grow(usize min_bytes)
     // aborting, and the non-throwing contract holds end-to-end. kDefaultAlignment
     // (16) satisfies TLSF's pool alignment requirement.
     void* pool = m_parent->try_allocate(cap, kDefaultAlignment);
-    if (pool == nullptr) { return nullptr; }
+    if (pool == nullptr)
+    {
+        return nullptr;
+    }
     void* node = m_parent->try_allocate(sizeof(Chunk), alignof(Chunk));
     if (node == nullptr)
     {
@@ -81,10 +93,16 @@ GrowableTlsfAllocator::Chunk* GrowableTlsfAllocator::grow(usize min_bytes)
 
 void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
 {
-    if (size == 0) { return nullptr; }
+    if (size == 0)
+    {
+        return nullptr;
+    }
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
-        if (void* p = c->tlsf.try_allocate(size, alignment)) { return p; }
+        if (void* p = c->tlsf.try_allocate(size, alignment))
+        {
+            return p;
+        }
     }
     // No existing chunk fits — grow one large enough for this request. TLSF's
     // mapping_search rounds the request UP to the next second-level size sub-class
@@ -93,9 +111,15 @@ void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
     // allowance, the empty-pool sentinel overhead, and a small fixed header slack.
     const usize search_round = (size >> 5) + 1; // ~size/32: the SL sub-class round-up
     const usize need = size + search_round + alignment + TlsfAllocator::min_pool_size() + (usize{4} << 10);
-    if (need > kMaxChunkBytes) { return nullptr; }
+    if (need > kMaxChunkBytes)
+    {
+        return nullptr;
+    }
     Chunk* c = grow(need);
-    if (c == nullptr) { return nullptr; } // parent exhausted (grow used try_allocate)
+    if (c == nullptr) // parent exhausted (grow used try_allocate)
+    {
+        return nullptr;
+    }
     return c->tlsf.try_allocate(size, alignment);
 }
 
@@ -111,7 +135,10 @@ void* GrowableTlsfAllocator::allocate(usize size, usize alignment)
 
 void GrowableTlsfAllocator::deallocate(void* p) noexcept
 {
-    if (p == nullptr) { return; }
+    if (p == nullptr)
+    {
+        return;
+    }
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
         if (c->tlsf.owns(p))
@@ -127,7 +154,10 @@ bool GrowableTlsfAllocator::owns(const void* p) const noexcept
 {
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
-        if (c->tlsf.owns(p)) { return true; }
+        if (c->tlsf.owns(p))
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -136,14 +166,20 @@ usize GrowableTlsfAllocator::allocation_size(const void* p) const noexcept
 {
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
-        if (c->tlsf.owns(p)) { return c->tlsf.allocation_size(p); }
+        if (c->tlsf.owns(p))
+        {
+            return c->tlsf.allocation_size(p);
+        }
     }
     return 0;
 }
 
 void* GrowableTlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize alignment)
 {
-    if (p == nullptr) { return allocate(new_size, alignment); }
+    if (p == nullptr)
+    {
+        return allocate(new_size, alignment);
+    }
     if (new_size == 0)
     {
         deallocate(p);
@@ -154,7 +190,10 @@ void* GrowableTlsfAllocator::reallocate(void* p, usize old_size, usize new_size,
     // fatal-on-OOM and we want to fall back to a different/new chunk instead.
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
-        if (!c->tlsf.owns(p)) { continue; }
+        if (!c->tlsf.owns(p))
+        {
+            continue;
+        }
         const usize copy_n = old_size < new_size ? old_size : new_size;
         if (void* q = c->tlsf.try_allocate(new_size, alignment)) // same chunk has room
         {

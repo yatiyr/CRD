@@ -71,7 +71,9 @@ private:
         for (std::size_t i = m_next; i < m_script.size(); ++i)
         {
             if (std::strcmp(tag, m_script[i]) == 0)
+            {
                 return true;
+            }
         }
         return false;
     }
@@ -80,7 +82,9 @@ private:
         for (const char* t : m_arrived)
         {
             if (std::strcmp(t, tag) == 0)
+            {
                 return true;
+            }
         }
         return false;
     }

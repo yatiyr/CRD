@@ -41,7 +41,10 @@ TEST_CASE("assetio: OBJ quad -- corner dedup collapses shared vertices, fan tria
     CHECK(m.has_uv0());
     CHECK(m.uv0[2].x == 1.0F);
     CHECK(m.uv0[2].y == 1.0F);
-    for (crd::usize i = 0; i < m.normals.size(); ++i) { CHECK(m.normals[i].z == 1.0F); }
+    for (crd::usize i = 0; i < m.normals.size(); ++i)
+    {
+        CHECK(m.normals[i].z == 1.0F);
+    }
     // fan: (0,1,2) (0,2,3)
     CHECK(m.indices[0] == 0U);
     CHECK(m.indices[3] == 0U);

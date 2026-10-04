@@ -67,16 +67,25 @@ public:
         for (crd::usize ii = n; ii-- > 0;)
         {
             const crd::f64 a = m_adjoint[ii];
-            if (a == 0.0) { continue; }
+            if (a == 0.0)
+            {
+                continue;
+            }
             const crd::u32 beg = m_op_beg[ii];
             const crd::u32 end = m_op_end[ii];
-            for (crd::u32 k = beg; k < end; ++k) { m_adjoint[m_in_idx[k]] += m_in_par[k] * a; }
+            for (crd::u32 k = beg; k < end; ++k)
+            {
+                m_adjoint[m_in_idx[k]] += m_in_par[k] * a;
+            }
         }
     }
 
     void zero_adjoints() noexcept
     {
-        for (crd::usize i = 0; i < m_adjoint.size(); ++i) { m_adjoint[i] = 0.0; }
+        for (crd::usize i = 0; i < m_adjoint.size(); ++i)
+        {
+            m_adjoint[i] = 0.0;
+        }
     }
     void reset() noexcept // reuse the tape (keeps capacity — arena-friendly)
     {

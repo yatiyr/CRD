@@ -104,9 +104,13 @@ TEST_CASE("v5b-2a static front-end: clean unsymmetric system (residual + diag-do
     {
         tb.add(i, i, static_cast<crd::f64>(n + 2));
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, 1.0);
+        }
         if (i > 0)
+        {
             tb.add(i, i - 1, -2.0);
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<crd::f64> xtrue(&alloc);
@@ -163,9 +167,13 @@ TEST_CASE("v5b-2a static front-end: MC64 balances a BADLY-SCALED matrix", "[lu][
         const crd::f64 s = std::pow(10.0, static_cast<crd::f64>(static_cast<int>(i % 6) - 3));
         tb.add(i, i, s * static_cast<crd::f64>(n + 2));
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, s * 1.0);
+        }
         if (i > 0)
+        {
             tb.add(i, i - 1, s * -2.0);
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<crd::f64> xtrue(&alloc);
@@ -194,9 +202,13 @@ TEST_CASE("v5b-2a static front-end: complex (Complex64)", "[lu][v5b-2a][complex]
     {
         tb.add(i, i, C{static_cast<crd::f64>(n + 2), 1.0});
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, C{1.0, -0.5});
+        }
         if (i > 0)
+        {
             tb.add(i, i - 1, C{-2.0, 0.3});
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<C> xtrue(&alloc);
@@ -625,9 +637,13 @@ TEST_CASE("v5b-2c SupernodalLU: badly-scaled matrix (MC64 balances) residual", "
         const crd::f64 s = std::pow(10.0, static_cast<crd::f64>(static_cast<int>(i % 6) - 3));
         tb.add(i, i, s * static_cast<crd::f64>(n + 2));
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, s * 1.0);
+        }
         if (i > 0)
+        {
             tb.add(i, i - 1, s * -2.0);
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<crd::f64> xtrue(&alloc);
@@ -656,9 +672,13 @@ TEST_CASE("v5b-2c SupernodalLU: complex non-Hermitian residual", "[lu][v5b-2c][c
     {
         tb.add(i, i, C{static_cast<crd::f64>(4 * n + 10), 1.0});
         if (i > 0)
+        {
             tb.add(i, i - 1, C{-1.0, 0.2});
+        }
         if (i + 2 < n)
+        {
             tb.add(i, i + 2, C{0.5, -0.3});
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<C> xtrue(&alloc);
@@ -1132,9 +1152,13 @@ TEST_CASE("v5b-3b-3 MultifrontalLU: residual vs known solution (DD + MC64-rescue
             const crd::f64 s = std::pow(10.0, static_cast<crd::f64>(static_cast<int>(i % 6) - 3));
             tb.add(i, i, s * static_cast<crd::f64>(n + 2));
             if (i + 1 < n)
+            {
                 tb.add(i, i + 1, s * 1.0);
+            }
             if (i > 0)
+            {
                 tb.add(i, i - 1, s * -2.0);
+            }
         }
         auto a = tb.compress();
         crd::containers::Array<crd::f64> xtrue(&alloc);
@@ -1164,9 +1188,13 @@ TEST_CASE("v5b-3b-3 MultifrontalLU: complex non-Hermitian residual", "[lu][v5b-3
     {
         tb.add(i, i, C{static_cast<crd::f64>(4 * n + 10), 1.0});
         if (i > 0)
+        {
             tb.add(i, i - 1, C{-1.0, 0.2});
+        }
         if (i + 2 < n)
+        {
             tb.add(i, i + 2, C{0.5, -0.3});
+        }
     }
     auto a = tb.compress();
     crd::containers::Array<C> xtrue(&alloc);

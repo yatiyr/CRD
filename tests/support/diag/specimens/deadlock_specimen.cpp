@@ -42,7 +42,9 @@ void on_hang(const crd::jobs::HangReport& report, void* /*user*/) noexcept
     std::printf("CRD_DIAG_PARKED_TOTAL=%zu\n", static_cast<std::size_t>(report.parked_total));
     std::fflush(stdout);
     if (report.kind == crd::jobs::HangKind::WaitCycle)
+    {
         std::_Exit(42); // the deadlock was classified as a wait cycle, as expected
+    }
     std::_Exit(96);     // a hang was detected but classified as some other shape
 }
 
@@ -54,14 +56,18 @@ int deadlock_assert_handler(const char* /*formatted_message*/)
 void job_a(void* /*data*/) noexcept
 {
     while (g_counter_b.load(std::memory_order_acquire) == nullptr)
+    {
         std::this_thread::yield(); // keeps this worker EXECUTING until B is submitted (so no premature verdict)
+    }
     crd::jobs::wait(g_counter_b.load(std::memory_order_acquire)); // park on B's completion -- never satisfied
 }
 
 void job_b(void* /*data*/) noexcept
 {
     while (g_counter_a.load(std::memory_order_acquire) == nullptr)
+    {
         std::this_thread::yield();
+    }
     crd::jobs::wait(g_counter_a.load(std::memory_order_acquire)); // park on A's completion -- never satisfied
 }
 } // namespace

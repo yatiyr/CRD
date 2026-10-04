@@ -81,14 +81,20 @@ Block* build_world(Context& ctx, const Systems& s, Operation** ops)
     ops[2] = ctx.create_operation(s.physics, ConstSpan<Value*>(ph_in, 1U), 0U);
     ops[3] = ctx.create_operation(s.input, ConstSpan<Value*>(in_in, 1U), 0U);
     ops[4] = ctx.create_operation(s.spawn, {}, 0U);
-    for (u32 i = 0; i < 5U; ++i) { b->append(ops[i]); }
+    for (u32 i = 0; i < 5U; ++i)
+    {
+        b->append(ops[i]);
+    }
     return b;
 }
 [[nodiscard]] bool edge_present(const Array<Hazard>& h, const Operation* a, const Operation* b, HazardKind k) noexcept
 {
     for (usize i = 0; i < h.size(); ++i)
     {
-        if (h[i].before == a && h[i].after == b && h[i].kind == k) { return true; }
+        if (h[i].before == a && h[i].after == b && h[i].kind == k)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -96,7 +102,10 @@ Block* build_world(Context& ctx, const Systems& s, Operation** ops)
 {
     for (usize i = 0; i < h.size(); ++i)
     {
-        if ((h[i].before == a && h[i].after == b) || (h[i].before == b && h[i].after == a)) { return true; }
+        if ((h[i].before == a && h[i].after == b) || (h[i].before == b && h[i].after == a))
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -137,7 +146,10 @@ TEST_CASE("ceir 9f: a structural mutation is a whole-store barrier against every
 
     // spawn WRITES the whole ECS store (a null resource) -> conflicts with EVERY component access (the nullptr rule) ->
     // a barrier, by the EXISTING 4d conflict predicate, no special structural-mutation mechanism.
-    for (u32 i = 0; i < 4U; ++i) { CHECK(ctx.ops_hazard(*spawn, *op[i]) != HazardKind::None); }
+    for (u32 i = 0; i < 4U; ++i)
+    {
+        CHECK(ctx.ops_hazard(*spawn, *op[i]) != HazardKind::None);
+    }
     CHECK(ctx.ops_hazard(*spawn, *op[0]) == HazardKind::Waw); // whole write vs Position write -> WAW
     CHECK(ctx.ops_hazard(*spawn, *op[1]) == HazardKind::Raw); // whole write vs render (reads) -> RAW
 }

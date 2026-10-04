@@ -121,8 +121,16 @@ TEST_CASE("dsp filtering: lfilter BIT-EXACT vs scipy + filtfilt matches scipy (z
     const usize na = sizeof(ref_lf_a)/sizeof(double);
     const auto yl = dsp::lfilter<f64>(&alloc, cont::ConstSpan<f64>(ref_lf_b,nb), cont::ConstSpan<f64>(ref_lf_a,na), cont::ConstSpan<f64>(ref_lf_x,nx));
     REQUIRE(yl.size() == nx);
-    for (usize i = 0; i < nx; ++i) { INFO("lf[" << i << "]"); CHECK(yl[i] == ref_lfilter[i]); } // BIT-EXACT (DF2T mul-add)
+    for (usize i = 0; i < nx; ++i) // BIT-EXACT (DF2T mul-add)
+    {
+        INFO("lf[" << i << "]");
+        CHECK(yl[i] == ref_lfilter[i]);
+    }
     const auto yff = dsp::filtfilt<f64>(&alloc, cont::ConstSpan<f64>(ref_lf_b,nb), cont::ConstSpan<f64>(ref_lf_a,na), cont::ConstSpan<f64>(ref_lf_x,nx));
     REQUIRE(yff.size() == nx);
-    for (usize i = 0; i < nx; ++i) { INFO("ff[" << i << "]"); CHECK_THAT(yff[i], WithinAbs(ref_filtfilt[i], 1e-10)); } // vs scipy
+    for (usize i = 0; i < nx; ++i) // vs scipy
+    {
+        INFO("ff[" << i << "]");
+        CHECK_THAT(yff[i], WithinAbs(ref_filtfilt[i], 1e-10));
+    }
 }

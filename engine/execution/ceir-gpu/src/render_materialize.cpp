@@ -14,23 +14,35 @@ namespace
 [[nodiscard]] containers::StringView str_attr(const Context& ctx, const Operation* op, containers::StringView name)
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return {}; }
+    if (!a.valid())
+    {
+        return {};
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::String ? v.s : containers::StringView{};
 }
 [[nodiscard]] crd::i64 int_attr(const Context& ctx, const Operation* op, containers::StringView name, crd::i64 dflt)
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return dflt; }
+    if (!a.valid())
+    {
+        return dflt;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::Int ? v.i : dflt;
 }
 [[nodiscard]] float float_attr(const Context& ctx, const Operation* op, containers::StringView name, float dflt)
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return dflt; }
+    if (!a.valid())
+    {
+        return dflt;
+    }
     const AttrValue v = ctx.attr_value(a);
-    if (v.kind != AttrKind::Float) { return dflt; }
+    if (v.kind != AttrKind::Float)
+    {
+        return dflt;
+    }
     crd::f64 d = 0.0;
     std::memcpy(&d, &v.f, sizeof(d)); // Float is stored as the f64 bit pattern
     return static_cast<float>(d);
@@ -38,7 +50,10 @@ namespace
 [[nodiscard]] bool bool_attr(const Context& ctx, const Operation* op, containers::StringView name)
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return false; } // absent ⇒ false (the CEIR-16-3c extent_from_target default)
+    if (!a.valid()) // absent ⇒ false (the CEIR-16-3c extent_from_target default)
+    {
+        return false;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::Bool && v.b;
 }
@@ -47,8 +62,14 @@ namespace
 [[nodiscard]] crd::gpu::LoadOp load_op_of(const Context& ctx, const Operation* op)
 {
     const containers::StringView s = str_attr(ctx, op, containers::StringView("load"));
-    if (s == containers::StringView("load")) { return crd::gpu::LoadOp::Load; }
-    if (s == containers::StringView("dontcare")) { return crd::gpu::LoadOp::DontCare; }
+    if (s == containers::StringView("load"))
+    {
+        return crd::gpu::LoadOp::Load;
+    }
+    if (s == containers::StringView("dontcare"))
+    {
+        return crd::gpu::LoadOp::DontCare;
+    }
     return crd::gpu::LoadOp::Clear;
 }
 [[nodiscard]] crd::gpu::StoreOp store_op_of(const Context& ctx, const Operation* op)
@@ -60,37 +81,85 @@ namespace
 [[nodiscard]] crd::gpu::BlendMode blend_of(const Context& ctx, const Operation* op)
 {
     const containers::StringView s = str_attr(ctx, op, containers::StringView("blend"));
-    if (s == containers::StringView("alpha")) { return crd::gpu::BlendMode::Alpha; }
-    if (s == containers::StringView("additive")) { return crd::gpu::BlendMode::Additive; }
-    if (s == containers::StringView("premultiplied")) { return crd::gpu::BlendMode::PremultipliedAlpha; }
+    if (s == containers::StringView("alpha"))
+    {
+        return crd::gpu::BlendMode::Alpha;
+    }
+    if (s == containers::StringView("additive"))
+    {
+        return crd::gpu::BlendMode::Additive;
+    }
+    if (s == containers::StringView("premultiplied"))
+    {
+        return crd::gpu::BlendMode::PremultipliedAlpha;
+    }
     // ⛔ CEIR-16d-live-4a-1: the WBOIT MRT modes — without these the reveal attachment silently folded to Opaque (the
     // materializer's default), so a WBOIT accumulate pass rendered wrong. RevealageMultiply is the ONE the set exists for
     // (dst·(1−src.rgb), which no generic mode expresses); Multiply + RevealComposite complete the enum.
-    if (s == containers::StringView("multiply")) { return crd::gpu::BlendMode::Multiply; }
-    if (s == containers::StringView("revealage_multiply")) { return crd::gpu::BlendMode::RevealageMultiply; }
-    if (s == containers::StringView("reveal_composite")) { return crd::gpu::BlendMode::RevealComposite; }
+    if (s == containers::StringView("multiply"))
+    {
+        return crd::gpu::BlendMode::Multiply;
+    }
+    if (s == containers::StringView("revealage_multiply"))
+    {
+        return crd::gpu::BlendMode::RevealageMultiply;
+    }
+    if (s == containers::StringView("reveal_composite"))
+    {
+        return crd::gpu::BlendMode::RevealComposite;
+    }
     return crd::gpu::BlendMode::Opaque;
 }
 [[nodiscard]] crd::gpu::DepthCompare compare_of(const Context& ctx, const Operation* op)
 {
     const containers::StringView s = str_attr(ctx, op, containers::StringView("compare"));
-    if (s == containers::StringView("never")) { return crd::gpu::DepthCompare::Never; }
-    if (s == containers::StringView("less")) { return crd::gpu::DepthCompare::Less; }
-    if (s == containers::StringView("equal")) { return crd::gpu::DepthCompare::Equal; }
-    if (s == containers::StringView("greater")) { return crd::gpu::DepthCompare::Greater; }
-    if (s == containers::StringView("not_equal")) { return crd::gpu::DepthCompare::NotEqual; }
-    if (s == containers::StringView("greater_equal")) { return crd::gpu::DepthCompare::GreaterEqual; }
-    if (s == containers::StringView("always")) { return crd::gpu::DepthCompare::Always; }
+    if (s == containers::StringView("never"))
+    {
+        return crd::gpu::DepthCompare::Never;
+    }
+    if (s == containers::StringView("less"))
+    {
+        return crd::gpu::DepthCompare::Less;
+    }
+    if (s == containers::StringView("equal"))
+    {
+        return crd::gpu::DepthCompare::Equal;
+    }
+    if (s == containers::StringView("greater"))
+    {
+        return crd::gpu::DepthCompare::Greater;
+    }
+    if (s == containers::StringView("not_equal"))
+    {
+        return crd::gpu::DepthCompare::NotEqual;
+    }
+    if (s == containers::StringView("greater_equal"))
+    {
+        return crd::gpu::DepthCompare::GreaterEqual;
+    }
+    if (s == containers::StringView("always"))
+    {
+        return crd::gpu::DepthCompare::Always;
+    }
     return crd::gpu::DepthCompare::LessEqual;
 }
 // Resolve a count operand to a compile-time u32 (arith.const), mirroring lower.cpp::resolve_const_u32.
 [[nodiscard]] bool const_u32(const Context& ctx, const Value* v, crd::u32& out)
 {
     const Operation* const def = v->defining_op();
-    if (def == nullptr) { return false; }
-    if (ctx.op_name(def->kind()) != containers::StringView("arith.const")) { return false; }
+    if (def == nullptr)
+    {
+        return false;
+    }
+    if (ctx.op_name(def->kind()) != containers::StringView("arith.const"))
+    {
+        return false;
+    }
     const AttrValue av = ctx.attr_value(def->attr(containers::StringView("value")));
-    if (av.kind != AttrKind::Int) { return false; }
+    if (av.kind != AttrKind::Int)
+    {
+        return false;
+    }
     out = static_cast<crd::u32>(av.i);
     return true;
 }
@@ -148,13 +217,22 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
     for (crd::u32 i = 0; i < scope_op->num_operands(); ++i)
     {
         const Operation* const att = scope_op->operand(i)->defining_op();
-        if (att == nullptr) { return false; } // an attachment operand must be a color/depth_attachment op result
+        if (att == nullptr) // an attachment operand must be a color/depth_attachment op result
+        {
+            return false;
+        }
         const containers::StringView nm = ctx.op_name(att->kind());
         if (nm == containers::StringView("render.color_attachment"))
         {
-            if (out.color.size() >= crd::gpu::kMaxColorAttachments) { return false; }
+            if (out.color.size() >= crd::gpu::kMaxColorAttachments)
+            {
+                return false;
+            }
             crd::gpu::ColorAttachmentDesc c;
-            if (!materialize_color_attachment_desc(ctx, att, c)) { return false; }
+            if (!materialize_color_attachment_desc(ctx, att, c))
+            {
+                return false;
+            }
             c.target = resolver(att, user);
             out.color.push_back(c);
         }
@@ -170,7 +248,10 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
             crd::gpu::IRasterTarget* const dt = resolver(att, user);
             if (dt != nullptr)
             {
-                if (!materialize_depth_attachment_desc(ctx, att, out.depth)) { return false; }
+                if (!materialize_depth_attachment_desc(ctx, att, out.depth))
+                {
+                    return false;
+                }
                 out.depth.target      = dt;
                 // ⛔ `read_only` → the per-draw depth-WRITE disable (RasterState), a draw-state concern; named-forward.
             }
@@ -183,7 +264,10 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
     // ⛔ CEIR-16d: a scope with ZERO resolved attachments (a depth-only pass whose depth did not resolve, or an empty scope)
     // must NEVER reach begin_rendering — legacy record_scene_raster returns early on `color == nullptr && depth == nullptr`.
     // Fail materialize LOUD (the caller returns UnsupportedCommand) rather than record an empty scope onto the encoder.
-    if (out.color.size() == 0U && !out.depth.enabled) { return false; }
+    if (out.color.size() == 0U && !out.depth.enabled)
+    {
+        return false;
+    }
     // ⭐ CEIR-16-3c: a composite renders to whatever target it is bound to (a per-cascade shadow atlas, a half-res buffer,
     // the swapchain), whose size is known only at RECORD. `extent_from_target` overrides the authored placeholder width/
     // height with the RESOLVED target's size (record parity: `dims = color != nullptr ? color : depth` — the colour target
@@ -191,8 +275,14 @@ bool materialize_rendering_desc(const Context& ctx, const Operation* scope_op, R
     if (bool_attr(ctx, scope_op, containers::StringView("extent_from_target")))
     {
         const crd::gpu::IRasterTarget* ext = nullptr;
-        if (out.color.size() > 0U && out.color[0].target != nullptr) { ext = out.color[0].target; }
-        else if (out.depth.enabled && out.depth.target != nullptr) { ext = out.depth.target; }
+        if (out.color.size() > 0U && out.color[0].target != nullptr)
+        {
+            ext = out.color[0].target;
+        }
+        else if (out.depth.enabled && out.depth.target != nullptr)
+        {
+            ext = out.depth.target;
+        }
         if (ext != nullptr)
         {
             out.width  = ext->width();
@@ -221,7 +311,10 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
     if (nm == containers::StringView("render.draw"))
     {
         out.command = crd::gpu::RasterCommandKind::Draw;
-        if (!fold(0U, g.vertex_or_index_count) || !fold(1U, g.instance_count)) { return false; }
+        if (!fold(0U, g.vertex_or_index_count) || !fold(1U, g.instance_count))
+        {
+            return false;
+        }
         g.first_vertex = static_cast<crd::u32>(int_attr(ctx, draw_op, containers::StringView("first_vertex"), 0));
         // ⭐ None (PROCEDURAL — the VS reads gl_VertexIndex, e.g. a fullscreen/proc triangle) vs StoragePull (vertex-PULL
         // from a bound buffer): the binding COUNT is the proxy (a procedural draw binds nothing; a vertex-pull draw binds
@@ -232,15 +325,27 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
         // StoragePull would route it to the encoder's vertex-pull arm which, finding NO vertex buffer, draws NOTHING (a black
         // pass). Absent → the 14b heuristic (>2 operands ⇒ a binding present ⇒ StoragePull; else procedural/None).
         const containers::StringView gm = str_attr(ctx, draw_op, containers::StringView("geometry"));
-        if (gm == containers::StringView("procedural")) { g.kind = crd::gpu::GeometryKind::None; }
-        else if (gm == containers::StringView("pull")) { g.kind = crd::gpu::GeometryKind::StoragePull; }
-        else { g.kind = (draw_op->num_operands() > 2U) ? crd::gpu::GeometryKind::StoragePull : crd::gpu::GeometryKind::None; }
+        if (gm == containers::StringView("procedural"))
+        {
+            g.kind = crd::gpu::GeometryKind::None;
+        }
+        else if (gm == containers::StringView("pull"))
+        {
+            g.kind = crd::gpu::GeometryKind::StoragePull;
+        }
+        else
+        {
+            g.kind = (draw_op->num_operands() > 2U) ? crd::gpu::GeometryKind::StoragePull : crd::gpu::GeometryKind::None;
+        }
     }
     else if (nm == containers::StringView("render.draw_indexed"))
     {
         out.command = crd::gpu::RasterCommandKind::DrawIndexed;
         g.kind      = crd::gpu::GeometryKind::Indexed;
-        if (!fold(0U, g.vertex_or_index_count) || !fold(1U, g.instance_count)) { return false; }
+        if (!fold(0U, g.vertex_or_index_count) || !fold(1U, g.instance_count))
+        {
+            return false;
+        }
         g.first_index = static_cast<crd::u32>(int_attr(ctx, draw_op, containers::StringView("first_index"), 0));
         // ⛔ %index_buffer (operand 2) → g.index_buffer via a binding resolver — the caller (14z-1b/2).
     }
@@ -267,13 +372,19 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
     {
         out.command = crd::gpu::RasterCommandKind::DispatchMesh;
         g.kind      = crd::gpu::GeometryKind::Meshlet;
-        if (!fold(0U, g.group_count_x) || !fold(1U, g.group_count_y) || !fold(2U, g.group_count_z)) { return false; }
+        if (!fold(0U, g.group_count_x) || !fold(1U, g.group_count_y) || !fold(2U, g.group_count_z))
+        {
+            return false;
+        }
         // ⛔ CEIR-14z-7: the mesh_dispatch op is 3D (the compute.dispatch mirror), but every Meshlet VERB consumes group_count_x
         // ONLY, so a (gx,gy,gz) with y or z > 1 would SILENTLY lower to a (gx) draw (the cook-only-gates-ship-impossible shape).
         // Refuse a y/z != 1 grid LOUDLY (→ UnsupportedCommand, the dynamic-grid precedent) rather than draw the wrong thing.
         // ⚠ draw_mesh leveled the 3D device APIs (vkCmdDrawMeshTasksEXT / D3D12 DispatchMesh are BOTH 3D) down to 1D — widening
         // the verb to 3D is a signature widen-audit with no y/z consumer yet, so it is a NAMED-FORWARD (the user's call), NOT this slice.
-        if (g.group_count_y != 1U || g.group_count_z != 1U) { return false; }
+        if (g.group_count_y != 1U || g.group_count_z != 1U)
+        {
+            return false;
+        }
     }
     else if (nm == containers::StringView("render.mesh_dispatch_indirect"))
     {
@@ -302,13 +413,22 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
         if (g.kind == crd::gpu::GeometryKind::Indirect || g.kind == crd::gpu::GeometryKind::IndirectCount
             || g.kind == crd::gpu::GeometryKind::MeshletIndirect)
         {
-            if (resolvers.storage == nullptr) { return false; } // an indirect draw needs a buffer resolver for its args
+            if (resolvers.storage == nullptr) // an indirect draw needs a buffer resolver for its args
+            {
+                return false;
+            }
             g.args_buffer = resolvers.storage(draw_op->operand(0U), resolvers.storage_user);
-            if (g.args_buffer == nullptr) { return false; } // an indirect draw with no args reads garbage — typed fail
+            if (g.args_buffer == nullptr) // an indirect draw with no args reads garbage — typed fail
+            {
+                return false;
+            }
             if (g.kind == crd::gpu::GeometryKind::IndirectCount)
             {
                 g.count_buffer = resolvers.storage(draw_op->operand(1U), resolvers.storage_user);
-                if (g.count_buffer == nullptr) { return false; }
+                if (g.count_buffer == nullptr)
+                {
+                    return false;
+                }
             }
         }
         const crd::u32 start = render_draw_binding_start(nm);
@@ -330,7 +450,10 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
                 // fullscreen executor used is an ENCODER-dispatch lowering detail — CEIR-16-3a-2/3, expressed as explicit IR.)
                 crd::gpu::ITexture* const tex =
                     resolvers.texture != nullptr ? resolvers.texture(operand, resolvers.texture_user) : nullptr;
-                if (tex == nullptr) { return false; } // an image binding with no / a failed texture resolver — typed fail, never silent
+                if (tex == nullptr) // an image binding with no / a failed texture resolver — typed fail, never silent
+                {
+                    return false;
+                }
                 b.frequency = crd::gpu::BindingFrequency::Material;
                 b.kind      = crd::gpu::BindingKind::SampledTexture;
                 b.texture   = tex;
@@ -345,7 +468,10 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
                 crd::gpu::ITexture* const* const arr =
                     resolvers.texture_array != nullptr ? resolvers.texture_array(operand, resolvers.texture_array_user, count)
                                                        : nullptr;
-                if (arr == nullptr || count == 0U) { return false; } // a bindless array that does not resolve — typed fail
+                if (arr == nullptr || count == 0U) // a bindless array that does not resolve — typed fail
+                {
+                    return false;
+                }
                 b.frequency     = crd::gpu::BindingFrequency::Material;
                 b.kind          = crd::gpu::BindingKind::BindlessTextureArray;
                 b.texture_array = arr;
@@ -365,7 +491,10 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
             {
                 crd::gpu::IStorageBuffer* const buf =
                     resolvers.storage != nullptr ? resolvers.storage(operand, resolvers.storage_user) : nullptr;
-                if (buf == nullptr) { return false; } // a 1-of-N-bound draw renders garbage from the wrong buffer — typed fail
+                if (buf == nullptr) // a 1-of-N-bound draw renders garbage from the wrong buffer — typed fail
+                {
+                    return false;
+                }
                 b.frequency = crd::gpu::BindingFrequency::Object;
                 b.kind      = crd::gpu::BindingKind::StorageBuffer;
                 b.buffer    = buf;
@@ -385,10 +514,16 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
 [[nodiscard]] bool emit_amplify_list(const Context& ctx, const Operation* op, crd::gpu::ICommandEncoder& encoder,
                                      const RenderResolvers& resolvers)
 {
-    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr)
+    {
+        return false;
+    }
     const containers::StringView prim = str_attr(ctx, op, containers::StringView("primitive"));
     const bool                   mesh = prim == containers::StringView("meshlet");
-    if (!mesh && prim != containers::StringView("patches")) { return false; }
+    if (!mesh && prim != containers::StringView("patches"))
+    {
+        return false;
+    }
     crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
 
     const auto emit = [&](crd::gpu::IRasterProgram* prog, crd::u32 count, crd::gpu::IStorageBuffer* geo)
@@ -419,16 +554,25 @@ bool materialize_draw_packet(const Context& ctx, const Operation* draw_op, const
     if (n == 0U)
     {
         const crd::i64 fc = int_attr(ctx, op, containers::StringView("fallback_count"), 0);
-        if (fc > 0 && def_prog != nullptr) { emit(def_prog, static_cast<crd::u32>(fc), nullptr); }
+        if (fc > 0 && def_prog != nullptr)
+        {
+            emit(def_prog, static_cast<crd::u32>(fc), nullptr);
+        }
         return true;
     }
     for (crd::u32 i = 0; i < n; ++i)
     {
         RasterDrawItem it{};
         resolvers.draws_item(resolvers.draws_user, i, it);
-        if (it.vertex_count == 0U) { continue; } // ⛔ a zero-count item is SKIPPED, never dispatched (record_amplify_raster)
+        if (it.vertex_count == 0U) // ⛔ a zero-count item is SKIPPED, never dispatched (record_amplify_raster)
+        {
+            continue;
+        }
         crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr) { continue; }
+        if (prog == nullptr)
+        {
+            continue;
+        }
         emit(prog, it.vertex_count, it.storage);
     }
     return true;
@@ -484,7 +628,10 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
 [[nodiscard]] bool emit_scene_list(const Context& ctx, const Operation* op, crd::gpu::ICommandEncoder& encoder,
                                    const RenderResolvers& resolvers, bool scope_has_color)
 {
-    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr)
+    {
+        return false;
+    }
     crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
 
     // ⛔ CEIR-16z-2: PROCEDURAL mode (the §41 visbuffer dissolution) — a byte-exact port of the deleted record_visbuffer_raster
@@ -498,9 +645,15 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
         {
             RasterDrawItem it{};
             resolvers.draws_item(resolvers.draws_user, i, it);
-            if (it.vertex_count == 0U) { continue; }
+            if (it.vertex_count == 0U)
+            {
+                continue;
+            }
             crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
-            if (prog == nullptr) { continue; }
+            if (prog == nullptr)
+            {
+                continue;
+            }
             crd::gpu::RasterDrawPacket p;
             p.program                        = prog;
             p.command                        = crd::gpu::RasterCommandKind::Draw;
@@ -532,9 +685,15 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
     {
         RasterDrawItem it{};
         resolvers.draws_item(resolvers.draws_user, i, it);
-        if (it.storage == nullptr) { continue; }
+        if (it.storage == nullptr)
+        {
+            continue;
+        }
         crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr) { continue; }
+        if (prog == nullptr)
+        {
+            continue;
+        }
 
         // A draw's OWN texture (base-colour map) beats the pass atlas; a pass depth read with no per-item map is a shadow
         // lookup; a per-item map INSIDE a depth-reading pass is the COMBINED shape. ⛔ a DEPTH-ONLY pass (no colour) binds
@@ -542,7 +701,10 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
         const bool                has_color = scope_has_color;
         crd::gpu::ITexture* const item_map  = has_color ? it.texture : nullptr;
         crd::gpu::ITexture*       tex        = nullptr;
-        if (has_color) { tex = item_map != nullptr ? item_map : pass_tex; }
+        if (has_color)
+        {
+            tex = item_map != nullptr ? item_map : pass_tex;
+        }
         const bool                     depth_tex = has_color && item_map == nullptr && pass_depth;
         const bool                     combined  = has_color && item_map != nullptr && pass_tex != nullptr && pass_depth;
         const crd::gpu::ResourceBinding sbind{crd::gpu::BindingFrequency::Object, crd::gpu::BindingKind::StorageBuffer, 0U,
@@ -681,7 +843,10 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
 [[nodiscard]] bool emit_scene_list_mrt(const Operation* op, crd::gpu::ICommandEncoder& encoder,
                                        const RenderResolvers& resolvers, const crd::gpu::RenderingDesc& rd)
 {
-    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr) { return false; }
+    if (resolvers.program == nullptr || resolvers.draws_count == nullptr || resolvers.draws_item == nullptr)
+    {
+        return false;
+    }
     crd::gpu::IRasterProgram* const def_prog = resolvers.program(op, resolvers.program_user);
     // ⛔⛔ CEIR-18c: a ≥2-colour MRT scene list is a DEFERRED G-BUFFER — its items are the SAME DrawList shapes the
     // single-colour ladder draws (REN-39 INDEXED-PULL, REN-40 GPU-indirect, textured), NOT only the non-indexed
@@ -701,9 +866,15 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
     {
         RasterDrawItem it{};
         resolvers.draws_item(resolvers.draws_user, i, it);
-        if (it.storage == nullptr) { continue; }
+        if (it.storage == nullptr)
+        {
+            continue;
+        }
         crd::gpu::IRasterProgram* const prog = it.program != nullptr ? it.program : def_prog;
-        if (prog == nullptr) { continue; }
+        if (prog == nullptr)
+        {
+            continue;
+        }
         // a G-buffer scope always has colour; a per-item base-colour map beats the (usually absent) pass atlas.
         crd::gpu::ITexture* const item_map = it.texture;
         crd::gpu::ITexture* const tex      = item_map != nullptr ? item_map : pass_tex;
@@ -742,7 +913,10 @@ void scene_attach_textures(crd::gpu::RasterDrawPacket& pk, crd::gpu::ITexture* i
             p.geometry.vertex_or_index_count = it.vertex_count;
         }
         p.bindings.push_back(sbind);
-        if (tex != nullptr || depth_tex || combined) { scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp); }
+        if (tex != nullptr || depth_tex || combined)
+        {
+            scene_attach_textures(p, it.texture, pass_tex, tex, combined, depth_tex, pass_cmp);
+        }
         encoder.draw(p);
         encoder.end_rendering();
     }
@@ -790,9 +964,15 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             }
             for (crd::u32 c = 0; c < static_cast<crd::u32>(rd.color.size()); ++c)
             {
-                if (rd.color[c].target == nullptr) { return ExecuteError::UnresolvedProgram; }
+                if (rd.color[c].target == nullptr)
+                {
+                    return ExecuteError::UnresolvedProgram;
+                }
             }
-            if (rd.depth.enabled && rd.depth.target == nullptr) { return ExecuteError::UnresolvedProgram; }
+            if (rd.depth.enabled && rd.depth.target == nullptr)
+            {
+                return ExecuteError::UnresolvedProgram;
+            }
             scope_has_color = rd.color.size() > 0U;
             // ⛔ CEIR-16d-live-4a-3: a ≥2-colour MRT scope DEFERS its begin_rendering — emit_scene_list_mrt runs the per-item
             // begin/draw/end at the Draw (the legacy MRT arm's scope-per-item shape). GAP (iv): the MRT arm hardcodes Clear
@@ -817,7 +997,10 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
                 {
                     rd.color[c].load = crd::gpu::LoadOp::Load;
                 }
-                if (rd.depth.enabled) { rd.depth.load = crd::gpu::LoadOp::Load; }
+                if (rd.depth.enabled)
+                {
+                    rd.depth.load = crd::gpu::LoadOp::Load;
+                }
             }
             deferred         = false;
             outer_begin_open = true;
@@ -832,7 +1015,10 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             if (ctx.op_name(cmd.op->kind()) == containers::StringView("render.mesh_dispatch_list"))
             {
                 flush_deferred(); // an amplify list keeps the one-scope-N-draws shape (never a per-item MRT scope)
-                if (!emit_amplify_list(ctx, cmd.op, encoder, resolvers)) { return ExecuteError::UnsupportedCommand; }
+                if (!emit_amplify_list(ctx, cmd.op, encoder, resolvers))
+                {
+                    return ExecuteError::UnsupportedCommand;
+                }
                 break;
             }
             // ⭐ CEIR-16d: the SCENE per-draw-item verb ladder (render.scene_draw_list) — likewise a 0-operand TEMPLATE
@@ -863,7 +1049,10 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             {
                 return ExecuteError::UnsupportedCommand;
             }
-            if (p.program == nullptr) { return ExecuteError::UnresolvedProgram; }
+            if (p.program == nullptr)
+            {
+                return ExecuteError::UnresolvedProgram;
+            }
             encoder.draw(p);
             break;
         }
@@ -871,7 +1060,10 @@ ExecuteError execute_render_lowered(const Context& ctx, containers::ConstSpan<Lo
             // ⛔ CEIR-16d-live-4a-3: close the OUTER scope only if one is open — a consumed MRT scene list (per-item scopes
             // self-closed) and an UNRESOLVED deferral (a ≥2-colour scope with 0 items — matches legacy's 0-iteration loop:
             // no begin, no end) both leave outer_begin_open false, so nothing is emitted here.
-            if (outer_begin_open) { encoder.end_rendering(); }
+            if (outer_begin_open)
+            {
+                encoder.end_rendering();
+            }
             scope_has_color  = false;
             deferred         = false;
             outer_begin_open = false;
@@ -916,16 +1108,25 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
                                   const RenderResolvers& resolvers)
 {
     auto fg = raster.create_frame_graph();
-    if (fg == nullptr) { return ExecuteError::NoFrameGraph; }
+    if (fg == nullptr)
+    {
+        return ExecuteError::NoFrameGraph;
+    }
     auto encoder = raster.create_command_encoder();
-    if (encoder == nullptr) { return ExecuteError::NoFrameGraph; }
+    if (encoder == nullptr)
+    {
+        return ExecuteError::NoFrameGraph;
+    }
 
     // Count the render.scopes (BeginRender ops) up front, then RESERVE the closure array so the pointers handed to
     // execute() never move on push (the execute_frame stability contract — the callback reads through them at execute()).
     crd::u32 nscopes = 0U;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
-        if (commands[i].kind == LoweredKind::BeginRender) { ++nscopes; }
+        if (commands[i].kind == LoweredKind::BeginRender)
+        {
+            ++nscopes;
+        }
     }
     containers::Array<RenderFrameClosure> closures(&alloc);
     closures.reserve(nscopes);
@@ -944,7 +1145,11 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
         crd::u32       end_idx   = begin_idx;
         for (crd::u32 j = begin_idx + 1U; j < static_cast<crd::u32>(commands.size()); ++j)
         {
-            if (commands[j].kind == LoweredKind::EndRender) { end_idx = j; break; } // NestedRenderScope is verifier-rejected
+            if (commands[j].kind == LoweredKind::EndRender) // NestedRenderScope is verifier-rejected
+            {
+                end_idx = j;
+                break;
+            }
         }
         const crd::u32 slice_count = end_idx - begin_idx + 1U;
 
@@ -957,12 +1162,18 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
         crd::gpu::IFramePassBuilder& b = fg->add_pass("ceir-scope");
         for (crd::u32 c = 0; c < static_cast<crd::u32>(rd.color.size()); ++c)
         {
-            if (rd.color[c].target == nullptr) { return ExecuteError::UnresolvedProgram; }
+            if (rd.color[c].target == nullptr)
+            {
+                return ExecuteError::UnresolvedProgram;
+            }
             b.writes(fg->import_target(*rd.color[c].target));
         }
         if (rd.depth.enabled)
         {
-            if (rd.depth.target == nullptr) { return ExecuteError::UnresolvedProgram; }
+            if (rd.depth.target == nullptr)
+            {
+                return ExecuteError::UnresolvedProgram;
+            }
             b.writes(fg->import_target(*rd.depth.target));
         }
 
@@ -971,7 +1182,10 @@ ExecuteError execute_render_frame(const Context& ctx, containers::ConstSpan<Lowe
         i = end_idx + 1U;
     }
 
-    if (!fg->build()) { return ExecuteError::FrameBuildFailed; }
+    if (!fg->build())
+    {
+        return ExecuteError::FrameBuildFailed;
+    }
     fg->execute(); // ONE submission — barriers + end-of-frame readback owned by the frame graph
     return ExecuteError::None;
 }
@@ -996,13 +1210,19 @@ struct SceneEvalMap
     {
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if (binds[i].v == v) { return binds[i].h; }
+            if (binds[i].v == v)
+            {
+                return binds[i].h;
+            }
         }
         return 0U; // an unbound operand ⇒ 0 (an unresolvable upstream — the callback receives 0)
     }
     void bind(const Value* v, SceneResolveHandle h) noexcept
     {
-        if (n < kMax) { binds[n++] = {v, h}; }
+        if (n < kMax)
+        {
+            binds[n++] = {v, h};
+        }
     }
 };
 
@@ -1012,7 +1232,10 @@ struct SceneEvalMap
 ExecuteError eval_scene_region(const Context& ctx, const Region* r, const RenderResolvers& res, SceneEvalMap& map,
                                SceneResolvedHandles& out) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return ExecuteError::None; }
+    if (r == nullptr)
+    {
+        return ExecuteError::None;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -1020,42 +1243,69 @@ ExecuteError eval_scene_region(const Context& ctx, const Region* r, const Render
             const containers::StringView nm = ctx.op_name(op->kind());
             if (nm == containers::StringView("scene.resolve_material"))
             {
-                if (res.resolve_material == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                if (res.resolve_material == nullptr)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 const SceneResolveHandle mh = res.resolve_material(res.resolve_material_user, map.lookup(op->operand(0U)));
-                if (mh == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                if (mh == 0U)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 map.bind(op->result(0U), mh);
                 out.material = mh;
             }
             else if (nm == containers::StringView("scene.resolve_technique"))
             {
-                if (res.resolve_technique == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                if (res.resolve_technique == nullptr)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 const SceneResolveHandle th = res.resolve_technique(res.resolve_technique_user, map.lookup(op->operand(0U)),
                                                                     str_attr(ctx, op, containers::StringView("phase")));
-                if (th == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                if (th == 0U)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 map.bind(op->result(0U), th);
                 out.technique = th;
             }
             else if (nm == containers::StringView("scene.resolve_program"))
             {
-                if (res.resolve_program == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                if (res.resolve_program == nullptr)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 const SceneResolveHandle pg = res.resolve_program(res.resolve_program_user, map.lookup(op->operand(0U)),
                                                                   map.lookup(op->operand(1U)));
-                if (pg == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                if (pg == 0U)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 map.bind(op->result(0U), pg);
                 out.program = pg;
             }
             else if (nm == containers::StringView("scene.resolve_geometry"))
             {
-                if (res.resolve_geometry == nullptr) { return ExecuteError::UnresolvedSceneHandle; }
+                if (res.resolve_geometry == nullptr)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 const SceneResolveHandle gh = res.resolve_geometry(res.resolve_geometry_user, map.lookup(op->operand(0U)));
-                if (gh == 0U) { return ExecuteError::UnresolvedSceneHandle; }
+                if (gh == 0U)
+                {
+                    return ExecuteError::UnresolvedSceneHandle;
+                }
                 map.bind(op->result(0U), gh);
                 out.geometry = gh;
             }
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const ExecuteError e = eval_scene_region(ctx, op->region(i), res, map, out);
-                if (e != ExecuteError::None) { return e; }
+                if (e != ExecuteError::None)
+                {
+                    return e;
+                }
             }
         }
     }

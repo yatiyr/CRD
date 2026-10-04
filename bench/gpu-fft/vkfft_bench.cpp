@@ -26,7 +26,10 @@ static double timed_appends(VkGPU* vkGPU, VkFFTApplication* app, VkFFTLaunchPara
     bi.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cb, &bi);
     lp->commandBuffer = &cb;
-    for (uint64_t i = 0; i < num_iter; ++i) { VkFFTAppend(app, -1, lp); }
+    for (uint64_t i = 0; i < num_iter; ++i)
+    {
+        VkFFTAppend(app, -1, lp);
+    }
     vkEndCommandBuffer(cb);
     VkSubmitInfo si         = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount   = 1;
@@ -44,11 +47,31 @@ int main()
 {
     VkGPU vkGPU     = {};
     vkGPU.device_id = 0;
-    if (createInstance(&vkGPU, 0) != VK_SUCCESS) { std::printf("createInstance failed\n"); return 1; }
-    if (findPhysicalDevice(&vkGPU) != VK_SUCCESS) { std::printf("findPhysicalDevice failed\n"); return 1; }
-    if (createDevice(&vkGPU, 0) != VK_SUCCESS) { std::printf("createDevice failed\n"); return 1; }
-    if (createFence(&vkGPU) != VK_SUCCESS) { std::printf("createFence failed\n"); return 1; }
-    if (createCommandPool(&vkGPU) != VK_SUCCESS) { std::printf("createCommandPool failed\n"); return 1; }
+    if (createInstance(&vkGPU, 0) != VK_SUCCESS)
+    {
+        std::printf("createInstance failed\n");
+        return 1;
+    }
+    if (findPhysicalDevice(&vkGPU) != VK_SUCCESS)
+    {
+        std::printf("findPhysicalDevice failed\n");
+        return 1;
+    }
+    if (createDevice(&vkGPU, 0) != VK_SUCCESS)
+    {
+        std::printf("createDevice failed\n");
+        return 1;
+    }
+    if (createFence(&vkGPU) != VK_SUCCESS)
+    {
+        std::printf("createFence failed\n");
+        return 1;
+    }
+    if (createCommandPool(&vkGPU) != VK_SUCCESS)
+    {
+        std::printf("createCommandPool failed\n");
+        return 1;
+    }
     vkGetPhysicalDeviceProperties(vkGPU.physicalDevice, &vkGPU.physicalDeviceProperties);
     glslang_initialize_process();
 
@@ -85,7 +108,11 @@ int main()
         cfg.bufferSize = &bufferSize;
 
         VkFFTApplication app = {};
-        if (initializeVkFFT(&app, cfg) != VKFFT_SUCCESS) { std::printf("# initializeVkFFT fail N=%llu\n", (unsigned long long)n); continue; }
+        if (initializeVkFFT(&app, cfg) != VKFFT_SUCCESS)
+        {
+            std::printf("# initializeVkFFT fail N=%llu\n", (unsigned long long)n);
+            continue;
+        }
         VkFFTLaunchParams lp = {};
 
         const uint64_t num_iter = 20;
@@ -94,7 +121,10 @@ int main()
         for (int r = 0; r < 20; ++r)
         {
             const double per = timed_appends(&vkGPU, &app, &lp, num_iter) / static_cast<double>(num_iter);
-            if (per < best) { best = per; }
+            if (per < best)
+            {
+                best = per;
+            }
         }
         const double gflops = 5.0 * (double)n * (std::log((double)n) / std::log(2.0)) * (double)batch / (best * 1e-3) / 1e9;
         std::printf("%-8llu %-10llu %-10.4f %-10.1f\n", (unsigned long long)n, (unsigned long long)batch, best, gflops);

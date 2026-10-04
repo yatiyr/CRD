@@ -21,7 +21,10 @@ struct Parser
 
     void skip_ws() noexcept
     {
-        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) { ++p; }
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+        {
+            ++p;
+        }
     }
     [[nodiscard]] bool eat(char c) noexcept
     {
@@ -37,16 +40,31 @@ struct Parser
     // ── string decode (escapes + \uXXXX incl. surrogate pairs → UTF-8) into the pool ──────────────────────────────────
     [[nodiscard]] bool hex4(crd::u32& out) noexcept
     {
-        if (end - p < 4) { return false; }
+        if (end - p < 4)
+        {
+            return false;
+        }
         out = 0;
         for (int i = 0; i < 4; ++i)
         {
             const crd::u8 c = p[i];
             crd::u32      d = 0;
-            if (c >= '0' && c <= '9') { d = c - crd::u8{'0'}; }
-            else if (c >= 'a' && c <= 'f') { d = 10U + (c - crd::u8{'a'}); }
-            else if (c >= 'A' && c <= 'F') { d = 10U + (c - crd::u8{'A'}); }
-            else { return false; }
+            if (c >= '0' && c <= '9')
+            {
+                d = c - crd::u8{'0'};
+            }
+            else if (c >= 'a' && c <= 'f')
+            {
+                d = 10U + (c - crd::u8{'a'});
+            }
+            else if (c >= 'A' && c <= 'F')
+            {
+                d = 10U + (c - crd::u8{'A'});
+            }
+            else
+            {
+                return false;
+            }
             out = (out << 4U) | d;
         }
         p += 4;
@@ -55,7 +73,10 @@ struct Parser
     void utf8_append(crd::u32 cp)
     {
         auto& s = doc->strings;
-        if (cp < 0x80U) { s.push_back(static_cast<char>(cp)); }
+        if (cp < 0x80U)
+        {
+            s.push_back(static_cast<char>(cp));
+        }
         else if (cp < 0x800U)
         {
             s.push_back(static_cast<char>(0xC0U | (cp >> 6U)));
@@ -167,7 +188,10 @@ struct Parser
         while (q < end
                && ((*q >= '0' && *q <= '9') || *q == '-' || *q == '+' || *q == '.' || *q == 'e' || *q == 'E'))
         {
-            if (n + 1 < sizeof(buf)) { buf[n++] = static_cast<char>(*q); }
+            if (n + 1 < sizeof(buf))
+            {
+                buf[n++] = static_cast<char>(*q);
+            }
             ++q;
         }
         buf[n]      = '\0';
@@ -219,7 +243,10 @@ struct Parser
             crd::u32 prev  = kInvalid;
             crd::u32 count = 0;
             skip_ws();
-            if (eat(is_obj ? '}' : ']')) { return idx; } // empty
+            if (eat(is_obj ? '}' : ']')) // empty
+            {
+                return idx;
+            }
             for (;;)
             {
                 crd::u32 koff = 0;
@@ -232,7 +259,10 @@ struct Parser
                         fail();
                         return kInvalid;
                     }
-                    if (!parse_string(koff, klen)) { return kInvalid; }
+                    if (!parse_string(koff, klen))
+                    {
+                        return kInvalid;
+                    }
                     skip_ws();
                     if (!eat(':'))
                     {
@@ -241,11 +271,20 @@ struct Parser
                     }
                 }
                 const crd::u32 child = parse_value(depth + 1);
-                if (child == kInvalid) { return kInvalid; }
+                if (child == kInvalid)
+                {
+                    return kInvalid;
+                }
                 doc->nodes[child].key_off = koff;
                 doc->nodes[child].key_len = klen;
-                if (prev == kInvalid) { doc->nodes[idx].child = child; }
-                else { doc->nodes[prev].next = child; }
+                if (prev == kInvalid)
+                {
+                    doc->nodes[idx].child = child;
+                }
+                else
+                {
+                    doc->nodes[prev].next = child;
+                }
                 prev = child;
                 ++count;
                 skip_ws();
@@ -268,31 +307,46 @@ struct Parser
             doc->nodes[idx].type = JsonType::String;
             crd::u32 off         = 0;
             crd::u32 len         = 0;
-            if (!parse_string(off, len)) { return kInvalid; }
+            if (!parse_string(off, len))
+            {
+                return kInvalid;
+            }
             doc->nodes[idx].str_off = off;
             doc->nodes[idx].str_len = len;
             return idx;
         }
         if (c == 't')
         {
-            if (!literal("true")) { return kInvalid; }
+            if (!literal("true"))
+            {
+                return kInvalid;
+            }
             doc->nodes[idx].type    = JsonType::Bool;
             doc->nodes[idx].boolean = true;
             return idx;
         }
         if (c == 'f')
         {
-            if (!literal("false")) { return kInvalid; }
+            if (!literal("false"))
+            {
+                return kInvalid;
+            }
             doc->nodes[idx].type = JsonType::Bool;
             return idx;
         }
         if (c == 'n')
         {
-            if (!literal("null")) { return kInvalid; }
+            if (!literal("null"))
+            {
+                return kInvalid;
+            }
             return idx; // Null
         }
         doc->nodes[idx].type = JsonType::Number;
-        if (!parse_number(doc->nodes[idx].number)) { return kInvalid; }
+        if (!parse_number(doc->nodes[idx].number))
+        {
+            return kInvalid;
+        }
         return idx;
     }
 };
@@ -328,66 +382,105 @@ bool parse(crd::containers::ConstSpan<crd::u8> bytes, JsonDoc& doc)
 bool str_eq(const JsonDoc& doc, crd::u32 off, crd::u32 len, const char* s) noexcept
 {
     const crd::usize n = std::strlen(s);
-    if (n != len) { return false; }
+    if (n != len)
+    {
+        return false;
+    }
     return len == 0U || std::memcmp(doc.strings.data() + off, s, n) == 0;
 }
 
 crd::u32 find(const JsonDoc& doc, crd::u32 obj, const char* key) noexcept
 {
-    if (obj == kInvalid || obj >= doc.nodes.size() || doc.nodes[obj].type != JsonType::Object) { return kInvalid; }
+    if (obj == kInvalid || obj >= doc.nodes.size() || doc.nodes[obj].type != JsonType::Object)
+    {
+        return kInvalid;
+    }
     for (crd::u32 c = doc.nodes[obj].child; c != kInvalid; c = doc.nodes[c].next)
     {
-        if (str_eq(doc, doc.nodes[c].key_off, doc.nodes[c].key_len, key)) { return c; }
+        if (str_eq(doc, doc.nodes[c].key_off, doc.nodes[c].key_len, key))
+        {
+            return c;
+        }
     }
     return kInvalid;
 }
 
 crd::u32 at(const JsonDoc& doc, crd::u32 arr, crd::u32 index) noexcept
 {
-    if (arr == kInvalid || arr >= doc.nodes.size() || doc.nodes[arr].type != JsonType::Array) { return kInvalid; }
+    if (arr == kInvalid || arr >= doc.nodes.size() || doc.nodes[arr].type != JsonType::Array)
+    {
+        return kInvalid;
+    }
     crd::u32 c = doc.nodes[arr].child;
-    for (crd::u32 i = 0; c != kInvalid && i < index; ++i) { c = doc.nodes[c].next; }
+    for (crd::u32 i = 0; c != kInvalid && i < index; ++i)
+    {
+        c = doc.nodes[c].next;
+    }
     return c;
 }
 
 crd::u32 count_of(const JsonDoc& doc, crd::u32 node) noexcept
 {
-    if (node == kInvalid || node >= doc.nodes.size()) { return 0; }
+    if (node == kInvalid || node >= doc.nodes.size())
+    {
+        return 0;
+    }
     return doc.nodes[node].count;
 }
 
 crd::f64 as_f64(const JsonDoc& doc, crd::u32 node, crd::f64 def) noexcept
 {
-    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Number) { return def; }
+    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Number)
+    {
+        return def;
+    }
     return doc.nodes[node].number;
 }
 
 crd::i64 as_i64(const JsonDoc& doc, crd::u32 node, crd::i64 def) noexcept
 {
-    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Number) { return def; }
+    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Number)
+    {
+        return def;
+    }
     return static_cast<crd::i64>(doc.nodes[node].number);
 }
 
 bool as_bool(const JsonDoc& doc, crd::u32 node, bool def) noexcept
 {
-    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Bool) { return def; }
+    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::Bool)
+    {
+        return def;
+    }
     return doc.nodes[node].boolean;
 }
 
 bool str_value_eq(const JsonDoc& doc, crd::u32 node, const char* s) noexcept
 {
-    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::String) { return false; }
+    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::String)
+    {
+        return false;
+    }
     return str_eq(doc, doc.nodes[node].str_off, doc.nodes[node].str_len, s);
 }
 
 crd::u32 str_value(const JsonDoc& doc, crd::u32 node, char* buf, crd::u32 cap) noexcept
 {
-    if (cap == 0U) { return 0; }
+    if (cap == 0U)
+    {
+        return 0;
+    }
     buf[0] = '\0';
-    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::String) { return 0; }
+    if (node == kInvalid || node >= doc.nodes.size() || doc.nodes[node].type != JsonType::String)
+    {
+        return 0;
+    }
     const crd::u32 len = doc.nodes[node].str_len;
     const crd::u32 n   = len < cap - 1U ? len : cap - 1U;
-    if (n > 0U) { std::memcpy(buf, doc.strings.data() + doc.nodes[node].str_off, n); }
+    if (n > 0U)
+    {
+        std::memcpy(buf, doc.strings.data() + doc.nodes[node].str_off, n);
+    }
     buf[n] = '\0';
     return len;
 }

@@ -102,12 +102,18 @@ u32 LooseOctree<T>::allocate_node(const AABB3<T>& bounds, u32 parent, u8 depth)
 
     OctreeNode<T>& n = m_nodes[idx];
     n.bounds = bounds;
-    for (u8 i = 0; i < 8U; ++i) { n.children[i] = k_null; }
+    for (u8 i = 0; i < 8U; ++i)
+    {
+        n.children[i] = k_null;
+    }
     n.parent = parent;
     n.depth  = depth;
     n.flags  = 1U; // bit 0 = allocated
     ++m_allocated_nodes;
-    if (depth > m_max_depth_used) { m_max_depth_used = depth; }
+    if (depth > m_max_depth_used)
+    {
+        m_max_depth_used = depth;
+    }
     return idx;
 }
 
@@ -210,9 +216,30 @@ AABB3<T> LooseOctree<T>::child_bounds_of(const AABB3<T>& parent_bounds, u8 octan
 {
     const Vec3<T> mid = aabb_center(parent_bounds);
     AABB3<T> c = parent_bounds;
-    if ((octant & 1U) != 0U) { c.min.x = mid.x; } else { c.max.x = mid.x; }
-    if ((octant & 2U) != 0U) { c.min.y = mid.y; } else { c.max.y = mid.y; }
-    if ((octant & 4U) != 0U) { c.min.z = mid.z; } else { c.max.z = mid.z; }
+    if ((octant & 1U) != 0U)
+    {
+        c.min.x = mid.x;
+    }
+    else
+    {
+        c.max.x = mid.x;
+    }
+    if ((octant & 2U) != 0U)
+    {
+        c.min.y = mid.y;
+    }
+    else
+    {
+        c.max.y = mid.y;
+    }
+    if ((octant & 4U) != 0U)
+    {
+        c.min.z = mid.z;
+    }
+    else
+    {
+        c.max.z = mid.z;
+    }
     return c;
 }
 
@@ -246,14 +273,26 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
     const T fit_factor = m_loosening - T{1};
 
     auto axis_depth = [&](T ext, T root_ext_axis) -> i32 {
-        if (ext <= T{0}) { return static_cast<i32>(m_max_depth); } // degenerate axis
-        if (fit_factor <= T{0}) { return 0; } // loosening=1 ⇒ classical octree, root only
+        if (ext <= T{0}) // degenerate axis
+        {
+            return static_cast<i32>(m_max_depth);
+        }
+        if (fit_factor <= T{0}) // loosening=1 ⇒ classical octree, root only
+        {
+            return 0;
+        }
         const T ratio = fit_factor * root_ext_axis / ext;
-        if (!(ratio > T{1})) { return 0; } // root only
+        if (!(ratio > T{1})) // root only
+        {
+            return 0;
+        }
         // d = floor(log2(ratio)). crd::math::log2 is a boundary scalar use, OK in
         // builder code (geometry-spatial is not in the crd-no-std-math-check scope).
         const f64 d_f = crd::math::log2(static_cast<f64>(ratio));
-        if (d_f >= static_cast<f64>(m_max_depth)) { return static_cast<i32>(m_max_depth); }
+        if (d_f >= static_cast<f64>(m_max_depth))
+        {
+            return static_cast<i32>(m_max_depth);
+        }
         return static_cast<i32>(d_f);
     };
 
@@ -261,8 +300,14 @@ u8 LooseOctree<T>::target_depth_for(const Vec3<T>& extent) const noexcept
     const i32 dy = axis_depth(extent.y, root_ext.y);
     const i32 dz = axis_depth(extent.z, root_ext.z);
     i32 d = std::min(std::min(dx, dy), dz);
-    if (d < 0) { d = 0; }
-    if (d > static_cast<i32>(m_max_depth)) { d = static_cast<i32>(m_max_depth); }
+    if (d < 0)
+    {
+        d = 0;
+    }
+    if (d > static_cast<i32>(m_max_depth))
+    {
+        d = static_cast<i32>(m_max_depth);
+    }
     return static_cast<u8>(d);
 }
 
@@ -408,13 +453,22 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 {
-    if (m_root == k_null) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_root == k_null)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     // Defensive NaN guard at the query surface — robust ray-AABB intrinsics
     // can return TRUE for non-finite inputs depending on order of operations
     // (NaN-vs-NaN comparisons are unspecified in the slab math). Symmetric
     // with v5a kd_radius / kd_range_aabb non-finite tolerance.
-    if (!is_finite(ray.origin) || !is_finite(ray.direction)) { return std::nullopt; }
+    if (!is_finite(ray.origin) || !is_finite(ray.direction))
+    {
+        return std::nullopt;
+    }
 
     // Ray-AABB precompute (sign + inv direction) — amortise across many AABB tests.
     // Note: precompute is f32-only today; cast for f64 path.
@@ -447,20 +501,42 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                 const T hi = loose.max[static_cast<usize>(ax)];
                 if (std::abs(d) < std::numeric_limits<T>::epsilon())
                 {
-                    if (o < lo || o > hi) { tmin_loc = std::numeric_limits<T>::infinity(); break; }
+                    if (o < lo || o > hi)
+                    {
+                        tmin_loc = std::numeric_limits<T>::infinity();
+                        break;
+                    }
                 }
                 else
                 {
                     const T inv = T{1} / d;
                     T t1 = (lo - o) * inv;
                     T t2 = (hi - o) * inv;
-                    if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                    if (t1 > tmin_loc) { tmin_loc = t1; }
-                    if (t2 < tmax_loc) { tmax_loc = t2; }
-                    if (tmin_loc > tmax_loc) { tmin_loc = std::numeric_limits<T>::infinity(); break; }
+                    if (t1 > t2)
+                    {
+                        const T tmp = t1;
+                        t1 = t2;
+                        t2 = tmp;
+                    }
+                    if (t1 > tmin_loc)
+                    {
+                        tmin_loc = t1;
+                    }
+                    if (t2 < tmax_loc)
+                    {
+                        tmax_loc = t2;
+                    }
+                    if (tmin_loc > tmax_loc)
+                    {
+                        tmin_loc = std::numeric_limits<T>::infinity();
+                        break;
+                    }
                 }
             }
-            if (tmin_loc > tmax_loc || tmin_loc >= static_cast<T>(best.t)) { continue; }
+            if (tmin_loc > tmax_loc || tmin_loc >= static_cast<T>(best.t))
+            {
+                continue;
+            }
 
             // Local objects scan
             if (ni < m_cells.size())
@@ -481,20 +557,42 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                         const T hi = obj.aabb.max[static_cast<usize>(ax)];
                         if (std::abs(d) < std::numeric_limits<T>::epsilon())
                         {
-                            if (o < lo || o > hi) { hit = false; break; }
+                            if (o < lo || o > hi)
+                            {
+                                hit = false;
+                                break;
+                            }
                         }
                         else
                         {
                             const T inv = T{1} / d;
                             T t1 = (lo - o) * inv;
                             T t2 = (hi - o) * inv;
-                            if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                            if (t1 > t_obj_min) { t_obj_min = t1; }
-                            if (t2 < t_obj_max) { t_obj_max = t2; }
-                            if (t_obj_min > t_obj_max) { hit = false; break; }
+                            if (t1 > t2)
+                            {
+                                const T tmp = t1;
+                                t1 = t2;
+                                t2 = tmp;
+                            }
+                            if (t1 > t_obj_min)
+                            {
+                                t_obj_min = t1;
+                            }
+                            if (t2 < t_obj_max)
+                            {
+                                t_obj_max = t2;
+                            }
+                            if (t_obj_min > t_obj_max)
+                            {
+                                hit = false;
+                                break;
+                            }
                         }
                     }
-                    if (!hit || t_obj_min < T{0}) { continue; }
+                    if (!hit || t_obj_min < T{0})
+                    {
+                        continue;
+                    }
                     const f64 t_d = static_cast<f64>(t_obj_min);
                     if (t_d < best.t)
                     {
@@ -521,7 +619,10 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                 }
             }
         }
-        if (!any) { return std::nullopt; }
+        if (!any)
+        {
+            return std::nullopt;
+        }
         return crd::geometry::RayHit<u32>{static_cast<f32>(best.t), best.payload};
     }
     else
@@ -549,7 +650,10 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
         while (sp > 0)
         {
             const Frame f = stack[--sp];
-            if (f.t_near >= best_t) { continue; }
+            if (f.t_near >= best_t)
+            {
+                continue;
+            }
 
             const OctreeNode<T>& node = m_nodes[f.cell];
 
@@ -586,7 +690,10 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
             for (u8 oct = 0; oct < 8U; ++oct)
             {
                 const u32 child = node.children[oct];
-                if (child == k_null) { continue; }
+                if (child == k_null)
+                {
+                    continue;
+                }
                 const AABB3<T> child_loose = loose_aabb_of(m_nodes[child]);
                 T t_c = T{0};
                 if (!crd::geometry::primitives::intersect_ray_aabb_robust(
@@ -616,7 +723,10 @@ LooseOctree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
             }
         }
 
-        if (!any) { return std::nullopt; }
+        if (!any)
+        {
+            return std::nullopt;
+        }
         return crd::geometry::RayHit<u32>{best_t, best_payload};
     }
 }

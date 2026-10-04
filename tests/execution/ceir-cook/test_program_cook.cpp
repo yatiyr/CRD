@@ -129,7 +129,10 @@ Operation* add_dispatch(Context& c, const CReg& r, Block* bm, const char* kernel
     Operation* const d       = c.create_operation(r.disp, ConstSpan<Value*>(dops, 4U), 0U);
     c.set_attr(d, "kernel", c.attr_symbol(StringView(kernel_name)));
     c.set_attr(d, "access", c.attr_string("r"));
-    if (pinned) { c.set_attr(d, "kernel_interface", c.attr_int(pin)); }
+    if (pinned)
+    {
+        c.set_attr(d, "kernel_interface", c.attr_int(pin));
+    }
     bm->append(d);
     return d;
 }

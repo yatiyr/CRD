@@ -2730,8 +2730,12 @@ void dtrevc_right(crd::memory::IAllocator* alloc, const Matrix<T>& t_in, Matrix<
 
     vr = Matrix<T>(alloc, n, n);
     for (crd::usize i = 0; i < n; ++i)
+    {
         for (crd::usize j = 0; j < n; ++j)
+        {
             vr.at(i, j) = T{0};
+        }
+    }
     if (n == 0)
     {
         return;
@@ -3025,8 +3029,12 @@ void ztrevc_right(crd::memory::IAllocator* alloc, const Matrix<T>& t_in, Matrix<
 
     vr = Matrix<T>(alloc, n, n);
     for (crd::usize i = 0; i < n; ++i)
+    {
         for (crd::usize j = 0; j < n; ++j)
+        {
             vr.at(i, j) = czero;
+        }
+    }
     if (n == 0)
     {
         return;
@@ -3303,12 +3311,30 @@ void dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz, crd::u
                     T tst1 = std::abs(h(k, k)) + std::abs(h(k + 1, k + 1));
                     if (tst1 == T{0})
                     {
-                        if (k >= ktop + 1) tst1 += std::abs(h(k, k - 1));
-                        if (k >= ktop + 2) tst1 += std::abs(h(k, k - 2));
-                        if (k >= ktop + 3) tst1 += std::abs(h(k, k - 3));
-                        if (k <= kbot - 2) tst1 += std::abs(h(k + 2, k + 1));
-                        if (k <= kbot - 3) tst1 += std::abs(h(k + 3, k + 1));
-                        if (k <= kbot - 4) tst1 += std::abs(h(k + 4, k + 1));
+                        if (k >= ktop + 1)
+                        {
+                            tst1 += std::abs(h(k, k - 1));
+                        }
+                        if (k >= ktop + 2)
+                        {
+                            tst1 += std::abs(h(k, k - 2));
+                        }
+                        if (k >= ktop + 3)
+                        {
+                            tst1 += std::abs(h(k, k - 3));
+                        }
+                        if (k <= kbot - 2)
+                        {
+                            tst1 += std::abs(h(k + 2, k + 1));
+                        }
+                        if (k <= kbot - 3)
+                        {
+                            tst1 += std::abs(h(k + 3, k + 1));
+                        }
+                        if (k <= kbot - 4)
+                        {
+                            tst1 += std::abs(h(k + 4, k + 1));
+                        }
                     }
                     if (std::abs(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
                     {
@@ -3430,12 +3456,30 @@ void dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz, crd::u
                     T tst1 = std::abs(h(k, k)) + std::abs(h(k + 1, k + 1));
                     if (tst1 == T{0})
                     {
-                        if (k >= ktop + 1) tst1 += std::abs(h(k, k - 1));
-                        if (k >= ktop + 2) tst1 += std::abs(h(k, k - 2));
-                        if (k >= ktop + 3) tst1 += std::abs(h(k, k - 3));
-                        if (k <= kbot - 2) tst1 += std::abs(h(k + 2, k + 1));
-                        if (k <= kbot - 3) tst1 += std::abs(h(k + 3, k + 1));
-                        if (k <= kbot - 4) tst1 += std::abs(h(k + 4, k + 1));
+                        if (k >= ktop + 1)
+                        {
+                            tst1 += std::abs(h(k, k - 1));
+                        }
+                        if (k >= ktop + 2)
+                        {
+                            tst1 += std::abs(h(k, k - 2));
+                        }
+                        if (k >= ktop + 3)
+                        {
+                            tst1 += std::abs(h(k, k - 3));
+                        }
+                        if (k <= kbot - 2)
+                        {
+                            tst1 += std::abs(h(k + 2, k + 1));
+                        }
+                        if (k <= kbot - 3)
+                        {
+                            tst1 += std::abs(h(k + 3, k + 1));
+                        }
+                        if (k <= kbot - 4)
+                        {
+                            tst1 += std::abs(h(k + 4, k + 1));
+                        }
                     }
                     if (std::abs(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
                     {
@@ -4761,12 +4805,30 @@ void complex_dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz
                     R tst1 = cabs1(h(k, k)) + cabs1(h(k + 1, k + 1));
                     if (tst1 == R{0})
                     {
-                        if (k >= ktop + 1) tst1 += cabs1(h(k, k - 1));
-                        if (k >= ktop + 2) tst1 += cabs1(h(k, k - 2));
-                        if (k >= ktop + 3) tst1 += cabs1(h(k, k - 3));
-                        if (k <= kbot - 2) tst1 += cabs1(h(k + 2, k + 1));
-                        if (k <= kbot - 3) tst1 += cabs1(h(k + 3, k + 1));
-                        if (k <= kbot - 4) tst1 += cabs1(h(k + 4, k + 1));
+                        if (k >= ktop + 1)
+                        {
+                            tst1 += cabs1(h(k, k - 1));
+                        }
+                        if (k >= ktop + 2)
+                        {
+                            tst1 += cabs1(h(k, k - 2));
+                        }
+                        if (k >= ktop + 3)
+                        {
+                            tst1 += cabs1(h(k, k - 3));
+                        }
+                        if (k <= kbot - 2)
+                        {
+                            tst1 += cabs1(h(k + 2, k + 1));
+                        }
+                        if (k <= kbot - 3)
+                        {
+                            tst1 += cabs1(h(k + 3, k + 1));
+                        }
+                        if (k <= kbot - 4)
+                        {
+                            tst1 += cabs1(h(k + 4, k + 1));
+                        }
                     }
                     if (cabs1(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
                     {
@@ -4890,12 +4952,30 @@ void complex_dlaqr5_sweep(crd::memory::IAllocator* alloc, bool wantt, bool wantz
                     R tst1 = cabs1(h(k, k)) + cabs1(h(k + 1, k + 1));
                     if (tst1 == R{0})
                     {
-                        if (k >= ktop + 1) tst1 += cabs1(h(k, k - 1));
-                        if (k >= ktop + 2) tst1 += cabs1(h(k, k - 2));
-                        if (k >= ktop + 3) tst1 += cabs1(h(k, k - 3));
-                        if (k <= kbot - 2) tst1 += cabs1(h(k + 2, k + 1));
-                        if (k <= kbot - 3) tst1 += cabs1(h(k + 3, k + 1));
-                        if (k <= kbot - 4) tst1 += cabs1(h(k + 4, k + 1));
+                        if (k >= ktop + 1)
+                        {
+                            tst1 += cabs1(h(k, k - 1));
+                        }
+                        if (k >= ktop + 2)
+                        {
+                            tst1 += cabs1(h(k, k - 2));
+                        }
+                        if (k >= ktop + 3)
+                        {
+                            tst1 += cabs1(h(k, k - 3));
+                        }
+                        if (k <= kbot - 2)
+                        {
+                            tst1 += cabs1(h(k + 2, k + 1));
+                        }
+                        if (k <= kbot - 3)
+                        {
+                            tst1 += cabs1(h(k + 3, k + 1));
+                        }
+                        if (k <= kbot - 4)
+                        {
+                            tst1 += cabs1(h(k + 4, k + 1));
+                        }
                     }
                     if (cabs1(h(k + 1, k)) <= std::max(smlnum, ulp * tst1))
                     {

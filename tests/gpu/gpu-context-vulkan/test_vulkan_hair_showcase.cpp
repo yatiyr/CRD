@@ -62,25 +62,39 @@ void gpu_dispatch(void* ctx, crd::kir::KGraph& g, const crd::kir::KEntry& e, crd
     ++d->kernels;
 
     kir::GlslKernel kern(d->alloc);
-    if (!kir::emit_compute_kernel_glsl(g, e, d->alloc, kern)) { return; }
+    if (!kir::emit_compute_kernel_glsl(g, e, d->alloc, kern))
+    {
+        return;
+    }
 
     gpu::ComputePipeline* pipe = nullptr;
     for (crd::usize i = 0; i < d->cache.size(); ++i)
     {
-        if (d->cache[i]->src == kern.source) { pipe = d->cache[i]->pipe.get(); break; }
+        if (d->cache[i]->src == kern.source)
+        {
+            pipe = d->cache[i]->pipe.get();
+            break;
+        }
     }
     if (pipe == nullptr)
     {
         ++d->compiles;
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "hair_showcase", d->alloc, false);
-        if (!spv.ok) { std::printf("  [gpu] GLSL compile FAILED: %s\n", spv.error_message.c_str()); return; }
+        if (!spv.ok)
+        {
+            std::printf("  [gpu] GLSL compile FAILED: %s\n", spv.error_message.c_str());
+            return;
+        }
         auto en = std::make_unique<GpuDispatcher::Entry>(d->alloc);
         en->src = kern.source;
         // n_bindings is an int in the factory signature — casting to u32 here only narrows straight back.
         en->pipe = d->compute->create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
-        if (en->pipe == nullptr) { return; }
+        if (en->pipe == nullptr)
+        {
+            return;
+        }
         pipe = en->pipe.get();
         d->cache.push_back(std::move(en));
     }
@@ -89,7 +103,10 @@ void gpu_dispatch(void* ctx, crd::kir::KGraph& g, const crd::kir::KEntry& e, crd
     // in, dispatch, convert back. That single-precision round trip is exactly what the B18 GPU gates measure against
     // the oracle, and it lands at ~1e-6, far below anything visible in an 8-bit image.
     int total = 0;
-    for (int b = 0; b < nbufs; ++b) { total += bufs[b].len; }
+    for (int b = 0; b < nbufs; ++b)
+    {
+        total += bufs[b].len;
+    }
     crd::containers::Array<float> store(d->alloc);
     store.resize(static_cast<crd::usize>(total), 0.0F);
     float* host[8] = {};
@@ -99,13 +116,19 @@ void gpu_dispatch(void* ctx, crd::kir::KGraph& g, const crd::kir::KEntry& e, crd
     {
         host[b] = store.data() + off;
         lens[b] = static_cast<int>(bufs[b].len);
-        for (int i = 0; i < bufs[b].len; ++i) { host[b][i] = static_cast<float>(bufs[b].data[i]); }
+        for (int i = 0; i < bufs[b].len; ++i)
+        {
+            host[b][i] = static_cast<float>(bufs[b].data[i]);
+        }
         off += bufs[b].len;
     }
     crd::kir_test::dispatch_kernel_1wg(*d->compute, *pipe, host, lens, nbufs, groups);
     for (int b = 0; b < nbufs; ++b)
     {
-        for (int i = 0; i < bufs[b].len; ++i) { bufs[b].data[i] = static_cast<double>(host[b][i]); }
+        for (int i = 0; i < bufs[b].len; ++i)
+        {
+            bufs[b].data[i] = static_cast<double>(host[b][i]);
+        }
     }
 }
 
@@ -234,7 +257,11 @@ TEST_CASE("B18 SHOWCASE: hair types and colours rendered on the GPU", "[.showcas
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());

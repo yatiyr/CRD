@@ -219,7 +219,11 @@ TEST_CASE("v9e-c HLSL conformance: dxc compiles every manifest's emitted HLSL",
 TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on GPU",
           "[shader_helpers][hlsl][gpu][conformance]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     // dxc-availability probe (see the compile test above for rationale).

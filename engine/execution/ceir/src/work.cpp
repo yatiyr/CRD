@@ -23,7 +23,10 @@ namespace
 // Is `v`'s type the work Extern class `cls`? (A non-Extern / wrong-class / null value ⇒ false.)
 [[nodiscard]] bool is_work_class(const Context& ctx, const Value* v, TypeClassId cls) noexcept
 {
-    if (v == nullptr) { return false; }
+    if (v == nullptr)
+    {
+        return false;
+    }
     const Type t = ctx.type_of(v->type());
     return t.kind == TypeKind::Extern && t.type_class == cls;
 }
@@ -57,7 +60,10 @@ namespace
 [[nodiscard]] bool parse_access(containers::StringView s, u32& count) noexcept
 {
     count = 0U;
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     usize start = 0U;
     for (usize i = 0; i <= s.size(); ++i)
     {
@@ -66,7 +72,10 @@ namespace
             const usize len = i - start;
             const char* t   = s.data() + start;
             const bool  ok  = (len == 1U && (t[0] == 'r' || t[0] == 'w')) || (len == 2U && t[0] == 'r' && t[1] == 'w');
-            if (!ok) { return false; }
+            if (!ok)
+            {
+                return false;
+            }
             ++count;
             start = i + 1U;
         }
@@ -95,9 +104,18 @@ namespace
     const u32       bindings = op->num_operands() >= fixed ? op->num_operands() - fixed : 0U;
     u32             tokens   = 0U;
     const AttrValue av       = ctx.attr_value(op->attr(containers::StringView("access")));
-    if (av.kind != AttrKind::String) { return {nullptr, op, WorkMisuseKind::AccessTokenInvalid}; }
-    if (!parse_access(av.s, tokens)) { return {nullptr, op, WorkMisuseKind::AccessTokenInvalid}; }
-    if (tokens != bindings) { return {nullptr, op, WorkMisuseKind::AccessArityMismatch}; }
+    if (av.kind != AttrKind::String)
+    {
+        return {nullptr, op, WorkMisuseKind::AccessTokenInvalid};
+    }
+    if (!parse_access(av.s, tokens))
+    {
+        return {nullptr, op, WorkMisuseKind::AccessTokenInvalid};
+    }
+    if (tokens != bindings)
+    {
+        return {nullptr, op, WorkMisuseKind::AccessArityMismatch};
+    }
     for (u32 i = fixed; i < op->num_operands(); ++i)
     {
         if (!is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
@@ -113,7 +131,10 @@ namespace
 // recursive walk stays const-clean.
 WorkMisuse scan_work_region(const Context& ctx, const Region* r, TypeClassId queue) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -123,9 +144,15 @@ WorkMisuse scan_work_region(const Context& ctx, const Region* r, TypeClassId que
             if (nm == containers::StringView("work.queue_alloc"))
             {
                 const AttrValue cv = ctx.attr_value(op->attr(containers::StringView("capacity")));
-                if (cv.kind != AttrKind::Int || cv.i < 1) { return {nullptr, op, WorkMisuseKind::CapacityInvalid}; }
+                if (cv.kind != AttrKind::Int || cv.i < 1)
+                {
+                    return {nullptr, op, WorkMisuseKind::CapacityInvalid};
+                }
                 const AttrValue sv = ctx.attr_value(op->attr(containers::StringView("record_stride")));
-                if (sv.kind != AttrKind::Int || sv.i < 1) { return {nullptr, op, WorkMisuseKind::RecordStrideInvalid}; }
+                if (sv.kind != AttrKind::Int || sv.i < 1)
+                {
+                    return {nullptr, op, WorkMisuseKind::RecordStrideInvalid};
+                }
             }
             // ⛔ work.produce (the grid-dispatch appender): operand(3) is work.queue; dims (0-2) Index; access/bindings.
             else if (nm == containers::StringView("work.produce"))
@@ -135,7 +162,10 @@ WorkMisuse scan_work_region(const Context& ctx, const Region* r, TypeClassId que
                     return {op->operand(3U), op, WorkMisuseKind::QueueTypeMismatch};
                 }
                 const WorkMisuse d = check_work_shape(ctx, op, 4U, /*has_grid=*/true); // grid+queue = 4 fixed
-                if (d.kind != WorkMisuseKind::None) { return d; }
+                if (d.kind != WorkMisuseKind::None)
+                {
+                    return d;
+                }
             }
             // ⛔ work.consume (the INDIRECT dispatch): operand(0) is work.queue; NO host grid (device count drives it).
             else if (nm == containers::StringView("work.consume"))
@@ -145,7 +175,10 @@ WorkMisuse scan_work_region(const Context& ctx, const Region* r, TypeClassId que
                     return {op->operand(0U), op, WorkMisuseKind::QueueTypeMismatch};
                 }
                 const WorkMisuse d = check_work_shape(ctx, op, 1U, /*has_grid=*/false); // queue = 1 fixed, no grid
-                if (d.kind != WorkMisuseKind::None) { return d; }
+                if (d.kind != WorkMisuseKind::None)
+                {
+                    return d;
+                }
             }
             // ⛔ work.compact (stream-compaction): operand(0) AND operand(1) are work.queue (src, dst); access/bindings.
             else if (nm == containers::StringView("work.compact"))
@@ -159,12 +192,18 @@ WorkMisuse scan_work_region(const Context& ctx, const Region* r, TypeClassId que
                     return {op->operand(1U), op, WorkMisuseKind::QueueTypeMismatch};
                 }
                 const WorkMisuse d = check_work_shape(ctx, op, 2U, /*has_grid=*/false); // src+dst = 2 fixed, no grid
-                if (d.kind != WorkMisuseKind::None) { return d; }
+                if (d.kind != WorkMisuseKind::None)
+                {
+                    return d;
+                }
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const WorkMisuse e = scan_work_region(ctx, op->region(i), queue);
-                if (e.kind != WorkMisuseKind::None) { return e; }
+                if (e.kind != WorkMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

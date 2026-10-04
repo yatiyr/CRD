@@ -34,7 +34,10 @@ crd::containers::Array<Vec3f> make_cloud(u32 n, u32 seed, crd::memory::IAllocato
     pts.reserve(n);
     std::mt19937 rng(seed);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < n; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     return pts;
 }
 
@@ -51,8 +54,14 @@ crd::containers::Array<KdNeighbor<f32>> brute_knn(crd::containers::ConstSpan<Vec
         all.push_back(KdNeighbor<f32>{i, d.x * d.x + d.y * d.y + d.z * d.z});
     }
     auto cmp = [](const KdNeighbor<f32>& lhs, const KdNeighbor<f32>& rhs) {
-        if (lhs.distance_squared < rhs.distance_squared) return true;
-        if (lhs.distance_squared > rhs.distance_squared) return false;
+        if (lhs.distance_squared < rhs.distance_squared)
+        {
+            return true;
+        }
+        if (lhs.distance_squared > rhs.distance_squared)
+        {
+            return false;
+        }
         return lhs.payload < rhs.payload;
     };
     std::sort(all.data(), all.data() + all.size(), cmp);
@@ -60,7 +69,10 @@ crd::containers::Array<KdNeighbor<f32>> brute_knn(crd::containers::ConstSpan<Vec
     crd::containers::Array<KdNeighbor<f32>> top(a);
     const u32 take = std::min<u32>(k, static_cast<u32>(all.size()));
     top.reserve(take);
-    for (u32 i = 0; i < take; ++i) { top.push_back(all[i]); }
+    for (u32 i = 0; i < take; ++i)
+    {
+        top.push_back(all[i]);
+    }
     return top;
 }
 } // namespace
@@ -206,7 +218,10 @@ TEST_CASE("KdTree concurrent k-NN queries via crd-jobs (proves naturally-const-s
 {
     auto corpus = std::make_unique<KdConcurrencyCorpus>();
     auto cloud = make_cloud(500U, 42U, &corpus->alloc);
-    for (auto& p : cloud) { corpus->pts.push_back(p); }
+    for (auto& p : cloud)
+    {
+        corpus->pts.push_back(p);
+    }
     corpus->tree = kd_build<f32>(crd::containers::ConstSpan<crd::math::Vec3f>{corpus->pts.data(), corpus->pts.size()},
                                     &corpus->alloc);
 
@@ -243,7 +258,10 @@ TEST_CASE("KdTree concurrent k-NN queries via crd-jobs (proves naturally-const-s
                         { ok = false; break; }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);

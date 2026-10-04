@@ -85,7 +85,10 @@ struct Dx12RayTracingContext::Impl
     // Close + execute the recorded list, block for the GPU, then reopen it (the AS build and the trace dispatch are one-shot).
     [[nodiscard]] bool submit_and_wait()
     {
-        if (!ok) { return false; }
+        if (!ok)
+        {
+            return false;
+        }
         bool submitted = false;
         if (FAILED(detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), fence_val, submitted))
             || FAILED(detail::dx12_wait(device.Get(), fence.Get(), fence_val, event))
@@ -103,26 +106,56 @@ Dx12RayTracingContext::Dx12RayTracingContext() : m_impl(std::make_unique<Impl>()
 {
     auto&                  impl = *m_impl;
     ComPtr<ID3D12Device>   dev0;
-    if (FAILED(impl.validation.create(dev0))) { return; }
-    if (FAILED(dev0.As(&impl.device))) { return; } // ID3D12Device5 carries the DXR entry points
+    if (FAILED(impl.validation.create(dev0)))
+    {
+        return;
+    }
+    if (FAILED(dev0.As(&impl.device))) // ID3D12Device5 carries the DXR entry points
+    {
+        return;
+    }
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 opt5{};
-    if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opt5, sizeof(opt5)))) { return; }
-    if (opt5.RaytracingTier < D3D12_RAYTRACING_TIER_1_1) { return; } // inline RayQuery in compute needs tier 1.1
+    if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opt5, sizeof(opt5))))
+    {
+        return;
+    }
+    if (opt5.RaytracingTier < D3D12_RAYTRACING_TIER_1_1) // inline RayQuery in compute needs tier 1.1
+    {
+        return;
+    }
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
-    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc)))) { return; }
+    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue))))
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
+    {
+        return;
+    }
     ComPtr<ID3D12GraphicsCommandList> l0;
-    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&l0)))) { return; }
-    if (FAILED(l0.As(&impl.list))) { return; } // ID3D12GraphicsCommandList4 carries BuildRaytracingAccelerationStructure
-    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence)))) { return; }
+    if (FAILED(impl.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, impl.cmd_alloc.Get(), nullptr, IID_PPV_ARGS(&l0))))
+    {
+        return;
+    }
+    if (FAILED(l0.As(&impl.list))) // ID3D12GraphicsCommandList4 carries BuildRaytracingAccelerationStructure
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence))))
+    {
+        return;
+    }
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     impl.ok    = (impl.event != nullptr);
 }
 
 Dx12RayTracingContext::~Dx12RayTracingContext()
 {
-    if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
+    if (m_impl->event != nullptr)
+    {
+        CloseHandle(m_impl->event);
+    }
 }
 
 bool Dx12RayTracingContext::valid() const noexcept { return m_impl->ok && SUCCEEDED(m_impl->device->GetDeviceRemovedReason()); }
@@ -148,7 +181,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
                                                                           bool opaque)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || ntris == 0 || ninst == 0) { return nullptr; }
+    if (!impl.ok || ntris == 0 || ninst == 0)
+    {
+        return nullptr;
+    }
     const crd::u32 nverts = ntris * 3U;
     auto           scene  = std::make_unique<SceneImpl>();
 
@@ -156,7 +192,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     // blocking submit_and_wait at the end, so the GPU sees them during the build.
     ComPtr<ID3D12Resource> vbuf = make_buffer(impl.device.Get(), static_cast<UINT64>(nverts) * 3U * sizeof(float),
                                               D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (vbuf == nullptr) { return nullptr; }
+    if (vbuf == nullptr)
+    {
+        return nullptr;
+    }
     void* vp = nullptr;
     vbuf->Map(0, nullptr, &vp);
     std::memcpy(vp, vertices, static_cast<size_t>(nverts) * 3U * sizeof(float));
@@ -184,7 +223,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&binputs, &bpre);
     ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->blas = make_buffer(impl.device.Get(), bpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-    if (bscratch == nullptr || scene->blas == nullptr) { return nullptr; }
+    if (bscratch == nullptr || scene->blas == nullptr)
+    {
+        return nullptr;
+    }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bbuild{};
     bbuild.Inputs                           = binputs;
     bbuild.ScratchAccelerationStructureData = bscratch->GetGPUVirtualAddress();
@@ -198,7 +240,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
 
     // ── `ninst` instances of the BLAS, each with its row-major 3×4 world transform ──
     ComPtr<ID3D12Resource> ibuf = make_buffer(impl.device.Get(), static_cast<UINT64>(ninst) * sizeof(D3D12_RAYTRACING_INSTANCE_DESC), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (ibuf == nullptr) { return nullptr; }
+    if (ibuf == nullptr)
+    {
+        return nullptr;
+    }
     void* ip = nullptr;
     ibuf->Map(0, nullptr, &ip);
     auto* insts = static_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(ip);
@@ -207,7 +252,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
         D3D12_RAYTRACING_INSTANCE_DESC inst{};
         for (int r = 0; r < 3; ++r)
         {
-            for (int c = 0; c < 4; ++c) { inst.Transform[r][c] = transforms[static_cast<size_t>(n) * 12U + static_cast<size_t>(r) * 4U + static_cast<size_t>(c)]; }
+            for (int c = 0; c < 4; ++c)
+            {
+                inst.Transform[r][c] = transforms[static_cast<size_t>(n) * 12U + static_cast<size_t>(r) * 4U + static_cast<size_t>(c)];
+            }
         }
         inst.InstanceMask          = 0xFFU;
         inst.InstanceID            = n; // surfaces as InstanceID() for per-instance data
@@ -227,7 +275,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&tinputs, &tpre);
     ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->tlas = make_buffer(impl.device.Get(), tpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-    if (tscratch == nullptr || scene->tlas == nullptr) { return nullptr; }
+    if (tscratch == nullptr || scene->tlas == nullptr)
+    {
+        return nullptr;
+    }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tbuild{};
     tbuild.Inputs                           = tinputs;
     tbuild.ScratchAccelerationStructureData = tscratch->GetGPUVirtualAddress();
@@ -236,7 +287,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
     impl.list->BuildRaytracingAccelerationStructure(&tbuild, 0, nullptr);
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
-    if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
+    if (!impl.submit_and_wait()) // Retain uploads/scratch through completion.
+    {
+        return nullptr;
+    }
 
     // batch 4b: mint after the last early-return (the scene is now fully built). One identity per scene: mint on the
     // TLAS, name the BLAS with the same id. The transient build feeds (vbuf/ibuf/scratch) are locals — never minted.
@@ -248,7 +302,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_instanced(const 
 std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const float* segments, crd::u32 nseg)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || nseg == 0 || segments == nullptr) { return nullptr; }
+    if (!impl.ok || nseg == 0 || segments == nullptr)
+    {
+        return nullptr;
+    }
     auto scene = std::make_unique<SceneImpl>();
 
     // ── AABB buffer: the CONSERVATIVE bound of each swept segment ──
@@ -257,7 +314,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     // Computed here on the host to keep the build self-contained; build_lss_aabb_kernel is the GPU-side equivalent.
     ComPtr<ID3D12Resource> abuf = make_buffer(impl.device.Get(), static_cast<UINT64>(nseg) * sizeof(D3D12_RAYTRACING_AABB),
                                               D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (abuf == nullptr) { return nullptr; }
+    if (abuf == nullptr)
+    {
+        return nullptr;
+    }
     void* ap = nullptr;
     abuf->Map(0, nullptr, &ap);
     auto* boxes = static_cast<D3D12_RAYTRACING_AABB*>(ap);
@@ -304,7 +364,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&binputs, &bpre);
     ComPtr<ID3D12Resource> bscratch = make_buffer(impl.device.Get(), bpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->blas = make_buffer(impl.device.Get(), bpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-    if (bscratch == nullptr || scene->blas == nullptr) { return nullptr; }
+    if (bscratch == nullptr || scene->blas == nullptr)
+    {
+        return nullptr;
+    }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bbuild{};
     bbuild.Inputs                           = binputs;
     bbuild.ScratchAccelerationStructureData = bscratch->GetGPUVirtualAddress();
@@ -318,7 +381,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
 
     // ── single-instance TLAS (identity transform) ──
     ComPtr<ID3D12Resource> ibuf = make_buffer(impl.device.Get(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (ibuf == nullptr) { return nullptr; }
+    if (ibuf == nullptr)
+    {
+        return nullptr;
+    }
     void* ip = nullptr;
     ibuf->Map(0, nullptr, &ip);
     D3D12_RAYTRACING_INSTANCE_DESC inst{};
@@ -340,7 +406,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     impl.device->GetRaytracingAccelerationStructurePrebuildInfo(&tinputs, &tpre);
     ComPtr<ID3D12Resource> tscratch = make_buffer(impl.device.Get(), tpre.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     scene->tlas = make_buffer(impl.device.Get(), tpre.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-    if (tscratch == nullptr || scene->tlas == nullptr) { return nullptr; }
+    if (tscratch == nullptr || scene->tlas == nullptr)
+    {
+        return nullptr;
+    }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tbuild{};
     tbuild.Inputs                           = tinputs;
     tbuild.ScratchAccelerationStructureData = tscratch->GetGPUVirtualAddress();
@@ -349,7 +418,10 @@ std::unique_ptr<Dx12RtScene> Dx12RayTracingContext::build_scene_curves(const flo
     impl.list->BuildRaytracingAccelerationStructure(&tbuild, 0, nullptr);
     scene->tlas_va = scene->tlas->GetGPUVirtualAddress();
 
-    if (!impl.submit_and_wait()) { return nullptr; } // Retain uploads/scratch through completion.
+    if (!impl.submit_and_wait()) // Retain uploads/scratch through completion.
+    {
+        return nullptr;
+    }
 
     // batch 4b: mint after the last early-return (the scene is now fully built). One identity per scene: mint on the
     // TLAS, name the BLAS with the same id. The transient build feeds (vbuf/ibuf/scratch) are locals — never minted.
@@ -364,11 +436,23 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
     auto&            impl  = *m_impl;
     const SceneImpl& scene = static_cast<const SceneImpl&>(scene_base);
     const crd::usize nbuf  = bindings.size();
-    if (!impl.ok || scene.tlas == nullptr || nbuf == 0 || nbuf > 15) { return false; }
+    if (!impl.ok || scene.tlas == nullptr || nbuf == 0 || nbuf > 15)
+    {
+        return false;
+    }
 
     UINT maxb = 0;
-    for (crd::usize i = 0; i < nbuf; ++i) { if (bindings[i].binding > maxb) { maxb = bindings[i].binding; } }
-    if (maxb == 0) { return false; } // buffers live at u1.. (u0 is unused; the TLAS is the root SRV t0)
+    for (crd::usize i = 0; i < nbuf; ++i)
+    {
+        if (bindings[i].binding > maxb)
+        {
+            maxb = bindings[i].binding;
+        }
+    }
+    if (maxb == 0) // buffers live at u1.. (u0 is unused; the TLAS is the root SRV t0)
+    {
+        return false;
+    }
 
     // ── root signature: [0] root SRV t0 = TLAS · [1] UAV table u1..u{maxb} ──
     D3D12_DESCRIPTOR_RANGE range{};
@@ -386,9 +470,15 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
     rsd.pParameters   = rp;
     ComPtr<ID3DBlob> sig;
     ComPtr<ID3DBlob> serr;
-    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr))) { return false; }
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &serr)))
+    {
+        return false;
+    }
     ComPtr<ID3D12RootSignature> root;
-    if (FAILED(impl.device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root)))) { return false; }
+    if (FAILED(impl.device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
+    {
+        return false;
+    }
 
     // ── compute PSO from the DXIL ──
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
@@ -396,7 +486,10 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
     pd.CS.pShaderBytecode = dxil.data();
     pd.CS.BytecodeLength  = dxil.size();
     ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(impl.device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)))) { return false; }
+    if (FAILED(impl.device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
+    {
+        return false;
+    }
 
     // ── shader-visible UAV heap (u1..u{maxb}; slot (binding-1) ↔ register u{binding}) ──
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
@@ -404,7 +497,10 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
     hd.NumDescriptors = maxb;
     hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> heap;
-    if (FAILED(impl.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)))) { return false; }
+    if (FAILED(impl.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap))))
+    {
+        return false;
+    }
     const UINT incr = impl.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     // one DEFAULT (UAV) buffer per binding + UPLOAD / READBACK staging as needed. Committed DEFAULT buffers are zero-initialised,
@@ -415,11 +511,17 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
     for (crd::usize i = 0; i < nbuf; ++i)
     {
         def[i] = make_buffer(impl.device.Get(), bindings[i].bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
-        if (def[i] == nullptr) { return false; }
+        if (def[i] == nullptr)
+        {
+            return false;
+        }
         if (bindings[i].upload != nullptr)
         {
             up[i] = make_buffer(impl.device.Get(), bindings[i].bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
-            if (up[i] == nullptr) { return false; }
+            if (up[i] == nullptr)
+            {
+                return false;
+            }
             void* mp = nullptr;
             up[i]->Map(0, nullptr, &mp);
             std::memcpy(mp, bindings[i].upload, static_cast<size_t>(bindings[i].bytes));
@@ -435,7 +537,10 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
         if (bindings[i].readback != nullptr)
         {
             rb[i] = make_buffer(impl.device.Get(), bindings[i].bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
-            if (rb[i] == nullptr) { return false; }
+            if (rb[i] == nullptr)
+            {
+                return false;
+            }
         }
         // RAW UAV at heap slot (binding-1) ⇒ register u{binding}.
         D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
@@ -466,7 +571,10 @@ bool Dx12RayTracingContext::trace_dispatch(const Dx12RtScene& scene_base, crd::c
             impl.list->CopyResource(rb[i].Get(), def[i].Get());
         }
     }
-    if (!impl.submit_and_wait()) { return false; }
+    if (!impl.submit_and_wait())
+    {
+        return false;
+    }
 
     for (crd::usize i = 0; i < nbuf; ++i) // read back
     {

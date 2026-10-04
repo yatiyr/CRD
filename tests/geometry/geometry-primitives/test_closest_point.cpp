@@ -467,7 +467,11 @@ TEMPLATE_TEST_CASE("closest_point 3D -- Tetrahedron", "[geometry][closest_point]
             {
                 const Vec3<T> cp = closest_point(faces[i], p);
                 const T d2 = crd::math::distance_squared(cp, p);
-                if (d2 < best_d2) { best_d2 = d2; best = cp; }
+                if (d2 < best_d2)
+                {
+                    best_d2 = d2;
+                    best = cp;
+                }
             }
             // If the query is inside, both agree on `p`. If outside, both
             // agree on the same face point (modulo ULP).

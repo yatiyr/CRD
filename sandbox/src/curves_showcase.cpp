@@ -69,7 +69,10 @@ void emit_frames(crd::draw::RenderBuffer& buf, const Curve& curve, u32 n_samples
                   f32 axis_len, f32 width_px, ShowcaseFrameMode mode,
                   crd::memory::IAllocator& alloc) noexcept
 {
-    if (mode == ShowcaseFrameMode::Off || n_samples == 0U) { return; }
+    if (mode == ShowcaseFrameMode::Off || n_samples == 0U)
+    {
+        return;
+    }
 
     if (mode == ShowcaseFrameMode::Frenet)
     {

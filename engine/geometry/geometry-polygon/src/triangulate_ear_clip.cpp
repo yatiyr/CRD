@@ -109,7 +109,10 @@ inline bool is_ear(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
                    crd::u32                                         head,
                    crd::u32                                         i) noexcept
 {
-    if (!is_convex(verts, nxt, prv, i)) { return false; }
+    if (!is_convex(verts, nxt, prv, i))
+    {
+        return false;
+    }
     const auto& a = verts[prv[i]];
     const auto& b = verts[i];
     const auto& c = verts[nxt[i]];
@@ -121,7 +124,10 @@ inline bool is_ear(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
     {
         if (j != i && j != prv[i] && j != nxt[i] && is_reflex[j])
         {
-            if (point_in_triangle_2d(a, b, c, verts[j])) { return false; }
+            if (point_in_triangle_2d(a, b, c, verts[j]))
+            {
+                return false;
+            }
         }
         j = nxt[j];
     } while (j != head);
@@ -136,7 +142,10 @@ bool ear_clip_kernel(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
                      crd::memory::IAllocator*                        alloc)
 {
     const crd::u32 n = static_cast<crd::u32>(verts.size());
-    if (n < 3U) { return false; }
+    if (n < 3U)
+    {
+        return false;
+    }
 
     crd::containers::Array<crd::u32> nxt(alloc);
     crd::containers::Array<crd::u32> prv(alloc);
@@ -171,7 +180,10 @@ bool ear_clip_kernel(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
         {
             if (!reflex[j] && is_ear(verts, nxt, prv, reflex, head, j))
             {
-                if (ear_i == kNullIdx || j < ear_i) { ear_i = j; }
+                if (ear_i == kNullIdx || j < ear_i)
+                {
+                    ear_i = j;
+                }
             }
             j = nxt[j];
         } while (j != head);
@@ -195,7 +207,10 @@ bool ear_clip_kernel(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
         nxt[p]           = q;
         prv[q]           = p;
         --alive;
-        if (head == ear_i) { head = q; }
+        if (head == ear_i)
+        {
+            head = q;
+        }
 
         // Reclassify the two neighbours — their convex/reflex status may flip.
         if (alive >= 3U)
@@ -205,7 +220,10 @@ bool ear_clip_kernel(crd::containers::ConstSpan<crd::math::Vec2<T>> verts,
         }
     }
 
-    if (alive != 3U) { return false; }
+    if (alive != 3U)
+    {
+        return false;
+    }
 
     // Final triangle from the three remaining vertices.
     const crd::u32 a = head;
@@ -228,11 +246,22 @@ crd::u32 rightmost_vertex_index(Ring2<T> r) noexcept
     {
         const auto& bv = r[best];
         const auto& cv = r[i];
-        if (cv.x > bv.x) { best = i; continue; }
+        if (cv.x > bv.x)
+        {
+            best = i;
+            continue;
+        }
         if (cv.x == bv.x)
         {
-            if (cv.y > bv.y) { best = i; continue; }
-            if (cv.y == bv.y && i < best) { best = i; }
+            if (cv.y > bv.y)
+            {
+                best = i;
+                continue;
+            }
+            if (cv.y == bv.y && i < best)
+            {
+                best = i;
+            }
         }
     }
     return best;
@@ -258,7 +287,10 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
     // compute the x-intersect at y = hole_m.y. We need the SMALLEST positive
     // t-intersect (strictly to the right of hole_m).
     const crd::u32 n = static_cast<crd::u32>(bridged.size());
-    if (n < 3U) { return {}; }
+    if (n < 3U)
+    {
+        return {};
+    }
 
     T        best_dx          = std::numeric_limits<T>::infinity();
     crd::u32 hit_edge_lo      = kNullIdx; // edge endpoint with smaller y on hit edge
@@ -273,15 +305,27 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
         // Edge straddles or touches y = hole_m.y?
         const bool a_above = a.y >= hole_m.y;
         const bool b_above = b.y >= hole_m.y;
-        if (a_above == b_above && !(a.y == hole_m.y || b.y == hole_m.y)) { continue; }
+        if (a_above == b_above && !(a.y == hole_m.y || b.y == hole_m.y))
+        {
+            continue;
+        }
         // Compute x at y = hole_m.y. Skip horizontal edges (same-y endpoints)
         // — they don't yield a unique intersection.
-        if (a.y == b.y) { continue; }
+        if (a.y == b.y)
+        {
+            continue;
+        }
         const T t = (hole_m.y - a.y) / (b.y - a.y);
-        if (t < T{0} || t > T{1}) { continue; }
+        if (t < T{0} || t > T{1})
+        {
+            continue;
+        }
         const T x = a.x + t * (b.x - a.x);
         const T dx = x - hole_m.x;
-        if (dx <= T{0}) { continue; } // intersection is at or left of M
+        if (dx <= T{0}) // intersection is at or left of M
+        {
+            continue;
+        }
         if (dx < best_dx)
         {
             best_dx     = dx;
@@ -291,7 +335,10 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
         }
     }
 
-    if (hit_edge_lo == kNullIdx) { return {}; } // no visible outer edge
+    if (hit_edge_lo == kNullIdx) // no visible outer edge
+    {
+        return {};
+    }
 
     // Step 2: Eberly's candidate is the edge endpoint with the LARGER x.
     crd::u32 candidate
@@ -330,18 +377,30 @@ find_bridge_target(crd::containers::ConstSpan<crd::math::Vec2<T>> bridged,
     }
     for (crd::u32 k = 0; k < n; ++k)
     {
-        if (k == candidate) { continue; }
+        if (k == candidate)
+        {
+            continue;
+        }
         // Re-classify reflex on the fly: a vertex k is REFLEX iff
         // orient2d(prev_k, k, next_k) <= 0 for a CCW ring (assumed for the
         // bridged sequence's outer-first build order).
         const crd::u32 kp     = (k + n - 1U) % n;
         const crd::u32 kn     = (k + 1U) % n;
         const T        sign_k = orient2d_signed(bridged[kp], bridged[k], bridged[kn]);
-        if (sign_k > T{0}) { continue; } // convex — skip
+        if (sign_k > T{0}) // convex — skip
+        {
+            continue;
+        }
         // Reflex — is it inside the search triangle?
-        if (!point_in_triangle_2d(tA, tB, tC, bridged[k])) { continue; }
+        if (!point_in_triangle_2d(tA, tB, tC, bridged[k]))
+        {
+            continue;
+        }
         const T dx = bridged[k].x - hole_m.x;
-        if (dx <= T{0}) { continue; }
+        if (dx <= T{0})
+        {
+            continue;
+        }
         const T dy    = bridged[k].y - hole_m.y;
         const T ratio = (dy < T{0} ? -dy : dy) / dx;
         if (ratio < best_ratio || (ratio == best_ratio && k < best_idx))
@@ -390,7 +449,10 @@ TriangulationResult<T> triangulate_ear_clip(Ring2<T> ring, crd::memory::IAllocat
     // For a simple ring, the original-index map is the identity.
     crd::containers::Array<crd::u32> orig(alloc);
     orig.resize(ring.size());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(ring.size()); ++i) { orig[i] = i; }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(ring.size()); ++i)
+    {
+        orig[i] = i;
+    }
 
     if (!ear_clip_kernel<T>(ring.vertices, crd::containers::ConstSpan<crd::u32>{orig.data(), orig.size()},
                             result.triangle_indices, alloc))
@@ -462,7 +524,10 @@ TriangulationResult<T> triangulate_ear_clip(PolygonView2<T> poly, crd::memory::I
     // + the bridge target finder.
     crd::containers::Array<crd::u32> hole_order(alloc);
     hole_order.resize(hole_count);
-    for (crd::u32 h = 0; h < hole_count; ++h) { hole_order[h] = h + 1U; } // skip outer (ring 0)
+    for (crd::u32 h = 0; h < hole_count; ++h) // skip outer (ring 0)
+    {
+        hole_order[h] = h + 1U;
+    }
     // Selection-sort descending by rightmost-x. O(H²); H is small (typically
     // ≤ 8 for fonts, ≤ tens for navmeshes), so this is fine + deterministic.
     for (crd::u32 i = 0; i < hole_count; ++i)

@@ -53,7 +53,10 @@ inline void u(crd::containers::String& s, int v) { glsl_detail::app_uint(s, v); 
 // `NAME(const __half* in, const __half* w, __half* out, int nrows)`. Deterministic (fixed schedule, no atomics).
 inline bool emit_fused_mlp_fwd_cuda(const MlpConfig& cfg, const char* name, GlslKernel& out)
 {
-    if (!cfg.valid()) { return false; }
+    if (!cfg.valid())
+    {
+        return false;
+    }
     using mlp_detail::u;
     const int wd  = cfg.width;
     const int nl  = cfg.layers;
@@ -187,7 +190,10 @@ inline void mlp_forward_ref(const MlpConfig& cfg, const float* in, const float* 
     const int nl = cfg.layers;
     for (int r = 0; r < batch; ++r)
     {
-        for (int c = 0; c < wd; ++c) { scratch_a[c] = in[r * wd + c]; }
+        for (int c = 0; c < wd; ++c)
+        {
+            scratch_a[c] = in[r * wd + c];
+        }
         float* cur = scratch_a;
         float* nxt = scratch_b;
         for (int l = 0; l < nl; ++l)
@@ -196,14 +202,20 @@ inline void mlp_forward_ref(const MlpConfig& cfg, const float* in, const float* 
             for (int n = 0; n < wd; ++n)
             {
                 float acc = 0.0F;
-                for (int k = 0; k < wd; ++k) { acc = acc + cur[k] * wl[k * wd + n]; } // z[n] = sum_k a[k]·w[l][k*wd + n] (row-major B)
+                for (int k = 0; k < wd; ++k) // z[n] = sum_k a[k]·w[l][k*wd + n] (row-major B)
+                {
+                    acc = acc + cur[k] * wl[k * wd + n];
+                }
                 nxt[n] = (l + 1 < nl && acc < 0.0F) ? 0.0F : acc;                      // ReLU on hidden, linear on last
             }
             float* t = cur;
             cur      = nxt;
             nxt      = t;
         }
-        for (int c = 0; c < wd; ++c) { outp[r * wd + c] = cur[c]; }
+        for (int c = 0; c < wd; ++c)
+        {
+            outp[r * wd + c] = cur[c];
+        }
     }
 }
 
@@ -389,13 +401,19 @@ inline void mlp_backward_ref(const MlpConfig& cfg, const float* a_all, const flo
     const int bw = batch * wd;
     for (int r = 0; r < batch; ++r)
     {
-        for (int n = 0; n < wd; ++n) { g_scratch[n] = gout[r * wd + n]; }
+        for (int n = 0; n < wd; ++n)
+        {
+            g_scratch[n] = gout[r * wd + n];
+        }
         for (int layer = nl - 1; layer >= 0; --layer)
         {
             for (int n = 0; n < wd; ++n)
             {
                 float dz = g_scratch[n];
-                if (layer + 1 < nl) { dz = (a_all[(layer + 1) * bw + r * wd + n] > 0.0F) ? g_scratch[n] : 0.0F; }
+                if (layer + 1 < nl)
+                {
+                    dz = (a_all[(layer + 1) * bw + r * wd + n] > 0.0F) ? g_scratch[n] : 0.0F;
+                }
                 dz_all[layer * bw + r * wd + n] = dz;
             }
             if (layer > 0)
@@ -403,10 +421,16 @@ inline void mlp_backward_ref(const MlpConfig& cfg, const float* a_all, const flo
                 for (int k = 0; k < wd; ++k)
                 {
                     float acc = 0.0F;
-                    for (int n = 0; n < wd; ++n) { acc = acc + dz_all[layer * bw + r * wd + n] * w[layer * wd * wd + k * wd + n]; }
+                    for (int n = 0; n < wd; ++n)
+                    {
+                        acc = acc + dz_all[layer * bw + r * wd + n] * w[layer * wd * wd + k * wd + n];
+                    }
                     ng_scratch[k] = acc;
                 }
-                for (int k = 0; k < wd; ++k) { g_scratch[k] = ng_scratch[k]; }
+                for (int k = 0; k < wd; ++k)
+                {
+                    g_scratch[k] = ng_scratch[k];
+                }
             }
         }
     }
@@ -417,7 +441,10 @@ inline void mlp_backward_ref(const MlpConfig& cfg, const float* a_all, const flo
             for (int n = 0; n < wd; ++n)
             {
                 float acc = 0.0F;
-                for (int r = 0; r < batch; ++r) { acc = acc + a_all[layer * bw + r * wd + k] * dz_all[layer * bw + r * wd + n]; }
+                for (int r = 0; r < batch; ++r)
+                {
+                    acc = acc + a_all[layer * bw + r * wd + k] * dz_all[layer * bw + r * wd + n];
+                }
                 dw[layer * wd * wd + k * wd + n] = acc;
             }
         }
@@ -433,7 +460,10 @@ inline void mlp_backward_ref(const MlpConfig& cfg, const float* a_all, const flo
 // (fixed schedule, no atomics). Requires cfg where 6·batch_tile·width ≤ maxComputeSharedMemorySize (48 KB ⇒ tile ≤ 128@W64).
 inline bool emit_fused_mlp_fwd_glsl(const MlpConfig& cfg, GlslKernel& out)
 {
-    if (!cfg.valid()) { return false; }
+    if (!cfg.valid())
+    {
+        return false;
+    }
     using mlp_detail::u;
     const int wd  = cfg.width;
     const int nl  = cfg.layers;
@@ -543,14 +573,20 @@ inline bool emit_fused_mlp_fwd_glsl(const MlpConfig& cfg, GlslKernel& out)
 // FP32 statement-tier backward (build_mlp_bwd_dw) is the bit-exact/deterministic companion. Baked BATCH ⇒ pass it here.
 inline bool emit_fused_mlp_bwd_cuda(const MlpConfig& cfg, int batch, int ngroup, const char* name, GlslKernel& out)
 {
-    if (!cfg.valid()) { return false; }
+    if (!cfg.valid())
+    {
+        return false;
+    }
     const int wd  = cfg.width;
     const int nl  = cfg.layers;
     const int tl  = cfg.batch_tile;
     const int nw  = cfg.warps;
     const int rpw = tl / nw;   // rows per warp (da)
     const int cpw = wd / nw;   // dW cols per warp
-    if (cpw % 16 != 0 || rpw % 16 != 0 || tl % 16 != 0) { return false; }
+    if (cpw % 16 != 0 || rpw % 16 != 0 || tl % 16 != 0)
+    {
+        return false;
+    }
     const int dw_cf = cpw / 16; // dW col fragments per warp
     const int dw_rf = wd / 16;  // dW row fragments (feature-in k)
     const int dw_kb = tl / 16;  // dW contraction blocks (batch)

@@ -236,8 +236,14 @@ template <typename Curve>
     T       t_plus  = t + h;
     if (!curve.closed)
     {
-        if (t_minus < static_cast<T>(0)) { t_minus = static_cast<T>(0); }
-        if (t_plus  > static_cast<T>(1)) { t_plus  = static_cast<T>(1); }
+        if (t_minus < static_cast<T>(0))
+        {
+            t_minus = static_cast<T>(0);
+        }
+        if (t_plus  > static_cast<T>(1))
+        {
+            t_plus  = static_cast<T>(1);
+        }
     }
     const T denom = t_plus - t_minus;
     if (denom <= static_cast<T>(0))

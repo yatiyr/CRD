@@ -118,7 +118,10 @@ TEST_CASE("property: Cholesky reconstructs random SPD across seeds/sizes",
                         s += chol.packed().at(i, p) * chol.packed().at(j, p);
                     }
                     const double d = std::abs(s - a.at(i, j));
-                    if (d > max_err) max_err = d;
+                    if (d > max_err)
+                    {
+                        max_err = d;
+                    }
                 }
             }
             REQUIRE(max_err < 1e-7);

@@ -33,7 +33,10 @@ constexpr int kMaxIn = 32;
 bool compile_code(const char* src, const char* arch, crd::containers::Array<char>& code)
 {
     hiprtcProgram prog = nullptr;
-    if (hiprtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != HIPRTC_SUCCESS) { return false; }
+    if (hiprtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != HIPRTC_SUCCESS)
+    {
+        return false;
+    }
     char archopt[80];
     std::snprintf(archopt, sizeof(archopt), "--gpu-architecture=%s", arch);
     const char*        opts[] = {"-ffp-contract=off", archopt};
@@ -53,7 +56,11 @@ bool compile_code(const char* src, const char* arch, crd::containers::Array<char
         return false;
     }
     size_t sz = 0;
-    if (hiprtcGetCodeSize(prog, &sz) != HIPRTC_SUCCESS || sz == 0) { hiprtcDestroyProgram(&prog); return false; }
+    if (hiprtcGetCodeSize(prog, &sz) != HIPRTC_SUCCESS || sz == 0)
+    {
+        hiprtcDestroyProgram(&prog);
+        return false;
+    }
     code.resize(sz, '\0');
     const hiprtcResult gr = hiprtcGetCode(prog, code.data());
     hiprtcDestroyProgram(&prog);
@@ -66,10 +73,19 @@ bool launch_and_readback(hipFunction_t fn, crd::u32 groups, void** params, hipDe
 {
     for (int i = 0; i < n_inputs; ++i)
     {
-        if (hipMemcpyHtoD(d_in[i], const_cast<float*>(inputs[input_iidx[i]]), in_bytes[i]) != hipSuccess) { return false; }
+        if (hipMemcpyHtoD(d_in[i], const_cast<float*>(inputs[input_iidx[i]]), in_bytes[i]) != hipSuccess)
+        {
+            return false;
+        }
     }
-    if (hipModuleLaunchKernel(fn, groups > 0U ? groups : 1U, 1U, 1U, 256U, 1U, 1U, 0U, nullptr, params, nullptr) != hipSuccess) { return false; }
-    if (hipDeviceSynchronize() != hipSuccess) { return false; }
+    if (hipModuleLaunchKernel(fn, groups > 0U ? groups : 1U, 1U, 1U, 256U, 1U, 1U, 0U, nullptr, params, nullptr) != hipSuccess)
+    {
+        return false;
+    }
+    if (hipDeviceSynchronize() != hipSuccess)
+    {
+        return false;
+    }
     return hipMemcpyDtoH(out, d_out, out_bytes) == hipSuccess;
 }
 } // namespace
@@ -78,12 +94,24 @@ KirBackendHip::KirBackendHip(crd::memory::IAllocator* alloc) : m_impl(std::make_
 {
     auto& impl = *m_impl;
     impl.alloc = alloc;
-    if (hipInit(0) != hipSuccess) { return; }
+    if (hipInit(0) != hipSuccess)
+    {
+        return;
+    }
     int count = 0;
-    if (hipGetDeviceCount(&count) != hipSuccess || count == 0) { return; }
-    if (hipSetDevice(0) != hipSuccess) { return; }
+    if (hipGetDeviceCount(&count) != hipSuccess || count == 0)
+    {
+        return;
+    }
+    if (hipSetDevice(0) != hipSuccess)
+    {
+        return;
+    }
     hipDeviceProp_t prop{};
-    if (hipGetDeviceProperties(&prop, 0) != hipSuccess) { return; }
+    if (hipGetDeviceProperties(&prop, 0) != hipSuccess)
+    {
+        return;
+    }
     std::snprintf(impl.arch, sizeof(impl.arch), "%s", prop.gcnArchName);
     impl.ok = true;
 }
@@ -95,7 +123,10 @@ bool KirBackendHip::valid() const noexcept { return m_impl->ok; }
 bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_inputs > kMaxIn) { return false; }
+    if (!impl.ok || n_inputs > kMaxIn)
+    {
+        return false;
+    }
     const KNode& outn = g.node(output);
 
     GlslKernel kern(impl.alloc);
@@ -106,7 +137,10 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
 
     if (outn.op == KOp::Contract)
     {
-        if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode& an = g.node(outn.a);
         const KNode& bn = g.node(outn.b);
         const int    r  = an.shape.rank;
@@ -114,7 +148,10 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
         d1              = static_cast<crd::u32>(an.shape.dims[r - 1]);
         d2              = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
         d3              = 1U;
-        for (int k = 0; k < r - 2; ++k) { d3 *= static_cast<crd::u32>(an.shape.dims[k]); }
+        for (int k = 0; k < r - 2; ++k)
+        {
+            d3 *= static_cast<crd::u32>(an.shape.dims[k]);
+        }
         in_bytes[0] = static_cast<crd::u64>(d0) * d1 * d3 * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(d1) * d2 * d3 * sizeof(float);
         out_bytes   = static_cast<crd::u64>(d0) * d2 * d3 * sizeof(float);
@@ -123,8 +160,17 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     else if (is_reduce(outn.op))
     {
         const bool fast = (outn.tier == DetTier::Fast && is_fast_reduceable(outn.op)); // T2 parallel block tree-reduce
-        if (fast) { if (!emit_reduce_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_reduce_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_reduce_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_reduce_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
         const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
         d0                       = static_cast<crd::u32>(out_numel);
@@ -135,7 +181,10 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     }
     else if (outn.op == KOp::Gather)
     {
-        if (!emit_gather_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_gather_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   dn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 data_numel = static_cast<crd::u64>(dn.shape.numel());
@@ -149,7 +198,10 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     }
     else if (outn.op == KOp::Scatter)
     {
-        if (!emit_scatter_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_scatter_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   bn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 base_numel = static_cast<crd::u64>(bn.shape.numel());
@@ -167,8 +219,17 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     else if (outn.op == KOp::ScanSum)
     {
         const bool fast = (outn.tier == DetTier::Fast); // T2 parallel block prefix-sum
-        if (fast) { if (!emit_scan_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_scan_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_scan_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_scan_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 numel   = static_cast<crd::u64>(outn.shape.numel());
         const crd::u32 scanlen = static_cast<crd::u32>(outn.shape.dims[outn.shape.rank - 1]);
         d0                     = static_cast<crd::u32>(numel / scanlen); // nrows
@@ -179,26 +240,51 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
     }
     else
     {
-        if (!emit_elementwise_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_elementwise_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         d0                = static_cast<crd::u32>(on);
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * sizeof(float);
+        }
         out_bytes = on * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
 
     crd::containers::Array<char> code(impl.alloc);
-    if (!compile_code(kern.source.c_str(), impl.arch, code)) { return false; }
+    if (!compile_code(kern.source.c_str(), impl.arch, code))
+    {
+        return false;
+    }
     hipModule_t mod = nullptr;
-    if (hipModuleLoadData(&mod, code.data()) != hipSuccess) { return false; }
+    if (hipModuleLoadData(&mod, code.data()) != hipSuccess)
+    {
+        return false;
+    }
     hipFunction_t fn = nullptr;
-    if (hipModuleGetFunction(&fn, mod, "ckir") != hipSuccess) { hipModuleUnload(mod); return false; }
+    if (hipModuleGetFunction(&fn, mod, "ckir") != hipSuccess)
+    {
+        hipModuleUnload(mod);
+        return false;
+    }
 
     hipDeviceptr_t d_in[kMaxIn] = {};
     hipDeviceptr_t d_out        = nullptr;
     bool           alloc_ok     = true;
-    for (int i = 0; i < n_inputs; ++i) { if (hipMalloc(&d_in[i], in_bytes[i]) != hipSuccess) { alloc_ok = false; } }
-    if (alloc_ok && hipMalloc(&d_out, out_bytes) != hipSuccess) { alloc_ok = false; }
+    for (int i = 0; i < n_inputs; ++i)
+    {
+        if (hipMalloc(&d_in[i], in_bytes[i]) != hipSuccess)
+        {
+            alloc_ok = false;
+        }
+    }
+    if (alloc_ok && hipMalloc(&d_out, out_bytes) != hipSuccess)
+    {
+        alloc_ok = false;
+    }
 
     bool result = false;
     if (alloc_ok)
@@ -206,22 +292,50 @@ bool KirBackendHip::run(const KGraph& g, int output, const float* const* inputs,
         void*    params[kMaxIn + 6];
         int      np = 0;
         crd::u32 cdims[4] = {d0, d1, d2, d3}; // Contract: emit_contract_cuda's uint4{M,K,N,nbatch} — ONE 16B arg, not four scalars
-        for (int i = 0; i < n_inputs; ++i) { params[np++] = &d_in[i]; }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            params[np++] = &d_in[i];
+        }
         params[np++] = &d_out;
-        if (outn.op == KOp::Contract) { params[np++] = cdims; } // ckir(A,Bm,C, uint4{M,K,N,nbatch})
+        if (outn.op == KOp::Contract) // ckir(A,Bm,C, uint4{M,K,N,nbatch})
+        {
+            params[np++] = cdims;
+        }
         else
         {
             params[np++] = &d0;
-            if (is_reduce(outn.op)) { params[np++] = &d1; }
-            else if (outn.op == KOp::Gather) { params[np++] = &d1; }
-            else if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
-            else if (outn.op == KOp::ScanSum) { params[np++] = &d1; }
+            if (is_reduce(outn.op))
+            {
+                params[np++] = &d1;
+            }
+            else if (outn.op == KOp::Gather)
+            {
+                params[np++] = &d1;
+            }
+            else if (outn.op == KOp::Scatter)
+            {
+                params[np++] = &d1;
+                params[np++] = &d2;
+            }
+            else if (outn.op == KOp::ScanSum)
+            {
+                params[np++] = &d1;
+            }
         }
         result = launch_and_readback(fn, groups, params, d_in, in_bytes, n_inputs, kern.input_iidx, inputs, d_out, out_bytes, out);
     }
 
-    for (int i = 0; i < n_inputs; ++i) { if (d_in[i] != nullptr) { hipFree(d_in[i]); } }
-    if (d_out != nullptr) { hipFree(d_out); }
+    for (int i = 0; i < n_inputs; ++i)
+    {
+        if (d_in[i] != nullptr)
+        {
+            hipFree(d_in[i]);
+        }
+    }
+    if (d_out != nullptr)
+    {
+        hipFree(d_out);
+    }
     hipModuleUnload(mod);
     return result;
 }

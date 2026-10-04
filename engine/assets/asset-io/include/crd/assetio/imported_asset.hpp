@@ -100,13 +100,28 @@ struct ImportedMesh
     // holds; the import tests gate on it.
     [[nodiscard]] bool is_consistent() const noexcept
     {
-        if (normals.size() != 0U && normals.size() != positions.size()) { return false; }
-        if (uv0.size() != 0U && uv0.size() != positions.size()) { return false; }
-        if (tangent.size() != 0U && tangent.size() != positions.size()) { return false; }
-        if ((indices.size() % 3U) != 0U) { return false; }
+        if (normals.size() != 0U && normals.size() != positions.size())
+        {
+            return false;
+        }
+        if (uv0.size() != 0U && uv0.size() != positions.size())
+        {
+            return false;
+        }
+        if (tangent.size() != 0U && tangent.size() != positions.size())
+        {
+            return false;
+        }
+        if ((indices.size() % 3U) != 0U)
+        {
+            return false;
+        }
         for (crd::usize i = 0; i < indices.size(); ++i)
         {
-            if (indices[i] >= positions.size()) { return false; }
+            if (indices[i] >= positions.size())
+            {
+                return false;
+            }
         }
         return true;
     }

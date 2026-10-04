@@ -226,8 +226,14 @@ TEST_CASE("ceir 9b: latency is a queryable interface summed along the chain; a m
         for (crd::usize i = 0; i < kinds.size(); ++i)
         {
             const LatencyInterface* const li = get_op_interface<LatencyInterface>(ctx, kinds[i]);
-            if (li == nullptr) { known = false; } // an op with no declared latency -> the chain latency is UNKNOWN
-            else { sum += li->latency; }
+            if (li == nullptr) // an op with no declared latency -> the chain latency is UNKNOWN
+            {
+                known = false;
+            }
+            else
+            {
+                sum += li->latency;
+            }
         }
         return sum;
     };

@@ -25,13 +25,19 @@ namespace
 void push_bytes(crd::containers::Array<crd::u8>& b, const void* src, crd::usize n, bool swap)
 {
     const crd::u8* s = static_cast<const crd::u8*>(src);
-    for (crd::usize i = 0; i < n; ++i) { b.push_back(swap ? s[n - 1 - i] : s[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        b.push_back(swap ? s[n - 1 - i] : s[i]);
+    }
 }
 void push_f32e(crd::containers::Array<crd::u8>& b, crd::f32 v, bool swap) { push_bytes(b, &v, 4, swap); }
 void push_i32e(crd::containers::Array<crd::u8>& b, crd::i32 v, bool swap) { push_bytes(b, &v, 4, swap); }
 void push_text(crd::containers::Array<crd::u8>& b, const char* s)
 {
-    for (const char* c = s; *c != '\0'; ++c) { b.push_back(static_cast<crd::u8>(*c)); }
+    for (const char* c = s; *c != '\0'; ++c)
+    {
+        b.push_back(static_cast<crd::u8>(*c));
+    }
 }
 
 // A triangle with per-vertex normal + a SKIPPED uchar color triple, faces as (uchar count, int idx) — in either endianness.
@@ -49,7 +55,10 @@ void build_binary_tri(crd::containers::Array<crd::u8>& b, bool big_endian)
     const crd::f32 pos[3][3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
     for (int v = 0; v < 3; ++v)
     {
-        for (int i = 0; i < 3; ++i) { push_f32e(b, pos[v][i], big_endian); }
+        for (int i = 0; i < 3; ++i)
+        {
+            push_f32e(b, pos[v][i], big_endian);
+        }
         push_f32e(b, 0.0F, big_endian);
         push_f32e(b, 0.0F, big_endian);
         push_f32e(b, 1.0F, big_endian);

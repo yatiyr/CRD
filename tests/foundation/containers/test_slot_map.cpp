@@ -27,7 +27,9 @@ struct MoveOnly
         if (this != &o)
         {
             if (live_counter)
+            {
                 --(*live_counter);
+            }
             value          = o.value;
             live_counter   = o.live_counter;
             o.live_counter = nullptr;
@@ -37,7 +39,9 @@ struct MoveOnly
     ~MoveOnly()
     {
         if (live_counter)
+        {
             --(*live_counter);
+        }
     }
 };
 } // namespace
@@ -100,19 +104,27 @@ TEST_CASE("slot_map: many live handles stay independently valid", "[containers][
     SlotMap<int> m;
     SlotMap<int>::Handle hs[16];
     for (int i = 0; i < 16; ++i)
+    {
         hs[i] = m.insert(i * 10);
+    }
     CHECK(m.size() == 16U);
 
     // Erase the evens; odds remain valid, evens go stale.
     for (int i = 0; i < 16; i += 2)
+    {
         CHECK(m.erase(hs[i]));
+    }
     CHECK(m.size() == 8U);
     for (int i = 0; i < 16; ++i)
     {
         if (i % 2 == 0)
+        {
             CHECK(m.get(hs[i]) == nullptr);
+        }
         else
+        {
             CHECK((m.get(hs[i]) != nullptr && *m.get(hs[i]) == i * 10));
+        }
     }
 }
 

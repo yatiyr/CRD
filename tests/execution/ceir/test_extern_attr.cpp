@@ -96,8 +96,14 @@ String replace_first(const String& s, StringView from, StringView to, crd::memor
     {
         if (i + from.size() <= s.size() && std::memcmp(d + i, from.data(), from.size()) == 0)
         {
-            for (usize j = 0; j < to.size(); ++j) { out.push_back(to[j]); }
-            for (usize j = i + from.size(); j < s.size(); ++j) { out.push_back(d[j]); }
+            for (usize j = 0; j < to.size(); ++j)
+            {
+                out.push_back(to[j]);
+            }
+            for (usize j = i + from.size(); j < s.size(); ++j)
+            {
+                out.push_back(d[j]);
+            }
             return out;
         }
         out.push_back(d[i]);
@@ -437,7 +443,10 @@ TEST_CASE("ceir 8b: single-byte corruption of an aggregate-attr blob never crash
     for (usize i = 0; i < blob.size(); ++i)
     {
         ByteArray b(&root);
-        for (usize j = 0; j < blob.size(); ++j) { b.push_back(blob[j]); }
+        for (usize j = 0; j < blob.size(); ++j)
+        {
+            b.push_back(blob[j]);
+        }
         b[i] = static_cast<u8>(b[i] ^ 0xFFU);
         {
             Context           c(&root);

@@ -99,7 +99,10 @@ enum SurfaceField : crd::u8
 [[nodiscard]] inline int define_surface(KGraph& g)
 {
     KType f[SfCount];
-    for (int i = 0; i < SfCount; ++i) { f[i] = KType::make_scalar(DType::F32); } // default: float
+    for (int i = 0; i < SfCount; ++i) // default: float
+    {
+        f[i] = KType::make_scalar(DType::F32);
+    }
     f[SfBaseColor]        = KType::vec(DType::F32, 3);
     f[SfNormal]           = KType::vec(DType::F32, 3);
     f[SfEmissive]         = KType::vec(DType::F32, 3);
@@ -121,7 +124,10 @@ inline void surface_defaults(KGraph& g, int out[SfCount])
     const auto sh   = make_shape({1});
     const auto k    = [&](double v) { return g.constant(v, sh, DType::F32); };
     const auto v3   = [&](double x, double y, double z) { return g.vec3(g.constant(x, sh, DType::F32), g.constant(y, sh, DType::F32), g.constant(z, sh, DType::F32)); };
-    for (int i = 0; i < SfCount; ++i) { out[i] = k(0.0); } // scalar 0 default
+    for (int i = 0; i < SfCount; ++i) // scalar 0 default
+    {
+        out[i] = k(0.0);
+    }
     out[SfBaseColor]         = v3(0.8, 0.8, 0.8);
     out[SfMetallic]          = k(0.0);
     out[SfRoughness]         = k(0.5);

@@ -91,8 +91,16 @@ f32 point_aabb_d2(const Vec3f& p, const AABB3<f32>& a) noexcept
         const f32 v = p[static_cast<usize>(i)];
         const f32 lo = a.min[static_cast<usize>(i)];
         const f32 hi = a.max[static_cast<usize>(i)];
-        if (v < lo)      { const f32 d = lo - v; d2 += d * d; }
-        else if (v > hi) { const f32 d = v - hi; d2 += d * d; }
+        if (v < lo)
+        {
+            const f32 d = lo - v;
+            d2 += d * d;
+        }
+        else if (v > hi)
+        {
+            const f32 d = v - hi;
+            d2 += d * d;
+        }
     }
     return d2;
 }
@@ -195,11 +203,17 @@ TEST_CASE("SpatialHash overlap matches brute force on random AABB cloud",
         crd::containers::Array<u32> expected(&f.alloc);
         for (u32 i = 0; i < objs.size(); ++i)
         {
-            if (aabb_overlap(objs[i], q)) { expected.push_back(i); }
+            if (aabb_overlap(objs[i], q))
+            {
+                expected.push_back(i);
+            }
         }
         std::sort(expected.data(), expected.data() + expected.size());
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 
@@ -231,11 +245,17 @@ TEST_CASE("SpatialHash radius matches brute force",
             crd::containers::Array<u32> expected(&f.alloc);
             for (u32 i = 0; i < objs.size(); ++i)
             {
-                if (point_aabb_d2(q, objs[i]) <= r2) { expected.push_back(i); }
+                if (point_aabb_d2(q, objs[i]) <= r2)
+                {
+                    expected.push_back(i);
+                }
             }
             std::sort(expected.data(), expected.data() + expected.size());
             REQUIRE(got.size() == expected.size());
-            for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+            for (usize i = 0; i < got.size(); ++i)
+            {
+                REQUIRE(got[i] == expected[i]);
+            }
         }
     }
 }
@@ -363,7 +383,10 @@ TEST_CASE("SpatialHash insert/remove cycle keeps surviving handles valid",
     REQUIRE(h.object_count() == 50U);
 
     // Remove evens.
-    for (u32 i = 0; i < 50U; i += 2U) { h.remove(ids[i]); }
+    for (u32 i = 0; i < 50U; i += 2U)
+    {
+        h.remove(ids[i]);
+    }
     REQUIRE(h.object_count() == 25U);
 
     // Verify odds still resolve.
@@ -516,7 +539,10 @@ TEST_CASE("SpatialHash scratch overlap byte-identical to single-thread overload"
         std::sort(sc.data(), sc.data() + sc.size());
 
         REQUIRE(single.size() == sc.size());
-        for (usize i = 0; i < single.size(); ++i) { REQUIRE(single[i] == sc[i]); }
+        for (usize i = 0; i < single.size(); ++i)
+        {
+            REQUIRE(single[i] == sc[i]);
+        }
     }
 }
 
@@ -546,7 +572,10 @@ TEST_CASE("SpatialHash scratch radius byte-identical to single-thread overload",
             h.radius(q, r, scratch, sc);
             std::sort(sc.data(), sc.data() + sc.size());
             REQUIRE(single.size() == sc.size());
-            for (usize i = 0; i < single.size(); ++i) { REQUIRE(single[i] == sc[i]); }
+            for (usize i = 0; i < single.size(); ++i)
+            {
+                REQUIRE(single[i] == sc[i]);
+            }
         }
     }
 }
@@ -669,10 +698,17 @@ TEST_CASE("SpatialHash concurrent queries via crd-jobs fiber pool",
                 {
                     for (usize i = 0; i < got.size(); ++i)
                     {
-                        if (got[i] != corpus_ptr->ref[q][i]) { ok = false; break; }
+                        if (got[i] != corpus_ptr->ref[q][i])
+                        {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);
@@ -711,14 +747,20 @@ TEST_CASE("SpatialHashScratch grows when tree object count exceeds capacity",
     REQUIRE(scratch.capacity() == 0U);
 
     // Insert 5 objects + query; scratch should grow to >= 5.
-    for (u32 i = 0; i < 5U; ++i) { (void)h.insert(aabb_around(Vec3f{static_cast<f32>(i), 0, 0}, 0.2F), i); }
+    for (u32 i = 0; i < 5U; ++i)
+    {
+        (void)h.insert(aabb_around(Vec3f{static_cast<f32>(i), 0, 0}, 0.2F), i);
+    }
     crd::containers::Array<u32> hits(&f.alloc);
     h.overlap(AABB3<f32>{Vec3f{-1, -1, -1}, Vec3f{6, 1, 1}}, scratch, hits);
     REQUIRE(hits.size() == 5U);
     REQUIRE(scratch.capacity() >= 5U);
 
     // Insert 50 more + query; scratch must grow.
-    for (u32 i = 5; i < 55U; ++i) { (void)h.insert(aabb_around(Vec3f{static_cast<f32>(i), 0, 0}, 0.2F), i); }
+    for (u32 i = 5; i < 55U; ++i)
+    {
+        (void)h.insert(aabb_around(Vec3f{static_cast<f32>(i), 0, 0}, 0.2F), i);
+    }
     hits.clear();
     h.overlap(AABB3<f32>{Vec3f{-1, -1, -1}, Vec3f{56, 1, 1}}, scratch, hits);
     REQUIRE(hits.size() == 55U);

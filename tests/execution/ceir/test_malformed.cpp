@@ -93,9 +93,15 @@ TEST_CASE("ceir malformed: bad TEXT is rejected, never a crash", "[ceir][malform
     {
         String deep(&root);
         deep.append("module { ^bb0: t.x() : ");
-        for (u32 i = 0; i < 200U; ++i) { deep.append("!vec<1x"); }
+        for (u32 i = 0; i < 200U; ++i)
+        {
+            deep.append("!vec<1x");
+        }
         deep.append("!i32");
-        for (u32 i = 0; i < 200U; ++i) { deep.push_back('>'); }
+        for (u32 i = 0; i < 200U; ++i)
+        {
+            deep.push_back('>');
+        }
         deep.append(" }");
         Context    ctx(&root);
         const auto pr = parse(ctx, StringView(deep.data(), deep.size()));
@@ -117,8 +123,14 @@ TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malfo
     auto mutated = [&root, &good](usize truncate_to, int at, u8 xor_val) {
         Array<u8> b(&root);
         const usize n = truncate_to == 0U ? good.size() : truncate_to;
-        for (usize i = 0; i < n && i < good.size(); ++i) { b.push_back(good[i]); }
-        if (at >= 0 && static_cast<usize>(at) < b.size()) { b[static_cast<usize>(at)] ^= xor_val; }
+        for (usize i = 0; i < n && i < good.size(); ++i)
+        {
+            b.push_back(good[i]);
+        }
+        if (at >= 0 && static_cast<usize>(at) < b.size())
+        {
+            b[static_cast<usize>(at)] ^= xor_val;
+        }
         return b;
     };
 
@@ -131,7 +143,10 @@ TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malfo
     // trailing junk after the last chunk
     {
         Array<u8> b(&root);
-        for (usize i = 0; i < good.size(); ++i) { b.push_back(good[i]); }
+        for (usize i = 0; i < good.size(); ++i)
+        {
+            b.push_back(good[i]);
+        }
         b.push_back(0x7FU);
         CHECK(rejects(b));
     }
@@ -143,7 +158,10 @@ TEST_CASE("ceir malformed: bad BINARY is rejected, never a crash", "[ceir][malfo
         for (usize off = good.size() > 40U ? good.size() - 40U : 0U; off + 4U <= good.size(); off += 1U)
         {
             Array<u8> b(&root);
-            for (usize i = 0; i < good.size(); ++i) { b.push_back(good[i]); }
+            for (usize i = 0; i < good.size(); ++i)
+            {
+                b.push_back(good[i]);
+            }
             b[off]      = 0xFFU; // inflate a byte to make some nearby count enormous
             b[off + 1U] = 0xFFU;
             b[off + 2U] = 0xFFU;

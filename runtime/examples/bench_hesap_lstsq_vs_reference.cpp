@@ -238,9 +238,13 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < m * n; ++k)
+                {
                     aw[k] = acm[k];
+                }
                 for (crd::usize k = 0; k < m; ++k)
+                {
                     bw[k] = bcm[k];
+                }
                 int inf = 0;
                 dgels_("N", &mi, &ni, &nrhs, aw.data(), &mi, bw.data(), &mi, work.data(), &lwork, &inf);
             });
@@ -257,11 +261,17 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < m * n; ++k)
+                {
                     aw[k] = acm[k];
+                }
                 for (crd::usize k = 0; k < m; ++k)
+                {
                     bw[k] = bcm[k];
+                }
                 for (crd::usize k = 0; k < n; ++k)
+                {
                     jpvt[k] = 0;
+                }
                 int inf = 0;
                 int rk = 0;
                 dgelsy_(&mi, &ni, &nrhs, aw.data(), &mi, bw.data(), &mi, jpvt.data(), &rcond, &rk, work_y.data(),
@@ -286,9 +296,13 @@ int main()
             [&]()
             {
                 for (crd::usize k = 0; k < m * n; ++k)
+                {
                     aw[k] = acm[k];
+                }
                 for (crd::usize k = 0; k < m; ++k)
+                {
                     bw[k] = bcm[k];
+                }
                 int inf = 0;
                 int rk = 0;
                 dgelsd_(&mi, &ni, &nrhs, aw.data(), &mi, bw.data(), &mi, sv.data(), &rcond, &rk, work_d.data(),
@@ -369,8 +383,12 @@ int main()
         {
             auto& p = q.packed();
             for (crd::usize i = 0; i < m; ++i)
+            {
                 for (crd::usize j = 0; j < n; ++j)
+                {
                     p.at(i, j) = a.at(i, j);
+                }
+            }
         };
         const crd::f64 t_blk = time_loop(
             [&]()

@@ -116,19 +116,34 @@ private:
 
     [[nodiscard]] static T ilut_conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
     [[nodiscard]] static R ilut_mag(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     }
     [[nodiscard]] static Csr build_conj_transpose(const Csr& a, crd::memory::IAllocator* alloc)
     {
         Csr   at   = crd::hesap::sparse::transpose<T>(a, alloc);
         auto& vals = at.values().values;
-        for (crd::usize k = 0; k < vals.size(); ++k) { vals[k] = ilut_conj(vals[k]); }
+        for (crd::usize k = 0; k < vals.size(); ++k)
+        {
+            vals[k] = ilut_conj(vals[k]);
+        }
         return at;
     }
 
@@ -136,7 +151,10 @@ private:
     // entries occupy [0, ncut) (unordered within). Quickselect on |w|.
     static void qsplit(T* w, crd::u32* idx, crd::u32 len, crd::u32 ncut)
     {
-        if (ncut == 0 || ncut >= len) { return; }
+        if (ncut == 0 || ncut >= len)
+        {
+            return;
+        }
         crd::u32 first = 0, last = len - 1;
         for (;;)
         {
@@ -153,8 +171,18 @@ private:
             }
             { const T tw = w[mid]; w[mid] = w[first]; w[first] = tw;
               const crd::u32 ti = idx[mid]; idx[mid] = idx[first]; idx[first] = ti; }
-            if (mid == ncut) { return; }
-            if (mid > ncut) { last = mid - 1; } else { first = mid + 1; }
+            if (mid == ncut)
+            {
+                return;
+            }
+            if (mid > ncut)
+            {
+                last = mid - 1;
+            }
+            else
+            {
+                first = mid + 1;
+            }
         }
     }
 
@@ -166,7 +194,11 @@ private:
         const T*    av = mat.values().values.data();
         const crd::usize nv = mat.values().values.size();
         R amax = R(0);
-        for (crd::usize k = 0; k < nv; ++k) { const R m = ilut_mag(av[k]); amax = m > amax ? m : amax; }
+        for (crd::usize k = 0; k < nv; ++k)
+        {
+            const R m = ilut_mag(av[k]);
+            amax = m > amax ? m : amax;
+        }
         const R floor = std::sqrt(std::numeric_limits<R>::epsilon()) * amax + std::numeric_limits<R>::min();
 
         // Row scaling D_r[i] = 1/max|A row i| (∞-norm; robust to a single outlier entry that
@@ -176,7 +208,11 @@ private:
         for (crd::u32 i = 0; i < m_n; ++i)
         {
             R rmax = R(0);
-            for (crd::u32 k = ia[i]; k < ia[i + 1]; ++k) { const R m = ilut_mag(av[k]); rmax = m > rmax ? m : rmax; }
+            for (crd::u32 k = ia[i]; k < ia[i + 1]; ++k)
+            {
+                const R m = ilut_mag(av[k]);
+                rmax = m > rmax ? m : rmax;
+            }
             U.drow[i] = T(rmax > R(0) ? R(1) / rmax : R(1));
         }
 
@@ -186,7 +222,10 @@ private:
         w.resize(m_n);
         jw.resize(m_n);
         jr.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { jr[i] = -1; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            jr[i] = -1;
+        }
 
         L.ptr.push_back(0);
         U.ptr.push_back(0);
@@ -197,7 +236,10 @@ private:
             const crd::u32 j1 = ia[ii];
             const crd::u32 j2 = ia[ii + 1];
             R              tnorm = R(0);
-            for (crd::u32 k = j1; k < j2; ++k) { tnorm += ilut_mag(av[k]); }
+            for (crd::u32 k = j1; k < j2; ++k)
+            {
+                tnorm += ilut_mag(av[k]);
+            }
             // average 1-norm of the SCALED row (D_r·A): · |drow[ii]| (SPARSKIT measure, scale-invariant).
             tnorm = (j2 > j1) ? (tnorm / static_cast<R>(j2 - j1)) * ilut_mag(U.drow[ii]) : R(0);
             const R droptau = droptol * tnorm;
@@ -210,9 +252,25 @@ private:
             {
                 const crd::u32 col = ja[k];
                 const T        v   = av[k] * dr;
-                if (col < ii)      { jw[lenl] = static_cast<crd::i32>(col); w[lenl] = v; jr[col] = static_cast<crd::i32>(lenl); ++lenl; }
-                else if (col == ii){ w[ii] = v; }
-                else               { const crd::u32 jpos = ii + lenu; jw[jpos] = static_cast<crd::i32>(col); w[jpos] = v; jr[col] = static_cast<crd::i32>(jpos); ++lenu; }
+                if (col < ii)
+                {
+                    jw[lenl] = static_cast<crd::i32>(col);
+                    w[lenl] = v;
+                    jr[col] = static_cast<crd::i32>(lenl);
+                    ++lenl;
+                }
+                else if (col == ii)
+                {
+                    w[ii] = v;
+                }
+                else
+                {
+                    const crd::u32 jpos = ii + lenu;
+                    jw[jpos] = static_cast<crd::i32>(col);
+                    w[jpos] = v;
+                    jr[col] = static_cast<crd::i32>(jpos);
+                    ++lenu;
+                }
             }
 
             // Eliminate the L part in increasing column order.
@@ -225,7 +283,14 @@ private:
                 // Find the smallest column in jw[jj..lenl); swap it to position jj.
                 crd::u32 kmin = jj;
                 crd::i32 jrow = jw[jj];
-                for (crd::u32 j = jj + 1; j < lenl; ++j) { if (jw[j] < jrow) { jrow = jw[j]; kmin = j; } }
+                for (crd::u32 j = jj + 1; j < lenl; ++j)
+                {
+                    if (jw[j] < jrow)
+                    {
+                        jrow = jw[j];
+                        kmin = j;
+                    }
+                }
                 if (kmin != jj)
                 {
                     const crd::i32 tj = jw[jj]; jw[jj] = jw[kmin]; jw[kmin] = tj;
@@ -237,7 +302,11 @@ private:
                 jr[row] = -1; // remove from the active set
 
                 const T fac = w[jj] * U.diag[row]; // U.diag stores 1/U_kk (inverse) ⇒ multiply
-                if (ilut_mag(fac) <= droptau) { ++jj; continue; } // drop the multiplier
+                if (ilut_mag(fac) <= droptau) // drop the multiplier
+                {
+                    ++jj;
+                    continue;
+                }
 
                 // w -= fac · U row `row` (the stored off-diagonal U entries, cols > row).
                 for (crd::u32 q = U.ptr[row]; q < U.ptr[row + 1]; ++q)
@@ -247,13 +316,34 @@ private:
                     const crd::i32 jpos = jr[col];
                     if (col >= ii) // U region
                     {
-                        if (jpos == -1) { const crd::u32 ip = ii + lenu; jw[ip] = static_cast<crd::i32>(col); w[ip] = T{} - s; jr[col] = static_cast<crd::i32>(ip); ++lenu; }
-                        else            { w[static_cast<crd::u32>(jpos)] = w[static_cast<crd::u32>(jpos)] - s; }
+                        if (jpos == -1)
+                        {
+                            const crd::u32 ip = ii + lenu;
+                            jw[ip] = static_cast<crd::i32>(col);
+                            w[ip] = T{}
+                            - s;
+                            jr[col] = static_cast<crd::i32>(ip);
+                            ++lenu;
+                        }
+                        else
+                        {
+                            w[static_cast<crd::u32>(jpos)] = w[static_cast<crd::u32>(jpos)] - s;
+                        }
                     }
                     else // L region (fill below the diagonal)
                     {
-                        if (jpos == -1) { jw[lenl] = static_cast<crd::i32>(col); w[lenl] = T{} - s; jr[col] = static_cast<crd::i32>(lenl); ++lenl; }
-                        else            { w[static_cast<crd::u32>(jpos)] = w[static_cast<crd::u32>(jpos)] - s; }
+                        if (jpos == -1)
+                        {
+                            jw[lenl] = static_cast<crd::i32>(col);
+                            w[lenl] = T{}
+                            - s;
+                            jr[col] = static_cast<crd::i32>(lenl);
+                            ++lenl;
+                        }
+                        else
+                        {
+                            w[static_cast<crd::u32>(jpos)] = w[static_cast<crd::u32>(jpos)] - s;
+                        }
                     }
                 }
                 // Keep the multiplier fac as an L entry (compacted to the front).
@@ -265,24 +355,39 @@ private:
             lenl_kept = lfront;
 
             // Reset jr for the U active set (the L set was reset during elimination).
-            for (crd::u32 m = 0; m < lenu; ++m) { jr[static_cast<crd::u32>(jw[ii + m])] = -1; }
+            for (crd::u32 m = 0; m < lenu; ++m)
+            {
+                jr[static_cast<crd::u32>(jw[ii + m])] = -1;
+            }
 
             // ---- Store L row ii: drop |w| ≤ droptau, keep the lfil largest. ----
             {
                 crd::u32 len = 0;
                 for (crd::u32 m = 0; m < lenl_kept; ++m)
                 {
-                    if (ilut_mag(w[m]) > droptau) { w[len] = w[m]; jw[len] = jw[m]; ++len; }
+                    if (ilut_mag(w[m]) > droptau)
+                    {
+                        w[len] = w[m];
+                        jw[len] = jw[m];
+                        ++len;
+                    }
                 }
                 const crd::u32 keep = len < lfil ? len : lfil;
                 qsplit(w.data(), reinterpret_cast<crd::u32*>(jw.data()), len, keep);
-                for (crd::u32 m = 0; m < keep; ++m) { L.col.push_back(static_cast<crd::u32>(jw[m])); L.val.push_back(w[m]); }
+                for (crd::u32 m = 0; m < keep; ++m)
+                {
+                    L.col.push_back(static_cast<crd::u32>(jw[m]));
+                    L.val.push_back(w[m]);
+                }
                 L.ptr.push_back(static_cast<crd::u32>(L.col.size()));
             }
 
             // ---- Diagonal: pivot floor, store the INVERSE (so elimination multiplies). ----
             T diag = w[ii];
-            if (ilut_mag(diag) < floor) { diag = T(floor); }
+            if (ilut_mag(diag) < floor)
+            {
+                diag = T(floor);
+            }
             U.diag[ii] = T(1) / diag;
 
             // ---- Store U row ii (off-diagonal, cols > ii): drop + keep lfil largest. ----
@@ -295,7 +400,12 @@ private:
                 for (crd::u32 m = 1; m < lenu; ++m) // skip slot ii (the diagonal); U entries at [ii+1, ii+lenu)
                 {
                     const crd::u32 src = ii + m;
-                    if (ilut_mag(w[src]) > droptau) { w[ii + 1 + len] = w[src]; jw[ii + 1 + len] = jw[src]; ++len; }
+                    if (ilut_mag(w[src]) > droptau)
+                    {
+                        w[ii + 1 + len] = w[src];
+                        jw[ii + 1 + len] = jw[src];
+                        ++len;
+                    }
                 }
                 const crd::u32 keep = len < lfil ? len : lfil;
                 qsplit(w.data() + ii + 1, reinterpret_cast<crd::u32*>(jw.data()) + ii + 1, len, keep);
@@ -315,7 +425,10 @@ private:
                const crd::hesap::sparse::TriSchedule& su, crd::containers::ConstSpan<T> r,
                crd::containers::Span<T> z) const
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rs[i] = r[i] * U.drow[i]; } // scale input by D_r
+        for (crd::u32 i = 0; i < m_n; ++i) // scale input by D_r
+        {
+            m_rs[i] = r[i] * U.drow[i];
+        }
         crd::hesap::sparse::tri_solve_lower_levelsched<T>(L.ptr.data(), L.col.data(), L.val.data(), nullptr, sl,
                                                           m_rs.data(), z.data()); // L y = D_r·r (unit)
         crd::hesap::sparse::tri_solve_upper_levelsched<T>(U.ptr.data(), U.col.data(), U.val.data(), U.diag.data(), su,

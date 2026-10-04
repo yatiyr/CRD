@@ -34,8 +34,14 @@ public:
     explicit AsyncPipelineWarmer(crd::memory::IAllocator* a) : m_code(a), m_nbind(a), m_key(a), m_pipes(a) {}
     ~AsyncPipelineWarmer()
     {
-        if (m_counter != nullptr) { crd::jobs::wait(m_counter); } // never leak an unwaited job (jobs.hpp contract)
-        for (crd::usize i = 0; i < m_pipes.size(); ++i) { delete m_pipes[i]; }
+        if (m_counter != nullptr) // never leak an unwaited job (jobs.hpp contract)
+        {
+            crd::jobs::wait(m_counter);
+        }
+        for (crd::usize i = 0; i < m_pipes.size(); ++i)
+        {
+            delete m_pipes[i];
+        }
     }
     AsyncPipelineWarmer(const AsyncPipelineWarmer&)            = delete;
     AsyncPipelineWarmer& operator=(const AsyncPipelineWarmer&) = delete;
@@ -59,19 +65,31 @@ public:
         m_warmed = 0U;
         m_pipes.resize(m_code.size(), nullptr);
         const crd::u32 count = static_cast<crd::u32>(m_code.size());
-        if (count == 0U) { m_counter = nullptr; return; }
+        if (count == 0U)
+        {
+            m_counter = nullptr;
+            return;
+        }
         m_counter = crd::jobs::parallel_for(count, 1U, [self = this](crd::u32 b, crd::u32 e) {
             for (crd::u32 i = b; i < e; ++i)
             {
                 std::unique_ptr<crd::gpu::ComputePipeline> p = self->m_create(self->m_code[i], self->m_nbind[i], self->m_user);
-                if (p != nullptr) { self->m_pipes[i] = p.release(); ++self->m_warmed; } // disjoint index i — single job, no race
+                if (p != nullptr) // disjoint index i — single job, no race
+                {
+                    self->m_pipes[i] = p.release();
+                    ++self->m_warmed;
+                }
             }
         });
     }
 
     void wait() // block until the batch is hot (the crd-jobs happens-before makes the results visible on this thread)
     {
-        if (m_counter != nullptr) { crd::jobs::wait(m_counter); m_counter = nullptr; }
+        if (m_counter != nullptr)
+        {
+            crd::jobs::wait(m_counter);
+            m_counter = nullptr;
+        }
     }
     [[nodiscard]] bool     in_flight() const noexcept { return m_counter != nullptr; }
     [[nodiscard]] crd::u32 count() const noexcept { return static_cast<crd::u32>(m_pipes.size()); }
@@ -83,7 +101,13 @@ public:
     // The ready pipeline for a queued `key` (linear scan — a warmup set is small), or nullptr.
     [[nodiscard]] crd::gpu::ComputePipeline* pipeline_for_key(crd::u32 key) const noexcept
     {
-        for (crd::usize i = 0; i < m_key.size(); ++i) { if (m_key[i] == key) { return m_pipes[i]; } }
+        for (crd::usize i = 0; i < m_key.size(); ++i)
+        {
+            if (m_key[i] == key)
+            {
+                return m_pipes[i];
+            }
+        }
         return nullptr;
     }
 

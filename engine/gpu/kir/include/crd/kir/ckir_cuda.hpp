@@ -58,13 +58,28 @@ inline bool emit_elementwise_cuda(const KGraph& g, int output, crd::memory::IAll
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_fusable(nd.op)) { return false; }
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (!is_fusable(nd.op))
+        {
+            return false;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
@@ -82,12 +97,20 @@ inline bool emit_elementwise_cuda(const KGraph& g, int output, crd::memory::IAll
     crd::containers::String& s = out.source;
     s.clear();
     s.append("extern \"C\" __global__ void ckir(");
-    for (int b = 0; b < out.n_inputs; ++b) { s.append("const float* in"); app_uint(s, b); s.append(", "); }
+    for (int b = 0; b < out.n_inputs; ++b)
+    {
+        s.append("const float* in");
+        app_uint(s, b);
+        s.append(", ");
+    }
     s.append("float* outb, unsigned n) {\n");
     s.append("  unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;\n  if (gid >= n) return;\n");
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         s.append("  float t"); app_uint(s, i); s.append(" = ");
         const auto ta = [&](int id) { s.append("t"); app_uint(s, id); };
@@ -123,13 +146,22 @@ inline bool emit_elementwise_cuda(const KGraph& g, int output, crd::memory::IAll
 inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     using namespace glsl_detail;
-    if (!entry.is_kernel()) { return false; }
+    if (!entry.is_kernel())
+    {
+        return false;
+    }
     const int                n = g.size();
     crd::containers::String& s = out.source;
     s.clear();
     out.n_inputs = 0;
 
-    const auto cty = [](DType d) -> const char* { if (dt_is_uint(d)) { return "unsigned"; } return dt_is_int(d) ? "int" : "float"; };
+    const auto cty = [](DType d) -> const char*
+    {
+        if (dt_is_uint(d))
+        {
+            return "unsigned";
+        }
+        return dt_is_int(d) ? "int" : "float"; };
     const auto value_type = [&](DType dtype) -> const char* {
         return dtype == DType::Bool ? "bool" : cty(dtype);
     };
@@ -143,9 +175,15 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         const KNode& nd = g.node(i);
         if (nd.op == KOp::BufferDecl)
         {
-            if (!first) { s.append(", "); }
+            if (!first)
+            {
+                s.append(", ");
+            }
             first = false;
-            if (nd.axes == 3U) { s.append("volatile "); } // COHERENT buffer (lookback/spin cells): defeat load hoisting
+            if (nd.axes == 3U) // COHERENT buffer (lookback/spin cells): defeat load hoisting
+            {
+                s.append("volatile ");
+            }
             s.append(cty(nd.dtype())); s.append("* buf"); app_uint(s, nd.iidx);
         }
     }
@@ -162,7 +200,12 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
 
     bool       ok = true;
     const auto ev = [&](auto&& self, int node) -> void {
-        if (matd[static_cast<crd::usize>(node)] != 0U) { s.append("t"); app_uint(s, static_cast<crd::u32>(node)); return; }
+        if (matd[static_cast<crd::usize>(node)] != 0U)
+        {
+            s.append("t");
+            app_uint(s, static_cast<crd::u32>(node));
+            return;
+        }
         const KNode& nd  = g.node(node);
         const auto   bin = [&](const char* o) { s.append("("); self(self, nd.a); s.append(o); self(self, nd.b); s.append(")"); };
         const auto   fn2 = [&](const char* f) { s.append(f); s.append("("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append(")"); };
@@ -171,13 +214,30 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         {
         case KOp::Const:
             // %lld (full 64-bit) via app_int_const — NOT static_cast<int> (MSVC clamps a u32 const > INT_MAX to INT_MIN).
-            if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype())) { app_int_const(s, nd.cval, nd.dtype()); }
-            else { app_flit(s, nd.cval); s.append("f"); }
+            if (dt_is_uint(nd.dtype()) || dt_is_int(nd.dtype()))
+            {
+                app_int_const(s, nd.cval, nd.dtype());
+            }
+            else
+            {
+                app_flit(s, nd.cval);
+                s.append("f");
+            }
             break;
         case KOp::Builtin:
-            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex) { s.append("threadIdx.x"); }
-            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex) { s.append("blockIdx.x"); }
-            else { ok = false; s.append("0u"); }
+            if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::LocalInvocationIndex)
+            {
+                s.append("threadIdx.x");
+            }
+            else if (static_cast<KBuiltin>(nd.iidx) == KBuiltin::WorkgroupIndex)
+            {
+                s.append("blockIdx.x");
+            }
+            else
+            {
+                ok = false;
+                s.append("0u");
+            }
             break;
         case KOp::KernelLoopVar: s.append("lv"); app_uint(s, nd.a); break;
         case KOp::BufferLoad: s.append("buf"); app_uint(s, g.node(nd.a).iidx); s.append("["); self(self, nd.b); s.append("]"); break;
@@ -208,7 +268,16 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
         case KOp::Min: fn2("fminf"); break;
         case KOp::Max: fn2("fmaxf"); break;
         case KOp::Clamp: s.append("fminf(fmaxf("); self(self, nd.a); s.append(", "); self(self, nd.b); s.append("), "); self(self, nd.c); s.append(")"); break; // B4-vis: bbox clamp = min(max()) (matches oracle)
-        case KOp::Mod: if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype())) { bin(" % "); } else { fn2("fmodf"); } break;
+        case KOp::Mod:
+                if (dt_is_int(nd.dtype()) || dt_is_uint(nd.dtype()))
+                {
+                    bin(" % ");
+                }
+                else
+                {
+                    fn2("fmodf");
+                }
+                break;
         case KOp::CmpLt: bin(" < "); break;
         case KOp::CmpLe: bin(" <= "); break;
         case KOp::CmpGt: bin(" > "); break;
@@ -250,14 +319,33 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
     crd::containers::Array<crd::u8> declseen(scratch);
     declseen.resize(static_cast<crd::usize>(n), 0U);
     const auto decl = [&](auto&& self, int node) -> void {
-        if (declseen[static_cast<crd::usize>(node)] != 0U) { return; }
-        if (in_hoist && order.must_defer(node)) { return; }
+        if (declseen[static_cast<crd::usize>(node)] != 0U)
+        {
+            return;
+        }
+        if (in_hoist && order.must_defer(node))
+        {
+            return;
+        }
         declseen[static_cast<crd::usize>(node)] = 1U;
         const KNode& nd = g.node(node);
-        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) { self(self, nd.b); return; } // resource leaf: only the index carries temps
-        if (nd.a >= 0) { self(self, nd.a); }
-        if (nd.b >= 0) { self(self, nd.b); }
-        if (nd.c >= 0) { self(self, nd.c); }
+        if (nd.op == KOp::BufferLoad || nd.op == KOp::SharedLoad) // resource leaf: only the index carries temps
+        {
+            self(self, nd.b);
+            return;
+        }
+        if (nd.a >= 0)
+        {
+            self(self, nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            self(self, nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            self(self, nd.c);
+        }
         if (!is_inline_op(nd.op) && matd[static_cast<crd::usize>(node)] == 0U)
         {
             s.append("  "); s.append(value_type(nd.dtype())); s.append(" t"); app_uint(s, static_cast<crd::u32>(node)); s.append(" = ");
@@ -286,7 +374,12 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             case KStmtKind::For: i = st.body_begin + st.body_count; break;
             case KStmtKind::If: decl(decl, st.value); self_h(self_h, st.body_begin, st.body_count); i = st.body_begin + st.body_count; break;
             case KStmtKind::SpinUntilNonzero: decl(decl, st.index); ++i; break;
-            case KStmtKind::TraceRayCurves: for (int k = 0; k < 8; ++k) { decl(decl, g.stmt_ext_operand(st, k)); } ++i; break;
+            case KStmtKind::TraceRayCurves:
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        decl(decl, g.stmt_ext_operand(st, k));
+                    }
+                    ++i; break;
             default: ++i; break;
             }
         }
@@ -301,7 +394,12 @@ inline bool emit_compute_kernel_cuda(const KGraph& g, const KEntry& entry, crd::
             {
             case KStmtKind::BufferStore: decl(decl, st.index); decl(decl, st.value); s.append("  buf"); app_uint(s, g.node(st.target).iidx); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
             case KStmtKind::SharedStore: decl(decl, st.index); decl(decl, st.value); s.append("  sh"); app_uint(s, st.target); s.append("["); ev(ev, st.index); s.append("] = "); ev(ev, st.value); s.append(";\n"); ++i; break;
-            case KStmtKind::Barrier: if (st.scope == BarrierScope::Buffer) { s.append("  __threadfence();\n"); } s.append("  __syncthreads();\n"); ++i; break;
+            case KStmtKind::Barrier:
+                    if (st.scope == BarrierScope::Buffer)
+                    {
+                        s.append("  __threadfence();\n");
+                    }
+                    s.append("  __syncthreads();\n"); ++i; break;
             case KStmtKind::Materialize: // FREEZE st.value into a temp NOW (survives a later shared overwrite)
                 decl(decl, st.value);
                 if (matd[static_cast<crd::usize>(st.value)] == 0U)
@@ -373,24 +471,55 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (i < 0 || reach[static_cast<crd::usize>(i)]) { continue; }
+        if (i < 0 || reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (!is_vec_fusable(nd.op)) { return false; }
-        if (nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc) { return false; } // dynamic control flow not mirrored yet — refuse loudly
-        if (nd.op == KOp::MatInverse && nd.type.rows == 4) { return false; }                          // mat4 inverse deferred, as on HLSL/WGSL
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
-        if (nd.d >= 0) { stk.push_back(nd.d); }
-        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { stk.push_back(g.ext_operand(nd, k)); }
+        if (!is_vec_fusable(nd.op))
+        {
+            return false;
+        }
+        // dynamic control flow not mirrored yet — refuse loudly
+        if (nd.op == KOp::For || nd.op == KOp::LoopIndex || nd.op == KOp::LoopAcc)
+        {
+            return false;
+        }
+        if (nd.op == KOp::MatInverse && nd.type.rows == 4) // mat4 inverse deferred, as on HLSL/WGSL
+        {
+            return false;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
+        if (nd.d >= 0)
+        {
+            stk.push_back(nd.d);
+        }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k)
+        {
+            stk.push_back(g.ext_operand(nd, k));
+        }
     }
     crd::containers::Array<int> binding_of(scratch);
     binding_of.resize(static_cast<crd::usize>(n), -1);
     out.n_inputs = 0;
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         if (g.node(i).op == KOp::Input)
         {
             binding_of[static_cast<crd::usize>(i)] = out.n_inputs;
@@ -403,7 +532,12 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
     crd::containers::String& s = out.source;
     s.clear();
     s.append("extern \"C\" __global__ void ckir(");
-    for (int b = 0; b < out.n_inputs; ++b) { s.append("const float* in"); app_uint(s, b); s.append(", "); }
+    for (int b = 0; b < out.n_inputs; ++b)
+    {
+        s.append("const float* in");
+        app_uint(s, b);
+        s.append(", ");
+    }
     s.append("float* outb, unsigned n) {\n");
     s.append("  unsigned gid = blockIdx.x * blockDim.x + threadIdx.x;\n  if (gid >= n) return;\n");
 
@@ -421,13 +555,32 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
                 {
                     const int src = g.ext_operand(nd, k);
                     const int sc  = g.node(src).comps();
-                    if (comp < off + sc) { node = src; comp -= off; hit = true; break; }
+                    if (comp < off + sc)
+                    {
+                        node = src;
+                        comp -= off;
+                        hit = true;
+                        break;
+                    }
                     off += sc;
                 }
-                if (hit) { continue; }
+                if (hit)
+                {
+                    continue;
+                }
             }
-            else if (nd.op == KOp::FieldGet) { comp += g.struct_field_offset(g.node(nd.a).type.struct_id, nd.iidx); node = nd.a; continue; }
-            else if (nd.op == KOp::ArrayGet) { comp += nd.iidx * g.node(nd.a).type.elem_size(); node = nd.a; continue; }
+            else if (nd.op == KOp::FieldGet)
+            {
+                comp += g.struct_field_offset(g.node(nd.a).type.struct_id, nd.iidx);
+                node = nd.a;
+                continue;
+            }
+            else if (nd.op == KOp::ArrayGet)
+            {
+                comp += nd.iidx * g.node(nd.a).type.elem_size();
+                node = nd.a;
+                continue;
+            }
             rn = node;
             rc = comp;
             return;
@@ -440,14 +593,38 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
     const auto decl = [&](int i, int k, DType d)
     {
         s.append("  ");
-        if (d == DType::Bool) { s.append("bool"); }
-        else if (dt_is_uint(d)) { s.append("unsigned"); }
-        else if (dt_is_int(d)) { s.append("int"); }
-        else { s.append("float"); }
+        if (d == DType::Bool)
+        {
+            s.append("bool");
+        }
+        else if (dt_is_uint(d))
+        {
+            s.append("unsigned");
+        }
+        else if (dt_is_int(d))
+        {
+            s.append("int");
+        }
+        else
+        {
+            s.append("float");
+        }
         s.append(" t"); app_uint(s, i); s.append("_"); app_uint(s, k); s.append(" = ");
     };
     // truthiness of one component of `node` (bool components test directly; numeric ones compare against zero)
-    const auto truth = [&](int node, int k) { if (g.node(node).dtype() == DType::Bool) { tc(node, k); } else { s.append("("); tc(node, k); s.append(" != 0.0f)"); } };
+    const auto truth = [&](int node, int k)
+    {
+        if (g.node(node).dtype() == DType::Bool)
+        {
+            tc(node, k);
+        }
+        else
+        {
+            s.append("(");
+            tc(node, k);
+            s.append(" != 0.0f)");
+        }
+    };
     // 2x2 / 3x3 determinant of a column-major index set into `node`'s components (mirrors ckir_eval's mat_det order)
     const auto det2 = [&](int node, const int* x) { tc(node, x[0]); s.append("*"); tc(node, x[3]); s.append(" - "); tc(node, x[2]); s.append("*"); tc(node, x[1]); };
     const auto det3 = [&](int node, const int* x)
@@ -459,75 +636,417 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
 
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
-        if (is_aggregate(nd.op)) { continue; } // resolved at emit time by `resolve()` — nothing is materialized
+        if (is_aggregate(nd.op)) // resolved at emit time by `resolve()` — nothing is materialized
+        {
+            continue;
+        }
         const int   c  = nd.comps();
         const DType dt = nd.dtype();
         switch (nd.op)
         {
         case KOp::Input:
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("in"); app_uint(s, binding_of[static_cast<crd::usize>(i)]); if (c == 1) { s.append("[gid]"); } else { s.append("[gid*"); app_uint(s, c); s.append("+"); app_uint(s, k); s.append("]"); } s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                s.append("in");
+                app_uint(s, binding_of[static_cast<crd::usize>(i)]);
+                if (c == 1)
+                {
+                    s.append("[gid]");
+                }
+                else
+                {
+                    s.append("[gid*");
+                    app_uint(s, c);
+                    s.append("+");
+                    app_uint(s, k);
+                    s.append("]");
+                }
+                s.append(";\n");
+            }
             break;
         case KOp::Const:
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); if (dt == DType::Bool) { s.append(nd.cval != 0.0 ? "true" : "false"); } else if (dt_is_int(dt) || dt_is_uint(dt)) { app_ilit(s, nd.cval); } else { app_flit(s, nd.cval); s.append("f"); } s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                if (dt == DType::Bool)
+                {
+                    s.append(nd.cval != 0.0 ? "true" : "false");
+                }
+                else if (dt_is_int(dt) || dt_is_uint(dt))
+                {
+                    app_ilit(s, nd.cval);
+                }
+                else
+                {
+                    app_flit(s, nd.cval);
+                    s.append("f");
+                }
+                s.append(";\n");
+            }
             break;
         case KOp::Cast:
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); if (dt == DType::Bool) { s.append("bool("); } else if (dt_is_uint(dt)) { s.append("(unsigned)("); } else if (dt_is_int(dt)) { s.append("int("); } else { s.append("float("); } tc(nd.a, k); s.append(");\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                if (dt == DType::Bool)
+                {
+                    s.append("bool(");
+                }
+                else if (dt_is_uint(dt))
+                {
+                    s.append("(unsigned)(");
+                }
+                else if (dt_is_int(dt))
+                {
+                    s.append("int(");
+                }
+                else
+                {
+                    s.append("float(");
+                }
+                tc(nd.a, k);
+                s.append(");\n");
+            }
             break;
-        case KOp::Neg: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("-"); tc(nd.a, k); s.append(";\n"); } break;
-        case KOp::Recip: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("1.0f / "); tc(nd.a, k); s.append(";\n"); } break;
-        case KOp::Abs: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("fabsf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Sqrt: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("sqrtf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Rsqrt: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("1.0f / sqrtf("); tc(nd.a, k); s.append(");\n"); } break; // NOT rsqrtf: that is the approximate intrinsic
-        case KOp::Exp: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("expf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Log: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("logf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Sin: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("sinf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Cos: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("cosf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Floor: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("floorf("); tc(nd.a, k); s.append(");\n"); } break;
-        case KOp::Fract: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("("); tc(nd.a, k); s.append(" - floorf("); tc(nd.a, k); s.append("));\n"); } break;
-        case KOp::Add: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" + "); tcb(nd.b, k); s.append(";\n"); } break;
-        case KOp::Sub: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" - "); tcb(nd.b, k); s.append(";\n"); } break;
-        case KOp::Mul: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" * "); tcb(nd.b, k); s.append(";\n"); } break;
-        case KOp::Div: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" / "); tcb(nd.b, k); s.append(";\n"); } break;
-        case KOp::Min: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("fminf("); tc(nd.a, k); s.append(", "); tcb(nd.b, k); s.append(");\n"); } break;
-        case KOp::Max: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("fmaxf("); tc(nd.a, k); s.append(", "); tcb(nd.b, k); s.append(");\n"); } break;
-        case KOp::Pow: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("powf("); tc(nd.a, k); s.append(", "); tcb(nd.b, k); s.append(");\n"); } break;
-        case KOp::Clamp: for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("fminf(fmaxf("); tc(nd.a, k); s.append(", "); tcb(nd.b, k); s.append("), "); tcb(nd.c, k); s.append(");\n"); } break;
-        case KOp::Mix: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" * (1.0f - "); tcb(nd.c, k); s.append(") + "); tcb(nd.b, k); s.append(" * "); tcb(nd.c, k); s.append(";\n"); } break; // oracle order: a*(1-t) + b*t
+        case KOp::Neg:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("-");
+                    tc(nd.a, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Recip:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("1.0f / ");
+                    tc(nd.a, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Abs:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("fabsf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Sqrt:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("sqrtf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Rsqrt:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("1.0f / sqrtf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break; // NOT rsqrtf: that is the approximate intrinsic
+        case KOp::Exp:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("expf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Log:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("logf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Sin:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("sinf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Cos:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("cosf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Floor:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("floorf(");
+                    tc(nd.a, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Fract:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("(");
+                    tc(nd.a, k);
+                    s.append(" - floorf(");
+                    tc(nd.a, k);
+                    s.append("));\n");
+                }
+                break;
+        case KOp::Add:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, k);
+                    s.append(" + ");
+                    tcb(nd.b, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Sub:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, k);
+                    s.append(" - ");
+                    tcb(nd.b, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Mul:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, k);
+                    s.append(" * ");
+                    tcb(nd.b, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Div:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, k);
+                    s.append(" / ");
+                    tcb(nd.b, k);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Min:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("fminf(");
+                    tc(nd.a, k);
+                    s.append(", ");
+                    tcb(nd.b, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Max:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("fmaxf(");
+                    tc(nd.a, k);
+                    s.append(", ");
+                    tcb(nd.b, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Pow:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("powf(");
+                    tc(nd.a, k);
+                    s.append(", ");
+                    tcb(nd.b, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Clamp:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    s.append("fminf(fmaxf(");
+                    tc(nd.a, k);
+                    s.append(", ");
+                    tcb(nd.b, k);
+                    s.append("), ");
+                    tcb(nd.c, k);
+                    s.append(");\n");
+                }
+                break;
+        case KOp::Mix:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, k);
+                    s.append(" * (1.0f - ");
+                    tcb(nd.c, k);
+                    s.append(") + ");
+                    tcb(nd.b, k);
+                    s.append(" * ");
+                    tcb(nd.c, k);
+                    s.append(";\n");
+                }
+                break; // oracle order: a*(1-t) + b*t
         case KOp::Vec2: decl(i, 0, dt); tc(nd.a, 0); s.append(";\n"); decl(i, 1, dt); tc(nd.b, 0); s.append(";\n"); break;
         case KOp::Vec3: decl(i, 0, dt); tc(nd.a, 0); s.append(";\n"); decl(i, 1, dt); tc(nd.b, 0); s.append(";\n"); decl(i, 2, dt); tc(nd.c, 0); s.append(";\n"); break;
-        case KOp::VecConcat: { const int ac = g.node(nd.a).comps(); for (int k = 0; k < c; ++k) { decl(i, k, dt); if (k < ac) { tc(nd.a, k); } else { tc(nd.b, k - ac); } s.append(";\n"); } break; }
+        case KOp::VecConcat:
+        {
+            const int ac = g.node(nd.a).comps();
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                if (k < ac)
+                {
+                    tc(nd.a, k);
+                }
+                else
+                {
+                    tc(nd.b, k - ac);
+                }
+                s.append(";\n");
+            }
+            break; }
         case KOp::VecComp: decl(i, 0, dt); tc(nd.a, nd.iidx); s.append(";\n"); break;
-        case KOp::Swizzle: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, nd.perm[k]); s.append(";\n"); } break;
-        case KOp::Splat: for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, 0); s.append(";\n"); } break;
-        case KOp::Dot: { const int ac = g.node(nd.a).comps(); decl(i, 0, dt); for (int k = 0; k < ac; ++k) { if (k) { s.append(" + "); } tc(nd.a, k); s.append("*"); tc(nd.b, k); } s.append(";\n"); break; }
+        case KOp::Swizzle:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, nd.perm[k]);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Splat:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    tc(nd.a, 0);
+                    s.append(";\n");
+                }
+                break;
+        case KOp::Dot:
+        {
+            const int ac = g.node(nd.a).comps(); decl(i, 0, dt);
+            for (int k = 0; k < ac; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.a, k);
+                s.append("*");
+                tc(nd.b, k);
+            }
+            s.append(";\n"); break; }
         case KOp::Cross:
             decl(i, 0, dt); tc(nd.a, 1); s.append("*"); tc(nd.b, 2); s.append(" - "); tc(nd.a, 2); s.append("*"); tc(nd.b, 1); s.append(";\n");
             decl(i, 1, dt); tc(nd.a, 2); s.append("*"); tc(nd.b, 0); s.append(" - "); tc(nd.a, 0); s.append("*"); tc(nd.b, 2); s.append(";\n");
             decl(i, 2, dt); tc(nd.a, 0); s.append("*"); tc(nd.b, 1); s.append(" - "); tc(nd.a, 1); s.append("*"); tc(nd.b, 0); s.append(";\n");
             break;
-        case KOp::VecLen: { const int ac = g.node(nd.a).comps(); decl(i, 0, dt); s.append("sqrtf("); for (int k = 0; k < ac; ++k) { if (k) { s.append(" + "); } tc(nd.a, k); s.append("*"); tc(nd.a, k); } s.append(");\n"); break; }
+        case KOp::VecLen:
+        {
+            const int ac = g.node(nd.a).comps(); decl(i, 0, dt); s.append("sqrtf(");
+            for (int k = 0; k < ac; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.a, k);
+                s.append("*");
+                tc(nd.a, k);
+            }
+            s.append(");\n"); break; }
         case KOp::Normalize:
         {
             s.append("  float t"); app_uint(s, i); s.append("_L = sqrtf(");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } tc(nd.a, k); s.append("*"); tc(nd.a, k); }
+            for (int k = 0; k < c; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.a, k);
+                s.append("*");
+                tc(nd.a, k);
+            }
             s.append(");\n");
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" / t"); app_uint(s, i); s.append("_L;\n"); } // oracle divides by len
+            for (int k = 0; k < c; ++k) // oracle divides by len
+            {
+                decl(i, k, dt);
+                tc(nd.a, k);
+                s.append(" / t");
+                app_uint(s, i);
+                s.append("_L;\n");
+            }
             break;
         }
         case KOp::Reflect:
         {
             s.append("  float t"); app_uint(s, i); s.append("_D = ");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } tc(nd.b, k); s.append("*"); tc(nd.a, k); } // dp = n . i
+            for (int k = 0; k < c; ++k) // dp = n . i
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.b, k);
+                s.append("*");
+                tc(nd.a, k);
+            }
             s.append(";\n");
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" - 2.0f * t"); app_uint(s, i); s.append("_D * "); tc(nd.b, k); s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                tc(nd.a, k);
+                s.append(" - 2.0f * t");
+                app_uint(s, i);
+                s.append("_D * ");
+                tc(nd.b, k);
+                s.append(";\n");
+            }
             break;
         }
         case KOp::Refract:
         {
             s.append("  float t"); app_uint(s, i); s.append("_D = ");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } tc(nd.b, k); s.append("*"); tc(nd.a, k); }
+            for (int k = 0; k < c; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.b, k);
+                s.append("*");
+                tc(nd.a, k);
+            }
             s.append(";\n");
             s.append("  float t"); app_uint(s, i); s.append("_E = "); tc(nd.c, 0); s.append(";\n");
             s.append("  float t"); app_uint(s, i); s.append("_K = 1.0f - t"); app_uint(s, i); s.append("_E * t"); app_uint(s, i); s.append("_E * (1.0f - t"); app_uint(s, i); s.append("_D * t"); app_uint(s, i); s.append("_D);\n");
@@ -541,17 +1060,60 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::Faceforward:
         {
             s.append("  float t"); app_uint(s, i); s.append("_D = ");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } tc(nd.c, k); s.append("*"); tc(nd.b, k); } // dp = nref . i
+            for (int k = 0; k < c; ++k) // dp = nref . i
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.c, k);
+                s.append("*");
+                tc(nd.b, k);
+            }
             s.append(";\n");
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("((t"); app_uint(s, i); s.append("_D < 0.0f) ? 1.0f : -1.0f) * "); tc(nd.a, k); s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                s.append("((t");
+                app_uint(s, i);
+                s.append("_D < 0.0f) ? 1.0f : -1.0f) * ");
+                tc(nd.a, k);
+                s.append(";\n");
+            }
             break;
         }
-        case KOp::MatFromCols: { const int mr = nd.type.rows; const int mc = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d}; for (int col = 0; col < mc; ++col) { for (int row = 0; row < mr; ++row) { decl(i, col * mr + row, dt); tc(operand[col], row); s.append(";\n"); } } break; }
+        case KOp::MatFromCols:
+        {
+            const int mr = nd.type.rows; const int mc = nd.type.cols; const int operand[4] = {nd.a, nd.b, nd.c, nd.d};
+            for (int col = 0; col < mc; ++col)
+            {
+                for (int row = 0; row < mr; ++row)
+                {
+                    decl(i, col * mr + row, dt);
+                    tc(operand[col], row);
+                    s.append(";\n");
+                }
+            }
+            break; }
         case KOp::MatVecMul:
         {
             const int mr = g.node(nd.a).type.rows;
             const int mc = g.node(nd.a).type.cols;
-            for (int r = 0; r < mr; ++r) { decl(i, r, dt); for (int col = 0; col < mc; ++col) { if (col) { s.append(" + "); } tc(nd.a, col * mr + r); s.append("*"); tc(nd.b, col); } s.append(";\n"); }
+            for (int r = 0; r < mr; ++r)
+            {
+                decl(i, r, dt);
+                for (int col = 0; col < mc; ++col)
+                {
+                    if (col)
+                    {
+                        s.append(" + ");
+                    }
+                    tc(nd.a, col * mr + r);
+                    s.append("*");
+                    tc(nd.b, col);
+                }
+                s.append(";\n");
+            }
             break;
         }
         case KOp::MatMatMul:
@@ -559,28 +1121,101 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
             const int ar = g.node(nd.a).type.rows;
             const int ak = g.node(nd.a).type.cols;
             const int bc = g.node(nd.b).type.cols;
-            for (int col = 0; col < bc; ++col) { for (int r = 0; r < ar; ++r) { decl(i, col * ar + r, dt); for (int k = 0; k < ak; ++k) { if (k) { s.append(" + "); } tc(nd.a, k * ar + r); s.append("*"); tc(nd.b, col * ak + k); } s.append(";\n"); } }
+            for (int col = 0; col < bc; ++col)
+            {
+                for (int r = 0; r < ar; ++r)
+                {
+                    decl(i, col * ar + r, dt);
+                    for (int k = 0; k < ak; ++k)
+                    {
+                        if (k)
+                        {
+                            s.append(" + ");
+                        }
+                        tc(nd.a, k * ar + r);
+                        s.append("*");
+                        tc(nd.b, col * ak + k);
+                    }
+                    s.append(";\n");
+                }
+            }
             break;
         }
-        case KOp::MatTranspose: { const int orows = nd.type.rows; const int ocols = nd.type.cols; for (int col = 0; col < ocols; ++col) { for (int r = 0; r < orows; ++r) { decl(i, col * orows + r, dt); tc(nd.a, r * ocols + col); s.append(";\n"); } } break; }
-        case KOp::OuterProduct: { const int orows = nd.type.rows; const int ocols = nd.type.cols; for (int col = 0; col < ocols; ++col) { for (int row = 0; row < orows; ++row) { decl(i, col * orows + row, dt); tc(nd.a, row); s.append("*"); tc(nd.b, col); s.append(";\n"); } } break; }
+        case KOp::MatTranspose:
+        {
+            const int orows = nd.type.rows; const int ocols = nd.type.cols;
+            for (int col = 0; col < ocols; ++col)
+            {
+                for (int r = 0; r < orows; ++r)
+                {
+                    decl(i, col * orows + r, dt);
+                    tc(nd.a, r * ocols + col);
+                    s.append(";\n");
+                }
+            }
+            break; }
+        case KOp::OuterProduct:
+        {
+            const int orows = nd.type.rows; const int ocols = nd.type.cols;
+            for (int col = 0; col < ocols; ++col)
+            {
+                for (int row = 0; row < orows; ++row)
+                {
+                    decl(i, col * orows + row, dt);
+                    tc(nd.a, row);
+                    s.append("*");
+                    tc(nd.b, col);
+                    s.append(";\n");
+                }
+            }
+            break; }
         case KOp::Determinant:
         {
             const int d = g.node(nd.a).type.rows;
             decl(i, 0, dt);
-            if (d == 2) { const int x[4] = {0, 1, 2, 3}; det2(nd.a, x); }
-            else if (d == 3) { int x[9]; for (int k = 0; k < 9; ++k) { x[k] = k; } det3(nd.a, x); }
-            else { return false; } // 4x4 determinant not mirrored on CUDA (documented gap)
+            if (d == 2)
+            {
+                const int x[4] = {0, 1, 2, 3};
+                det2(nd.a, x);
+            }
+            else if (d == 3)
+            {
+                int x[9];
+                for (int k = 0; k < 9; ++k)
+                {
+                    x[k] = k;
+                }
+                det3(nd.a, x);
+            }
+            else // 4x4 determinant not mirrored on CUDA (documented gap)
+            {
+                return false;
+            }
             s.append(";\n");
             break;
         }
         case KOp::MatInverse:
         {
             const int d = nd.type.rows;
-            if (d != 2 && d != 3) { return false; }
+            if (d != 2 && d != 3)
+            {
+                return false;
+            }
             s.append("  float t"); app_uint(s, i); s.append("_DET = ");
-            if (d == 2) { const int x[4] = {0, 1, 2, 3}; det2(nd.a, x); }
-            else { int x[9]; for (int k = 0; k < 9; ++k) { x[k] = k; } det3(nd.a, x); }
+            if (d == 2)
+            {
+                const int x[4] = {0, 1, 2, 3};
+                det2(nd.a, x);
+            }
+            else
+            {
+                int x[9];
+                for (int k = 0; k < 9; ++k)
+                {
+                    x[k] = k;
+                }
+                det3(nd.a, x);
+            }
             s.append(";\n");
             // mirrors ckir_eval: dst[cj*d + ri] = sign(ri+cj) * minor_det(sr=cj, sc=ri) / det
             for (int cj = 0; cj < d; ++cj)
@@ -589,18 +1224,60 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
                 {
                     int mi  = 0;
                     int idx[4] = {0, 0, 0, 0};
-                    for (int col = 0; col < d; ++col) { if (col == ri) { continue; } for (int row = 0; row < d; ++row) { if (row == cj) { continue; } idx[mi++] = col * d + row; } }
+                    for (int col = 0; col < d; ++col)
+                    {
+                        if (col == ri)
+                        {
+                            continue;
+                        }
+                        for (int row = 0; row < d; ++row)
+                        {
+                            if (row == cj)
+                            {
+                                continue;
+                            }
+                            idx[mi++] = col * d + row;
+                        }
+                    }
                     decl(i, cj * d + ri, dt);
                     s.append(((ri + cj) % 2 == 0) ? "(" : "-(");
-                    if (d == 2) { tc(nd.a, idx[0]); }
-                    else { det2(nd.a, idx); }
+                    if (d == 2)
+                    {
+                        tc(nd.a, idx[0]);
+                    }
+                    else
+                    {
+                        det2(nd.a, idx);
+                    }
                     s.append(") / t"); app_uint(s, i); s.append("_DET;\n");
                 }
             }
             break;
         }
-        case KOp::VecAny: { const int ac = g.node(nd.a).comps(); decl(i, 0, dt); for (int k = 0; k < ac; ++k) { if (k) { s.append(" || "); } truth(nd.a, k); } s.append(";\n"); break; }
-        case KOp::VecAll: { const int ac = g.node(nd.a).comps(); decl(i, 0, dt); for (int k = 0; k < ac; ++k) { if (k) { s.append(" && "); } truth(nd.a, k); } s.append(";\n"); break; }
+        case KOp::VecAny:
+        {
+            const int ac = g.node(nd.a).comps(); decl(i, 0, dt);
+            for (int k = 0; k < ac; ++k)
+            {
+                if (k)
+                {
+                    s.append(" || ");
+                }
+                truth(nd.a, k);
+            }
+            s.append(";\n"); break; }
+        case KOp::VecAll:
+        {
+            const int ac = g.node(nd.a).comps(); decl(i, 0, dt);
+            for (int k = 0; k < ac; ++k)
+            {
+                if (k)
+                {
+                    s.append(" && ");
+                }
+                truth(nd.a, k);
+            }
+            s.append(";\n"); break; }
         case KOp::CmpLt: case KOp::CmpLe: case KOp::CmpGt: case KOp::CmpGe: case KOp::CmpEq: case KOp::CmpNe:
         {
             const char* sym = " < ";
@@ -613,12 +1290,37 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
             case KOp::CmpNe: sym = " != "; break;
             default: break;
             }
-            for (int k = 0; k < c; ++k) { decl(i, k, dt); s.append("("); tc(nd.a, k); s.append(sym); tcb(nd.b, k); s.append(");\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                decl(i, k, dt);
+                s.append("(");
+                tc(nd.a, k);
+                s.append(sym);
+                tcb(nd.b, k);
+                s.append(");\n");
+            }
             break;
         }
-        case KOp::Select: for (int k = 0; k < c; ++k) { decl(i, k, dt); truth(nd.c, 0); s.append(" ? "); tc(nd.a, k); s.append(" : "); tcb(nd.b, k); s.append(";\n"); } break;
+        case KOp::Select:
+                for (int k = 0; k < c; ++k)
+                {
+                    decl(i, k, dt);
+                    truth(nd.c, 0);
+                    s.append(" ? ");
+                    tc(nd.a, k);
+                    s.append(" : ");
+                    tcb(nd.b, k);
+                    s.append(";\n");
+                }
+                break;
         case KOp::QuatConj:
-            for (int k = 0; k < 3; ++k) { decl(i, k, dt); s.append("-"); tc(nd.a, k); s.append(";\n"); }
+            for (int k = 0; k < 3; ++k)
+            {
+                decl(i, k, dt);
+                s.append("-");
+                tc(nd.a, k);
+                s.append(";\n");
+            }
             decl(i, 3, dt); tc(nd.a, 3); s.append(";\n");
             break;
         case KOp::QuatMul:
@@ -630,7 +1332,14 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::QuatAxisAngle:
             s.append("  float t"); app_uint(s, i); s.append("_H = "); tc(nd.b, 0); s.append(" * 0.5f;\n");
             s.append("  float t"); app_uint(s, i); s.append("_S = sinf(t"); app_uint(s, i); s.append("_H);\n");
-            for (int k = 0; k < 3; ++k) { decl(i, k, dt); tc(nd.a, k); s.append(" * t"); app_uint(s, i); s.append("_S;\n"); }
+            for (int k = 0; k < 3; ++k)
+            {
+                decl(i, k, dt);
+                tc(nd.a, k);
+                s.append(" * t");
+                app_uint(s, i);
+                s.append("_S;\n");
+            }
             decl(i, 3, dt); s.append("cosf(t"); app_uint(s, i); s.append("_H);\n");
             break;
         case KOp::QuatRotate:
@@ -644,7 +1353,15 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
         case KOp::QuatToMat3:
         {
             const char* nm[4] = {"_QX", "_QY", "_QZ", "_QW"};
-            for (int k = 0; k < 4; ++k) { s.append("  float t"); app_uint(s, i); s.append(nm[k]); s.append(" = "); tc(nd.a, k); s.append(";\n"); }
+            for (int k = 0; k < 4; ++k)
+            {
+                s.append("  float t");
+                app_uint(s, i);
+                s.append(nm[k]);
+                s.append(" = ");
+                tc(nd.a, k);
+                s.append(";\n");
+            }
             const auto q = [&](int k) { s.append("t"); app_uint(s, i); s.append(nm[k]); };
             const auto m2 = [&](int p, int r) { q(p); s.append("*"); q(r); };
             decl(i, 0, dt); s.append("1.0f - 2.0f * ("); m2(1, 1); s.append(" + "); m2(2, 2); s.append(");\n");
@@ -660,18 +1377,77 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
         }
         case KOp::Slerp:
         {
-            for (int k = 0; k < c; ++k) { s.append("  float t"); app_uint(s, i); s.append("_"); app_uint(s, k); s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                s.append("  float t");
+                app_uint(s, i);
+                s.append("_");
+                app_uint(s, k);
+                s.append(";\n");
+            }
             s.append("  {\n    float d = ");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } tc(nd.a, k); s.append("*"); tc(nd.b, k); }
+            for (int k = 0; k < c; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                tc(nd.a, k);
+                s.append("*");
+                tc(nd.b, k);
+            }
             s.append(";\n    float sg = 1.0f;\n    if (d < 0.0f) { d = -d; sg = -1.0f; }\n");
             s.append("    if (d > 0.9995f) {\n");
-            for (int k = 0; k < c; ++k) { s.append("      float m"); app_uint(s, k); s.append(" = "); tc(nd.a, k); s.append(" + "); tc(nd.c, 0); s.append(" * (sg * "); tc(nd.b, k); s.append(" - "); tc(nd.a, k); s.append(");\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                s.append("      float m");
+                app_uint(s, k);
+                s.append(" = ");
+                tc(nd.a, k);
+                s.append(" + ");
+                tc(nd.c, 0);
+                s.append(" * (sg * ");
+                tc(nd.b, k);
+                s.append(" - ");
+                tc(nd.a, k);
+                s.append(");\n");
+            }
             s.append("      float s2 = ");
-            for (int k = 0; k < c; ++k) { if (k) { s.append(" + "); } s.append("m"); app_uint(s, k); s.append("*m"); app_uint(s, k); }
+            for (int k = 0; k < c; ++k)
+            {
+                if (k)
+                {
+                    s.append(" + ");
+                }
+                s.append("m");
+                app_uint(s, k);
+                s.append("*m");
+                app_uint(s, k);
+            }
             s.append(";\n      float il = 1.0f / sqrtf(s2);\n");
-            for (int k = 0; k < c; ++k) { s.append("      t"); app_uint(s, i); s.append("_"); app_uint(s, k); s.append(" = m"); app_uint(s, k); s.append(" * il;\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                s.append("      t");
+                app_uint(s, i);
+                s.append("_");
+                app_uint(s, k);
+                s.append(" = m");
+                app_uint(s, k);
+                s.append(" * il;\n");
+            }
             s.append("    } else {\n      float th = acosf(d);\n      float sn = sinf(th);\n      float w1 = sinf((1.0f - "); tc(nd.c, 0); s.append(") * th) / sn;\n      float w2 = sinf("); tc(nd.c, 0); s.append(" * th) / sn;\n");
-            for (int k = 0; k < c; ++k) { s.append("      t"); app_uint(s, i); s.append("_"); app_uint(s, k); s.append(" = w1 * "); tc(nd.a, k); s.append(" + w2 * sg * "); tc(nd.b, k); s.append(";\n"); }
+            for (int k = 0; k < c; ++k)
+            {
+                s.append("      t");
+                app_uint(s, i);
+                s.append("_");
+                app_uint(s, k);
+                s.append(" = w1 * ");
+                tc(nd.a, k);
+                s.append(" + w2 * sg * ");
+                tc(nd.b, k);
+                s.append(";\n");
+            }
             s.append("    }\n  }\n");
             break;
         }
@@ -685,11 +1461,34 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
     for (int k = 0; k < oc; ++k)
     {
         s.append("  outb[");
-        if (oc == 1) { s.append("gid"); } else { s.append("gid*"); app_uint(s, oc); s.append("+"); app_uint(s, k); }
+        if (oc == 1)
+        {
+            s.append("gid");
+        }
+        else
+        {
+            s.append("gid*");
+            app_uint(s, oc);
+            s.append("+");
+            app_uint(s, k);
+        }
         s.append("] = ");
-        if (oty.scalar == DType::Bool) { s.append("("); tc(output, k); s.append(" ? 1.0f : 0.0f)"); }
-        else if (oty.scalar != DType::F32 && oty.scalar != DType::F64) { s.append("float("); tc(output, k); s.append(")"); }
-        else { tc(output, k); }
+        if (oty.scalar == DType::Bool)
+        {
+            s.append("(");
+            tc(output, k);
+            s.append(" ? 1.0f : 0.0f)");
+        }
+        else if (oty.scalar != DType::F32 && oty.scalar != DType::F64)
+        {
+            s.append("float(");
+            tc(output, k);
+            s.append(")");
+        }
+        else
+        {
+            tc(output, k);
+        }
         s.append(";\n");
     }
     s.append("}\n");
@@ -701,7 +1500,10 @@ inline bool emit_vec_cuda(const KGraph& g, int output, crd::memory::IAllocator* 
 inline bool emit_contract_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -725,27 +1527,70 @@ inline bool emit_contract_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_reduce_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (!is_reduce(rn.op)) { return false; }
-    if (g.node(rn.a).op != KOp::Input) { return false; }
+    if (!is_reduce(rn.op))
+    {
+        return false;
+    }
+    if (g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0;
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; }
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
     crd::containers::String& s = out.source;
     s.clear();
     s.append("extern \"C\" __global__ void ckir(const float* A, float* O, unsigned nout, unsigned redsize) {\n");
     s.append("  unsigned o = blockIdx.x * blockDim.x + threadIdx.x;\n  if (o >= nout) return;\n  unsigned base = o * redsize;\n");
-    if (rn.op == KOp::ReduceSum) { s.append("  float acc = 0.0f;\n  for (unsigned r = 0; r < redsize; ++r) { acc = acc + A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceProd) { s.append("  float acc = 1.0f;\n  for (unsigned r = 0; r < redsize; ++r) { acc = acc * A[base + r]; }\n"); }
-    else if (rn.op == KOp::ReduceMax) { s.append("  float acc = A[base];\n  for (unsigned r = 1; r < redsize; ++r) { acc = fmaxf(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ReduceMin) { s.append("  float acc = A[base];\n  for (unsigned r = 1; r < redsize; ++r) { acc = fminf(acc, A[base + r]); }\n"); }
-    else if (rn.op == KOp::ArgMax) { s.append("  float bv = A[base]; unsigned bi = 0u;\n  for (unsigned r = 1; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  float acc = (float)bi;\n"); }
-    else { s.append("  float bv = A[base]; unsigned bi = 0u;\n  for (unsigned r = 1; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  float acc = (float)bi;\n"); }
+    if (rn.op == KOp::ReduceSum)
+    {
+        s.append("  float acc = 0.0f;\n  for (unsigned r = 0; r < redsize; ++r) { acc = acc + A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceProd)
+    {
+        s.append("  float acc = 1.0f;\n  for (unsigned r = 0; r < redsize; ++r) { acc = acc * A[base + r]; }\n");
+    }
+    else if (rn.op == KOp::ReduceMax)
+    {
+        s.append("  float acc = A[base];\n  for (unsigned r = 1; r < redsize; ++r) { acc = fmaxf(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ReduceMin)
+    {
+        s.append("  float acc = A[base];\n  for (unsigned r = 1; r < redsize; ++r) { acc = fminf(acc, A[base + r]); }\n");
+    }
+    else if (rn.op == KOp::ArgMax)
+    {
+        s.append("  float bv = A[base]; unsigned bi = 0u;\n  for (unsigned r = 1; r < redsize; ++r) { if (A[base + r] > bv) { bv = A[base + r]; bi = r; } }\n  float acc = (float)bi;\n");
+    }
+    else
+    {
+        s.append("  float bv = A[base]; unsigned bi = 0u;\n  for (unsigned r = 1; r < redsize; ++r) { if (A[base + r] < bv) { bv = A[base + r]; bi = r; } }\n  float acc = (float)bi;\n");
+    }
     s.append("  O[o] = acc;\n}\n");
     return true;
 }
@@ -754,14 +1599,36 @@ inline bool emit_reduce_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_reduce_fast_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& rn = g.node(output);
-    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input) { return false; }
+    if (rn.tier != DetTier::Fast || !is_fast_reduceable(rn.op) || g.node(rn.a).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& ish = g.node(rn.a).shape;
     int          t   = 0;
-    for (int k = ish.rank - 1; k >= 0; --k) { if (((rn.axes >> k) & 1U) != 0U) { ++t; } else { break; } }
-    if (t == 0) { return false; }
+    for (int k = ish.rank - 1; k >= 0; --k)
+    {
+        if (((rn.axes >> k) & 1U) != 0U)
+        {
+            ++t;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (t == 0)
+    {
+        return false;
+    }
     crd::u32 tmask = 0;
-    for (int k = ish.rank - t; k < ish.rank; ++k) { tmask |= (1U << k); }
-    if (rn.axes != tmask) { return false; }
+    for (int k = ish.rank - t; k < ish.rank; ++k)
+    {
+        tmask |= (1U << k);
+    }
+    if (rn.axes != tmask)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(rn.a).iidx;
     crd::containers::String& s = out.source;
@@ -785,10 +1652,16 @@ inline bool emit_reduce_fast_cuda(const KGraph& g, int output, GlslKernel& out)
 // BR=64 (a warp-pair block) + BC=32, halving BC until the static shared 2·BC·D·4 fits 48 KB (so large head dims still emit).
 inline void select_attention_tile(int dim, int slen, const char* device, int& br, int& bc) noexcept
 {
-    if (lookup_attention_tuned(device, slen, dim, br, bc)) { return; } // DB replay overrides the heuristic
+    if (lookup_attention_tuned(device, slen, dim, br, bc)) // DB replay overrides the heuristic
+    {
+        return;
+    }
     br = 64;
     bc = 32;
-    while (bc > 4 && static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024) { bc /= 2; }
+    while (bc > 4 && static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024)
+    {
+        bc /= 2;
+    }
 }
 
 // AS-4 FUSION: emit a FLASH-attention kernel for a KOp::Attention node — O = softmax(Q·Kᵀ·scale)·V. ONE kernel, one block per
@@ -800,13 +1673,28 @@ inline void select_attention_tile(int dim, int slen, const char* device, int& br
 inline bool emit_attention_flash_cuda(const KGraph& g, int output, int br, int bc, GlslKernel& out)
 {
     const KNode& an = g.node(output);
-    if (an.op != KOp::Attention) { return false; }
-    if (g.node(an.a).op != KOp::Input || g.node(an.b).op != KOp::Input || g.node(an.c).op != KOp::Input) { return false; }
+    if (an.op != KOp::Attention)
+    {
+        return false;
+    }
+    if (g.node(an.a).op != KOp::Input || g.node(an.b).op != KOp::Input || g.node(an.c).op != KOp::Input)
+    {
+        return false;
+    }
     const Shape& qs = g.node(an.a).shape;
-    if (qs.rank != 2 || br <= 0 || bc <= 0) { return false; }
+    if (qs.rank != 2 || br <= 0 || bc <= 0)
+    {
+        return false;
+    }
     const int dim = static_cast<int>(qs.dims[1]);
-    if (dim <= 0) { return false; }
-    if (static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024) { return false; } // static shared cap
+    if (dim <= 0)
+    {
+        return false;
+    }
+    if (static_cast<crd::i64>(bc) * dim * 2 * 4 > 48 * 1024) // static shared cap
+    {
+        return false;
+    }
     out.n_inputs      = 3;
     out.input_iidx[0] = g.node(an.a).iidx;
     out.input_iidx[1] = g.node(an.b).iidx;
@@ -847,7 +1735,10 @@ inline bool emit_attention_flash_cuda(const KGraph& g, int output, int br, int b
 inline bool emit_gather_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& gn = g.node(output);
-    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input) { return false; }
+    if (gn.op != KOp::Gather || g.node(gn.a).op != KOp::Input || g.node(gn.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(gn.a).iidx; // data
     out.input_iidx[1] = g.node(gn.b).iidx; // idx
@@ -866,7 +1757,10 @@ inline bool emit_gather_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scatter_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input) { return false; }
+    if (sn.op != KOp::Scatter || g.node(sn.a).op != KOp::Input || g.node(sn.b).op != KOp::Input || g.node(sn.c).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 3;
     out.input_iidx[0] = g.node(sn.a).iidx; // base
     out.input_iidx[1] = g.node(sn.b).iidx; // idx
@@ -887,7 +1781,10 @@ inline bool emit_scatter_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -903,7 +1800,10 @@ inline bool emit_scan_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_scan_fast_cuda(const KGraph& g, int output, GlslKernel& out)
 {
     const KNode& sn = g.node(output);
-    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input) { return false; }
+    if (sn.op != KOp::ScanSum || sn.tier != DetTier::Fast || g.node(sn.a).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 1;
     out.input_iidx[0] = g.node(sn.a).iidx;
     crd::containers::String& s = out.source;
@@ -928,8 +1828,14 @@ inline bool emit_scan_fast_cuda(const KGraph& g, int output, GlslKernel& out)
 inline bool emit_contract_tiled_cuda(const KGraph& g, int output, const TileSchedule& sch, GlslKernel& out)
 {
     const KNode& c = g.node(output);
-    if (sch.kind != Sched::WarpTiled) { return false; }
-    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (sch.kind != Sched::WarpTiled)
+    {
+        return false;
+    }
+    if (c.op != KOp::Contract || g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
@@ -1102,28 +2008,62 @@ inline void emit_epi_fn(const KGraph& g, int output, const FuseInfo& fi, crd::me
     {
         const int i = stk[stk.size() - 1];
         stk.resize(stk.size() - 1);
-        if (reach[static_cast<crd::usize>(i)]) { continue; }
+        if (reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         reach[static_cast<crd::usize>(i)] = 1;
         const KNode& nd = g.node(i);
-        if (nd.op == KOp::Contract || nd.op == KOp::Broadcast) { continue; } // leaves
-        if (nd.a >= 0) { stk.push_back(nd.a); }
-        if (nd.b >= 0) { stk.push_back(nd.b); }
-        if (nd.c >= 0) { stk.push_back(nd.c); }
+        if (nd.op == KOp::Contract || nd.op == KOp::Broadcast) // leaves
+        {
+            continue;
+        }
+        if (nd.a >= 0)
+        {
+            stk.push_back(nd.a);
+        }
+        if (nd.b >= 0)
+        {
+            stk.push_back(nd.b);
+        }
+        if (nd.c >= 0)
+        {
+            stk.push_back(nd.c);
+        }
     }
     s.append("__device__ __forceinline__ float epi(float acc");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append(", float b"); app_uint(s, j); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append(", float b");
+        app_uint(s, j);
+    }
     s.append(") {\n");
     for (int i = 0; i < n; ++i)
     {
-        if (!reach[static_cast<crd::usize>(i)]) { continue; }
+        if (!reach[static_cast<crd::usize>(i)])
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         s.append("  float e"); app_uint(s, i); s.append(" = ");
         const auto te = [&](int id) { s.append("e"); app_uint(s, id); };
-        if (i == fi.contract) { s.append("acc"); }
+        if (i == fi.contract)
+        {
+            s.append("acc");
+        }
         else
         {
             bool is_bias = false;
-            for (int j = 0; j < fi.n_bias; ++j) { if (fi.bias_node[j] == i) { s.append("b"); app_uint(s, j); is_bias = true; break; } }
+            for (int j = 0; j < fi.n_bias; ++j)
+            {
+                if (fi.bias_node[j] == i)
+                {
+                    s.append("b");
+                    app_uint(s, j);
+                    is_bias = true;
+                    break;
+                }
+            }
             if (!is_bias)
             {
                 switch (nd.op)
@@ -1171,12 +2111,21 @@ inline bool emit_contract_tiled_fused_cuda(const KGraph& g, int output, int cont
                                            const FuseInfo& fi, crd::memory::IAllocator* scratch, GlslKernel& out)
 {
     const KNode& c = g.node(contract);
-    if (sch.kind != Sched::WarpTiled || c.op != KOp::Contract) { return false; }
-    if (g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input) { return false; }
+    if (sch.kind != Sched::WarpTiled || c.op != KOp::Contract)
+    {
+        return false;
+    }
+    if (g.node(c.a).op != KOp::Input || g.node(c.b).op != KOp::Input)
+    {
+        return false;
+    }
     out.n_inputs      = 2 + fi.n_bias;
     out.input_iidx[0] = g.node(c.a).iidx;
     out.input_iidx[1] = g.node(c.b).iidx;
-    for (int j = 0; j < fi.n_bias; ++j) { out.input_iidx[2 + j] = fi.bias_iidx[j]; }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        out.input_iidx[2 + j] = fi.bias_iidx[j];
+    }
 
     crd::containers::String& s = out.source;
     s.clear();
@@ -1203,7 +2152,11 @@ inline bool emit_contract_tiled_fused_cuda(const KGraph& g, int output, int cont
 )CKIR");
     emit_epi_fn(g, output, fi, scratch, s);
     s.append("extern \"C\" __global__ void __launch_bounds__(NT) ckir(const float* A, const float* Bm, float* C");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append(", const float* bias"); glsl_detail::app_uint(s, j); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append(", const float* bias");
+        glsl_detail::app_uint(s, j);
+    }
     s.append(", unsigned M, unsigned N, unsigned K) {\n");
     s.append(R"CKIR(  (void)M;
   const unsigned cRow = blockIdx.y, cCol = blockIdx.x;
@@ -1313,13 +2266,26 @@ inline bool emit_contract_tiled_fused_cuda(const KGraph& g, int output, int cont
         for (int n = 0; n < TN; n += 4) {
           const int base = (wm * TM + m) * (WNITER * TN) + wn * TN + n;
 )CKIR");
-    for (int j = 0; j < fi.n_bias; ++j) { s.append("          float4 B"); glsl_detail::app_uint(s, j); s.append(" = *reinterpret_cast<const float4*>(&bias"); glsl_detail::app_uint(s, j); s.append("[gcol + n]);\n"); }
+    for (int j = 0; j < fi.n_bias; ++j)
+    {
+        s.append("          float4 B");
+        glsl_detail::app_uint(s, j);
+        s.append(" = *reinterpret_cast<const float4*>(&bias");
+        glsl_detail::app_uint(s, j);
+        s.append("[gcol + n]);\n");
+    }
     s.append("          float4 v;\n");
     const char* comp[4] = {"x", "y", "z", "w"};
     for (int k = 0; k < 4; ++k)
     {
         s.append("          v."); s.append(comp[k]); s.append(" = epi(acc[base + "); glsl_detail::app_uint(s, static_cast<crd::u32>(k)); s.append("]");
-        for (int j = 0; j < fi.n_bias; ++j) { s.append(", B"); glsl_detail::app_uint(s, j); s.append("."); s.append(comp[k]); }
+        for (int j = 0; j < fi.n_bias; ++j)
+        {
+            s.append(", B");
+            glsl_detail::app_uint(s, j);
+            s.append(".");
+            s.append(comp[k]);
+        }
         s.append(");\n");
     }
     s.append(R"CKIR(          *reinterpret_cast<float4*>(&Cw[(threadRowInWarp * TM + m) * N + threadColInWarp * TN + n]) = v;

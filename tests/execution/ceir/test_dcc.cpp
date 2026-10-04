@@ -65,17 +65,32 @@ struct DccGraph
     [[nodiscard]] Operation* mod(Block* b, OpId k, ConstSpan<Value*> inputs, StringView param, i64 pval)
     {
         Operation* const o = ctx.create_operation(k, inputs, 1U, ctx.type_i64());
-        if (!param.empty()) { ctx.set_attr(o, param, ctx.attr_int(pval)); }
+        if (!param.empty())
+        {
+            ctx.set_attr(o, param, ctx.attr_int(pval));
+        }
         b->append(o);
         return o;
     }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
-        if (op.kind() == base) { return ctx.attr_value(op.attr("poly")).i; }
+        if (op.kind() == base)
+        {
+            return ctx.attr_value(op.attr("poly")).i;
+        }
         const i64 in0 = value[op.operand(0)->defining_op()->stable_id().value - 1U];
-        if (op.kind() == subdiv) { return in0 * ctx.attr_value(op.attr("level")).i; }
-        if (op.kind() == xform) { return in0 + ctx.attr_value(op.attr("extra")).i; }
-        if (op.kind() == boolean_op) { return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U]; }
+        if (op.kind() == subdiv)
+        {
+            return in0 * ctx.attr_value(op.attr("level")).i;
+        }
+        if (op.kind() == xform)
+        {
+            return in0 + ctx.attr_value(op.attr("extra")).i;
+        }
+        if (op.kind() == boolean_op)
+        {
+            return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U];
+        }
         return in0; // deform / output preserve the poly count (a deform's `strength` does NOT change topology)
     }
     [[nodiscard]] u32 count(const Operation* op) const { return recomputes[op->stable_id().value - 1U]; }
@@ -116,7 +131,10 @@ struct DccGraph
             for (u32 k = 0; k < cell[i]->num_operands(); ++k)
             {
                 const Operation* const dop = cell[i]->operand(k)->defining_op();
-                if (dop == nullptr) { continue; }
+                if (dop == nullptr)
+                {
+                    continue;
+                }
                 dag.add_edge(id, dop->stable_id().value);
                 deps[i].push_back(dop->stable_id().value);
             }
@@ -146,7 +164,10 @@ struct DccGraph
         Array<u64> aff(alloc);
         REQUIRE(dag.affected_by(seed, aff));
         tag.push_back(seed);
-        for (usize i = 0; i < aff.size(); ++i) { tag.push_back(aff[i]); }
+        for (usize i = 0; i < aff.size(); ++i)
+        {
+            tag.push_back(aff[i]);
+        }
         Array<u8> tagged(alloc);
         Array<u8> changed(alloc);
         for (u32 i = 0; i < 7U; ++i)
@@ -154,21 +175,36 @@ struct DccGraph
             tagged.push_back(0U);
             changed.push_back(0U);
         }
-        for (usize i = 0; i < tag.size(); ++i) { tagged[tag[i] - 1U] = 1U; }
+        for (usize i = 0; i < tag.size(); ++i)
+        {
+            tagged[tag[i] - 1U] = 1U;
+        }
         Array<u64> order(alloc);
         REQUIRE(dag.topo_order(order));
         for (usize i = 0; i < order.size(); ++i)
         {
             const u64 id = order[i];
-            if (tagged[id - 1U] == 0U) { continue; }
+            if (tagged[id - 1U] == 0U)
+            {
+                continue;
+            }
             const u64 new_content = content_hash(*cell[id - 1U], ctx);
             bool      must        = false;
-            if (id == seed && new_content != dag.content_of(id)) { must = true; } // the edited modifier's formula changed
+            if (id == seed && new_content != dag.content_of(id)) // the edited modifier's formula changed
+            {
+                must = true;
+            }
             for (usize k = 0; k < deps[id - 1U].size(); ++k)
             {
-                if (changed[deps[id - 1U][k] - 1U] != 0U) { must = true; } // an upstream input's mesh changed
+                if (changed[deps[id - 1U][k] - 1U] != 0U) // an upstream input's mesh changed
+                {
+                    must = true;
+                }
             }
-            if (!must) { continue; } // early-out (Blender "no update needed")
+            if (!must) // early-out (Blender "no update needed")
+            {
+                continue;
+            }
             const u64 old_interface = dag.interface_of(id);
             const i64 v             = eval(*cell[id - 1U]);
             value[id - 1U]          = v;
@@ -176,7 +212,10 @@ struct DccGraph
             const u64 new_interface = value_hash(v);
             dag.set_revision(id, new_content, new_interface);
             evaluated.push_back(id);
-            if (new_interface != old_interface) { changed[id - 1U] = 1U; }
+            if (new_interface != old_interface)
+            {
+                changed[id - 1U] = 1U;
+            }
         }
     }
     // A parameter edit rides an 8i transaction (the touched-set is the depsgraph seed).
@@ -200,7 +239,10 @@ TEST_CASE("ceir 9c: initial evaluation computes every modifier exactly once", "[
     Array<Operation*>            c(&root);
     g.build(c);
     g.full_eval();
-    for (u32 i = 0; i < 7U; ++i) { CHECK(g.recomputes[i] == 1U); }
+    for (u32 i = 0; i < 7U; ++i)
+    {
+        CHECK(g.recomputes[i] == 1U);
+    }
     CHECK(g.value[1] == 400); // subdivide = base(100) * level(4)
     CHECK(g.value[4] == 450); // boolean = sub(400) + cut_t(50)
     CHECK(g.value[6] == 450); // output = deform(preserves) = 450
@@ -256,7 +298,10 @@ TEST_CASE("ceir 9c: a cutter-branch edit does not re-evaluate the subdivide bran
     bool has_sub = false;
     for (usize i = 0; i < aff.size(); ++i)
     {
-        if (aff[i] == sub->stable_id().value) { has_sub = true; }
+        if (aff[i] == sub->stable_id().value)
+        {
+            has_sub = true;
+        }
     }
     CHECK_FALSE(has_sub);
 
@@ -318,5 +363,8 @@ TEST_CASE("ceir 9c: a no-op parameter edit through a transaction re-evaluates no
     Array<u64> evaluated(&root);
     g.depsgraph_reeval(seed, tag, evaluated);
     CHECK(evaluated.size() == 0U);
-    for (u32 i = 0; i < 7U; ++i) { CHECK(g.recomputes[i] == 1U); }
+    for (u32 i = 0; i < 7U; ++i)
+    {
+        CHECK(g.recomputes[i] == 1U);
+    }
 }

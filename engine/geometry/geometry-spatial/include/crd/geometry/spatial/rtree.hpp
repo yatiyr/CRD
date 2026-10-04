@@ -320,8 +320,14 @@ template <MathScalar T>
 template <typename Fn>
 void RTree<T>::overlap(const AABB3<T>& query, Fn&& on_hit) const
 {
-    if (m_root == k_null) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
+    if (m_root == k_null)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
 
     // Iterative DFS. Worst-case sp = M × depth (push every child per
     // descent). M=16, depth ≤ 16 ⇒ 256 frames covers any practical scene.

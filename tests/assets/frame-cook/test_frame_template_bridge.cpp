@@ -167,7 +167,10 @@ void ab_template_fidelity(const fc::FrameGraphDesc& desc, rp::ExecutorRegistry& 
     const bool ok_b = fc::build_frame_graph_template(desc_b, generic_for_each_count, nullptr, schemas, tmpl_b, diags_b);
 
     REQUIRE(ok_a == ok_b); // the ceir round-trip does not change bridgeability
-    if (!ok_a) { return; } // a bridge gap on BOTH — not this gate's subject
+    if (!ok_a) // a bridge gap on BOTH — not this gate's subject
+    {
+        return;
+    }
 
     REQUIRE(tmpl_a.passes().size() == tmpl_b.passes().size());
     for (u32 i = 0; i < tmpl_a.passes().size(); ++i)
@@ -196,7 +199,10 @@ void ab_template_fidelity(const fc::FrameGraphDesc& desc, rp::ExecutorRegistry& 
     if (cok_a)
     {
         REQUIRE(ca.schedule().size() == cb.schedule().size());
-        for (u32 s = 0; s < ca.schedule().size(); ++s) { CHECK(ca.schedule()[s] == cb.schedule()[s]); }
+        for (u32 s = 0; s < ca.schedule().size(); ++s)
+        {
+            CHECK(ca.schedule()[s] == cb.schedule()[s]);
+        }
     }
 }
 
@@ -245,7 +251,10 @@ void gate_frame_plans(const char* stem, crd::memory::IAllocator& alloc)
     REQUIRE_FALSE(diags.has_errors());
     for (u32 pi = 0; pi < desc.passes.size(); ++pi)
     {
-        if (!fc::pass_is_fullscreen(desc.passes[pi])) { continue; }
+        if (!fc::pass_is_fullscreen(desc.passes[pi]))
+        {
+            continue;
+        }
         const rg::CeirPassPlan* const plan = plans.table.find(
             rp::pass_param_id(StringView(desc.passes[pi].name.c_str(), desc.passes[pi].name.size())));
         REQUIRE(plan != nullptr);  // every fullscreen pass got a bound plan (found by its authored name)
@@ -286,7 +295,10 @@ TEST_CASE("RAF-8: a forward_csm frame bridges to a render-graph template and com
         const rg::GraphPass* fwd = nullptr;
         for (u32 i = 0; i < tmpl.passes().size(); ++i)
         {
-            if (tmpl.passes()[i].name_hash == bridged_name("forward", 0U)) { fwd = &tmpl.passes()[i]; }
+            if (tmpl.passes()[i].name_hash == bridged_name("forward", 0U))
+            {
+                fwd = &tmpl.passes()[i];
+            }
         }
         REQUIRE(fwd != nullptr);
         u32 tex_reads = 0U;
@@ -294,9 +306,18 @@ TEST_CASE("RAF-8: a forward_csm frame bridges to a render-graph template and com
         for (u32 i = 0; i < fwd->payload.resources.size(); ++i)
         {
             const rp::ResourceRef& rr = fwd->payload.resources[i];
-            if (rr.access != rp::SlotAccess::Read) { continue; }
-            if (rr.kind == rp::SlotResourceKind::Texture) { ++tex_reads; }
-            else if (rr.kind == rp::SlotResourceKind::StorageBuffer) { ++buf_reads; }
+            if (rr.access != rp::SlotAccess::Read)
+            {
+                continue;
+            }
+            if (rr.kind == rp::SlotResourceKind::Texture)
+            {
+                ++tex_reads;
+            }
+            else if (rr.kind == rp::SlotResourceKind::StorageBuffer)
+            {
+                ++buf_reads;
+            }
         }
         CHECK(tex_reads == 1U); // shadow_atlas
         CHECK(buf_reads == 2U); // instances + cull_args on read_buffer0/1
@@ -386,7 +407,10 @@ TEST_CASE("CEIR-15d-5: the ceir round-trip lowers to an IDENTICAL render-graph t
     REQUIRE(rg::compile(tmpl_b, schemas, 1920U, 1080U, cb, diags));
     REQUIRE_FALSE(diags.has_errors());
     REQUIRE(ca.schedule().size() == cb.schedule().size());
-    for (u32 s = 0; s < ca.schedule().size(); ++s) { CHECK(ca.schedule()[s] == cb.schedule()[s]); }
+    for (u32 s = 0; s < ca.schedule().size(); ++s)
+    {
+        CHECK(ca.schedule()[s] == cb.schedule()[s]);
+    }
 }
 
 // ── CEIR-15e: every SHIPPED frame asset lowers IDENTICALLY through the CEIR path (device-free per-asset fidelity). Each
@@ -461,7 +485,10 @@ TEST_CASE("CEIR-19z-2: rt_shadow's compute + raytrace passes bind storage READS-
         const u64 h = rp::pass_param_id(StringView(n)) ^ 0x9E3779B97F4A7C15ULL;
         for (u32 i = 0; i < tmpl.passes().size(); ++i)
         {
-            if (tmpl.passes()[i].name_hash == h) { return &tmpl.passes()[i]; }
+            if (tmpl.passes()[i].name_hash == h)
+            {
+                return &tmpl.passes()[i];
+            }
         }
         return nullptr;
     };
@@ -470,7 +497,10 @@ TEST_CASE("CEIR-19z-2: rt_shadow's compute + raytrace passes bind storage READS-
         const u64 rh = rp::pass_param_id(StringView(res));
         for (u32 i = 0; i < p.payload.resources.size(); ++i)
         {
-            if (p.payload.resources[i].resource_id == rh) { return p.payload.resources[i].slot_name_hash; }
+            if (p.payload.resources[i].resource_id == rh)
+            {
+                return p.payload.resources[i].slot_name_hash;
+            }
         }
         return 0U;
     };
@@ -577,8 +607,14 @@ TEST_CASE("RAF-8: a compute pass that reads a TEXTURE routes it to the sampled s
     for (u32 i = 0; i < tmpl.passes()[0].payload.resources.size(); ++i)
     {
         const rp::ResourceRef& rr = tmpl.passes()[0].payload.resources[i];
-        if (rr.kind == rp::SlotResourceKind::Texture && rr.access == rp::SlotAccess::Read) { ++tex_reads; }
-        if (rr.kind == rp::SlotResourceKind::StorageBuffer && rr.access == rp::SlotAccess::ReadWrite) { ++buf_writes; }
+        if (rr.kind == rp::SlotResourceKind::Texture && rr.access == rp::SlotAccess::Read)
+        {
+            ++tex_reads;
+        }
+        if (rr.kind == rp::SlotResourceKind::StorageBuffer && rr.access == rp::SlotAccess::ReadWrite)
+        {
+            ++buf_writes;
+        }
     }
     CHECK(tex_reads == 1U);  // hzb on the `sampled` slot
     CHECK(buf_writes == 1U); // cull_args on `storage`
@@ -616,8 +652,14 @@ TEST_CASE("RAF-8: an MRT depth-prepass routes the depth write to depth and the c
     for (u32 i = 0; i < tmpl.passes()[0].payload.resources.size(); ++i)
     {
         const rp::ResourceRef& rr = tmpl.passes()[0].payload.resources[i];
-        if (rr.kind == rp::SlotResourceKind::ColorTarget && rr.access == rp::SlotAccess::Write) { ++color_writes; }
-        if (rr.kind == rp::SlotResourceKind::DepthTarget) { ++depth_writes; }
+        if (rr.kind == rp::SlotResourceKind::ColorTarget && rr.access == rp::SlotAccess::Write)
+        {
+            ++color_writes;
+        }
+        if (rr.kind == rp::SlotResourceKind::DepthTarget)
+        {
+            ++depth_writes;
+        }
     }
     CHECK(color_writes == 1U); // velocity
     CHECK(depth_writes == 1U); // scene_depth
@@ -877,7 +919,10 @@ TEST_CASE("Frame clear hints preserve authored CEIR clears and first-writer iden
     CHECK_FALSE(plans.clear_hints[1].color_set);
     CHECK(plans.clear_hints[1].value.depth == 0.75F);
     CHECK(plans.clear_hints[2].color_set);
-    for (float value : plans.clear_hints[2].value.color) { CHECK(value == 1.0F); }
+    for (float value : plans.clear_hints[2].value.color)
+    {
+        CHECK(value == 1.0F);
+    }
     CHECK_FALSE(plans.clear_hints[4].color_set);
     CHECK_FALSE(plans.clear_hints[4].depth_set);
     const auto* plan = plans.table.find(rp::pass_param_id(StringView("post_pass")));

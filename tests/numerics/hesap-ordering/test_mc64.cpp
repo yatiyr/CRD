@@ -50,10 +50,16 @@ bool is_permutation(const Mc64Scaling& s, crd::u32 n)
 {
     crd::containers::Array<crd::u8> seen(s.colperm.allocator());
     seen.resize(n);
-    for (crd::u32 j = 0; j < n; ++j) { seen[j] = 0; }
+    for (crd::u32 j = 0; j < n; ++j)
+    {
+        seen[j] = 0;
+    }
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (s.colperm[i] >= n || seen[s.colperm[i]]) { return false; }
+        if (s.colperm[i] >= n || seen[s.colperm[i]])
+        {
+            return false;
+        }
         seen[s.colperm[i]] = 1;
     }
     return true;
@@ -75,7 +81,10 @@ TEST_CASE("MC64 matches the large off-diagonal entries to the diagonal (cyclic)"
     auto s = mc64_match_and_scale<crd::f64>(a, &alloc);
     REQUIRE(s.full_rank);
     REQUIRE(is_permutation<crd::f64>(s, n));
-    for (crd::u32 i = 0; i < n; ++i) { REQUIRE(s.colperm[i] == (i + 1) % n); } // matched the big entries
+    for (crd::u32 i = 0; i < n; ++i) // matched the big entries
+    {
+        REQUIRE(s.colperm[i] == (i + 1) % n);
+    }
     check_i_matrix<crd::f64>(a, s);
 }
 
@@ -89,9 +98,18 @@ TEST_CASE("MC64 produces the I-matrix property on a badly-scaled general matrix"
     {
         const double s = std::pow(10.0, static_cast<double>(i % 7) - 3.0); // 1e-3 .. 1e3 row scale
         b.add(i, i, s * 0.5);
-        if (i + 1 < n) { b.add(i, i + 1, s * 3.0); }
-        if (i > 0) { b.add(i, i - 1, s * 2.0); }
-        if (i + 3 < n) { b.add(i, i + 3, s * 0.7); }
+        if (i + 1 < n)
+        {
+            b.add(i, i + 1, s * 3.0);
+        }
+        if (i > 0)
+        {
+            b.add(i, i - 1, s * 2.0);
+        }
+        if (i + 3 < n)
+        {
+            b.add(i, i + 3, s * 0.7);
+        }
     }
     auto a = b.compress();
     auto s = mc64_match_and_scale<crd::f64>(a, &alloc);
@@ -107,8 +125,14 @@ TEST_CASE("MC64 is deterministic (bit-identical across runs)", "[hesap-ordering]
     for (crd::u32 i = 0; i < n; ++i)
     {
         b.add(i, i, 1.0 + 0.5 * static_cast<double>(i % 3));
-        if (i + 2 < n) { b.add(i, i + 2, 4.0 - 0.1 * static_cast<double>(i % 5)); }
-        if (i > 1) { b.add(i, i - 2, 2.5); }
+        if (i + 2 < n)
+        {
+            b.add(i, i + 2, 4.0 - 0.1 * static_cast<double>(i % 5));
+        }
+        if (i > 1)
+        {
+            b.add(i, i - 2, 2.5);
+        }
     }
     auto a  = b.compress();
     auto s1 = mc64_match_and_scale<crd::f64>(a, &alloc);
@@ -135,6 +159,9 @@ TEST_CASE("MC64 handles a complex matrix (matches by magnitude)", "[hesap-orderi
     auto a = b.compress();
     auto s = mc64_match_and_scale<C>(a, &alloc);
     REQUIRE(is_permutation<C>(s, n));
-    for (crd::u32 i = 0; i < n; ++i) { REQUIRE(s.colperm[i] == (i + 2) % n); }
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        REQUIRE(s.colperm[i] == (i + 2) % n);
+    }
     check_i_matrix<C>(a, s);
 }

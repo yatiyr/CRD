@@ -55,11 +55,20 @@ namespace crd::geometry::curves
 template <crd::math::MathScalar T>
 [[nodiscard]] constexpr T t_wrap(T t, bool closed) noexcept
 {
-    if (!closed) { return t; }
+    if (!closed)
+    {
+        return t;
+    }
     // Modular wrap. Branchless on the common path (0 <= t <= 1).
     // For t outside [0, 1] we do explicit floor-based modular reduction.
-    if (t >= static_cast<T>(0) && t < static_cast<T>(1)) { return t; }
-    if (t == static_cast<T>(1)) { return static_cast<T>(0); }
+    if (t >= static_cast<T>(0) && t < static_cast<T>(1))
+    {
+        return t;
+    }
+    if (t == static_cast<T>(1))
+    {
+        return static_cast<T>(0);
+    }
     // Generic path: t mod 1.
     const T floor_t = static_cast<T>(static_cast<crd::i64>(t < static_cast<T>(0) ? t - static_cast<T>(1) : t));
     return t - floor_t;
@@ -80,7 +89,10 @@ template <crd::math::MathScalar T>
 
     const auto n_pts  = static_cast<crd::u32>(curve.points.size());
     const auto n_segs = curve.closed ? n_pts : (n_pts - 1U);
-    if (n_segs == 0U) { return curve.points[0]; }
+    if (n_segs == 0U)
+    {
+        return curve.points[0];
+    }
 
     // Clamp to [0, 1] for open curves; closed curves already wrapped above.
     const T t_clamped = t_eff <= static_cast<T>(0)   ? static_cast<T>(0)
@@ -88,7 +100,10 @@ template <crd::math::MathScalar T>
                                                      : t_eff;
     const T scaled = t_clamped * static_cast<T>(n_segs);
     auto    i      = static_cast<crd::u32>(scaled);
-    if (i >= n_segs) { i = n_segs - 1U; }
+    if (i >= n_segs)
+    {
+        i = n_segs - 1U;
+    }
     const T u = scaled - static_cast<T>(i);
 
     const auto& a = curve.points[i];
@@ -104,14 +119,20 @@ template <crd::math::MathScalar T>
 
     const auto n_pts  = static_cast<crd::u32>(curve.points.size());
     const auto n_segs = curve.closed ? n_pts : (n_pts - 1U);
-    if (n_segs == 0U) { return crd::math::Vec3<T>{}; }
+    if (n_segs == 0U)
+    {
+        return crd::math::Vec3<T>{};
+    }
 
     const T t_clamped = t_eff <= static_cast<T>(0)   ? static_cast<T>(0)
                         : t_eff >= static_cast<T>(1) ? static_cast<T>(1)
                                                      : t_eff;
     const T scaled = t_clamped * static_cast<T>(n_segs);
     auto    i      = static_cast<crd::u32>(scaled);
-    if (i >= n_segs) { i = n_segs - 1U; }
+    if (i >= n_segs)
+    {
+        i = n_segs - 1U;
+    }
 
     const auto& a = curve.points[i];
     const auto& b = curve.points[(i + 1U) % n_pts];
@@ -402,14 +423,20 @@ template <crd::math::MathScalar T>
 
     const auto n_pts  = static_cast<crd::u32>(curve.points.size());
     const auto n_segs = curve.closed ? n_pts : (n_pts - 1U);
-    if (n_segs == 0U) { return curve.points[0]; }
+    if (n_segs == 0U)
+    {
+        return curve.points[0];
+    }
 
     const T t_clamped = t_eff <= static_cast<T>(0)   ? static_cast<T>(0)
                         : t_eff >= static_cast<T>(1) ? static_cast<T>(1)
                                                      : t_eff;
     const T scaled = t_clamped * static_cast<T>(n_segs);
     auto    i      = static_cast<crd::u32>(scaled);
-    if (i >= n_segs) { i = n_segs - 1U; }
+    if (i >= n_segs)
+    {
+        i = n_segs - 1U;
+    }
     const T u = scaled - static_cast<T>(i);
 
     crd::math::Vec3<T> p0, p1, p2, p3;
@@ -461,8 +488,14 @@ template <crd::math::MathScalar T>
     constexpr crd::u32 degree = 3U;
     // Clamped-endpoint convention: at t == knots[n_control], return n_control - 1
     // so we get the last interior span.
-    if (t >= knots[n_control]) { return n_control - 1U; }
-    if (t <= knots[degree]) { return degree; }
+    if (t >= knots[n_control])
+    {
+        return n_control - 1U;
+    }
+    if (t <= knots[degree])
+    {
+        return degree;
+    }
 
     // Binary search in [degree, n_control].
     crd::u32 lo = degree;
@@ -470,8 +503,14 @@ template <crd::math::MathScalar T>
     while (lo + 1U < hi)
     {
         const crd::u32 mid = (lo + hi) / 2U;
-        if (t < knots[mid]) { hi = mid; }
-        else { lo = mid; }
+        if (t < knots[mid])
+        {
+            hi = mid;
+        }
+        else
+        {
+            lo = mid;
+        }
     }
     return lo;
 }
@@ -529,7 +568,10 @@ template <crd::math::MathScalar T>
 
     // Sum N_{k-3+r, 3}(t) * P_{k-3+r} for r=0..3.
     crd::math::Vec3<T> result{};
-    for (crd::u32 r = 0U; r < 4U; ++r) { result = result + curve.points[k - degree + r] * basis[r]; }
+    for (crd::u32 r = 0U; r < 4U; ++r)
+    {
+        result = result + curve.points[k - degree + r] * basis[r];
+    }
     return result;
 }
 

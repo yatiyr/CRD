@@ -58,7 +58,11 @@ TypeId tf(Context& ctx, TypeId shape) { return ctx.type_tensor(ctx.type_f32(), s
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -92,7 +96,10 @@ ExecuteError run_host(Context& ctx, memory::IAllocator* alloc, const TensorPipel
     for (usize i = 0; i < nb; ++i)
     {
         offs[i] = total;
-        if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(f32); }
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(f32);
+        }
     }
     containers::Array<f32> store(alloc);
     store.resize(static_cast<usize>(total), sentinel);
@@ -103,12 +110,18 @@ ExecuteError run_host(Context& ctx, memory::IAllocator* alloc, const TensorPipel
     }
     for (usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != BufferRole::ExternalIn) { continue; }
+        if (plan.buffers[i].role != BufferRole::ExternalIn)
+        {
+            continue;
+        }
         for (usize s = 0; s < n_seeds; ++s)
         {
             if (seeds[s].value == plan.buffers[i].value)
             {
-                for (u32 e = 0; e < seeds[s].count; ++e) { ptr[i][e] = seeds[s].floats[e]; }
+                for (u32 e = 0; e < seeds[s].count; ++e)
+                {
+                    ptr[i][e] = seeds[s].floats[e];
+                }
             }
         }
     }
@@ -118,9 +131,18 @@ ExecuteError run_host(Context& ctx, memory::IAllocator* alloc, const TensorPipel
     if (out != nullptr)
     {
         i32 oi = -1;
-        for (usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == BufferRole::Output) { oi = static_cast<i32>(i); } }
+        for (usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].role == BufferRole::Output)
+            {
+                oi = static_cast<i32>(i);
+            }
+        }
         REQUIRE(oi >= 0);
-        for (usize e = 0; e < out_len; ++e) { out[e] = ptr[static_cast<usize>(oi)][e]; }
+        for (usize e = 0; e < out_len; ++e)
+        {
+            out[e] = ptr[static_cast<usize>(oi)][e];
+        }
     }
     return ee;
 }
@@ -174,22 +196,39 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs a fused MLP bit-exact v
     f32 w1_in[d0 * d1];
     f32 w2_in[d1 * d2];
     f32 oracle[mrows * d2];
-    for (u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i) - 12); }
-    for (u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<f32>(static_cast<int>(i % 7) - 3); }
-    for (u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i % 5) - 2); }
+    for (u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i) - 12);
+    }
+    for (u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<f32>(static_cast<int>(i % 7) - 3);
+    }
+    for (u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i % 5) - 2);
+    }
     for (u32 mm = 0; mm < mrows; ++mm)
     {
         f32 h1[d1];
         for (u32 nn = 0; nn < d1; ++nn)
         {
             f32 acc = 0.0F;
-            for (u32 kk = 0; kk < d0; ++kk) { const f32 prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn]; acc = acc + prod; }
+            for (u32 kk = 0; kk < d0; ++kk)
+            {
+                const f32 prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn];
+                acc = acc + prod;
+            }
             h1[nn] = crd::math::max(acc, 0.0F);
         }
         for (u32 j = 0; j < d2; ++j)
         {
             f32 acc = 0.0F;
-            for (u32 nn = 0; nn < d1; ++nn) { const f32 prod = h1[nn] * w2_in[nn * d2 + j]; acc = acc + prod; }
+            for (u32 nn = 0; nn < d1; ++nn)
+            {
+                const f32 prod = h1[nn] * w2_in[nn * d2 + j];
+                acc = acc + prod;
+            }
             oracle[mm * d2 + j] = acc;
         }
     }
@@ -199,7 +238,10 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs a fused MLP bit-exact v
     TensorPipelineProfile profile(&alloc); // §137 structural profile — one row per stage (bytes + kind; the CPU has no grid)
     const ExecuteError ee = run_host(ctx, &alloc, plan, seeds, 3U, got, mrows * d2, 0.0F, &profile);
     REQUIRE(ee == ExecuteError::None);
-    for (u32 i = 0; i < mrows * d2; ++i) { CHECK(got[i] == oracle[i]); } // BIT-EXACT (the oracle doctrine, not a tolerance)
+    for (u32 i = 0; i < mrows * d2; ++i) // BIT-EXACT (the oracle doctrine, not a tolerance)
+    {
+        CHECK(got[i] == oracle[i]);
+    }
 
     // the profile mirrors the plan: two rows, GemmRelu then Gemm, with the trailing-output bytes each stage writes (h1[M,d1],
     // then y[M,d2]) — the row 30b-2's two-class orchestrator reads to attribute work per provider class.
@@ -236,7 +278,11 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs a reduce(sum) bit-exact
 
     f32 in_data[n];
     f32 oracle = 0.0F;
-    for (u32 i = 0; i < n; ++i) { in_data[i] = 0.3F * static_cast<f32>(static_cast<int>(i) - 8); oracle = oracle + in_data[i]; }
+    for (u32 i = 0; i < n; ++i)
+    {
+        in_data[i] = 0.3F * static_cast<f32>(static_cast<int>(i) - 8);
+        oracle = oracle + in_data[i];
+    }
 
     const Seed         seeds[1] = {{in, in_data, n}};
     f32                got      = -1.0F;
@@ -288,7 +334,11 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host rejects an unsupported stage
     // reduce (stage 2) never writes — the terminal keeps -777 (the no-partial-write proof).
     f32 adata[side * side];
     f32 bdata[side * side];
-    for (u32 i = 0; i < side * side; ++i) { adata[i] = 0.1F * static_cast<f32>(i + 1U); bdata[i] = -0.2F * static_cast<f32>(i); }
+    for (u32 i = 0; i < side * side; ++i)
+    {
+        adata[i] = 0.1F * static_cast<f32>(i + 1U);
+        bdata[i] = -0.2F * static_cast<f32>(i);
+    }
     const Seed         seeds[2] = {{a, adata, side * side}, {bb, bdata, side * side}};
     f32                terminal = 0.0F; // run_host copies the terminal (Output) buffer's CURRENT contents into this
     const ExecuteError ee       = run_host(ctx, &alloc, plan, seeds, 2U, &terminal, 1U, -777.0F);
@@ -324,11 +374,19 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs elementwise/transpose/b
         f32 ad[n];
         f32 cd[n];
         f32 oracle[n];
-        for (u32 i = 0; i < n; ++i) { ad[i] = 0.5F * static_cast<f32>(i) - 1.0F; cd[i] = -0.25F * static_cast<f32>(i) + 2.0F; oracle[i] = ad[i] + cd[i]; }
+        for (u32 i = 0; i < n; ++i)
+        {
+            ad[i] = 0.5F * static_cast<f32>(i) - 1.0F;
+            cd[i] = -0.25F * static_cast<f32>(i) + 2.0F;
+            oracle[i] = ad[i] + cd[i];
+        }
         const Seed seeds[2] = {{a, ad, n}, {c, cd, n}};
         f32        got[n];
         REQUIRE(run_host(ctx, &alloc, plan, seeds, 2U, got, n) == ExecuteError::None);
-        for (u32 i = 0; i < n; ++i) { CHECK(got[i] == oracle[i]); }
+        for (u32 i = 0; i < n; ++i)
+        {
+            CHECK(got[i] == oracle[i]);
+        }
     }
 
     SECTION("transpose [2,3]->[3,2]")
@@ -346,13 +404,25 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs elementwise/transpose/b
         REQUIRE(plan.stages[0].kind == ceg::StageKind::Transpose);
 
         f32 ad[r * c];
-        for (u32 i = 0; i < r * c; ++i) { ad[i] = 0.1F * static_cast<f32>(i + 1U); }
+        for (u32 i = 0; i < r * c; ++i)
+        {
+            ad[i] = 0.1F * static_cast<f32>(i + 1U);
+        }
         f32 oracle[c * r]; // out[i,j] = a[j,i] — out[i*r+j] = a[j*c+i]
-        for (u32 i = 0; i < c; ++i) { for (u32 j = 0; j < r; ++j) { oracle[i * r + j] = ad[j * c + i]; } }
+        for (u32 i = 0; i < c; ++i)
+        {
+            for (u32 j = 0; j < r; ++j)
+            {
+                oracle[i * r + j] = ad[j * c + i];
+            }
+        }
         const Seed seeds[1] = {{a, ad, r * c}};
         f32        got[c * r];
         REQUIRE(run_host(ctx, &alloc, plan, seeds, 1U, got, c * r) == ExecuteError::None);
-        for (u32 i = 0; i < c * r; ++i) { CHECK(got[i] == oracle[i]); }
+        for (u32 i = 0; i < c * r; ++i)
+        {
+            CHECK(got[i] == oracle[i]);
+        }
     }
 
     SECTION("broadcast [1,3]->[2,3]")
@@ -370,13 +440,25 @@ TEST_CASE("ceir 30b-1: execute_tensor_pipeline_host runs elementwise/transpose/b
         REQUIRE(plan.stages[0].kind == ceg::StageKind::Broadcast);
 
         f32 ad[c];
-        for (u32 i = 0; i < c; ++i) { ad[i] = 0.3F * static_cast<f32>(i) - 0.7F; }
+        for (u32 i = 0; i < c; ++i)
+        {
+            ad[i] = 0.3F * static_cast<f32>(i) - 0.7F;
+        }
         f32 oracle[rout * c]; // row-repeat: out[r,col] = a[0,col]
-        for (u32 rr = 0; rr < rout; ++rr) { for (u32 col = 0; col < c; ++col) { oracle[rr * c + col] = ad[col]; } }
+        for (u32 rr = 0; rr < rout; ++rr)
+        {
+            for (u32 col = 0; col < c; ++col)
+            {
+                oracle[rr * c + col] = ad[col];
+            }
+        }
         const Seed seeds[1] = {{a, ad, c}};
         f32        got[rout * c];
         REQUIRE(run_host(ctx, &alloc, plan, seeds, 1U, got, rout * c) == ExecuteError::None);
-        for (u32 i = 0; i < rout * c; ++i) { CHECK(got[i] == oracle[i]); }
+        for (u32 i = 0; i < rout * c; ++i)
+        {
+            CHECK(got[i] == oracle[i]);
+        }
     }
 }
 
@@ -425,22 +507,39 @@ TEST_CASE("ceir 30b-2b-1: execute_tensor_pipeline_host runs a fuse=false relu Vi
     f32 w1_in[d0 * d1];
     f32 w2_in[d1 * d2];
     f32 oracle[mrows * d2];
-    for (u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i) - 12); }
-    for (u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<f32>(static_cast<int>(i % 7) - 3); }
-    for (u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i % 5) - 2); }
+    for (u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i) - 12);
+    }
+    for (u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<f32>(static_cast<int>(i % 7) - 3);
+    }
+    for (u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<f32>(static_cast<int>(i % 5) - 2);
+    }
     for (u32 mm = 0; mm < mrows; ++mm)
     {
         f32 h1[d1];
         for (u32 nn = 0; nn < d1; ++nn)
         {
             f32 acc = 0.0F;
-            for (u32 kk = 0; kk < d0; ++kk) { const f32 prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn]; acc = acc + prod; }
+            for (u32 kk = 0; kk < d0; ++kk)
+            {
+                const f32 prod = x_in[mm * d0 + kk] * w1_in[kk * d1 + nn];
+                acc = acc + prod;
+            }
             h1[nn] = crd::math::max(acc, 0.0F);
         }
         for (u32 j = 0; j < d2; ++j)
         {
             f32 acc = 0.0F;
-            for (u32 nn = 0; nn < d1; ++nn) { const f32 prod = h1[nn] * w2_in[nn * d2 + j]; acc = acc + prod; }
+            for (u32 nn = 0; nn < d1; ++nn)
+            {
+                const f32 prod = h1[nn] * w2_in[nn * d2 + j];
+                acc = acc + prod;
+            }
             oracle[mm * d2 + j] = acc;
         }
     }
@@ -454,7 +553,10 @@ TEST_CASE("ceir 30b-2b-1: execute_tensor_pipeline_host runs a fuse=false relu Vi
         f32 got[mrows * d2];
         const ExecuteError ee = run_host(ctx, &alloc, plan, seeds, 3U, got, mrows * d2, 0.0F, nullptr, ropts);
         REQUIRE(ee == ExecuteError::None);
-        for (u32 i = 0; i < mrows * d2; ++i) { CHECK(got[i] == oracle[i]); } // BIT-EXACT (the oracle doctrine)
+        for (u32 i = 0; i < mrows * d2; ++i) // BIT-EXACT (the oracle doctrine)
+        {
+            CHECK(got[i] == oracle[i]);
+        }
     }
     SECTION("no resolver -> UnresolvedKernel (the 30b-1 behavior preserved)")
     {
@@ -468,7 +570,10 @@ TEST_CASE("ceir 30b-2b-1: execute_tensor_pipeline_host runs a fuse=false relu Vi
         f32 term[mrows * d2];
         const ExecuteError ee = run_host(ctx, &alloc, plan, seeds, 3U, term, mrows * d2, -777.0F, nullptr, ropts);
         CHECK(ee == ExecuteError::UnresolvedKernel);
-        for (u32 i = 0; i < mrows * d2; ++i) { CHECK(term[i] == -777.0F); } // the 2nd gemm (Output) never ran — no partial write
+        for (u32 i = 0; i < mrows * d2; ++i) // the 2nd gemm (Output) never ran — no partial write
+        {
+            CHECK(term[i] == -777.0F);
+        }
     }
 }
 
@@ -536,5 +641,8 @@ TEST_CASE("ceir 30b-2b-1: the two-class sandwich runs all-Host bit-exact", "[cei
     f32        got[dd * dd];
     const ExecuteError ee = run_host(ctx, &alloc, plan, seeds, 5U, got, dd * dd, 0.0F, nullptr, ropts);
     REQUIRE(ee == ExecuteError::None);
-    for (u32 i = 0; i < dd * dd; ++i) { CHECK(got[i] == oracle[i]); } // BIT-EXACT all-Host (the 30b-2b-2 all-Host arm)
+    for (u32 i = 0; i < dd * dd; ++i) // BIT-EXACT all-Host (the 30b-2b-2 all-Host arm)
+    {
+        CHECK(got[i] == oracle[i]);
+    }
 }

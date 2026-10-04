@@ -68,7 +68,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 void make_quad(crd::containers::Array<Vec3<f32>>& pos,
@@ -79,7 +82,10 @@ void make_quad(crd::containers::Array<Vec3<f32>>& pos,
     pos.push_back(Vec3<f32>{1, 1, 0});
     pos.push_back(Vec3<f32>{0, 1, 0});
     const u32 tris[] = {0, 1, 2,  0, 2, 3};
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 } // anonymous namespace
@@ -311,7 +317,10 @@ TEST_CASE("isotropic_remesh: surface projection keeps vertices near cube",
     // surface-projection ulp noise).
     for (u32 v = 0; v < out.vertex_pool_size(); ++v)
     {
-        if (!out.vertex_alive(v)) { continue; }
+        if (!out.vertex_alive(v))
+        {
+            continue;
+        }
         const auto& p = out.vertex(v).position;
         CHECK(p.x >= -1e-3F); CHECK(p.x <= 1.0F + 1e-3F);
         CHECK(p.y >= -1e-3F); CHECK(p.y <= 1.0F + 1e-3F);
@@ -342,7 +351,10 @@ TEST_CASE("isotropic_remesh: f64 precision tier remeshes a cube",
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
     HalfEdgeMesh<f64> m{&f.alloc};
     REQUIRE(m.build_from(crd::containers::ConstSpan<Vec3<f64>>{pos.data(), pos.size()},
                           crd::containers::ConstSpan<u32>{idx.data(), idx.size()})

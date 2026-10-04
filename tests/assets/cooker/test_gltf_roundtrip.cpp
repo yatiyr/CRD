@@ -33,7 +33,10 @@ crd::memory::TlsfAllocator g_alloc{32U << 20U};
 void push_bytes(crd::containers::Array<crd::u8>& b, const void* src, crd::usize n)
 {
     const auto* s = static_cast<const crd::u8*>(src);
-    for (crd::usize i = 0; i < n; ++i) { b.push_back(s[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        b.push_back(s[i]);
+    }
 }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v) { push_bytes(b, &v, 4); }
 void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v) { push_bytes(b, &v, 4); }
@@ -48,7 +51,10 @@ TEST_CASE("GEO-4 pt 3: import -> cook -> native EDIT -> export -> re-import roun
     crd::containers::Array<crd::u8> bin(&g_alloc);
     const crd::f32 pos[18] = {0, 0, 0, 1, 0, 0, 0, 1, 0,   // tri A in the XY plane
                               0, 0, 0, 0, 0, 1, 1, 0, 0};  // tri B in the XZ plane (fold about the X edge)
-    for (crd::f32 v : pos) { push_f32(bin, v); }
+    for (crd::f32 v : pos)
+    {
+        push_f32(bin, v);
+    }
 
     const char* json = R"({
       "asset": {"version": "2.0"},
@@ -76,11 +82,20 @@ TEST_CASE("GEO-4 pt 3: import -> cook -> native EDIT -> export -> re-import roun
     push_u32(glb, jlen + jpad);
     push_u32(glb, 0x4E4F534AU);
     push_bytes(glb, json, jlen);
-    for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+    for (crd::u32 i = 0; i < jpad; ++i)
+    {
+        glb.push_back(' ');
+    }
     push_u32(glb, blen + bpad);
     push_u32(glb, 0x004E4942U);
-    for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
-    for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+    for (crd::usize i = 0; i < bin.size(); ++i)
+    {
+        glb.push_back(bin[i]);
+    }
+    for (crd::u32 i = 0; i < bpad; ++i)
+    {
+        glb.push_back(0);
+    }
 
     const char* src_path  = "geo4_roundtrip.glb";
     const char* meta_path = "geo4_roundtrip.glb.meta";
@@ -176,7 +191,10 @@ TEST_CASE("GEO-4 pt 3: import -> cook -> native EDIT -> export -> re-import roun
         push_bytes(re_verts, rec, 48U);
     }
     crd::containers::Array<crd::u8> re_idx(&g_alloc);
-    for (crd::usize i = 0; i < edit.indices.size(); ++i) { push_u32(re_idx, edit.indices[i]); }
+    for (crd::usize i = 0; i < edit.indices.size(); ++i)
+    {
+        push_u32(re_idx, edit.indices[i]);
+    }
 
     crd::assetio::ExportAsset ea(&g_alloc);
     crd::assetio::ExportMesh  em;
@@ -186,7 +204,10 @@ TEST_CASE("GEO-4 pt 3: import -> cook -> native EDIT -> export -> re-import roun
     em.material = 0;
     ea.meshes.push_back(em);
     crd::assetio::ExportMaterial mat;
-    for (crd::u32 c = 0; c < 3U; ++c) { mat.base_color[c] = params.base_color[c]; }
+    for (crd::u32 c = 0; c < 3U; ++c)
+    {
+        mat.base_color[c] = params.base_color[c];
+    }
     mat.base_color[3] = params.base_alpha;
     mat.metallic     = params.metallic;
     mat.roughness    = params.roughness;

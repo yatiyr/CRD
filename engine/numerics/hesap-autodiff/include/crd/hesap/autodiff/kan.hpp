@@ -23,7 +23,10 @@ constexpr int kMaxIn    = 32; // max layer input width (Bmat scratch = kMaxIn * 
 inline void make_grid(crd::f64 gmin, crd::f64 gmax, int gcount, int p, crd::f64* grid) noexcept
 {
     const crd::f64 h = (gmax - gmin) / static_cast<crd::f64>(gcount);
-    for (int i = 0; i <= gcount + 2 * p; ++i) { grid[i] = gmin + static_cast<crd::f64>(i - p) * h; }
+    for (int i = 0; i <= gcount + 2 * p; ++i)
+    {
+        grid[i] = gmin + static_cast<crd::f64>(i - p) * h;
+    }
 }
 
 // B-spline basis of degree p at x: fills B[0..nbasis) with B_g^p(x) and, if dB != nullptr, dB_g^p/dx. nbasis = G+p.
@@ -31,7 +34,10 @@ inline void bspline(crd::f64 x, const crd::f64* grid, int nbasis, int p, crd::f6
 {
     crd::f64  b[kMaxBasis];
     const int n0 = nbasis + p; // G + 2p degree-0 functions
-    for (int g = 0; g < n0; ++g) { b[g] = (grid[g] <= x && x < grid[g + 1]) ? 1.0 : 0.0; }
+    for (int g = 0; g < n0; ++g)
+    {
+        b[g] = (grid[g] <= x && x < grid[g + 1]) ? 1.0 : 0.0;
+    }
     for (int k = 1; k <= p - 1; ++k) // recurse to degree p−1
     {
         for (int g = 0; g < n0 - k; ++g)
@@ -71,7 +77,11 @@ inline void kan_forward(int din, int dout, int nbasis, int p, const crd::f64* wb
 {
     crd::f64 base[kMaxIn];
     crd::f64 bmat[kMaxIn * kMaxBasis];
-    for (int i = 0; i < din; ++i) { base[i] = silu(x[i]); bspline(x[i], grid, nbasis, p, bmat + i * nbasis, nullptr); }
+    for (int i = 0; i < din; ++i)
+    {
+        base[i] = silu(x[i]);
+        bspline(x[i], grid, nbasis, p, bmat + i * nbasis, nullptr);
+    }
     for (int j = 0; j < dout; ++j)
     {
         crd::f64 s = 0.0;
@@ -80,7 +90,10 @@ inline void kan_forward(int din, int dout, int nbasis, int p, const crd::f64* wb
             s += wb[j * din + i] * base[i];
             const crd::f64* wrow = ws + (static_cast<crd::usize>(j) * din + i) * nbasis;
             const crd::f64* brow = bmat + i * nbasis;
-            for (int g = 0; g < nbasis; ++g) { s += wrow[g] * brow[g]; }
+            for (int g = 0; g < nbasis; ++g)
+            {
+                s += wrow[g] * brow[g];
+            }
         }
         y[j] = s;
     }
@@ -99,7 +112,10 @@ inline void kan_forward_naive(int din, int dout, int nbasis, int p, const crd::f
             bspline(x[i], grid, nbasis, p, bi, nullptr); // recomputed for EVERY j -- the waste
             s += wb[j * din + i] * silu(x[i]);
             const crd::f64* wrow = ws + (static_cast<crd::usize>(j) * din + i) * nbasis;
-            for (int g = 0; g < nbasis; ++g) { s += wrow[g] * bi[g]; }
+            for (int g = 0; g < nbasis; ++g)
+            {
+                s += wrow[g] * bi[g];
+            }
         }
         y[j] = s;
     }
@@ -121,12 +137,18 @@ inline void kan_vjp(int din, int dout, int nbasis, int p, const crd::f64* wb, co
     }
     for (int j = 0; j < dout; ++j)
     {
-        for (int i = 0; i < din; ++i) { gwb[j * din + i] += dy[j] * base[i]; }
+        for (int i = 0; i < din; ++i)
+        {
+            gwb[j * din + i] += dy[j] * base[i];
+        }
         for (int i = 0; i < din; ++i)
         {
             crd::f64* grow = gws + (static_cast<crd::usize>(j) * din + i) * nbasis;
             const crd::f64* brow = bmat + i * nbasis;
-            for (int g = 0; g < nbasis; ++g) { grow[g] += dy[j] * brow[g]; }
+            for (int g = 0; g < nbasis; ++g)
+            {
+                grow[g] += dy[j] * brow[g];
+            }
         }
     }
     for (int i = 0; i < din; ++i)
@@ -137,7 +159,10 @@ inline void kan_vjp(int din, int dout, int nbasis, int p, const crd::f64* wb, co
             crd::f64        e    = wb[j * din + i] * dbase[i];
             const crd::f64* wrow = ws + (static_cast<crd::usize>(j) * din + i) * nbasis;
             const crd::f64* drow = dbmat + i * nbasis;
-            for (int g = 0; g < nbasis; ++g) { e += wrow[g] * drow[g]; }
+            for (int g = 0; g < nbasis; ++g)
+            {
+                e += wrow[g] * drow[g];
+            }
             gxi += dy[j] * e;
         }
         gx[i] = gxi;

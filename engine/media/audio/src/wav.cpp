@@ -30,17 +30,26 @@ namespace
     {
         crd::u8 raw[4];
         std::memcpy(raw, &v, 4);
-        for (crd::u8 x : raw) { b.push_back(x); }
+        for (crd::u8 x : raw)
+        {
+            b.push_back(x);
+        }
     }
     void wr_u16(crd::containers::Array<crd::u8>& b, crd::u16 v)
     {
         crd::u8 raw[2];
         std::memcpy(raw, &v, 2);
-        for (crd::u8 x : raw) { b.push_back(x); }
+        for (crd::u8 x : raw)
+        {
+            b.push_back(x);
+        }
     }
     void wr_tag(crd::containers::Array<crd::u8>& b, const char* t)
     {
-        for (int i = 0; i < 4; ++i) { b.push_back(static_cast<crd::u8>(t[i])); }
+        for (int i = 0; i < 4; ++i)
+        {
+            b.push_back(static_cast<crd::u8>(t[i]));
+        }
     }
 } // namespace
 
@@ -63,11 +72,17 @@ WavError wav_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
         const crd::u8* ch   = bytes.data() + pos;
         const crd::u32 size = rd_u32(ch + 4);
         const crd::u8* body = ch + 8;
-        if (pos + 8 + size > bytes.size()) { return WavError::Malformed; }
+        if (pos + 8 + size > bytes.size())
+        {
+            return WavError::Malformed;
+        }
 
         if (std::memcmp(ch, "fmt ", 4) == 0)
         {
-            if (size < 16) { return WavError::Malformed; }
+            if (size < 16)
+            {
+                return WavError::Malformed;
+            }
             format_tag          = rd_u16(body);
             out.channels        = rd_u16(body + 2);
             out.sample_rate     = rd_u32(body + 4);
@@ -75,15 +90,24 @@ WavError wav_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
             if (format_tag == kFormatExtensible)
             {
                 // cbSize(22): valid bits + channel mask + SubFormat GUID (first u16 = the real tag)
-                if (size < 40) { return WavError::Malformed; }
+                if (size < 40)
+                {
+                    return WavError::Malformed;
+                }
                 format_tag = rd_u16(body + 24);
             }
-            if (out.channels == 0 || out.sample_rate == 0) { return WavError::Malformed; }
+            if (out.channels == 0 || out.sample_rate == 0)
+            {
+                return WavError::Malformed;
+            }
             have_fmt = true;
         }
         else if (std::memcmp(ch, "data", 4) == 0)
         {
-            if (!have_fmt) { return WavError::MissingFmt; }
+            if (!have_fmt)
+            {
+                return WavError::MissingFmt;
+            }
             if (format_tag == kFormatPcm)
             {
                 if (bits != 8 && bits != 16 && bits != 24 && bits != 32)
@@ -92,7 +116,10 @@ WavError wav_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
                 }
                 const crd::u32   bytes_per = bits / 8U;
                 const crd::usize count     = size / bytes_per;
-                if (count % out.channels != 0) { return WavError::Malformed; }
+                if (count % out.channels != 0)
+                {
+                    return WavError::Malformed;
+                }
                 out.bits_per_sample = bits;
                 out.isamples.reserve(count);
                 for (crd::usize i = 0; i < count; ++i)
@@ -119,10 +146,16 @@ WavError wav_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
             }
             if (format_tag == kFormatFloat)
             {
-                if (bits != 32 && bits != 64) { return WavError::UnsupportedFormat; }
+                if (bits != 32 && bits != 64)
+                {
+                    return WavError::UnsupportedFormat;
+                }
                 const crd::u32   bytes_per = bits / 8U;
                 const crd::usize count     = size / bytes_per;
-                if (count % out.channels != 0) { return WavError::Malformed; }
+                if (count % out.channels != 0)
+                {
+                    return WavError::Malformed;
+                }
                 out.bits_per_sample = 0;
                 out.fsamples.reserve(count);
                 for (crd::usize i = 0; i < count; ++i)
@@ -153,9 +186,15 @@ WavError wav_decode(crd::containers::ConstSpan<crd::u8> bytes, AudioPcm& out)
 crd::containers::Array<crd::u8> wav_encode(const AudioPcm& pcm, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> out(alloc);
-    if (!pcm.valid()) { return out; }
+    if (!pcm.valid())
+    {
+        return out;
+    }
     const bool as_float = pcm.is_float();
-    if (!as_float && pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24) { return out; }
+    if (!as_float && pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24)
+    {
+        return out;
+    }
 
     const crd::u16 real_bits  = as_float ? 32U : pcm.bits_per_sample; // float masters are 32-bit IEEE
     const crd::u32 bytes_per  = real_bits / 8U;
@@ -182,17 +221,26 @@ crd::containers::Array<crd::u8> wav_encode(const AudioPcm& pcm, crd::memory::IAl
         {
             crd::u8 raw[4];
             std::memcpy(raw, &pcm.fsamples[i], 4);
-            for (crd::u8 x : raw) { out.push_back(x); }
+            for (crd::u8 x : raw)
+            {
+                out.push_back(x);
+            }
         }
         else
         {
             const crd::i32 v = pcm.isamples[i];
             out.push_back(static_cast<crd::u8>(v & 0xFF));
             out.push_back(static_cast<crd::u8>((v >> 8) & 0xFF));
-            if (bytes_per == 3) { out.push_back(static_cast<crd::u8>((v >> 16) & 0xFF)); }
+            if (bytes_per == 3)
+            {
+                out.push_back(static_cast<crd::u8>((v >> 16) & 0xFF));
+            }
         }
     }
-    if ((data_size & 1U) != 0) { out.push_back(0); } // the RIFF pad byte
+    if ((data_size & 1U) != 0) // the RIFF pad byte
+    {
+        out.push_back(0);
+    }
     return out;
 }
 
@@ -202,12 +250,18 @@ void pcm_to_f32(const AudioPcm& pcm, crd::containers::Array<crd::f32>& out)
     if (pcm.is_float())
     {
         out.reserve(pcm.fsamples.size());
-        for (crd::f32 v : pcm.fsamples) { out.push_back(v); }
+        for (crd::f32 v : pcm.fsamples)
+        {
+            out.push_back(v);
+        }
         return;
     }
     const crd::f32 scale = 1.0F / static_cast<crd::f32>(1U << (pcm.bits_per_sample - 1U));
     out.reserve(pcm.isamples.size());
-    for (crd::i32 v : pcm.isamples) { out.push_back(static_cast<crd::f32>(v) * scale); }
+    for (crd::i32 v : pcm.isamples)
+    {
+        out.push_back(static_cast<crd::f32>(v) * scale);
+    }
 }
 
 } // namespace crd::audio

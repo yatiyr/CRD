@@ -942,7 +942,10 @@ crd::f64 insphere_exact(const Vec3<crd::f64>& a, const Vec3<crd::f64>& b, const 
                           crd::f64* out_96, crd::usize* out_len) noexcept {
         const crd::usize t48a = linear_expansion_sum(plen, p, qlen, q, temp48a);
         crd::usize t48b = linear_expansion_sum(rlen, r, slen, s, temp48b);
-        for (crd::usize i = 0; i < t48b; ++i) { temp48b[i] = -temp48b[i]; }
+        for (crd::usize i = 0; i < t48b; ++i)
+        {
+            temp48b[i] = -temp48b[i];
+        }
         *out_len = linear_expansion_sum(t48a, temp48a, t48b, temp48b, out_96);
     };
 

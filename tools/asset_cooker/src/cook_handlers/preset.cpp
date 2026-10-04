@@ -53,12 +53,16 @@ constexpr crd::u32 kPresetHandlerVersion = 1U;
 {
     const crd::toml::node* n = root.get(key);
     if (n == nullptr)
+    {
         return fallback;
+    }
     if (auto v = n->value<int64_t>(); v.has_value())
     {
         const auto raw = *v;
         if (raw < 0)
+        {
             return 0U;
+        }
         const auto u = static_cast<crd::u64>(raw);
         return u > max_inclusive ? max_inclusive : static_cast<crd::u32>(u);
     }
@@ -74,11 +78,17 @@ constexpr crd::u32 kPresetHandlerVersion = 1U;
 {
     const crd::toml::node* n = root.get(key);
     if (n == nullptr)
+    {
         return fallback;
+    }
     if (auto v = n->value<double>(); v.has_value())
+    {
         return static_cast<float>(*v);
+    }
     if (auto v = n->value<int64_t>(); v.has_value())
+    {
         return static_cast<float>(*v);
+    }
     return fallback;
 }
 
@@ -124,8 +134,14 @@ emit_camera(const crd::toml::node& root, const CookContext& ctx)
         if (auto s = n->value<std::string_view>(); s.has_value())
         {
             const auto& v = *s;
-            if (v == "Perspective")       c.lens_model = crd::preset::LensModel::Perspective;
-            else if (v == "Orthographic") c.lens_model = crd::preset::LensModel::Orthographic;
+            if (v == "Perspective")
+            {
+                c.lens_model = crd::preset::LensModel::Perspective;
+            }
+            else if (v == "Orthographic")
+            {
+                c.lens_model = crd::preset::LensModel::Orthographic;
+            }
         }
     }
     if (const crd::toml::node* n = root.get("exposure_mode"); n != nullptr)
@@ -133,8 +149,14 @@ emit_camera(const crd::toml::node& root, const CookContext& ctx)
         if (auto s = n->value<std::string_view>(); s.has_value())
         {
             const auto& v = *s;
-            if (v == "Manual")         c.exposure_mode = crd::preset::ExposureMode::Manual;
-            else if (v == "AutoEV100") c.exposure_mode = crd::preset::ExposureMode::AutoEV100;
+            if (v == "Manual")
+            {
+                c.exposure_mode = crd::preset::ExposureMode::Manual;
+            }
+            else if (v == "AutoEV100")
+            {
+                c.exposure_mode = crd::preset::ExposureMode::AutoEV100;
+            }
         }
     }
 
@@ -154,7 +176,9 @@ CookResult preset_handler(const CookContext& ctx)
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
     if (!ctx.io->read_source(src_bytes))
+    {
         return result;
+    }
     crd::containers::String text(ctx.allocator);
     text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
@@ -205,7 +229,9 @@ CookResult preset_handler(const CookContext& ctx)
     }
 
     if (bytes.empty())
+    {
         return result;
+    }
 
     result.type_fourcc     = fourcc;
     result.cooked_bytes    = std::move(bytes);

@@ -80,7 +80,10 @@ void env_plain(KGraph& g, tq::VariantEnv& out, void* /*user*/)
     const int  lcol = g.vec3(g.constant(1.0, sh, DType::F32), g.constant(1.0, sh, DType::F32),
                              g.constant(1.0, sh, DType::F32));
     crd::f64   vals[tq::kMaxVariantOptions] = {};
-    for (int i = 0; i < n_opts; ++i) { vals[i] = static_cast<crd::f64>(opts[i]); }
+    for (int i = 0; i < n_opts; ++i)
+    {
+        vals[i] = static_cast<crd::f64>(opts[i]);
+    }
     const ck::VariantOptions vo{material::AlphaMode::Opaque, 0.5};
     const bool ok = tq::build_fs_for_pass(mt, t, pass, vo, in, g, e, ldir, lcol, nullptr, 0,
                                           static_cast<const crd::f64*>(vals), n_opts);
@@ -153,7 +156,10 @@ bool never_16_taps(const tq::VariantKey& k, void* /*user*/)
 {
     for (int i = 0; i < k.n_options; ++i)
     {
-        if (k.options[i] == 16) { return true; }
+        if (k.options[i] == 16)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -197,7 +203,10 @@ TEST_CASE("REN-37.7: the matrix enumerates what is DECLARED, and a negative filt
         CHECK(m.program_count() == 2U);
         CHECK(m.dedup_ratio() == 6.0);
         // every entry maps to a program index inside the deduped set
-        for (crd::usize i = 0; i < m.entries.size(); ++i) { CHECK(m.entries[i].program < m.program_count()); }
+        for (crd::usize i = 0; i < m.entries.size(); ++i)
+        {
+            CHECK(m.entries[i].program < m.program_count());
+        }
     }
 
     // ── the NEGATIVE declaration: "this project never ships 16-tap PCF". Filtered combinations cost NOTHING —

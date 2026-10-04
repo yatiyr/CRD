@@ -106,7 +106,10 @@ inline CeirDispatchAsset build_ceir_dispatch_asset(crd::ceir::Context& c, const 
 inline crd::ceir::Block* build_add_ceir_asset(crd::ceir::Context& c, const crd::ceir::Value* out_binds[3])
 {
     const CeirDispatchAsset a = build_ceir_dispatch_asset(c, "add", "r,r,w", 3);
-    for (int i = 0; i < 3; ++i) { out_binds[i] = a.binds[i]; }
+    for (int i = 0; i < 3; ++i)
+    {
+        out_binds[i] = a.binds[i];
+    }
     return a.block;
 }
 
@@ -185,7 +188,10 @@ inline CeirMultiAsset build_ceir_multi_asset(crd::ceir::Context& c, int nbuffers
         ops[0] = gx;
         ops[1] = gy;
         ops[2] = gz;
-        for (int k = 0; k < p.nbind; ++k) { ops[3 + k] = bufv[p.bind[k]]; }
+        for (int k = 0; k < p.nbind; ++k)
+        {
+            ops[3 + k] = bufv[p.bind[k]];
+        }
         ce::Operation* const dd = c.create_operation(disp, crd::containers::ConstSpan<ce::Value*>(ops, static_cast<crd::usize>(3 + p.nbind)), 0U);
         c.set_attr(dd, "kernel", c.attr_symbol(crd::containers::StringView(p.kernel)));
         c.set_attr(dd, "access", c.attr_string(crd::containers::StringView(p.access)));
@@ -208,7 +214,10 @@ inline crd::gpu::ComputePipeline* resolve_multi(const crd::ceir::Operation* d, v
     const auto* m = static_cast<const MultiResolve*>(user);
     for (int i = 0; i < m->n; ++i)
     {
-        if (m->ops[i] == d) { return m->pipes[i]; }
+        if (m->ops[i] == d)
+        {
+            return m->pipes[i];
+        }
     }
     return nullptr;
 }
@@ -222,7 +231,10 @@ inline int collect_dispatch_binds(const crd::ceir::Context& ctx, const crd::ceir
         if (ctx.op_name(op->kind()) == crd::containers::StringView("compute.dispatch"))
         {
             const int nb = op->num_operands() >= 3U ? static_cast<int>(op->num_operands()) - 3 : 0;
-            for (int i = 0; i < nb && i < 8; ++i) { out[i] = op->operand(static_cast<crd::u32>(3 + i)); }
+            for (int i = 0; i < nb && i < 8; ++i)
+            {
+                out[i] = op->operand(static_cast<crd::u32>(3 + i));
+            }
             return nb;
         }
     }
@@ -256,14 +268,23 @@ dispatch_ceir_1wg_resolved(crd::ceir::Context& cctx, crd::containers::ConstSpan<
         up[b]  = ctx.create_buffer(bytes, transfer_src, g::ComputeMemory::CpuToGpu);
         rb[b]  = ctx.create_buffer(bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
         auto* p = static_cast<float*>(up[b]->map());
-        for (int i = 0; i < lens[b]; ++i) { p[i] = host[b][i]; }
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            p[i] = host[b][i];
+        }
         up[b]->unmap();
         table[b] = {ceir_binds[b], dev[b].get()}; // CEIR Value -> the live device buffer (binding order)
     }
 
     auto& rec = ctx.begin();
-    for (int b = 0; b < nbufs; ++b) { rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(lens[b]) * sizeof(float)); }
-    for (int b = 0; b < nbufs; ++b) { rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+    for (int b = 0; b < nbufs; ++b)
+    {
+        rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(lens[b]) * sizeof(float));
+    }
+    for (int b = 0; b < nbufs; ++b)
+    {
+        rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    }
 
     // ⭐ the ONE swapped line: execute_lowered records the dispatch (resolve kernel + gather bindings) instead of rec.dispatch.
     (void)gx; // the CEIR grid const (1) drives the workgroup count; gx is the caller's intent, asserted equal by the asset
@@ -281,7 +302,10 @@ dispatch_ceir_1wg_resolved(crd::ceir::Context& cctx, crd::containers::ConstSpan<
     for (int b = 0; b < nbufs; ++b)
     {
         const auto* r = static_cast<const float*>(rb[b]->map());
-        for (int i = 0; i < lens[b]; ++i) { host[b][i] = r[i]; }
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            host[b][i] = r[i];
+        }
         rb[b]->unmap();
     }
     return err;
@@ -327,7 +351,10 @@ dispatch_ceir_multi(crd::ceir::Context& cctx, const CeirMultiAsset& asset,
         up[b]  = ctx.create_buffer(bytes, transfer_src, g::ComputeMemory::CpuToGpu);
         rb[b]  = ctx.create_buffer(bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
         auto* p = static_cast<float*>(up[b]->map());
-        for (int i = 0; i < sizes[b]; ++i) { p[i] = host[b][i]; }
+        for (int i = 0; i < sizes[b]; ++i)
+        {
+            p[i] = host[b][i];
+        }
         up[b]->unmap();
         table[b] = {asset.buffers[b], dev[b].get()};
     }
@@ -335,8 +362,14 @@ dispatch_ceir_multi(crd::ceir::Context& cctx, const CeirMultiAsset& asset,
     MultiResolve mr{asset.dispatches, pipes, asset.ndispatch};
 
     auto& rec = ctx.begin();
-    for (int b = 0; b < nb; ++b) { rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(sizes[b]) * sizeof(float)); }
-    for (int b = 0; b < nb; ++b) { rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+    for (int b = 0; b < nb; ++b)
+    {
+        rec.copy(*up[b], *dev[b], 0U, 0U, static_cast<crd::u64>(sizes[b]) * sizeof(float));
+    }
+    for (int b = 0; b < nb; ++b)
+    {
+        rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    }
 
     // ⭐ execute_lowered records every pass dispatch + the DERIVED inter-pass barriers (replacing dispatch_fft2d's manual loop).
     const crd::ceir::gpu::ExecuteError err = crd::ceir::gpu::execute_lowered(
@@ -352,7 +385,10 @@ dispatch_ceir_multi(crd::ceir::Context& cctx, const CeirMultiAsset& asset,
     for (int b = 0; b < nb; ++b)
     {
         const auto* r = static_cast<const float*>(rb[b]->map());
-        for (int i = 0; i < sizes[b]; ++i) { host[b][i] = r[i]; }
+        for (int i = 0; i < sizes[b]; ++i)
+        {
+            host[b][i] = r[i];
+        }
         rb[b]->unmap();
     }
     return err;
@@ -386,7 +422,10 @@ inline const CpuKernelRef* resolve_cpu_multi(const crd::ceir::Operation* d, void
     const auto* m = static_cast<const CpuMultiResolve*>(user);
     for (int i = 0; i < m->n; ++i)
     {
-        if (m->ops[i] == d) { return &m->refs[i]; }
+        if (m->ops[i] == d)
+        {
+            return &m->refs[i];
+        }
     }
     return nullptr;
 }
@@ -411,9 +450,15 @@ inline bool execute_lowered_cpu(const crd::ceir::Context& ctx, crd::containers::
         {
             return false;
         }
-        if (cmd.kind != ce::gpu::LoweredKind::Dispatch) { continue; } // Barrier/Transfer: no-op on the sequential CPU
+        if (cmd.kind != ce::gpu::LoweredKind::Dispatch) // Barrier/Transfer: no-op on the sequential CPU
+        {
+            continue;
+        }
         const CpuKernelRef* const kr = (resolver != nullptr) ? resolver(cmd.op, user) : nullptr;
-        if (kr == nullptr || kr->graph == nullptr) { return false; }
+        if (kr == nullptr || kr->graph == nullptr)
+        {
+            return false;
+        }
 
         const ce::Operation* const op = cmd.op;
         const int                  nb = op->num_operands() >= 3U ? static_cast<int>(op->num_operands()) - 3 : 0;
@@ -432,7 +477,10 @@ inline bool execute_lowered_cpu(const crd::ceir::Context& ctx, crd::containers::
                     break;
                 }
             }
-            if (data == nullptr) { return false; }
+            if (data == nullptr)
+            {
+                return false;
+            }
             kb[k] = crd::kir::KernelBuffer{data, size, 0U, static_cast<crd::u8>(k)};
         }
         crd::kir::eval_cpu_kernel(*kr->graph, kr->entry, kb, nb, kr->entry.local_size[0], scratch, cmd.groups_x);

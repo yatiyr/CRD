@@ -43,7 +43,9 @@ int fiber_exhaustion_assert_handler(const char* formatted_message)
 void spin_forever(void* /*data*/) noexcept
 {
     while (true)
+    {
         std::this_thread::yield();
+    }
 }
 } // namespace
 

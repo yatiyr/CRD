@@ -70,7 +70,10 @@ Vec2<T> polygon_centroid(const Vec2<T>* verts, u32 n)
         cy += (p.y + q.y) * cross;
     }
     a *= static_cast<T>(0.5);
-    if (a == static_cast<T>(0)) { return Vec2<T>{static_cast<T>(0), static_cast<T>(0)}; }
+    if (a == static_cast<T>(0))
+    {
+        return Vec2<T>{static_cast<T>(0), static_cast<T>(0)};
+    }
     const T inv_6a = static_cast<T>(1) / (static_cast<T>(6) * a);
     return Vec2<T>{cx * inv_6a, cy * inv_6a};
 }
@@ -84,14 +87,23 @@ T lloyd_energy(const crd::containers::Array<Vec2<T>>& sites,
 {
     auto vor = voronoi_2d<T>(
         crd::containers::ConstSpan<Vec2<T>>{sites.data(), sites.size()}, alloc);
-    if (!vor.ok()) { return std::numeric_limits<T>::infinity(); }
+    if (!vor.ok())
+    {
+        return std::numeric_limits<T>::infinity();
+    }
 
     T energy = static_cast<T>(0);
     crd::containers::Array<Vec2<T>> poly(alloc);
     for (const auto& cell : vor.cells)
     {
-        if (!cell.is_bounded) { continue; }
-        if (cell.vertex_indices.size() < 3U) { continue; }
+        if (!cell.is_bounded)
+        {
+            continue;
+        }
+        if (cell.vertex_indices.size() < 3U)
+        {
+            continue;
+        }
         poly.clear();
         for (u32 vi : cell.vertex_indices)
         {

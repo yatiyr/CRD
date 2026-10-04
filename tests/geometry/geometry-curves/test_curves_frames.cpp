@@ -161,7 +161,11 @@ TEST_CASE("frames: planar circular arc RMF reduces to Frenet (binormal == plane 
         const T dot_b = crd::math::dot(f.binormal, plane_normal);
         REQUIRE(approx_eq(std::abs(dot_b), static_cast<T>(1), static_cast<T>(1e-3)));
         const T sign = dot_b >= static_cast<T>(0) ? static_cast<T>(1) : static_cast<T>(-1);
-        if (!first_sign_set) { expected_sign = sign; first_sign_set = true; }
+        if (!first_sign_set)
+        {
+            expected_sign = sign;
+            first_sign_set = true;
+        }
         REQUIRE(approx_eq(sign, expected_sign));
     }
 }

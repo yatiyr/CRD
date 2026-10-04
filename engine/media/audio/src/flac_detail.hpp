@@ -73,14 +73,23 @@ struct Md5
         const crd::u8  pad  = 0x80;
         update(&pad, 1);
         const crd::u8 zero = 0;
-        while (buf_len != 56) { update(&zero, 1); }
+        while (buf_len != 56)
+        {
+            update(&zero, 1);
+        }
         crd::u8 len_le[8];
-        for (int i = 0; i < 8; ++i) { len_le[i] = static_cast<crd::u8>((bits >> (8U * i)) & 0xFFU); }
+        for (int i = 0; i < 8; ++i)
+        {
+            len_le[i] = static_cast<crd::u8>((bits >> (8U * i)) & 0xFFU);
+        }
         update(len_le, 8);
         const crd::u32 regs[4] = {a, b, c, d};
         for (int i = 0; i < 4; ++i)
         {
-            for (int j = 0; j < 4; ++j) { out[i * 4 + j] = static_cast<crd::u8>((regs[i] >> (8U * j)) & 0xFFU); }
+            for (int j = 0; j < 4; ++j)
+            {
+                out[i * 4 + j] = static_cast<crd::u8>((regs[i] >> (8U * j)) & 0xFFU);
+            }
         }
     }
 
@@ -182,7 +191,10 @@ struct BitReader
     [[nodiscard]] crd::i64 read_signed(crd::u32 n) noexcept
     {
         const crd::u64 u = read_bits(n);
-        if (n == 0) { return 0; }
+        if (n == 0)
+        {
+            return 0;
+        }
         const crd::u64 sign = 1ULL << (n - 1U);
         return (u & sign) != 0 ? static_cast<crd::i64>(u | ~((sign << 1U) - 1ULL)) : static_cast<crd::i64>(u);
     }
@@ -204,8 +216,14 @@ struct BitReader
     [[nodiscard]] crd::u64 read_utf8() noexcept // the FLAC frame-number coding (up to 36 bits, 7 bytes)
     {
         const crd::u64 b0 = read_bits(8);
-        if (!ok) { return 0; }
-        if ((b0 & 0x80U) == 0) { return b0; }
+        if (!ok)
+        {
+            return 0;
+        }
+        if ((b0 & 0x80U) == 0)
+        {
+            return b0;
+        }
         crd::u32 extra = 0;
         crd::u64 mask  = 0x40;
         while ((b0 & mask) != 0 && extra < 7)
@@ -266,7 +284,10 @@ struct BitWriter
 
     void write_unary(crd::u32 q) noexcept
     {
-        for (crd::u32 i = 0; i < q; ++i) { write_bits(0, 1); }
+        for (crd::u32 i = 0; i < q; ++i)
+        {
+            write_bits(0, 1);
+        }
         write_bits(1, 1);
     }
 
@@ -280,7 +301,10 @@ struct BitWriter
             return;
         }
         crd::u32 k = 2;
-        while (k < 7 && v >= (1ULL << (5U * k + 1U))) { ++k; }
+        while (k < 7 && v >= (1ULL << (5U * k + 1U)))
+        {
+            ++k;
+        }
         const crd::u32 lead_bits = 7U - k;
         const crd::u8  lead_mask = static_cast<crd::u8>(0xFFU << (8U - k)); // k ones then a zero
         write_bits(static_cast<crd::u64>(lead_mask) |
@@ -294,7 +318,10 @@ struct BitWriter
 
     void align_zero() noexcept
     {
-        while (bit != 0) { write_bits(0, 1); }
+        while (bit != 0)
+        {
+            write_bits(0, 1);
+        }
     }
 };
 

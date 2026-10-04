@@ -17,7 +17,13 @@ namespace kir = crd::kir;
 namespace
 {
 constexpr int kN = 1024;
-void  fill(float* v, int n, float base) { for (int i = 0; i < n; ++i) { v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7); } }
+void  fill(float* v, int n, float base)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7);
+    }
+}
 float absf(float x) { return x < 0.0F ? -x : x; }
 } // namespace
 
@@ -25,7 +31,11 @@ TEST_CASE("v17-d: WebGPU elementwise matches the CPU oracle (ULP-tolerant)", "[k
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu      wg(&alloc);
-    if (!wg.valid()) { WARN("no WebGPU adapter available; skipping"); return; }
+    if (!wg.valid())
+    {
+        WARN("no WebGPU adapter available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     kir::KGraph      g(&alloc);
@@ -57,7 +67,11 @@ TEST_CASE("v17-g: WebGPU FUSES GEMM+bias+SiLU into one kernel, correct vs the or
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 128;
@@ -98,7 +112,10 @@ TEST_CASE("v17-g: WebGPU FUSES GEMM+bias+SiLU into one kernel, correct vs the or
     {
         const float d  = (gpu[i] - cpuo[i]) / (1.0F + (cpuo[i] < 0.0F ? -cpuo[i] : cpuo[i]));
         const float ad = d < 0.0F ? -d : d;
-        if (ad > maxrel) { maxrel = ad; }
+        if (ad > maxrel)
+        {
+            maxrel = ad;
+        }
     }
     CHECK(maxrel < 2e-3F);
 }
@@ -107,7 +124,11 @@ TEST_CASE("v17-h: WebGPU T2 FAST tiled GEMM (FMA, transposed-A) matches the orac
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu      wg(&alloc);
-    if (!wg.valid()) { WARN("no WebGPU adapter available; skipping"); return; }
+    if (!wg.valid())
+    {
+        WARN("no WebGPU adapter available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 128; // 64x64x8-tileable => routes to emit_contract_fast_wgsl (the ported crush kernel)
@@ -127,18 +148,38 @@ TEST_CASE("v17-h: WebGPU T2 FAST tiled GEMM (FMA, transposed-A) matches the orac
     REQUIRE(wg.run(g, c, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
     float maxrel = 0.0F; // FMA tier ⇒ relative-tolerance
-    for (int i = 0; i < mm * nn; ++i) { float df = gpu_out[i] - cpu_out[i]; if (df < 0.0F) { df = -df; } float cv = cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i]; float rd = df / (cv + 1e-3F); if (rd > maxrel) { maxrel = rd; } }
+    for (int i = 0; i < mm * nn; ++i)
+    {
+        float df = gpu_out[i] - cpu_out[i];
+        if (df < 0.0F)
+        {
+            df = -df;
+        }
+        float cv = cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i];
+        float rd = df / (cv + 1e-3F);
+        if (rd > maxrel)
+        {
+            maxrel = rd;
+        }
+    }
     CHECK(maxrel < 1e-4F);
     float d2[mm * nn]; // T2 determinism: run-to-run bit-identical
     REQUIRE(wg.run(g, c, inputs, 2, d2));
-    for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == d2[i]); }
+    for (int i = 0; i < mm * nn; ++i)
+    {
+        CHECK(gpu_out[i] == d2[i]);
+    }
 }
 
 TEST_CASE("v17-d: WebGPU matmul + reduce match the CPU oracle (ULP-tolerant)", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu      wg(&alloc);
-    if (!wg.valid()) { WARN("no WebGPU adapter available; skipping"); return; }
+    if (!wg.valid())
+    {
+        WARN("no WebGPU adapter available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     SECTION("matmul 32x48 @ 48x24")
@@ -159,7 +200,10 @@ TEST_CASE("v17-d: WebGPU matmul + reduce match the CPU oracle (ULP-tolerant)", "
         float        cpu_out[mm * nn];
         REQUIRE(wg.run(g, c, inputs, 2, gpu_out));
         REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
-        for (int i = 0; i < mm * nn; ++i) { CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i]))); }
+        for (int i = 0; i < mm * nn; ++i)
+        {
+            CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i])));
+        }
     }
     SECTION("reduce-sum over rows")
     {
@@ -175,7 +219,10 @@ TEST_CASE("v17-d: WebGPU matmul + reduce match the CPU oracle (ULP-tolerant)", "
         float        cpu_out[rows];
         REQUIRE(wg.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i]))); }
+        for (int i = 0; i < rows; ++i)
+        {
+            CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i])));
+        }
     }
     SECTION("reduce-min + reduce-prod over rows (ULP-tolerant vs oracle)")
     {
@@ -188,13 +235,19 @@ TEST_CASE("v17-d: WebGPU matmul + reduce match the CPU oracle (ULP-tolerant)", "
             const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
             const int   red = g.reduce(ops[oi], a, 0x2U);
             float       xv[rows * cols];
-            for (int i = 0; i < rows * cols; ++i) { xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51); }
+            for (int i = 0; i < rows * cols; ++i)
+            {
+                xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51);
+            }
             const float* inputs[] = {xv};
             float        gpu_out[rows];
             float        cpu_out[rows];
             REQUIRE(wg.run(g, red, inputs, 1, gpu_out));
             REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-            for (int i = 0; i < rows; ++i) { CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i]))); }
+            for (int i = 0; i < rows; ++i)
+            {
+                CHECK(absf(gpu_out[i] - cpu_out[i]) <= 1e-4F * (1.0F + absf(cpu_out[i])));
+            }
         }
     }
 }
@@ -203,7 +256,11 @@ TEST_CASE("v17-breadth: WebGPU floor/ceil/sign/cmpeq/cmple bit-match the CPU ora
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    nn = 1024;
@@ -231,14 +288,21 @@ TEST_CASE("v17-breadth: WebGPU floor/ceil/sign/cmpeq/cmple bit-match the CPU ora
     float        cpu_out[nn];
     REQUIRE(be.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // floor/ceil/sign/cmp all exact => BIT-EXACT
+    for (int i = 0; i < nn; ++i) // floor/ceil/sign/cmp all exact => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: WebGPU gather row index-select bit-matches the CPU oracle", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 50; // data rows
@@ -249,22 +313,35 @@ TEST_CASE("v17-breadth: WebGPU gather row index-select bit-matches the CPU oracl
     const int     idx  = g.input(kir::make_shape({mm}), kir::DType::F32);
     const int     out  = g.gather(data, idx);
     float dv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { dv[i] = 0.1F * static_cast<float>(i) - 3.0F; }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        dv[i] = 0.1F * static_cast<float>(i) - 3.0F;
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 7 + 3) % rr); }
+    for (int i = 0; i < mm; ++i)
+    {
+        iv[i] = static_cast<float>((i * 7 + 3) % rr);
+    }
     const float* inputs[] = {dv, iv};
     float        gpu_out[mm * cc];
     float        cpu_out[mm * cc];
     REQUIRE(be.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < mm * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // gather = pure copy => BIT-EXACT
+    for (int i = 0; i < mm * cc; ++i) // gather = pure copy => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: WebGPU argmax/argmin index bit-matches the CPU oracle", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 40;
@@ -276,13 +353,19 @@ TEST_CASE("v17-breadth: WebGPU argmax/argmin index bit-matches the CPU oracle", 
         const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   red = g.reduce(ops[oi], a, 0x2U);
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i * 37) % 91) * 0.1F; } // varied; first-match ties
+        for (int i = 0; i < rows * cols; ++i) // varied; first-match ties
+        {
+            xv[i] = static_cast<float>((i * 37) % 91) * 0.1F;
+        }
         const float* inputs[] = {xv};
         float        gpu_out[rows];
         float        cpu_out[rows];
         REQUIRE(be.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // the extremum INDEX, exact => BIT-EXACT
+        for (int i = 0; i < rows; ++i) // the extremum INDEX, exact => BIT-EXACT
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
 }
 
@@ -290,7 +373,11 @@ TEST_CASE("v17-breadth: WebGPU round ties-to-even bit-matches the CPU oracle", "
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    nn = 256;
@@ -299,20 +386,30 @@ TEST_CASE("v17-breadth: WebGPU round ties-to-even bit-matches the CPU oracle", "
     const int        x   = g.input(sh, kir::DType::F32);
     const int        out = g.unary(kir::KOp::Round, x);
     float            xv[nn];
-    for (int i = 0; i < nn; ++i) { xv[i] = -8.0F + 0.5F * static_cast<float>(i); } // every value is .0 or .5 => exercises ties-to-even
+    for (int i = 0; i < nn; ++i) // every value is .0 or .5 => exercises ties-to-even
+    {
+        xv[i] = -8.0F + 0.5F * static_cast<float>(i);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[nn];
     float        cpu_out[nn];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // ties-even == nearbyint => BIT-EXACT
+    for (int i = 0; i < nn; ++i) // ties-even == nearbyint => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: WebGPU scatter last-wins bit-matches the CPU oracle", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 30; // base rows
@@ -324,24 +421,40 @@ TEST_CASE("v17-breadth: WebGPU scatter last-wins bit-matches the CPU oracle", "[
     const int     upd  = g.input(kir::make_shape({mm, cc}), kir::DType::F32);
     const int     out  = g.scatter(base, idx, upd);
     float bv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { bv[i] = -1.0F - 0.1F * static_cast<float>(i); }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        bv[i] = -1.0F - 0.1F * static_cast<float>(i);
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 3) % rr); } // i=0 and i=10 both hit row 0
+    for (int i = 0; i < mm; ++i) // i=0 and i=10 both hit row 0
+    {
+        iv[i] = static_cast<float>((i * 3) % rr);
+    }
     float uv[mm * cc];
-    for (int i = 0; i < mm * cc; ++i) { uv[i] = 5.0F + 0.25F * static_cast<float>(i); }
+    for (int i = 0; i < mm * cc; ++i)
+    {
+        uv[i] = 5.0F + 0.25F * static_cast<float>(i);
+    }
     const float* inputs[] = {bv, iv, uv};
     float        gpu_out[rr * cc];
     float        cpu_out[rr * cc];
     REQUIRE(be.run(g, out, inputs, 3, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 3, cpu_out));
-    for (int i = 0; i < rr * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // last-wins, fixed order => BIT-EXACT
+    for (int i = 0; i < rr * cc; ++i) // last-wins, fixed order => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: WebGPU scan prefix-sum bit-matches the CPU oracle", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 32;
@@ -350,20 +463,30 @@ TEST_CASE("v17-breadth: WebGPU scan prefix-sum bit-matches the CPU oracle", "[ki
     const int     a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
     const int     out = g.scan(a); // inclusive prefix-sum along cols
     float         xv[rows * cols];
-    for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i % 7) + 1); } // small ints => exact cumulative sums everywhere
+    for (int i = 0; i < rows * cols; ++i) // small ints => exact cumulative sums everywhere
+    {
+        xv[i] = static_cast<float>((i % 7) + 1);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[rows * cols];
     float        cpu_out[rows * cols];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < rows * cols; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // exact integer prefix sums => BIT-EXACT
+    for (int i = 0; i < rows * cols; ++i) // exact integer prefix sums => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-perf: WebGPU T2 fast reduce sum/prod/max/min matches T1 oracle + deterministic", "[kir][webgpu][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 16;
@@ -375,7 +498,10 @@ TEST_CASE("v17-perf: WebGPU T2 fast reduce sum/prod/max/min matches T1 oracle + 
         const int   a  = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   r2 = g.reduce(ops[oi], a, 0x2U, kir::DetTier::Fast); // T2 parallel tree-reduce
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = (i % 3 == 0) ? 2.0F : 1.0F; } // {1,2}: sum/prod/max/min all reassociation-exact
+        for (int i = 0; i < rows * cols; ++i) // {1,2}: sum/prod/max/min all reassociation-exact
+        {
+            xv[i] = (i % 3 == 0) ? 2.0F : 1.0F;
+        }
         const float* inputs[] = {xv};
         float        g1[rows];
         float        g2[rows];
@@ -383,7 +509,11 @@ TEST_CASE("v17-perf: WebGPU T2 fast reduce sum/prod/max/min matches T1 oracle + 
         REQUIRE(be.run(g, r2, inputs, 1, g1));
         REQUIRE(cpu.run(g, r2, inputs, 1, co)); // T1 fixed-order oracle == exact for these inputs
         REQUIRE(be.run(g, r2, inputs, 1, g2));
-        for (int i = 0; i < rows; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+        for (int i = 0; i < rows; ++i) // T2 correct + run-to-run deterministic
+        {
+            CHECK(g1[i] == co[i]);
+            CHECK(g1[i] == g2[i]);
+        }
     }
 }
 
@@ -391,7 +521,11 @@ TEST_CASE("v17-perf: WebGPU T2 fast parallel scan matches T1 oracle + determinis
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendWebGpu        be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 4;
@@ -401,7 +535,10 @@ TEST_CASE("v17-perf: WebGPU T2 fast parallel scan matches T1 oracle + determinis
     const int     s2 = g.scan(a, kir::DetTier::Fast); // T2 parallel prefix-sum
     crd::containers::Array<float> xv(&alloc);
     xv.resize(static_cast<crd::usize>(rows) * nlen);
-    for (int i = 0; i < rows * nlen; ++i) { xv[i] = static_cast<float>((i % 4) + 1); } // small ints => order-invariant exact prefix sums
+    for (int i = 0; i < rows * nlen; ++i) // small ints => order-invariant exact prefix sums
+    {
+        xv[i] = static_cast<float>((i % 4) + 1);
+    }
     const float* inputs[] = {xv.data()};
     crd::containers::Array<float> g1(&alloc);
     crd::containers::Array<float> g2(&alloc);
@@ -412,7 +549,11 @@ TEST_CASE("v17-perf: WebGPU T2 fast parallel scan matches T1 oracle + determinis
     REQUIRE(be.run(g, s2, inputs, 1, g1.data()));
     REQUIRE(cpu.run(g, s2, inputs, 1, co.data())); // T1 fixed-order oracle == exact for integer inputs
     REQUIRE(be.run(g, s2, inputs, 1, g2.data()));
-    for (int i = 0; i < rows * nlen; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+    for (int i = 0; i < rows * nlen; ++i) // T2 correct + run-to-run deterministic
+    {
+        CHECK(g1[i] == co[i]);
+        CHECK(g1[i] == g2[i]);
+    }
 }
 
 // ── B0 fan-out (2026-07-10): the TYPE-AWARE value layer on WebGPU ────────────────────────────────────────────────────
@@ -423,7 +564,11 @@ TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[ki
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::KirBackendWebGpu      be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    vn = 128;
@@ -449,7 +594,13 @@ TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[ki
         REQUIRE(be.run(g, o, inputs, 2, gpu));
         REQUIRE(cpu.run(g, o, inputs, 2, ref));
         int bad = 0;
-        for (int i = 0; i < vn * 3; ++i) { if (absf(gpu[i] - ref[i]) > 1e-4F * absf(ref[i]) + 1e-5F) { ++bad; } }
+        for (int i = 0; i < vn * 3; ++i)
+        {
+            if (absf(gpu[i] - ref[i]) > 1e-4F * absf(ref[i]) + 1e-5F)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 
@@ -478,7 +629,13 @@ TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[ki
         float        gpu[vn * 3];
         REQUIRE(be.run(g, pv, inputs, 4, gpu));
         int bad = 0;
-        for (int i = 0; i < vn * 3; ++i) { if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F) { ++bad; } }
+        for (int i = 0; i < vn * 3; ++i)
+        {
+            if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 
@@ -505,7 +662,13 @@ TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[ki
         float        gpu[vn * 2];
         REQUIRE(be.run(g, pv, inputs, 3, gpu));
         int bad = 0;
-        for (int i = 0; i < vn * 2; ++i) { if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F) { ++bad; } }
+        for (int i = 0; i < vn * 2; ++i)
+        {
+            if (absf(gpu[i] - vd[i]) > 1e-3F * absf(vd[i]) + 1e-3F)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
 
         kir::KGraph g2(&alloc);
@@ -533,7 +696,10 @@ TEST_CASE("v17 B0 fan-out: WGSL vec3/mat3/mat2 value layer runs on WebGPU", "[ki
                 for (int r = 0; r < 2; ++r)
                 {
                     const float ref = ad[i * 2 + r] * bd[i * 3 + col];
-                    if (absf(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * absf(ref) + 1e-4F) { ++bado; }
+                    if (absf(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * absf(ref) + 1e-4F)
+                    {
+                        ++bado;
+                    }
                 }
             }
         }
@@ -546,7 +712,11 @@ TEST_CASE("v17 B0 fan-out: WGSL bvec3 (any/all) + Light-struct SROA on WebGPU", 
 {
     crd::memory::TlsfAllocator alloc(32U << 20U);
     kir::KirBackendWebGpu      be(&alloc);
-    if (!be.valid()) { WARN("no WebGPU device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no WebGPU device available; skipping");
+        return;
+    }
 
     constexpr int    bn = 128;
     const kir::Shape sh = kir::make_shape({bn});
@@ -578,8 +748,14 @@ TEST_CASE("v17 B0 fan-out: WGSL bvec3 (any/all) + Light-struct SROA on WebGPU", 
         {
             const bool ea = (avd[i * 3] < bvd[i * 3]) || (avd[i * 3 + 1] < bvd[i * 3 + 1]) || (avd[i * 3 + 2] < bvd[i * 3 + 2]);
             const bool eb = (avd[i * 3] < bvd[i * 3]) && (avd[i * 3 + 1] < bvd[i * 3 + 1]) && (avd[i * 3 + 2] < bvd[i * 3 + 2]);
-            if (gan[i] != (ea ? 1.0F : 0.0F)) { ++bad; }
-            if (gal[i] != (eb ? 1.0F : 0.0F)) { ++bad; }
+            if (gan[i] != (ea ? 1.0F : 0.0F))
+            {
+                ++bad;
+            }
+            if (gal[i] != (eb ? 1.0F : 0.0F))
+            {
+                ++bad;
+            }
         }
         CHECK(bad == 0);
     }
@@ -615,7 +791,10 @@ TEST_CASE("v17 B0 fan-out: WGSL bvec3 (any/all) + Light-struct SROA on WebGPU", 
             for (int k = 0; k < 3; ++k)
             {
                 const float ref = cold[i * 3 + k] * radd[i] + posd[i * 3 + k];
-                if (absf(gout[i * 3 + k] - ref) > 1e-4F * absf(ref) + 1e-4F) { ++bad; }
+                if (absf(gout[i * 3 + k] - ref) > 1e-4F * absf(ref) + 1e-4F)
+                {
+                    ++bad;
+                }
             }
         }
         CHECK(bad == 0);

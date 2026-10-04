@@ -55,12 +55,18 @@ struct SwRasterScene
     };
     for (int v = 0; v < SwRasterScene::n_vert; ++v)
     {
-        for (int c = 0; c < 4; ++c) { s.pos[v * 4 + c] = verts[v][c]; }
+        for (int c = 0; c < 4; ++c)
+        {
+            s.pos[v * 4 + c] = verts[v][c];
+        }
     }
     const crd::u32 tris[SwRasterScene::n_tri][3] = {{0U, 1U, 2U}, {0U, 2U, 3U}, {4U, 5U, 6U}};
     for (int t = 0; t < SwRasterScene::n_tri; ++t)
     {
-        for (int c = 0; c < 3; ++c) { s.idx[t * 3 + c] = tris[t][c]; }
+        for (int c = 0; c < 3; ++c)
+        {
+            s.idx[t * 3 + c] = tris[t][c];
+        }
     }
     return s;
 }
@@ -73,8 +79,14 @@ inline void sw_raster_oracle(const crd::kir::KGraph& g, const crd::kir::KEntry& 
     const int npix = static_cast<int>(sc.cfg.width * sc.cfg.height);
     crd::f64  pos64[SwRasterScene::n_vert * 4];
     crd::f64  idx64[SwRasterScene::n_tri * 3];
-    for (int i = 0; i < SwRasterScene::n_vert * 4; ++i) { pos64[i] = static_cast<crd::f64>(sc.pos[i]); }
-    for (int i = 0; i < SwRasterScene::n_tri * 3; ++i) { idx64[i] = static_cast<crd::f64>(sc.idx[i]); }
+    for (int i = 0; i < SwRasterScene::n_vert * 4; ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(sc.pos[i]);
+    }
+    for (int i = 0; i < SwRasterScene::n_tri * 3; ++i)
+    {
+        idx64[i] = static_cast<crd::f64>(sc.idx[i]);
+    }
     crd::containers::Array<crd::f64> vis64(&alloc);
     vis64.resize(static_cast<crd::usize>(npix), static_cast<crd::f64>(crd::kir::visbuffer::kVisEmptyKey));
 
@@ -85,7 +97,10 @@ inline void sw_raster_oracle(const crd::kir::KGraph& g, const crd::kir::KEntry& 
     crd::kir::eval_cpu_kernel(g, e, bufs, 3, sc.cfg.local_size, &alloc, grid);
 
     out.resize(static_cast<crd::usize>(npix), 0U);
-    for (int i = 0; i < npix; ++i) { out[static_cast<crd::usize>(i)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < npix; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(i)]);
+    }
 }
 
 // GPU dispatch: bind positions (f32, b0), indices (u32, b1), vis keys (u32, b2, pre-cleared to kVisEmptyKey) as GpuOnly
@@ -114,13 +129,22 @@ inline void dispatch_visraster(crd::gpu::IComputeContext& ctx, crd::gpu::Compute
     auto vis_rb  = ctx.create_buffer(vis_b, transfer_dst, g::ComputeMemory::GpuToCpu);
 
     auto* pp = static_cast<float*>(pos_up->map());
-    for (int i = 0; i < SwRasterScene::n_vert * 4; ++i) { pp[i] = sc.pos[i]; }
+    for (int i = 0; i < SwRasterScene::n_vert * 4; ++i)
+    {
+        pp[i] = sc.pos[i];
+    }
     pos_up->unmap();
     auto* ip = static_cast<crd::u32*>(idx_up->map());
-    for (int i = 0; i < SwRasterScene::n_tri * 3; ++i) { ip[i] = sc.idx[i]; }
+    for (int i = 0; i < SwRasterScene::n_tri * 3; ++i)
+    {
+        ip[i] = sc.idx[i];
+    }
     idx_up->unmap();
     auto* vp = static_cast<crd::u32*>(vis_up->map());
-    for (int i = 0; i < npix; ++i) { vp[i] = crd::kir::visbuffer::kVisEmptyKey; } // clear to "no triangle"
+    for (int i = 0; i < npix; ++i) // clear to "no triangle"
+    {
+        vp[i] = crd::kir::visbuffer::kVisEmptyKey;
+    }
     vis_up->unmap();
 
     auto&             rec      = ctx.begin();
@@ -138,7 +162,10 @@ inline void dispatch_visraster(crd::gpu::IComputeContext& ctx, crd::gpu::Compute
 
     out.resize(static_cast<crd::usize>(npix), 0U);
     const auto* r = static_cast<const crd::u32*>(vis_rb->map());
-    for (int i = 0; i < npix; ++i) { out[static_cast<crd::usize>(i)] = r[i]; }
+    for (int i = 0; i < npix; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = r[i];
+    }
     vis_rb->unmap();
 }
 
@@ -199,8 +226,14 @@ inline void dais_make_vis(const DaisScene& sc, crd::memory::IAllocator& alloc, c
     const crd::kir::KEntry re = crd::kir::visbuffer::build_sw_raster_visbuffer(rg, sc.raster_cfg);
     crd::f64        pos64[DaisScene::n_vert * 4];
     crd::f64        idx64[DaisScene::n_tri * 3];
-    for (int i = 0; i < DaisScene::n_vert * 4; ++i) { pos64[i] = static_cast<crd::f64>(sc.pos[i]); }
-    for (int i = 0; i < DaisScene::n_tri * 3; ++i) { idx64[i] = static_cast<crd::f64>(sc.idx[i]); }
+    for (int i = 0; i < DaisScene::n_vert * 4; ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(sc.pos[i]);
+    }
+    for (int i = 0; i < DaisScene::n_tri * 3; ++i)
+    {
+        idx64[i] = static_cast<crd::f64>(sc.idx[i]);
+    }
     crd::containers::Array<crd::f64> vis64(&alloc);
     vis64.resize(static_cast<crd::usize>(npix), static_cast<crd::f64>(crd::kir::visbuffer::kVisEmptyKey));
     crd::kir::KernelBuffer rbufs[3] = {{pos64, DaisScene::n_vert * 4, 0, 0},
@@ -209,7 +242,10 @@ inline void dais_make_vis(const DaisScene& sc, crd::memory::IAllocator& alloc, c
     const crd::u32         rgrid = (sc.raster_cfg.tri_count + sc.raster_cfg.local_size - 1U) / sc.raster_cfg.local_size;
     crd::kir::eval_cpu_kernel(rg, re, rbufs, 3, sc.raster_cfg.local_size, &alloc, rgrid);
     vis.resize(static_cast<crd::usize>(npix), 0U);
-    for (int i = 0; i < npix; ++i) { vis[static_cast<crd::usize>(i)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < npix; ++i)
+    {
+        vis[static_cast<crd::usize>(i)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(i)]);
+    }
 }
 
 // CPU ORACLE for the deferred pass: run `de` (of `dg`) over `vis` + geometry + attributes → the per-pixel shaded f32.
@@ -221,14 +257,26 @@ inline void dais_oracle(const crd::kir::KGraph& dg, const crd::kir::KEntry& de, 
     crd::f64  pos64[DaisScene::n_vert * 4];
     crd::f64  idx64[DaisScene::n_tri * 3];
     crd::f64  attr64[DaisScene::n_vert];
-    for (int i = 0; i < DaisScene::n_vert * 4; ++i) { pos64[i] = static_cast<crd::f64>(sc.pos[i]); }
-    for (int i = 0; i < DaisScene::n_tri * 3; ++i) { idx64[i] = static_cast<crd::f64>(sc.idx[i]); }
-    for (int i = 0; i < DaisScene::n_vert; ++i) { attr64[i] = static_cast<crd::f64>(sc.attr[i]); }
+    for (int i = 0; i < DaisScene::n_vert * 4; ++i)
+    {
+        pos64[i] = static_cast<crd::f64>(sc.pos[i]);
+    }
+    for (int i = 0; i < DaisScene::n_tri * 3; ++i)
+    {
+        idx64[i] = static_cast<crd::f64>(sc.idx[i]);
+    }
+    for (int i = 0; i < DaisScene::n_vert; ++i)
+    {
+        attr64[i] = static_cast<crd::f64>(sc.attr[i]);
+    }
     crd::containers::Array<crd::f64> vis64(&alloc);
     crd::containers::Array<crd::f64> out64(&alloc);
     vis64.resize(static_cast<crd::usize>(npix), 0.0);
     out64.resize(static_cast<crd::usize>(npix), 0.0);
-    for (int i = 0; i < npix; ++i) { vis64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(vis[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < npix; ++i)
+    {
+        vis64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(vis[static_cast<crd::usize>(i)]);
+    }
     crd::kir::KernelBuffer dbufs[5] = {{vis64.data(), npix, 0, 0},
                                        {pos64, DaisScene::n_vert * 4, 0, 1},
                                        {idx64, DaisScene::n_tri * 3, 0, 2},
@@ -237,7 +285,10 @@ inline void dais_oracle(const crd::kir::KGraph& dg, const crd::kir::KEntry& de, 
     const crd::u32         dgrid = (static_cast<crd::u32>(npix) + sc.shade_cfg.local_size - 1U) / sc.shade_cfg.local_size;
     crd::kir::eval_cpu_kernel(dg, de, dbufs, 5, sc.shade_cfg.local_size, &alloc, dgrid);
     shade.resize(static_cast<crd::usize>(npix), 0.0F);
-    for (int i = 0; i < npix; ++i) { shade[static_cast<crd::usize>(i)] = static_cast<float>(out64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < npix; ++i)
+    {
+        shade[static_cast<crd::usize>(i)] = static_cast<float>(out64[static_cast<crd::usize>(i)]);
+    }
 }
 
 // GPU dispatch of the deferred pass: vis (u32, b0), positions (f32, b1), indices (u32, b2), attributes (f32, b3), shaded out
@@ -271,19 +322,34 @@ inline void dispatch_dais(crd::gpu::IComputeContext& ctx, crd::gpu::ComputePipel
     auto out_rb  = ctx.create_buffer(out_b, transfer_dst, g::ComputeMemory::GpuToCpu);
 
     auto* vp = static_cast<crd::u32*>(vis_up->map());
-    for (int i = 0; i < npix; ++i) { vp[i] = vis[static_cast<crd::usize>(i)]; }
+    for (int i = 0; i < npix; ++i)
+    {
+        vp[i] = vis[static_cast<crd::usize>(i)];
+    }
     vis_up->unmap();
     auto* pp = static_cast<float*>(pos_up->map());
-    for (int i = 0; i < DaisScene::n_vert * 4; ++i) { pp[i] = sc.pos[i]; }
+    for (int i = 0; i < DaisScene::n_vert * 4; ++i)
+    {
+        pp[i] = sc.pos[i];
+    }
     pos_up->unmap();
     auto* ip = static_cast<crd::u32*>(idx_up->map());
-    for (int i = 0; i < DaisScene::n_tri * 3; ++i) { ip[i] = sc.idx[i]; }
+    for (int i = 0; i < DaisScene::n_tri * 3; ++i)
+    {
+        ip[i] = sc.idx[i];
+    }
     idx_up->unmap();
     auto* ap = static_cast<float*>(att_up->map());
-    for (int i = 0; i < DaisScene::n_vert; ++i) { ap[i] = sc.attr[i]; }
+    for (int i = 0; i < DaisScene::n_vert; ++i)
+    {
+        ap[i] = sc.attr[i];
+    }
     att_up->unmap();
     auto* op = static_cast<float*>(out_up->map());
-    for (int i = 0; i < npix; ++i) { op[i] = 0.0F; } // clear: empty pixels keep 0
+    for (int i = 0; i < npix; ++i) // clear: empty pixels keep 0
+    {
+        op[i] = 0.0F;
+    }
     out_up->unmap();
 
     auto&             rec      = ctx.begin();
@@ -305,7 +371,10 @@ inline void dispatch_dais(crd::gpu::IComputeContext& ctx, crd::gpu::ComputePipel
 
     out.resize(static_cast<crd::usize>(npix), 0.0F);
     const auto* r = static_cast<const float*>(out_rb->map());
-    for (int i = 0; i < npix; ++i) { out[static_cast<crd::usize>(i)] = r[i]; }
+    for (int i = 0; i < npix; ++i)
+    {
+        out[static_cast<crd::usize>(i)] = r[i];
+    }
     out_rb->unmap();
 }
 
@@ -331,7 +400,10 @@ struct HzbScene
     s.cfg.local_size = 64;
     for (int y = 0; y < 16; ++y)
     {
-        for (int x = 0; x < 16; ++x) { s.depth[y * 16 + x] = (x < 8) ? 0.2F : 1.0F; } // near wall | far background
+        for (int x = 0; x < 16; ++x) // near wall | far background
+        {
+            s.depth[y * 16 + x] = (x < 8) ? 0.2F : 1.0F;
+        }
     }
     // cluster 0: footprint (2,2)-(5,5) over the near wall, nearer depth 0.5 (behind the 0.2 wall) → OCCLUDED
     const float defs[HzbScene::n_clusters][6] = {
@@ -342,7 +414,10 @@ struct HzbScene
     const crd::u32 exp[HzbScene::n_clusters] = {0U, 1U, 1U};
     for (int c = 0; c < HzbScene::n_clusters; ++c)
     {
-        for (int f = 0; f < 6; ++f) { s.clusters[c * 6 + f] = defs[c][f]; }
+        for (int f = 0; f < 6; ++f)
+        {
+            s.clusters[c * 6 + f] = defs[c][f];
+        }
         s.expected[c] = exp[c];
     }
     return s;
@@ -359,7 +434,10 @@ inline void hzb_cull_oracle(const HzbScene& sc, crd::memory::IAllocator& alloc, 
 
     crd::containers::Array<crd::f64> hzb(&alloc);
     hzb.resize(static_cast<crd::usize>(tot), 0.0);
-    for (int i = 0; i < 16 * 16; ++i) { hzb[static_cast<crd::usize>(i)] = static_cast<crd::f64>(sc.depth[i]); } // mip 0
+    for (int i = 0; i < 16 * 16; ++i) // mip 0
+    {
+        hzb[static_cast<crd::usize>(i)] = static_cast<crd::f64>(sc.depth[i]);
+    }
 
     for (crd::u32 level = 1U; level < nm; ++level) // build each level in place
     {
@@ -375,9 +453,15 @@ inline void hzb_cull_oracle(const HzbScene& sc, crd::memory::IAllocator& alloc, 
     crd::containers::Array<crd::f64> clu(&alloc);
     crd::containers::Array<crd::f64> vis64(&alloc);
     offs.resize(static_cast<crd::usize>(nm), 0.0);
-    for (crd::u32 m = 0; m < nm; ++m) { offs[static_cast<crd::usize>(m)] = static_cast<crd::f64>(vb::hzb_mip_offset(base, m)); }
+    for (crd::u32 m = 0; m < nm; ++m)
+    {
+        offs[static_cast<crd::usize>(m)] = static_cast<crd::f64>(vb::hzb_mip_offset(base, m));
+    }
     clu.resize(static_cast<crd::usize>(HzbScene::n_clusters * 6), 0.0);
-    for (int i = 0; i < HzbScene::n_clusters * 6; ++i) { clu[static_cast<crd::usize>(i)] = static_cast<crd::f64>(sc.clusters[i]); }
+    for (int i = 0; i < HzbScene::n_clusters * 6; ++i)
+    {
+        clu[static_cast<crd::usize>(i)] = static_cast<crd::f64>(sc.clusters[i]);
+    }
     vis64.resize(static_cast<crd::usize>(HzbScene::n_clusters), 0.0);
 
     crd::kir::KGraph       cg(&alloc);
@@ -389,7 +473,10 @@ inline void hzb_cull_oracle(const HzbScene& sc, crd::memory::IAllocator& alloc, 
     crd::kir::eval_cpu_kernel(cg, ce, cbufs, 4, sc.cfg.local_size, &alloc, 1U);
 
     vis.resize(static_cast<crd::usize>(HzbScene::n_clusters), 0U);
-    for (int c = 0; c < HzbScene::n_clusters; ++c) { vis[static_cast<crd::usize>(c)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(c)]); }
+    for (int c = 0; c < HzbScene::n_clusters; ++c)
+    {
+        vis[static_cast<crd::usize>(c)] = static_cast<crd::u32>(vis64[static_cast<crd::usize>(c)]);
+    }
 }
 
 // GPU: build the HZB pyramid (one downsample dispatch per level, barriered on the single hzb buffer) then the cull dispatch,
@@ -436,13 +523,22 @@ inline void hzb_cull_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pipe
     auto vis_rb  = ctx.create_buffer(vis_b, transfer_dst, g::ComputeMemory::GpuToCpu);
 
     auto* hp = static_cast<float*>(hzb_up->map());
-    for (int i = 0; i < tot; ++i) { hp[i] = (i < 16 * 16) ? sc.depth[i] : 0.0F; } // mip 0 = depth, rest built on GPU
+    for (int i = 0; i < tot; ++i) // mip 0 = depth, rest built on GPU
+    {
+        hp[i] = (i < 16 * 16) ? sc.depth[i] : 0.0F;
+    }
     hzb_up->unmap();
     auto* ofp = static_cast<crd::u32*>(off_up->map());
-    for (crd::u32 m = 0; m < nm; ++m) { ofp[m] = vb::hzb_mip_offset(base, m); }
+    for (crd::u32 m = 0; m < nm; ++m)
+    {
+        ofp[m] = vb::hzb_mip_offset(base, m);
+    }
     off_up->unmap();
     auto* clp = static_cast<float*>(clu_up->map());
-    for (int i = 0; i < ncl * 6; ++i) { clp[i] = sc.clusters[i]; }
+    for (int i = 0; i < ncl * 6; ++i)
+    {
+        clp[i] = sc.clusters[i];
+    }
     clu_up->unmap();
 
     auto& rec = ctx.begin();
@@ -468,7 +564,10 @@ inline void hzb_cull_dispatch(crd::gpu::IComputeContext& ctx, MakePipe make_pipe
 
     vis.resize(static_cast<crd::usize>(ncl), 0U);
     const auto* r = static_cast<const crd::u32*>(vis_rb->map());
-    for (int c = 0; c < ncl; ++c) { vis[static_cast<crd::usize>(c)] = r[c]; }
+    for (int c = 0; c < ncl; ++c)
+    {
+        vis[static_cast<crd::usize>(c)] = r[c];
+    }
     vis_rb->unmap();
 }
 

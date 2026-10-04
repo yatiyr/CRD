@@ -63,7 +63,10 @@ void ret(Context& c, Block* b, Value* v)
 }
 void module_block(Context& c, Module& m)
 {
-    if (m.body()->first_block() == nullptr) { m.body()->append(c.create_block(0U)); }
+    if (m.body()->first_block() == nullptr)
+    {
+        m.body()->append(c.create_block(0U));
+    }
 }
 ConstSpan<u8> span_of(const Array<u8>& b) { return ConstSpan<u8>(b.data(), b.size()); }
 

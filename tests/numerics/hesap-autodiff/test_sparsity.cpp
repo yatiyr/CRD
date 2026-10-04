@@ -26,8 +26,14 @@ struct Tridiag // y_i depends on x_{i-1}, x_i, x_{i+1}
         for (int i = 0; i < n; ++i)
         {
             T acc = x[i] * x[i] + sin(x[i]);
-            if (i > 0) { acc = acc + 2.0 * x[i - 1]; }
-            if (i < n - 1) { acc = acc + x[i + 1]; }
+            if (i > 0)
+            {
+                acc = acc + 2.0 * x[i - 1];
+            }
+            if (i < n - 1)
+            {
+                acc = acc + x[i + 1];
+            }
             y[i] = acc;
         }
     }
@@ -38,9 +44,15 @@ struct Arrow // y_0 dense (depends on all); y_i (i>0) depends on x_0 and x_i
     void operator()(const T* x, int n, T* y, int /*m*/) const
     {
         T s = x[0] * x[0];
-        for (int i = 1; i < n; ++i) { s = s + x[i] * x[i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            s = s + x[i] * x[i];
+        }
         y[0] = s;
-        for (int i = 1; i < n; ++i) { y[i] = x[0] * x[i]; }
+        for (int i = 1; i < n; ++i)
+        {
+            y[i] = x[0] * x[i];
+        }
     }
 };
 struct MulZero // y_0 = x0*0 + x1 : the GLOBAL pattern keeps {0,1} (coefficient 0 unknown at trace time)
@@ -64,8 +76,14 @@ struct SparseHess // f = Σ x_i² + Σ sin(x_i·x_{i+1}) → tridiagonal Hessian
     {
         using std::sin;
         T acc = x[0] * x[0];
-        for (int i = 1; i < n; ++i) { acc = acc + x[i] * x[i]; }
-        for (int i = 0; i < n - 1; ++i) { acc = acc + sin(x[i] * x[i + 1]); }
+        for (int i = 1; i < n; ++i)
+        {
+            acc = acc + x[i] * x[i];
+        }
+        for (int i = 0; i < n - 1; ++i)
+        {
+            acc = acc + sin(x[i] * x[i + 1]);
+        }
         return acc;
     }
 };
@@ -103,7 +121,10 @@ TEST_CASE("distance-2 coloring is valid + minimal", "[autodiff][sparsity]")
         {
             for (int b = a + 1; b < n; ++b)
             {
-                if (rows[i].has(a) && rows[i].has(b)) { CHECK(color[a] != color[b]); }
+                if (rows[i].has(a) && rows[i].has(b))
+                {
+                    CHECK(color[a] != color[b]);
+                }
             }
         }
     }
@@ -114,7 +135,10 @@ TEST_CASE("compressed recovery == dense Jacobian (tridiagonal + arrowhead)", "[a
     auto check = [](auto functor, auto tag) {
         constexpr int n = decltype(tag)::value;
         crd::f64      x[n];
-        for (int i = 0; i < n; ++i) { x[i] = 0.2 + 0.1 * i; }
+        for (int i = 0; i < n; ++i)
+        {
+            x[i] = 0.2 + 0.1 * i;
+        }
 
         // dense reference (v15-d driver)
         ad::JetPackD<8> jsc[n];
@@ -139,7 +163,10 @@ TEST_CASE("compressed recovery == dense Jacobian (tridiagonal + arrowhead)", "[a
                                cc::Span<crd::f64>(sparse, n * n), cc::Span<crd::f64>(v, n), cc::Span<crd::f64>(bcol, n),
                                cc::Span<crd::f64>(bmat, n * ncol), cc::Span<ad::Dual<crd::f64>>(ds, n),
                                cc::Span<ad::Dual<crd::f64>>(dy, n));
-        for (int e = 0; e < n * n; ++e) { CHECK_THAT(sparse[e], WithinRel(dense[e], 1e-12)); }
+        for (int e = 0; e < n * n; ++e)
+        {
+            CHECK_THAT(sparse[e], WithinRel(dense[e], 1e-12));
+        }
     };
     check(Tridiag{}, std::integral_constant<int, 16>{});
     check(Arrow{}, std::integral_constant<int, 12>{});
@@ -183,7 +210,10 @@ TEST_CASE("sparse Hessian recovery == dense hyper-dual Hessian", "[autodiff][spa
 {
     constexpr int n = 8;
     crd::f64      x[n];
-    for (int i = 0; i < n; ++i) { x[i] = 0.3 + 0.1 * i; }
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = 0.3 + 0.1 * i;
+    }
 
     // dense reference (v15-c hyper-dual)
     crd::f64 dense[n * n];
@@ -212,7 +242,10 @@ TEST_CASE("sparse Hessian recovery == dense hyper-dual Hessian", "[autodiff][spa
     {
         for (int j = i; j < n; ++j)
         {
-            if (std::abs(dense[i * n + j]) > 1e-9) { CHECK(h.has_pair(i, j)); }
+            if (std::abs(dense[i * n + j]) > 1e-9)
+            {
+                CHECK(h.has_pair(i, j));
+            }
         }
     }
 }

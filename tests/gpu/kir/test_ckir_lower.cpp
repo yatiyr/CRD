@@ -97,7 +97,10 @@ TEST_CASE("B7-a: lower() is round-trip BIT-STABLE + idempotent (const-fold + DCE
     (void)g.unary(kir::KOp::Exp, x); // dead → DCE drops it
 
     crd::f64 xv[nsamp];
-    for (int i = 0; i < nsamp; ++i) { xv[i] = (0.25 * i) - 8.0; }
+    for (int i = 0; i < nsamp; ++i)
+    {
+        xv[i] = (0.25 * i) - 8.0;
+    }
     const crd::f64* inp[] = {xv};
 
     crd::f64 before[nsamp];
@@ -112,7 +115,13 @@ TEST_CASE("B7-a: lower() is round-trip BIT-STABLE + idempotent (const-fold + DCE
     kir::eval_cpu(g, inp, &alloc, root, after);
 
     int bad = 0;
-    for (int i = 0; i < nsamp; ++i) { if (before[i] != after[i]) { ++bad; } } // BIT-identical
+    for (int i = 0; i < nsamp; ++i) // BIT-identical
+    {
+        if (before[i] != after[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(size_after < size_before); // folded 2+3, merged x*x, dropped the dead exp
 
@@ -122,7 +131,10 @@ TEST_CASE("B7-a: lower() is round-trip BIT-STABLE + idempotent (const-fold + DCE
     CHECK(g.size() == size_after);
     crd::f64 after2[nsamp];
     kir::eval_cpu(g, inp, &alloc, root2, after2);
-    for (int i = 0; i < nsamp; ++i) { CHECK(after2[i] == after[i]); }
+    for (int i = 0; i < nsamp; ++i)
+    {
+        CHECK(after2[i] == after[i]);
+    }
 }
 
 TEST_CASE("B7-b: uniform_boundary finds the maximal uniform subexpression on the fragment path", "[kir][lower][hoist]")
@@ -179,7 +191,10 @@ TEST_CASE("B7-b: specialize collapses a static switch to a variant, bit-identica
         const int                  sel    = g.select(cond, ba, bb);
 
         crd::f64 xv[nsamp];
-        for (int i = 0; i < nsamp; ++i) { xv[i] = (0.5 * i) - 8.0; }
+        for (int i = 0; i < nsamp; ++i)
+        {
+            xv[i] = (0.5 * i) - 8.0;
+        }
         const crd::f64* inp[] = {xv};
 
         const int size_before = g.size();
@@ -190,7 +205,13 @@ TEST_CASE("B7-b: specialize collapses a static switch to a variant, bit-identica
         crd::f64 o[nsamp];
         kir::eval_cpu(g, inp, &alloc, root, o);
         int bad = 0;
-        for (int i = 0; i < nsamp; ++i) { if (o[i] != expected(xv[i])) { ++bad; } }
+        for (int i = 0; i < nsamp; ++i)
+        {
+            if (o[i] != expected(xv[i]))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);                 // the variant is BIT-identical to the chosen branch
         CHECK(size_after < size_before); // the dead branch was eliminated
     };
@@ -227,7 +248,10 @@ TEST_CASE("B7 GATE: lowering never const-folds a memory read with a constant ind
     bool has_load = false;
     for (int i = 0; i < g.size(); ++i)
     {
-        if (g.node(i).op == crd::kir::KOp::StorageLoad) { has_load = true; }
+        if (g.node(i).op == crd::kir::KOp::StorageLoad)
+        {
+            has_load = true;
+        }
     }
     CHECK(has_load);
 }

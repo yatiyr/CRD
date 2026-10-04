@@ -118,7 +118,10 @@ void mk_dispatch(Context& ctx, Block* blk, Operation* at, Value* grid, Value* co
     ops[0] = grid;
     ops[1] = grid;
     ops[2] = grid;
-    for (u32 i = 0; i < nb; ++i) { ops[3U + i] = binds[i]; }
+    for (u32 i = 0; i < nb; ++i)
+    {
+        ops[3U + i] = binds[i];
+    }
     Operation* const op = ctx.create_operation(ctx.intern_op("compute", "dispatch"), ConstSpan<Value*>(ops, 3U + nb), 0U);
     ctx.set_attr(op, StringView("kernel"), ctx.attr_symbol(kernel));
     ctx.set_attr(op, StringView("access"), ctx.attr_string(access));
@@ -164,14 +167,23 @@ void VjpRegistry::register_kernel(StringView kernel, VjpRuleFn fn)
 
 VjpRuleFn VjpRegistry::lookup(const Context& ctx, const Operation* op) const noexcept
 {
-    if (op == nullptr) { return nullptr; }
+    if (op == nullptr)
+    {
+        return nullptr;
+    }
     const OpId kind = op->kind();
     if (kind.value == kDispatchOp)
     {
         const AttrId a = op->attr(StringView("kernel"));
-        if (!a.valid()) { return nullptr; } // absent kernel ⇒ MissingVjp (never a fall-through to an op-kind rule)
+        if (!a.valid()) // absent kernel ⇒ MissingVjp (never a fall-through to an op-kind rule)
+        {
+            return nullptr;
+        }
         const AttrValue v = ctx.attr_value(a);
-        if (v.kind != AttrKind::SymbolRef) { return nullptr; }
+        if (v.kind != AttrKind::SymbolRef)
+        {
+            return nullptr;
+        }
         const VjpRuleFn* const f = m_kernel_rules.find(containers::fnv1a_64(v.s.data(), v.s.size()));
         return f != nullptr ? *f : nullptr;
     }
@@ -190,8 +202,14 @@ GradError vjp_gemm(Context& ctx, const VjpRegistry& /*reg*/, Block* blk, Operati
     Value* const a  = fwd->operand(0U); // A [M, K]
     Value* const b  = fwd->operand(1U); // B [K, N]
     Value* const dc = result_adjoints[0]; // dC [M, N]
-    if (!is_tensor(ctx, a) || !is_tensor(ctx, b) || !is_tensor(ctx, dc)) { return GradError::OperandNotTensor; }
-    if (!is_float_elem(ctx, a->type())) { return GradError::ElementNotFloat; }
+    if (!is_tensor(ctx, a) || !is_tensor(ctx, b) || !is_tensor(ctx, dc))
+    {
+        return GradError::OperandNotTensor;
+    }
+    if (!is_float_elem(ctx, a->type()))
+    {
+        return GradError::ElementNotFloat;
+    }
     if (rank_of(ctx, a->type()) != 2U || rank_of(ctx, b->type()) != 2U || rank_of(ctx, dc->type()) != 2U)
     {
         return GradError::ShapeRankInvalid;
@@ -219,16 +237,31 @@ GradError vjp_reduce(Context& ctx, const VjpRegistry& /*reg*/, Block* blk, Opera
     }
     Value* const input = fwd->operand(0U);
     Value* const dout  = result_adjoints[0];
-    if (!is_tensor(ctx, input) || !is_tensor(ctx, dout)) { return GradError::OperandNotTensor; }
-    if (!is_float_elem(ctx, input->type())) { return GradError::ElementNotFloat; }
+    if (!is_tensor(ctx, input) || !is_tensor(ctx, dout))
+    {
+        return GradError::OperandNotTensor;
+    }
+    if (!is_float_elem(ctx, input->type()))
+    {
+        return GradError::ElementNotFloat;
+    }
     // sum's VJP is a broadcast (d/dx of a sum is 1); max/min/prod/mean are name-forward — a TYPED reject, not a wrong grad.
     const AttrValue fn = ctx.attr_value(fwd->attr(StringView("fn")));
-    if (fn.kind != AttrKind::String || fn.s != StringView("sum")) { return GradError::ReduceFnUnsupported; }
+    if (fn.kind != AttrKind::String || fn.s != StringView("sum"))
+    {
+        return GradError::ReduceFnUnsupported;
+    }
     const AttrValue ax = ctx.attr_value(fwd->attr(StringView("axis")));
-    if (ax.kind != AttrKind::Int) { return GradError::ShapeRankInvalid; }
+    if (ax.kind != AttrKind::Int)
+    {
+        return GradError::ShapeRankInvalid;
+    }
     const TypeId in_t = input->type();
     const usize  rank = rank_of(ctx, in_t);
-    if (rank == 0U || rank > 16U || ax.i < 0 || static_cast<usize>(ax.i) >= rank) { return GradError::ShapeRankInvalid; }
+    if (rank == 0U || rank > 16U || ax.i < 0 || static_cast<usize>(ax.i) >= rank)
+    {
+        return GradError::ShapeRankInvalid;
+    }
     // keepdim shape = input's, with the reduced axis re-inserted at size 1 (dodges the 1D right-align broadcast scar),
     // then broadcast back to the full input shape.
     TypeId dims[16];
@@ -253,11 +286,18 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
         return res;
     }
     Block* const blk = loss->defining_op()->parent_block();
-    if (blk == nullptr) { res.error = GradError::OperandNotTensor; return res; }
+    if (blk == nullptr)
+    {
+        res.error = GradError::OperandNotTensor;
+        return res;
+    }
 
     // snapshot the FORWARD ops BEFORE emitting any backward op (else the reverse walk re-processes its own output).
     containers::Array<Operation*> fwd(scratch);
-    for (Operation* op = blk->first_op(); op != nullptr; op = op->next_in_block()) { fwd.push_back(op); }
+    for (Operation* op = blk->first_op(); op != nullptr; op = op->next_in_block())
+    {
+        fwd.push_back(op);
+    }
 
     // ── PURE PRE-PASS (no emit): every op on loss's backward reachability set must have a rule + fit the walk's caps, so
     // MissingVjp / ArityUnsupported leave the module byte-identical (the expand_ml "reject before emit" precedent). The
@@ -269,13 +309,23 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
         for (usize idx = fwd.size(); idx-- > 0U;)
         {
             Operation* const op = fwd[idx];
-            if (op->num_operands() == 0U) { continue; }
+            if (op->num_operands() == 0U)
+            {
+                continue;
+            }
             bool on_path = false;
             for (u32 r = 0; r < op->num_results(); ++r)
             {
-                if (reached.find(op->result(r)) != nullptr) { on_path = true; break; }
+                if (reached.find(op->result(r)) != nullptr)
+                {
+                    on_path = true;
+                    break;
+                }
             }
-            if (!on_path) { continue; }
+            if (!on_path)
+            {
+                continue;
+            }
             if (op->num_results() > 4U || op->num_operands() > 8U)
             {
                 res.error = GradError::ArityUnsupported;
@@ -288,7 +338,10 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
                 res.error_op = op;
                 return res;
             }
-            for (u32 i = 0; i < op->num_operands(); ++i) { (void)reached.insert(op->operand(i), 1U); }
+            for (u32 i = 0; i < op->num_operands(); ++i)
+            {
+                (void)reached.insert(op->operand(i), 1U);
+            }
         }
     }
 
@@ -307,7 +360,10 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
     for (usize idx = fwd.size(); idx-- > 0U;)
     {
         Operation* const op = fwd[idx];
-        if (op->num_operands() == 0U) { continue; } // leaf (declare/const) — its adjoint is a gradient sink, not backprop'd
+        if (op->num_operands() == 0U) // leaf (declare/const) — its adjoint is a gradient sink, not backprop'd
+        {
+            continue;
+        }
         const u32 nres = op->num_results() < 4U ? op->num_results() : 4U;
         Value*    radj[4]  = {};
         bool      on_path  = false;
@@ -315,9 +371,15 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
         {
             Value* const* const f = adj.find(op->result(r));
             radj[r]               = (f != nullptr) ? *f : nullptr;
-            if (radj[r] != nullptr) { on_path = true; }
+            if (radj[r] != nullptr)
+            {
+                on_path = true;
+            }
         }
-        if (!on_path) { continue; } // op does not reach loss
+        if (!on_path) // op does not reach loss
+        {
+            continue;
+        }
         const VjpRuleFn rule = reg.lookup(ctx, op);
         if (rule == nullptr)
         {
@@ -338,7 +400,10 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
         }
         for (u32 i = 0; i < nop && i < 8U; ++i)
         {
-            if (oadj[i] == nullptr) { continue; }
+            if (oadj[i] == nullptr)
+            {
+                continue;
+            }
             Value* const        v    = op->operand(i);
             Value* const* const prev = adj.find(v);
             if (prev != nullptr) // a value with two consumers: SUM the partial adjoints (tensor.elementwise{add})
@@ -346,14 +411,21 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
                 Value* const acc = mk_add(ctx, blk, anchor, *prev, oadj[i], v->type());
                 adj[v]           = acc;
             }
-            else { (void)adj.insert(v, oadj[i]); }
+            else
+            {
+                (void)adj.insert(v, oadj[i]);
+            }
         }
     }
     anchor->erase();
 
     for (usize i = 0; i < wrt.size() && i < grads.size(); ++i)
     {
-        if (wrt[i] == nullptr || !is_tensor(ctx, wrt[i])) { res.error = GradError::WrtNotTensor; return res; }
+        if (wrt[i] == nullptr || !is_tensor(ctx, wrt[i]))
+        {
+            res.error = GradError::WrtNotTensor;
+            return res;
+        }
         Value* const* const g = adj.find(wrt[i]);
         grads[i]              = (g != nullptr) ? *g : nullptr; // null ⇒ wrt not reached (zero gradient); the gate tests reached wrt
     }
@@ -371,7 +443,10 @@ GradError vjp_mlp(Context& ctx, const VjpRegistry& /*reg*/, Block* blk, Operatio
     // activation envelope: relu-only (the authored relu_vjp.ckir pair). The ml verifier already restricts to {relu}; the rule
     // re-checks so a non-verify-clean or future-activation module TYPED-rejects instead of silently emitting a wrong gradient.
     const AttrValue act = ctx.attr_value(fwd->attr(StringView("activation")));
-    if (act.kind != AttrKind::String || act.s != StringView("relu")) { return GradError::MlpActivationUnsupported; }
+    if (act.kind != AttrKind::String || act.s != StringView("relu"))
+    {
+        return GradError::MlpActivationUnsupported;
+    }
 
     const u32    nw = fwd->num_operands() - 1U; // weight count (>=1, per the ml verifier)
     Value* const x  = fwd->operand(0U);
@@ -379,7 +454,10 @@ GradError vjp_mlp(Context& ctx, const VjpRegistry& /*reg*/, Block* blk, Operatio
     {
         return GradError::OperandNotTensor;
     }
-    if (nw > 8U) { return GradError::ArityUnsupported; } // the reverse-walk's fixed depth cap (h/z arrays below)
+    if (nw > 8U) // the reverse-walk's fixed depth cap (h/z arrays below)
+    {
+        return GradError::ArityUnsupported;
+    }
     const TypeId elem = elem_of(ctx, x->type());
     Value* const dout = result_adjoints[0]; // dOut — the composite result's adjoint
 
@@ -428,8 +506,14 @@ GradError vjp_mlp(Context& ctx, const VjpRegistry& /*reg*/, Block* blk, Operatio
         Value* const wit   = mk_transpose2d(ctx, blk, at, wi, wt_t); // W_iᵀ
         Value* const dprev = mk_gemm(ctx, blk, at, dz, wit, h[i - 1U]->type());
         Value*       next_dz = nullptr;
-        if (i > 1U) { next_dz = emit_relu_vjp_dispatch(ctx, blk, at, grid, z[i - 1U], dprev); }
-        else { operand_adjoints[0] = dprev; } // dx (input adjoint) — emitted BEFORE dW_1 so dW_1 lands last
+        if (i > 1U)
+        {
+            next_dz = emit_relu_vjp_dispatch(ctx, blk, at, grid, z[i - 1U], dprev);
+        }
+        else // dx (input adjoint) — emitted BEFORE dW_1 so dW_1 lands last
+        {
+            operand_adjoints[0] = dprev;
+        }
         // dW_i = gemm(h_{i-1}ᵀ [K_i, M], dz_i [M, N_i]) : [K_i, N_i] == W_i's type. EMITTED LAST in the iteration.
         const TypeId ht_t = tensor2(ctx, elem, dim_of(ctx, h[i - 1U]->type(), 1U), dim_of(ctx, h[i - 1U]->type(), 0U));
         Value* const ht   = mk_transpose2d(ctx, blk, at, h[i - 1U], ht_t); // h_{i-1}ᵀ

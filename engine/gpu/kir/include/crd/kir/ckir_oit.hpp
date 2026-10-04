@@ -674,7 +674,10 @@ inline constexpr crd::u32 kAbufferEmpty = 0xFFFFFFFFU; // empty head / end-of-li
         aa[qi]       = g.select(v, g.buffer_load(nodedata, uadd(nb, cu(3U))), cf(0.0));
         dd[qi]       = g.select(v, g.buffer_load(nodedata, uadd(nb, cu(4U))), cf(2.0));
         const int gathered[] = {rr[qi], gg[qi], bb[qi], aa[qi], dd[qi]};
-        for (const int value : gathered) { g.stmt_materialize(value); }
+        for (const int value : gathered)
+        {
+            g.stmt_materialize(value);
+        }
     }
     // Sort ascending by depth (front-to-back), then composite `C += T·aᵢ·cᵢ ; T *= (1-aᵢ)` over the background.
     for (crd::u32 i = 0; i + 1U < nq; ++i)

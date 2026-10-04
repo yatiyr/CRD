@@ -67,7 +67,10 @@ Operation* mkdraw(Context& ctx, const Kit& k, Block* rb, Value* vcount, Value* i
     Value* ops[2 + 8];
     ops[0] = vcount;
     ops[1] = icount;
-    for (crd::usize i = 0; i < binds.size(); ++i) { ops[2 + i] = binds[i]; }
+    for (crd::usize i = 0; i < binds.size(); ++i)
+    {
+        ops[2 + i] = binds[i];
+    }
     Operation* const op = ctx.create_operation(k.draw, ConstSpan<Value*>(ops, 2U + binds.size()), 0U);
     ctx.set_attr(op, "program", ctx.attr_symbol(StringView(prog)));
     ctx.set_attr(op, "access", ctx.attr_string(StringView(access)));
@@ -82,7 +85,10 @@ Operation* mkdrawi(Context& ctx, const Kit& k, Block* rb, Value* icount, Value* 
     ops[0] = icount;
     ops[1] = inst;
     ops[2] = index_buffer;
-    for (crd::usize i = 0; i < binds.size(); ++i) { ops[3 + i] = binds[i]; }
+    for (crd::usize i = 0; i < binds.size(); ++i)
+    {
+        ops[3 + i] = binds[i];
+    }
     Operation* const op = ctx.create_operation(k.drawi, ConstSpan<Value*>(ops, 3U + binds.size()), 0U);
     ctx.set_attr(op, "program", ctx.attr_symbol(StringView(prog)));
     ctx.set_attr(op, "access", ctx.attr_string(StringView(access)));

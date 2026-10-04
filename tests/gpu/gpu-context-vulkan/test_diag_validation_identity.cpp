@@ -56,7 +56,10 @@ struct Submitter
 {
     for (const auto& record : capture.messages())
     {
-        if (record.message_id_number == id_number) { return &record; }
+        if (record.message_id_number == id_number)
+        {
+            return &record;
+        }
     }
     return nullptr;
 }
@@ -70,7 +73,11 @@ TEST_CASE("Vulkan validation resolves the Cerid identity from a named object the
     cfg.headless          = true;
     cfg.enable_validation = true; // the instance must enable VK_EXT_debug_utils or the capture stays silent
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; } // absence of a GPU, not a failure
+    if (ctx == nullptr) // absence of a GPU, not a failure
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     REQUIRE(vk->vk_instance() != VK_NULL_HANDLE);
@@ -124,7 +131,10 @@ namespace
 {
     for (const auto& record : capture.messages())
     {
-        if (record.identity == id) { return &record; }
+        if (record.identity == id)
+        {
+            return &record;
+        }
     }
     return nullptr;
 }
@@ -135,7 +145,10 @@ namespace
     vkGetPhysicalDeviceMemoryProperties(phys, &props);
     for (crd::u32 i = 0; i < props.memoryTypeCount; ++i)
     {
-        if ((type_bits & (1U << i)) != 0U && (props.memoryTypes[i].propertyFlags & want) == want) { return i; }
+        if ((type_bits & (1U << i)) != 0U && (props.memoryTypes[i].propertyFlags & want) == want)
+        {
+            return i;
+        }
     }
     return UINT32_MAX;
 }
@@ -149,7 +162,11 @@ TEST_CASE("DIAG.7a(g): a Core hazard on a named Cerid buffer yields an error cor
     cfg.headless          = true;
     cfg.enable_validation = true; // Core
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     REQUIRE(gpu::validation_layer_spec_version() != 0U); // layer present, else a clean count is meaningless
@@ -272,19 +289,31 @@ struct HazardRig
         bci.size        = size;
         bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(device, &bci, nullptr, &buffer) != VK_SUCCESS) { return false; }
+        if (vkCreateBuffer(device, &bci, nullptr, &buffer) != VK_SUCCESS)
+        {
+            return false;
+        }
 
         VkMemoryRequirements req{};
         vkGetBufferMemoryRequirements(device, buffer, &req);
         const crd::u32 mt = find_memory_type(phys, req.memoryTypeBits,
                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (mt == UINT32_MAX) { return false; }
+        if (mt == UINT32_MAX)
+        {
+            return false;
+        }
         VkMemoryAllocateInfo mai{};
         mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         mai.allocationSize  = req.size;
         mai.memoryTypeIndex = mt;
-        if (vkAllocateMemory(device, &mai, nullptr, &memory) != VK_SUCCESS) { return false; }
-        if (vkBindBufferMemory(device, buffer, memory, 0) != VK_SUCCESS) { return false; }
+        if (vkAllocateMemory(device, &mai, nullptr, &memory) != VK_SUCCESS)
+        {
+            return false;
+        }
+        if (vkBindBufferMemory(device, buffer, memory, 0) != VK_SUCCESS)
+        {
+            return false;
+        }
 
         if (name != nullptr) // DIAG.7a(g-4): name==nullptr leaves the buffer UNNAMED (so a Pass label is the only token)
         {
@@ -296,7 +325,10 @@ struct HazardRig
         pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         pci.queueFamilyIndex = fam;
-        if (vkCreateCommandPool(device, &pci, nullptr, &pool) != VK_SUCCESS) { return false; }
+        if (vkCreateCommandPool(device, &pci, nullptr, &pool) != VK_SUCCESS)
+        {
+            return false;
+        }
         VkCommandBufferAllocateInfo cbai{};
         cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         cbai.commandPool        = pool;
@@ -307,10 +339,19 @@ struct HazardRig
 
     void teardown()
     {
-        if (pool != VK_NULL_HANDLE) { vkDestroyCommandPool(device, pool, nullptr); }
+        if (pool != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(device, pool, nullptr);
+        }
         gpu::detail::vk_detach_identity(id);
-        if (buffer != VK_NULL_HANDLE) { vkDestroyBuffer(device, buffer, nullptr); }
-        if (memory != VK_NULL_HANDLE) { vkFreeMemory(device, memory, nullptr); }
+        if (buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device, buffer, nullptr);
+        }
+        if (memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device, memory, nullptr);
+        }
     }
 };
 
@@ -332,7 +373,11 @@ TEST_CASE("DIAG.7a(g-2): sync validation flags a WAW on a named buffer (correlat
     cfg.enable_validation      = true; // Core (also names the object)
     cfg.enable_sync_validation = true; // Synchronization
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     REQUIRE(gpu::validation_layer_spec_version() != 0U);
@@ -429,7 +474,11 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
     cfg.enable_validation              = true; // Core (also names the objects)
     cfg.enable_gpu_assisted_validation = true; // GpuAssisted
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     if (!vk->validation_activation().is_active(gpu::ValidationMode::GpuAssisted))
@@ -450,7 +499,10 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
         "void main() { outb.data[idxb.idx[0]] = 0xABCDu; }\n";
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kSrc), "gpuav_oob",
                                                 crd::memory::default_allocator());
-    if (!spv.ok) { WARN("GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(
         crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
@@ -484,7 +536,11 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
     const gpu::ValidationMessage* hit = nullptr;
     for (const auto& r : capture.messages())
     {
-        if (r.identity.valid()) { hit = &r; break; }
+        if (r.identity.valid())
+        {
+            hit = &r;
+            break;
+        }
     }
     REQUIRE(hit != nullptr);                          // the GPU-AV diagnostic is correlated to a Cerid object
     UNSCOPED_INFO("correlated route kind=" << static_cast<int>(hit->identity.kind)); // 0=Resource 1=Program 2=Pass
@@ -504,7 +560,11 @@ TEST_CASE("DIAG.7a(g-4): a hazard inside a PassLabelScope correlates to the Pass
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     REQUIRE(gpu::validation_layer_spec_version() != 0U);

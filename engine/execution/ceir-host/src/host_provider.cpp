@@ -41,10 +41,16 @@ void run_launch(void* data)
     sub.set_cancel_flag(t->cancel);
     containers::Array<crd::i64> y(&t->scratch);
     const ExecError e = sub.invoke_region(*t->module, *t->body, containers::ConstSpan<crd::i64>(), y);
-    if (e != ExecError::None) { t->err = e; }
+    if (e != ExecError::None)
+    {
+        t->err = e;
+    }
     else
     {
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(y.size()); ++i) { t->result.push_back(y[i]); }
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(y.size()); ++i)
+        {
+            t->result.push_back(y[i]);
+        }
     }
 }
 // POOL-ELIGIBILITY (bridge-local — the launch classifier): the body is StateEdge-free + calls-resolved (reuse the core
@@ -56,40 +62,61 @@ bool block_defines(Block* b, const Value* v)
 {
     for (crd::u32 a = 0; a < b->num_args(); ++a)
     {
-        if (b->arg(a) == v) { return true; }
+        if (b->arg(a) == v)
+        {
+            return true;
+        }
     }
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
         for (crd::u32 rr = 0; rr < op->num_results(); ++rr)
         {
-            if (op->result(rr) == v) { return true; }
+            if (op->result(rr) == v)
+            {
+                return true;
+            }
         }
         for (crd::u32 i = 0; i < op->num_regions(); ++i)
         {
-            if (region_defines(op->region(i), v)) { return true; }
+            if (region_defines(op->region(i), v))
+            {
+                return true;
+            }
         }
     }
     return false;
 }
 bool region_defines(Region* r, const Value* v)
 {
-    if (r == nullptr) { return false; }
+    if (r == nullptr)
+    {
+        return false;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
-        if (block_defines(b, v)) { return true; }
+        if (block_defines(b, v))
+        {
+            return true;
+        }
     }
     return false;
 }
 bool no_outer_captures(Region* body)
 {
-    if (body == nullptr) { return true; }
+    if (body == nullptr)
+    {
+        return true;
+    }
     for (Block* b = body->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             for (crd::u32 i = 0; i < op->num_operands(); ++i)
             {
-                if (!region_defines(body, op->operand(i))) { return false; } // an operand defined OUTSIDE the body = a capture
+                if (!region_defines(body, op->operand(i))) // an operand defined OUTSIDE the body = a capture
+                {
+                    return false;
+                }
             }
         }
     }
@@ -105,7 +132,10 @@ bool pool_eligible(Context& ctx, const SymbolTable& syms, Region* body)
 ExecError launch_seq_inframe(exec::Interpreter& in, const Operation& op)
 {
     containers::Array<crd::i64> ys(in.allocator());
-    if (const ExecError e = in.run_region(*op.region(0), &ys); e != ExecError::None) { return e; }
+    if (const ExecError e = in.run_region(*op.region(0), &ys); e != ExecError::None)
+    {
+        return e;
+    }
     const crd::u32 handle = in.store_yields(containers::ConstSpan<crd::i64>(ys.data(), ys.size()));
     in.set_value(op.result(0), static_cast<crd::i64>(handle));
     return ExecError::None;
@@ -148,13 +178,25 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
     {
         return in.fail(ExecError::UndefinedValue, &op);
     }
-    if (step <= 0) { return in.fail(ExecError::BadForStep, &op); }
+    if (step <= 0)
+    {
+        return in.fail(ExecError::BadForStep, &op);
+    }
 
     const crd::u32 count = (hi > lo) ? static_cast<crd::u32>((hi - lo + step - 1) / step) : 0U;
-    for (crd::u32 i = 0; i < count; ++i) { out.push_back(0); }
-    if (count == 0U) { return ExecError::None; } // empty range: an empty map, no jobs
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        out.push_back(0);
+    }
+    if (count == 0U) // empty range: an empty map, no jobs
+    {
+        return ExecError::None;
+    }
     containers::Array<ExecError> errs(pc->self->map_allocator());
-    for (crd::u32 i = 0; i < count; ++i) { errs.push_back(ExecError::None); }
+    for (crd::u32 i = 0; i < count; ++i)
+    {
+        errs.push_back(ExecError::None);
+    }
 
     // §32: the dispatch priority = the op region's RealtimeClass tag (audio/frame-critical → High, …).
     RegionExec re{};
@@ -175,9 +217,18 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
                 containers::Array<crd::i64> yield(&item_scratch);
                 const ExecError e = sub.invoke_region(*rjp->module, *rjp->body, containers::ConstSpan<crd::i64>(iva, 1U),
                                                        yield);
-                if (e != ExecError::None) { rjp->errs[idx] = e; }
-                else if (yield.size() >= 1U) { rjp->out[idx] = yield[0]; }
-                else { rjp->errs[idx] = ExecError::ParallelYieldArity; } // (pre-flight makes this unreachable)
+                if (e != ExecError::None)
+                {
+                    rjp->errs[idx] = e;
+                }
+                else if (yield.size() >= 1U)
+                {
+                    rjp->out[idx] = yield[0];
+                }
+                else // (pre-flight makes this unreachable)
+                {
+                    rjp->errs[idx] = ExecError::ParallelYieldArity;
+                }
             }
         },
         crd::jobs::StackSize::Small, prio);
@@ -186,7 +237,10 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
     // first-in-index-order error (deterministic first-offender; disjoint per-index slots, no atomics).
     for (crd::u32 idx = 0; idx < count; ++idx)
     {
-        if (errs[idx] != ExecError::None) { return in.fail(errs[idx], &op); }
+        if (errs[idx] != ExecError::None)
+        {
+            return in.fail(errs[idx], &op);
+        }
     }
     return ExecError::None;
 }
@@ -195,9 +249,15 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
 ExecError eval_parallel_for(exec::Interpreter& in, const Operation& op)
 {
     auto* const pc = static_cast<ParallelCtx*>(in.user());
-    if (pc == nullptr) { return in.fail(ExecError::NoSemantics, &op); } // no parallel context (a nested/misconfigured pf)
+    if (pc == nullptr) // no parallel context (a nested/misconfigured pf)
+    {
+        return in.fail(ExecError::NoSemantics, &op);
+    }
     containers::Array<crd::i64> output(pc->self->map_allocator());
-    if (const ExecError e = run_parallel_map(in, op, pc, output); e != ExecError::None) { return e; }
+    if (const ExecError e = run_parallel_map(in, op, pc, output); e != ExecError::None)
+    {
+        return e;
+    }
     pc->self->store_map(&op, std::move(output));
     return ExecError::None; // task.parallel_for is a statement op — no SSA results; the map is in map_output
 }
@@ -209,12 +269,21 @@ ExecError eval_parallel_for(exec::Interpreter& in, const Operation& op)
 ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
 {
     auto* const pc = static_cast<ParallelCtx*>(in.user());
-    if (pc == nullptr) { return in.fail(ExecError::NoSemantics, &op); }
+    if (pc == nullptr)
+    {
+        return in.fail(ExecError::NoSemantics, &op);
+    }
     containers::Array<crd::i64> out(pc->self->map_allocator());
-    if (const ExecError e = run_parallel_map(in, op, pc, out); e != ExecError::None) { return e; } // region(0) = map
+    if (const ExecError e = run_parallel_map(in, op, pc, out); e != ExecError::None) // region(0) = map
+    {
+        return e;
+    }
 
     crd::i64 acc = 0;
-    if (!in.value_of(op.operand(3), acc)) { return in.fail(ExecError::UndefinedValue, &op); } // the init operand
+    if (!in.value_of(op.operand(3), acc)) // the init operand
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
 
     const Region* const           combine = op.region(1);
     crd::memory::GrowableTlsfAllocator  fold_scratch; // the fold's OWN scratch — never the shared Context arena or `in`'s frame
@@ -225,8 +294,14 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
         crd::i64                    ba[2] = {acc, out[i]}; // (acc, elem) — the combine reads its two block-args in INDEX order
         containers::Array<crd::i64> yield(&fold_scratch);
         const ExecError e = fold.invoke_region(*pc->module, *combine, containers::ConstSpan<crd::i64>(ba, 2U), yield);
-        if (e != ExecError::None) { return in.fail(e, &op); } // a fold-step error is attributed to the map_reduce op
-        if (yield.size() < 1U) { return in.fail(ExecError::ParallelYieldArity, &op); } // (pre-flight makes this unreachable)
+        if (e != ExecError::None) // a fold-step error is attributed to the map_reduce op
+        {
+            return in.fail(e, &op);
+        }
+        if (yield.size() < 1U) // (pre-flight makes this unreachable)
+        {
+            return in.fail(ExecError::ParallelYieldArity, &op);
+        }
         acc = yield[0];
     }
     pc->self->store_map(&op, std::move(out)); // §118 inspection parity — the intermediate map is free (already built)
@@ -242,16 +317,25 @@ ExecError resolve_yields(exec::Interpreter& in, HostProvider* self, crd::i64 tok
     if (self != nullptr && self->is_pooled(tok))
     {
         ExecError e = ExecError::None;
-        if (!self->resolve_pooled(tok, out, e)) { return ExecError::BadToken; } // forged / out-of-range pooled handle
+        if (!self->resolve_pooled(tok, out, e)) // forged / out-of-range pooled handle
+        {
+            return ExecError::BadToken;
+        }
         return e;
     }
-    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok))) { return ExecError::BadToken; }
+    if (tok < 0 || !in.valid_yield_handle(static_cast<crd::u32>(tok)))
+    {
+        return ExecError::BadToken;
+    }
     out = in.stored_yields(static_cast<crd::u32>(tok));
     return ExecError::None;
 }
 bool token_valid(exec::Interpreter& in, HostProvider* self, crd::i64 tok) // validity WITHOUT waiting (race/cancel)
 {
-    if (self != nullptr && self->is_pooled(tok)) { return self->pooled_index_valid(tok); }
+    if (self != nullptr && self->is_pooled(tok))
+    {
+        return self->pooled_index_valid(tok);
+    }
     return tok >= 0 && in.valid_yield_handle(static_cast<crd::u32>(tok));
 }
 // launch/spawn/worker/main_thread: pool the body if eligible (pure + self-contained), else the sequential in-frame
@@ -259,9 +343,15 @@ bool token_valid(exec::Interpreter& in, HostProvider* self, crd::i64 tok) // val
 ExecError launch_pooled_impl(exec::Interpreter& in, const Operation& op, crd::i32 pin_thread)
 {
     auto* const pc = static_cast<ParallelCtx*>(in.user());
-    if (pc == nullptr) { return launch_seq_inframe(in, op); } // NESTED launch (a sub has no user) ⇒ sequential fallback
+    if (pc == nullptr) // NESTED launch (a sub has no user) ⇒ sequential fallback
+    {
+        return launch_seq_inframe(in, op);
+    }
     const SymbolTable* const syms = pc->module->symbols();
-    if (syms == nullptr || !pool_eligible(in.ctx(), *syms, op.region(0))) { return launch_seq_inframe(in, op); }
+    if (syms == nullptr || !pool_eligible(in.ctx(), *syms, op.region(0)))
+    {
+        return launch_seq_inframe(in, op);
+    }
     RegionExec re{};
     (void)in.ctx().op_region_exec(op, re);
     const crd::i64 handle =
@@ -275,7 +365,10 @@ ExecError eval_main_thread_pooled(exec::Interpreter& in, const Operation& op) { 
 ExecError eval_await_pooled(exec::Interpreter& in, const Operation& op)
 {
     crd::i64 tok = 0;
-    if (!in.value_of(op.operand(0), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
+    if (!in.value_of(op.operand(0), tok))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
     auto* const                     pc = static_cast<ParallelCtx*>(in.user());
     containers::ConstSpan<crd::i64> ys;
     if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
@@ -296,13 +389,19 @@ ExecError eval_join_pooled(exec::Interpreter& in, const Operation& op)
     for (crd::u32 i = 0; i < op.num_operands(); ++i)
     {
         crd::i64 tok = 0;
-        if (!in.value_of(op.operand(i), tok)) { return in.fail(ExecError::UndefinedValue, &op); }
+        if (!in.value_of(op.operand(i), tok))
+        {
+            return in.fail(ExecError::UndefinedValue, &op);
+        }
         containers::ConstSpan<crd::i64> ys;
         if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
         {
             return in.fail(e, &op);
         }
-        for (crd::usize k = 0; k < ys.size(); ++k) { merged.push_back(ys[k]); }
+        for (crd::usize k = 0; k < ys.size(); ++k)
+        {
+            merged.push_back(ys[k]);
+        }
     }
     in.set_value(op.result(0),
                  static_cast<crd::i64>(in.store_yields(containers::ConstSpan<crd::i64>(merged.data(), merged.size()))));
@@ -316,18 +415,33 @@ ExecError eval_race_pooled(exec::Interpreter& in, const Operation& op)
     for (crd::u32 i = 0; i < op.num_operands(); ++i)
     {
         crd::i64 t = 0;
-        if (!in.value_of(op.operand(i), t)) { return in.fail(ExecError::UndefinedValue, &op); }
-        if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t)) { return in.fail(ExecError::BadToken, &op); }
+        if (!in.value_of(op.operand(i), t))
+        {
+            return in.fail(ExecError::UndefinedValue, &op);
+        }
+        if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t))
+        {
+            return in.fail(ExecError::BadToken, &op);
+        }
     }
-    if (op.num_results() > 0U) { in.set_value(op.result(0), 0); }
+    if (op.num_results() > 0U)
+    {
+        in.set_value(op.result(0), 0);
+    }
     return ExecError::None;
 }
 ExecError eval_cancel_pooled(exec::Interpreter& in, const Operation& op)
 {
     crd::i64    t  = 0;
     auto* const pc = static_cast<ParallelCtx*>(in.user());
-    if (!in.value_of(op.operand(0), t)) { return in.fail(ExecError::UndefinedValue, &op); }
-    if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t)) { return in.fail(ExecError::BadToken, &op); }
+    if (!in.value_of(op.operand(0), t))
+    {
+        return in.fail(ExecError::UndefinedValue, &op);
+    }
+    if (!token_valid(in, pc != nullptr ? pc->self : nullptr, t))
+    {
+        return in.fail(ExecError::BadToken, &op);
+    }
     return ExecError::None; // consume + no-op (the counter is drained at execute() exit)
 }
 
@@ -339,7 +453,10 @@ ExecError eval_cancel_pooled(exec::Interpreter& in, const Operation& op)
 HostProvider::HostProvider(memory::IAllocator* alloc, crd::u32 num_jobs, crd::u64 sub_fuel)
     : m_alloc(alloc), m_num_jobs(num_jobs), m_sub_fuel(num_jobs == 0U ? 1U : sub_fuel), m_map(alloc)
 {
-    if (m_num_jobs == 0U) { m_num_jobs = 1U; }
+    if (m_num_jobs == 0U)
+    {
+        m_num_jobs = 1U;
+    }
 }
 
 containers::StringView HostProvider::name() const noexcept { return containers::StringView("host-jobs"); }
@@ -352,14 +469,23 @@ bool HostProvider::advertises(const Context& ctx, OpId k) const
 
 void HostProvider::store_map(const Operation* pf_op, containers::Array<crd::i64>&& out)
 {
-    if (containers::Array<crd::i64>* const slot = m_map.find(pf_op); slot != nullptr) { *slot = std::move(out); }
-    else { m_map.insert(pf_op, std::move(out)); }
+    if (containers::Array<crd::i64>* const slot = m_map.find(pf_op); slot != nullptr)
+    {
+        *slot = std::move(out);
+    }
+    else
+    {
+        m_map.insert(pf_op, std::move(out));
+    }
 }
 
 containers::ConstSpan<crd::i64> HostProvider::map_output(const Operation* pf_op) const noexcept
 {
     const containers::Array<crd::i64>* const slot = m_map.find(pf_op);
-    if (slot == nullptr) { return {}; }
+    if (slot == nullptr)
+    {
+        return {};
+    }
     return containers::ConstSpan<crd::i64>(slot->data(), slot->size());
 }
 
@@ -445,7 +571,10 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
 
 bool HostProvider::resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err) noexcept
 {
-    if (!pooled_index_valid(tok)) { return false; } // forged / out-of-range pooled handle
+    if (!pooled_index_valid(tok)) // forged / out-of-range pooled handle
+    {
+        return false;
+    }
     PooledToken* const t = m_pooled[static_cast<crd::usize>(tok - kPoolBase)];
     if (!t->waited) // wait the completion counter exactly once — the happens-before edge to the worker's result write
     {
@@ -463,7 +592,10 @@ void HostProvider::drain_pooled() noexcept
     for (crd::usize i = 0; i < m_pooled.size(); ++i)
     {
         PooledToken* const t = m_pooled[i];
-        if (!t->waited && t->counter != nullptr) { crd::jobs::wait(t->counter); }
+        if (!t->waited && t->counter != nullptr)
+        {
+            crd::jobs::wait(t->counter);
+        }
         t->~PooledToken();
         m_alloc->deallocate(t);
     }

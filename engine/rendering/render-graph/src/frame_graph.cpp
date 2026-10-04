@@ -219,7 +219,10 @@ bool GraphExecutorTable::register_record(ExecutorTypeId id, PassRecordFn fn, Dia
 void GraphExecutorTable::replace_record(ExecutorTypeId id, PassRecordFn fn) noexcept
 {
     const usize idx = lower_bound(id);
-    if (idx < m_entries.size() && m_entries[idx].id == id) { m_entries[idx].fn = fn; }
+    if (idx < m_entries.size() && m_entries[idx].id == id)
+    {
+        m_entries[idx].fn = fn;
+    }
 }
 
 // ── built-in record functions: payload + resources → the canonical command model ──
@@ -480,9 +483,15 @@ struct FsResolverBundle
 u64 fs_source_of(const crd::ceir::Context& cctx, const crd::ceir::Value* operand)
 {
     const crd::ceir::Operation* const def = operand->defining_op();
-    if (def == nullptr) { return 0U; }
+    if (def == nullptr)
+    {
+        return 0U;
+    }
     const crd::ceir::AttrId a = def->attr(crd::containers::StringView("source"));
-    if (!a.valid()) { return 0U; }
+    if (!a.valid())
+    {
+        return 0U;
+    }
     const crd::ceir::AttrValue v = cctx.attr_value(a);
     return v.kind == crd::ceir::AttrKind::Int ? static_cast<u64>(v.i) : 0U;
 }
@@ -505,7 +514,10 @@ IRasterTarget* fs_target(const crd::ceir::Operation* op, void* user)
         {
             IRasterTarget* const color =
                 rc->has(pass_param_id("color")) ? rc->color_target(pass_param_id("color")) : nullptr;
-            if (color != nullptr && color->has_depth()) { depth = color; }
+            if (color != nullptr && color->has_depth())
+            {
+                depth = color;
+            }
         }
         return depth;
     }
@@ -521,7 +533,10 @@ IRasterTarget* fs_target(const crd::ceir::Operation* op, void* user)
     if (ca.valid())
     {
         const crd::ceir::AttrValue v = b->cctx->attr_value(ca);
-        if (v.kind == crd::ceir::AttrKind::Int && v.i >= 0 && v.i < 4) { cslot = static_cast<crd::u32>(v.i); }
+        if (v.kind == crd::ceir::AttrKind::Int && v.i >= 0 && v.i < 4)
+        {
+            cslot = static_cast<crd::u32>(v.i);
+        }
     }
     return rc->color_target(pass_param_id(kColorSlots[cslot]));
 }
@@ -546,7 +561,10 @@ ITexture* const* fs_texture_array(const crd::ceir::Value*, void* user, u32& out_
     for (u32 i = 0; i < 8U; ++i)
     {
         const u64 slot = pass_param_id(kInputs[i]);
-        if (!b->rctx->has(slot)) { continue; } // undeclared ⇒ not part of this pass's fan; skip (compact)
+        if (!b->rctx->has(slot)) // undeclared ⇒ not part of this pass's fan; skip (compact)
+        {
+            continue;
+        }
         ITexture* const tx = b->rctx->texture(slot);
         if (tx == nullptr)
         {
@@ -574,7 +592,10 @@ u32 fs_draws_count(void* user)
 void fs_draws_item(void* user, u32 index, crd::ceir::gpu::RasterDrawItem& out)
 {
     const DrawList dl = static_cast<FsResolverBundle*>(user)->rctx->draws();
-    if (index >= dl.count) { return; } // defensive: out stays default (count 0 ⇒ skipped); the walk already bounds by count
+    if (index >= dl.count) // defensive: out stays default (count 0 ⇒ skipped); the walk already bounds by count
+    {
+        return;
+    }
     const RenderDrawItem& it = dl.items[index];
     out.program              = it.program;
     out.storage              = it.storage;
@@ -1032,14 +1053,35 @@ bool execute_frame(const CompiledFrameGraph& compiled, const FrameGraphTemplate&
             const bool is_rw = (ref.access == SlotAccess::ReadWrite);
             if (h->is_buffer)
             {
-                if (is_rw) { b.read_writes(h->buf); }
-                else if (is_write) { b.writes(h->buf); }
-                else { b.reads(h->buf); }
+                if (is_rw)
+                {
+                    b.read_writes(h->buf);
+                }
+                else if (is_write)
+                {
+                    b.writes(h->buf);
+                }
+                else
+                {
+                    b.reads(h->buf);
+                }
             }
-            else if (is_rw) { b.read_writes(h->img); }
-            else if (is_write) { b.writes(h->img); }
-            else if (ref.kind == SlotResourceKind::DepthTarget) { b.reads_depth(h->img); }
-            else { b.reads(h->img); }
+            else if (is_rw)
+            {
+                b.read_writes(h->img);
+            }
+            else if (is_write)
+            {
+                b.writes(h->img);
+            }
+            else if (ref.kind == SlotResourceKind::DepthTarget)
+            {
+                b.reads_depth(h->img);
+            }
+            else
+            {
+                b.reads(h->img);
+            }
         }
         const DrawList* dl = draw_lists != nullptr ? draw_lists->find(pass.name_hash) : nullptr;
         // ⭐⭐ RAF-12.2-b: this pass's OWN programs if the host bound them per pass; else the frame-wide default.
@@ -1085,12 +1127,21 @@ void run_authored_cb(crd::gpu::IFrameContext& fctx, void* user)
     // per-pass DEVICE setup (mirrors the legacy record_pass preamble): compute diagnostics, counter zeroing, this pass's
     // sampler + raster state (context state, reset to defaults at the pass boundary so a pass never inherits a neighbour).
     r.compute_diag(8U);
-    if (ap.device_kind == crd::gpu::FgPassKind::Compute) { r.compute_diag(9U); }
+    if (ap.device_kind == crd::gpu::FgPassKind::Compute)
+    {
+        r.compute_diag(9U);
+    }
     for (crd::u32 i = 0; i < ap.n_counters; ++i)
     {
-        if (crd::gpu::IStorageBuffer* cb = fctx.buffer(ap.counters[i]); cb != nullptr) { r.fill_buffer(*cb, 0U, 4U, 0U); }
+        if (crd::gpu::IStorageBuffer* cb = fctx.buffer(ap.counters[i]); cb != nullptr)
+        {
+            r.fill_buffer(*cb, 0U, 4U, 0U);
+        }
     }
-    if (ap.has_sampler) { r.set_sampler(ap.sampler); }
+    if (ap.has_sampler)
+    {
+        r.set_sampler(ap.sampler);
+    }
     r.set_pass_state(ap.state);
 
     auto enc = r.create_command_encoder();
@@ -1146,7 +1197,10 @@ void run_authored_cb(crd::gpu::IFrameContext& fctx, void* user)
         if (d.has_storage)
         {
             sb = fctx.buffer(d.storage);
-            if (sb == nullptr) { continue; }
+            if (sb == nullptr)
+            {
+                continue;
+            }
         }
         RenderDrawItem ri{};
         ri.storage         = sb;

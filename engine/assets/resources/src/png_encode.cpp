@@ -45,12 +45,21 @@ crd::containers::Array<crd::u8> png_encode_rgba(crd::containers::ConstSpan<crd::
                                                 crd::u32 height, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> out(alloc);
-    if (width == 0U || height == 0U || width > kMaxDim || height > kMaxDim) { return out; }
-    if (rgba.size() != static_cast<crd::usize>(width) * height * 4U) { return out; }
+    if (width == 0U || height == 0U || width > kMaxDim || height > kMaxDim)
+    {
+        return out;
+    }
+    if (rgba.size() != static_cast<crd::usize>(width) * height * 4U)
+    {
+        return out;
+    }
 
     // signature
     const crd::u8 sig[8] = {0x89U, 'P', 'N', 'G', '\r', '\n', 0x1AU, '\n'};
-    for (crd::u32 i = 0; i < 8U; ++i) { out.push_back(sig[i]); }
+    for (crd::u32 i = 0; i < 8U; ++i)
+    {
+        out.push_back(sig[i]);
+    }
 
     // IHDR: 8-bit truecolor+alpha, no interlace
     crd::containers::Array<crd::u8> ihdr(alloc);
@@ -70,7 +79,10 @@ crd::containers::Array<crd::u8> png_encode_rgba(crd::containers::ConstSpan<crd::
     {
         raw.push_back(0U); // filter: None
         const crd::usize row = static_cast<crd::usize>(y) * width * 4U;
-        for (crd::usize i = 0; i < static_cast<crd::usize>(width) * 4U; ++i) { raw.push_back(rgba[row + i]); }
+        for (crd::usize i = 0; i < static_cast<crd::usize>(width) * 4U; ++i)
+        {
+            raw.push_back(rgba[row + i]);
+        }
     }
     const crd::containers::Array<crd::u8> idat =
         zlib_deflate(crd::containers::ConstSpan<crd::u8>(raw.data(), raw.size()), alloc);

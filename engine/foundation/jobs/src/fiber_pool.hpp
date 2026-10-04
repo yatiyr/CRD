@@ -90,7 +90,9 @@ public:
         const auto walk = [&fn](const Tier& t, FiberTier kind)
         {
             for (crd::u32 i = 0U; i < t.count; ++i)
+            {
                 fn(t.fibers[i], kind); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            }
         };
         walk(m_small, FiberTier::Small);
         walk(m_medium, FiberTier::Medium);

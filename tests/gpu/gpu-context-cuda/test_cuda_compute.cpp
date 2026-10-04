@@ -33,14 +33,20 @@ TEST_CASE("CUDA atomic A-buffer snapshots preserve the exact composite", "[cuda]
     crd::memory::TlsfAllocator alloc(16U << 20U);
     auto context = g::create_cuda_compute_context(alloc);
     REQUIRE(context != nullptr);
-    if (!context->valid()) { SKIP("CUDA device unavailable"); }
+    if (!context->valid())
+    {
+        SKIP("CUDA device unavailable");
+    }
     crd::kir::oit::AbufferConfig config;
     config.width = 32U;
     config.height = 32U;
     config.layers = 4U;
     config.local_size = 64U;
     const auto scene = crd::gputest::make_oit_scene();
-    for (crd::usize index = 0; index < 3U; ++index) { config.bg[index] = scene.background[index]; }
+    for (crd::usize index = 0; index < 3U; ++index)
+    {
+        config.bg[index] = scene.background[index];
+    }
     const auto make_pipeline = [&](const crd::kir::KGraph& graph, const crd::kir::KEntry& entry, int bindings) {
         crd::kir::GlslKernel kernel(&alloc);
         REQUIRE(crd::kir::emit_compute_kernel_cuda(graph, entry, &alloc, kernel));
@@ -58,7 +64,10 @@ TEST_CASE("CUDA atomic A-buffer snapshots preserve the exact composite", "[cuda]
     bool exact = true;
     for (crd::usize index = 0; index < actual.size(); ++index)
     {
-        if (static_cast<crd::f64>(actual[index]) != expected[index]) { exact = false; }
+        if (static_cast<crd::f64>(actual[index]) != expected[index])
+        {
+            exact = false;
+        }
     }
     CHECK(exact);
     CHECK(actual[0] != scene.background[0]);
@@ -116,7 +125,11 @@ TEST_CASE("CUDA compute: vec-add through IComputeContext == CPU reference + last
     bool ok = true;
     for (crd::u32 i = 0; i < n_elems; ++i)
     {
-        if (po[i] != static_cast<float>(3U * i)) { ok = false; break; }
+        if (po[i] != static_cast<float>(3U * i))
+        {
+            ok = false;
+            break;
+        }
     }
     CHECK(ok);                          // vec-add == CPU reference (a[i]+b[i] == 3i)
     CHECK(ctx->last_gpu_ms() > 0.0);    // real CUDA-event GPU timing

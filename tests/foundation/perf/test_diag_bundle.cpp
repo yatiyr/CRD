@@ -37,7 +37,9 @@ cont::Array<crd::u8> pattern(crd::u8 seed, crd::usize n)
     cont::Array<crd::u8> a;
     a.resize_uninitialized(n);
     for (crd::usize i = 0; i < n; ++i)
+    {
         a[i] = static_cast<crd::u8>(seed * 31U + i);
+    }
     return a;
 }
 
@@ -50,7 +52,9 @@ crd::u32 test_crc32(const crd::u8* p, crd::usize n) noexcept
     {
         c ^= p[i];
         for (int k = 0; k < 8; ++k)
+        {
             c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+        }
     }
     return c ^ 0xFFFFFFFFU;
 }
@@ -75,12 +79,16 @@ cont::Array<crd::u8> read_file_bytes(const char* path)
     std::FILE*           f = nullptr;
 #if defined(_MSC_VER)
     if (fopen_s(&f, path, "rb") != 0)
+    {
         f = nullptr;
+    }
 #else
     f = std::fopen(path, "rb");
 #endif
     if (f == nullptr)
+    {
         return out;
+    }
     std::fseek(f, 0, SEEK_END);
     const long sz = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
@@ -230,7 +238,9 @@ TEST_CASE("bundle recovers the valid prefix of a truncated file", "[perf][diag][
         // must stop rather than accept the zeroed slot (its empty-payload crc happens to be 0).
         cont::Array<crd::u8> z = buf;
         for (crd::usize i = end1; i < z.size(); ++i)
+        {
             z[i] = 0;
+        }
         const BundleReadResult r = read_bundle(span_of(z.data(), z.size()));
         CHECK(r.status == BundleReadStatus::RecoveredTruncated);
         CHECK(r.sections.size() == 2U);
@@ -400,9 +410,13 @@ TEST_CASE("retention keeps only the newest bundles", "[perf][diag][bundle]")
         std::snprintf(name, sizeof(name), "bundle_%02d.cdb", i);
         const bool present = fs::exists(dir / name, ec);
         if (i < 3)
+        {
             CHECK_FALSE(present);
+        }
         else
+        {
             CHECK(present);
+        }
     }
 
     fs::remove_all(dir, ec);

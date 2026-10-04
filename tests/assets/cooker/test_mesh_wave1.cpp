@@ -58,21 +58,39 @@ void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v)
 {
     crd::u8 raw[4];
     std::memcpy(raw, &v, 4);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v)
 {
     crd::u8 raw[4];
     std::memcpy(raw, &v, 4);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 void push_tri(crd::containers::Array<crd::u8>& b, const crd::f32* n, const crd::f32* v0, const crd::f32* v1,
               const crd::f32* v2)
 {
-    for (int i = 0; i < 3; ++i) { push_f32(b, n[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v0[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v1[i]); }
-    for (int i = 0; i < 3; ++i) { push_f32(b, v2[i]); }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, n[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v0[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v1[i]);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        push_f32(b, v2[i]);
+    }
     b.push_back(0);
     b.push_back(0); // attr u16
 }
@@ -96,7 +114,10 @@ TEST_CASE("cooker: wave1 STL cooks to a MESH CRDR -- interleave exact, position_
 {
     // a 1-triangle STL authored in MILLIMETRES (1000 mm legs); .meta position_scale 0.001 -> 1 m in the artifact
     crd::containers::Array<crd::u8> stl(&g_alloc);
-    for (int i = 0; i < 80; ++i) { stl.push_back(0); }
+    for (int i = 0; i < 80; ++i)
+    {
+        stl.push_back(0);
+    }
     push_u32(stl, 1);
     const crd::f32 nz[3] = {0.0F, 0.0F, 1.0F};
     const crd::f32 a[3]  = {0.0F, 0.0F, 0.0F};
@@ -214,10 +235,22 @@ TEST_CASE("cooker: wave1 GLB cooks via OUR glTF parser -- authored tangents PRES
     const crd::f32 nrm[9]  = {0, 0, 1, 0, 0, 1, 0, 0, 1};
     const crd::f32 uv[6]   = {0, 0, 1, 0, 0, 1};
     const crd::f32 tan[12] = {0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1};
-    for (crd::f32 v : pos) { push_f32(bin, v); }
-    for (crd::f32 v : nrm) { push_f32(bin, v); }
-    for (crd::f32 v : uv) { push_f32(bin, v); }
-    for (crd::f32 v : tan) { push_f32(bin, v); }
+    for (crd::f32 v : pos)
+    {
+        push_f32(bin, v);
+    }
+    for (crd::f32 v : nrm)
+    {
+        push_f32(bin, v);
+    }
+    for (crd::f32 v : uv)
+    {
+        push_f32(bin, v);
+    }
+    for (crd::f32 v : tan)
+    {
+        push_f32(bin, v);
+    }
 
     const char* json = "{\"asset\":{\"version\":\"2.0\"},"
                        "\"buffers\":[{\"byteLength\":144}],"
@@ -245,12 +278,24 @@ TEST_CASE("cooker: wave1 GLB cooks via OUR glTF parser -- authored tangents PRES
     push_u32(glb, 12U + 8U + jlen + jpad + 8U + blen + bpad);
     push_u32(glb, jlen + jpad);
     push_u32(glb, 0x4E4F534AU);
-    for (crd::u32 i = 0; i < jlen; ++i) { glb.push_back(static_cast<crd::u8>(json[i])); }
-    for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+    for (crd::u32 i = 0; i < jlen; ++i)
+    {
+        glb.push_back(static_cast<crd::u8>(json[i]));
+    }
+    for (crd::u32 i = 0; i < jpad; ++i)
+    {
+        glb.push_back(' ');
+    }
     push_u32(glb, blen + bpad);
     push_u32(glb, 0x004E4942U);
-    for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
-    for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+    for (crd::usize i = 0; i < bin.size(); ++i)
+    {
+        glb.push_back(bin[i]);
+    }
+    for (crd::u32 i = 0; i < bpad; ++i)
+    {
+        glb.push_back(0);
+    }
 
     const char* src_path = "cerid_wave1_authored.glb";
     REQUIRE(fs::write_file_binary(fs::Path(crd::containers::StringView(src_path)), crd::containers::as_const_span(glb)));
@@ -293,10 +338,16 @@ TEST_CASE("cooker: wave1 3MF cooks through OUR ZIP + XML + parser -- MESH artifa
     for (const auto& v : tetra)
     {
         const crd::f32 rec[12] = {v[0], v[1], v[2], 0, 0, 1, 0, 0, 1, 0, 0, 1};
-        for (crd::f32 f : rec) { push_f32(verts, f); }
+        for (crd::f32 f : rec)
+        {
+            push_f32(verts, f);
+        }
     }
     const crd::u32 faces[12] = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
-    for (crd::u32 i : faces) { push_u32(idx, i); }
+    for (crd::u32 i : faces)
+    {
+        push_u32(idx, i);
+    }
 
     crd::containers::String model_xml(&g_alloc);
     REQUIRE(crd::assetio::threemf_write_model_xml(crd::containers::as_const_span(verts),
@@ -351,8 +402,14 @@ TEST_CASE("cooker: wave1 3MF cooks through OUR ZIP + XML + parser -- MESH artifa
         const crd::u8* rec = vert->payload.data() + vi * 48U;
         const crd::f32 x   = read_f32(rec + 0);
         const crd::f32 z   = read_f32(rec + 8);
-        if (x > max_x) { max_x = x; }
-        if (z > max_z) { max_z = z; }
+        if (x > max_x)
+        {
+            max_x = x;
+        }
+        if (z > max_z)
+        {
+            max_z = z;
+        }
     }
     CHECK(max_x == 1.0F); // metres in, metres out — the writer's unit="meter" round-trips at scale 1
     CHECK(max_z == 1.0F);
@@ -362,7 +419,10 @@ TEST_CASE("cooker: wave1 3MF cooks through OUR ZIP + XML + parser -- MESH artifa
     const crd::cooker::ExtraArtifact* scen = nullptr;
     for (crd::usize i = 0; i < result.extra_artifacts.size(); ++i)
     {
-        if (result.extra_artifacts[i].type_fourcc == crd::scene::kFourCC_SCEN) { scen = &result.extra_artifacts[i]; }
+        if (result.extra_artifacts[i].type_fourcc == crd::scene::kFourCC_SCEN)
+        {
+            scen = &result.extra_artifacts[i];
+        }
     }
     REQUIRE(scen != nullptr);
     crd::scene::SceneLoader     loader;

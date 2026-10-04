@@ -62,11 +62,17 @@ public:
     // z = D_c·Pᶜ·( ILUT(B)⁻¹·(D_r·r) ).
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rs[i] = T(static_cast<R>(m_mc64.dr[i])) * r[i]; } // D_r·r
+        for (crd::u32 i = 0; i < m_n; ++i) // D_r·r
+        {
+            m_rs[i] = T(static_cast<R>(m_mc64.dr[i])) * r[i];
+        }
         (void)m_ilut.apply(crd::containers::ConstSpan<T>{m_rs.data(), m_n},
                            crd::containers::Span<T>{m_yb.data(), m_n}); // yb ≈ B⁻¹·(D_r·r)
         const auto* cp = m_mc64.colperm.data();
-        for (crd::u32 k = 0; k < m_n; ++k) { z[cp[k]] = T(static_cast<R>(m_mc64.dc[cp[k]])) * m_yb[k]; } // D_c·Pᶜ·yb
+        for (crd::u32 k = 0; k < m_n; ++k) // D_c·Pᶜ·yb
+        {
+            z[cp[k]] = T(static_cast<R>(m_mc64.dc[cp[k]])) * m_yb[k];
+        }
         return true;
     }
 
@@ -74,10 +80,16 @@ public:
     [[nodiscard]] bool apply_adjoint(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
         const auto* cp = m_mc64.colperm.data();
-        for (crd::u32 k = 0; k < m_n; ++k) { m_yb[k] = T(static_cast<R>(m_mc64.dc[cp[k]])) * r[cp[k]]; } // Pᶜᵀ·D_c·r
+        for (crd::u32 k = 0; k < m_n; ++k) // Pᶜᵀ·D_c·r
+        {
+            m_yb[k] = T(static_cast<R>(m_mc64.dc[cp[k]])) * r[cp[k]];
+        }
         (void)m_ilut.apply_adjoint(crd::containers::ConstSpan<T>{m_yb.data(), m_n},
                                    crd::containers::Span<T>{m_rs.data(), m_n}); // rs ≈ B⁻ᴴ·yb
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = T(static_cast<R>(m_mc64.dr[i])) * m_rs[i]; } // D_r·rs
+        for (crd::u32 i = 0; i < m_n; ++i) // D_r·rs
+        {
+            z[i] = T(static_cast<R>(m_mc64.dr[i])) * m_rs[i];
+        }
         return true;
     }
 
@@ -99,7 +111,10 @@ private:
         const T*       vals  = a.values().values.data();
         crd::containers::Array<crd::u32> invperm(alloc); // invperm[colperm[k]] = k
         invperm.resize(n);
-        for (crd::u32 k = 0; k < n; ++k) { invperm[mc.colperm[k]] = k; }
+        for (crd::u32 k = 0; k < n; ++k)
+        {
+            invperm[mc.colperm[k]] = k;
+        }
         crd::hesap::sparse::TripletBuilder<T> tb(alloc, n, n);
         for (crd::u32 i = 0; i < n; ++i)
         {

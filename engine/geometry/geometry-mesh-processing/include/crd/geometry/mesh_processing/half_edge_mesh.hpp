@@ -274,7 +274,10 @@ public:
         // to h; since v7a stores ONLY triangle meshes, we hard-code 2 hops.
         // (When v8+ adds n-gon support we'll generalise.)
         const crd::u32 n1 = m_half_edges[h].next;
-        if (n1 == k_null_he) { return k_null_he; }
+        if (n1 == k_null_he)
+        {
+            return k_null_he;
+        }
         return m_half_edges[n1].next;
     }
 
@@ -306,9 +309,15 @@ template <crd::math::MathScalar T>
 template <typename Fn>
 void HalfEdgeMesh<T>::for_each_outgoing_he(crd::u32 v, Fn&& fn) const
 {
-    if (!vertex_alive(v)) { return; }
+    if (!vertex_alive(v))
+    {
+        return;
+    }
     const crd::u32 start = m_vertices[v].outgoing;
-    if (start == k_null_he) { return; }
+    if (start == k_null_he)
+    {
+        return;
+    }
     // Uniform CW rotation: `next outgoing = cur.twin.next`. Works the same
     // way for interior and boundary HEs because:
     //   - interior cur: cur.twin is INCOMING to v (in a different face);
@@ -328,10 +337,19 @@ void HalfEdgeMesh<T>::for_each_outgoing_he(crd::u32 v, Fn&& fn) const
     {
         fn(cur);
         const crd::u32 t = m_half_edges[cur].twin;
-        if (t == k_null_he) { break; }
+        if (t == k_null_he)
+        {
+            break;
+        }
         const crd::u32 nxt = m_half_edges[t].next;
-        if (nxt == k_null_he) { break; }
-        if (nxt == start) { return; } // wrapped — full one-ring complete
+        if (nxt == k_null_he)
+        {
+            break;
+        }
+        if (nxt == start) // wrapped — full one-ring complete
+        {
+            return;
+        }
         cur = nxt;
     }
 }
@@ -340,16 +358,25 @@ template <crd::math::MathScalar T>
 template <typename Fn>
 void HalfEdgeMesh<T>::for_each_face_he(crd::u32 f, Fn&& fn) const
 {
-    if (!face_alive(f)) { return; }
+    if (!face_alive(f))
+    {
+        return;
+    }
     const crd::u32 start = m_faces[f].first_he;
-    if (start == k_null_he) { return; }
+    if (start == k_null_he)
+    {
+        return;
+    }
     crd::u32       cur   = start;
     const crd::u32 cap   = 8U; // triangle = 3 hops; cap defensively at 8 in case of arbitrary polygon
     for (crd::u32 step = 0; step < cap; ++step)
     {
         fn(cur);
         cur = m_half_edges[cur].next;
-        if (cur == k_null_he || cur == start) { break; }
+        if (cur == k_null_he || cur == start)
+        {
+            break;
+        }
     }
 }
 

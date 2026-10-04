@@ -116,7 +116,10 @@ TEST_CASE("v17-i-a: headless Vulkan compute context via the GpuContextManager", 
     std::printf("[gpu-context-vulkan] adapter=%s  coopmat2=%s  compute_family=%u\n",
                 vk->adapter_name(), vk->cooperative_matrix2() ? "YES" : "no", vk->compute_family());
     // coopmat2 is the tensor lever (present on the RTX 4070 Ti Super); a soft note so the test stays portable.
-    if (!vk->cooperative_matrix2()) { WARN("adapter has no VK_NV_cooperative_matrix2 — tensor tier will be unavailable"); }
+    if (!vk->cooperative_matrix2())
+    {
+        WARN("adapter has no VK_NV_cooperative_matrix2 — tensor tier will be unavailable");
+    }
 }
 // DIAG.7a(f): per-mode validation ACTIVATION on Vulkan. Requesting core/sync/GPU-assisted yields a consistent report;
 // a valid context created WITH core means the layer loaded so Core is active; sync/GPU-assisted resolve against
@@ -130,7 +133,10 @@ TEST_CASE("DIAG.7a(f): Vulkan reports per-mode validation activation", "[gpu-con
     cfg.enable_sync_validation         = true; // Synchronization
     cfg.enable_gpu_assisted_validation = true; // GpuAssisted
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr || !ctx->valid()) { SKIP("no Vulkan device with the validation layer available"); }
+    if (ctx == nullptr || !ctx->valid())
+    {
+        SKIP("no Vulkan device with the validation layer available");
+    }
 
     const gpu::ValidationActivation va = ctx->validation_activation();
     REQUIRE(va.consistent()); // the backend filled a well-formed report
@@ -149,7 +155,10 @@ TEST_CASE("DIAG.7a(f): Vulkan reports per-mode validation activation", "[gpu-con
         const bool active = va.is_active(m);
         const gpu::ValidationUnsupportedReason reason = va.unsupported_reason(m);
         UNSCOPED_INFO("mode " << static_cast<int>(m) << " active=" << active << " reason=" << gpu::to_string(reason));
-        if (active) { CHECK(reason == gpu::ValidationUnsupportedReason::None); }
+        if (active)
+        {
+            CHECK(reason == gpu::ValidationUnsupportedReason::None);
+        }
         else
         {
             CHECK((reason == gpu::ValidationUnsupportedReason::ExtensionAbsent
@@ -193,7 +202,11 @@ TEST_CASE("D-007 C6: cooperative-vector device enable (VK_NV_cooperative_vector)
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     std::printf("[coopvec] adapter=%s  coopvec=%s  training=%s  max_components=%u  stages=0x%x\n", vk->adapter_name(),
@@ -234,9 +247,17 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(32U << 20U);
@@ -271,7 +292,10 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
 
     const auto spv =
         gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kCoopVecSrc), "coopvec_matvec", &alloc);
-    if (!spv.ok) { WARN("coopvec GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("coopvec GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4, 0U);
     REQUIRE(pipe != nullptr);
@@ -286,8 +310,14 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
     crd::containers::Array<crd::u16> w_h(&alloc);   w_h.resize(uz(m_n * k_n));
     // deterministic pseudo-random in ~[-1,1], stored as the f16-ROUNDED values (both device and oracle read these exact bits).
     const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
-    for (int i = 0; i < b_n * k_n; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i)); }
-    for (int i = 0; i < m_n * k_n; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 991)); }
+    for (int i = 0; i < b_n * k_n; ++i)
+    {
+        in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i));
+    }
+    for (int i = 0; i < m_n * k_n; ++i)
+    {
+        w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 991));
+    }
     // oracle: accumulate in fp32 (using the f16-rounded operands), then ROUND the result to fp16 — the device stores an fp16
     // result (combo 0), so the comparison is against the f16-rounded sum. Matched-accuracy, not bit-exact.
     crd::containers::Array<float> ref(&alloc); ref.resize(uz(b_n * m_n), 0.0F);
@@ -296,7 +326,10 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
         for (int m = 0; m < m_n; ++m)
         {
             float acc = 0.0F;
-            for (int k = 0; k < k_n; ++k) { acc += crd::math::f16_bits_to_f32(in_h[uz(b * k_n + k)]) * crd::math::f16_bits_to_f32(w_h[uz(m * k_n + k)]); }
+            for (int k = 0; k < k_n; ++k)
+            {
+                acc += crd::math::f16_bits_to_f32(in_h[uz(b * k_n + k)]) * crd::math::f16_bits_to_f32(w_h[uz(m * k_n + k)]);
+            }
             ref[uz(b * m_n + m)] = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(acc));
         }
     }
@@ -309,7 +342,10 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
         auto stg  = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u8*>(stg->map());
         const auto* s = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = s[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = s[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -342,7 +378,15 @@ TEST_CASE("D-007 C6-b: cooperative-vector matrix-vector DISPATCHES on Vulkan == 
     }
     const auto* out = static_cast<const crd::u16*>(rb->map()); // fp16 bits
     float worst = 0.0F;
-    for (int i = 0; i < b_n * m_n; ++i) { const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - ref[uz(i)]; const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    for (int i = 0; i < b_n * m_n; ++i)
+    {
+        const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - ref[uz(i)];
+        const float d = d0 < 0.0F ? -d0 : d0;
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
     rb->unmap();
     std::printf("[coopvec] matvec B=%d K=%d M=%d  worst |device - oracle| = %.5f\n", b_n, k_n, m_n, static_cast<double>(worst));
     CHECK(worst < 0.06F); // matched fp16 accuracy (fp16 products + fp16-rounded result; the HW accumulation order differs from the oracle's)
@@ -361,9 +405,17 @@ TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulk
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(32U << 20U);
@@ -378,7 +430,10 @@ TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulk
     REQUIRE(nn::emit_coopvec_mlp_glsl(mlp, kern));
     const auto spv =
         gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "coopvec_mlp", &alloc);
-    if (!spv.ok) { WARN("coopvec MLP GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("coopvec MLP GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 5, 0U);
     REQUIRE(pipe != nullptr);
@@ -391,9 +446,18 @@ TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulk
     crd::containers::Array<crd::u16> b_h(&alloc);   b_h.resize(uz(bc));
     // small deterministic pseudo-random weights/inputs (scaled so activations stay in fp16's accurate range, no ReLU-dead net)
     const auto rnd = [](int i, float scale) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return ((static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F) * scale; };
-    for (int i = 0; i < n_s * mlp.in_dim; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F)); }
-    for (int i = 0; i < wc; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.25F)); }   // 1/sqrt(16) ~ 0.25 init
-    for (int i = 0; i < bc; ++i) { b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F)); }
+    for (int i = 0; i < n_s * mlp.in_dim; ++i)
+    {
+        in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F));
+    }
+    for (int i = 0; i < wc; ++i) // 1/sqrt(16) ~ 0.25 init
+    {
+        w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.25F));
+    }
+    for (int i = 0; i < bc; ++i)
+    {
+        b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F));
+    }
     crd::containers::Array<crd::u16> ref(&alloc); ref.resize(uz(n_s * mlp.out_dim), static_cast<crd::u16>(0));
     nn::eval_coopvec_mlp_cpu(mlp, w_h.data(), b_h.data(), in_h.data(), n_s, ref.data());
 
@@ -406,7 +470,10 @@ TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulk
         auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u8*>(stg->map());
         const auto* srcb = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = srcb[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -432,7 +499,15 @@ TEST_CASE("D-007 B10: cooperative-vector MLP (neural shading) DISPATCHES on Vulk
     }
     const auto* out = static_cast<const crd::u16*>(rb->map());
     float worst = 0.0F;
-    for (int i = 0; i < n_s * mlp.out_dim; ++i) { const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - crd::math::f16_bits_to_f32(ref[uz(i)]); const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    for (int i = 0; i < n_s * mlp.out_dim; ++i)
+    {
+        const float d0 = crd::math::f16_bits_to_f32(out[uz(i)]) - crd::math::f16_bits_to_f32(ref[uz(i)]);
+        const float d = d0 < 0.0F ? -d0 : d0;
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
     rb->unmap();
     std::printf("[coopvec] MLP %d->%dx%d->%d  N=%d  worst |device - reference| = %.5f\n", mlp.in_dim, mlp.hidden, mlp.hidden_layers, mlp.out_dim, n_s, static_cast<double>(worst));
     CHECK(worst < 0.05F); // matched fp16 accuracy across 3 layers
@@ -451,9 +526,17 @@ TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading v
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(512U << 20U);
@@ -484,9 +567,18 @@ TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading v
     crd::containers::Array<crd::u16> w_h(&alloc);   w_h.resize(uz(wc));
     crd::containers::Array<crd::u16> b_h(&alloc);   b_h.resize(uz(bc));
     const auto rnd = [](int i, float scale) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return ((static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F) * scale; };
-    for (int i = 0; i < n_px * mlp.in_dim; ++i) { in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F)); }
-    for (int i = 0; i < wc; ++i) { w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.18F)); }
-    for (int i = 0; i < bc; ++i) { b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F)); }
+    for (int i = 0; i < n_px * mlp.in_dim; ++i)
+    {
+        in_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i, 1.0F));
+    }
+    for (int i = 0; i < wc; ++i)
+    {
+        w_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 17, 0.18F));
+    }
+    for (int i = 0; i < bc; ++i)
+    {
+        b_h[uz(i)] = crd::math::f32_to_f16_bits(rnd(i + 7919, 0.1F));
+    }
 
     auto d_in   = compute.create_buffer(static_cast<crd::u64>(n_px * mlp.in_dim) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
     auto d_w    = compute.create_buffer(static_cast<crd::u64>(wc) * 2U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
@@ -498,7 +590,10 @@ TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading v
         auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u8*>(stg->map());
         const auto* srcb = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = srcb[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -522,8 +617,24 @@ TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading v
     double best_sc = 1.0e30;
     run(*pipe_cv, *d_ocv); // warmup
     run(*pipe_sc, *d_osc);
-    for (int r = 0; r < 6; ++r) { run(*pipe_cv, *d_ocv); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best_cv) { best_cv = ms; } }
-    for (int r = 0; r < 6; ++r) { run(*pipe_sc, *d_osc); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best_sc) { best_sc = ms; } }
+    for (int r = 0; r < 6; ++r)
+    {
+        run(*pipe_cv, *d_ocv);
+        const double ms = compute.last_gpu_ms();
+        if (ms > 0.0 && ms < best_cv)
+        {
+            best_cv = ms;
+        }
+    }
+    for (int r = 0; r < 6; ++r)
+    {
+        run(*pipe_sc, *d_osc);
+        const double ms = compute.last_gpu_ms();
+        if (ms > 0.0 && ms < best_sc)
+        {
+            best_sc = ms;
+        }
+    }
 
     // self-verify: both kernels compute the SAME MLP ⇒ their fp16 outputs must match (a modest tolerance for the different
     // accumulation paths — tensor-core vs scalar fp32).
@@ -533,7 +644,16 @@ TEST_CASE("D-007 B10: cooperative-vector MLP CRUSH -- per-pixel neural shading v
     const auto* ocv = static_cast<const crd::u16*>(rb_cv->map());
     const auto* osc = static_cast<const crd::u16*>(rb_sc->map());
     float worst = 0.0F;
-    for (int i = 0; i < 4096; ++i) { const int idx = (i * 509) % (n_px * mlp.out_dim); const float d0 = crd::math::f16_bits_to_f32(ocv[uz(idx)]) - crd::math::f16_bits_to_f32(osc[uz(idx)]); const float d = d0 < 0.0F ? -d0 : d0; if (d > worst) { worst = d; } }
+    for (int i = 0; i < 4096; ++i)
+    {
+        const int idx = (i * 509) % (n_px * mlp.out_dim);
+        const float d0 = crd::math::f16_bits_to_f32(ocv[uz(idx)]) - crd::math::f16_bits_to_f32(osc[uz(idx)]);
+        const float d = d0 < 0.0F ? -d0 : d0;
+        if (d > worst)
+        {
+            worst = d;
+        }
+    }
     rb_cv->unmap();
     rb_sc->unmap();
 
@@ -561,9 +681,17 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(128U << 20U);
@@ -591,9 +719,18 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
     crd::containers::Array<float> w(&alloc);  w.resize(uz(wc), 0.0F);
     crd::containers::Array<float> bd(&alloc); bd.resize(uz(bc), 0.0F);
     const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
-    for (int i = 0; i < 32 * 16; ++i) { w[uz(i)] = rnd(i) * 0.30F; }             // W0 (fan-in 16)
-    for (int i = 0; i < 32 * 32; ++i) { w[uz(512 + i)] = rnd(i + 101) * 0.18F; } // W1 (fan-in 32)
-    for (int i = 0; i < 3 * 32; ++i) { w[uz(1536 + i)] = rnd(i + 907) * 0.18F; } // W2
+    for (int i = 0; i < 32 * 16; ++i) // W0 (fan-in 16)
+    {
+        w[uz(i)] = rnd(i) * 0.30F;
+    }
+    for (int i = 0; i < 32 * 32; ++i) // W1 (fan-in 32)
+    {
+        w[uz(512 + i)] = rnd(i + 101) * 0.18F;
+    }
+    for (int i = 0; i < 3 * 32; ++i) // W2
+    {
+        w[uz(1536 + i)] = rnd(i + 907) * 0.18F;
+    }
     const int   grid   = 32;
     const int   epochs = 1200;
     const float lr     = 0.01F; // Adam
@@ -607,8 +744,14 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
     float b2t = 1.0F;
     for (int ep = 0; ep < epochs; ++ep)
     {
-        for (int i = 0; i < wc; ++i) { gw[uz(i)] = 0.0F; }
-        for (int i = 0; i < bc; ++i) { gb[uz(i)] = 0.0F; }
+        for (int i = 0; i < wc; ++i)
+        {
+            gw[uz(i)] = 0.0F;
+        }
+        for (int i = 0; i < bc; ++i)
+        {
+            gb[uz(i)] = 0.0F;
+        }
         for (int gy = 0; gy < grid; ++gy)
         {
             for (int gx = 0; gx < grid; ++gx)
@@ -619,23 +762,89 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
                 nn::neural_uv_encode(uu, vv, 16, a0);
                 float z1[32];
                 float a1[32];
-                for (int r = 0; r < 32; ++r) { float acc = bd[uz(r)]; for (int k = 0; k < 16; ++k) { acc += w[uz(r * 16 + k)] * a0[k]; } z1[r] = acc; a1[r] = acc > 0.0F ? acc : 0.0F; }
+                for (int r = 0; r < 32; ++r)
+                {
+                    float acc = bd[uz(r)];
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        acc += w[uz(r * 16 + k)] * a0[k];
+                    }
+                    z1[r] = acc;
+                    a1[r] = acc > 0.0F ? acc : 0.0F;
+                }
                 float z2[32];
                 float a2[32];
-                for (int r = 0; r < 32; ++r) { float acc = bd[uz(32 + r)]; for (int k = 0; k < 32; ++k) { acc += w[uz(512 + r * 32 + k)] * a1[k]; } z2[r] = acc; a2[r] = acc > 0.0F ? acc : 0.0F; }
+                for (int r = 0; r < 32; ++r)
+                {
+                    float acc = bd[uz(32 + r)];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        acc += w[uz(512 + r * 32 + k)] * a1[k];
+                    }
+                    z2[r] = acc;
+                    a2[r] = acc > 0.0F ? acc : 0.0F;
+                }
                 float out3[3];
-                for (int o = 0; o < 3; ++o) { float acc = bd[uz(64 + o)]; for (int k = 0; k < 32; ++k) { acc += w[uz(1536 + o * 32 + k)] * a2[k]; } out3[o] = acc; }
+                for (int o = 0; o < 3; ++o)
+                {
+                    float acc = bd[uz(64 + o)];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        acc += w[uz(1536 + o * 32 + k)] * a2[k];
+                    }
+                    out3[o] = acc;
+                }
                 float tgt[3];
                 target(uu, vv, tgt);
                 float d3[3];
-                for (int o = 0; o < 3; ++o) { d3[o] = 2.0F * (out3[o] - tgt[o]); }
-                for (int o = 0; o < 3; ++o) { gb[uz(64 + o)] += d3[o]; for (int k = 0; k < 32; ++k) { gw[uz(1536 + o * 32 + k)] += d3[o] * a2[k]; } }
+                for (int o = 0; o < 3; ++o)
+                {
+                    d3[o] = 2.0F * (out3[o] - tgt[o]);
+                }
+                for (int o = 0; o < 3; ++o)
+                {
+                    gb[uz(64 + o)] += d3[o];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        gw[uz(1536 + o * 32 + k)] += d3[o] * a2[k];
+                    }
+                }
                 float d2[32];
-                for (int k = 0; k < 32; ++k) { float acc = 0.0F; for (int o = 0; o < 3; ++o) { acc += w[uz(1536 + o * 32 + k)] * d3[o]; } d2[k] = z2[k] > 0.0F ? acc : 0.0F; }
-                for (int r = 0; r < 32; ++r) { gb[uz(32 + r)] += d2[r]; for (int k = 0; k < 32; ++k) { gw[uz(512 + r * 32 + k)] += d2[r] * a1[k]; } }
+                for (int k = 0; k < 32; ++k)
+                {
+                    float acc = 0.0F;
+                    for (int o = 0; o < 3; ++o)
+                    {
+                        acc += w[uz(1536 + o * 32 + k)] * d3[o];
+                    }
+                    d2[k] = z2[k] > 0.0F ? acc : 0.0F;
+                }
+                for (int r = 0; r < 32; ++r)
+                {
+                    gb[uz(32 + r)] += d2[r];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        gw[uz(512 + r * 32 + k)] += d2[r] * a1[k];
+                    }
+                }
                 float d1[32];
-                for (int k = 0; k < 32; ++k) { float acc = 0.0F; for (int r = 0; r < 32; ++r) { acc += w[uz(512 + r * 32 + k)] * d2[r]; } d1[k] = z1[k] > 0.0F ? acc : 0.0F; }
-                for (int r = 0; r < 32; ++r) { gb[uz(r)] += d1[r]; for (int k = 0; k < 16; ++k) { gw[uz(r * 16 + k)] += d1[r] * a0[k]; } }
+                for (int k = 0; k < 32; ++k)
+                {
+                    float acc = 0.0F;
+                    for (int r = 0; r < 32; ++r)
+                    {
+                        acc += w[uz(512 + r * 32 + k)] * d2[r];
+                    }
+                    d1[k] = z1[k] > 0.0F ? acc : 0.0F;
+                }
+                for (int r = 0; r < 32; ++r)
+                {
+                    gb[uz(r)] += d1[r];
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        gw[uz(r * 16 + k)] += d1[r] * a0[k];
+                    }
+                }
             }
         }
         b1t *= 0.9F;
@@ -643,8 +852,20 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
         const float bc1 = 1.0F - b1t;
         const float bc2 = 1.0F - b2t;
         const float ns  = 1.0F / static_cast<float>(grid * grid);
-        for (int i = 0; i < wc; ++i) { const float g = gw[uz(i)] * ns; mw[uz(i)] = 0.9F * mw[uz(i)] + 0.1F * g; vw[uz(i)] = 0.999F * vw[uz(i)] + 0.001F * g * g; w[uz(i)] -= lr * (mw[uz(i)] / bc1) / (crd::math::sqrt(vw[uz(i)] / bc2) + 1.0e-8F); }
-        for (int i = 0; i < bc; ++i) { const float g = gb[uz(i)] * ns; mb[uz(i)] = 0.9F * mb[uz(i)] + 0.1F * g; vb[uz(i)] = 0.999F * vb[uz(i)] + 0.001F * g * g; bd[uz(i)] -= lr * (mb[uz(i)] / bc1) / (crd::math::sqrt(vb[uz(i)] / bc2) + 1.0e-8F); }
+        for (int i = 0; i < wc; ++i)
+        {
+            const float g = gw[uz(i)] * ns;
+            mw[uz(i)] = 0.9F * mw[uz(i)] + 0.1F * g;
+            vw[uz(i)] = 0.999F * vw[uz(i)] + 0.001F * g * g;
+            w[uz(i)] -= lr * (mw[uz(i)] / bc1) / (crd::math::sqrt(vw[uz(i)] / bc2) + 1.0e-8F);
+        }
+        for (int i = 0; i < bc; ++i)
+        {
+            const float g = gb[uz(i)] * ns;
+            mb[uz(i)] = 0.9F * mb[uz(i)] + 0.1F * g;
+            vb[uz(i)] = 0.999F * vb[uz(i)] + 0.001F * g * g;
+            bd[uz(i)] -= lr * (mb[uz(i)] / bc1) / (crd::math::sqrt(vb[uz(i)] / bc2) + 1.0e-8F);
+        }
     }
 
     // ISOLATION: PSNR of a CPU fp32 forward of the trained net (vs target) over a 128² grid — separates training from the fp16 render.
@@ -658,11 +879,41 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
                 const float uu = (static_cast<float>(gx) + 0.5F) / static_cast<float>(cg);
                 const float vv = (static_cast<float>(gy) + 0.5F) / static_cast<float>(cg);
                 float a0[16]; nn::neural_uv_encode(uu, vv, 16, a0);
-                float a1[32]; for (int r = 0; r < 32; ++r) { float acc = bd[uz(r)]; for (int k = 0; k < 16; ++k) { acc += w[uz(r * 16 + k)] * a0[k]; } a1[r] = acc > 0.0F ? acc : 0.0F; }
-                float a2[32]; for (int r = 0; r < 32; ++r) { float acc = bd[uz(32 + r)]; for (int k = 0; k < 32; ++k) { acc += w[uz(512 + r * 32 + k)] * a1[k]; } a2[r] = acc > 0.0F ? acc : 0.0F; }
-                float o3[3]; for (int o = 0; o < 3; ++o) { float acc = bd[uz(64 + o)]; for (int k = 0; k < 32; ++k) { acc += w[uz(1536 + o * 32 + k)] * a2[k]; } o3[o] = acc; }
+                float a1[32];
+                for (int r = 0; r < 32; ++r)
+                {
+                    float acc = bd[uz(r)];
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        acc += w[uz(r * 16 + k)] * a0[k];
+                    }
+                    a1[r] = acc > 0.0F ? acc : 0.0F;
+                }
+                float a2[32];
+                for (int r = 0; r < 32; ++r)
+                {
+                    float acc = bd[uz(32 + r)];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        acc += w[uz(512 + r * 32 + k)] * a1[k];
+                    }
+                    a2[r] = acc > 0.0F ? acc : 0.0F;
+                }
+                float o3[3];
+                for (int o = 0; o < 3; ++o)
+                {
+                    float acc = bd[uz(64 + o)];
+                    for (int k = 0; k < 32; ++k)
+                    {
+                        acc += w[uz(1536 + o * 32 + k)] * a2[k];
+                    }
+                    o3[o] = acc;
+                }
                 float t[3]; target(uu, vv, t);
-                for (int o = 0; o < 3; ++o) { cmse += static_cast<double>((o3[o] - t[o]) * (o3[o] - t[o])); }
+                for (int o = 0; o < 3; ++o)
+                {
+                    cmse += static_cast<double>((o3[o] - t[o]) * (o3[o] - t[o]));
+                }
             }
         }
         cmse /= static_cast<double>(cg * cg * 3);
@@ -672,14 +923,23 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
     // quantize the trained weights to fp16 for the tensor render.
     crd::containers::Array<crd::u16> w16(&alloc); w16.resize(uz(wc));
     crd::containers::Array<crd::u16> b16(&alloc); b16.resize(uz(bc));
-    for (int i = 0; i < wc; ++i) { w16[uz(i)] = crd::math::f32_to_f16_bits(w[uz(i)]); }
-    for (int i = 0; i < bc; ++i) { b16[uz(i)] = crd::math::f32_to_f16_bits(bd[uz(i)]); }
+    for (int i = 0; i < wc; ++i)
+    {
+        w16[uz(i)] = crd::math::f32_to_f16_bits(w[uz(i)]);
+    }
+    for (int i = 0; i < bc; ++i)
+    {
+        b16[uz(i)] = crd::math::f32_to_f16_bits(bd[uz(i)]);
+    }
 
     // ── RENDER the neural material per pixel on the coopvec tensor path ──
     kir::GlslKernel kern(&alloc);
     REQUIRE(nn::emit_neural_material_render_glsl(mlp, kern));
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "neural_mat", &alloc);
-    if (!spv.ok) { WARN("neural material GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("neural material GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 4, 0U);
     REQUIRE(pipe != nullptr);
@@ -693,7 +953,10 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
         auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u8*>(stg->map());
         const auto* srcb = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = srcb[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -748,20 +1011,51 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
                 float rr = 0.0F;
                 float gg = 0.0F;
                 float bbl = 0.0F;
-                if (from_target) { float t[3]; target((static_cast<float>(x) + 0.5F) / dim, (static_cast<float>(sy) + 0.5F) / dim, t); rr = t[0]; gg = t[1]; bbl = t[2]; }
-                else { const crd::u32 pv = img[uz(sy * dim + x)]; rr = static_cast<float>(pv & 0xFFU) / 255.0F; gg = static_cast<float>((pv >> 8U) & 0xFFU) / 255.0F; bbl = static_cast<float>((pv >> 16U) & 0xFFU) / 255.0F; }
-                const auto q = [](float c) { float cc = c; if (cc < 0.0F) { cc = 0.0F; } else if (cc > 1.0F) { cc = 1.0F; } return static_cast<unsigned char>(crd::math::round(cc * 255.0F)); };
+                if (from_target)
+                {
+                    float t[3];
+                    target((static_cast<float>(x) + 0.5F) / dim, (static_cast<float>(sy) + 0.5F) / dim, t);
+                    rr = t[0];
+                    gg = t[1];
+                    bbl = t[2];
+                }
+                else
+                {
+                    const crd::u32 pv = img[uz(sy * dim + x)];
+                    rr = static_cast<float>(pv & 0xFFU) / 255.0F;
+                    gg = static_cast<float>((pv >> 8U) & 0xFFU) / 255.0F;
+                    bbl = static_cast<float>((pv >> 16U) & 0xFFU) / 255.0F;
+                }
+                const auto q = [](float c)
+                {
+                    float cc = c;
+                    if (cc < 0.0F)
+                    {
+                        cc = 0.0F;
+                    }
+                    else if (cc > 1.0F)
+                    {
+                        cc = 1.0F;
+                    }
+                    return static_cast<unsigned char>(crd::math::round(cc * 255.0F)); };
                 const crd::u32 o = 54U + static_cast<crd::u32>(fy) * rowsize + static_cast<crd::u32>(x) * 3U;
                 bmp[o] = q(bbl); bmp[o + 1] = q(gg); bmp[o + 2] = q(rr);
             }
         }
         FILE* f = nullptr;
 #ifdef _MSC_VER
-        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+        if (fopen_s(&f, path, "wb") != 0) // MSVC: the deprecated fopen errors under /WX
+        {
+            f = nullptr;
+        }
 #else
         f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
 #endif
-        if (f != nullptr) { fwrite(bmp.data(), 1U, bmp.size(), f); fclose(f); }
+        if (f != nullptr)
+        {
+            fwrite(bmp.data(), 1U, bmp.size(), f);
+            fclose(f);
+        }
     };
     write_bmp("D:/Dev/cerid/build/neural_material.bmp", false);
     write_bmp("D:/Dev/cerid/build/neural_target.bmp", true);
@@ -785,10 +1079,22 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
-    if (!vk->cooperative_vector_training()) { WARN("no cooperativeVectorTraining; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
+    if (!vk->cooperative_vector_training())
+    {
+        WARN("no cooperativeVectorTraining; skipping");
+        return;
+    }
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(64U << 20U);
@@ -803,18 +1109,43 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
     const auto rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F) - 1.0F; };
     crd::containers::Array<float> wstar(&alloc); wstar.resize(uz(d_n * d_n));
     crd::containers::Array<float> bstar(&alloc); bstar.resize(uz(d_n));
-    for (int i = 0; i < d_n * d_n; ++i) { wstar[uz(i)] = rnd(i) * 0.20F; }
-    for (int i = 0; i < d_n; ++i) { bstar[uz(i)] = rnd(i + 555) * 0.10F; }
+    for (int i = 0; i < d_n * d_n; ++i)
+    {
+        wstar[uz(i)] = rnd(i) * 0.20F;
+    }
+    for (int i = 0; i < d_n; ++i)
+    {
+        bstar[uz(i)] = rnd(i + 555) * 0.10F;
+    }
     crd::containers::Array<crd::u16> x16(&alloc);  x16.resize(uz(n_s * d_n));
     crd::containers::Array<crd::u16> t16(&alloc);  t16.resize(uz(n_s * d_n));
     crd::containers::Array<float>    xf(&alloc);   xf.resize(uz(n_s * d_n));
-    for (int i = 0; i < n_s * d_n; ++i) { const float xv = rnd(i + 9001); xf[uz(i)] = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(xv)); x16[uz(i)] = crd::math::f32_to_f16_bits(xv); }
-    for (int s = 0; s < n_s; ++s) { for (int m = 0; m < d_n; ++m) { float acc = bstar[uz(m)]; for (int k = 0; k < d_n; ++k) { acc += wstar[uz(m * d_n + k)] * xf[uz(s * d_n + k)]; } t16[uz(s * d_n + m)] = crd::math::f32_to_f16_bits(acc); } }
+    for (int i = 0; i < n_s * d_n; ++i)
+    {
+        const float xv = rnd(i + 9001);
+        xf[uz(i)] = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(xv));
+        x16[uz(i)] = crd::math::f32_to_f16_bits(xv);
+    }
+    for (int s = 0; s < n_s; ++s)
+    {
+        for (int m = 0; m < d_n; ++m)
+        {
+            float acc = bstar[uz(m)];
+            for (int k = 0; k < d_n; ++k)
+            {
+                acc += wstar[uz(m * d_n + k)] * xf[uz(s * d_n + k)];
+            }
+            t16[uz(s * d_n + m)] = crd::math::f32_to_f16_bits(acc);
+        }
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(nn::emit_coopvec_linear_train_glsl(d_n, kern));
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "coopvec_train", &alloc);
-    if (!spv.ok) { WARN("coopvec train GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("coopvec train GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 8, 0U);
     REQUIRE(pipe != nullptr);
@@ -852,7 +1183,10 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
         auto  stg = compute.create_buffer(nbytes, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u8*>(stg->map());
         const auto* srcb = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = srcb[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -866,7 +1200,10 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
         compute.submit_and_wait();
         const auto* p = static_cast<const crd::u8*>(rbf->map());
         auto*       d = static_cast<crd::u8*>(dstp);
-        for (crd::u64 i = 0; i < nbytes; ++i) { d[i] = p[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            d[i] = p[i];
+        }
         rbf->unmap();
     };
     const crd::u32 cfgv[4] = {static_cast<crd::u32>(n_s), 0U, 0U, 0U};
@@ -904,9 +1241,16 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
 
         read_bytes(*d_y, yout.data(), static_cast<crd::u64>(n_s * d_n) * 2U);
         double loss = 0.0;
-        for (int i = 0; i < n_s * d_n; ++i) { const float e = crd::math::f16_bits_to_f32(yout[uz(i)]) - crd::math::f16_bits_to_f32(t16[uz(i)]); loss += static_cast<double>(e * e); }
+        for (int i = 0; i < n_s * d_n; ++i)
+        {
+            const float e = crd::math::f16_bits_to_f32(yout[uz(i)]) - crd::math::f16_bits_to_f32(t16[uz(i)]);
+            loss += static_cast<double>(e * e);
+        }
         loss /= static_cast<double>(n_s * d_n);
-        if (step == 0) { loss0 = loss; }
+        if (step == 0)
+        {
+            loss0 = loss;
+        }
         lossf = loss;
 
         // read the TrainingOptimal weight-grad, convert → RowMajor; read the bias-grad.
@@ -932,11 +1276,38 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
         {
             crd::containers::Array<float> gw_ref(&alloc); gw_ref.resize(uz(d_n * d_n), 0.0F);
             crd::containers::Array<float> gb_ref(&alloc); gb_ref.resize(uz(d_n), 0.0F);
-            for (int s = 0; s < n_s; ++s) { for (int m = 0; m < d_n; ++m) { const float dm = 2.0F * (0.0F - crd::math::f16_bits_to_f32(t16[uz(s * d_n + m)])); gb_ref[uz(m)] += dm; for (int k = 0; k < d_n; ++k) { gw_ref[uz(m * d_n + k)] += dm * crd::math::f16_bits_to_f32(x16[uz(s * d_n + k)]); } } }
+            for (int s = 0; s < n_s; ++s)
+            {
+                for (int m = 0; m < d_n; ++m)
+                {
+                    const float dm = 2.0F * (0.0F - crd::math::f16_bits_to_f32(t16[uz(s * d_n + m)]));
+                    gb_ref[uz(m)] += dm;
+                    for (int k = 0; k < d_n; ++k)
+                    {
+                        gw_ref[uz(m * d_n + k)] += dm * crd::math::f16_bits_to_f32(x16[uz(s * d_n + k)]);
+                    }
+                }
+            }
             float gwerr = 0.0F;
-            for (int i = 0; i < d_n * d_n; ++i) { const float e = crd::math::f16_bits_to_f32(gw_rm[uz(i)]) - gw_ref[uz(i)]; const float a = e < 0.0F ? -e : e; if (a > gwerr) { gwerr = a; } }
+            for (int i = 0; i < d_n * d_n; ++i)
+            {
+                const float e = crd::math::f16_bits_to_f32(gw_rm[uz(i)]) - gw_ref[uz(i)];
+                const float a = e < 0.0F ? -e : e;
+                if (a > gwerr)
+                {
+                    gwerr = a;
+                }
+            }
             float gberr = 0.0F;
-            for (int i = 0; i < d_n; ++i) { const float e = crd::math::f16_bits_to_f32(gb16[uz(i)]) - gb_ref[uz(i)]; const float a = e < 0.0F ? -e : e; if (a > gberr) { gberr = a; } }
+            for (int i = 0; i < d_n; ++i)
+            {
+                const float e = crd::math::f16_bits_to_f32(gb16[uz(i)]) - gb_ref[uz(i)];
+                const float a = e < 0.0F ? -e : e;
+                if (a > gberr)
+                {
+                    gberr = a;
+                }
+            }
             std::printf("[coopvec-train] step0 device gradient vs CPU ref: worst dW err=%.3f, worst db err=%.3f (accum magnitude ~%d)\n", static_cast<double>(gwerr), static_cast<double>(gberr), n_s);
             CHECK(gwerr < 2.0F); // fp16 accumulation over the batch (values ~O(N)); the hardware outer-product matches the reference
             CHECK(gberr < 2.0F);
@@ -944,8 +1315,16 @@ TEST_CASE("D-007 B10: on-device coopvec TRAINING -- hardware gradients fit a lin
 
         // SGD apply (host; the heavy backprop was on the tensor path) + re-quantize for the next step.
         const float inv = lr / static_cast<float>(n_s);
-        for (int i = 0; i < d_n * d_n; ++i) { wf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gw_rm[uz(i)]); w16[uz(i)] = crd::math::f32_to_f16_bits(wf[uz(i)]); }
-        for (int i = 0; i < d_n; ++i) { bf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gb16[uz(i)]); b16[uz(i)] = crd::math::f32_to_f16_bits(bf[uz(i)]); }
+        for (int i = 0; i < d_n * d_n; ++i)
+        {
+            wf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gw_rm[uz(i)]);
+            w16[uz(i)] = crd::math::f32_to_f16_bits(wf[uz(i)]);
+        }
+        for (int i = 0; i < d_n; ++i)
+        {
+            bf[uz(i)] -= inv * crd::math::f16_bits_to_f32(gb16[uz(i)]);
+            b16[uz(i)] = crd::math::f32_to_f16_bits(bf[uz(i)]);
+        }
     }
     std::printf("[coopvec-train] linear %dx%d, N=%d, %d steps: loss %.5f -> %.5f (%.1f%% down) -- trained on the tensor path\n", d_n, d_n, n_s, steps, loss0, lossf, 100.0 * (1.0 - lossf / loss0));
     CHECK(lossf < loss0 * 0.05); // the on-device gradients drove the loss to <5% of its start (it learned the map)
@@ -963,7 +1342,11 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops (reduce/scan/broadcast/shuffle) DIS
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -977,23 +1360,35 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops (reduce/scan/broadcast/shuffle) DIS
     constexpr int no  = crd::gputest::kSubgroupNOut;
     // REN-38 llvmpipe campaign: the kernel AND the oracle are shaped by the DEVICE subgroup width (llvmpipe 8).
     const crd::u32 lanes = compute.subgroup_size();
-    if (lanes == 0U || lanes > 32U) { SKIP("no u32-maskable subgroup width reported"); }
+    if (lanes == 0U || lanes > 32U)
+    {
+        SKIP("no u32-maskable subgroup width reported");
+    }
     kir::KGraph      g(&alloc);
     const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g, t_n, static_cast<int>(lanes));
 
     crd::containers::Array<crd::u32> xin(&alloc);   xin.resize(uz(t_n));
-    for (int i = 0; i < t_n; ++i) { xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU; } // small ⇒ no u32 wrap
+    for (int i = 0; i < t_n; ++i) // small ⇒ no u32 wrap
+    {
+        xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU;
+    }
     // CPU ORACLE reference (f64 domain; round_dtype wraps to u32).
     crd::containers::Array<crd::f64> xin64(&alloc); xin64.resize(uz(t_n));
     crd::containers::Array<crd::f64> out64(&alloc); out64.resize(uz(no * t_n), 0.0);
-    for (int i = 0; i < t_n; ++i) { xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]); }
+    for (int i = 0; i < t_n; ++i)
+    {
+        xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]);
+    }
     kir::KernelBuffer bufs[2] = {{xin64.data(), t_n, 0, 0}, {out64.data(), no * t_n, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U, lanes);
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "subgroup_ops", &alloc);
-    if (!spv.ok) { WARN("subgroup GLSL->SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("subgroup GLSL->SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok);
     auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
     REQUIRE(pipe != nullptr);
@@ -1003,7 +1398,10 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops (reduce/scan/broadcast/shuffle) DIS
     {
         auto  stg = compute.create_buffer(static_cast<crd::u64>(t_n) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < t_n; ++i) { p[i] = xin[uz(i)]; }
+        for (int i = 0; i < t_n; ++i)
+        {
+            p[i] = xin[uz(i)];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(t_n) * 4U);
@@ -1019,7 +1417,13 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops (reduce/scan/broadcast/shuffle) DIS
     { auto& r2 = compute.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(no * t_n) * 4U); compute.submit_and_wait(); }
     const auto* out = static_cast<const crd::u32*>(rb->map());
     int bad = 0;
-    for (int i = 0; i < no * t_n; ++i) { if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)]))) { ++bad; } }
+    for (int i = 0; i < no * t_n; ++i)
+    {
+        if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)])))
+        {
+            ++bad;
+        }
+    }
     rb->unmap();
     std::printf("[subgroup] 64-thread wg (2x32-lane): %d/%d results mismatched vs oracle (add/max/incl/excl/bcast/shuffle/or)\n", bad, no * t_n);
     CHECK(bad == 0); // GPU wave ops == CPU oracle, bit-exact
@@ -1036,7 +1440,11 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass de
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -1074,7 +1482,15 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass de
     constexpr int n_v = 256;
     int           ref = 0;
     crd::containers::Array<crd::u32> vals(&alloc); vals.resize(uz(n_v));
-    for (int i = 0; i < n_v; ++i) { const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U; vals[uz(i)] = v; if ((v & 1U) == 0U) { ++ref; } }
+    for (int i = 0; i < n_v; ++i)
+    {
+        const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U;
+        vals[uz(i)] = v;
+        if ((v & 1U) == 0U)
+        {
+            ++ref;
+        }
+    }
 
     auto d_in   = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
     auto d_args = compute.create_buffer(3U * 4U, storage | indirect | transfer_dst, cg::ComputeMemory::GpuOnly);
@@ -1083,7 +1499,11 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass de
     const auto up = [&](cg::ComputeBuffer& dst, const void* src, crd::u64 nb) {
         auto stg = compute.create_buffer(nb, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p = static_cast<crd::u8*>(stg->map()); const auto* s = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nb; ++i) { p[i] = s[i]; } stg->unmap();
+        for (crd::u64 i = 0; i < nb; ++i)
+        {
+            p[i] = s[i];
+        }
+        stg->unmap();
         auto& rc = compute.begin(); rc.copy(*stg, dst, 0U, 0U, nb); compute.submit_and_wait();
     };
     const crd::u32 cfgv = static_cast<crd::u32>(n_v);
@@ -1091,7 +1511,13 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass de
     up(*d_in, vals.data(), static_cast<crd::u64>(n_v) * 4U);
     up(*d_cfg, &cfgv, 4U);
     up(*d_args, zeros, 3U * 4U);
-    { auto stg = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu); auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < n_v; ++i) { p[i] = 0U; } stg->unmap(); auto& rc = compute.begin(); rc.copy(*stg, *d_out, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); compute.submit_and_wait(); }
+    {
+        auto stg = compute.create_buffer(static_cast<crd::u64>(n_v) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu); auto* p = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < n_v; ++i)
+        {
+            p[i] = 0U;
+        }
+        stg->unmap(); auto& rc = compute.begin(); rc.copy(*stg, *d_out, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); compute.submit_and_wait(); }
 
     auto& rec = compute.begin();
     cg::ComputeBuffer* cb[3] = {d_in.get(), d_args.get(), d_cfg.get()};
@@ -1106,7 +1532,13 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on Vulkan -- a compute pass de
     { auto& r2 = compute.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); compute.submit_and_wait(); }
     const auto* out = static_cast<const crd::u32*>(rb->map());
     int written = 0;
-    for (int i = 0; i < n_v; ++i) { if (out[uz(i)] != 0U) { ++written; } }
+    for (int i = 0; i < n_v; ++i)
+    {
+        if (out[uz(i)] != 0U)
+        {
+            ++written;
+        }
+    }
     rb->unmap();
     std::printf("[c5-indirect] GPU counted %d even inputs -> dispatch_indirect launched %d groups (CPU ref = %d)\n", written, written, ref);
     CHECK(written == ref); // the GPU-decided dispatch launched EXACTLY the reference count of groups
@@ -1123,9 +1555,17 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->device_generated_commands()) { WARN("no VK_NV_device_generated_commands; skipping"); return; }
+    if (!vk->device_generated_commands())
+    {
+        WARN("no VK_NV_device_generated_commands; skipping");
+        return;
+    }
     const VkDevice         dev  = vk->vk_device();
     const VkPhysicalDevice phys = vk->vk_physical_device();
     const VkQueue          q    = vk->compute_queue();
@@ -1145,7 +1585,13 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
     VkPhysicalDeviceMemoryProperties memprops{};
     vkGetPhysicalDeviceMemoryProperties(phys, &memprops);
     const auto find_mem = [&](crd::u32 type_bits, VkMemoryPropertyFlags want) -> crd::u32 {
-        for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i) { if ((type_bits & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want) { return i; } }
+        for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i)
+        {
+            if ((type_bits & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want)
+            {
+                return i;
+            }
+        }
         return 0U;
     };
     struct Buf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkDeviceAddress addr = 0; };
@@ -1168,14 +1614,26 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
         mai.memoryTypeIndex = find_mem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkAllocateMemory(dev, &mai, nullptr, &b.mem);
         vkBindBufferMemory(dev, b.buf, b.mem, 0);
-        if (device_addr) { VkBufferDeviceAddressInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO; ai.buffer = b.buf; b.addr = vkGetBufferDeviceAddress(dev, &ai); }
+        if (device_addr)
+        {
+            VkBufferDeviceAddressInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            ai.buffer = b.buf;
+            b.addr = vkGetBufferDeviceAddress(dev, &ai);
+        }
         return b;
     };
 
     constexpr int n_seq = 4;
     constexpr int out_n = 16;
     Buf d_out = make_buf(static_cast<VkDeviceSize>(out_n) * 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
-    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); for (int i = 0; i < out_n; ++i) { static_cast<crd::u32*>(p)[i] = 0U; } vkUnmapMemory(dev, d_out.mem); }
+    {
+        void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p);
+        for (int i = 0; i < out_n; ++i)
+        {
+            static_cast<crd::u32*>(p)[i] = 0U;
+        }
+        vkUnmapMemory(dev, d_out.mem); }
 
     // ── descriptor set layout (1 storage buffer) + pipeline layout (+ an 8-byte push constant {slot,val}) ──
     VkDescriptorSetLayoutBinding dslb{};
@@ -1227,7 +1685,15 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
     const crd::u32 slots[n_seq] = {2U, 5U, 9U, 13U};
     const crd::u32 vals[n_seq]  = {111U, 222U, 333U, 444U};
     { auto* p = static_cast<crd::u8*>(nullptr); vkMapMemory(dev, d_stream.mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&p));
-      for (int s = 0; s < n_seq; ++s) { auto* u = reinterpret_cast<crd::u32*>(p + static_cast<crd::usize>(s) * stride); u[0] = slots[s]; u[1] = vals[s]; u[2] = 1U; u[3] = 1U; u[4] = 1U; }
+      for (int s = 0; s < n_seq; ++s)
+      {
+          auto* u = reinterpret_cast<crd::u32*>(p + static_cast<crd::usize>(s) * stride);
+          u[0] = slots[s];
+          u[1] = vals[s];
+          u[2] = 1U;
+          u[3] = 1U;
+          u[4] = 1U;
+      }
       vkUnmapMemory(dev, d_stream.mem); }
 
     // ── preprocess buffer (from the generated-commands memory requirements) ──
@@ -1256,7 +1722,13 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
     // ── verify: each generated sequence wrote its OWN slot ← its OWN val (varied push constant + dispatch, one execute call) ──
     int good = 0;
     { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); const auto* o = static_cast<const crd::u32*>(p);
-      for (int s = 0; s < n_seq; ++s) { if (o[slots[s]] == vals[s]) { ++good; } }
+      for (int s = 0; s < n_seq; ++s)
+      {
+          if (o[slots[s]] == vals[s])
+          {
+              ++good;
+          }
+      }
       vkUnmapMemory(dev, d_out.mem); }
     std::printf("[dgc] device-generated stream: %d/%d sequences ran with their own {slot,val,dispatch} via ONE execute call\n", good, n_seq);
     CHECK(good == n_seq);
@@ -1268,7 +1740,11 @@ TEST_CASE("D-007 C5: device-generated commands -- a generated stream of VARIED c
     vkDestroyShaderModule(dev, sm, nullptr);
     vkDestroyPipelineLayout(dev, playout, nullptr);
     vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
-    for (Buf* b : {&d_out, &d_stream, &d_pre}) { vkDestroyBuffer(dev, b->buf, nullptr); vkFreeMemory(dev, b->mem, nullptr); }
+    for (Buf* b : {&d_out, &d_stream, &d_pre})
+    {
+        vkDestroyBuffer(dev, b->buf, nullptr);
+        vkFreeMemory(dev, b->mem, nullptr);
+    }
 }
 
 // D-007 C5 (frontier, FULL): DEVICE-GENERATED COMMANDS with PER-SEQUENCE PIPELINE SWITCHING — the GPU-authored stream selects a
@@ -1281,9 +1757,17 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->device_generated_commands()) { WARN("no VK_NV_device_generated_commands; skipping"); return; }
+    if (!vk->device_generated_commands())
+    {
+        WARN("no VK_NV_device_generated_commands; skipping");
+        return;
+    }
     const VkDevice         dev  = vk->vk_device();
     const VkPhysicalDevice phys = vk->vk_physical_device();
     const VkQueue          q    = vk->compute_queue();
@@ -1301,7 +1785,16 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
 
     VkPhysicalDeviceMemoryProperties memprops{};
     vkGetPhysicalDeviceMemoryProperties(phys, &memprops);
-    const auto find_mem = [&](crd::u32 tb, VkMemoryPropertyFlags want) -> crd::u32 { for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i) { if ((tb & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want) { return i; } } return 0U; };
+    const auto find_mem = [&](crd::u32 tb, VkMemoryPropertyFlags want) -> crd::u32
+    {
+        for (crd::u32 i = 0; i < memprops.memoryTypeCount; ++i)
+        {
+            if ((tb & (1U << i)) != 0U && (memprops.memoryTypes[i].propertyFlags & want) == want)
+            {
+                return i;
+            }
+        }
+        return 0U; };
     struct Buf { VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkDeviceAddress addr = 0; };
     const auto make_buf = [&](VkDeviceSize size, VkBufferUsageFlags usage, bool da) -> Buf {
         Buf b{};
@@ -1311,13 +1804,25 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
         VkMemoryAllocateFlagsInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO; fi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
         VkMemoryAllocateInfo mai{}; mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; mai.pNext = da ? &fi : nullptr; mai.allocationSize = mr.size; mai.memoryTypeIndex = find_mem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkAllocateMemory(dev, &mai, nullptr, &b.mem); vkBindBufferMemory(dev, b.buf, b.mem, 0);
-        if (da) { VkBufferDeviceAddressInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO; ai.buffer = b.buf; b.addr = vkGetBufferDeviceAddress(dev, &ai); }
+        if (da)
+        {
+            VkBufferDeviceAddressInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            ai.buffer = b.buf;
+            b.addr = vkGetBufferDeviceAddress(dev, &ai);
+        }
         return b;
     };
 
     constexpr int out_n = 16;
     Buf d_out = make_buf(static_cast<VkDeviceSize>(out_n) * 4U, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
-    { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); for (int i = 0; i < out_n; ++i) { static_cast<crd::u32*>(p)[i] = 0U; } vkUnmapMemory(dev, d_out.mem); }
+    {
+        void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p);
+        for (int i = 0; i < out_n; ++i)
+        {
+            static_cast<crd::u32*>(p)[i] = 0U;
+        }
+        vkUnmapMemory(dev, d_out.mem); }
 
     VkDescriptorSetLayoutBinding dslb{}; dslb.binding = 0; dslb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; dslb.descriptorCount = 1; dslb.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo dslci{}; dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; dslci.bindingCount = 1; dslci.pBindings = &dslb;
@@ -1391,7 +1896,17 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
     const crd::u32        slot[n_seq]      = {2U, 5U, 9U, 13U};
     const crd::u32        val[n_seq]       = {1U, 2U, 3U, 4U};
     { crd::u8* p = nullptr; vkMapMemory(dev, d_stream.mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&p));
-      for (int s = 0; s < n_seq; ++s) { auto* q8 = p + static_cast<crd::usize>(s) * stride; std::memcpy(q8, &pipe_addr[s], 8); auto* u = reinterpret_cast<crd::u32*>(q8 + 8); u[0] = slot[s]; u[1] = val[s]; u[2] = 1U; u[3] = 1U; u[4] = 1U; }
+      for (int s = 0; s < n_seq; ++s)
+      {
+          auto* q8 = p + static_cast<crd::usize>(s) * stride;
+          std::memcpy(q8, &pipe_addr[s], 8);
+          auto* u = reinterpret_cast<crd::u32*>(q8 + 8);
+          u[0] = slot[s];
+          u[1] = val[s];
+          u[2] = 1U;
+          u[3] = 1U;
+          u[4] = 1U;
+      }
       vkUnmapMemory(dev, d_stream.mem); }
 
     VkGeneratedCommandsMemoryRequirementsInfoNV gmri{}; gmri.sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_NV; gmri.pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE; gmri.pipeline = pa.pipe; gmri.indirectCommandsLayout = iclayout; gmri.maxSequencesCount = n_seq;
@@ -1408,7 +1923,13 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
 
     int good = 0;
     { void* p = nullptr; vkMapMemory(dev, d_out.mem, 0, VK_WHOLE_SIZE, 0, &p); const auto* o = static_cast<const crd::u32*>(p);
-      for (int s = 0; s < n_seq; ++s) { if (o[slot[s]] == base_exp[s] + val[s]) { ++good; } }
+      for (int s = 0; s < n_seq; ++s)
+      {
+          if (o[slot[s]] == base_exp[s] + val[s])
+          {
+              ++good;
+          }
+      }
       vkUnmapMemory(dev, d_out.mem); }
     std::printf("[dgc-pipe] GPU-authored stream switched pipelines per sequence: %d/%d (A=100+, B=200+ selected by the PIPELINE token)\n", good, n_seq);
     CHECK(good == n_seq);
@@ -1416,10 +1937,20 @@ TEST_CASE("D-007 C5: device-generated commands -- per-sequence PIPELINE switch (
     pfn_destroy(dev, iclayout, nullptr);
     vkDestroyCommandPool(dev, cpool, nullptr);
     vkDestroyDescriptorPool(dev, pool, nullptr);
-    for (IndPipe* ip : {&pa, &pb}) { vkDestroyPipeline(dev, ip->pipe, nullptr); vkDestroyShaderModule(dev, ip->sm, nullptr); vkDestroyBuffer(dev, ip->meta.buf, nullptr); vkFreeMemory(dev, ip->meta.mem, nullptr); }
+    for (IndPipe* ip : {&pa, &pb})
+    {
+        vkDestroyPipeline(dev, ip->pipe, nullptr);
+        vkDestroyShaderModule(dev, ip->sm, nullptr);
+        vkDestroyBuffer(dev, ip->meta.buf, nullptr);
+        vkFreeMemory(dev, ip->meta.mem, nullptr);
+    }
     vkDestroyPipelineLayout(dev, playout, nullptr);
     vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
-    for (Buf* b : {&d_out, &d_stream, &d_pre}) { vkDestroyBuffer(dev, b->buf, nullptr); vkFreeMemory(dev, b->mem, nullptr); }
+    for (Buf* b : {&d_out, &d_stream, &d_pre})
+    {
+        vkDestroyBuffer(dev, b->buf, nullptr);
+        vkFreeMemory(dev, b->mem, nullptr);
+    }
 }
 
 TEST_CASE("D-008 C0: the program seam -- cooked SPIR-V -> IGpuProgram (ADR-0103)", "[gpu-context][vulkan][gpu][program]")
@@ -1876,7 +2407,11 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on Vulkan (deferred store +
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -1895,10 +2430,16 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on Vulkan (deferred store +
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_abuffer", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -1914,7 +2455,10 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on Vulkan (deferred store +
     for (crd::usize i = 0; i < gpu_out.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(gpu_out[i]) - cpu[i]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     INFO("A-buffer exact-composite worst |GPU - oracle| = " << worst);
     CHECK(worst == 0.0); // pure f32 mul/add/sub on a deterministic sorted order ⇒ BIT-EXACT
@@ -1937,7 +2481,11 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment recon
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -1960,10 +2508,16 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment recon
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_mboit", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -1981,7 +2535,10 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment recon
     for (crd::usize i = 0; i < mb_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
-        if (d > worst_ulp) { worst_ulp = d; }
+        if (d > worst_ulp)
+        {
+            worst_ulp = d;
+        }
     }
     INFO("MBOIT GPU vs oracle worst |Δ| = " << worst_ulp);
     CHECK(worst_ulp < 1.0e-5); // to-ULP (division + ln/exp), like DAIS/ocean
@@ -1989,15 +2546,24 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on Vulkan (4-power-moment recon
     // Quality: MBOIT vs exact, and WBOIT vs exact, on the SAME dense scene (RGBA8 LSB). The hero tier wins at high complexity.
     const auto q = [](double v) {
         double c = v;
-        if (c < 0.0) { c = 0.0; }
-        else if (c > 1.0) { c = 1.0; }
+        if (c < 0.0)
+        {
+            c = 0.0;
+        }
+        else if (c > 1.0)
+        {
+            c = 1.0;
+        }
         return static_cast<int>(std::lround(c * 255.0));
     };
     int        mboit_err = 0;
     for (int ch = 0; ch < 3; ++ch)
     {
         const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
-        if (d > mboit_err) { mboit_err = d; }
+        if (d > mboit_err)
+        {
+            mboit_err = d;
+        }
     }
     const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
                                                                     crd::gputest::oit_exact_composite_rgba8(scene));
@@ -2018,7 +2584,11 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic -- exa
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -2042,10 +2612,16 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic -- exa
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_mboit6", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -2063,22 +2639,34 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on Vulkan (larger Cholesky + cubic -- exa
     for (crd::usize i = 0; i < mb_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
-        if (d > worst_ulp) { worst_ulp = d; }
+        if (d > worst_ulp)
+        {
+            worst_ulp = d;
+        }
     }
     INFO("MBOIT6 GPU vs oracle worst |Δ| = " << worst_ulp);
     CHECK(worst_ulp < 5.0e-3); // to-ULP: the cubic root-solve amplifies the GPU/CPU transcendental ULP (~1 LSB in 8-bit)
 
     const auto q = [](double v) {
         double c = v;
-        if (c < 0.0) { c = 0.0; }
-        else if (c > 1.0) { c = 1.0; }
+        if (c < 0.0)
+        {
+            c = 0.0;
+        }
+        else if (c > 1.0)
+        {
+            c = 1.0;
+        }
         return static_cast<int>(std::lround(c * 255.0));
     };
     int        mboit_err = 0;
     for (int ch = 0; ch < 3; ++ch)
     {
         const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
-        if (d > mboit_err) { mboit_err = d; }
+        if (d > mboit_err)
+        {
+            mboit_err = d;
+        }
     }
     const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
                                                                     crd::gputest::oit_exact_composite_rgba8(scene));
@@ -2100,7 +2688,11 @@ TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on Vulkan (value-re
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -2119,10 +2711,16 @@ TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on Vulkan (value-re
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_abuffer_atomic", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -2138,7 +2736,10 @@ TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on Vulkan (value-re
     for (crd::usize i = 0; i < gpu_out.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(gpu_out[i]) - exact_cpu[i]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     INFO("atomic A-buffer vs static-slot exact reference: worst |Δ| = " << worst);
     CHECK(worst == 0.0); // dynamic atomic capture + sort == the exact composite, bit-for-bit
@@ -2160,7 +2761,11 @@ TEST_CASE("D-007 B17-c: stochastic transparency on Vulkan (deterministic-hash co
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -2179,10 +2784,16 @@ TEST_CASE("D-007 B17-c: stochastic transparency on Vulkan (deterministic-hash co
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_stochastic", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -2200,7 +2811,10 @@ TEST_CASE("D-007 B17-c: stochastic transparency on Vulkan (deterministic-hash co
     for (crd::usize i = 0; i < st_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(st_gpu[i]) - st_cpu[i]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     INFO("stochastic GPU vs oracle worst |Δ| = " << worst);
     CHECK(worst == 0.0); // a DETERMINISTIC "random" tier ⇒ bit-identical across backends (portable TAA history)
@@ -2228,7 +2842,10 @@ TEST_CASE("D-007 B17-c: stochastic transparency on Vulkan (deterministic-hash co
         for (int ch = 0; ch < 3; ++ch)
         {
             const double b = std::fabs(mean[ch] / static_cast<double>(wh) - exact_cpu[static_cast<crd::usize>(ch)]);
-            if (b > bias) { bias = b; }
+            if (b > bias)
+            {
+                bias = b;
+            }
         }
         rms = std::sqrt(sse / static_cast<double>(wh * 3U));
     };
@@ -2266,7 +2883,11 @@ TEST_CASE("D-007 B17-c: OIT tier GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -2362,7 +2983,10 @@ TEST_CASE("D-007 B17-c: OIT tier GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30
     // reusable resets for the atomic tier: `clr_head` = wh words all EMPTY (head buffer), `clr_cnt` = 1 word 0 (counter)
     auto  clr_head = compute.create_buffer(static_cast<crd::u64>(wh) * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
     auto* hp       = static_cast<crd::u32*>(clr_head->map());
-    for (crd::u32 i = 0; i < wh; ++i) { hp[i] = crd::kir::oit::kAbufferEmpty; }
+    for (crd::u32 i = 0; i < wh; ++i)
+    {
+        hp[i] = crd::kir::oit::kAbufferEmpty;
+    }
     clr_head->unmap();
     auto  clr_cnt = compute.create_buffer(sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
     *static_cast<crd::u32*>(clr_cnt->map()) = 0U;
@@ -2386,7 +3010,10 @@ TEST_CASE("D-007 B17-c: OIT tier GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30
             rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb2)), nullptr, 0U, gx, 1U, 1U);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         return best;
     };
@@ -2421,7 +3048,10 @@ TEST_CASE("D-007 B17-c: OIT tier GPU PERFORMANCE (Vulkan, last_gpu_ms, min-of-30
         rec.dispatch(*p_ar, crd::containers::ConstSpan<cg::ComputeBuffer*>(rb, 4), nullptr, 0U, g_pix_wg, 1U, 1U);
         compute.submit_and_wait();
         const double ms = compute.last_gpu_ms();
-        if (ms > 0.0 && ms < t_atomic) { t_atomic = ms; }
+        if (ms > 0.0 && ms < t_atomic)
+        {
+            t_atomic = ms;
+        }
     }
 
     std::printf("\n=== OIT tier GPU perf board (Vulkan, kernel-only last_gpu_ms, min-of-30) ===\n");
@@ -2454,10 +3084,22 @@ TEST_CASE("D-007 B4: IR-authored MESH-shader triangle draws on Vulkan (CKIR mesh
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
-    if (!vk->mesh_shader()) { WARN("adapter has no VK_EXT_mesh_shader; skipping the mesh draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!vk->mesh_shader())
+    {
+        WARN("adapter has no VK_EXT_mesh_shader; skipping the mesh draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -2506,9 +3148,17 @@ TEST_CASE("D-007 B4: Vulkan TASK amplification -- 1 task workgroup emits N mesh 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping the task draw"); return; }
+    if (!vk->shader_object() || !vk->mesh_shader())
+    {
+        WARN("no shader_object/mesh_shader; skipping the task draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -2550,7 +3200,10 @@ TEST_CASE("D-007 B4: Vulkan TASK amplification -- 1 task workgroup emits N mesh 
     {
         const double   xc = -0.7 + static_cast<double>(c) * 0.45;
         const crd::u32 sx = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
-        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) { ++lit; } // red ≈ payload(220)
+        if ((target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U) // red ≈ payload(220)
+        {
+            ++lit;
+        }
     }
     CHECK(lit == static_cast<int>(n_tri)); // all N amplified triangles rendered with the payload colour
 }
@@ -2567,9 +3220,17 @@ TEST_CASE("D-007 B4: Vulkan TASK multi-field payload -- a 3-uint payload flows t
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping"); return; }
+    if (!vk->shader_object() || !vk->mesh_shader())
+    {
+        WARN("no shader_object/mesh_shader; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -2627,9 +3288,17 @@ TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch -- a compute cu
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object() || !vk->mesh_shader()) { WARN("no shader_object/mesh_shader; skipping"); return; }
+    if (!vk->shader_object() || !vk->mesh_shader())
+    {
+        WARN("no shader_object/mesh_shader; skipping");
+        return;
+    }
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
     auto raster = gpu::create_vulkan_raster_context(*vk);
@@ -2659,7 +3328,10 @@ TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch -- a compute cu
     auto args_rb  = compute.create_buffer(3U * 4U, cu::transfer_dst, gpu::ComputeMemory::GpuToCpu);
     REQUIRE(args_dev != nullptr);
     auto* kp = static_cast<crd::u32*>(keys_up->map());
-    for (crd::u32 i = 0; i < n_meshlets; ++i) { kp[i] = (i < survivors) ? 1U : 0U; }
+    for (crd::u32 i = 0; i < n_meshlets; ++i)
+    {
+        kp[i] = (i < survivors) ? 1U : 0U;
+    }
     keys_up->unmap();
     auto* ap = static_cast<crd::u32*>(args_up->map());
     ap[0] = 0U;
@@ -2710,8 +3382,17 @@ TEST_CASE("D-007 B4: Vulkan GPU-driven indirect meshlet dispatch -- a compute cu
         const double   xc  = -0.8 + static_cast<double>(w) * 0.2;
         const crd::u32 sx  = static_cast<crd::u32>((xc + 1.0) * 0.5 * static_cast<double>(dim));
         const bool     red = (target->read_pixel(sx, dim / 2U) & 0xFFU) > 180U;
-        if (w < survivors) { if (red) { ++rendered; } }
-        else if (!red) { ++culled; }
+        if (w < survivors)
+        {
+            if (red)
+            {
+                ++rendered;
+            }
+        }
+        else if (!red)
+        {
+            ++culled;
+        }
     }
     CHECK(rendered == static_cast<int>(survivors));               // all 5 survivors rendered via the indirect count
     CHECK(culled == static_cast<int>(n_meshlets - survivors));    // the 3 culled meshlets never dispatched
@@ -2730,9 +3411,17 @@ TEST_CASE("D-007 B4-tess: Vulkan tessellation -- a VS->TCS->TES->FS quad subdivi
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object() || !vk->tessellation()) { WARN("no shader_object/tessellation; skipping the tess draw"); return; }
+    if (!vk->shader_object() || !vk->tessellation())
+    {
+        WARN("no shader_object/tessellation; skipping the tess draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -2790,9 +3479,17 @@ TEST_CASE("D-007 B4-vis-4: Vulkan HW-raster visibility buffer writes SV_Primitiv
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no shader_object; skipping the visbuffer draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no shader_object; skipping the visbuffer draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -2825,9 +3522,18 @@ TEST_CASE("D-007 B4-vis-4: Vulkan HW-raster visibility buffer writes SV_Primitiv
         for (crd::u32 x = 0; x < dim; ++x)
         {
             const crd::u32 id = target->read_pixel(x, y);
-            if (id == 0U) { ++n0; }
-            else if (id == 1U) { ++n1; }
-            else if (id == 0xFFFFFFFFU) { ++nempty; }
+            if (id == 0U)
+            {
+                ++n0;
+            }
+            else if (id == 1U)
+            {
+                ++n1;
+            }
+            else if (id == 0xFFFFFFFFU)
+            {
+                ++nempty;
+            }
         }
     }
     CHECK(nempty == 0);                            // the fullscreen quad covers every pixel (no cleared 0xFFFFFFFF survives)
@@ -3005,9 +3711,17 @@ TEST_CASE("D-007 B1-c: IR noperspective vs smooth interpolant diverge on a persp
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping the draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping the draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -3051,9 +3765,17 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping the draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping the draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(4U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -3092,8 +3814,14 @@ TEST_CASE("D-007 B1-c: IR centroid interpolation samples inside coverage on an M
             const auto     r  = static_cast<int>(px & 0xFFU);
             const auto     g  = static_cast<int>((px >> 8U) & 0xFFU);
             const int      d  = r > g ? r - g : g - r;
-            if (d > max_diff) { max_diff = d; }
-            if (d >= 2) { ++n_diff; } // >=2 ignores any ±1 unorm rounding asymmetry between the two resolves
+            if (d > max_diff)
+            {
+                max_diff = d;
+            }
+            if (d >= 2) // >=2 ignores any ±1 unorm rounding asymmetry between the two resolves
+            {
+                ++n_diff;
+            }
         }
     }
     WARN("[centroid vulkan] max|R-G| = " << max_diff << "  n_diff(>=2) = " << n_diff);
@@ -3109,9 +3837,17 @@ TEST_CASE("D-007 B1-c: IR sample interpolation forces per-sample shading on an M
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping the draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping the draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -3142,7 +3878,10 @@ TEST_CASE("D-007 B1-c: IR sample interpolation forces per-sample shading on an M
             for (crd::u32 x = 0; x < dim; ++x)
             {
                 const auto rr = static_cast<int>(target->read_pixel(x, y) & 0xFFU);
-                if (rr >= 40 && rr <= 215) { ++n; } // a partial (antialiased) coverage of the step
+                if (rr >= 40 && rr <= 215) // a partial (antialiased) coverage of the step
+                {
+                    ++n;
+                }
             }
         }
         return n;
@@ -3171,9 +3910,16 @@ inline VkRaster vk_raster_or_skip()
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     r.ctx        = gpu::create_vulkan_gpu_context(cfg);
-    if (r.ctx == nullptr) { return r; }
+    if (r.ctx == nullptr)
+    {
+        return r;
+    }
     r.vk = static_cast<gpu::VulkanGpuContext*>(r.ctx.get());
-    if (!r.vk->shader_object()) { r.vk = nullptr; return r; }
+    if (!r.vk->shader_object())
+    {
+        r.vk = nullptr;
+        return r;
+    }
     r.raster = gpu::create_vulkan_raster_context(*r.vk);
     return r;
 }
@@ -3189,7 +3935,10 @@ inline int count_equal_even_pairs(gpu::IRasterTarget& t, crd::u32 dim)
         {
             const int rl = static_cast<int>(t.read_pixel(i, y) & 0xFFU);
             const int rr = static_cast<int>(t.read_pixel(i + 1U, y) & 0xFFU);
-            if (rl == rr) { ++n; }
+            if (rl == rr)
+            {
+                ++n;
+            }
         }
     }
     return n;
@@ -3200,7 +3949,11 @@ TEST_CASE("D-007 B1-d: IR frag-depth write drives the depth test (Vulkan)", "[gp
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3238,7 +3991,11 @@ TEST_CASE("D-007 B1-d: IR conservative depth (DepthGreater) frag-depth write (Vu
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3271,7 +4028,11 @@ TEST_CASE("D-007 B1-d: IR early_fragment_tests forces early-Z (Vulkan)", "[gpu-c
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3304,8 +4065,16 @@ TEST_CASE("D-007 B1-e: per-draw VRS 2x2 coarsens shading (Vulkan)", "[gpu-contex
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
-    if (!r.vk->fragment_shading_rate()) { WARN("adapter has no VK_KHR_fragment_shading_rate; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!r.vk->fragment_shading_rate())
+    {
+        WARN("adapter has no VK_KHR_fragment_shading_rate; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3344,8 +4113,16 @@ TEST_CASE("D-007 B1-e: per-primitive VRS out (gl_PrimitiveShadingRateEXT) coarse
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
-    if (!r.vk->fragment_shading_rate()) { WARN("adapter has no VK_KHR_fragment_shading_rate; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!r.vk->fragment_shading_rate())
+    {
+        WARN("adapter has no VK_KHR_fragment_shading_rate; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3383,8 +4160,16 @@ TEST_CASE("D-007 B4: per-primitive VRS from a MESH shader coarsens shading (Vulk
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
-    if (!r.vk->fragment_shading_rate() || !r.vk->mesh_shader()) { WARN("no VRS / mesh_shader; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!r.vk->fragment_shading_rate() || !r.vk->mesh_shader())
+    {
+        WARN("no VRS / mesh_shader; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3416,8 +4201,16 @@ TEST_CASE("D-007 B1-e: attachment (image) VRS 2x2 coarsens shading (Vulkan)", "[
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
-    if (!r.vk->fragment_shading_rate()) { WARN("adapter has no VK_KHR_fragment_shading_rate; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
+    if (!r.vk->fragment_shading_rate())
+    {
+        WARN("adapter has no VK_KHR_fragment_shading_rate; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3455,7 +4248,13 @@ inline int count_red(gpu::IRasterTarget& t, crd::u32 dim)
     int n = 0;
     for (crd::u32 y = 0; y < dim; ++y)
     {
-        for (crd::u32 x = 0; x < dim; ++x) { if ((t.read_pixel(x, y) & 0xFFU) > 200U) { ++n; } }
+        for (crd::u32 x = 0; x < dim; ++x)
+        {
+            if ((t.read_pixel(x, y) & 0xFFU) > 200U)
+            {
+                ++n;
+            }
+        }
     }
     return n;
 }
@@ -3466,9 +4265,17 @@ TEST_CASE("D-007 B1-f: conservative OVERESTIMATE raster covers more pixels (Vulk
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
-    if (!r.raster->supports_conservative_raster()) { WARN("adapter has no conservative raster; skipping"); return; }
+    if (!r.raster->supports_conservative_raster())
+    {
+        WARN("adapter has no conservative raster; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -3506,9 +4313,17 @@ TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixe
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
-    if (!r.raster->supports_inner_coverage()) { WARN("adapter has no inner coverage; skipping"); return; }
+    if (!r.raster->supports_inner_coverage())
+    {
+        WARN("adapter has no inner coverage; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -3542,8 +4357,14 @@ TEST_CASE("D-007 B1-f: inner coverage distinguishes fully-covered from edge pixe
             const crd::u32 rr = px & 0xFFU;
             const crd::u32 gg = (px >> 8U) & 0xFFU;
             const crd::u32 bb = (px >> 16U) & 0xFFU;
-            if (rr > 200U && gg > 200U && bb > 200U) { ++white; }
-            else if (rr < 50U && gg < 50U && bb < 50U) { ++black; }
+            if (rr > 200U && gg > 200U && bb > 200U)
+            {
+                ++white;
+            }
+            else if (rr < 50U && gg < 50U && bb < 50U)
+            {
+                ++black;
+            }
         }
     }
     WARN("[inner coverage vulkan] white=" << white << " black=" << black);
@@ -3556,9 +4377,17 @@ TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (Vulkan)"
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
-    if (!r.raster->supports_fragment_interlock()) { WARN("adapter has no fragment interlock; skipping"); return; }
+    if (!r.raster->supports_fragment_interlock())
+    {
+        WARN("adapter has no fragment interlock; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     constexpr crd::u32 dim = 32U;
@@ -3596,7 +4425,11 @@ TEST_CASE("D-007 B2-a: IR 2D texture sample (left-red/right-green) draws on Vulk
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3640,7 +4473,11 @@ TEST_CASE("D-007 B2-b: IR sample-op family (Lod/Grad/texelFetch/gather/textureSi
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -3692,7 +4529,11 @@ TEST_CASE("D-007 B2-b: IR shadow-compare sample (SampleCmp on a depth texture) o
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3732,7 +4573,11 @@ TEST_CASE("D-007 B8-f: IR shadow-map foundation + bias stack renders on Vulkan",
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -3771,7 +4616,11 @@ TEST_CASE("D-007 B8-g: IR PCF filtered soft shadows render on Vulkan", "[gpu-con
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -3811,7 +4660,11 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on V
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -3852,7 +4705,10 @@ TEST_CASE("D-007 B2-c: IR texture dimensions (1D/3D/Cube/2DArray/CubeArray) on V
         crd::u8 d[8U * 8U * 6U * 4U];
         crd::gputest::fill_solid(d + 0U * 64U * 4U, 64U, 0U, 255U, 0U);   // +X green (screen-right)
         crd::gputest::fill_solid(d + 1U * 64U * 4U, 64U, 255U, 0U, 0U);   // -X red   (screen-left)
-        for (crd::u32 f = 2; f < 6; ++f) { crd::gputest::fill_solid(d + f * 64U * 4U, 64U, 0U, 0U, 255U); }
+        for (crd::u32 f = 2; f < 6; ++f)
+        {
+            crd::gputest::fill_solid(d + f * 64U * 4U, 64U, 0U, 0U, 255U);
+        }
         auto t = r.raster->create_texture_dim(gpu::TextureKind::Cube, 8U, 8U, 6U, d);
         REQUIRE(t != nullptr);
         run(crd::gputest::build_sample_cube_fs, *t);
@@ -3879,9 +4735,17 @@ TEST_CASE("D-007 B2-d: IR bindless texture array (dynamic index) on Vulkan", "[g
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
-    if (!r.raster->supports_bindless()) { WARN("adapter has no non-uniform descriptor indexing; skipping"); return; }
+    if (!r.raster->supports_bindless())
+    {
+        WARN("adapter has no non-uniform descriptor indexing; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
     kir::KGraph vg(&alloc);
@@ -3926,7 +4790,11 @@ TEST_CASE("D-007 B5-a: IR OpenPBR surface material writes the deferred G-buffer 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -3970,7 +4838,11 @@ TEST_CASE("D-007 B5-b: IR full OpenPBR 1.1 slab (coat/fuzz/transmission/thin-fil
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4011,7 +4883,11 @@ TEST_CASE("D-007 B5-c: IR shading-model tag (Gooch) + masked alpha domain on Vul
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -4059,7 +4935,11 @@ TEST_CASE("D-007 B6-a: IR MaterialX operator nodes (overlay per-channel branch) 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -4098,7 +4978,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -4127,8 +5011,14 @@ TEST_CASE("D-007 B6-b: IR MaterialX perlin noise (U32 Bob-Jenkins hash) renders 
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_noise_perlin_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 128) { any = true; } // the noise actually varies (not a flat 0.5)
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 128) // the noise actually varies (not a flat 0.5)
+        {
+            any = true;
+        }
     }
     WARN("[noise perlin vulkan] col2 got=" << (target->read_pixel(2U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_noise_perlin_expected(2U));
     CHECK(bad == 0);
@@ -4140,7 +5030,11 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on Vulkan",
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -4168,8 +5062,14 @@ TEST_CASE("D-007 B6-b: IR MaterialX worley (cellular) noise renders on Vulkan",
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_noise_worley_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 0) { any = true; }
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 0)
+        {
+            any = true;
+        }
     }
     WARN("[noise worley vulkan] col7 got=" << (target->read_pixel(7U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_noise_worley_expected(7U));
     CHECK(bad == 0);
@@ -4181,7 +5081,11 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4209,8 +5113,14 @@ TEST_CASE("D-007 B6-c: IR MaterialX UV place2d (rotate2d: radians/sin/cos) rende
     {
         const int got  = static_cast<int>(target->read_pixel(x, dim / 2U) & 0xFFU);
         const int want = crd::gputest::build_uv_place2d_expected(x);
-        if (got < want - 4 || got > want + 4) { ++bad; }
-        if (got != 0 && got != 255) { any = true; }
+        if (got < want - 4 || got > want + 4)
+        {
+            ++bad;
+        }
+        if (got != 0 && got != 255)
+        {
+            any = true;
+        }
     }
     WARN("[uv place2d vulkan] col7 got=" << (target->read_pixel(7U, dim / 2U) & 0xFFU) << " want=" << crd::gputest::build_uv_place2d_expected(7U));
     CHECK(bad == 0);
@@ -4222,7 +5132,11 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4250,8 +5164,18 @@ TEST_CASE("D-007 B6-d: IR MaterialX NPR gooch_shade (normalize/dot/reflect/mix/p
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_npr_gooch_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; } // the warm/cool gradient varies across the row
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_npr_gooch_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0)) // the warm/cool gradient varies across the row
+        {
+            any = true;
+        }
     }
     WARN("[npr gooch vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                         << " want=" << crd::gputest::build_npr_gooch_expected(7U, 0) << "," << crd::gputest::build_npr_gooch_expected(7U, 1) << "," << crd::gputest::build_npr_gooch_expected(7U, 2));
@@ -4264,7 +5188,11 @@ TEST_CASE("D-007 B7-c: IR a LOWERED material (const-fold+DCE+CSE) renders identi
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(4U << 20U);
 
@@ -4301,7 +5229,11 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on Vul
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4329,8 +5261,18 @@ TEST_CASE("D-007 B8-a: IR Cook-Torrance BRDF (GGX + multiscatter) renders on Vul
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_brdf_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; } // the highlight varies across the roughness ramp
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_brdf_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0)) // the highlight varies across the roughness ramp
+        {
+            any = true;
+        }
     }
     WARN("[brdf vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                    << " want=" << crd::gputest::build_lighting_brdf_expected(7U, 0) << "," << crd::gputest::build_lighting_brdf_expected(7U, 1) << "," << crd::gputest::build_lighting_brdf_expected(7U, 2));
@@ -4343,7 +5285,11 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on Vu
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4371,8 +5317,18 @@ TEST_CASE("D-007 B8-b: IR OpenPBR lobes (clearcoat + sheen layered) render on Vu
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_layered_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_layered_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[layered vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                       << " want=" << crd::gputest::build_lighting_layered_expected(7U, 0) << "," << crd::gputest::build_lighting_layered_expected(7U, 1) << "," << crd::gputest::build_lighting_layered_expected(7U, 2));
@@ -4385,7 +5341,11 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4413,8 +5373,18 @@ TEST_CASE("D-007 B8-b: IR thin-film iridescence + transmission (glass) render on
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_glass_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_glass_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[glass vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                     << " want=" << crd::gputest::build_lighting_glass_expected(7U, 0) << "," << crd::gputest::build_lighting_glass_expected(7U, 1) << "," << crd::gputest::build_lighting_glass_expected(7U, 2));
@@ -4427,7 +5397,11 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4455,8 +5429,18 @@ TEST_CASE("D-007 B8-c: IR punctual lights (directional + point + spot) render on
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_lights_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_lights_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[lights vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                      << " want=" << crd::gputest::build_lighting_lights_expected(7U, 0) << "," << crd::gputest::build_lighting_lights_expected(7U, 1) << "," << crd::gputest::build_lighting_lights_expected(7U, 2));
@@ -4469,7 +5453,11 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on Vulkan",
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4497,8 +5485,18 @@ TEST_CASE("D-007 B8-d: IR area light (LTC diffuse rectangle) renders on Vulkan",
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_area_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_area_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[area vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                    << " want=" << crd::gputest::build_lighting_area_expected(7U, 0) << "," << crd::gputest::build_lighting_area_expected(7U, 1) << "," << crd::gputest::build_lighting_area_expected(7U, 2));
@@ -4511,7 +5509,11 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on Vulkan"
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4539,8 +5541,18 @@ TEST_CASE("D-007 B8-d: IR tube area light (LTC line integral) renders on Vulkan"
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_tube_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_tube_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[tube vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                    << " want=" << crd::gputest::build_lighting_tube_expected(7U, 0) << "," << crd::gputest::build_lighting_tube_expected(7U, 1) << "," << crd::gputest::build_lighting_tube_expected(7U, 2));
@@ -4553,7 +5565,11 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4581,8 +5597,18 @@ TEST_CASE("D-007 B8-d: IR disk area light (LTC ellipse + SolveCubic) renders on 
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_disk_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_disk_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[disk vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                    << " want=" << crd::gputest::build_lighting_disk_expected(7U, 0) << "," << crd::gputest::build_lighting_disk_expected(7U, 1) << "," << crd::gputest::build_lighting_disk_expected(7U, 2));
@@ -4595,7 +5621,11 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4623,8 +5653,18 @@ TEST_CASE("D-007 B8-e: IR image-based lighting (SH irradiance + split-sum specul
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_ibl_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-        if (ch(px, 0) != ch(2U, 0)) { any = true; }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_ibl_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
+        if (ch(px, 0) != ch(2U, 0))
+        {
+            any = true;
+        }
     }
     WARN("[ibl vulkan] col7 rgb=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2)
                                   << " want=" << crd::gputest::build_lighting_ibl_expected(7U, 0) << "," << crd::gputest::build_lighting_ibl_expected(7U, 1) << "," << crd::gputest::build_lighting_ibl_expected(7U, 2));
@@ -4637,7 +5677,11 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4664,7 +5708,14 @@ TEST_CASE("D-007 B8-h: IR cascaded shadow-map selection (split/select/snap/blend
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_lighting_csm_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_lighting_csm_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     // cascade index (R) rises left→right across the three splits: near band = cascade 0, far band = cascade 3.
     CHECK(ch(target->read_pixel(3U, dim / 2U), 0) < ch(target->read_pixel(29U, dim / 2U), 0));
@@ -4678,7 +5729,11 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4711,7 +5766,14 @@ TEST_CASE("D-007 B8-i: IR screen-space + translucent shadows (contact / Fourier-
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " vulkan] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -4724,7 +5786,11 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on V
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4756,7 +5822,14 @@ TEST_CASE("D-007 B8-j: IR skinning (linear-blend + dual-quaternion) renders on V
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         // the skinned position must vary across the sweep (the blend actually deforms) — R differs near vs far.
         CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
@@ -4771,7 +5844,11 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4797,7 +5874,14 @@ TEST_CASE("D-007 B8-k: IR material cook seam (Forward variant renders + GBuffer 
     for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_cook_forward_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_cook_forward_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0)); // base_color.r sweeps → the lit red varies
     WARN("[cook-forward vulkan] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
@@ -4817,7 +5901,11 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4850,7 +5938,14 @@ TEST_CASE("D-007 B8-l: IR render paths (deferred G-buffer lighting / clustered l
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " vulkan] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -4863,7 +5958,11 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
 
@@ -4896,7 +5995,14 @@ TEST_CASE("D-007 B8-m: THE CULMINATION -- skinned + textured + lit + IBL + PCF-s
     for (crd::u32 x = 2U; x < 13U; x += 2U)
     {
         const crd::u32 px = target->read_pixel(x, dim / 2U);
-        for (int c = 0; c < 3; ++c) { const int want = crd::gputest::build_master_lit_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+        for (int c = 0; c < 3; ++c)
+        {
+            const int want = crd::gputest::build_master_lit_expected(x, c);
+            if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
     // SHADOWED region (right): the direct term is occluded → only the IBL ambient floor remains → strictly darker than lit.
@@ -4913,7 +6019,11 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4948,7 +6058,14 @@ TEST_CASE("D-007 B12: IR screen-space lighting frontier (AO/SSILVB - SSR - SSGI 
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         WARN("[" << tc.tag << " vulkan] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
                  << " want=" << tc.ex(27U, 0) << "," << tc.ex(27U, 1) << "," << tc.ex(27U, 2));
@@ -4961,7 +6078,11 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -4998,7 +6119,14 @@ TEST_CASE("D-007 B13 post: IR HDR + TAA + bloom + cinematic + finish (specAA/CA/
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = tc.ex(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = tc.ex(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
         }
         CHECK(ch(target->read_pixel(3U, dim / 2U), 0) != ch(target->read_pixel(29U, dim / 2U), 0));
         WARN("[hdr-" << tc.tag << " vulkan] col27 rgb=" << ch(target->read_pixel(27U, dim / 2U), 0) << "," << ch(target->read_pixel(27U, dim / 2U), 1) << "," << ch(target->read_pixel(27U, dim / 2U), 2)
@@ -5012,7 +6140,11 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
 {
     namespace kir = crd::kir;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(8U << 20U);
     constexpr crd::u32         dim = 32U;
@@ -5023,8 +6155,14 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
     {
         kir::KGraph fg(&alloc);
         kir::KEntry fe;
-        if (which == 0) { crd::gputest::build_lighting_specular_fs(fg, fe); }
-        else { crd::gputest::build_lighting_aniso_fs(fg, fe); }
+        if (which == 0)
+        {
+            crd::gputest::build_lighting_specular_fs(fg, fe);
+        }
+        else
+        {
+            crd::gputest::build_lighting_aniso_fs(fg, fe);
+        }
         auto vs = r.ctx->create_program(vg, ve);
         auto fs = r.ctx->create_program(fg, fe);
         REQUIRE(vs != nullptr);
@@ -5040,8 +6178,18 @@ TEST_CASE("D-007 B8-d: IR area light SPECULAR (LTC LUT Minv reconstruction) rend
         for (crd::u32 x = 2U; x < dim - 2U; x += 5U)
         {
             const crd::u32 px = target->read_pixel(x, dim / 2U);
-            for (int c = 0; c < 3; ++c) { const int want = (which == 0) ? crd::gputest::build_lighting_specular_expected(x, c) : crd::gputest::build_lighting_aniso_expected(x, c); if (ch(px, c) < want - 4 || ch(px, c) > want + 4) { ++bad; } }
-            if (ch(px, 0) != ch(2U, 0)) { any = true; }
+            for (int c = 0; c < 3; ++c)
+            {
+                const int want = (which == 0) ? crd::gputest::build_lighting_specular_expected(x, c) : crd::gputest::build_lighting_aniso_expected(x, c);
+                if (ch(px, c) < want - 4 || ch(px, c) > want + 4)
+                {
+                    ++bad;
+                }
+            }
+            if (ch(px, 0) != ch(2U, 0))
+            {
+                any = true;
+            }
         }
         WARN("[area-spec vulkan which=" << which << "] col7=" << ch(target->read_pixel(7U, dim / 2U), 0) << "," << ch(target->read_pixel(7U, dim / 2U), 1) << "," << ch(target->read_pixel(7U, dim / 2U), 2));
         CHECK(bad == 0);
@@ -5057,7 +6205,11 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on V
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5070,7 +6222,11 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on V
     // 1) the CPU ORACLE (f64 buffers, F32-rounded ops) — the bit-exact reference.
     crd::f64 in64[ls];
     crd::f64 out64[ls];
-    for (int i = 0; i < ls; ++i) { in64[i] = 1.0 + 3.0 * static_cast<crd::f64>(i); out64[i] = -1.0; } // exact in f32
+    for (int i = 0; i < ls; ++i) // exact in f32
+    {
+        in64[i] = 1.0 + 3.0 * static_cast<crd::f64>(i);
+        out64[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in64, ls, 0, 0}, {out64, ls, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
@@ -5087,14 +6243,24 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on V
     // 3) dispatch ONE workgroup on the portable surface, read back.
     float in32[ls];
     float out32[ls];
-    for (int i = 0; i < ls; ++i) { in32[i] = static_cast<float>(in64[i]); out32[i] = -1.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in32[i] = static_cast<float>(in64[i]);
+        out32[i] = -1.0F;
+    }
     float*    host[2] = {in32, out32};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
 
     // 4) GPU == oracle, bit-for-bit (reverse is pure data movement ⇒ exact on every vendor).
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out32[i] != static_cast<float>(out64[i])) { ++bad; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out32[i] != static_cast<float>(out64[i]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(out32[0] == static_cast<float>(in64[ls - 1])); // spot-check the reversal actually happened
     CHECK(out32[ls - 1] == static_cast<float>(in64[0]));
@@ -5112,7 +6278,11 @@ TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPAT
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5138,7 +6308,13 @@ TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPAT
 
     const int npix = static_cast<int>(scene.cfg.width * scene.cfg.height);
     int       diff = 0;
-    for (int i = 0; i < npix; ++i) { if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)]) { ++diff; } }
+    for (int i = 0; i < npix; ++i)
+    {
+        if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)])
+        {
+            ++diff;
+        }
+    }
     CHECK(diff == 0); // BIT-EXACT: GPU visibility keys == CPU oracle (atomicMin order-independent; matches the DX12 result)
 
     const crd::u32 w  = scene.cfg.width;
@@ -5163,7 +6339,11 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on Vulkan =
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5201,11 +6381,17 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on Vulkan =
         const float cp  = shade_cpu[static_cast<crd::usize>(i)];
         const float acp = absf(cp) > 1.0e-6F ? absf(cp) : 1.0e-6F;
         const float rel = absf(gp - cp) / acp;
-        if (rel > max_rel) { max_rel = rel; }
+        if (rel > max_rel)
+        {
+            max_rel = rel;
+        }
         if (gp != 0.0F)
         {
             ++covered;
-            if (gp < 1.9F || gp > 32.1F) { ++outrange; }
+            if (gp < 1.9F || gp > 32.1F)
+            {
+                ++outrange;
+            }
         }
     }
     WARN("[DAIS vk] max relative error (GPU vs oracle) = " << max_rel);
@@ -5229,7 +6415,11 @@ TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on Vulkan == CP
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5239,10 +6429,16 @@ TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on Vulkan == CP
     bool                          emit_ok = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_hzb", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -5267,7 +6463,11 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU orac
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5290,8 +6490,14 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU orac
     w64.resize(static_cast<crd::usize>(n_w));
     crd::containers::Array<crd::f64> out64(&alloc);
     out64.resize(static_cast<crd::usize>(n_in));
-    for (int i = 0; i < n_in; ++i) { in64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6))); }
-    for (int i = 0; i < n_w; ++i) { w64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5))); }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6)));
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5)));
+    }
     kir::KernelBuffer bufs[3] = {{in64.data(), n_in, 0, 0}, {w64.data(), n_w, 0, 1}, {out64.data(), n_in, 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(batch));
 
@@ -5310,16 +6516,31 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on Vulkan == CPU orac
     w32.resize(static_cast<crd::usize>(n_w));
     crd::containers::Array<float> out32(&alloc);
     out32.resize(static_cast<crd::usize>(n_in));
-    for (int i = 0; i < n_in; ++i) { in32[static_cast<crd::usize>(i)] = static_cast<float>(in64[static_cast<crd::usize>(i)]); }
-    for (int i = 0; i < n_w; ++i) { w32[static_cast<crd::usize>(i)] = static_cast<float>(w64[static_cast<crd::usize>(i)]); }
-    for (int i = 0; i < n_in; ++i) { out32[static_cast<crd::usize>(i)] = -1.0F; }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in32[static_cast<crd::usize>(i)] = static_cast<float>(in64[static_cast<crd::usize>(i)]);
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w32[static_cast<crd::usize>(i)] = static_cast<float>(w64[static_cast<crd::usize>(i)]);
+    }
+    for (int i = 0; i < n_in; ++i)
+    {
+        out32[static_cast<crd::usize>(i)] = -1.0F;
+    }
     float*    host[3] = {in32.data(), w32.data(), out32.data()};
     const int lens[3] = {n_in, n_w, n_in};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(batch));
 
     // 4) GPU == oracle, bit-for-bit (FP32 precise, no FMA ⇒ exact on every vendor — the moat the tensor tier cannot hold).
     int bad = 0;
-    for (int i = 0; i < n_in; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
+    for (int i = 0; i < n_in; ++i)
+    {
+        if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -5335,7 +6556,11 @@ TEST_CASE("CEIR-18a-1 GATE: the Forward+ cull producer's per-cluster light lists
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5353,10 +6578,16 @@ TEST_CASE("CEIR-18a-1 GATE: the Forward+ cull producer's per-cluster light lists
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                     "ckir_light_cull", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -5374,8 +6605,20 @@ TEST_CASE("CEIR-18a-1 GATE: the Forward+ cull producer's per-cluster light lists
 
     // (1) the DEVICE list AND count buffers == the CPU oracle, EXACTLY.
     crd::u32 diffs = 0U;
-    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
-    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_list.size(); ++i)
+    {
+        if (gpu_list[i] != oracle_list[i])
+        {
+            ++diffs;
+        }
+    }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i)
+    {
+        if (gpu_cnt[i] != oracle_cnt[i])
+        {
+            ++diffs;
+        }
+    }
     INFO("18a-1 GPU-vs-oracle diffs (list+count) = " << diffs);
     CHECK(diffs == 0U);
 
@@ -5389,7 +6632,10 @@ TEST_CASE("CEIR-18a-1 GATE: the Forward+ cull producer's per-cluster light lists
         {
             CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
         }
-        if (scene.expected_count[c] == 0) { ++empty; }
+        if (scene.expected_count[c] == 0)
+        {
+            ++empty;
+        }
     }
     CHECK(empty >= 1U);                                        // ≥1 empty cluster
     CHECK(empty < static_cast<crd::u32>(Scene::num_clusters)); // and ≥1 populated cluster
@@ -5410,7 +6656,11 @@ TEST_CASE("CEIR-18a-2 GATE: the cull producer's device list matches the analytic
     cfg.backend  = gp::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gp::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gp::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5427,9 +6677,15 @@ TEST_CASE("CEIR-18a-2 GATE: the cull producer's device list matches the analytic
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gp::compile_glsl_to_spirv(gp::ShaderStage::Compute, crd::containers::to_view(kern.source), "cull2", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -5460,7 +6716,11 @@ TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists mat
     cfg.backend  = gp::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gp::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gp::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5477,10 +6737,16 @@ TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists mat
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_glsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         const auto spv = gp::compile_glsl_to_spirv(gp::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                    "ckir_light_cull_3d", &alloc);
-        if (!spv.ok) { emit_ok = false; }
+        if (!spv.ok)
+        {
+            emit_ok = false;
+        }
         return compute.create_pipeline_from_spirv(
             crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbufs, 0U);
     };
@@ -5498,8 +6764,20 @@ TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists mat
 
     // (1) device list AND count == the CPU oracle, EXACTLY (serial compaction ⇒ bit-identical, no atomics).
     crd::u32 diffs = 0U;
-    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
-    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_list.size(); ++i)
+    {
+        if (gpu_list[i] != oracle_list[i])
+        {
+            ++diffs;
+        }
+    }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i)
+    {
+        if (gpu_cnt[i] != oracle_cnt[i])
+        {
+            ++diffs;
+        }
+    }
     INFO("18b GPU-vs-oracle diffs (list+count) = " << diffs);
     CHECK(diffs == 0U);
 
@@ -5512,7 +6790,10 @@ TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists mat
         {
             CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
         }
-        if (scene.expected_count[c] == 0) { ++empty; }
+        if (scene.expected_count[c] == 0)
+        {
+            ++empty;
+        }
     }
     CHECK(empty >= 1U);
     CHECK(empty < static_cast<crd::u32>(Scene::num_clusters));
@@ -5526,8 +6807,14 @@ TEST_CASE("CEIR-18b GATE: the 3D clustered cull producer's per-cluster lists mat
     for (int k = 0; k < Scene::cap; ++k)
     {
         const crd::usize kk = static_cast<crd::usize>(k);
-        if (static_cast<int>(gpu_list[c0_base + kk]) == 1) { c0_has_l1 = true; }
-        if (static_cast<int>(gpu_list[c32_base + kk]) == 0) { c32_has_l0 = true; }
+        if (static_cast<int>(gpu_list[c0_base + kk]) == 1)
+        {
+            c0_has_l1 = true;
+        }
+        if (static_cast<int>(gpu_list[c32_base + kk]) == 0)
+        {
+            c32_has_l0 = true;
+        }
     }
     CHECK(static_cast<int>(gpu_list[c0_base]) == 0);  // c0 slot0 = L0
     CHECK(static_cast<int>(gpu_list[c32_base]) == 1); // c32 slot0 = L1
@@ -5543,7 +6830,11 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5570,7 +6861,10 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle 
     auto rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     for (int p = 0; p < np; ++p)
     {
-        for (int c = 0; c < 3; ++c) { color[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5); }
+        for (int c = 0; c < 3; ++c)
+        {
+            color[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5);
+        }
         var[uz(p)]          = 0.05;
         gbuf[uz(p * 4 + 0)] = 1.0 + 0.1 * rnd();
         gbuf[uz(p * 4 + 1)] = 0.0;
@@ -5598,10 +6892,22 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle 
     hv.resize(uz(np));
     hco.resize(uz(np * 3));
     hvo.resize(uz(np));
-    for (int i = 0; i < np * 3; ++i) { hc[uz(i)] = static_cast<float>(color[uz(i)]); }
-    for (int i = 0; i < np * 4; ++i) { hg[uz(i)] = static_cast<float>(gbuf[uz(i)]); }
-    for (int i = 0; i < np; ++i) { hv[uz(i)] = static_cast<float>(var[uz(i)]); }
-    for (int i = 0; i < np * 3; ++i) { hco[uz(i)] = -9.0F; }
+    for (int i = 0; i < np * 3; ++i)
+    {
+        hc[uz(i)] = static_cast<float>(color[uz(i)]);
+    }
+    for (int i = 0; i < np * 4; ++i)
+    {
+        hg[uz(i)] = static_cast<float>(gbuf[uz(i)]);
+    }
+    for (int i = 0; i < np; ++i)
+    {
+        hv[uz(i)] = static_cast<float>(var[uz(i)]);
+    }
+    for (int i = 0; i < np * 3; ++i)
+    {
+        hco[uz(i)] = -9.0F;
+    }
     float*    host[5] = {hc.data(), hg.data(), hv.data(), hco.data(), hvo.data()};
     const int lens[5] = {np * 3, np * 4, np, np * 3, np};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 5, static_cast<crd::u32>(np / 64));
@@ -5612,7 +6918,10 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on Vulkan == CPU oracle 
         const double ref = col_out[uz(i)];
         const double got = static_cast<double>(hco[uz(i)]);
         const double rel = std::fabs(got - ref) / (std::fabs(ref) + 1e-3);
-        if (rel > maxrel) { maxrel = rel; }
+        if (rel > maxrel)
+        {
+            maxrel = rel;
+        }
     }
     std::printf("[Vulkan SVGF a-trous 32x32] maxrel(GPU vs oracle) = %.2e\n", maxrel);
     CHECK(maxrel < 1e-4); // arithmetic bit-exact; exp/pow weights ULP-tolerant (the B8 transcendental bar)
@@ -5626,7 +6935,11 @@ TEST_CASE("B14-b: CKIR DDGI probe sample (octahedral + Chebyshev + trilinear) DI
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5692,9 +7005,22 @@ TEST_CASE("B14-b: CKIR DDGI probe sample (octahedral + Chebyshev + trilinear) DI
     crd::containers::Array<float> h4(&alloc);
     crd::containers::Array<float>* h[5] = {&h0, &h1, &h2, &h3, &h4};
     float*                        host[5];
-    for (int b = 0; b < 5; ++b) { h[b]->resize(uz(lens[b])); host[b] = h[b]->data(); }
-    for (int b = 0; b < 4; ++b) { for (int i = 0; i < lens[b]; ++i) { (*h[b])[uz(i)] = static_cast<float>(bufs[b].data[i]); } }
-    for (int i = 0; i < lens[4]; ++i) { h4[uz(i)] = -9.0F; }
+    for (int b = 0; b < 5; ++b)
+    {
+        h[b]->resize(uz(lens[b]));
+        host[b] = h[b]->data();
+    }
+    for (int b = 0; b < 4; ++b)
+    {
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            (*h[b])[uz(i)] = static_cast<float>(bufs[b].data[i]);
+        }
+    }
+    for (int i = 0; i < lens[4]; ++i)
+    {
+        h4[uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 5, static_cast<crd::u32>(nq / 64));
 
     double maxrel = 0.0;
@@ -5716,7 +7042,11 @@ TEST_CASE("B14-b: CKIR DDGI probe UPDATE (octahedral integrate + moments + hyste
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5732,7 +7062,11 @@ TEST_CASE("B14-b: CKIR DDGI probe UPDATE (octahedral integrate + moments + hyste
 
     crd::containers::Array<crd::f64> b[7];
     const int                        lens[7] = {8 * nr * 3, 8 * nr * 3, 8 * nr, ntx * 3, ntx * 2, ntx * 3, ntx * 2};
-    for (int k = 0; k < 7; ++k) { b[k] = crd::containers::Array<crd::f64>(&alloc); b[k].resize(uz(lens[k])); }
+    for (int k = 0; k < 7; ++k)
+    {
+        b[k] = crd::containers::Array<crd::f64>(&alloc);
+        b[k].resize(uz(lens[k]));
+    }
     crd::u32 s = 91U;
     auto rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     for (int i = 0; i < 8 * nr; ++i)
@@ -5742,10 +7076,19 @@ TEST_CASE("B14-b: CKIR DDGI probe UPDATE (octahedral integrate + moments + hyste
         b[1][uz(i * 3 + 0)] = 0.6; b[1][uz(i * 3 + 1)] = 0.3; b[1][uz(i * 3 + 2)] = 0.1;                 // radiance
         b[2][uz(i)]         = 2.0 + 4.0 * rnd();                                                          // hit distance
     }
-    for (int i = 0; i < ntx * 3; ++i) { b[3][uz(i)] = 0.1 * rnd(); } // non-zero prev ⇒ the hysteresis lerp is exercised
-    for (int i = 0; i < ntx * 2; ++i) { b[4][uz(i)] = 0.2 * rnd(); }
+    for (int i = 0; i < ntx * 3; ++i) // non-zero prev ⇒ the hysteresis lerp is exercised
+    {
+        b[3][uz(i)] = 0.1 * rnd();
+    }
+    for (int i = 0; i < ntx * 2; ++i)
+    {
+        b[4][uz(i)] = 0.2 * rnd();
+    }
     kir::KernelBuffer kb[7];
-    for (int k = 0; k < 7; ++k) { kb[k] = {b[k].data(), lens[k], 0, static_cast<crd::u8>(k)}; }
+    for (int k = 0; k < 7; ++k)
+    {
+        kb[k] = {b[k].data(), lens[k], 0, static_cast<crd::u8>(k)};
+    }
     kir::eval_cpu_kernel(g, e, kb, 7, e.local_size[0], &alloc, static_cast<crd::u32>(ntx / 64));
 
     kir::GlslKernel kern(&alloc);
@@ -5757,15 +7100,32 @@ TEST_CASE("B14-b: CKIR DDGI probe UPDATE (octahedral integrate + moments + hyste
 
     crd::containers::Array<float> hf[7];
     float*                        host[7];
-    for (int k = 0; k < 7; ++k) { hf[k] = crd::containers::Array<float>(&alloc); hf[k].resize(uz(lens[k])); host[k] = hf[k].data(); }
-    for (int k = 0; k < 5; ++k) { for (int i = 0; i < lens[k]; ++i) { hf[k][uz(i)] = static_cast<float>(b[k].data()[i]); } }
-    for (int i = 0; i < lens[5]; ++i) { hf[5][uz(i)] = -9.0F; }
+    for (int k = 0; k < 7; ++k)
+    {
+        hf[k] = crd::containers::Array<float>(&alloc);
+        hf[k].resize(uz(lens[k]));
+        host[k] = hf[k].data();
+    }
+    for (int k = 0; k < 5; ++k)
+    {
+        for (int i = 0; i < lens[k]; ++i)
+        {
+            hf[k][uz(i)] = static_cast<float>(b[k].data()[i]);
+        }
+    }
+    for (int i = 0; i < lens[5]; ++i)
+    {
+        hf[5][uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 7, static_cast<crd::u32>(ntx / 64));
 
     double maxrel = 0.0;
     for (int k = 5; k < 7; ++k)
     {
-        for (int i = 0; i < lens[k]; ++i) { maxrel = std::max(maxrel, std::fabs(static_cast<double>(hf[k][uz(i)]) - b[k][uz(i)]) / (std::fabs(b[k][uz(i)]) + 1e-3)); }
+        for (int i = 0; i < lens[k]; ++i)
+        {
+            maxrel = std::max(maxrel, std::fabs(static_cast<double>(hf[k][uz(i)]) - b[k][uz(i)]) / (std::fabs(b[k][uz(i)]) + 1e-3));
+        }
     }
     std::printf("[Vulkan DDGI probe-update] maxrel(GPU vs oracle) = %.2e\n", maxrel);
     CHECK(maxrel < 1e-4); // integrate/moments/hysteresis + pow (cos^sharpness) ULP ⇒ effectively exact
@@ -5779,7 +7139,11 @@ TEST_CASE("B14-a: CKIR ReSTIR RIS (weighted reservoir resampling) DISPATCHES on 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5825,9 +7189,19 @@ TEST_CASE("B14-a: CKIR ReSTIR RIS (weighted reservoir resampling) DISPATCHES on 
     crd::containers::Array<float> h1(&alloc);
     crd::containers::Array<float>* h[2] = {&h0, &h1};
     float*                        host[2];
-    for (int b = 0; b < 2; ++b) { h[b]->resize(uz(lens[b])); host[b] = h[b]->data(); }
-    for (int i = 0; i < lens[0]; ++i) { h0[uz(i)] = static_cast<float>(bufs[0].data[i]); }
-    for (int i = 0; i < lens[1]; ++i) { h1[uz(i)] = -9.0F; }
+    for (int b = 0; b < 2; ++b)
+    {
+        h[b]->resize(uz(lens[b]));
+        host[b] = h[b]->data();
+    }
+    for (int i = 0; i < lens[0]; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(bufs[0].data[i]);
+    }
+    for (int i = 0; i < lens[1]; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
 
     double maxrel = 0.0;
@@ -5848,7 +7222,11 @@ TEST_CASE("B14-a: CKIR ReSTIR TEMPORAL merge (two-reservoir combine + M clamp) D
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5892,9 +7270,23 @@ TEST_CASE("B14-a: CKIR ReSTIR TEMPORAL merge (two-reservoir combine + M clamp) D
     const int lens[4] = {n * 4, n * 4, n, n * 4};
     crd::containers::Array<float> hf[4];
     float*                        host[4];
-    for (int k = 0; k < 4; ++k) { hf[k] = crd::containers::Array<float>(&alloc); hf[k].resize(uz(lens[k])); host[k] = hf[k].data(); }
-    for (int k = 0; k < 3; ++k) { for (int i = 0; i < lens[k]; ++i) { hf[k][uz(i)] = static_cast<float>(bufs[k].data[i]); } }
-    for (int i = 0; i < lens[3]; ++i) { hf[3][uz(i)] = -9.0F; }
+    for (int k = 0; k < 4; ++k)
+    {
+        hf[k] = crd::containers::Array<float>(&alloc);
+        hf[k].resize(uz(lens[k]));
+        host[k] = hf[k].data();
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        for (int i = 0; i < lens[k]; ++i)
+        {
+            hf[k][uz(i)] = static_cast<float>(bufs[k].data[i]);
+        }
+    }
+    for (int i = 0; i < lens[3]; ++i)
+    {
+        hf[3][uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 4, static_cast<crd::u32>(n / 64));
 
     double maxrel = 0.0;
@@ -5915,7 +7307,11 @@ TEST_CASE("B14-a: CKIR ReSTIR SPATIAL reuse (K-neighbour reservoir merge) DISPAT
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -5943,7 +7339,11 @@ TEST_CASE("B14-a: CKIR ReSTIR SPATIAL reuse (K-neighbour reservoir merge) DISPAT
     {
         res[uz(p * 4 + 0)] = 0.2 + 2.0 * rnd(); res[uz(p * 4 + 1)] = 0.1 + 1.5 * rnd();
         res[uz(p * 4 + 2)] = 0.3 + rnd();       res[uz(p * 4 + 3)] = 16.0 + 48.0 * rnd();
-        for (int j = 0; j < k; ++j) { nbr[uz(p * k + j)] = static_cast<double>(static_cast<int>(rnd() * n) % n); xi[uz(p * k + j)] = rnd(); }
+        for (int j = 0; j < k; ++j)
+        {
+            nbr[uz(p * k + j)] = static_cast<double>(static_cast<int>(rnd() * n) % n);
+            xi[uz(p * k + j)] = rnd();
+        }
     }
     kir::KernelBuffer bufs[4] = {{res.data(), n * 4, 0, 0}, {nbr.data(), n * k, 0, 1}, {xi.data(), n * k, 0, 2}, {out.data(), n * 4, 0, 3}};
     kir::eval_cpu_kernel(g, e, bufs, 4, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
@@ -5958,9 +7358,23 @@ TEST_CASE("B14-a: CKIR ReSTIR SPATIAL reuse (K-neighbour reservoir merge) DISPAT
     const int lens[4] = {n * 4, n * k, n * k, n * 4};
     crd::containers::Array<float> hf[4];
     float*                        host[4];
-    for (int b = 0; b < 4; ++b) { hf[b] = crd::containers::Array<float>(&alloc); hf[b].resize(uz(lens[b])); host[b] = hf[b].data(); }
-    for (int b = 0; b < 3; ++b) { for (int i = 0; i < lens[b]; ++i) { hf[b][uz(i)] = static_cast<float>(bufs[b].data[i]); } }
-    for (int i = 0; i < lens[3]; ++i) { hf[3][uz(i)] = -9.0F; }
+    for (int b = 0; b < 4; ++b)
+    {
+        hf[b] = crd::containers::Array<float>(&alloc);
+        hf[b].resize(uz(lens[b]));
+        host[b] = hf[b].data();
+    }
+    for (int b = 0; b < 3; ++b)
+    {
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            hf[b][uz(i)] = static_cast<float>(bufs[b].data[i]);
+        }
+    }
+    for (int i = 0; i < lens[3]; ++i)
+    {
+        hf[3][uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 4, static_cast<crd::u32>(n / 64));
 
     double maxrel = 0.0;
@@ -5981,7 +7395,11 @@ TEST_CASE("B15-a: CKIR atmosphere TRANSMITTANCE LUT (Hillaire/Bruneton extinctio
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6010,7 +7428,10 @@ TEST_CASE("B15-a: CKIR atmosphere TRANSMITTANCE LUT (Hillaire/Bruneton extinctio
     const int lens[1] = {nel};
     crd::containers::Array<float> h0(&alloc);
     h0.resize(uz(nel));
-    for (int i = 0; i < nel; ++i) { h0[uz(i)] = -9.0F; }
+    for (int i = 0; i < nel; ++i)
+    {
+        h0[uz(i)] = -9.0F;
+    }
     float* host[1] = {h0.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 1, static_cast<crd::u32>(w * ht / 64));
 
@@ -6035,7 +7456,11 @@ TEST_CASE("B15-a: CKIR atmosphere MULTIPLE-SCATTERING LUT (Hillaire isotropic se
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6057,7 +7482,10 @@ TEST_CASE("B15-a: CKIR atmosphere MULTIPLE-SCATTERING LUT (Hillaire isotropic se
     tlut.resize(uz(tn));
     kir::KernelBuffer tb[1] = {{tlut.data(), tn, 0, 0}};
     kir::eval_cpu_kernel(gt, et, tb, 1, et.local_size[0], &alloc, static_cast<crd::u32>(tw * th / 64));
-    for (int i = 0; i < tn; ++i) { tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)])); }
+    for (int i = 0; i < tn; ++i)
+    {
+        tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)]));
+    }
 
     kir::KGraph       gm(&alloc);
     const kir::KEntry em = kir::atmos::build_atmos_multiscatter(gm, acfg);
@@ -6078,13 +7506,22 @@ TEST_CASE("B15-a: CKIR atmosphere MULTIPLE-SCATTERING LUT (Hillaire isotropic se
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(tn));
     h1.resize(uz(mn));
-    for (int i = 0; i < tn; ++i) { h0[uz(i)] = static_cast<float>(tlut[uz(i)]); }
-    for (int i = 0; i < mn; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < tn; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(tlut[uz(i)]);
+    }
+    for (int i = 0; i < mn; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(res * res / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < mn; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - ms[uz(i)])); }
+    for (int i = 0; i < mn; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - ms[uz(i)]));
+    }
     std::printf("[Vulkan atmosphere multiscatter LUT] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     // Ψ is a small fill radiance; only exp/sqrt (GPU vs libm) diverge over the sphere×march accumulation + bilinear LUT taps.
     CHECK(maxabs < 2e-4);
@@ -6098,7 +7535,11 @@ TEST_CASE("B15-a: CKIR atmosphere SKY-VIEW LUT (single+multiple scattering, both
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6126,7 +7567,10 @@ TEST_CASE("B15-a: CKIR atmosphere SKY-VIEW LUT (single+multiple scattering, both
     tlut.resize(uz(tn));
     kir::KernelBuffer tb[1] = {{tlut.data(), tn, 0, 0}};
     kir::eval_cpu_kernel(gt, et, tb, 1, et.local_size[0], &alloc, static_cast<crd::u32>(tw * th / 64));
-    for (int i = 0; i < tn; ++i) { tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)])); }
+    for (int i = 0; i < tn; ++i)
+    {
+        tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)]));
+    }
 
     kir::KGraph       gm(&alloc);
     const kir::KEntry em = kir::atmos::build_atmos_multiscatter(gm, acfg);
@@ -6134,7 +7578,10 @@ TEST_CASE("B15-a: CKIR atmosphere SKY-VIEW LUT (single+multiple scattering, both
     ms.resize(uz(rn));
     kir::KernelBuffer mb[2] = {{tlut.data(), tn, 0, 0}, {ms.data(), rn, 0, 1}};
     kir::eval_cpu_kernel(gm, em, mb, 2, em.local_size[0], &alloc, static_cast<crd::u32>(rs * rs / 64));
-    for (int i = 0; i < rn; ++i) { ms[uz(i)] = static_cast<double>(static_cast<float>(ms[uz(i)])); }
+    for (int i = 0; i < rn; ++i)
+    {
+        ms[uz(i)] = static_cast<double>(static_cast<float>(ms[uz(i)]));
+    }
 
     kir::KGraph       gs(&alloc);
     const kir::KEntry es = kir::atmos::build_atmos_skyview(gs, acfg);
@@ -6157,14 +7604,26 @@ TEST_CASE("B15-a: CKIR atmosphere SKY-VIEW LUT (single+multiple scattering, both
     h0.resize(uz(tn));
     h1.resize(uz(rn));
     h2.resize(uz(sn));
-    for (int i = 0; i < tn; ++i) { h0[uz(i)] = static_cast<float>(tlut[uz(i)]); }
-    for (int i = 0; i < rn; ++i) { h1[uz(i)] = static_cast<float>(ms[uz(i)]); }
-    for (int i = 0; i < sn; ++i) { h2[uz(i)] = -9.0F; }
+    for (int i = 0; i < tn; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(tlut[uz(i)]);
+    }
+    for (int i = 0; i < rn; ++i)
+    {
+        h1[uz(i)] = static_cast<float>(ms[uz(i)]);
+    }
+    for (int i = 0; i < sn; ++i)
+    {
+        h2[uz(i)] = -9.0F;
+    }
     float* host[3] = {h0.data(), h1.data(), h2.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(sw * sh / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < sn; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - sv[uz(i)])); }
+    for (int i = 0; i < sn; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - sv[uz(i)]));
+    }
     std::printf("[Vulkan atmosphere sky-view LUT] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     // sky radiance from single (phase-weighted) + multiple scattering; only exp/sqrt/pow (GPU vs libm) diverge over the march.
     CHECK(maxabs < 5e-4);
@@ -6178,7 +7637,11 @@ TEST_CASE("B15-a: CKIR atmosphere AERIAL-PERSPECTIVE froxels (3D volume, both LU
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6204,7 +7667,10 @@ TEST_CASE("B15-a: CKIR atmosphere AERIAL-PERSPECTIVE froxels (3D volume, both LU
     tlut.resize(uz(tn));
     kir::KernelBuffer tb[1] = {{tlut.data(), tn, 0, 0}};
     kir::eval_cpu_kernel(gt, et, tb, 1, et.local_size[0], &alloc, static_cast<crd::u32>(tw * th / 64));
-    for (int i = 0; i < tn; ++i) { tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)])); }
+    for (int i = 0; i < tn; ++i)
+    {
+        tlut[uz(i)] = static_cast<double>(static_cast<float>(tlut[uz(i)]));
+    }
 
     kir::KGraph       gm(&alloc);
     const kir::KEntry em = kir::atmos::build_atmos_multiscatter(gm, acfg);
@@ -6212,7 +7678,10 @@ TEST_CASE("B15-a: CKIR atmosphere AERIAL-PERSPECTIVE froxels (3D volume, both LU
     ms.resize(uz(rn));
     kir::KernelBuffer mb[2] = {{tlut.data(), tn, 0, 0}, {ms.data(), rn, 0, 1}};
     kir::eval_cpu_kernel(gm, em, mb, 2, em.local_size[0], &alloc, static_cast<crd::u32>(rr * rr / 64));
-    for (int i = 0; i < rn; ++i) { ms[uz(i)] = static_cast<double>(static_cast<float>(ms[uz(i)])); }
+    for (int i = 0; i < rn; ++i)
+    {
+        ms[uz(i)] = static_cast<double>(static_cast<float>(ms[uz(i)]));
+    }
 
     kir::KGraph       ga(&alloc);
     const kir::KEntry ea = kir::atmos::build_atmos_aerial(ga, acfg);
@@ -6235,14 +7704,26 @@ TEST_CASE("B15-a: CKIR atmosphere AERIAL-PERSPECTIVE froxels (3D volume, both LU
     h0.resize(uz(tn));
     h1.resize(uz(rn));
     h2.resize(uz(an));
-    for (int i = 0; i < tn; ++i) { h0[uz(i)] = static_cast<float>(tlut[uz(i)]); }
-    for (int i = 0; i < rn; ++i) { h1[uz(i)] = static_cast<float>(ms[uz(i)]); }
-    for (int i = 0; i < an; ++i) { h2[uz(i)] = -9.0F; }
+    for (int i = 0; i < tn; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(tlut[uz(i)]);
+    }
+    for (int i = 0; i < rn; ++i)
+    {
+        h1[uz(i)] = static_cast<float>(ms[uz(i)]);
+    }
+    for (int i = 0; i < an; ++i)
+    {
+        h2[uz(i)] = -9.0F;
+    }
     float* host[3] = {h0.data(), h1.data(), h2.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(apr * apr / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < an; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - ap[uz(i)])); }
+    for (int i = 0; i < an; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - ap[uz(i)]));
+    }
     std::printf("[Vulkan atmosphere aerial-perspective] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     CHECK(maxabs < 5e-4);
 }
@@ -6255,7 +7736,11 @@ TEST_CASE("B14-d: CKIR NRC hash-grid ENCODER (Instant-NGP, trilinear hashed feat
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6277,8 +7762,14 @@ TEST_CASE("B14-d: CKIR NRC hash-grid ENCODER (Instant-NGP, trilinear hashed feat
     out.resize(uz(n * lf));
     crd::u32 s   = 7U;
     auto     rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
-    for (int i = 0; i < n * 3; ++i) { pos[uz(i)] = rnd(); }
-    for (int i = 0; i < ts; ++i) { tab[uz(i)] = rnd() * 2.0 - 1.0; } // learnable features (signed)
+    for (int i = 0; i < n * 3; ++i)
+    {
+        pos[uz(i)] = rnd();
+    }
+    for (int i = 0; i < ts; ++i) // learnable features (signed)
+    {
+        tab[uz(i)] = rnd() * 2.0 - 1.0;
+    }
     kir::KernelBuffer bufs[3] = {{pos.data(), n * 3, 0, 0}, {tab.data(), ts, 0, 1}, {out.data(), n * lf, 0, 2}};
     kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
 
@@ -6296,14 +7787,26 @@ TEST_CASE("B14-d: CKIR NRC hash-grid ENCODER (Instant-NGP, trilinear hashed feat
     h0.resize(uz(n * 3));
     h1.resize(uz(ts));
     h2.resize(uz(n * lf));
-    for (int i = 0; i < n * 3; ++i) { h0[uz(i)] = static_cast<float>(pos[uz(i)]); }
-    for (int i = 0; i < ts; ++i) { h1[uz(i)] = static_cast<float>(tab[uz(i)]); }
-    for (int i = 0; i < n * lf; ++i) { h2[uz(i)] = -9.0F; }
+    for (int i = 0; i < n * 3; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(pos[uz(i)]);
+    }
+    for (int i = 0; i < ts; ++i)
+    {
+        h1[uz(i)] = static_cast<float>(tab[uz(i)]);
+    }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        h2[uz(i)] = -9.0F;
+    }
     float* host[3] = {h0.data(), h1.data(), h2.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(n / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < n * lf; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - out[uz(i)])); }
+    for (int i = 0; i < n * lf; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h2[uz(i)]) - out[uz(i)]));
+    }
     std::printf("[Vulkan NRC hash-grid encode] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     CHECK(maxabs < 1e-6); // integer spatial hash + trilinear blend — no transcendentals ⇒ bit-exact (f32 sum ULP only)
 }
@@ -6316,7 +7819,11 @@ TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6337,11 +7844,26 @@ TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan 
     crd::containers::Array<crd::f64> w2(&alloc);
     crd::containers::Array<crd::f64> b2(&alloc);
     enc.resize(uz(n * d)); w1.resize(uz(h * d)); b1.resize(uz(h)); w2.resize(uz(o * h)); b2.resize(uz(o));
-    for (int i = 0; i < n * d; ++i) { enc[uz(i)] = rnd(); }
-    for (int i = 0; i < h * d; ++i) { w1[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < h; ++i) { b1[uz(i)] = rnd() * 0.2; }
-    for (int i = 0; i < o * h; ++i) { w2[uz(i)] = rnd() * 0.5; }
-    for (int i = 0; i < o; ++i) { b2[uz(i)] = rnd() * 0.1; }
+    for (int i = 0; i < n * d; ++i)
+    {
+        enc[uz(i)] = rnd();
+    }
+    for (int i = 0; i < h * d; ++i)
+    {
+        w1[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < h; ++i)
+    {
+        b1[uz(i)] = rnd() * 0.2;
+    }
+    for (int i = 0; i < o * h; ++i)
+    {
+        w2[uz(i)] = rnd() * 0.5;
+    }
+    for (int i = 0; i < o; ++i)
+    {
+        b2[uz(i)] = rnd() * 0.1;
+    }
 
     // ── inference ──
     {
@@ -6360,12 +7882,29 @@ TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan 
         const int lens[6] = {n * d, h * d, h, o * h, o, n * o};
         crd::containers::Array<float> hb[6];
         float*                        host[6];
-        for (int k = 0; k < 6; ++k) { hb[k] = crd::containers::Array<float>(&alloc); hb[k].resize(uz(lens[k])); host[k] = hb[k].data(); }
-        for (int k = 0; k < 5; ++k) { for (int i = 0; i < lens[k]; ++i) { hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]); } }
-        for (int i = 0; i < lens[5]; ++i) { hb[5][uz(i)] = -9.0F; }
+        for (int k = 0; k < 6; ++k)
+        {
+            hb[k] = crd::containers::Array<float>(&alloc);
+            hb[k].resize(uz(lens[k]));
+            host[k] = hb[k].data();
+        }
+        for (int k = 0; k < 5; ++k)
+        {
+            for (int i = 0; i < lens[k]; ++i)
+            {
+                hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]);
+            }
+        }
+        for (int i = 0; i < lens[5]; ++i)
+        {
+            hb[5][uz(i)] = -9.0F;
+        }
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, static_cast<crd::u32>(n / 64));
         double mdiff = 0.0;
-        for (int i = 0; i < n * o; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[5][uz(i)]) - out[uz(i)])); }
+        for (int i = 0; i < n * o; ++i)
+        {
+            mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[5][uz(i)]) - out[uz(i)]));
+        }
         std::printf("[Vulkan NRC infer] maxabs = %.2e\n", mdiff);
         CHECK(mdiff < 1e-5);
     }
@@ -6377,7 +7916,10 @@ TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan 
         crd::containers::Array<crd::f64> gw1(&alloc);
         crd::containers::Array<crd::f64> gw2(&alloc);
         tgt.resize(uz(n * o)); gw1.resize(uz(n * h * d)); gw2.resize(uz(n * o * h));
-        for (int i = 0; i < n * o; ++i) { tgt[uz(i)] = rnd(); }
+        for (int i = 0; i < n * o; ++i)
+        {
+            tgt[uz(i)] = rnd();
+        }
         kir::KernelBuffer bufs[8] = {{enc.data(), n * d, 0, 0}, {w1.data(), h * d, 0, 1}, {b1.data(), h, 0, 2}, {w2.data(), o * h, 0, 3}, {b2.data(), o, 0, 4}, {tgt.data(), n * o, 0, 5}, {gw1.data(), n * h * d, 0, 6}, {gw2.data(), n * o * h, 0, 7}};
         kir::eval_cpu_kernel(g, e, bufs, 8, e.local_size[0], &alloc, static_cast<crd::u32>(n / 64));
         kir::GlslKernel kern(&alloc);
@@ -6389,14 +7931,37 @@ TEST_CASE("B14-d: CKIR NRC MLP inference + TRAINING backprop DISPATCH on Vulkan 
         const int lens[8] = {n * d, h * d, h, o * h, o, n * o, n * h * d, n * o * h};
         crd::containers::Array<float> hb[8];
         float*                        host[8];
-        for (int k = 0; k < 8; ++k) { hb[k] = crd::containers::Array<float>(&alloc); hb[k].resize(uz(lens[k])); host[k] = hb[k].data(); }
-        for (int k = 0; k < 6; ++k) { for (int i = 0; i < lens[k]; ++i) { hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]); } }
-        for (int i = 0; i < lens[6]; ++i) { hb[6][uz(i)] = -9.0F; }
-        for (int i = 0; i < lens[7]; ++i) { hb[7][uz(i)] = -9.0F; }
+        for (int k = 0; k < 8; ++k)
+        {
+            hb[k] = crd::containers::Array<float>(&alloc);
+            hb[k].resize(uz(lens[k]));
+            host[k] = hb[k].data();
+        }
+        for (int k = 0; k < 6; ++k)
+        {
+            for (int i = 0; i < lens[k]; ++i)
+            {
+                hb[k][uz(i)] = static_cast<float>(bufs[k].data[i]);
+            }
+        }
+        for (int i = 0; i < lens[6]; ++i)
+        {
+            hb[6][uz(i)] = -9.0F;
+        }
+        for (int i = 0; i < lens[7]; ++i)
+        {
+            hb[7][uz(i)] = -9.0F;
+        }
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 8, static_cast<crd::u32>(n / 64));
         double mdiff = 0.0;
-        for (int i = 0; i < n * h * d; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[6][uz(i)]) - gw1[uz(i)])); }
-        for (int i = 0; i < n * o * h; ++i) { mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[7][uz(i)]) - gw2[uz(i)])); }
+        for (int i = 0; i < n * h * d; ++i)
+        {
+            mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[6][uz(i)]) - gw1[uz(i)]));
+        }
+        for (int i = 0; i < n * o * h; ++i)
+        {
+            mdiff = std::max(mdiff, std::fabs(static_cast<double>(hb[7][uz(i)]) - gw2[uz(i)]));
+        }
         std::printf("[Vulkan NRC train-grad] maxabs = %.2e\n", mdiff);
         CHECK(mdiff < 1e-5);
     }
@@ -6410,7 +7975,11 @@ TEST_CASE("B15-b: CKIR cloud DENSITY field (Nubis Perlin-Worley + coverage + ero
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6451,13 +8020,22 @@ TEST_CASE("B15-b: CKIR cloud DENSITY field (Nubis Perlin-Worley + coverage + ero
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(n * 3));
     h1.resize(uz(n));
-    for (int i = 0; i < n * 3; ++i) { h0[uz(i)] = static_cast<float>(pos[uz(i)]); }
-    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < n * 3; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(pos[uz(i)]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < n; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    for (int i = 0; i < n; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)]));
+    }
     std::printf("[Vulkan cloud density] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     CHECK(maxabs < 1e-6); // Perlin/Worley noise = integer hash + lerp, no transcendentals ⇒ bit-exact
 }
@@ -6474,7 +8052,11 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on Vulkan ==
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6518,8 +8100,14 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on Vulkan ==
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(n * 6));
     h1.resize(uz(n));
-    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < n * 6; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(in[uz(i)]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
 
@@ -6531,7 +8119,10 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on Vulkan ==
         const double ov = out[uz(i)];
         const double ad = std::fabs(gv - ov);
         maxabs          = std::max(maxabs, ad);
-        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+        if (std::fabs(ov) > 1.0e-3)
+        {
+            maxrel = std::max(maxrel, ad / std::fabs(ov));
+        }
     }
     std::printf("[Vulkan hair BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
     // to-ULP: observed maxabs ~2e-7 (≈f32 bit-exact), maxrel ~7e-6 (tens of f32 ULP over the exp/log/asin/sinh/logistic chain).
@@ -6557,7 +8148,11 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on Vulkan 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6604,8 +8199,14 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on Vulkan 
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(n * 6));
     h1.resize(uz(n));
-    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < n * 6; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(in[uz(i)]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
 
@@ -6617,7 +8218,10 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on Vulkan 
         const double ov = out[uz(i)];
         const double ad = std::fabs(gv - ov);
         maxabs          = std::max(maxabs, ad);
-        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+        if (std::fabs(ov) > 1.0e-3)
+        {
+            maxrel = std::max(maxrel, ad / std::fabs(ov));
+        }
     }
     std::printf("[Vulkan fur BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
     CHECK(maxabs < 1.0e-2); // same conformance envelope as the hair BCSDF above (same exp-amplified cone)
@@ -6637,7 +8241,11 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on Vulkan == CPU oracl
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6650,20 +8258,43 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on Vulkan == CPU oracl
                           crd::u32 groups, const char* name) -> double {
         crd::containers::Array<double> snap(&alloc);
         int total = 0;
-        for (int i = 0; i < nbuf; ++i) { total += lens[i]; }
+        for (int i = 0; i < nbuf; ++i)
+        {
+            total += lens[i];
+        }
         snap.resize(uz(total), 0.0);
         int off = 0;
-        for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { snap[uz(off + j)] = data[i][j]; } off += lens[i]; }
+        for (int i = 0; i < nbuf; ++i)
+        {
+            for (int j = 0; j < lens[i]; ++j)
+            {
+                snap[uz(off + j)] = data[i][j];
+            }
+            off += lens[i];
+        }
 
         kir::KernelBuffer bufs[6];
-        for (int i = 0; i < nbuf; ++i) { bufs[i] = {data[i], lens[i], 0U, static_cast<crd::u8>(i)}; } // binding is u8
+        for (int i = 0; i < nbuf; ++i) // binding is u8
+        {
+            bufs[i] = {data[i], lens[i], 0U, static_cast<crd::u8>(i)};
+        }
         kir::eval_cpu_kernel(g, e, bufs, nbuf, e.local_size[0], &alloc, groups);
         crd::containers::Array<double> ref(&alloc);
         ref.resize(uz(lens[check]), 0.0);
-        for (int j = 0; j < lens[check]; ++j) { ref[uz(j)] = data[check][j]; }
+        for (int j = 0; j < lens[check]; ++j)
+        {
+            ref[uz(j)] = data[check][j];
+        }
 
         off = 0; // restore the pre-oracle state for the device run
-        for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { data[i][j] = snap[uz(off + j)]; } off += lens[i]; }
+        for (int i = 0; i < nbuf; ++i)
+        {
+            for (int j = 0; j < lens[i]; ++j)
+            {
+                data[i][j] = snap[uz(off + j)];
+            }
+            off += lens[i];
+        }
 
         kir::GlslKernel kern(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
@@ -6679,7 +8310,10 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on Vulkan == CPU oracl
         for (int i = 0; i < nbuf; ++i)
         {
             host[i] = host_store.data() + off;
-            for (int j = 0; j < lens[i]; ++j) { host[i][j] = static_cast<float>(data[i][j]); }
+            for (int j = 0; j < lens[i]; ++j)
+            {
+                host[i][j] = static_cast<float>(data[i][j]);
+            }
             off += lens[i];
         }
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, nbuf, groups);
@@ -6791,7 +8425,11 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6817,9 +8455,15 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     for (int s = 0; s < nseg; ++s)
     {
         const crd::usize o = uz(s * 8);
-        for (int k = 0; k < 3; ++k) { segs[o + uz(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + uz(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 3U] = 0.05 + rnd() * 0.25;
-        for (int k = 0; k < 3; ++k) { segs[o + 4U + uz(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + 4U + uz(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 7U] = 0.05 + rnd() * 0.25;
     }
     for (int r = 0; r < nray; ++r)
@@ -6834,8 +8478,14 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     }
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(nray * 6 + nseg * 8), 0.0);
-    for (int j = 0; j < nray * 6; ++j) { snap[uz(j)] = rays[uz(j)]; }
-    for (int j = 0; j < nseg * 8; ++j) { snap[uz(nray * 6 + j)] = segs[uz(j)]; }
+    for (int j = 0; j < nray * 6; ++j)
+    {
+        snap[uz(j)] = rays[uz(j)];
+    }
+    for (int j = 0; j < nseg * 8; ++j)
+    {
+        snap[uz(nray * 6 + j)] = segs[uz(j)];
+    }
 
     kir::KernelBuffer bufs[3] = {{rays.data(), nray * 6, 0U, 0U},
                                  {segs.data(), nseg * 8, 0U, 1U},
@@ -6843,7 +8493,10 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(nray * 2), 0.0);
-    for (int j = 0; j < nray * 2; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < nray * 2; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
@@ -6858,8 +8511,14 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     host_store.resize(uz(nray * 6 + nseg * 8 + nray * 2), 0.0F);
     float*    host[3] = {host_store.data(), host_store.data() + nray * 6, host_store.data() + nray * 6 + nseg * 8};
     const int lens[3] = {nray * 6, nseg * 8, nray * 2};
-    for (int j = 0; j < nray * 6; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
-    for (int j = 0; j < nseg * 8; ++j) { host[1][j] = static_cast<float>(snap[uz(nray * 6 + j)]); }
+    for (int j = 0; j < nray * 6; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
+    for (int j = 0; j < nseg * 8; ++j)
+    {
+        host[1][j] = static_cast<float>(snap[uz(nray * 6 + j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(nray / 64));
 
     // Compare only where the CPU reference actually HIT. A miss is sentinel-valued (1e30), and comparing sentinels in
@@ -6871,8 +8530,15 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on Vulkan == C
     {
         const bool cpu_hit = ref[uz(r * 2)] < 1.0e29;
         const bool gpu_hit = static_cast<double>(host[2][r * 2]) < 1.0e29;
-        if (cpu_hit != gpu_hit) { ++disagree; continue; }
-        if (!cpu_hit) { continue; }
+        if (cpu_hit != gpu_hit)
+        {
+            ++disagree;
+            continue;
+        }
+        if (!cpu_hit)
+        {
+            continue;
+        }
         ++hits;
         worst = std::max(worst, std::fabs(static_cast<double>(host[2][r * 2]) - ref[uz(r * 2)]));
         worst = std::max(worst, std::fabs(static_cast<double>(host[2][r * 2 + 1]) - ref[uz(r * 2 + 1)]));
@@ -6896,7 +8562,11 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on Vulkan == CPU oracle",
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -6927,13 +8597,19 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on Vulkan == CPU oracle",
     }
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(nb * 5), 0.0);
-    for (int j = 0; j < nb * 5; ++j) { snap[uz(j)] = in[uz(j)]; }
+    for (int j = 0; j < nb * 5; ++j)
+    {
+        snap[uz(j)] = in[uz(j)];
+    }
 
     kir::KernelBuffer bufs[2] = {{in.data(), nb * 5, 0U, 0U}, {out.data(), nb * 4, 0U, 1U}};
     kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(nb / 64));
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(nb * 4), 0.0);
-    for (int j = 0; j < nb * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < nb * 4; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
@@ -6949,7 +8625,10 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on Vulkan == CPU oracle",
     host_store.resize(uz(nb * 9), 0.0F);
     float*    host[2] = {host_store.data(), host_store.data() + nb * 5};
     const int lens[2] = {nb * 5, nb * 4};
-    for (int j = 0; j < nb * 5; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    for (int j = 0; j < nb * 5; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(nb / 64));
 
     double worst = 0.0;
@@ -6963,8 +8642,14 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on Vulkan == CPU oracle",
         }
         // ⭐ N_LOD and the control-point count are DISCRETE. They must agree EXACTLY, not to a tolerance — a half-strand
         //   disagreement is meaningless, but an off-by-one changes how much geometry the backend actually draws.
-        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)]) { ++cp_mismatch; }
-        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)]) { ++cp_mismatch; }
+        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)])
+        {
+            ++cp_mismatch;
+        }
+        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)])
+        {
+            ++cp_mismatch;
+        }
     }
     std::printf("[Vulkan B18-d LOD] %d bundles  maxabs(GPU vs oracle) = %.3e  discrete mismatches = %d\n", nb, worst,
                 cp_mismatch);
@@ -6985,7 +8670,11 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracl
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7013,7 +8702,10 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracl
     const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
     for (int i = 0; i < np; ++i)
     {
-        for (int c = 0; c < 3; ++c) { col[uz(i * 3 + c)] = rnd(); }
+        for (int c = 0; c < 3; ++c)
+        {
+            col[uz(i * 3 + c)] = rnd();
+        }
         const double a  = rnd() * 6.2831853;
         tan[uz(i * 2 + 0)] = std::cos(a); // unit tangents, varying per pixel — exercises the ellipse rotation on device
         tan[uz(i * 2 + 1)] = std::sin(a);
@@ -7022,9 +8714,18 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracl
 
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(np * 3 + np * 2 + np), 0.0);
-    for (int j = 0; j < np * 3; ++j) { snap[uz(j)] = col[uz(j)]; }
-    for (int j = 0; j < np * 2; ++j) { snap[uz(np * 3 + j)] = tan[uz(j)]; }
-    for (int j = 0; j < np; ++j) { snap[uz(np * 5 + j)] = dep[uz(j)]; }
+    for (int j = 0; j < np * 3; ++j)
+    {
+        snap[uz(j)] = col[uz(j)];
+    }
+    for (int j = 0; j < np * 2; ++j)
+    {
+        snap[uz(np * 3 + j)] = tan[uz(j)];
+    }
+    for (int j = 0; j < np; ++j)
+    {
+        snap[uz(np * 5 + j)] = dep[uz(j)];
+    }
 
     const crd::u32    groups  = (static_cast<crd::u32>(np) + e.local_size[0] - 1U) / e.local_size[0];
     kir::KernelBuffer bufs[4] = {{col.data(), np * 3, 0U, 0U},
@@ -7034,7 +8735,10 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracl
     kir::eval_cpu_kernel(g, e, bufs, 4, e.local_size[0], &alloc, groups);
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(np * 4), 0.0);
-    for (int j = 0; j < np * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < np * 4; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
@@ -7049,20 +8753,35 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on Vulkan == CPU oracl
     host_store.resize(uz(np * 3 + np * 2 + np + np * 4), 0.0F);
     float*    host[4] = {host_store.data(), host_store.data() + np * 3, host_store.data() + np * 5, host_store.data() + np * 6};
     const int lens[4] = {np * 3, np * 2, np, np * 4};
-    for (int j = 0; j < np * 3; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
-    for (int j = 0; j < np * 2; ++j) { host[1][j] = static_cast<float>(snap[uz(np * 3 + j)]); }
-    for (int j = 0; j < np; ++j) { host[2][j] = static_cast<float>(snap[uz(np * 5 + j)]); }
+    for (int j = 0; j < np * 3; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
+    for (int j = 0; j < np * 2; ++j)
+    {
+        host[1][j] = static_cast<float>(snap[uz(np * 3 + j)]);
+    }
+    for (int j = 0; j < np; ++j)
+    {
+        host[2][j] = static_cast<float>(snap[uz(np * 5 + j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 4, groups);
 
     double worst = 0.0;
-    for (int j = 0; j < np * 4; ++j) { worst = std::max(worst, std::fabs(static_cast<double>(host[3][j]) - ref[uz(j)])); }
+    for (int j = 0; j < np * 4; ++j)
+    {
+        worst = std::max(worst, std::fabs(static_cast<double>(host[3][j]) - ref[uz(j)]));
+    }
     std::printf("[Vulkan B18-e filter] %dx%d over %u groups (%d tail lanes)  maxabs(GPU vs oracle) = %.3e\n",
                 fc.width, fc.height, groups, static_cast<int>(groups * e.local_size[0]) - np, worst);
     CHECK(worst < 1.0e-5);
 
     // The guard held: every pixel still carries a strictly positive weight sum (it gathers itself at minimum). A tail lane
     // that escaped the guard would have RMW-accumulated into a clamped address and knocked one of these off its oracle value.
-    for (int i = 0; i < np; ++i) { CHECK(host[3][i * 4 + 3] > 0.0F); }
+    for (int i = 0; i < np; ++i)
+    {
+        CHECK(host[3][i * 4 + 3] > 0.0F);
+    }
 }
 
 
@@ -7077,7 +8796,11 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on Vulkan == CPU oracl
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7131,8 +8854,14 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on Vulkan == CPU oracl
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(n * 6));
     h1.resize(uz(n));
-    for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < n * 6; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(in[uz(i)]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
 
@@ -7144,7 +8873,10 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on Vulkan == CPU oracl
         const double ov = out[uz(i)];
         const double ad = std::fabs(gv - ov);
         maxabs          = std::max(maxabs, ad);
-        if (std::fabs(ov) > 1.0e-3) { maxrel = std::max(maxrel, ad / std::fabs(ov)); }
+        if (std::fabs(ov) > 1.0e-3)
+        {
+            maxrel = std::max(maxrel, ad / std::fabs(ov));
+        }
     }
     std::printf("[Vulkan Huang full] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
     // TOLERANCE RATIONALE (deliberately looser than the hair/fur gates' 3e-5, and justified — not moved to fit):
@@ -7165,7 +8897,11 @@ TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over t
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7184,7 +8920,12 @@ TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over t
     // bake the density volume on the CPU oracle, f32-round it (so the oracle + GPU march sample IDENTICAL input).
     crd::containers::Array<crd::f64> pos(&alloc);
     pos.resize(uz(nv * 3));
-    for (int zi = 0; zi < dim; ++zi) { for (int yi = 0; yi < dim; ++yi) { for (int xi = 0; xi < dim; ++xi) {
+    for (int zi = 0; zi < dim; ++zi)
+    {
+        for (int yi = 0; yi < dim; ++yi)
+        {
+            for (int xi = 0; xi < dim; ++xi)
+            {
         const int cell = (zi * dim + yi) * dim + xi;
         pos[uz(cell * 3 + 0)] = static_cast<double>(xi) * scl;
         pos[uz(cell * 3 + 1)] = static_cast<double>(yi) * scl;
@@ -7196,7 +8937,10 @@ TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over t
     vol.resize(uz(nv));
     kir::KernelBuffer db[2] = {{pos.data(), nv * 3, 0, 0}, {vol.data(), nv, 0, 1}};
     kir::eval_cpu_kernel(gd, ed, db, 2, ed.local_size[0], &alloc, static_cast<crd::u32>(nv / 64));
-    for (int i = 0; i < nv; ++i) { vol[uz(i)] = static_cast<double>(static_cast<float>(vol[uz(i)])); }
+    for (int i = 0; i < nv; ++i)
+    {
+        vol[uz(i)] = static_cast<double>(static_cast<float>(vol[uz(i)]));
+    }
 
     kir::KGraph       gm(&alloc);
     const kir::KEntry em = kir::clouds::build_cloud_march(gm, ccfg);
@@ -7217,13 +8961,22 @@ TEST_CASE("B15-b: CKIR cloud RAY-MARCH (Beer-Powder + phase + light march over t
     crd::containers::Array<float> h1(&alloc);
     h0.resize(uz(nv));
     h1.resize(uz(ns * 4));
-    for (int i = 0; i < nv; ++i) { h0[uz(i)] = static_cast<float>(vol[uz(i)]); }
-    for (int i = 0; i < ns * 4; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < nv; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(vol[uz(i)]);
+    }
+    for (int i = 0; i < ns * 4; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     float* host[2] = {h0.data(), h1.data()};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, static_cast<crd::u32>(ns / 64));
 
     double maxabs = 0.0;
-    for (int i = 0; i < ns * 4; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    for (int i = 0; i < ns * 4; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)]));
+    }
     std::printf("[Vulkan cloud march] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     CHECK(maxabs < 5e-5); // trilinear taps + Beer-Powder + phase; only exp/pow are ULP ⇒ effectively bit-exact
 }
@@ -7238,7 +8991,11 @@ TEST_CASE("B16-a-0: compute transcendentals DISPATCH on Vulkan == CPU oracle (UL
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7277,7 +9034,10 @@ TEST_CASE("B16-a-0: compute transcendentals DISPATCH on Vulkan == CPU oracle (UL
     crd::containers::Array<crd::f64> out(&alloc);
     in.resize(uz(n));
     out.resize(uz(n));
-    for (int i = 0; i < n; ++i) { in[uz(i)] = 0.2 + 0.01 * static_cast<double>(i); }
+    for (int i = 0; i < n; ++i)
+    {
+        in[uz(i)] = 0.2 + 0.01 * static_cast<double>(i);
+    }
     kir::KernelBuffer bufs[2] = {{in.data(), n, 0, 0}, {out.data(), n, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, e.local_size[0], &alloc, 1U);
 
@@ -7296,12 +9056,21 @@ TEST_CASE("B16-a-0: compute transcendentals DISPATCH on Vulkan == CPU oracle (UL
     h1.resize(uz(n));
     host[0] = h0.data();
     host[1] = h1.data();
-    for (int i = 0; i < n; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-    for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        h0[uz(i)] = static_cast<float>(in[uz(i)]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        h1[uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
 
     double maxabs = 0.0;
-    for (int i = 0; i < n; ++i) { maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)])); }
+    for (int i = 0; i < n; ++i)
+    {
+        maxabs = std::max(maxabs, std::fabs(static_cast<double>(h1[uz(i)]) - out[uz(i)]));
+    }
     std::printf("[Vulkan transcendentals] maxabs(GPU vs oracle) = %.2e\n", maxabs);
     // conformance envelope: the Vulkan spec grants atan2/asin/acos 4096 ULP (~5e-4 relative) and the 9-op sum
     // compounds to ~1e-3 absolute at these magnitudes. llvmpipe measures 1.6e-4; NV 1e-6. Both conformant.
@@ -7322,7 +9091,11 @@ TEST_CASE("B14/B15: CKIR GI + atmosphere kernels GPU PERFORMANCE (Vulkan, last_g
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7332,7 +9105,10 @@ TEST_CASE("B14/B15: CKIR GI + atmosphere kernels GPU PERFORMANCE (Vulkan, last_g
     const auto fillbuf = [&](cg::ComputeBuffer& dev, crd::u64 floats, float v) {
         auto  stg = compute.create_buffer(floats * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* pp  = static_cast<float*>(stg->map());
-        for (crd::u64 i = 0; i < floats; ++i) { pp[i] = v; }
+        for (crd::u64 i = 0; i < floats; ++i)
+        {
+            pp[i] = v;
+        }
         stg->unmap();
         auto& rec = compute.begin();
         rec.copy(*stg, dev, 0U, 0U, floats * sizeof(float));
@@ -7355,7 +9131,10 @@ TEST_CASE("B14/B15: CKIR GI + atmosphere kernels GPU PERFORMANCE (Vulkan, last_g
             rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, gx, 1U, 1U);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         return best;
     };
@@ -7432,9 +9211,17 @@ TEST_CASE("B14/B15: CKIR GI + atmosphere kernels GPU PERFORMANCE (Vulkan, last_g
             const kir::KEntry e = build(g, ac);
             auto pipe = pipe_of(g, e, nm, nb);
             crd::containers::Array<std::unique_ptr<cg::ComputeBuffer>> bufs(&alloc);
-            for (int i = 0; i < nb; ++i) { auto bp = mkbuf(static_cast<crd::u64>(fsz[i])); fillbuf(*bp, static_cast<crd::u64>(fsz[i]), 0.5F); bufs.push_back(std::move(bp)); }
+            for (int i = 0; i < nb; ++i)
+            {
+                auto bp = mkbuf(static_cast<crd::u64>(fsz[i]));
+                fillbuf(*bp, static_cast<crd::u64>(fsz[i]), 0.5F);
+                bufs.push_back(std::move(bp));
+            }
             cg::ComputeBuffer* b[4] = {nullptr, nullptr, nullptr, nullptr};
-            for (int i = 0; i < nb; ++i) { b[i] = bufs[static_cast<crd::usize>(i)].get(); }
+            for (int i = 0; i < nb; ++i)
+            {
+                b[i] = bufs[static_cast<crd::usize>(i)].get();
+            }
             const double ms = time_best(*pipe, b, nb, gx);
             std::printf("[gi-bench] atmos %-16s %9d %-8s %7.4f ms\n", nm, work, unit, ms);
             (void)unit;
@@ -7471,7 +9258,11 @@ TEST_CASE("B14/B15: CKIR-emitted GLSL vs HAND-WRITTEN GLSL head-to-head (zero-IR
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7481,7 +9272,10 @@ TEST_CASE("B14/B15: CKIR-emitted GLSL vs HAND-WRITTEN GLSL head-to-head (zero-IR
     const auto fillbuf = [&](cg::ComputeBuffer& dev, crd::u64 floats, auto gen) {
         auto  stg = compute.create_buffer(floats * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* pp  = static_cast<float*>(stg->map());
-        for (crd::u64 i = 0; i < floats; ++i) { pp[i] = gen(i); }
+        for (crd::u64 i = 0; i < floats; ++i)
+        {
+            pp[i] = gen(i);
+        }
         stg->unmap();
         auto& rec = compute.begin();
         rec.copy(*stg, dev, 0U, 0U, floats * sizeof(float));
@@ -7502,7 +9296,10 @@ TEST_CASE("B14/B15: CKIR-emitted GLSL vs HAND-WRITTEN GLSL head-to-head (zero-IR
             rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, gx, 1U, 1U);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         return best;
     };
@@ -7516,7 +9313,10 @@ TEST_CASE("B14/B15: CKIR-emitted GLSL vs HAND-WRITTEN GLSL head-to-head (zero-IR
         const auto* pa = static_cast<const float*>(ra->map());
         const auto* pb = static_cast<const float*>(rb->map());
         double      md = 0.0;
-        for (crd::u64 i = 0; i < floats; ++i) { md = std::max(md, std::fabs(static_cast<double>(pa[i]) - static_cast<double>(pb[i]))); }
+        for (crd::u64 i = 0; i < floats; ++i)
+        {
+            md = std::max(md, std::fabs(static_cast<double>(pa[i]) - static_cast<double>(pb[i])));
+        }
         ra->unmap();
         rb->unmap();
         return md;
@@ -7669,7 +9469,11 @@ TEST_CASE("B14-c: CKIR SVGF TEMPORAL integration DISPATCHES on Vulkan == CPU ora
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7703,7 +9507,11 @@ TEST_CASE("B14-c: CKIR SVGF TEMPORAL integration DISPATCHES on Vulkan == CPU ora
     auto rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     for (int p = 0; p < np; ++p)
     {
-        for (int c = 0; c < 3; ++c) { cc[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5); pc[uz(p * 3 + c)] = 0.5; }
+        for (int c = 0; c < 3; ++c)
+        {
+            cc[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5);
+            pc[uz(p * 3 + c)] = 0.5;
+        }
         cg[uz(p * 4 + 0)] = 1.0; cg[uz(p * 4 + 3)] = 1.0;
         pg[uz(p * 4 + 0)] = 1.0; pg[uz(p * 4 + 3)] = 1.0;
         ps[uz(p * 4 + 0)] = 0.5; ps[uz(p * 4 + 1)] = 0.26; ps[uz(p * 4 + 2)] = 5.0; ps[uz(p * 4 + 3)] = 0.01; // m1,m2,hist,var
@@ -7723,14 +9531,42 @@ TEST_CASE("B14-c: CKIR SVGF TEMPORAL integration DISPATCHES on Vulkan == CPU ora
     const int lens[8] = {np * 3, np * 4, np * 2, np * 3, np * 4, np * 4, np * 3, np * 4};
     crd::containers::Array<float> h[8];
     float*                        host[8];
-    for (int b = 0; b < 8; ++b) { h[b] = crd::containers::Array<float>(&alloc); h[b].resize(uz(lens[b])); host[b] = h[b].data(); }
-    for (int b = 0; b < 6; ++b) { for (int i = 0; i < lens[b]; ++i) { h[b][uz(i)] = static_cast<float>(bufs[b].data[i]); } }
-    for (int i = 0; i < lens[6]; ++i) { h[6][uz(i)] = -9.0F; }
+    for (int b = 0; b < 8; ++b)
+    {
+        h[b] = crd::containers::Array<float>(&alloc);
+        h[b].resize(uz(lens[b]));
+        host[b] = h[b].data();
+    }
+    for (int b = 0; b < 6; ++b)
+    {
+        for (int i = 0; i < lens[b]; ++i)
+        {
+            h[b][uz(i)] = static_cast<float>(bufs[b].data[i]);
+        }
+    }
+    for (int i = 0; i < lens[6]; ++i)
+    {
+        h[6][uz(i)] = -9.0F;
+    }
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 8, static_cast<crd::u32>(np / 64));
 
     double maxad = 0.0;
-    for (int i = 0; i < lens[6]; ++i) { const double d = std::fabs(static_cast<double>(h[6][uz(i)]) - oc[uz(i)]); if (d > maxad) { maxad = d; } }
-    for (int i = 0; i < lens[7]; ++i) { const double d = std::fabs(static_cast<double>(h[7][uz(i)]) - os[uz(i)]); if (d > maxad) { maxad = d; } }
+    for (int i = 0; i < lens[6]; ++i)
+    {
+        const double d = std::fabs(static_cast<double>(h[6][uz(i)]) - oc[uz(i)]);
+        if (d > maxad)
+        {
+            maxad = d;
+        }
+    }
+    for (int i = 0; i < lens[7]; ++i)
+    {
+        const double d = std::fabs(static_cast<double>(h[7][uz(i)]) - os[uz(i)]);
+        if (d > maxad)
+        {
+            maxad = d;
+        }
+    }
     std::printf("[Vulkan SVGF temporal] max_abs(GPU vs oracle) = %.2e\n", maxad);
     CHECK(maxad < 1e-5); // pure arithmetic (lerp + moments) ⇒ bit-close on every backend
 }
@@ -7743,7 +9579,11 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7766,7 +9606,10 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     a_all.resize(static_cast<crd::usize>(n_a));
     crd::containers::Array<float> w_f(&alloc);
     w_f.resize(static_cast<crd::usize>(n_w));
-    for (int i = 0; i < n_w; ++i) { w_f[static_cast<crd::usize>(i)] = 0.1F * static_cast<float>((i * 5) % 11 - 5); }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w_f[static_cast<crd::usize>(i)] = 0.1F * static_cast<float>((i * 5) % 11 - 5);
+    }
     for (int r = 0; r < batch; ++r)
     {
         for (int c = 0; c < wd; ++c)
@@ -7818,12 +9661,21 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     REQUIRE(pipe_a != nullptr);
     crd::containers::Array<float> dz(&alloc);
     dz.resize(static_cast<crd::usize>(n_dz));
-    for (int i = 0; i < n_dz; ++i) { dz[static_cast<crd::usize>(i)] = -7.0F; }
+    for (int i = 0; i < n_dz; ++i)
+    {
+        dz[static_cast<crd::usize>(i)] = -7.0F;
+    }
     float*    host_a[4] = {a_all.data(), w_f.data(), gout.data(), dz.data()};
     const int lens_a[4] = {n_a, n_w, bw, n_dz};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe_a, host_a, lens_a, 4, static_cast<crd::u32>(batch));
     int bad_dz = 0;
-    for (int i = 0; i < n_dz; ++i) { if (dz[static_cast<crd::usize>(i)] != ref_dz[static_cast<crd::usize>(i)]) { ++bad_dz; } }
+    for (int i = 0; i < n_dz; ++i)
+    {
+        if (dz[static_cast<crd::usize>(i)] != ref_dz[static_cast<crd::usize>(i)])
+        {
+            ++bad_dz;
+        }
+    }
     CHECK(bad_dz == 0);
 
     // Kernel B: DETERMINISTIC dW reduction (grid = L*W), using kernel A's dz
@@ -7840,7 +9692,10 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     crd::containers::Array<float> dw2(&alloc);
     dw2.resize(static_cast<crd::usize>(n_dw));
     const auto run_dw = [&](crd::containers::Array<float>& out) {
-        for (int i = 0; i < n_dw; ++i) { out[static_cast<crd::usize>(i)] = -7.0F; }
+        for (int i = 0; i < n_dw; ++i)
+        {
+            out[static_cast<crd::usize>(i)] = -7.0F;
+        }
         float*    host_b[3] = {a_all.data(), dz.data(), out.data()};
         const int lens_b[3] = {n_a, n_dz, n_dw};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe_b, host_b, lens_b, 3, static_cast<crd::u32>(nl * wd));
@@ -7851,8 +9706,14 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     int det    = 0;
     for (int i = 0; i < n_dw; ++i)
     {
-        if (dw[static_cast<crd::usize>(i)] != ref_dw[static_cast<crd::usize>(i)]) { ++bad_dw; }
-        if (dw[static_cast<crd::usize>(i)] != dw2[static_cast<crd::usize>(i)]) { ++det; }
+        if (dw[static_cast<crd::usize>(i)] != ref_dw[static_cast<crd::usize>(i)])
+        {
+            ++bad_dw;
+        }
+        if (dw[static_cast<crd::usize>(i)] != dw2[static_cast<crd::usize>(i)])
+        {
+            ++det;
+        }
     }
     CHECK(bad_dw == 0); // dW bit-exact vs the deterministic oracle
     CHECK(det == 0);    // run-to-run BIT-IDENTICAL — the moat the standalone's fp32-atomic dW could not hold
@@ -7866,7 +9727,11 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7879,7 +9744,11 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
 
     crd::f64 in64[nn];
     crd::f64 out64[nn];
-    for (int i = 0; i < nn; ++i) { in64[i] = static_cast<crd::f64>(i); out64[i] = -1.0; }
+    for (int i = 0; i < nn; ++i)
+    {
+        in64[i] = static_cast<crd::f64>(i);
+        out64[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in64, nn, 0, 0}, {out64, nn, 0, 1}};
     kir::eval_cpu_kernel(g, e, bufs, 2, static_cast<crd::u32>(t), &alloc);
 
@@ -7894,13 +9763,23 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
 
     float in32[nn];
     float out32[nn];
-    for (int i = 0; i < nn; ++i) { in32[i] = static_cast<float>(in64[i]); out32[i] = -1.0F; }
+    for (int i = 0; i < nn; ++i)
+    {
+        in32[i] = static_cast<float>(in64[i]);
+        out32[i] = -1.0F;
+    }
     float*    host[2] = {in32, out32};
     const int lens[2] = {nn, nn};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
 
     int bad = 0;
-    for (int i = 0; i < nn; ++i) { if (out32[i] != static_cast<float>(out64[i])) { ++bad; } }
+    for (int i = 0; i < nn; ++i)
+    {
+        if (out32[i] != static_cast<float>(out64[i]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(out32[1] == static_cast<float>(in64[t])); // out[0][1] == in[1][0] — the transpose actually happened
 }
@@ -7913,7 +9792,11 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on Vulkan == CPU 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -7963,20 +9846,37 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on Vulkan == CPU 
     float h_twi[half];
     float h_or[n];
     float h_oi[n];
-    for (int i = 0; i < n; ++i) { h_ir[i] = static_cast<float>(ir[i]); h_ii[i] = static_cast<float>(ii[i]); h_or[i] = -99.0F; h_oi[i] = -99.0F; }
-    for (int k = 0; k < half; ++k) { h_twr[k] = static_cast<float>(twr[k]); h_twi[k] = static_cast<float>(twi[k]); }
+    for (int i = 0; i < n; ++i)
+    {
+        h_ir[i] = static_cast<float>(ir[i]);
+        h_ii[i] = static_cast<float>(ii[i]);
+        h_or[i] = -99.0F;
+        h_oi[i] = -99.0F;
+    }
+    for (int k = 0; k < half; ++k)
+    {
+        h_twr[k] = static_cast<float>(twr[k]);
+        h_twi[k] = static_cast<float>(twi[k]);
+    }
     float*    host[6] = {h_ir, h_ii, h_twr, h_twi, h_or, h_oi};
     const int lens[6] = {n, n, half, half, n, n};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, 1U);
 
     const auto fa = [](float x) { return x < 0.0F ? -x : x; };
     float      maxmag = 1e-6F;
-    for (int k = 0; k < n; ++k) { maxmag = maxmag > fa(static_cast<float>(orr[k])) ? maxmag : fa(static_cast<float>(orr[k])); maxmag = maxmag > fa(static_cast<float>(oi[k])) ? maxmag : fa(static_cast<float>(oi[k])); }
+    for (int k = 0; k < n; ++k)
+    {
+        maxmag = maxmag > fa(static_cast<float>(orr[k])) ? maxmag : fa(static_cast<float>(orr[k]));
+        maxmag = maxmag > fa(static_cast<float>(oi[k])) ? maxmag : fa(static_cast<float>(oi[k]));
+    }
     int   exact  = 0;
     float maxdif = 0.0F;
     for (int k = 0; k < n; ++k)
     {
-        if (h_or[k] == static_cast<float>(orr[k]) && h_oi[k] == static_cast<float>(oi[k])) { ++exact; }
+        if (h_or[k] == static_cast<float>(orr[k]) && h_oi[k] == static_cast<float>(oi[k]))
+        {
+            ++exact;
+        }
         const float dr = fa(h_or[k] - static_cast<float>(orr[k]));
         const float di = fa(h_oi[k] - static_cast<float>(oi[k]));
         maxdif = maxdif > dr ? maxdif : dr;
@@ -7994,7 +9894,11 @@ TEST_CASE("B-cmp Phase 1: CKIR RADIX-4 Stockham FFT DISPATCHES on Vulkan == CPU 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8017,7 +9921,13 @@ TEST_CASE("B-cmp Phase 1: CKIR RADIX-4 Stockham FFT DISPATCHES on Vulkan == CPU 
     crd::f64 ii[n];
     crd::f64 orr[n];
     crd::f64 oi[n];
-    for (int i = 0; i < n; ++i) { ir[i] = static_cast<crd::f64>(static_cast<float>((i * 7 + 3) % 11 - 5)); ii[i] = static_cast<crd::f64>(static_cast<float>((i * 5 + 1) % 7 - 3)); orr[i] = -99.0; oi[i] = -99.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        ir[i] = static_cast<crd::f64>(static_cast<float>((i * 7 + 3) % 11 - 5));
+        ii[i] = static_cast<crd::f64>(static_cast<float>((i * 5 + 1) % 7 - 3));
+        orr[i] = -99.0;
+        oi[i] = -99.0;
+    }
     kir::KernelBuffer bufs[6] = {{ir, n, 0, 0}, {ii, n, 0, 1}, {twr, n, 0, 2}, {twi, n, 0, 3}, {orr, n, 0, 4}, {oi, n, 0, 5}};
     kir::eval_cpu_kernel(g, plan.entry, bufs, 6, static_cast<crd::u32>(n / 4), &alloc);
 
@@ -8034,13 +9944,27 @@ TEST_CASE("B-cmp Phase 1: CKIR RADIX-4 Stockham FFT DISPATCHES on Vulkan == CPU 
     float h_twi[n];
     float h_or[n];
     float h_oi[n];
-    for (int i = 0; i < n; ++i) { h_ir[i] = static_cast<float>(ir[i]); h_ii[i] = static_cast<float>(ii[i]); h_twr[i] = static_cast<float>(twr[i]); h_twi[i] = static_cast<float>(twi[i]); h_or[i] = -99.0F; h_oi[i] = -99.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        h_ir[i] = static_cast<float>(ir[i]);
+        h_ii[i] = static_cast<float>(ii[i]);
+        h_twr[i] = static_cast<float>(twr[i]);
+        h_twi[i] = static_cast<float>(twi[i]);
+        h_or[i] = -99.0F;
+        h_oi[i] = -99.0F;
+    }
     float*    host[6] = {h_ir, h_ii, h_twr, h_twi, h_or, h_oi};
     const int lens[6] = {n, n, n, n, n, n};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, 1U);
 
     int bad = 0; // `precise` GLSL temps ⇒ radix-4 FFT is BIT-EXACT vs the oracle
-    for (int k = 0; k < n; ++k) { if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k])) { ++bad; } }
+    for (int k = 0; k < n; ++k)
+    {
+        if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -8055,7 +9979,11 @@ TEST_CASE("B-cmp crush: REGISTER-BLOCKED radix-16 FFT DISPATCHES on Vulkan == CP
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8078,7 +10006,13 @@ TEST_CASE("B-cmp crush: REGISTER-BLOCKED radix-16 FFT DISPATCHES on Vulkan == CP
     crd::f64 ii[n];
     crd::f64 orr[n];
     crd::f64 oi[n];
-    for (int i = 0; i < n; ++i) { ir[i] = static_cast<crd::f64>(static_cast<float>((i * 7 + 3) % 11 - 5)); ii[i] = static_cast<crd::f64>(static_cast<float>((i * 5 + 1) % 7 - 3)); orr[i] = -99.0; oi[i] = -99.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        ir[i] = static_cast<crd::f64>(static_cast<float>((i * 7 + 3) % 11 - 5));
+        ii[i] = static_cast<crd::f64>(static_cast<float>((i * 5 + 1) % 7 - 3));
+        orr[i] = -99.0;
+        oi[i] = -99.0;
+    }
     kir::KernelBuffer bufs[6] = {{ir, n, 0, 0}, {ii, n, 0, 1}, {twr, n, 0, 2}, {twi, n, 0, 3}, {orr, n, 0, 4}, {oi, n, 0, 5}};
     kir::eval_cpu_kernel(g, plan.entry, bufs, 6, plan.entry.local_size[0], &alloc);
 
@@ -8095,13 +10029,27 @@ TEST_CASE("B-cmp crush: REGISTER-BLOCKED radix-16 FFT DISPATCHES on Vulkan == CP
     float h_twi[n];
     float h_or[n];
     float h_oi[n];
-    for (int i = 0; i < n; ++i) { h_ir[i] = static_cast<float>(ir[i]); h_ii[i] = static_cast<float>(ii[i]); h_twr[i] = static_cast<float>(twr[i]); h_twi[i] = static_cast<float>(twi[i]); h_or[i] = -99.0F; h_oi[i] = -99.0F; }
+    for (int i = 0; i < n; ++i)
+    {
+        h_ir[i] = static_cast<float>(ir[i]);
+        h_ii[i] = static_cast<float>(ii[i]);
+        h_twr[i] = static_cast<float>(twr[i]);
+        h_twi[i] = static_cast<float>(twi[i]);
+        h_or[i] = -99.0F;
+        h_oi[i] = -99.0F;
+    }
     float*    host[6] = {h_ir, h_ii, h_twr, h_twi, h_or, h_oi};
     const int lens[6] = {n, n, n, n, n, n};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, 1U);
 
     int bad = 0; // `precise` temps + table-only twiddles ⇒ the register-blocked FFT is BIT-EXACT vs the oracle
-    for (int k = 0; k < n; ++k) { if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k])) { ++bad; } }
+    for (int k = 0; k < n; ++k)
+    {
+        if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -8116,7 +10064,11 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on Vulka
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8134,14 +10086,22 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on Vulka
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[16];
     float*    h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -8150,9 +10110,22 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on Vulka
         h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5); // integer -> f32-exact
         h64[plan.in_im][i] = static_cast<crd::f64>((i * 5 + 1) % 7 - 3);
     }
-    for (int k = 0; k < cc; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc); h64[plan.tw_col_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a)); }
-    for (int k = 0; k < rr; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr); h64[plan.tw_row_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a)); }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); } // f32 mirror before the oracle mutates scratch
+    for (int k = 0; k < cc; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int k = 0; k < rr; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr);
+        h64[plan.tw_row_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int i = 0; i < total; ++i) // f32 mirror before the oracle mutates scratch
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -8180,8 +10153,14 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on Vulka
     {
         const float er = static_cast<float>(h64[plan.res_re][i]);
         const float ei = static_cast<float>(h64[plan.res_im][i]);
-        if (h32[plan.res_re][i] != er) { ++badr; }
-        if (h32[plan.res_im][i] != ei) { ++badi; }
+        if (h32[plan.res_re][i] != er)
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != ei)
+        {
+            ++badi;
+        }
         maxdif = maxdif > fa(h32[plan.res_re][i] - er) ? maxdif : fa(h32[plan.res_re][i] - er);
         maxdif = maxdif > fa(h32[plan.res_im][i] - ei) ? maxdif : fa(h32[plan.res_im][i] - ei);
     }
@@ -8201,7 +10180,11 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on Vulkan ==
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8218,14 +10201,22 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on Vulkan ==
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[16];
     float*    h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -8242,7 +10233,10 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on Vulkan ==
         h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
         h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
     }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -8270,8 +10264,14 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on Vulkan ==
     {
         const float er = static_cast<float>(h64[plan.res_re][i]);
         const float ei = static_cast<float>(h64[plan.res_im][i]);
-        if (h32[plan.res_re][i] != er) { ++badr; }
-        if (h32[plan.res_im][i] != ei) { ++badi; }
+        if (h32[plan.res_re][i] != er)
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != ei)
+        {
+            ++badi;
+        }
         md = md > fa(h32[plan.res_re][i] - er) ? md : fa(h32[plan.res_re][i] - er);
         md = md > fa(h32[plan.res_im][i] - ei) ? md : fa(h32[plan.res_im][i] - ei);
     }
@@ -8292,7 +10292,11 @@ TEST_CASE("B16-a-2: FULL FFT-ocean pipeline (evolve->IFFT->assemble) DISPATCHES 
     cfg2.backend  = gpu::GpuBackend::Vulkan;
     cfg2.headless = true;
     auto ctx      = gpu::create_vulkan_gpu_context(cfg2);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8342,12 +10346,23 @@ TEST_CASE("B16-a-2: FULL FFT-ocean pipeline (evolve->IFFT->assemble) DISPATCHES 
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> arena(&alloc);
     arena.resize(uz(total), 0.0);
     crd::f64* h64[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = arena.data() + off[b]; }
-    for (int i = 0; i < rc * 4; ++i) { h64[plan.in_re][i] = sro[uz(i)]; h64[plan.in_im][i] = sio[uz(i)]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = arena.data() + off[b];
+    }
+    for (int i = 0; i < rc * 4; ++i)
+    {
+        h64[plan.in_re][i] = sro[uz(i)];
+        h64[plan.in_im][i] = sio[uz(i)];
+    }
     for (int k = 0; k < n; ++k)
     {
         const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
@@ -8385,7 +10400,10 @@ TEST_CASE("B16-a-2: FULL FFT-ocean pipeline (evolve->IFFT->assemble) DISPATCHES 
     parf.resize(1U, tval);
     srf.resize(uz(rc * 4), 0.0F);
     sif.resize(uz(rc * 4), 0.0F);
-    for (int i = 0; i < rc * 4; ++i) { h0f[uz(i)] = static_cast<float>(h0[uz(i)]); }
+    for (int i = 0; i < rc * 4; ++i)
+    {
+        h0f[uz(i)] = static_cast<float>(h0[uz(i)]);
+    }
     float*    eh[4] = {h0f.data(), parf.data(), srf.data(), sif.data()};
     const int el[4] = {rc * 4, 1, rc * 4, rc * 4};
     crd::kir_test::dispatch_kernel_1wg(compute, *pevo, eh, el, 4, static_cast<crd::u32>(rc / 64));
@@ -8394,8 +10412,15 @@ TEST_CASE("B16-a-2: FULL FFT-ocean pipeline (evolve->IFFT->assemble) DISPATCHES 
     crd::containers::Array<float> a32(&alloc);
     a32.resize(uz(total), 0.0F);
     float* h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h32[b] = a32.data() + off[b]; }
-    for (int i = 0; i < rc * 4; ++i) { h32[plan.in_re][i] = srf[uz(i)]; h32[plan.in_im][i] = sif[uz(i)]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h32[b] = a32.data() + off[b];
+    }
+    for (int i = 0; i < rc * 4; ++i)
+    {
+        h32[plan.in_re][i] = srf[uz(i)];
+        h32[plan.in_im][i] = sif[uz(i)];
+    }
     for (int k = 0; k < n; ++k)
     {
         const crd::f64 a       = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(n);
@@ -8447,9 +10472,17 @@ TEST_CASE("B16-a-4: water_shade RENDERS on Vulkan (bluish body + sun glint)", "[
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping the draw"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping the draw");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     auto                       raster = gpu::create_vulkan_raster_context(*vk);
@@ -8485,7 +10518,10 @@ TEST_CASE("B16-a-4: water_shade RENDERS on Vulkan (bluish body + sun glint)", "[
         {
             const crd::u32 p   = target->read_pixel(x, y);
             const int      lum = static_cast<int>(p & 0xFFU) + static_cast<int>((p >> 8U) & 0xFFU) + static_cast<int>((p >> 16U) & 0xFFU);
-            if (lum > maxlum) { maxlum = lum; }
+            if (lum > maxlum)
+            {
+                maxlum = lum;
+            }
         }
     }
     WARN("[water-render-vk] centre RGB=(" << cr << "," << cg << "," << cb << ") maxlum=" << maxlum);
@@ -8504,9 +10540,17 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("adapter has no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("adapter has no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator     alloc(384U << 20U);
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -8544,7 +10588,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
     ocr.foam_scale = 1.8;
 
     kir::ocean::OceanConfig cfgs[nc];
-    for (int c = 0; c < nc; ++c) { cfgs[c].n = on; }
+    for (int c = 0; c < nc; ++c)
+    {
+        cfgs[c].n = on;
+    }
     // 0 = big directional SWELL · 1 = mid · 2 = chop · 3 = fine ripple. `small_wave` BAND-LIMITS each cascade's short waves so the
     // bands don't overlap. GENTLE sea — lower wind (less amplitude) but enough choppiness on 1/2 that crests still pinch → foam.
     // foam_bias/scale = the assemble kernel's PER-STEP injection coverage; foam_decay = how long a whitecap LINGERS (temporal).
@@ -8617,11 +10664,18 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
     // FFT working arena (f32) — fixed twiddles filled once; evolve fills in_re/in_im per frame.
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<float> a32(&alloc);
     a32.resize(uz(total), 0.0F);
     float* h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h32[b] = a32.data() + off[b];
+    }
     for (int kk = 0; kk < on; ++kk)
     {
         const crd::f64 a        = two_pi * static_cast<crd::f64>(kk) / static_cast<crd::f64>(on);
@@ -8659,23 +10713,42 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
             float*    eh[4] = {h0all.data() + uz(c * otc * 4), parf.data(), srf.data(), sif.data()};
             const int el[4] = {otc * 4, 1, otc * 4, otc * 4};
             crd::kir_test::dispatch_kernel_1wg(compute, *pevo[c], eh, el, 4, static_cast<crd::u32>(otc / 64));
-            for (int i = 0; i < otc * 4; ++i) { h32[plan.in_re][i] = srf[uz(i)]; h32[plan.in_im][i] = sif[uz(i)]; }
+            for (int i = 0; i < otc * 4; ++i)
+            {
+                h32[plan.in_re][i] = srf[uz(i)];
+                h32[plan.in_im][i] = sif[uz(i)];
+            }
             crd::kir_test::dispatch_fft2d(compute, plan, ifpipes, h32);
             float*    ah[4] = {h32[plan.res_re], h32[plan.res_im], dgf.data(), ngf.data()};
             const int al[4] = {otc * 4, otc * 4, otc * 4, otc * 4};
             crd::kir_test::dispatch_kernel_1wg(compute, *pasm[c], ah, al, 4, static_cast<crd::u32>(otc / 64));
-            for (int i = 0; i < otc; ++i) { inj[uz(i)] = dgf[uz(i * 4 + 3)]; } // this step's Jacobian breaking coverage
+            for (int i = 0; i < otc; ++i) // this step's Jacobian breaking coverage
+            {
+                inj[uz(i)] = dgf[uz(i * 4 + 3)];
+            }
             float*    fh[3] = {foam_a.data(), inj.data(), foam_b.data()};
             const int fl[3] = {otc, otc, otc};
             crd::kir_test::dispatch_kernel_1wg(compute, *pfoam, fh, fl, 3, static_cast<crd::u32>(otc / 64));
-            for (int i = 0; i < otc; ++i) { foam_a[uz(i)] = foam_b[uz(i)]; } // ping-pong; foam_a holds the accumulated foam
+            for (int i = 0; i < otc; ++i) // ping-pong; foam_a holds the accumulated foam
+            {
+                foam_a[uz(i)] = foam_b[uz(i)];
+            }
         }
         double hmax = 1e-3;
-        for (int i = 0; i < otc; ++i) { hmax = std::max(hmax, static_cast<double>(std::fabs(dgf[uz(i * 4 + 1)]))); }
+        for (int i = 0; i < otc; ++i)
+        {
+            hmax = std::max(hmax, static_cast<double>(std::fabs(dgf[uz(i * 4 + 1)])));
+        }
         const auto enc = [](double x) {
             long vv = std::lround(x * 255.0);
-            if (vv < 0) { vv = 0; }
-            if (vv > 255) { vv = 255; }
+            if (vv < 0)
+            {
+                vv = 0;
+            }
+            if (vv > 255)
+            {
+                vv = 255;
+            }
             return static_cast<unsigned char>(vv);
         };
         for (int i = 0; i < otc; ++i)
@@ -8720,7 +10793,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
                     spy += dys;
                     const int ix = static_cast<int>(spx);
                     const int iy = static_cast<int>(spy);
-                    if (ix < 0 || iy < 0 || ix >= static_cast<int>(dim) || iy >= static_cast<int>(dim)) { continue; }
+                    if (ix < 0 || iy < 0 || ix >= static_cast<int>(dim) || iy >= static_cast<int>(dim))
+                    {
+                        continue;
+                    }
                     const crd::u32 sp  = px[static_cast<crd::usize>(iy) * dim + static_cast<crd::u32>(ix)];
                     const double   rr  = static_cast<double>(sp & 0xFFU) / 255.0;
                     const double   gg  = static_cast<double>((sp >> 8U) & 0xFFU) / 255.0;
@@ -8737,8 +10813,14 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
                 const crd::u32 p    = px[static_cast<crd::usize>(y) * dim + x];
                 const auto     cl   = [](double c) {
                     long vv = std::lround(c * 255.0);
-                    if (vv < 0) { vv = 0; }
-                    if (vv > 255) { vv = 255; }
+                    if (vv < 0)
+                    {
+                        vv = 0;
+                    }
+                    if (vv > 255)
+                    {
+                        vv = 255;
+                    }
                     return static_cast<crd::u32>(vv);
                 };
                 const crd::u32 rc   = cl(static_cast<double>(p & 0xFFU) / 255.0 + ar * gain);
@@ -8780,7 +10862,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         }
         FILE* f = nullptr;
 #ifdef _MSC_VER
-        if (fopen_s(&f, path, "wb") != 0) { f = nullptr; } // MSVC: the deprecated fopen errors under /WX
+        if (fopen_s(&f, path, "wb") != 0) // MSVC: the deprecated fopen errors under /WX
+        {
+            f = nullptr;
+        }
 #else
         f = std::fopen(path, "wb"); // fopen_s is MSVC-only (the hair_render.hpp idiom)
 #endif
@@ -8795,7 +10880,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         // ── (A/B) bake ALL FOUR cascades on the GPU into one packed buffer → 4 mipmapped bindless textures; fill ocr.hmax[c] ──
         crd::containers::Array<unsigned char> rgball(&alloc);
         rgball.resize(uz(nc * otc * 4), static_cast<unsigned char>(0));
-        for (int c = 0; c < nc; ++c) { ocr.hmax[c] = bake_cascade(c, t, rgball.data() + uz(c * otc * 4)); }
+        for (int c = 0; c < nc; ++c)
+        {
+            ocr.hmax[c] = bake_cascade(c, t, rgball.data() + uz(c * otc * 4));
+        }
         std::unique_ptr<crd::gpu::ITexture> texc[nc];
         crd::gpu::ITexture*                 texs[8] = {};
         for (int c = 0; c < nc; ++c)
@@ -8829,7 +10917,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         hires.resize(static_cast<crd::usize>(rdim) * rdim);
         for (crd::u32 y = 0; y < rdim; ++y)
         {
-            for (crd::u32 x = 0; x < rdim; ++x) { hires[static_cast<crd::usize>(y) * rdim + x] = target->read_pixel(x, y); }
+            for (crd::u32 x = 0; x < rdim; ++x)
+            {
+                hires[static_cast<crd::usize>(y) * rdim + x] = target->read_pixel(x, y);
+            }
         }
         crd::containers::Array<crd::u32> px(&alloc);
         px.resize(static_cast<crd::usize>(dim) * dim);
@@ -8865,7 +10956,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
             sg += static_cast<double>((p >> 8U) & 0xFFU);
             sb += static_cast<double>((p >> 16U) & 0xFFU);
             const crd::u32 lum = (p & 0xFFU) + ((p >> 8U) & 0xFFU) + ((p >> 16U) & 0xFFU);
-            if (lum > mx) { mx = lum; }
+            if (lum > mx)
+            {
+                mx = lum;
+            }
         }
         const double np = static_cast<double>(dim) * dim;
         WARN("[ocean-frame] t=" << t << " mean RGB=(" << sr / np << "," << sg / np << "," << sb / np << ") maxlum=" << mx << " -> " << path);
@@ -8880,7 +10974,10 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
             ghi.resize(static_cast<crd::usize>(rdim) * rdim);
             for (crd::u32 y = 0; y < rdim; ++y)
             {
-                for (crd::u32 x = 0; x < rdim; ++x) { ghi[static_cast<crd::usize>(y) * rdim + x] = gt.read_pixel(x, y); }
+                for (crd::u32 x = 0; x < rdim; ++x)
+                {
+                    ghi[static_cast<crd::usize>(y) * rdim + x] = gt.read_pixel(x, y);
+                }
             }
             crd::containers::Array<crd::u32> pxg(&alloc);
             pxg.resize(static_cast<crd::usize>(dim) * dim);
@@ -8908,8 +11005,14 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
                     const double   cov  = static_cast<double>(ga) / (static_cast<double>(nsub) * 255.0); // coverage 0..1
                     const auto     mix  = [&](crd::u32 gsum, crd::u32 sky8) {
                         long vv = std::lround(cov * (static_cast<double>(gsum) / nsub) + (1.0 - cov) * static_cast<double>(sky8));
-                        if (vv < 0) { vv = 0; }
-                        if (vv > 255) { vv = 255; }
+                        if (vv < 0)
+                        {
+                            vv = 0;
+                        }
+                        if (vv > 255)
+                        {
+                            vv = 255;
+                        }
                         return static_cast<crd::u32>(vv);
                     };
                     const crd::u32 cr = mix(gr, sky & 0xFFU);
@@ -8991,7 +11094,11 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9015,7 +11122,11 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
         prev.resize(uz(rc));
         inj.resize(uz(rc));
         outo.resize(uz(rc), 0.0);
-        for (int i = 0; i < rc; ++i) { prev[uz(i)] = 0.01 * static_cast<double>(i % 7); inj[uz(i)] = (i % 5 == 0) ? 0.7 : 0.0; }
+        for (int i = 0; i < rc; ++i)
+        {
+            prev[uz(i)] = 0.01 * static_cast<double>(i % 7);
+            inj[uz(i)] = (i % 5 == 0) ? 0.7 : 0.0;
+        }
         kir::KernelBuffer ob[3] = {{prev.data(), rc, 0, 0}, {inj.data(), rc, 0, 1}, {outo.data(), rc, 0, 2}};
         kir::eval_cpu_kernel(g, e, ob, 3, e.local_size[0], &alloc, static_cast<crd::u32>(rc / 64));
 
@@ -9031,12 +11142,22 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
         hp.resize(uz(rc));
         hi.resize(uz(rc));
         ho.resize(uz(rc), -9.0F);
-        for (int i = 0; i < rc; ++i) { hp[uz(i)] = static_cast<float>(prev[uz(i)]); hi[uz(i)] = static_cast<float>(inj[uz(i)]); }
+        for (int i = 0; i < rc; ++i)
+        {
+            hp[uz(i)] = static_cast<float>(prev[uz(i)]);
+            hi[uz(i)] = static_cast<float>(inj[uz(i)]);
+        }
         float*    host[3] = {hp.data(), hi.data(), ho.data()};
         const int lens[3] = {rc, rc, rc};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 3, static_cast<crd::u32>(rc / 64));
         int bad = 0;
-        for (int i = 0; i < rc; ++i) { if (ho[uz(i)] != static_cast<float>(outo[uz(i)])) { ++bad; } }
+        for (int i = 0; i < rc; ++i)
+        {
+            if (ho[uz(i)] != static_cast<float>(outo[uz(i)]))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 
@@ -9050,14 +11171,22 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
 
         int off[16];
         int total = 0;
-        for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+        for (int b = 0; b < plan.nbuffers; ++b)
+        {
+            off[b] = total;
+            total += plan.buffers[b].size;
+        }
         crd::containers::Array<crd::f64> a64(&alloc);
         crd::containers::Array<float>    a32(&alloc);
         a64.resize(uz(total), 0.0);
         a32.resize(uz(total), 0.0F);
         crd::f64* h64[16];
         float*    h32[16];
-        for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+        for (int b = 0; b < plan.nbuffers; ++b)
+        {
+            h64[b] = a64.data() + off[b];
+            h32[b] = a32.data() + off[b];
+        }
 
         constexpr crd::f64 two_pi = 6.28318530717958647693;
         const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -9074,7 +11203,10 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
             h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
             h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
         }
-        for (int i = 0; i < total; ++i) { a32[uz(i)] = static_cast<float>(a64[uz(i)]); }
+        for (int i = 0; i < total; ++i)
+        {
+            a32[uz(i)] = static_cast<float>(a64[uz(i)]);
+        }
         crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
         std::unique_ptr<crd::gpu::ComputePipeline> pipe_store[8];
@@ -9095,8 +11227,14 @@ TEST_CASE("B16-a-3: foam accumulate + multi-cascade batch-12 IFFT DISPATCH on Vu
         int badi = 0;
         for (int i = 0; i < rc * batch; ++i)
         {
-            if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-            if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+            if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+            {
+                ++badr;
+            }
+            if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+            {
+                ++badi;
+            }
         }
         WARN("[ocean-cascade-vk] " << n << "x" << n << " batch=" << batch << " re-bad " << badr << " im-bad " << badi);
         CHECK(badr == 0);
@@ -9117,7 +11255,11 @@ TEST_CASE("B16-a-2: CKIR batched inverse 2-D FFT (the FFT-ocean transform) GPU b
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9150,12 +11292,24 @@ TEST_CASE("B16-a-2: CKIR batched inverse 2-D FFT (the FFT-ocean transform) GPU b
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[p].graph, plan.passes[p].entry, &alloc, kern));
             const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "oifftb", &alloc);
-            if (!spv.ok) { ok = false; break; }
+            if (!spv.ok)
+            {
+                ok = false;
+                break;
+            }
             pipe_store[p] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[p].nbind, 0U);
-            if (pipe_store[p] == nullptr) { ok = false; break; }
+            if (pipe_store[p] == nullptr)
+            {
+                ok = false;
+                break;
+            }
             pipes[p] = pipe_store[p].get();
         }
-        if (!ok) { WARN("[ocean-ifft-bench] N=" << n << " B=" << batch << " SKIPPED (compile/pipeline)"); continue; }
+        if (!ok)
+        {
+            WARN("[ocean-ifft-bench] N=" << n << " B=" << batch << " SKIPPED (compile/pipeline)");
+            continue;
+        }
 
         std::unique_ptr<cg::ComputeBuffer> dev[16];
         for (int b = 0; b < plan.nbuffers; ++b)
@@ -9173,12 +11327,48 @@ TEST_CASE("B16-a-2: CKIR batched inverse 2-D FFT (the FFT-ocean transform) GPU b
             rec.copy(*stg, *dev[id], 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(plan.in_re, [&](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = (i % rc == 0) ? vdc : 0.0F; } }); // DC per image
-        up(plan.in_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+        up(plan.in_re, [&](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = (i % rc == 0) ? vdc : 0.0F;
+            }
+        }); // DC per image
+        up(plan.in_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
+        up(plan.tw_col_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_col_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
 
         auto record = [&]() {
             auto& rec = compute.begin();
@@ -9186,22 +11376,48 @@ TEST_CASE("B16-a-2: CKIR batched inverse 2-D FFT (the FFT-ocean transform) GPU b
             {
                 const kir::Fft2dPass& pp       = plan.passes[p];
                 cg::ComputeBuffer*    binds[8] = {};
-                for (int k = 0; k < pp.nbind; ++k) { binds[k] = dev[pp.bind[k]].get(); }
+                for (int k = 0; k < pp.nbind; ++k)
+                {
+                    binds[k] = dev[pp.bind[k]].get();
+                }
                 rec.dispatch(*pipes[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(pp.nbind)), nullptr, 0U, pp.num_workgroups, 1U, 1U);
-                if (p + 1 < plan.npasses) { for (int b = 0; b < plan.nbuffers; ++b) { rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); } }
+                if (p + 1 < plan.npasses)
+                {
+                    for (int b = 0; b < plan.nbuffers; ++b)
+                    {
+                        rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+                    }
+                }
             }
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         // self-verify: DC-only spectrum ⇒ constant field vdc (unnormalised inverse). Check the first 64 outputs of image 0.
         auto rb = compute.create_buffer(64U * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         { auto& rec = compute.begin(); rec.barrier(*dev[plan.res_re], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc); rec.copy(*dev[plan.res_re], *rb, 0U, 0U, 64U * sizeof(float)); compute.submit_and_wait(); }
         const auto* o   = static_cast<const float*>(rb->map());
         int         bad = 0;
-        for (int i = 0; i < 64; ++i) { if (o[i] < vdc - 1e-3F || o[i] > vdc + 1e-3F) { ++bad; } }
+        for (int i = 0; i < 64; ++i)
+        {
+            if (o[i] < vdc - 1e-3F || o[i] > vdc + 1e-3F)
+            {
+                ++bad;
+            }
+        }
         rb->unmap();
         std::printf("%-6d %-6d %-14.4f %-16.5f  verify_bad=%d\n", n, batch, best, best / batch, bad);
         CHECK(best < 1e29);
@@ -9224,7 +11440,11 @@ TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchm
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9260,7 +11480,10 @@ TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchm
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_glsl(gg, e, &alloc, kern));
             const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), nm, &alloc);
-            if (!spv.ok) { return nullptr; }
+            if (!spv.ok)
+            {
+                return nullptr;
+            }
             return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
         };
         auto p_evo = make(gevo, eevo, 4, "oevo");
@@ -9289,16 +11512,40 @@ TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchm
             rec.copy(*stg, *dev[id], 0U, 0U, static_cast<crd::u64>(sizes[id]) * sizeof(float));
             compute.submit_and_wait();
         };
-        up(0, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 13 + 5) % 17 - 8) * 0.01F; } }); // synthetic h0
+        up(0, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = static_cast<float>((i * 13 + 5) % 17 - 8) * 0.01F;
+            }
+        }); // synthetic h0
         up(1, [&](float* p, int) { p[0] = tval; });
-        up(2, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(3, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+        up(2, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(3, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
 
         const auto dsp = [&](cg::ComputePipeline& pipe, const int* ids, int nb, crd::u32 grid, cg::ComputeRecorder& rec) {
             cg::ComputeBuffer* binds[8] = {};
-            for (int k = 0; k < nb; ++k) { binds[k] = dev[ids[k]].get(); }
+            for (int k = 0; k < nb; ++k)
+            {
+                binds[k] = dev[ids[k]].get();
+            }
             rec.dispatch(pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(nb)), nullptr, 0U, grid, 1U, 1U);
-            for (int b = 0; b < 12; ++b) { rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+            for (int b = 0; b < 12; ++b)
+            {
+                rec.barrier(*dev[b], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+            }
         };
         const int    evo_b[4] = {0, 1, 4, 5};
         const int    row_b[6] = {4, 5, 2, 3, 6, 7};
@@ -9323,11 +11570,31 @@ TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchm
             compute.submit_and_wait();
         };
 
-        for (int w = 0; w < 5; ++w) { rec_unfused(); rec_fused(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            rec_unfused();
+            rec_fused();
+        }
         double bu = 1e30;
         double bf = 1e30;
-        for (int r = 0; r < 30; ++r) { rec_unfused(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < bu) { bu = ms; } }
-        for (int r = 0; r < 30; ++r) { rec_fused(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < bf) { bf = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            rec_unfused();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < bu)
+            {
+                bu = ms;
+            }
+        }
+        for (int r = 0; r < 30; ++r)
+        {
+            rec_fused();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < bf)
+            {
+                bf = ms;
+            }
+        }
 
         // self-verify: fused res == un-fused res, bit-exact (the fusion + FFT are exact; GPU transcendentals are identical on
         // both paths). Read back the full 4-field result and compare.
@@ -9344,7 +11611,13 @@ TEST_CASE("B16-a-2: FUSED ocean update vs un-fused (the fusion crush) GPU benchm
         const auto* ou  = static_cast<const float*>(rbu->map());
         const auto* of  = static_cast<const float*>(rbf->map());
         int         bad = 0;
-        for (int i = 0; i < rc * 4; ++i) { if (ou[i] != of[i]) { ++bad; } }
+        for (int i = 0; i < rc * 4; ++i)
+        {
+            if (ou[i] != of[i])
+            {
+                ++bad;
+            }
+        }
         rbu->unmap();
         rbf->unmap();
 
@@ -9366,7 +11639,11 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on Vulkan ==
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9385,14 +11662,22 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on Vulkan ==
 
     int off[20];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[20];
     float*    h32[20];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -9403,9 +11688,22 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on Vulkan ==
         h64[plan.filt_re][i] = f32d(static_cast<crd::f64>((i * 3 + 1) % 9 - 4) * 0.25); // arbitrary f32-exact filter
         h64[plan.filt_im][i] = f32d(static_cast<crd::f64>((i * 2 + 5) % 7 - 3) * 0.25);
     }
-    for (int k = 0; k < cc; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc); h64[plan.tw_col_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a)); }
-    for (int k = 0; k < rr; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr); h64[plan.tw_row_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a)); }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int k = 0; k < cc; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int k = 0; k < rr; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr);
+        h64[plan.tw_row_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -9429,8 +11727,14 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on Vulkan ==
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
     {
-        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     WARN("[fft2dconv-vk] " << rr << "x" << cc << " bit-exact re-bad " << badr << " im-bad " << badi);
     CHECK(badr == 0);
@@ -9448,7 +11752,11 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-4 BATCHED FFT -- GPU benchmark vs the cuFFT
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9492,10 +11800,34 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-4 BATCHED FFT -- GPU benchmark vs the cuFFT
             rec.copy(*stg, dev, 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(*d_inre, io_bytes, [&](float* p, int cnt) { for (int i = 0; i < cnt; ++i) { p[i] = static_cast<float>((i * 7 + 3) % 11 - 5); } });
-        up(*d_inim, io_bytes, [&](float* p, int cnt) { for (int i = 0; i < cnt; ++i) { p[i] = static_cast<float>((i * 5 + 1) % 7 - 3); } });
-        up(*d_twre, tw_bytes, [&](float* p, int cnt) { for (int k = 0; k < cnt; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(*d_twim, tw_bytes, [&](float* p, int cnt) { for (int k = 0; k < cnt; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+        up(*d_inre, io_bytes, [&](float* p, int cnt)
+        {
+            for (int i = 0; i < cnt; ++i)
+            {
+                p[i] = static_cast<float>((i * 7 + 3) % 11 - 5);
+            }
+        });
+        up(*d_inim, io_bytes, [&](float* p, int cnt)
+        {
+            for (int i = 0; i < cnt; ++i)
+            {
+                p[i] = static_cast<float>((i * 5 + 1) % 7 - 3);
+            }
+        });
+        up(*d_twre, tw_bytes, [&](float* p, int cnt)
+        {
+            for (int k = 0; k < cnt; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(*d_twim, tw_bytes, [&](float* p, int cnt)
+        {
+            for (int k = 0; k < cnt; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
 
         cg::ComputeBuffer* binds[6] = {d_inre.get(), d_inim.get(), d_twre.get(), d_twim.get(), d_outre.get(), d_outim.get()};
         double             best     = 1e30;
@@ -9505,7 +11837,10 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-4 BATCHED FFT -- GPU benchmark vs the cuFFT
             rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 6), nullptr, 0U, static_cast<crd::u32>(batch), 1U, 1U);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         const double gflops = 5.0 * n * static_cast<double>(plan.log2n) * static_cast<double>(batch) / (best * 1e-3) / 1e9;
 
@@ -9542,7 +11877,13 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-4 BATCHED FFT -- GPU benchmark vs the cuFFT
         const auto* gr = static_cast<const float*>(rb_re->map());
         const auto* gi = static_cast<const float*>(rb_im->map());
         int         bad = 0;
-        for (int i = 0; i < n; ++i) { if (gr[i] != static_cast<float>(or0[static_cast<crd::usize>(i)]) || gi[i] != static_cast<float>(oi0[static_cast<crd::usize>(i)])) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (gr[i] != static_cast<float>(or0[static_cast<crd::usize>(i)]) || gi[i] != static_cast<float>(oi0[static_cast<crd::usize>(i)]))
+            {
+                ++bad;
+            }
+        }
         rb_re->unmap();
         rb_im->unmap();
 
@@ -9563,7 +11904,11 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED FFT-convolution -- GPU benchmark vs cuFFT's
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9604,12 +11949,48 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED FFT-convolution -- GPU benchmark vs cuFFT's
             rec.copy(*stg, dev, 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(*d_inre, io, [&](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 7 + 3) % 11 - 5); } });
-        up(*d_inim, io, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-        up(*d_twre, nb, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(*d_twim, nb, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(*d_ftre, nb, [](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = 1.0F; } }); // identity filter (Filt = FFT(delta) = 1)
-        up(*d_ftim, nb, [](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = 0.0F; } });
+        up(*d_inre, io, [&](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = static_cast<float>((i * 7 + 3) % 11 - 5);
+            }
+        });
+        up(*d_inim, io, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
+        up(*d_twre, nb, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(*d_twim, nb, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(*d_ftre, nb, [](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = 1.0F;
+            }
+        }); // identity filter (Filt = FFT(delta) = 1)
+        up(*d_ftim, nb, [](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = 0.0F;
+            }
+        });
 
         cg::ComputeBuffer* binds[8] = {d_inre.get(), d_inim.get(), d_twre.get(), d_twim.get(),
                                        d_ftre.get(), d_ftim.get(), d_outre.get(), d_outim.get()};
@@ -9620,7 +12001,10 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED FFT-convolution -- GPU benchmark vs cuFFT's
             rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 8), nullptr, 0U, static_cast<crd::u32>(batch), 1U, 1U);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         // verify wg0: identity filter ⇒ out ≈ in (round-trip FFT/iFFT, f32 tol).
         auto rb = compute.create_buffer(nb, transfer_dst, cg::ComputeMemory::GpuToCpu);
@@ -9633,7 +12017,13 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED FFT-convolution -- GPU benchmark vs cuFFT's
         const auto* o   = static_cast<const float*>(rb->map());
         const auto  fa  = [](float x) { return x < 0.0F ? -x : x; };
         int         bad = 0;
-        for (int i = 0; i < n; ++i) { if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 2e-3F * 6.0F) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 2e-3F * 6.0F)
+            {
+                ++bad;
+            }
+        }
         rb->unmap();
 
         const double cufft_conv = (n == 256) ? 0.879 : 0.887; // cufft_conv_bench.exe on this GPU
@@ -9655,7 +12045,11 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution -- GPU benchmark vs cuF
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9705,14 +12099,62 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution -- GPU benchmark vs cuF
             rec.copy(*stg, *dev[id], 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(plan.in_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 7 + 3) % 11 - 5); } });
-        up(plan.in_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.filt_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 1.0F; } }); // identity filter (round-trip)
-        up(plan.filt_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
+        up(plan.in_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = static_cast<float>((i * 7 + 3) % 11 - 5);
+            }
+        });
+        up(plan.in_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
+        up(plan.tw_col_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_col_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.filt_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 1.0F;
+            }
+        }); // identity filter (round-trip)
+        up(plan.filt_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
 
         auto record = [&]() {
             auto& rec = compute.begin();
@@ -9720,23 +12162,35 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution -- GPU benchmark vs cuF
             {
                 const kir::Fft2dPass& p        = plan.passes[pi];
                 cg::ComputeBuffer*    binds[8] = {};
-                for (int k = 0; k < p.nbind; ++k) { binds[k] = dev[p.bind[k]].get(); }
+                for (int k = 0; k < p.nbind; ++k)
+                {
+                    binds[k] = dev[p.bind[k]].get();
+                }
                 rec.dispatch(*pipes[pi], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(p.nbind)), nullptr, 0U, p.num_workgroups, 1U, 1U);
                 if (pi + 1 < plan.npasses) // barrier ONLY the buffers this pass WROTE (last 1 for transpose, last 2 for FFT/conv)
                 {
                     const int nout = (p.nbind == 2) ? 1 : 2;
-                    for (int j = p.nbind - nout; j < p.nbind; ++j) { rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+                    for (int j = p.nbind - nout; j < p.nbind; ++j)
+                    {
+                        rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+                    }
                 }
             }
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); } // warmup
+        for (int w = 0; w < 5; ++w) // warmup
+        {
+            record();
+        }
         double best = 1e30;
         for (int r = 0; r < 30; ++r)
         {
             record();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
 
         // SELF-CHECK: identity filter (H = 1) ⇒ the whole pipeline is FFT2 → identity → IFFT2 ⇒ out == in (f32 tol).
@@ -9750,7 +12204,13 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution -- GPU benchmark vs cuF
             const auto* o   = static_cast<const float*>(rb->map());
             const auto  fa  = [](float x) { return x < 0.0F ? -x : x; };
             int         bad = 0;
-            for (int i = 0; i < n; ++i) { if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 5e-3F * 6.0F) { ++bad; } }
+            for (int i = 0; i < n; ++i)
+            {
+                if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 5e-3F * 6.0F)
+                {
+                    ++bad;
+                }
+            }
             rb->unmap();
             CHECK(bad == 0); // the measured pipeline RECOVERS the input — the run is real, not garbage-fast
         }
@@ -9772,7 +12232,11 @@ TEST_CASE("B-cmp Phase 3: CKIR tiled column FFT -- coalescing benchmark", "[.fft
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9800,10 +12264,34 @@ TEST_CASE("B-cmp Phase 3: CKIR tiled column FFT -- coalescing benchmark", "[.fft
         rec.copy(*stg, dev, 0U, 0U, bytes);
         compute.submit_and_wait();
     };
-    up(*d_in_re, ib, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 7 + 3) % 11 - 5); } });
-    up(*d_in_im, ib, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-    up(*d_tw_re, nb, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-    up(*d_tw_im, nb, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
+    up(*d_in_re, ib, [](float* p, int c)
+    {
+        for (int i = 0; i < c; ++i)
+        {
+            p[i] = static_cast<float>((i * 7 + 3) % 11 - 5);
+        }
+    });
+    up(*d_in_im, ib, [](float* p, int c)
+    {
+        for (int i = 0; i < c; ++i)
+        {
+            p[i] = 0.0F;
+        }
+    });
+    up(*d_tw_re, nb, [&](float* p, int c)
+    {
+        for (int k = 0; k < c; ++k)
+        {
+            p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+        }
+    });
+    up(*d_tw_im, nb, [&](float* p, int c)
+    {
+        for (int k = 0; k < c; ++k)
+        {
+            p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+        }
+    });
 
     float ref0[64];
     for (int tc : {1, 2, 4})
@@ -9813,27 +12301,64 @@ TEST_CASE("B-cmp Phase 3: CKIR tiled column FFT -- coalescing benchmark", "[.fft
         kir::GlslKernel      kern(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, plan.entry, &alloc, kern));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "tiledcol", &alloc);
-        if (!spv.ok) { WARN("[fft-tiledcol] tile_c=" << tc << " compile FAILED (shared limit?): " << spv.error_message.c_str()); continue; }
+        if (!spv.ok)
+        {
+            WARN("[fft-tiledcol] tile_c=" << tc << " compile FAILED (shared limit?): " << spv.error_message.c_str());
+            continue;
+        }
         auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 6, 0U);
-        if (pipe == nullptr) { WARN("[fft-tiledcol] tile_c=" << tc << " pipeline FAILED (shared limit)"); continue; }
+        if (pipe == nullptr)
+        {
+            WARN("[fft-tiledcol] tile_c=" << tc << " pipeline FAILED (shared limit)");
+            continue;
+        }
 
         cg::ComputeBuffer* binds[6] = {d_in_re.get(), d_in_im.get(), d_tw_re.get(), d_tw_im.get(), d_out_re.get(), d_out_im.get()};
         const crd::u32     grid     = static_cast<crd::u32>(n / tc);
         auto               run      = [&]() { auto& rec = compute.begin(); rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, 6), nullptr, 0U, grid, 1U, 1U); compute.submit_and_wait(); };
-        for (int w = 0; w < 5; ++w) { run(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            run();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { run(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            run();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         auto rb = compute.create_buffer(64U * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         { auto& rec = compute.begin(); rec.barrier(*d_out_re, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc); rec.copy(*d_out_re, *rb, 0U, 0U, 64U * sizeof(float)); compute.submit_and_wait(); }
         const auto* o = static_cast<const float*>(rb->map());
         int         bad = 0;
-        if (tc == 1) { for (int i = 0; i < 64; ++i) { ref0[i] = o[i]; } }
-        else { for (int i = 0; i < 64; ++i) { if (o[i] != ref0[i]) { ++bad; } } }
+        if (tc == 1)
+        {
+            for (int i = 0; i < 64; ++i)
+            {
+                ref0[i] = o[i];
+            }
+        }
+        else
+        {
+            for (int i = 0; i < 64; ++i)
+            {
+                if (o[i] != ref0[i])
+                {
+                    ++bad;
+                }
+            }
+        }
         rb->unmap();
         WARN("[fft-tiledcol] tile_c=" << tc << "  " << best << " ms  matches-tile1=" << (tc == 1 ? 1 : (bad == 0)));
         CHECK(best < 1e29);
-        if (tc != 1) { CHECK(bad == 0); } // tiling must not change the result
+        if (tc != 1) // tiling must not change the result
+        {
+            CHECK(bad == 0);
+        }
     }
 }
 
@@ -9848,7 +12373,11 @@ TEST_CASE("B-cmp Phase 3: CKIR TRANSPOSE-ON-WRITE 3-dispatch conv -- GPU benchma
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9877,12 +12406,24 @@ TEST_CASE("B-cmp Phase 3: CKIR TRANSPOSE-ON-WRITE 3-dispatch conv -- GPU benchma
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
             const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "fft2dconvs", &alloc);
-            if (!spv.ok) { ok = false; break; }
+            if (!spv.ok)
+            {
+                ok = false;
+                break;
+            }
             pipe_store[pi] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[pi].nbind, 0U);
-            if (pipe_store[pi] == nullptr) { ok = false; break; }
+            if (pipe_store[pi] == nullptr)
+            {
+                ok = false;
+                break;
+            }
             pipes[pi] = pipe_store[pi].get();
         }
-        if (!ok) { WARN("[fft2dconv-strided] N=" << n << " tile_c=" << tc << " SKIPPED (shared over device limit)"); continue; }
+        if (!ok)
+        {
+            WARN("[fft2dconv-strided] N=" << n << " tile_c=" << tc << " SKIPPED (shared over device limit)");
+            continue;
+        }
 
         std::unique_ptr<cg::ComputeBuffer> dev[16];
         for (int b = 0; b < plan.nbuffers; ++b)
@@ -9900,14 +12441,62 @@ TEST_CASE("B-cmp Phase 3: CKIR TRANSPOSE-ON-WRITE 3-dispatch conv -- GPU benchma
             rec.copy(*stg, *dev[id], 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(plan.in_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = static_cast<float>((i * 7 + 3) % 11 - 5); } });
-        up(plan.in_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.filt_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 1.0F; } }); // identity ⇒ out == in
-        up(plan.filt_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
+        up(plan.in_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = static_cast<float>((i * 7 + 3) % 11 - 5);
+            }
+        });
+        up(plan.in_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
+        up(plan.tw_col_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_col_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.filt_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 1.0F;
+            }
+        }); // identity ⇒ out == in
+        up(plan.filt_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
 
         auto record = [&]() {
             auto& rec = compute.begin();
@@ -9915,19 +12504,36 @@ TEST_CASE("B-cmp Phase 3: CKIR TRANSPOSE-ON-WRITE 3-dispatch conv -- GPU benchma
             {
                 const kir::Fft2dPass& p        = plan.passes[pi];
                 cg::ComputeBuffer*    binds[8] = {};
-                for (int k = 0; k < p.nbind; ++k) { binds[k] = dev[p.bind[k]].get(); }
+                for (int k = 0; k < p.nbind; ++k)
+                {
+                    binds[k] = dev[p.bind[k]].get();
+                }
                 rec.dispatch(*pipes[pi], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(p.nbind)), nullptr, 0U, p.num_workgroups, 1U, 1U);
                 if (pi + 1 < plan.npasses)
                 {
                     const int nout = 2;
-                    for (int j = p.nbind - nout; j < p.nbind; ++j) { rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+                    for (int j = p.nbind - nout; j < p.nbind; ++j)
+                    {
+                        rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+                    }
                 }
             }
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         auto rb = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         {
@@ -9939,7 +12545,13 @@ TEST_CASE("B-cmp Phase 3: CKIR TRANSPOSE-ON-WRITE 3-dispatch conv -- GPU benchma
         const auto* o   = static_cast<const float*>(rb->map());
         const auto  fa  = [](float x) { return x < 0.0F ? -x : x; };
         int         bad = 0;
-        for (int i = 0; i < n; ++i) { if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 5e-3F * 6.0F) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (fa(o[i] - static_cast<float>((i * 7 + 3) % 11 - 5)) > 5e-3F * 6.0F)
+            {
+                ++bad;
+            }
+        }
         rb->unmap();
 
         const double cufft = 0.0473;
@@ -9963,7 +12575,11 @@ TEST_CASE("B-cmp Phase 3: CKIR BATCHED fused 2-D conv -- the DRAM-bound crush vs
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -9995,12 +12611,24 @@ TEST_CASE("B-cmp Phase 3: CKIR BATCHED fused 2-D conv -- the DRAM-bound crush vs
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
             const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "fft2dconvb", &alloc);
-            if (!spv.ok) { ok = false; break; }
+            if (!spv.ok)
+            {
+                ok = false;
+                break;
+            }
             pipe_store[pi] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[pi].nbind, 0U);
-            if (pipe_store[pi] == nullptr) { ok = false; break; }
+            if (pipe_store[pi] == nullptr)
+            {
+                ok = false;
+                break;
+            }
             pipes[pi] = pipe_store[pi].get();
         }
-        if (!ok) { WARN("[fft2dconv-batched] B=" << bt << " SKIPPED (compile/pipeline)"); continue; }
+        if (!ok)
+        {
+            WARN("[fft2dconv-batched] B=" << bt << " SKIPPED (compile/pipeline)");
+            continue;
+        }
 
         std::unique_ptr<cg::ComputeBuffer> dev[16];
         for (int b = 0; b < plan.nbuffers; ++b)
@@ -10019,14 +12647,64 @@ TEST_CASE("B-cmp Phase 3: CKIR BATCHED fused 2-D conv -- the DRAM-bound crush vs
             compute.submit_and_wait();
         };
         // per-image VARIED input ⇒ a cross-image index bug corrupts the self-check
-        up(plan.in_re, [&](float* p, int c) { for (int j = 0; j < c; ++j) { const int b = j / rc; const int i = j % rc; p[j] = static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5); } });
-        up(plan.in_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
-        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.filt_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 1.0F; } }); // identity spectrum ⇒ out == in
-        up(plan.filt_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
+        up(plan.in_re, [&](float* p, int c)
+        {
+            for (int j = 0; j < c; ++j)
+            {
+                const int b = j / rc;
+                const int i = j % rc;
+                p[j] = static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5);
+            }
+        });
+        up(plan.in_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
+        up(plan.tw_col_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_col_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.filt_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 1.0F;
+            }
+        }); // identity spectrum ⇒ out == in
+        up(plan.filt_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
 
         auto record = [&]() {
             auto& rec = compute.begin();
@@ -10034,19 +12712,36 @@ TEST_CASE("B-cmp Phase 3: CKIR BATCHED fused 2-D conv -- the DRAM-bound crush vs
             {
                 const kir::Fft2dPass& p        = plan.passes[pi];
                 cg::ComputeBuffer*    binds[8] = {};
-                for (int k = 0; k < p.nbind; ++k) { binds[k] = dev[p.bind[k]].get(); }
+                for (int k = 0; k < p.nbind; ++k)
+                {
+                    binds[k] = dev[p.bind[k]].get();
+                }
                 rec.dispatch(*pipes[pi], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(p.nbind)), nullptr, 0U, p.num_workgroups, 1U, 1U);
                 if (pi + 1 < plan.npasses)
                 {
                     const int nout = 2;
-                    for (int j = p.nbind - nout; j < p.nbind; ++j) { rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+                    for (int j = p.nbind - nout; j < p.nbind; ++j)
+                    {
+                        rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+                    }
                 }
             }
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         const crd::u64 rbbytes = static_cast<crd::u64>(plan.buffers[plan.res_re].size) * sizeof(float);
         auto           rb      = compute.create_buffer(rbbytes, transfer_dst, cg::ComputeMemory::GpuToCpu);
@@ -10063,7 +12758,10 @@ TEST_CASE("B-cmp Phase 3: CKIR BATCHED fused 2-D conv -- the DRAM-bound crush vs
         {
             const int b = j / rc;
             const int i = j % rc;
-            if (fa(o[j] - static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5)) > 5e-3F * 12.0F) { ++bad; }
+            if (fa(o[j] - static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5)) > 5e-3F * 12.0F)
+            {
+                ++bad;
+            }
         }
         rb->unmap();
 
@@ -10088,7 +12786,11 @@ TEST_CASE("B-cmp Phase 3: CKIR R2C REAL batched 2-D conv -- the half-spectrum cr
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10121,12 +12823,25 @@ TEST_CASE("B-cmp Phase 3: CKIR R2C REAL batched 2-D conv -- the half-spectrum cr
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_glsl(*plan.passes[pi].graph, plan.passes[pi].entry, &alloc, kern));
             const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "fft2dr2c", &alloc);
-            if (!spv.ok) { WARN("[fft2dconv-r2c] pass " << pi << " GLSL compile FAILED: " << spv.error_message.c_str()); ok = false; break; }
+            if (!spv.ok)
+            {
+                WARN("[fft2dconv-r2c] pass " << pi << " GLSL compile FAILED: " << spv.error_message.c_str());
+                ok = false;
+                break;
+            }
             pipe_store[pi] = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), plan.passes[pi].nbind, 0U);
-            if (pipe_store[pi] == nullptr) { ok = false; break; }
+            if (pipe_store[pi] == nullptr)
+            {
+                ok = false;
+                break;
+            }
             pipes[pi] = pipe_store[pi].get();
         }
-        if (!ok) { WARN("[fft2dconv-r2c] bt=" << bt << " SKIPPED"); continue; }
+        if (!ok)
+        {
+            WARN("[fft2dconv-r2c] bt=" << bt << " SKIPPED");
+            continue;
+        }
 
         std::unique_ptr<cg::ComputeBuffer> dev[20];
         for (int b = 0; b < plan.nbuffers; ++b)
@@ -10144,13 +12859,57 @@ TEST_CASE("B-cmp Phase 3: CKIR R2C REAL batched 2-D conv -- the half-spectrum cr
             rec.copy(*stg, *dev[id], 0U, 0U, bytes);
             compute.submit_and_wait();
         };
-        up(plan.in_re, [&](float* p, int c) { for (int j = 0; j < c; ++j) { const int b = j / rc; const int i = j % rc; p[j] = static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5); } });
-        up(plan.tw_col_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_col_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.tw_row_re, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(crd::math::cos(two_pi * k / n)); } });
-        up(plan.tw_row_im, [&](float* p, int c) { for (int k = 0; k < c; ++k) { p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n)); } });
-        up(plan.filt_re, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 1.0F; } }); // identity spectrum ⇒ out == in
-        up(plan.filt_im, [](float* p, int c) { for (int i = 0; i < c; ++i) { p[i] = 0.0F; } });
+        up(plan.in_re, [&](float* p, int c)
+        {
+            for (int j = 0; j < c; ++j)
+            {
+                const int b = j / rc;
+                const int i = j % rc;
+                p[j] = static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5);
+            }
+        });
+        up(plan.tw_col_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_col_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_re, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(crd::math::cos(two_pi * k / n));
+            }
+        });
+        up(plan.tw_row_im, [&](float* p, int c)
+        {
+            for (int k = 0; k < c; ++k)
+            {
+                p[k] = static_cast<float>(-crd::math::sin(two_pi * k / n));
+            }
+        });
+        up(plan.filt_re, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 1.0F;
+            }
+        }); // identity spectrum ⇒ out == in
+        up(plan.filt_im, [](float* p, int c)
+        {
+            for (int i = 0; i < c; ++i)
+            {
+                p[i] = 0.0F;
+            }
+        });
 
         auto record = [&]() {
             auto& rec = compute.begin();
@@ -10158,19 +12917,36 @@ TEST_CASE("B-cmp Phase 3: CKIR R2C REAL batched 2-D conv -- the half-spectrum cr
             {
                 const kir::Fft2dPass& p        = plan.passes[pi];
                 cg::ComputeBuffer*    binds[8] = {};
-                for (int k = 0; k < p.nbind; ++k) { binds[k] = dev[p.bind[k]].get(); }
+                for (int k = 0; k < p.nbind; ++k)
+                {
+                    binds[k] = dev[p.bind[k]].get();
+                }
                 rec.dispatch(*pipes[pi], crd::containers::ConstSpan<cg::ComputeBuffer*>(binds, static_cast<crd::usize>(p.nbind)), nullptr, 0U, p.num_workgroups, 1U, 1U);
                 if (pi + 1 < plan.npasses)
                 {
                     const int nout = 2;
-                    for (int j = p.nbind - nout; j < p.nbind; ++j) { rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead); }
+                    for (int j = p.nbind - nout; j < p.nbind; ++j)
+                    {
+                        rec.barrier(*dev[p.bind[j]], cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
+                    }
                 }
             }
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         const crd::u64 rbbytes = static_cast<crd::u64>(plan.buffers[plan.res_re].size) * sizeof(float);
         auto           rb      = compute.create_buffer(rbbytes, transfer_dst, cg::ComputeMemory::GpuToCpu);
@@ -10187,7 +12963,10 @@ TEST_CASE("B-cmp Phase 3: CKIR R2C REAL batched 2-D conv -- the half-spectrum cr
         {
             const int b = j / rc;
             const int i = j % rc;
-            if (fa(o[j] - static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5)) > 5e-3F * 12.0F) { ++bad; }
+            if (fa(o[j] - static_cast<float>((i * 7 + 3 + b * 13) % 11 - 5)) > 5e-3F * 12.0F)
+            {
+                ++bad;
+            }
         }
         rb->unmap();
 
@@ -10210,7 +12989,11 @@ TEST_CASE("B-cmp: CKIR device REDUCTION DISPATCHES on Vulkan == CPU oracle bit-e
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10220,7 +13003,11 @@ TEST_CASE("B-cmp: CKIR device REDUCTION DISPATCHES on Vulkan == CPU oracle bit-e
     crd::containers::Array<crd::f64> x64(&alloc);
     crd::containers::Array<float>    x32(&alloc);
     x64.resize(n); x32.resize(n);
-    for (int i = 0; i < n; ++i) { x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251 - 125); x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n; ++i)
+    {
+        x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251 - 125);
+        x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]);
+    }
 
     const kir::KOp ops[2] = {kir::KOp::Add, kir::KOp::Max};
     for (int oi = 0; oi < 2; ++oi)
@@ -10274,7 +13061,11 @@ TEST_CASE("B-cmp: CKIR device reduction -- GPU benchmark vs CUB DeviceReduce", "
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10311,7 +13102,10 @@ TEST_CASE("B-cmp: CKIR device reduction -- GPU benchmark vs CUB DeviceReduce", "
         {
             auto  stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
             auto* p   = static_cast<float*>(stg->map());
-            for (int i = 0; i < n; ++i) { p[i] = 1.0F; } // sum = n, exact in f32 for n = 2^k
+            for (int i = 0; i < n; ++i) // sum = n, exact in f32 for n = 2^k
+            {
+                p[i] = 1.0F;
+            }
             stg->unmap();
             auto& rec = compute.begin();
             rec.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(n) * sizeof(float));
@@ -10327,9 +13121,20 @@ TEST_CASE("B-cmp: CKIR device reduction -- GPU benchmark vs CUB DeviceReduce", "
             rec.dispatch(*pf, crd::containers::ConstSpan<cg::ComputeBuffer*>(b1, 2), nullptr, 0U, 1U, 1U, 1U);
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         auto rb = compute.create_buffer(sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         {
@@ -10363,7 +13168,11 @@ TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/m
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10380,7 +13189,10 @@ TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/m
     {
         auto  stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<float*>(stg->map());
-        for (int i = 0; i < n; ++i) { p[i] = 1.0F; }
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = 1.0F;
+        }
         stg->unmap();
         auto& rec = compute.begin();
         rec.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(n) * sizeof(float));
@@ -10396,14 +13208,26 @@ TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/m
         const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Add, threads, nblocks);
         kir::GlslKernel kb(&alloc);
         kir::GlslKernel kf(&alloc);
-        if (!kir::emit_compute_kernel_glsl(*plan.block_graph, plan.block, &alloc, kb)) { return 1e30; }
-        if (!kir::emit_compute_kernel_glsl(*plan.final_graph, plan.final_pass, &alloc, kf)) { return 1e30; }
+        if (!kir::emit_compute_kernel_glsl(*plan.block_graph, plan.block, &alloc, kb))
+        {
+            return 1e30;
+        }
+        if (!kir::emit_compute_kernel_glsl(*plan.final_graph, plan.final_pass, &alloc, kf))
+        {
+            return 1e30;
+        }
         const auto sb = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kb.source), "ra_b", &alloc);
         const auto sf = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kf.source), "ra_f", &alloc);
-        if (!sb.ok || !sf.ok) { return 1e30; }
+        if (!sb.ok || !sf.ok)
+        {
+            return 1e30;
+        }
         auto pb = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(sb.spirv.data(), sb.spirv.size()), 2, 0U);
         auto pf = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(sf.spirv.data(), sf.spirv.size()), 2, 0U);
-        if (pb == nullptr || pf == nullptr) { return 1e30; }
+        if (pb == nullptr || pf == nullptr)
+        {
+            return 1e30;
+        }
         auto d_part = compute.create_buffer(static_cast<crd::u64>(nblocks) * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
         auto d_out  = compute.create_buffer(sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
         auto record = [&]() {
@@ -10415,9 +13239,20 @@ TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/m
             rec.dispatch(*pf, crd::containers::ConstSpan<cg::ComputeBuffer*>(b1, 2), nullptr, 0U, 1U, 1U, 1U);
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 25; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 25; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
         auto rb = compute.create_buffer(sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         {
             auto& rec = compute.begin();
@@ -10449,12 +13284,20 @@ TEST_CASE("AS-4: the auto-scheduler TUNES the reduction on-device -- enumerate/m
         const int                 nb = at::reduce_nblocks(n, s);
         float                     sum = 0.0F;
         const double              ms = measure(s.threads, nb, sum);
-        if (ms > 1e29) { continue; }
+        if (ms > 1e29)
+        {
+            continue;
+        }
         CHECK(sum == static_cast<float>(n)); // ORACLE: every candidate must compute the correct reduction (else it can't win)
         ++measured;
         const double gbps = static_cast<double>(n) * sizeof(float) / (ms * 1.0e6);
         WARN("[reduce-autotune] cand threads=" << s.threads << " pt=" << s.per_thread << " nblocks=" << nb << " -> " << ms << " ms (" << gbps << " GB/s)");
-        if (ms < best_ms) { best_ms = ms; best_threads = s.threads; best_pt = s.per_thread; }
+        if (ms < best_ms)
+        {
+            best_ms = ms;
+            best_threads = s.threads;
+            best_pt = s.per_thread;
+        }
     }
     REQUIRE(measured > 0);
 
@@ -10484,7 +13327,11 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on Vulkan == CPU oracle bit-exact"
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10493,7 +13340,11 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on Vulkan == CPU oracle bit-exact"
     crd::memory::TlsfAllocator alloc(64U << 20U);
     crd::containers::Array<crd::f64> x64(&alloc); crd::containers::Array<float> x32(&alloc);
     x64.resize(n); x32.resize(n);
-    for (int i = 0; i < n; ++i) { x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5); x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n; ++i)
+    {
+        x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5);
+        x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]);
+    }
 
     for (int incl = 0; incl < 2; ++incl)
     {
@@ -10542,7 +13393,13 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on Vulkan == CPU oracle bit-exact"
         crd::kir_test::dispatch_kernel_1wg(compute, *p2, hb2, lb2, 3, static_cast<crd::u32>(nb));
 
         int bad = 0;
-        for (int i = 0; i < n; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)]))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -10558,7 +13415,11 @@ TEST_CASE("B-cmp: CKIR device scan -- GPU benchmark vs CUB DeviceScan", "[.scan-
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10598,7 +13459,10 @@ TEST_CASE("B-cmp: CKIR device scan -- GPU benchmark vs CUB DeviceScan", "[.scan-
         {
             auto stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
             auto* p  = static_cast<float*>(stg->map());
-            for (int i = 0; i < n; ++i) { p[i] = 1.0F; }
+            for (int i = 0; i < n; ++i)
+            {
+                p[i] = 1.0F;
+            }
             stg->unmap();
             auto& rec = compute.begin();
             rec.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(n) * sizeof(float));
@@ -10617,9 +13481,20 @@ TEST_CASE("B-cmp: CKIR device scan -- GPU benchmark vs CUB DeviceScan", "[.scan-
             rec.dispatch(*p2, crd::containers::ConstSpan<cg::ComputeBuffer*>(b2, 3), nullptr, 0U, static_cast<crd::u32>(nb), 1U, 1U);
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         auto rb = compute.create_buffer(sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         {
@@ -10650,7 +13525,11 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS scan -- the crush vs CUB DeviceScan", "[.scan
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10672,7 +13551,11 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS scan -- the crush vs CUB DeviceScan", "[.scan
         kir::GlslKernel kk(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kk));
         const auto sp = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kk.source), "scan_sp", &alloc);
-        if (!sp.ok) { WARN("[scan-sp] compile FAILED: " << sp.error_message.c_str()); continue; }
+        if (!sp.ok)
+        {
+            WARN("[scan-sp] compile FAILED: " << sp.error_message.c_str());
+            continue;
+        }
         auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(sp.spirv.data(), sp.spirv.size()), 4, 0U);
         REQUIRE(pipe != nullptr);
 
@@ -10681,11 +13564,20 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS scan -- the crush vs CUB DeviceScan", "[.scan
         auto d_agg = compute.create_buffer(static_cast<crd::u64>(nb) * sizeof(float), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
         auto d_flg = compute.create_buffer(static_cast<crd::u64>(nb) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
         auto zero  = compute.create_buffer(static_cast<crd::u64>(nb) * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
-        { auto* z = static_cast<crd::u32*>(zero->map()); for (int i = 0; i < nb; ++i) { z[i] = 0U; } zero->unmap(); }
+        {
+            auto* z = static_cast<crd::u32*>(zero->map());
+            for (int i = 0; i < nb; ++i)
+            {
+                z[i] = 0U;
+            }
+            zero->unmap(); }
         {
             auto stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(float), transfer_src, cg::ComputeMemory::CpuToGpu);
             auto* p  = static_cast<float*>(stg->map());
-            for (int i = 0; i < n; ++i) { p[i] = 1.0F; }
+            for (int i = 0; i < n; ++i)
+            {
+                p[i] = 1.0F;
+            }
             stg->unmap();
             auto& rec = compute.begin();
             rec.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(n) * sizeof(float));
@@ -10700,9 +13592,20 @@ TEST_CASE("B-cmp: CKIR SINGLE-PASS scan -- the crush vs CUB DeviceScan", "[.scan
             rec.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(b, 4), nullptr, 0U, static_cast<crd::u32>(nb), 1U, 1U);
             compute.submit_and_wait();
         };
-        for (int w = 0; w < 5; ++w) { record(); }
+        for (int w = 0; w < 5; ++w)
+        {
+            record();
+        }
         double best = 1e30;
-        for (int r = 0; r < 30; ++r) { record(); const double ms = compute.last_gpu_ms(); if (ms > 0.0 && ms < best) { best = ms; } }
+        for (int r = 0; r < 30; ++r)
+        {
+            record();
+            const double ms = compute.last_gpu_ms();
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
+        }
 
         auto rb = compute.create_buffer(2U * sizeof(float), transfer_dst, cg::ComputeMemory::GpuToCpu);
         {
@@ -10735,7 +13638,11 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10750,7 +13657,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     // hardwired warp-32 assumption — llvmpipe is 8-wide with 32 KB shared, where the 256-thread 8-bit shape is
     // both wrong (warp math) and unbuildable (32 KB of seg[] alone). Correctness is shape-independent.
     const crd::u32 lanes = compute.subgroup_size();
-    if (lanes == 0U) { SKIP("device reports no subgroup width - the warp-synchronous sort cannot be shaped"); }
+    if (lanes == 0U)
+    {
+        SKIP("device reports no subgroup width - the warp-synchronous sort cannot be shaped");
+    }
     const kir::SortConfig scfg    = kir::pick_sort_config(lanes, compute.shared_memory_bytes(), epb, false);
     const int             threads = scfg.threads;
     const int             radix_bits = scfg.radix_bits;
@@ -10769,7 +13679,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V compile failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -10780,7 +13693,11 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     cg::ComputePipeline* po2 = po2_s.get();
     crd::containers::Array<kir::KGraph> ghg(&alloc);
     crd::containers::Array<kir::KGraph> gsg(&alloc);
-    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
+    {
+        ghg.emplace_back(&alloc);
+        gsg.emplace_back(&alloc);
+    }
     for (int p = 0; p < npasses; ++p)
     {
         const crd::usize up = static_cast<crd::usize>(p);
@@ -10794,7 +13711,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     REQUIRE(po1 != nullptr); REQUIRE(po2 != nullptr);
 
     crd::containers::Array<crd::u32> keys(&alloc); keys.resize(n);
-    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U); }
+    for (int i = 0; i < n; ++i)
+    {
+        keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U);
+    }
 
     auto d_a  = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
     auto d_b  = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
@@ -10805,7 +13725,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     {
         auto stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < n; ++i) { p[i] = keys[static_cast<crd::usize>(i)]; }
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = keys[static_cast<crd::usize>(i)];
+        }
         stg->unmap();
         auto& rec = compute.begin();
         rec.copy(*stg, *d_a, 0U, 0U, static_cast<crd::u64>(n) * sizeof(crd::u32));
@@ -10844,7 +13767,15 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on Vulkan == sorted permutation", "
     int      bad = 0;
     crd::u32 ix  = 0U;
     crd::u32 sx  = 0U;
-    for (int i = 0; i < n; ++i) { if (i > 0 && o[i - 1] > o[i]) { ++bad; } ix ^= keys[static_cast<crd::usize>(i)]; sx ^= o[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        if (i > 0 && o[i - 1] > o[i])
+        {
+            ++bad;
+        }
+        ix ^= keys[static_cast<crd::usize>(i)];
+        sx ^= o[i];
+    }
     rb->unmap();
     CHECK(bad == 0);   // fully sorted
     CHECK(ix == sx);   // permutation of the input
@@ -10861,7 +13792,11 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -10909,7 +13844,10 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
     REQUIRE(po1 != nullptr); REQUIRE(po2 != nullptr);
 
     crd::containers::Array<crd::u32> keys(&alloc); keys.resize(n);
-    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U); }
+    for (int i = 0; i < n; ++i)
+    {
+        keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U);
+    }
 
     auto d_a = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
     auto d_b = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
@@ -10918,7 +13856,13 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
     auto d_t = compute.create_buffer(static_cast<crd::u64>(nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); // bin totals
     auto d_gb = compute.create_buffer(static_cast<crd::u64>(nbins) * sizeof(crd::u32), storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly); // per-bin global base
     auto stg = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
-    { auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < n; ++i) { p[i] = keys[static_cast<crd::usize>(i)]; } stg->unmap(); }
+    {
+        auto* p = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = keys[static_cast<crd::usize>(i)];
+        }
+        stg->unmap(); }
 
     // fresh random input each run — but in its OWN submit so the 67MB host→device copy (PCIe-bound) is NOT in last_gpu_ms.
     const auto upload = [&]() {
@@ -10940,17 +13884,29 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
             for (int p = 0; p < 4; ++p)
             {
                 cg::ComputeBuffer* hb[2] = {in, d_h.get()};
-                if (diag != 3) { rec.dispatch(*ph[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(hb, 2), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U); }
+                if (diag != 3)
+                {
+                    rec.dispatch(*ph[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(hb, 2), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
+                }
                 rec.barrier(*d_h, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
                 cg::ComputeBuffer* o1[3] = {d_h.get(), d_o.get(), d_t.get()};
-                if (diag != 1) { rec.dispatch(*po1, crd::containers::ConstSpan<cg::ComputeBuffer*>(o1, 3), nullptr, 0U, static_cast<crd::u32>(nbins), 1U, 1U); }
+                if (diag != 1)
+                {
+                    rec.dispatch(*po1, crd::containers::ConstSpan<cg::ComputeBuffer*>(o1, 3), nullptr, 0U, static_cast<crd::u32>(nbins), 1U, 1U);
+                }
                 rec.barrier(*d_o, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
                 rec.barrier(*d_t, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
                 cg::ComputeBuffer* o2[2] = {d_t.get(), d_gb.get()};
-                if (diag != 1) { rec.dispatch(*po2, crd::containers::ConstSpan<cg::ComputeBuffer*>(o2, 2), nullptr, 0U, 1U, 1U, 1U); }
+                if (diag != 1)
+                {
+                    rec.dispatch(*po2, crd::containers::ConstSpan<cg::ComputeBuffer*>(o2, 2), nullptr, 0U, 1U, 1U, 1U);
+                }
                 rec.barrier(*d_gb, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
                 cg::ComputeBuffer* sb[4] = {in, out, d_o.get(), d_gb.get()};
-                if (diag != 2) { rec.dispatch(*ps[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(sb, 4), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U); }
+                if (diag != 2)
+                {
+                    rec.dispatch(*ps[p], crd::containers::ConstSpan<cg::ComputeBuffer*>(sb, 4), nullptr, 0U, static_cast<crd::u32>(nblocks), 1U, 1U);
+                }
                 rec.barrier(*out, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::ShaderRead);
                 cg::ComputeBuffer* t = in; in = out; out = t;
             }
@@ -10958,7 +13914,10 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
         compute.submit_and_wait();
     };
     upload(); // once — d_a holds fresh random keys; every batched sort re-sorts the (now sorted) d_a: identical kernel work.
-    for (int w = 0; w < 2; ++w) { record(); }
+    for (int w = 0; w < 2; ++w)
+    {
+        record();
+    }
     double best = 1e30;      // GPU-timestamped (per sort)
     double wbest = 1e30;     // CPU wall-clock of the whole batch, per sort — robust to last_gpu_ms quirks
     for (int r = 0; r < 6; ++r)
@@ -10967,8 +13926,15 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
         record();
         const auto   t1  = std::chrono::high_resolution_clock::now();
         const double wms = std::chrono::duration<double, std::milli>(t1 - t0).count() / static_cast<double>(batch);
-        if (wms < wbest) { wbest = wms; }
-        const double ms = compute.last_gpu_ms() / static_cast<double>(batch); if (ms > 0.0 && ms < best) { best = ms; }
+        if (wms < wbest)
+        {
+            wbest = wms;
+        }
+        const double ms = compute.last_gpu_ms() / static_cast<double>(batch);
+        if (ms > 0.0 && ms < best)
+        {
+            best = ms;
+        }
     }
 
     auto rb = compute.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_dst, cg::ComputeMemory::GpuToCpu);
@@ -10977,7 +13943,15 @@ TEST_CASE("B-cmp: CKIR radix sort -- the crush vs CUB DeviceRadixSort", "[.sort-
     int      bad = 0;
     crd::u32 ix  = 0U;
     crd::u32 sx  = 0U;
-    for (int i = 0; i < n; ++i) { if (i > 0 && o[i - 1] > o[i]) { ++bad; } ix ^= keys[static_cast<crd::usize>(i)]; sx ^= o[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        if (i > 0 && o[i - 1] > o[i])
+        {
+            ++bad;
+        }
+        ix ^= keys[static_cast<crd::usize>(i)];
+        sx ^= o[i];
+    }
     rb->unmap();
     const double mks = static_cast<double>(n) / (wbest * 1.0e3);
     WARN("[sort-bench] N=" << n << " OURS wall " << wbest << " ms (" << mks << " Mkeys/s) vs CUB " << cub_ms << " = " << (cub_ms / wbest)
@@ -10998,7 +13972,11 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+count DISPATCHES on Vulkan == oracle", "[
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11011,7 +13989,10 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+count DISPATCHES on Vulkan == oracle", "[
     // REN-38 llvmpipe campaign: the ORACLE groups by the DEVICE subgroup width (llvmpipe 8, NV 32) — the old
     // hardwired /32 made the reference wrong, not the GPU.
     const crd::u32 sg_lanes = compute.subgroup_size();
-    if (sg_lanes == 0U) { SKIP("device reports no subgroup width"); }
+    if (sg_lanes == 0U)
+    {
+        SKIP("device reports no subgroup width");
+    }
 
     kir::KGraph g(&alloc);
     const auto  ku      = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), kir::make_shape({1}), kir::DType::U32); };
@@ -11036,12 +14017,21 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+count DISPATCHES on Vulkan == oracle", "[
 
     crd::containers::Array<crd::u32> host(&alloc);
     host.resize(threads);
-    for (int i = 0; i < threads; ++i) { host[static_cast<crd::usize>(i)] = static_cast<crd::u32>(i * 2654435761U); }
+    for (int i = 0; i < threads; ++i)
+    {
+        host[static_cast<crd::usize>(i)] = static_cast<crd::u32>(i * 2654435761U);
+    }
 
     auto d_in  = compute.create_buffer(threads * sizeof(crd::u32), storage | transfer_dst, cg::ComputeMemory::GpuOnly);
     auto d_out = compute.create_buffer(threads * sizeof(crd::u32), storage | transfer_src, cg::ComputeMemory::GpuOnly);
     auto stg   = compute.create_buffer(threads * sizeof(crd::u32), transfer_src, cg::ComputeMemory::CpuToGpu);
-    { auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < threads; ++i) { p[i] = host[static_cast<crd::usize>(i)]; } stg->unmap(); }
+    {
+        auto* p = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < threads; ++i)
+        {
+            p[i] = host[static_cast<crd::usize>(i)];
+        }
+        stg->unmap(); }
     { auto& r = compute.begin(); r.copy(*stg, *d_in, 0U, 0U, threads * sizeof(crd::u32)); r.barrier(*d_in, cg::ComputeAccess::TransferDst, cg::ComputeAccess::ShaderRead);
       cg::ComputeBuffer* b[2] = {d_in.get(), d_out.get()};
       r.dispatch(*pipe, crd::containers::ConstSpan<cg::ComputeBuffer*>(b, 2), nullptr, 0U, 1U, 1U, 1U);
@@ -11055,8 +14045,17 @@ TEST_CASE("B-cmp: CKIR subgroup ballot+count DISPATCHES on Vulkan == oracle", "[
     {
         const int sgbase = (t / static_cast<int>(sg_lanes)) * static_cast<int>(sg_lanes); // DEVICE width, not 32
         crd::u32  ref    = 0U;
-        for (int l = sgbase; l < t; ++l) { if ((host[static_cast<crd::usize>(l)] & 1U) != 0U) { ++ref; } }
-        if (got[t] != ref) { ++bad; }
+        for (int l = sgbase; l < t; ++l)
+        {
+            if ((host[static_cast<crd::usize>(l)] & 1U) != 0U)
+            {
+                ++ref;
+            }
+        }
+        if (got[t] != ref)
+        {
+            ++bad;
+        }
     }
     rb->unmap();
     CHECK(bad == 0); // GPU subgroup ballot/count == CPU oracle, bit-exact
@@ -11073,7 +14072,11 @@ TEST_CASE("B-cmp: radix sort PER-KERNEL standalone profile", "[.sort-kprof]")
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11094,7 +14097,10 @@ TEST_CASE("B-cmp: radix sort PER-KERNEL standalone profile", "[.sort-kprof]")
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -11114,7 +14120,10 @@ TEST_CASE("B-cmp: radix sort PER-KERNEL standalone profile", "[.sort-kprof]")
     {
         auto stg = compute.create_buffer(static_cast<crd::u64>(n) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < n; ++i) { p[i] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U); }
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U);
+        }
         stg->unmap();
         auto& r = compute.begin();
         r.copy(*stg, *d_a, 0U, 0U, static_cast<crd::u64>(n) * 4U);
@@ -11155,7 +14164,10 @@ TEST_CASE("B-cmp: radix sort PER-KERNEL standalone profile", "[.sort-kprof]")
         {
             run();
             const double ms = compute.last_gpu_ms() / static_cast<double>(kbatch);
-            if (ms > 0.0 && ms < best) { best = ms; }
+            if (ms > 0.0 && ms < best)
+            {
+                best = ms;
+            }
         }
         WARN("[kprof] " << nm << "  " << best << " ms");
         return best;
@@ -11187,7 +14199,11 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11210,7 +14226,10 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, k));
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(k.source), nm, &alloc);
-        if (!spv.ok) { WARN("[" << nm << "] SPIR-V failed: " << spv.error_message.c_str()); }
+        if (!spv.ok)
+        {
+            WARN("[" << nm << "] SPIR-V failed: " << spv.error_message.c_str());
+        }
         REQUIRE(spv.ok);
         return compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nb, 0U);
     };
@@ -11230,14 +14249,23 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
     REQUIRE(pcl != nullptr); REQUIRE(pgh != nullptr); REQUIRE(pgb != nullptr);
 
     crd::containers::Array<crd::u32> keys(&alloc); keys.resize(n);
-    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U); }
+    for (int i = 0; i < n; ++i)
+    {
+        keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 2654435761U) ^ (static_cast<crd::u32>(i) << 11U);
+    }
 
     auto d_a  = compute.create_buffer(static_cast<crd::u64>(n) * 4U, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
     auto d_b  = compute.create_buffer(static_cast<crd::u64>(n) * 4U, storage | transfer_dst | transfer_src, cg::ComputeMemory::GpuOnly);
     auto d_gb = compute.create_buffer(static_cast<crd::u64>(4 * nbins) * 4U, storage, cg::ComputeMemory::GpuOnly);
     auto d_ax = compute.create_buffer(static_cast<crd::u64>(aux_words) * 4U, storage, cg::ComputeMemory::GpuOnly);
     auto stg  = compute.create_buffer(static_cast<crd::u64>(n) * 4U, transfer_src, cg::ComputeMemory::CpuToGpu);
-    { auto* p = static_cast<crd::u32*>(stg->map()); for (int i = 0; i < n; ++i) { p[i] = keys[static_cast<crd::usize>(i)]; } stg->unmap(); }
+    {
+        auto* p = static_cast<crd::u32*>(stg->map());
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = keys[static_cast<crd::usize>(i)];
+        }
+        stg->unmap(); }
     { auto& r = compute.begin(); r.copy(*stg, *d_a, 0U, 0U, static_cast<crd::u64>(n) * 4U); r.barrier(*d_a, cg::ComputeAccess::TransferDst, cg::ComputeAccess::ShaderRead); compute.submit_and_wait(); }
 
     constexpr int batch  = 32;
@@ -11265,7 +14293,10 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
         }
         compute.submit_and_wait();
     };
-    for (int w = 0; w < 2; ++w) { record(); }
+    for (int w = 0; w < 2; ++w)
+    {
+        record();
+    }
     double best = 1e30; double wbest = 1e30;
     for (int r = 0; r < 6; ++r)
     {
@@ -11273,8 +14304,15 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
         record();
         const auto   t1  = std::chrono::high_resolution_clock::now();
         const double wms = std::chrono::duration<double, std::milli>(t1 - t0).count() / static_cast<double>(batch);
-        if (wms < wbest) { wbest = wms; }
-        const double ms = compute.last_gpu_ms() / static_cast<double>(batch); if (ms > 0.0 && ms < best) { best = ms; }
+        if (wms < wbest)
+        {
+            wbest = wms;
+        }
+        const double ms = compute.last_gpu_ms() / static_cast<double>(batch);
+        if (ms > 0.0 && ms < best)
+        {
+            best = ms;
+        }
     }
 
     auto rb = compute.create_buffer(static_cast<crd::u64>(n) * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
@@ -11283,7 +14321,15 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
     int      bad = 0;
     crd::u32 ix  = 0U;
     crd::u32 sx  = 0U;
-    for (int i = 0; i < n; ++i) { if (i > 0 && o[i - 1] > o[i]) { ++bad; } ix ^= keys[static_cast<crd::usize>(i)]; sx ^= o[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        if (i > 0 && o[i - 1] > o[i])
+        {
+            ++bad;
+        }
+        ix ^= keys[static_cast<crd::usize>(i)];
+        sx ^= o[i];
+    }
     rb->unmap();
     const double mks = static_cast<double>(n) / (wbest * 1.0e3);
     WARN("[sort-osw] N=" << n << " ONESWEEP wall " << wbest << " ms (" << mks << " Mkeys/s) vs CUB " << cub_ms << " = "
@@ -11307,7 +14353,11 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11331,8 +14381,14 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
                                                                     "[numthreads(1,1,1)] void main() {}"),
                                                                 crd::containers::StringView("dxc_probe"), &alloc)
                                     .ok;
-    if (dxil_available) { CHECK(ck.dxil_bytes > 0U); }
-    else { std::printf("[dxc unavailable] DXIL cook assertions soft-skipped (CRD_HAS_DXC=0)\n"); }
+    if (dxil_available)
+    {
+        CHECK(ck.dxil_bytes > 0U);
+    }
+    else
+    {
+        std::printf("[dxc unavailable] DXIL cook assertions soft-skipped (CRD_HAS_DXC=0)\n");
+    }
     CHECK(ck.cuda_bytes  > 0U); // CUDA/MSL/WGSL are emitted source (their platform toolchain finishes the compile)
     CHECK(ck.msl_bytes   > 0U);
     CHECK(ck.wgsl_bytes  > 0U);
@@ -11342,7 +14398,10 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
     REQUIRE(sc::read_shader_bundle(crd::containers::as_const_span(ck.crdr), bundle));
     const auto spvc = bundle.bytecode(sc::CookBackend::SpirV);
     REQUIRE(!spvc.empty());
-    if (dxil_available) { CHECK(!bundle.bytecode(sc::CookBackend::Dxil).empty()); }
+    if (dxil_available)
+    {
+        CHECK(!bundle.bytecode(sc::CookBackend::Dxil).empty());
+    }
     CHECK(!bundle.ir().empty());
     CHECK(bundle.reflection().size() == sizeof(kir::ShaderReflection));
 
@@ -11359,12 +14418,22 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
     REQUIRE(pipe != nullptr);
     float in_h[ls];
     float out_h[ls];
-    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in_h[i] = static_cast<float>(i) + 0.5F;
+        out_h[i] = 0.0F;
+    }
     float*    host[2] = {in_h, out_h};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
     int mism = 0;
-    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out_h[i] != in_h[ls - 1 - i])
+        {
+            ++mism;
+        }
+    }
     std::printf("[cook] .crdr cooked: spirv=%u dxil=%u ptx=%u cuda=%u msl=%u wgsl=%u B; cooked SPIR-V ran on GPU, %d/%d reversed\n",
                 ck.spirv_bytes, ck.dxil_bytes, ck.ptx_bytes, ck.cuda_bytes, ck.msl_bytes, ck.wgsl_bytes, ls - mism, ls);
     CHECK(mism == 0);
@@ -11381,7 +14450,10 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
         CHECK(ptx_sv.find(".target") != crd::containers::StringView::npos);
         std::printf("[cook] real PTX cooked via NVRTC: %u B (portable virtual-arch bytecode)\n", ck.ptx_bytes);
     }
-    else { WARN("no CUDA toolkit in this build; CUDA emitted as source only (no PTX)"); }
+    else
+    {
+        WARN("no CUDA toolkit in this build; CUDA emitted as source only (no PTX)");
+    }
 
     // (4) CONTENT-HASH CACHE: first cook writes, second cook re-uses the exact bytes.
     const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-cache";
@@ -11438,7 +14510,11 @@ TEST_CASE("D-007 D3: variant matrix -- content-hash dedup + on-demand cook + GPU
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11474,12 +14550,22 @@ TEST_CASE("D-007 D3: variant matrix -- content-hash dedup + on-demand cook + GPU
         constexpr int ls = 32;
         float         in_h[ls];
         float         out_h[ls];
-        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        for (int i = 0; i < ls; ++i)
+        {
+            in_h[i] = static_cast<float>(i) + 1.0F;
+            out_h[i] = 0.0F;
+        }
         float*    host[2] = {in_h, out_h};
         const int lens[2] = {ls, ls};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
         int bad = 0;
-        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        for (int i = 0; i < ls; ++i)
+        {
+            if (out_h[i] != in_h[i] * expect_scale)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     };
     run_variant(0U, 1.0F); // scale 1
@@ -11502,7 +14588,11 @@ TEST_CASE("D-007 D4: zero-compile runtime load from .crdr + persistent VkPipelin
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11534,12 +14624,22 @@ TEST_CASE("D-007 D4: zero-compile runtime load from .crdr + persistent VkPipelin
 
     float in_h[ls];
     float out_h[ls];
-    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in_h[i] = static_cast<float>(i) + 0.5F;
+        out_h[i] = 0.0F;
+    }
     float*    host[2] = {in_h, out_h};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
     int mism = 0;
-    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out_h[i] != in_h[ls - 1 - i])
+        {
+            ++mism;
+        }
+    }
     CHECK(mism == 0);
     std::printf("[d4] loaded cooked .crdr (%zu B) from disk with ZERO compile (reflection n_bindings=%d); ran %d/%d reversed\n",
                 static_cast<size_t>(loaded.size()), refl.n_bindings, ls - mism, ls);
@@ -11586,7 +14686,11 @@ TEST_CASE("D-007 D5: hot-reload -- edit the IR, atomically swap the live pipelin
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11598,12 +14702,22 @@ TEST_CASE("D-007 D5: hot-reload -- edit the IR, atomically swap the live pipelin
         REQUIRE(rc.pipeline() != nullptr);
         float in_h[ls];
         float out_h[ls];
-        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        for (int i = 0; i < ls; ++i)
+        {
+            in_h[i] = static_cast<float>(i) + 1.0F;
+            out_h[i] = 0.0F;
+        }
         float*    host[2] = {in_h, out_h};
         const int lens[2] = {ls, ls};
         crd::kir_test::dispatch_kernel_1wg(compute, *rc.pipeline(), host, lens, 2, 1U);
         int bad = 0;
-        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        for (int i = 0; i < ls; ++i)
+        {
+            if (out_h[i] != in_h[i] * expect_scale)
+            {
+                ++bad;
+            }
+        }
         return bad;
     };
 
@@ -11673,7 +14787,11 @@ TEST_CASE("D-007 D3: ubergraph variant style -- pin ShaderOptions + specialize, 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -11709,12 +14827,22 @@ TEST_CASE("D-007 D3: ubergraph variant style -- pin ShaderOptions + specialize, 
         constexpr int ls = 32;
         float         in_h[ls];
         float         out_h[ls];
-        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        for (int i = 0; i < ls; ++i)
+        {
+            in_h[i] = static_cast<float>(i) + 1.0F;
+            out_h[i] = 0.0F;
+        }
         float*    host[2] = {in_h, out_h};
         const int lens[2] = {ls, ls};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
         int bad = 0;
-        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        for (int i = 0; i < ls; ++i)
+        {
+            if (out_h[i] != in_h[i] * expect_scale)
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     };
     run_uber(0U, 1.0F); // opt0=0 → Select folds to ×1
@@ -11773,7 +14901,11 @@ TEST_CASE("D-007 D3: a REAL OpenPBR material through the variant matrix -- fragm
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
@@ -11817,7 +14949,10 @@ TEST_CASE("D-007 D3: a REAL OpenPBR material through the variant matrix -- fragm
     VkShaderModule sm = VK_NULL_HANDLE;
     const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
     CHECK(vr == VK_SUCCESS);
-    if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+    if (sm != VK_NULL_HANDLE)
+    {
+        vkDestroyShaderModule(vk->vk_device(), sm, nullptr);
+    }
     std::printf("[material] cooked Fragment SPIR-V (%zu B) accepted by the driver as a VkShaderModule\n", static_cast<size_t>(spv.size()));
 }
 
@@ -11869,7 +15004,11 @@ TEST_CASE("D-007 D2: cook a VS+FS raster program (material) into ONE .crdr bundl
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
@@ -11898,7 +15037,10 @@ TEST_CASE("D-007 D2: cook a VS+FS raster program (material) into ONE .crdr bundl
         smci.pCode    = reinterpret_cast<const crd::u32*>(spv.data());
         VkShaderModule sm = VK_NULL_HANDLE;
         const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
-        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        if (sm != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(vk->vk_device(), sm, nullptr);
+        }
         return vr;
     };
     CHECK(make_module(vspv) == VK_SUCCESS);
@@ -11919,9 +15061,17 @@ TEST_CASE("D-007: neural material FRAGMENT writes the OpenPBR G-buffer (MLP outp
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector; skipping"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector; skipping");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
     // A small MLP (in=hidden=out=16). Outputs [0..2]=base, [3]=metallic, [4]=roughness → the surface slab.
@@ -11930,7 +15080,10 @@ TEST_CASE("D-007: neural material FRAGMENT writes the OpenPBR G-buffer (MLP outp
     REQUIRE(nn::emit_neural_surface_fs_glsl(mcfg, kern));
 
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Fragment, crd::containers::to_view(kern.source), "neural_surface", &alloc);
-    if (!spv.ok) { WARN("neural surface FS -> SPIR-V failed: " << spv.error_message.c_str()); }
+    if (!spv.ok)
+    {
+        WARN("neural surface FS -> SPIR-V failed: " << spv.error_message.c_str());
+    }
     REQUIRE(spv.ok); // shaderc compiled a coopvec MLP in the FRAGMENT stage
     CHECK(!spv.spirv.empty());
 
@@ -11944,7 +15097,10 @@ TEST_CASE("D-007: neural material FRAGMENT writes the OpenPBR G-buffer (MLP outp
         VkShaderModule sm = VK_NULL_HANDLE;
         const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
         CHECK(vr == VK_SUCCESS);
-        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        if (sm != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(vk->vk_device(), sm, nullptr);
+        }
         std::printf("[neural] neural material FRAGMENT (coopvec MLP -> OpenPBR G-buffer, 4 MRT): %zu B SPIR-V, driver-accepted\n",
                     static_cast<size_t>(spv.spirv.size()));
     }
@@ -11992,7 +15148,11 @@ TEST_CASE("D-007 D6: joint VS+FS variant specialization -- material ubershader c
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::memory::TlsfAllocator alloc(48U << 20U);
 
@@ -12012,7 +15172,10 @@ TEST_CASE("D-007 D6: joint VS+FS variant specialization -- material ubershader c
         smci.pCode    = reinterpret_cast<const crd::u32*>(spv.data());
         VkShaderModule sm = VK_NULL_HANDLE;
         const VkResult vr = vkCreateShaderModule(vk->vk_device(), &smci, nullptr, &sm);
-        if (sm != VK_NULL_HANDLE) { vkDestroyShaderModule(vk->vk_device(), sm, nullptr); }
+        if (sm != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(vk->vk_device(), sm, nullptr);
+        }
         return vr == VK_SUCCESS;
     };
 
@@ -12094,7 +15257,11 @@ TEST_CASE("D-007 D8: multi-variant container -- one .crdr, key-addressed, dedupe
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -12131,12 +15298,22 @@ TEST_CASE("D-007 D8: multi-variant container -- one .crdr, key-addressed, dedupe
     constexpr int ls = 32;
     float         in_h[ls];
     float         out_h[ls];
-    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in_h[i] = static_cast<float>(i) + 1.0F;
+        out_h[i] = 0.0F;
+    }
     float*    host[2] = {in_h, out_h};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * 2.0F) { ++bad; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out_h[i] != in_h[i] * 2.0F)
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     std::printf("[d8] loaded key1's variant from the container and ran it on GPU: %d/%d ×2 correct\n", ls - bad, ls);
 }
@@ -12151,7 +15328,11 @@ TEST_CASE("D-007 D9: neural material completeness -- learned normal + end-to-end
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -12177,18 +15358,37 @@ TEST_CASE("D-007 D9: neural material completeness -- learned normal + end-to-end
     float         w2[out * hid];
     float         b2[out];
     const auto    rnd = [](int i) { const crd::u32 h = (static_cast<crd::u32>(i) * 2654435761U) ^ 0x9E3779B9U; return (static_cast<float>(h & 0xFFFFU) / 32768.0F - 1.0F) * 0.3F; };
-    for (int i = 0; i < hid * in_dim; ++i) { w1[i] = rnd(i); }
-    for (int i = 0; i < hid; ++i) { b1[i] = 0.0F; }
-    for (int i = 0; i < out * hid; ++i) { w2[i] = rnd(i + 971); }
-    for (int i = 0; i < out; ++i) { b2[i] = 0.0F; }
+    for (int i = 0; i < hid * in_dim; ++i)
+    {
+        w1[i] = rnd(i);
+    }
+    for (int i = 0; i < hid; ++i)
+    {
+        b1[i] = 0.0F;
+    }
+    for (int i = 0; i < out * hid; ++i)
+    {
+        w2[i] = rnd(i + 971);
+    }
+    for (int i = 0; i < out; ++i)
+    {
+        b2[i] = 0.0F;
+    }
     // reference surface: a smooth RGB pattern of (u,v)
     const auto target = [](float u, float v, int ch) {
-        if (ch == 0) { return 0.5F + 0.5F * static_cast<float>(crd::math::sin(6.2831853 * static_cast<double>(u))); }
-        if (ch == 1) { return 0.5F + 0.5F * static_cast<float>(crd::math::cos(6.2831853 * static_cast<double>(v))); }
+        if (ch == 0)
+        {
+            return 0.5F + 0.5F * static_cast<float>(crd::math::sin(6.2831853 * static_cast<double>(u)));
+        }
+        if (ch == 1)
+        {
+            return 0.5F + 0.5F * static_cast<float>(crd::math::cos(6.2831853 * static_cast<double>(v)));
+        }
         return u * v;
     };
     const auto encode = [](float u, float v, float* x) {
-        for (int k = 0; k < in_dim / 4; ++k) {
+        for (int k = 0; k < in_dim / 4; ++k)
+        {
             const float f = static_cast<float>(1 << k) * 3.14159265F;
             x[4 * k + 0] = static_cast<float>(crd::math::sin(f * u));
             x[4 * k + 1] = static_cast<float>(crd::math::cos(f * u));
@@ -12198,37 +15398,98 @@ TEST_CASE("D-007 D9: neural material completeness -- learned normal + end-to-end
     };
     const auto mse = [&]() {
         float e = 0.0F;
-        for (int gy = 0; gy < grid; ++gy) {
-            for (int gx = 0; gx < grid; ++gx) {
+        for (int gy = 0; gy < grid; ++gy)
+        {
+            for (int gx = 0; gx < grid; ++gx)
+            {
                 const float u = (static_cast<float>(gx) + 0.5F) / grid;
                 const float v = (static_cast<float>(gy) + 0.5F) / grid;
                 float       x[in_dim];
                 encode(u, v, x);
                 float h[hid];
-                for (int j = 0; j < hid; ++j) { float s = b1[j]; for (int i = 0; i < in_dim; ++i) { s += w1[j * in_dim + i] * x[i]; } h[j] = s > 0.0F ? s : 0.0F; }
-                for (int o = 0; o < out; ++o) { float s = b2[o]; for (int j = 0; j < hid; ++j) { s += w2[o * hid + j] * h[j]; } const float d = s - target(u, v, o); e += d * d; }
+                for (int j = 0; j < hid; ++j)
+                {
+                    float s = b1[j];
+                    for (int i = 0; i < in_dim; ++i)
+                    {
+                        s += w1[j * in_dim + i] * x[i];
+                    }
+                    h[j] = s > 0.0F ? s : 0.0F;
+                }
+                for (int o = 0; o < out; ++o)
+                {
+                    float s = b2[o];
+                    for (int j = 0; j < hid; ++j)
+                    {
+                        s += w2[o * hid + j] * h[j];
+                    }
+                    const float d = s - target(u, v, o);
+                    e += d * d;
+                }
             }
         }
         return e / static_cast<float>(grid * grid * out);
     };
     const float mse0 = mse();
     const float lr   = 0.15F;
-    for (int it = 0; it < 4000; ++it) {
-        for (int gy = 0; gy < grid; ++gy) {
-            for (int gx = 0; gx < grid; ++gx) {
+    for (int it = 0; it < 4000; ++it)
+    {
+        for (int gy = 0; gy < grid; ++gy)
+        {
+            for (int gx = 0; gx < grid; ++gx)
+            {
                 const float u = (static_cast<float>(gx) + 0.5F) / grid;
                 const float v = (static_cast<float>(gy) + 0.5F) / grid;
                 float       x[in_dim];
                 encode(u, v, x);
                 float h[hid];
                 float pre[hid];
-                for (int j = 0; j < hid; ++j) { float s = b1[j]; for (int i = 0; i < in_dim; ++i) { s += w1[j * in_dim + i] * x[i]; } pre[j] = s; h[j] = s > 0.0F ? s : 0.0F; }
+                for (int j = 0; j < hid; ++j)
+                {
+                    float s = b1[j];
+                    for (int i = 0; i < in_dim; ++i)
+                    {
+                        s += w1[j * in_dim + i] * x[i];
+                    }
+                    pre[j] = s;
+                    h[j] = s > 0.0F ? s : 0.0F;
+                }
                 float dy[out];
-                for (int o = 0; o < out; ++o) { float s = b2[o]; for (int j = 0; j < hid; ++j) { s += w2[o * hid + j] * h[j]; } dy[o] = 2.0F * (s - target(u, v, o)) / static_cast<float>(out); }
+                for (int o = 0; o < out; ++o)
+                {
+                    float s = b2[o];
+                    for (int j = 0; j < hid; ++j)
+                    {
+                        s += w2[o * hid + j] * h[j];
+                    }
+                    dy[o] = 2.0F * (s - target(u, v, o)) / static_cast<float>(out);
+                }
                 float dh[hid];
-                for (int j = 0; j < hid; ++j) { float s = 0.0F; for (int o = 0; o < out; ++o) { s += w2[o * hid + j] * dy[o]; } dh[j] = pre[j] > 0.0F ? s : 0.0F; }
-                for (int o = 0; o < out; ++o) { for (int j = 0; j < hid; ++j) { w2[o * hid + j] -= lr * dy[o] * h[j]; } b2[o] -= lr * dy[o]; }
-                for (int j = 0; j < hid; ++j) { for (int i = 0; i < in_dim; ++i) { w1[j * in_dim + i] -= lr * dh[j] * x[i]; } b1[j] -= lr * dh[j]; }
+                for (int j = 0; j < hid; ++j)
+                {
+                    float s = 0.0F;
+                    for (int o = 0; o < out; ++o)
+                    {
+                        s += w2[o * hid + j] * dy[o];
+                    }
+                    dh[j] = pre[j] > 0.0F ? s : 0.0F;
+                }
+                for (int o = 0; o < out; ++o)
+                {
+                    for (int j = 0; j < hid; ++j)
+                    {
+                        w2[o * hid + j] -= lr * dy[o] * h[j];
+                    }
+                    b2[o] -= lr * dy[o];
+                }
+                for (int j = 0; j < hid; ++j)
+                {
+                    for (int i = 0; i < in_dim; ++i)
+                    {
+                        w1[j * in_dim + i] -= lr * dh[j] * x[i];
+                    }
+                    b1[j] -= lr * dh[j];
+                }
             }
         }
     }
@@ -12275,7 +15536,10 @@ TEST_CASE("D-007 D10: parallel cook on crd-jobs is byte-identical to the serial 
     bool manifest_match = true;
     for (crd::usize i = 0; i < serial.entries.size(); ++i)
     {
-        if (!(serial.entries[i].hash == par.entries[i].hash) || serial.entries[i].key != par.entries[i].key) { manifest_match = false; }
+        if (!(serial.entries[i].hash == par.entries[i].hash) || serial.entries[i].key != par.entries[i].key)
+        {
+            manifest_match = false;
+        }
     }
     CHECK(manifest_match);
 
@@ -12319,7 +15583,11 @@ TEST_CASE("D-007 D11: async pipeline warmup on crd-jobs -- pipelines built off t
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -12346,7 +15614,10 @@ TEST_CASE("D-007 D11: async pipeline warmup on crd-jobs -- pipelines built off t
     warmer.submit(&vk_create_from_spirv, &compute); // reuses the D5 create-callback (context = user)
     REQUIRE(warmer.in_flight());                    // submit() did NOT block — the warm is running on a worker
     crd::u64 spin = 0U;                             // main-thread work overlapping the background compile (must not touch `compute`)
-    for (crd::u32 i = 0U; i < 200000U; ++i) { spin += (i * 2654435761U) ^ (spin >> 3U); }
+    for (crd::u32 i = 0U; i < 200000U; ++i)
+    {
+        spin += (i * 2654435761U) ^ (spin >> 3U);
+    }
     warmer.wait();                                  // join — the batch is hot
     CHECK(spin != 0U);                              // (defeat dead-code elimination of the overlap work)
 
@@ -12362,12 +15633,22 @@ TEST_CASE("D-007 D11: async pipeline warmup on crd-jobs -- pipelines built off t
         constexpr int ls = 32;
         float         in_h[ls];
         float         out_h[ls];
-        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        for (int i = 0; i < ls; ++i)
+        {
+            in_h[i] = static_cast<float>(i) + 1.0F;
+            out_h[i] = 0.0F;
+        }
         float*    host[2] = {in_h, out_h};
         const int lens[2] = {ls, ls};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
         int bad = 0;
-        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        for (int i = 0; i < ls; ++i)
+        {
+            if (out_h[i] != in_h[i] * expect_scale)
+            {
+                ++bad;
+            }
+        }
         return bad;
     };
     CHECK(run(warmer.pipeline_for_key(0U), 1.0F) == 0); // x1
@@ -12414,7 +15695,11 @@ TEST_CASE("D-007 D12: spec constants -- one cooked bundle, many pipelines via Vk
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -12439,12 +15724,22 @@ TEST_CASE("D-007 D12: spec constants -- one cooked bundle, many pipelines via Vk
         constexpr int ls = 32;
         float         in_h[ls];
         float         out_h[ls];
-        for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 1.0F; out_h[i] = 0.0F; }
+        for (int i = 0; i < ls; ++i)
+        {
+            in_h[i] = static_cast<float>(i) + 1.0F;
+            out_h[i] = 0.0F;
+        }
         float*    host[2] = {in_h, out_h};
         const int lens[2] = {ls, ls};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 2, 1U);
         int bad = 0;
-        for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[i] * expect_scale) { ++bad; } }
+        for (int i = 0; i < ls; ++i)
+        {
+            if (out_h[i] != in_h[i] * expect_scale)
+            {
+                ++bad;
+            }
+        }
         return bad;
     };
     // Four pipelines from the SAME cooked bytecode — three explicit spec values + the unbound default — all correct, no recompile.
@@ -12485,12 +15780,18 @@ bool  as6_correct(const float* cbuf, int mm, int nn, int kk)
         const int i   = (s * 977) % mm;
         const int j   = (s * 1471) % nn;
         double    acc = 0.0;
-        for (int k = 0; k < kk; ++k) { acc += static_cast<double>(as6_av(i, k)) * static_cast<double>(as6_bv(k, j)); }
+        for (int k = 0; k < kk; ++k)
+        {
+            acc += static_cast<double>(as6_av(i, k)) * static_cast<double>(as6_bv(k, j));
+        }
         const float ref = static_cast<float>(acc);
         const float got = cbuf[static_cast<crd::usize>(i) * nn + j];
         const float rel = (got - ref) / (1.0F + (ref < 0.0F ? -ref : ref));
         const float ar  = rel < 0.0F ? -rel : rel;
-        if (ar > maxrel) { maxrel = ar; }
+        if (ar > maxrel)
+        {
+            maxrel = ar;
+        }
     }
     return maxrel < 3e-3F;
 }
@@ -12504,7 +15805,11 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -12527,8 +15832,20 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
     h_a.resize(static_cast<crd::usize>(mm) * kk);
     h_b.resize(static_cast<crd::usize>(kk) * nn);
     h_c.resize(static_cast<crd::usize>(mm) * nn);
-    for (int i = 0; i < mm; ++i) { for (int k = 0; k < kk; ++k) { h_a[static_cast<crd::usize>(i) * kk + k] = as6_av(i, k); } }
-    for (int k = 0; k < kk; ++k) { for (int j = 0; j < nn; ++j) { h_b[static_cast<crd::usize>(k) * nn + j] = as6_bv(k, j); } }
+    for (int i = 0; i < mm; ++i)
+    {
+        for (int k = 0; k < kk; ++k)
+        {
+            h_a[static_cast<crd::usize>(i) * kk + k] = as6_av(i, k);
+        }
+    }
+    for (int k = 0; k < kk; ++k)
+    {
+        for (int j = 0; j < nn; ++j)
+        {
+            h_b[static_cast<crd::usize>(k) * nn + j] = as6_bv(k, j);
+        }
+    }
 
     auto d_a = compute.create_buffer(static_cast<crd::u64>(mm) * kk * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
     auto d_b = compute.create_buffer(static_cast<crd::u64>(kk) * nn * 4U, storage | transfer_dst, cg::ComputeMemory::GpuOnly);
@@ -12537,7 +15854,10 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
         auto        stg = compute.create_buffer(nb, transfer_src, cg::ComputeMemory::CpuToGpu);
         auto*       p   = static_cast<crd::u8*>(stg->map());
         const auto* ss  = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nb; ++i) { p[i] = ss[i]; }
+        for (crd::u64 i = 0; i < nb; ++i)
+        {
+            p[i] = ss[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nb);
@@ -12556,13 +15876,25 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
     auto           rb       = compute.create_buffer(static_cast<crd::u64>(mm) * nn * 4U, transfer_dst, cg::ComputeMemory::GpuToCpu);
     for (const Cand& cd : cands)
     {
-        if ((mm % cd.bt) != 0 || (nn % cd.bt) != 0 || (kk % cd.bk) != 0) { continue; }
+        if ((mm % cd.bt) != 0 || (nn % cd.bt) != 0 || (kk % cd.bk) != 0)
+        {
+            continue;
+        }
         crd::kir::GlslKernel kern(&alloc);
-        if (!crd::kir::emit_contract_tiled_glsl_sched(g, c, cd.bt, cd.bk, cd.tm, kern)) { continue; }
+        if (!crd::kir::emit_contract_tiled_glsl_sched(g, c, cd.bt, cd.bk, cd.tm, kern))
+        {
+            continue;
+        }
         const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source), "gemm", &alloc, true);
-        if (!spv.ok) { continue; }
+        if (!spv.ok)
+        {
+            continue;
+        }
         auto pipe = compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 3, 16U);
-        if (pipe == nullptr) { continue; }
+        if (pipe == nullptr)
+        {
+            continue;
+        }
         const crd::u32     gx      = static_cast<crd::u32>((mm / cd.bt) * (nn / cd.bt));
         cg::ComputeBuffer* binds[3] = {d_a.get(), d_b.get(), d_c.get()};
         for (int w = 0; w < 2; ++w)
@@ -12579,7 +15911,10 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
             r.barrier(*d_c, cg::ComputeAccess::ShaderWrite, cg::ComputeAccess::TransferSrc);
             compute.submit_and_wait();
             const double ms = compute.last_gpu_ms();
-            if (ms > 0.0 && ms < mn) { mn = ms; }
+            if (ms > 0.0 && ms < mn)
+            {
+                mn = ms;
+            }
         }
         {
             auto& r = compute.begin();
@@ -12587,12 +15922,22 @@ TEST_CASE("D-007 AS-6b: autotune the Vulkan/SPIR-V GEMM -- parameterized GLSL sc
             compute.submit_and_wait();
         }
         const auto* cptr = static_cast<const float*>(rb->map());
-        for (crd::usize i = 0; i < h_c.size(); ++i) { h_c[i] = cptr[i]; }
+        for (crd::usize i = 0; i < h_c.size(); ++i)
+        {
+            h_c[i] = cptr[i];
+        }
         rb->unmap();
         ++measured;
-        if (!as6_correct(h_c.data(), mm, nn, kk)) { continue; }
+        if (!as6_correct(h_c.data(), mm, nn, kk))
+        {
+            continue;
+        }
         ++correct;
-        if (mn < best_ms) { best_ms = mn; best = cd; }
+        if (mn < best_ms)
+        {
+            best_ms = mn;
+            best = cd;
+        }
     }
     REQUIRE(best.bt > 0);
     CHECK(correct == measured); // every emittable GLSL schedule computes correctly
@@ -12627,7 +15972,11 @@ TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (
     namespace kir = crd::kir;
     namespace pfs = crd::platform::fs;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -12637,22 +15986,43 @@ TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (
         const auto pushf = [&](crd::f32 v) {
             crd::u8 raw[4];
             std::memcpy(raw, &v, 4);
-            for (crd::u8 x : raw) { stl.push_back(x); }
+            for (crd::u8 x : raw)
+            {
+                stl.push_back(x);
+            }
         };
         const auto pushtri = [&](const crd::f32* a, const crd::f32* b, const crd::f32* c) {
             const crd::f32 nz[3] = {0.0F, 0.0F, 1.0F};
-            for (int i = 0; i < 3; ++i) { pushf(nz[i]); }
-            for (int i = 0; i < 3; ++i) { pushf(a[i]); }
-            for (int i = 0; i < 3; ++i) { pushf(b[i]); }
-            for (int i = 0; i < 3; ++i) { pushf(c[i]); }
+            for (int i = 0; i < 3; ++i)
+            {
+                pushf(nz[i]);
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                pushf(a[i]);
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                pushf(b[i]);
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                pushf(c[i]);
+            }
             stl.push_back(0);
             stl.push_back(0);
         };
-        for (int i = 0; i < 80; ++i) { stl.push_back(0); } // header
+        for (int i = 0; i < 80; ++i) // header
+        {
+            stl.push_back(0);
+        }
         const crd::u32 count = 2;
         crd::u8        raw[4];
         std::memcpy(raw, &count, 4);
-        for (crd::u8 x : raw) { stl.push_back(x); }
+        for (crd::u8 x : raw)
+        {
+            stl.push_back(x);
+        }
         const crd::f32 p00[3] = {-1000.0F, -1000.0F, 0.0F};
         const crd::f32 p10[3] = {0.0F, -1000.0F, 0.0F};
         const crd::f32 p11[3] = {0.0F, 1000.0F, 0.0F};
@@ -12704,7 +16074,10 @@ TEST_CASE("GEO-1: an IMPORTED STL cooks, uploads, and DRAWS via vertex pulling (
         crd::u32 vi = 0;
         std::memcpy(&vi, indx->payload.data() + ii * 4U, 4U);
         REQUIRE(vi < 4U);
-        for (crd::u32 b = 0; b < 48U; ++b) { stream.push_back(vert->payload[vi * 48U + b]); }
+        for (crd::u32 b = 0; b < 48U; ++b)
+        {
+            stream.push_back(vert->payload[vi * 48U + b]);
+        }
     }
 
     // 4. the DRAW: vertex-pulling VS + flat-red FS; the cooked stream uploaded into the storage buffer
@@ -12762,7 +16135,11 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
     namespace kir = crd::kir;
     namespace pfs = crd::platform::fs;
     auto        r = vk_raster_or_skip();
-    if (r.vk == nullptr) { WARN("no Vulkan device / VK_EXT_shader_object; skipping"); return; }
+    if (r.vk == nullptr)
+    {
+        WARN("no Vulkan device / VK_EXT_shader_object; skipping");
+        return;
+    }
     REQUIRE(r.raster != nullptr);
     crd::memory::TlsfAllocator alloc(16U << 20U);
 
@@ -12779,14 +16156,29 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
         const auto add_chunk = [&](const char* type, const crd::containers::Array<crd::u8>& payload) {
             push_be(png, static_cast<crd::u32>(payload.size()));
             crd::containers::Array<crd::u8> crc_in(&alloc);
-            for (int i = 0; i < 4; ++i) { crc_in.push_back(static_cast<crd::u8>(type[i])); }
-            for (crd::usize i = 0; i < payload.size(); ++i) { crc_in.push_back(payload[i]); }
-            for (int i = 0; i < 4; ++i) { png.push_back(static_cast<crd::u8>(type[i])); }
-            for (crd::usize i = 0; i < payload.size(); ++i) { png.push_back(payload[i]); }
+            for (int i = 0; i < 4; ++i)
+            {
+                crc_in.push_back(static_cast<crd::u8>(type[i]));
+            }
+            for (crd::usize i = 0; i < payload.size(); ++i)
+            {
+                crc_in.push_back(payload[i]);
+            }
+            for (int i = 0; i < 4; ++i)
+            {
+                png.push_back(static_cast<crd::u8>(type[i]));
+            }
+            for (crd::usize i = 0; i < payload.size(); ++i)
+            {
+                png.push_back(payload[i]);
+            }
             push_be(png, crd::resources::png_crc32(crd::containers::as_const_span(crc_in)));
         };
         const crd::u8 sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
-        for (crd::u8 s : sig) { png.push_back(s); }
+        for (crd::u8 s : sig)
+        {
+            png.push_back(s);
+        }
         crd::containers::Array<crd::u8> ihdr(&alloc);
         push_be(ihdr, 2U);
         push_be(ihdr, 2U);
@@ -12800,7 +16192,10 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
         const crd::u8 rows[2][9] = {{0, 255, 255, 255, 255, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 255, 255, 255, 255}};
         for (const auto& row : rows)
         {
-            for (crd::u8 b : row) { raw.push_back(b); }
+            for (crd::u8 b : row)
+            {
+                raw.push_back(b);
+            }
         }
         auto idat = crd::resources::zlib_deflate(crd::containers::as_const_span(raw), &alloc);
         add_chunk("IDAT", idat);
@@ -12813,11 +16208,20 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
         const auto pushf = [&](crd::f32 v) {
             crd::u8 raw4[4];
             std::memcpy(raw4, &v, 4);
-            for (crd::u8 x : raw4) { bin.push_back(x); }
+            for (crd::u8 x : raw4)
+            {
+                bin.push_back(x);
+            }
         };
         const crd::f32 pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
-        for (crd::f32 v : pos) { pushf(v); }
-        for (crd::usize i = 0; i < png.size(); ++i) { bin.push_back(png[i]); }
+        for (crd::f32 v : pos)
+        {
+            pushf(v);
+        }
+        for (crd::usize i = 0; i < png.size(); ++i)
+        {
+            bin.push_back(png[i]);
+        }
     }
 
     crd::containers::String json(&alloc);
@@ -12844,7 +16248,10 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
         const auto pushu = [&](crd::u32 v) {
             crd::u8 raw4[4];
             std::memcpy(raw4, &v, 4);
-            for (crd::u8 x : raw4) { glb.push_back(x); }
+            for (crd::u8 x : raw4)
+            {
+                glb.push_back(x);
+            }
         };
         const crd::u32 jlen = static_cast<crd::u32>(json.size());
         const crd::u32 jpad = (4U - (jlen % 4U)) % 4U;
@@ -12855,12 +16262,24 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
         pushu(12U + 8U + jlen + jpad + 8U + blen + bpad);
         pushu(jlen + jpad);
         pushu(0x4E4F534AU);
-        for (crd::u32 i = 0; i < jlen; ++i) { glb.push_back(static_cast<crd::u8>(json.c_str()[i])); }
-        for (crd::u32 i = 0; i < jpad; ++i) { glb.push_back(' '); }
+        for (crd::u32 i = 0; i < jlen; ++i)
+        {
+            glb.push_back(static_cast<crd::u8>(json.c_str()[i]));
+        }
+        for (crd::u32 i = 0; i < jpad; ++i)
+        {
+            glb.push_back(' ');
+        }
         pushu(blen + bpad);
         pushu(0x004E4942U);
-        for (crd::usize i = 0; i < bin.size(); ++i) { glb.push_back(bin[i]); }
-        for (crd::u32 i = 0; i < bpad; ++i) { glb.push_back(0); }
+        for (crd::usize i = 0; i < bin.size(); ++i)
+        {
+            glb.push_back(bin[i]);
+        }
+        for (crd::u32 i = 0; i < bpad; ++i)
+        {
+            glb.push_back(0);
+        }
     }
 
     const char* src_path = "cerid_geo3_close.glb";
@@ -12890,9 +16309,18 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
     for (crd::usize i = 0; i < cooked.extra_artifacts.size(); ++i)
     {
         const auto& e = cooked.extra_artifacts[i];
-        if (e.type_fourcc == crd::resources::kFourCC_TXTR) { txtr = &e; }
-        if (e.type_fourcc == crd::resources::kFourCC_PBRM) { pbrm = &e; }
-        if (e.type_fourcc == crd::scene::kFourCC_SCEN) { scen = &e; }
+        if (e.type_fourcc == crd::resources::kFourCC_TXTR)
+        {
+            txtr = &e;
+        }
+        if (e.type_fourcc == crd::resources::kFourCC_PBRM)
+        {
+            pbrm = &e;
+        }
+        if (e.type_fourcc == crd::scene::kFourCC_SCEN)
+        {
+            scen = &e;
+        }
     }
     REQUIRE(txtr != nullptr);
     REQUIRE(pbrm != nullptr);
@@ -12988,9 +16416,17 @@ TEST_CASE("RET-2: gpu-context PRESENTS -- acquire/blit/present/resize through a 
     cfg.headless          = false;
     cfg.enable_validation = true; // RET-4: the present path must be validation-SILENT, asserted by counters
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk); // RET-4: the gpu-context capture — the whole gate runs under it
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13072,7 +16508,10 @@ TEST_CASE("RET-2: gpu-context PRESENTS -- acquire/blit/present/resize through a 
         crd::u32   shown = 0;
         for (crd::usize i = 0; i < msgs.size() && shown < 4U; ++i)
         {
-            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ret2 capture] id=" << msgs[i].message_id_number << " " << msgs[i].message_text.c_str());
             ++shown;
         }
@@ -13094,9 +16533,17 @@ TEST_CASE("RET-4: the absorbed S6 suballocator -- 48 small images share pooled b
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13104,7 +16551,10 @@ TEST_CASE("RET-4: the absorbed S6 suballocator -- 48 small images share pooled b
 
     constexpr crd::u32 image_count = 48U;
     crd::u8            px[16U * 16U * 4U];
-    for (crd::usize i = 0; i < sizeof(px); ++i) { px[i] = static_cast<crd::u8>(i); }
+    for (crd::usize i = 0; i < sizeof(px); ++i)
+    {
+        px[i] = static_cast<crd::u8>(i);
+    }
 
     crd::containers::Array<std::unique_ptr<gpu::ITexture>> textures(crd::memory::default_allocator());
     for (crd::u32 i = 0; i < image_count; ++i)
@@ -13141,9 +16591,17 @@ TEST_CASE("RET-4: compact() releases drained blocks; indices stay STABLE across 
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13187,9 +16645,17 @@ TEST_CASE("RET-4: storage defrag relocates live buffers and PRESERVES contents (
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13202,11 +16668,17 @@ TEST_CASE("RET-4: storage defrag relocates live buffers and PRESERVES contents (
     {
         bufs[i] = raster->create_storage_buffer(words * 4U);
         REQUIRE(bufs[i] != nullptr);
-        for (crd::u32 w = 0; w < words; ++w) { pattern[w] = (i << 16U) | w; } // a per-buffer, per-word signature
+        for (crd::u32 w = 0; w < words; ++w) // a per-buffer, per-word signature
+        {
+            pattern[w] = (i << 16U) | w;
+        }
         REQUIRE(raster->upload_storage(*bufs[i], 0U, pattern, words * 4U));
     }
 
-    for (crd::u32 i = 0; i < n; i += 2U) { bufs[i].reset(); } // punch holes: destroy the even-indexed buffers
+    for (crd::u32 i = 0; i < n; i += 2U) // punch holes: destroy the even-indexed buffers
+    {
+        bufs[i].reset();
+    }
 
     const crd::u32 relocations = gpu::vulkan_raster_defragment(*raster);
     CHECK(relocations == n / 2U); // every SURVIVOR moved (recreate + copy + swap)
@@ -13269,19 +16741,35 @@ TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulk
     cfg.headless          = false;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!vk->present_capable()) { WARN("no present capability; skipping"); return; }
+    if (!vk->present_capable())
+    {
+        WARN("no present capability; skipping");
+        return;
+    }
 
     void* native = nullptr;
     if (!vk->headless_surface())
     {
         native = crd::gputest::create_test_window(256U, 256U);
-        if (native == nullptr) { WARN("no platform window available; skipping"); return; }
+        if (native == nullptr)
+        {
+            WARN("no platform window available; skipping");
+            return;
+        }
     }
     auto surface = raster->create_present_surface(native, 256U, 256U, gpu::PresentMode::Fifo);
     REQUIRE(surface != nullptr);
@@ -13337,7 +16825,10 @@ TEST_CASE("RET-5: ImGui composites through the gpu-context overlay present (Vulk
         crd::u32   shown = 0;
         for (crd::usize i = 0; i < msgs.size() && shown < 4U; ++i)
         {
-            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[i].severity == crd::gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ret5 capture] id=" << msgs[i].message_id_number << " " << msgs[i].message_text.c_str());
             ++shown;
         }
@@ -13364,9 +16855,17 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13438,19 +16937,34 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
     const auto fbits = [](float f) { crd::u32 u = 0; std::memcpy(&u, &f, 4U); return u; };
     for (crd::u32 c = 0; c < 4U; ++c)
     {
-        for (crd::u32 rr = 0; rr < 4U; ++rr) { words.push_back(fbits(c == rr ? 1.0F : 0.0F)); } // identity, column-major
+        for (crd::u32 rr = 0; rr < 4U; ++rr) // identity, column-major
+        {
+            words.push_back(fbits(c == rr ? 1.0F : 0.0F));
+        }
     }
     words.push_back(fbits(64.0F));      // [16] viewport_px.x
     words.push_back(fbits(64.0F));      // [17] viewport_px.y
     words.push_back(0xFFFFFFFFU);       // [18] category_mask -- all on
     words.push_back(fbits(0.0F));       // [19] time_s
-    while (words.size() < 32U) { words.push_back(0U); } // grid words unused by the line shaders
+    while (words.size() < 32U) // grid words unused by the line shaders
+    {
+        words.push_back(0U);
+    }
     const float line_inst[9] = {-2.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 0.0F, 0.0F, 8.0F};
     for (crd::u32 wi = 0; wi < 9U; ++wi)
     {
-        if (wi == 6U) { words.push_back(0xFFFFFFFFU); }      // color: opaque white
-        else if (wi == 7U) { words.push_back(0U); }          // flags: category 0, Depth::Always
-        else { words.push_back(fbits(line_inst[wi])); }
+        if (wi == 6U) // color: opaque white
+        {
+            words.push_back(0xFFFFFFFFU);
+        }
+        else if (wi == 7U) // flags: category 0, Depth::Always
+        {
+            words.push_back(0U);
+        }
+        else
+        {
+            words.push_back(fbits(line_inst[wi]));
+        }
     }
     auto storage = raster->create_storage_buffer(static_cast<crd::u32>(words.size() * 4U));
     REQUIRE(storage != nullptr);
@@ -13485,7 +16999,10 @@ TEST_CASE("RET-6: draw_overlay composites the CKIR line shader over an existing 
         crd::u32   shown = 0;
         for (crd::usize mi = 0; mi < msgs.size() && shown < 4U; ++mi)
         {
-            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ret6 capture] id=" << msgs[mi].message_id_number << " " << msgs[mi].message_text.c_str());
             ++shown;
         }
@@ -13510,9 +17027,17 @@ TEST_CASE("CEIR-34 R2: a ranged, depth-tested overlay composites over a colour+d
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13593,9 +17118,17 @@ TEST_CASE("CEIR-34 R2: a non-ranged depth-tested overlay composites over a colou
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13671,9 +17204,17 @@ TEST_CASE("CEIR-34 R2: first_vertex reaches the shader's VertexIndex (Vulkan) (o
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13726,9 +17267,17 @@ TEST_CASE("RET-6: crd-draw init + submit_overlay compose a RenderBuffer over the
     cfg.headless          = true;
     cfg.enable_validation = true;
     auto ctx              = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
-    if (!vk->shader_object()) { WARN("no VK_EXT_shader_object; skipping"); return; }
+    if (!vk->shader_object())
+    {
+        WARN("no VK_EXT_shader_object; skipping");
+        return;
+    }
     crd::gpu::ValidationCapture capture(*vk);
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
@@ -13790,7 +17339,10 @@ TEST_CASE("RET-6: crd-draw init + submit_overlay compose a RenderBuffer over the
         crd::u32   shown = 0;
         for (crd::usize mi = 0; mi < msgs.size() && shown < 4U; ++mi)
         {
-            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info) { continue; }
+            if (msgs[mi].severity == crd::gpu::ValidationSeverity::Info)
+            {
+                continue;
+            }
             WARN("[ret6-drawhalf capture] id=" << msgs[mi].message_id_number << " " << msgs[mi].message_text.c_str());
             ++shown;
         }
@@ -13831,11 +17383,19 @@ TEST_CASE("D2b-vk: create_storage_buffer mints one Resource identity, retired on
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+    if (!raster->valid())
+    {
+        WARN("no valid Vulkan raster device; skipping");
+        return;
+    }
 
     const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
@@ -13868,15 +17428,26 @@ TEST_CASE("D2b-vk: create_texture mints one Resource identity, retired on destro
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+    if (!raster->valid())
+    {
+        WARN("no valid Vulkan raster device; skipping");
+        return;
+    }
 
     constexpr crd::u32 tw = 16U;
     crd::u8            px[tw * tw * 4U];
-    for (crd::usize i = 0; i < sizeof(px); ++i) { px[i] = static_cast<crd::u8>(i & 0xFFU); }
+    for (crd::usize i = 0; i < sizeof(px); ++i)
+    {
+        px[i] = static_cast<crd::u8>(i & 0xFFU);
+    }
 
     const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
@@ -13917,11 +17488,19 @@ TEST_CASE("D2b-vk: create_color_target* mints one Resource identity per target",
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+    if (!raster->valid())
+    {
+        WARN("no valid Vulkan raster device; skipping");
+        return;
+    }
 
     const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
@@ -13975,11 +17554,19 @@ TEST_CASE("D2b-vk: create_gbuffer_target mints one Resource identity per target 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+    if (!raster->valid())
+    {
+        WARN("no valid Vulkan raster device; skipping");
+        return;
+    }
 
     const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
@@ -14011,10 +17598,18 @@ TEST_CASE("D2b-vk: VulkanComputeContext::create_buffer mints one Resource identi
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
-    if (!compute.valid()) { WARN("no valid Vulkan compute device; skipping"); return; }
+    if (!compute.valid())
+    {
+        WARN("no valid Vulkan compute device; skipping");
+        return;
+    }
 
     const crd::usize before = gpu::identity_registry().live_count(gpu::ObjectKind::Resource);
     {
@@ -14045,7 +17640,11 @@ TEST_CASE("D2b-vk: the upload staging ring mints one Resource identity per slot 
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
 
     // `before` BEFORE the raster context exists -- the rings are context-owned, retired only at teardown.
@@ -14053,7 +17652,11 @@ TEST_CASE("D2b-vk: the upload staging ring mints one Resource identity per slot 
     {
         auto raster = gpu::create_vulkan_raster_context(*vk);
         REQUIRE(raster != nullptr);
-        if (!raster->valid()) { WARN("no valid Vulkan raster device; skipping"); return; }
+        if (!raster->valid())
+        {
+            WARN("no valid Vulkan raster device; skipping");
+            return;
+        }
         // Init mints NO Resource (its only owned native object is a default sampler, not an ObjectKind::Resource).
         CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Resource) == before);
 
@@ -14101,10 +17704,18 @@ TEST_CASE("D2b-vk: VulkanComputeContext::create_pipeline_from_spirv mints one Pr
     cfg.backend  = gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
-    if (ctx == nullptr) { WARN("no Vulkan device available; skipping"); return; }
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     cg::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
-    if (!compute.valid()) { WARN("no valid Vulkan compute device; skipping"); return; }
+    if (!compute.valid())
+    {
+        WARN("no valid Vulkan compute device; skipping");
+        return;
+    }
 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     static const char* const   kSrc = "#version 460\n"

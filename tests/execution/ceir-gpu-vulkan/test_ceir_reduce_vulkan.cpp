@@ -40,7 +40,11 @@ Operation* build_reduce_op(Context& ctx, Module& m, const char* fn)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const     b   = func::func_body_block(f);
@@ -69,7 +73,10 @@ TEST_CASE("ceir 22b: synth_reduce runs sum/prod/max/min bit-exact on a Vulkan de
     static float in_data[kR * kC];
     for (int r = 0; r < kR; ++r)
     {
-        for (int c = 0; c < kC; ++c) { in_data[r * kC + c] = static_cast<float>(((r + c) % 3) + 1); }
+        for (int c = 0; c < kC; ++c)
+        {
+            in_data[r * kC + c] = static_cast<float>(((r + c) % 3) + 1);
+        }
     }
     // the INDEPENDENT references (the reduction DEFINITIONS, per fn).
     static float ref_sum[kR];
@@ -106,7 +113,11 @@ TEST_CASE("ceir 22b: synth_reduce runs sum/prod/max/min bit-exact on a Vulkan de
 
     // ── DEVICE (soft-skip with no adapter) ──
     kir::KirBackendVulkan vk(&kalloc);
-    if (!vk.valid()) { WARN("no Vulkan device — skipping the CEIR-22b reduce device gate"); return; }
+    if (!vk.valid())
+    {
+        WARN("no Vulkan device — skipping the CEIR-22b reduce device gate");
+        return;
+    }
     kir::KirBackendCpu cpu(&kalloc);
 
     struct Case

@@ -25,7 +25,10 @@ containers::StringView blend_str(crd::gpu::BlendMode b);
 bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, containers::Array<LoweredCommand>& out_plan)
 {
     out_plan.clear();
-    if (desc.num_inputs > 8U) { return false; } // the fixed input0..input7 fan (record_fullscreen_raster's kInputs)
+    if (desc.num_inputs > 8U) // the fixed input0..input7 fan (record_fullscreen_raster's kInputs)
+    {
+        return false;
+    }
 
     // The composite uses the arith (const counts), resource (declared reads/target), and render (scope/draw/attachment)
     // dialects. Registration is idempotent on a fresh Context (the documented precondition).
@@ -105,7 +108,10 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
     crd::u32   alen        = 0U;
     crd::u32   nb          = 0U;
     const auto push_access = [&accbuf, &alen, &nb]() {
-        if (nb > 0U) { accbuf[alen++] = ','; }
+        if (nb > 0U)
+        {
+            accbuf[alen++] = ',';
+        }
         accbuf[alen++] = 'r';
     };
 
@@ -192,7 +198,10 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
     rb->append(draw);
 
     // ── verify (the verifier-first contract execute_render_lowered assumes) + lower.
-    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None) { return false; }
+    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None)
+    {
+        return false;
+    }
     lower_region(ctx, *bb, out_plan);
     return true;
 }
@@ -259,7 +268,10 @@ bool build_mesh_indirect_ceir(Context& ctx, const MeshIndirectBuildDesc& desc, c
     ctx.set_attr(draw, "args_offset", ctx.attr_int(static_cast<crd::i64>(desc.args_offset)));
     rb->append(draw);
 
-    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None) { return false; }
+    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None)
+    {
+        return false;
+    }
     lower_region(ctx, *bb, out_plan);
     return true;
 }
@@ -319,7 +331,10 @@ bool build_amplify_ceir(Context& ctx, const AmplifyBuildDesc& desc, containers::
     ctx.set_attr(draw, "access", ctx.attr_string(containers::StringView("")));
     rb->append(draw);
 
-    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None) { return false; }
+    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None)
+    {
+        return false;
+    }
     lower_region(ctx, *bb, out_plan);
     return true;
 }
@@ -365,7 +380,10 @@ containers::StringView blend_str(crd::gpu::BlendMode b)
 bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Array<LoweredCommand>& out_plan)
 {
     out_plan.clear();
-    if (!desc.has_color && !desc.has_depth) { return false; } // a render.scope needs at least one attachment
+    if (!desc.has_color && !desc.has_depth) // a render.scope needs at least one attachment
+    {
+        return false;
+    }
 
     (void)arith::register_arith_ops(ctx);
     (void)resource::register_resource_ops(ctx);
@@ -397,8 +415,14 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
     if (desc.has_color)
     {
         crd::u32 ncol = desc.mrt_n;
-        if (ncol < 1U) { ncol = 1U; }
-        if (ncol > 4U) { ncol = 4U; } // kMaxColorAttachments
+        if (ncol < 1U)
+        {
+            ncol = 1U;
+        }
+        if (ncol > 4U) // kMaxColorAttachments
+        {
+            ncol = 4U;
+        }
         const bool mrt = ncol >= 2U;
         // ⛔ CEIR-16z-1: a visbuffer (clear_is_uint) target is a UINT-format image — the verifier's RAH-1a.1 scar rejects a
         // uint clear on a non-uint attachment. Single-colour only (uint MRT is not authored); the float scene stays f32.
@@ -432,7 +456,10 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
             // color0, color1 stayed unwritten). The undeclared-int-attr convention (like the binding `source` attr); the
             // slot NAMES live host-side in fs_target (ceir-gpu has no pass_param_id). Single-colour bakes 0 ⇒ "color".
             ctx.set_attr(col, "color_slot", ctx.attr_int(static_cast<crd::i64>(c)));
-            if (mrt) { ctx.set_attr(col, "blend", ctx.attr_string(blend_str(desc.blend[c]))); }
+            if (mrt)
+            {
+                ctx.set_attr(col, "blend", ctx.attr_string(blend_str(desc.blend[c])));
+            }
             bb->append(col);
             atts[natt++] = col->result(0U);
         }
@@ -473,10 +500,16 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
     ctx.set_attr(draw, "access", ctx.attr_string(containers::StringView("")));
     // ⛔ CEIR-16z-2: procedural mode (the §41 visbuffer form) — each item is a plain gl_VertexIndex Draw (GeometryKind::None,
     // no storage/textures/coalescing). Absent ⇒ storage (the ordinary storage-pull ladder), so the storage path is untouched.
-    if (desc.procedural) { ctx.set_attr(draw, "geometry", ctx.attr_string(containers::StringView("procedural"))); }
+    if (desc.procedural)
+    {
+        ctx.set_attr(draw, "geometry", ctx.attr_string(containers::StringView("procedural")));
+    }
     rb->append(draw);
 
-    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None) { return false; }
+    if (ctx.find_render_misuse(*m).kind != RenderMisuseKind::None)
+    {
+        return false;
+    }
     lower_region(ctx, *bb, out_plan);
     return true;
 }

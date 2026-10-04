@@ -15,10 +15,19 @@ namespace g = crd::gpu;
 {
     char buffer[g::kObjectIdentityBufferSize] = {};
     const crd::usize written = g::encode(id, buffer, sizeof(buffer));
-    if (written == 0U || written > g::kObjectIdentityMaxChars) { return false; }
-    if (std::strlen(buffer) != written) { return false; }
+    if (written == 0U || written > g::kObjectIdentityMaxChars)
+    {
+        return false;
+    }
+    if (std::strlen(buffer) != written)
+    {
+        return false;
+    }
     g::ObjectIdentity parsed;
-    if (!g::parse(std::string_view{buffer, written}, parsed)) { return false; }
+    if (!g::parse(std::string_view{buffer, written}, parsed))
+    {
+        return false;
+    }
     return parsed == id;
 }
 } // namespace

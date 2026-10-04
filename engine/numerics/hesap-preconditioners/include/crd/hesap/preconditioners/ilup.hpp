@@ -93,19 +93,34 @@ private:
 
     [[nodiscard]] static T ilup_conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
     [[nodiscard]] static R ilup_mag(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-        else { return v < R(0) ? -v : v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::sqrt(v.re * v.re + v.im * v.im);
+        }
+        else
+        {
+            return v < R(0) ? -v : v;
+        }
     }
     [[nodiscard]] static Csr build_conj_transpose(const Csr& a, crd::memory::IAllocator* alloc)
     {
         Csr   at   = crd::hesap::sparse::transpose<T>(a, alloc);
         auto& vals = at.values().values;
-        for (crd::usize k = 0; k < vals.size(); ++k) { vals[k] = ilup_conj(vals[k]); }
+        for (crd::usize k = 0; k < vals.size(); ++k)
+        {
+            vals[k] = ilup_conj(vals[k]);
+        }
         return at;
     }
 
@@ -117,7 +132,11 @@ private:
         const T*    av = mat.values().values.data();
         const crd::usize nv = mat.values().values.size();
         R amax = R(0);
-        for (crd::usize k = 0; k < nv; ++k) { const R m = ilup_mag(av[k]); amax = m > amax ? m : amax; }
+        for (crd::usize k = 0; k < nv; ++k)
+        {
+            const R m = ilup_mag(av[k]);
+            amax = m > amax ? m : amax;
+        }
         const R floor = std::sqrt(std::numeric_limits<R>::epsilon()) * amax + std::numeric_limits<R>::min();
 
         crd::containers::Array<T>        w(alloc);   // working row values
@@ -128,7 +147,10 @@ private:
         jw.resize(m_n);
         jr.resize(m_n);
         lev.resize(m_n);
-        for (crd::u32 i = 0; i < m_n; ++i) { jr[i] = -1; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            jr[i] = -1;
+        }
 
         L.ptr.push_back(0);
         U.ptr.push_back(0);
@@ -144,9 +166,27 @@ private:
             for (crd::u32 k = j1; k < j2; ++k)
             {
                 const crd::u32 col = ja[k];
-                if (col < ii)      { jw[lenl] = static_cast<crd::i32>(col); w[lenl] = av[k]; lev[lenl] = 0; jr[col] = static_cast<crd::i32>(lenl); ++lenl; }
-                else if (col == ii){ w[ii] = av[k]; }
-                else               { const crd::u32 jp = ii + lenu; jw[jp] = static_cast<crd::i32>(col); w[jp] = av[k]; lev[jp] = 0; jr[col] = static_cast<crd::i32>(jp); ++lenu; }
+                if (col < ii)
+                {
+                    jw[lenl] = static_cast<crd::i32>(col);
+                    w[lenl] = av[k];
+                    lev[lenl] = 0;
+                    jr[col] = static_cast<crd::i32>(lenl);
+                    ++lenl;
+                }
+                else if (col == ii)
+                {
+                    w[ii] = av[k];
+                }
+                else
+                {
+                    const crd::u32 jp = ii + lenu;
+                    jw[jp] = static_cast<crd::i32>(col);
+                    w[jp] = av[k];
+                    lev[jp] = 0;
+                    jr[col] = static_cast<crd::i32>(jp);
+                    ++lenu;
+                }
             }
 
             crd::u32 jj = 0, lfront = 0;
@@ -155,7 +195,14 @@ private:
                 // Smallest column in jw[jj..lenl); swap to position jj (carry w, lev, jr).
                 crd::u32 kmin = jj;
                 crd::i32 jrow = jw[jj];
-                for (crd::u32 j = jj + 1; j < lenl; ++j) { if (jw[j] < jrow) { jrow = jw[j]; kmin = j; } }
+                for (crd::u32 j = jj + 1; j < lenl; ++j)
+                {
+                    if (jw[j] < jrow)
+                    {
+                        jrow = jw[j];
+                        kmin = j;
+                    }
+                }
                 if (kmin != jj)
                 {
                     const crd::i32 tj = jw[jj]; jw[jj] = jw[kmin]; jw[kmin] = tj;
@@ -178,13 +225,19 @@ private:
                     const crd::u32 col    = U.col[q];
                     const crd::i32 jpos   = jr[col];
                     const crd::u32 newlev = levrow + U.lev[q] + 1;
-                    if (jpos == -1 && newlev > p) { continue; } // new fill over budget ⇒ drop
+                    if (jpos == -1 && newlev > p) // new fill over budget ⇒ drop
+                    {
+                        continue;
+                    }
                     const T s = fac * U.val[q];
                     if (jpos != -1) // existing entry: always update + refine level
                     {
                         const crd::u32 u = static_cast<crd::u32>(jpos);
                         w[u] = w[u] - s;
-                        if (newlev < lev[u]) { lev[u] = newlev; }
+                        if (newlev < lev[u])
+                        {
+                            lev[u] = newlev;
+                        }
                     }
                     else if (col >= ii) // new fill, U region
                     {
@@ -202,15 +255,25 @@ private:
             }
 
             // Reset jr for the U active set (L was reset during elimination).
-            for (crd::u32 m = 0; m < lenu; ++m) { jr[static_cast<crd::u32>(jw[ii + m])] = -1; }
+            for (crd::u32 m = 0; m < lenu; ++m)
+            {
+                jr[static_cast<crd::u32>(jw[ii + m])] = -1;
+            }
 
             // Store L row ii (all kept).
-            for (crd::u32 m = 0; m < lfront; ++m) { L.col.push_back(static_cast<crd::u32>(jw[m])); L.val.push_back(w[m]); }
+            for (crd::u32 m = 0; m < lfront; ++m)
+            {
+                L.col.push_back(static_cast<crd::u32>(jw[m]));
+                L.val.push_back(w[m]);
+            }
             L.ptr.push_back(static_cast<crd::u32>(L.col.size()));
 
             // Diagonal: pivot floor, store inverse.
             T diag = w[ii];
-            if (ilup_mag(diag) < floor) { diag = T(floor); }
+            if (ilup_mag(diag) < floor)
+            {
+                diag = T(floor);
+            }
             U.diag[ii] = T(1) / diag;
 
             // Store U row ii off-diagonal (all kept), with levels.

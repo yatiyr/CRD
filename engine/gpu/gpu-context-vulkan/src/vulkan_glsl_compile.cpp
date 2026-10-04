@@ -65,7 +65,10 @@ struct ShadercApi
         fs::Path sdk_path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
         free(sdk);
         auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
-        if (lib.is_valid()) { return lib; }
+        if (lib.is_valid())
+        {
+            return lib;
+        }
     }
     else
     {
@@ -89,7 +92,10 @@ struct ShadercApi
     {
         const bool last = (i + 1 == n);
         auto       lib  = crd::platform::DynamicLibrary::open(candidates[i], /*log_on_failure=*/last);
-        if (lib.is_valid()) { return lib; }
+        if (lib.is_valid())
+        {
+            return lib;
+        }
     }
     return crd::platform::DynamicLibrary{};
 }
@@ -121,7 +127,10 @@ public:
     ShadercLoader()
     {
         m_lib = try_open_shaderc();
-        if (!m_lib.is_valid()) { return; }
+        if (!m_lib.is_valid())
+        {
+            return;
+        }
 
         m_api.compiler_initialize    = m_lib.resolve_as<ShadercApi::CompilerInitialize>("shaderc_compiler_initialize");
         m_api.compiler_release       = m_lib.resolve_as<ShadercApi::CompilerRelease>("shaderc_compiler_release");
@@ -152,7 +161,10 @@ public:
 
     ~ShadercLoader()
     {
-        if (m_compiler != nullptr && m_api.compiler_release != nullptr) { m_api.compiler_release(m_compiler); }
+        if (m_compiler != nullptr && m_api.compiler_release != nullptr)
+        {
+            m_api.compiler_release(m_compiler);
+        }
     }
 
     ShadercLoader(const ShadercLoader&)            = delete;
@@ -172,14 +184,24 @@ public:
             shaderc_compiler_t  c   = nullptr;
             const ShadercApi*   api = nullptr;
             TlsCompiler() = default;
-            ~TlsCompiler() { if (c != nullptr && api != nullptr && api->compiler_release != nullptr) { api->compiler_release(c); } }
+            ~TlsCompiler()
+            {
+                if (c != nullptr && api != nullptr && api->compiler_release != nullptr)
+                {
+                    api->compiler_release(c);
+                }
+            }
             TlsCompiler(const TlsCompiler&)            = delete;
             TlsCompiler& operator=(const TlsCompiler&) = delete;
             TlsCompiler(TlsCompiler&&)                 = delete;
             TlsCompiler& operator=(TlsCompiler&&)      = delete;
         };
         thread_local TlsCompiler tls;
-        if (tls.c == nullptr && m_api.compiler_initialize != nullptr) { tls.api = &m_api; tls.c = m_api.compiler_initialize(); }
+        if (tls.c == nullptr && m_api.compiler_initialize != nullptr)
+        {
+            tls.api = &m_api;
+            tls.c = m_api.compiler_initialize();
+        }
         return tls.c != nullptr ? tls.c : m_compiler;
     }
 
@@ -235,7 +257,10 @@ public:
         const char*  bytes  = m_api.result_bytes(res);
         const size_t length = m_api.result_length(res);
         result.spirv.resize(static_cast<crd::usize>(length));
-        if (length > 0 && bytes != nullptr) { std::memcpy(result.spirv.data(), bytes, length); }
+        if (length > 0 && bytes != nullptr)
+        {
+            std::memcpy(result.spirv.data(), bytes, length);
+        }
         m_api.result_release(res);
         result.ok = true;
         return result;

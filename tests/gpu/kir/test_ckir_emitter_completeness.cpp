@@ -80,9 +80,18 @@ constexpr OpSpec kOps[] = {
     const int c = g.constant(0.25, shu, kir::DType::F32);
 
     int r = -1;
-    if (spec.arity == 1) { r = g.unary(spec.op, a); }
-    else if (spec.arity == 2) { r = g.binary(spec.op, a, b); }
-    else { r = g.ternary(spec.op, a, b, c); }
+    if (spec.arity == 1)
+    {
+        r = g.unary(spec.op, a);
+    }
+    else if (spec.arity == 2)
+    {
+        r = g.binary(spec.op, a, b);
+    }
+    else
+    {
+        r = g.ternary(spec.op, a, b, c);
+    }
     g.stmt_buffer_store(out_b, tid, r);
 
     kir::KEntry e;

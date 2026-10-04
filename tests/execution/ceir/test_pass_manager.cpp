@@ -36,7 +36,10 @@ struct OpCountAnalysis
         auto* const r = crd::memory::construct<OpCountAnalysis>(arena);
         for (Block* b = m.body()->first_block(); b != nullptr; b = b->next_in_region())
         {
-            for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { ++r->op_count; }
+            for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+            {
+                ++r->op_count;
+            }
         }
         return r;
     }

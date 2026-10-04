@@ -224,9 +224,15 @@ struct BlobResourceLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (!chunk) { return nullptr; }
+        if (!chunk)
+        {
+            return nullptr;
+        }
 
         void* raw = m_alloc.allocate(sizeof(BlobResource), alignof(BlobResource));
         auto* res = new (raw) BlobResource(&m_alloc);
@@ -240,7 +246,10 @@ struct BlobResourceLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (!payload) { return; }
+        if (!payload)
+        {
+            return;
+        }
         auto* res = static_cast<BlobResource*>(payload);
         res->~BlobResource();
         m_alloc.deallocate(res);
@@ -297,9 +306,15 @@ struct ChainedLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (!chunk || chunk->payload.size() < 16) { return nullptr; }
+        if (!chunk || chunk->payload.size() < 16)
+        {
+            return nullptr;
+        }
 
         // Read dep ResourceId from first 16 bytes of blob.
         ResourceId dep_id;
@@ -322,7 +337,10 @@ struct ChainedLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (payload) { m_alloc.deallocate(payload); }
+        if (payload)
+        {
+            m_alloc.deallocate(payload);
+        }
     }
 };
 

@@ -26,13 +26,19 @@ using Bytes = crd::containers::Array<crd::u8>;
 void put_u8(Bytes& b, crd::u8 v) { b.push_back(v); }
 void put_u32(Bytes& b, crd::u32 v)
 {
-    for (crd::u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU)); }
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
+    }
 }
 void put_i32(Bytes& b, int v) { put_u32(b, static_cast<crd::u32>(v)); }
 void put_str(Bytes& b, const crd::containers::String& s)
 {
     put_u32(b, static_cast<crd::u32>(s.size()));
-    for (crd::usize i = 0; i < s.size(); ++i) { b.push_back(static_cast<crd::u8>(s.c_str()[i])); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        b.push_back(static_cast<crd::u8>(s.c_str()[i]));
+    }
 }
 
 struct Cursor
@@ -43,15 +49,24 @@ struct Cursor
 
     bool have(crd::u64 n) noexcept
     {
-        if (!ok || pos + n > in.size()) { ok = false; }
+        if (!ok || pos + n > in.size())
+        {
+            ok = false;
+        }
         return ok;
     }
     crd::u8 u8v() noexcept { return have(1U) ? in[pos++] : static_cast<crd::u8>(0); }
     crd::u32 u32v() noexcept
     {
-        if (!have(4U)) { return 0U; }
+        if (!have(4U))
+        {
+            return 0U;
+        }
         crd::u32 v = 0;
-        for (crd::u32 i = 0; i < 4U; ++i) { v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U); }
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            v |= static_cast<crd::u32>(in[pos + i]) << (i * 8U);
+        }
         pos += 4U;
         return v;
     }
@@ -59,7 +74,10 @@ struct Cursor
     void strv(crd::containers::String& out)
     {
         const crd::u32 n = u32v();
-        if (!have(n)) { return; }
+        if (!have(n))
+        {
+            return;
+        }
         out.clear();
         for (crd::u32 i = 0; i < n; ++i)
         {
@@ -74,26 +92,92 @@ struct Cursor
 bool to_bind_type(std::string_view s, BindType& out, bool& is_array)
 {
     is_array = false;
-    if (s == "float")                { out = BindType::Float;                return true; }
-    if (s == "vec2")                 { out = BindType::Vec2;                 return true; }
-    if (s == "vec3")                 { out = BindType::Vec3;                 return true; }
-    if (s == "vec4")                 { out = BindType::Vec4;                 return true; }
-    if (s == "mat4")                 { out = BindType::Mat4;                 return true; }
-    if (s == "float[]")              { out = BindType::FloatArray; is_array = true; return true; }
-    if (s == "mat4[]")               { out = BindType::Mat4Array;  is_array = true; return true; }
-    if (s == "texture2D")            { out = BindType::Texture2D;            return true; }
-    if (s == "texture2DArray")       { out = BindType::Texture2DArray;       return true; }
-    if (s == "textureCube")          { out = BindType::TextureCube;          return true; }
-    if (s == "texture2DShadow")      { out = BindType::Texture2DShadow;      return true; }
-    if (s == "texture2DArrayShadow") { out = BindType::Texture2DArrayShadow; return true; }
+    if (s == "float")
+    {
+        out = BindType::Float;
+        return true;
+    }
+    if (s == "vec2")
+    {
+        out = BindType::Vec2;
+        return true;
+    }
+    if (s == "vec3")
+    {
+        out = BindType::Vec3;
+        return true;
+    }
+    if (s == "vec4")
+    {
+        out = BindType::Vec4;
+        return true;
+    }
+    if (s == "mat4")
+    {
+        out = BindType::Mat4;
+        return true;
+    }
+    if (s == "float[]")
+    {
+        out = BindType::FloatArray;
+        is_array = true;
+        return true;
+    }
+    if (s == "mat4[]")
+    {
+        out = BindType::Mat4Array;
+        is_array = true;
+        return true;
+    }
+    if (s == "texture2D")
+    {
+        out = BindType::Texture2D;
+        return true;
+    }
+    if (s == "texture2DArray")
+    {
+        out = BindType::Texture2DArray;
+        return true;
+    }
+    if (s == "textureCube")
+    {
+        out = BindType::TextureCube;
+        return true;
+    }
+    if (s == "texture2DShadow")
+    {
+        out = BindType::Texture2DShadow;
+        return true;
+    }
+    if (s == "texture2DArrayShadow")
+    {
+        out = BindType::Texture2DArrayShadow;
+        return true;
+    }
     return false;
 }
 bool to_frequency(std::string_view s, BindFrequency& out)
 {
-    if (s == "frame")    { out = BindFrequency::Frame;    return true; }
-    if (s == "pass")     { out = BindFrequency::Pass;     return true; }
-    if (s == "material") { out = BindFrequency::Material; return true; }
-    if (s == "object")   { out = BindFrequency::Object;   return true; }
+    if (s == "frame")
+    {
+        out = BindFrequency::Frame;
+        return true;
+    }
+    if (s == "pass")
+    {
+        out = BindFrequency::Pass;
+        return true;
+    }
+    if (s == "material")
+    {
+        out = BindFrequency::Material;
+        return true;
+    }
+    if (s == "object")
+    {
+        out = BindFrequency::Object;
+        return true;
+    }
     return false;
 }
 
@@ -108,7 +192,10 @@ void set_str(crd::containers::String& dst, std::string_view s)
 }
 void set_where(crd::containers::String* where, std::string_view s)
 {
-    if (where != nullptr) { set_str(*where, s); }
+    if (where != nullptr)
+    {
+        set_str(*where, s);
+    }
 }
 bool str_eq(const crd::containers::String& a, std::string_view b)
 {
@@ -154,7 +241,10 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
     auto*                  alloc = out.bindings.allocator();
     const std::string_view text(toml_text.data(), toml_text.size());
     const crd::toml::parse_result res = crd::toml::parse(text);
-    if (!res) { return TechniqueCookError::ParseFailed; }
+    if (!res)
+    {
+        return TechniqueCookError::ParseFailed;
+    }
     const crd::toml::node& root = res.table();
 
     // ⛔ RESET THE OUTPUT FIRST — the scar every cooker parser carries (material/vertex/light fixed it first):
@@ -169,17 +259,26 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
     out.options.clear();
 
     const auto sch = root["schema"].value<int64_t>();
-    if (!sch || *sch != static_cast<int64_t>(kTechniqueSchemaVersion)) { return TechniqueCookError::BadSchema; }
+    if (!sch || *sch != static_cast<int64_t>(kTechniqueSchemaVersion))
+    {
+        return TechniqueCookError::BadSchema;
+    }
     out.schema = kTechniqueSchemaVersion;
 
     const auto nm = root["name"].value<std::string_view>();
-    if (!nm || nm->empty()) { return TechniqueCookError::MissingName; }
+    if (!nm || nm->empty())
+    {
+        return TechniqueCookError::MissingName;
+    }
     set_str(out.name, *nm);
 
     set_str(out.surface, root["surface"].value_or(kOpenPbrSurface));
 
     const auto bd = root["body"].value<std::string_view>();
-    if (!bd || bd->empty()) { return TechniqueCookError::MissingBody; }
+    if (!bd || bd->empty())
+    {
+        return TechniqueCookError::MissingBody;
+    }
     if (bd->starts_with("builtin:"))
     {
         out.body_kind = TechniqueBodyKind::Builtin;
@@ -195,21 +294,35 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
         set_where(where, *bd);
         return TechniqueCookError::MissingBody;
     }
-    if (out.body.size() == 0U) { set_where(where, *bd); return TechniqueCookError::MissingBody; }
+    if (out.body.size() == 0U)
+    {
+        set_where(where, *bd);
+        return TechniqueCookError::MissingBody;
+    }
 
     if (const auto* arr = root["binding"].as_array())
     {
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return TechniqueCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return TechniqueCookError::ParseFailed;
+            }
             TechniqueBindingDesc b(alloc);
             const auto bn = (*t)["name"].value<std::string_view>();
-            if (!bn || bn->empty()) { return TechniqueCookError::MissingName; }
+            if (!bn || bn->empty())
+            {
+                return TechniqueCookError::MissingName;
+            }
             set_str(b.name, *bn);
             for (crd::usize i = 0; i < out.bindings.size(); ++i)
             {
-                if (str_eq(out.bindings[i].name, *bn)) { set_where(where, *bn); return TechniqueCookError::DuplicateBinding; }
+                if (str_eq(out.bindings[i].name, *bn))
+                {
+                    set_where(where, *bn);
+                    return TechniqueCookError::DuplicateBinding;
+                }
             }
             const auto ty = (*t)["type"].value<std::string_view>();
             bool       is_array = false;
@@ -219,7 +332,11 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
                 return TechniqueCookError::UnknownBindType;
             }
             const auto fq = (*t)["frequency"].value_or(std::string_view{"pass"});
-            if (!to_frequency(fq, b.freq)) { set_where(where, fq); return TechniqueCookError::UnknownFrequency; }
+            if (!to_frequency(fq, b.freq))
+            {
+                set_where(where, fq);
+                return TechniqueCookError::UnknownFrequency;
+            }
             b.count = static_cast<crd::u32>((*t)["count"].value_or<int64_t>(is_array ? 0 : 1));
             out.bindings.push_back(static_cast<TechniqueBindingDesc&&>(b));
         }
@@ -230,14 +347,24 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
         for (const auto& node : *arr)
         {
             const crd::toml::node* t = node.as_table();
-            if (t == nullptr) { return TechniqueCookError::ParseFailed; }
+            if (t == nullptr)
+            {
+                return TechniqueCookError::ParseFailed;
+            }
             TechniqueOptionDesc o(alloc);
             const auto on = (*t)["name"].value<std::string_view>();
-            if (!on || on->empty()) { return TechniqueCookError::MissingName; }
+            if (!on || on->empty())
+            {
+                return TechniqueCookError::MissingName;
+            }
             set_str(o.name, *on);
             for (crd::usize i = 0; i < out.options.size(); ++i)
             {
-                if (str_eq(out.options[i].name, *on)) { set_where(where, *on); return TechniqueCookError::DuplicateOption; }
+                if (str_eq(out.options[i].name, *on))
+                {
+                    set_where(where, *on);
+                    return TechniqueCookError::DuplicateOption;
+                }
             }
             o.min_value     = static_cast<int>((*t)["min"].value_or<int64_t>(0));
             o.max_value     = static_cast<int>((*t)["max"].value_or<int64_t>(0));
@@ -251,9 +378,18 @@ TechniqueCookError parse_technique_toml(crd::containers::StringView toml_text, T
 
 TechniqueCookError validate_technique(const TechniqueDesc& desc, crd::containers::String* where)
 {
-    if (desc.schema != kTechniqueSchemaVersion) { return TechniqueCookError::BadSchema; }
-    if (desc.name.size() == 0U) { return TechniqueCookError::MissingName; }
-    if (desc.body.size() == 0U) { return TechniqueCookError::MissingBody; }
+    if (desc.schema != kTechniqueSchemaVersion)
+    {
+        return TechniqueCookError::BadSchema;
+    }
+    if (desc.name.size() == 0U)
+    {
+        return TechniqueCookError::MissingName;
+    }
+    if (desc.body.size() == 0U)
+    {
+        return TechniqueCookError::MissingBody;
+    }
     if (!str_eq(desc.surface, kOpenPbrSurface))
     {
         set_where(where, sv(desc.surface));
@@ -263,7 +399,10 @@ TechniqueCookError validate_technique(const TechniqueDesc& desc, crd::containers
     for (crd::usize i = 0; i < desc.bindings.size(); ++i)
     {
         const TechniqueBindingDesc& b = desc.bindings[i];
-        if (b.name.size() == 0U) { return TechniqueCookError::MissingName; }
+        if (b.name.size() == 0U)
+        {
+            return TechniqueCookError::MissingName;
+        }
         for (crd::usize k = 0; k < i; ++k)
         {
             if (str_eq(desc.bindings[k].name, sv(b.name)))
@@ -285,7 +424,10 @@ TechniqueCookError validate_technique(const TechniqueDesc& desc, crd::containers
     for (crd::usize i = 0; i < desc.options.size(); ++i)
     {
         const TechniqueOptionDesc& o = desc.options[i];
-        if (o.name.size() == 0U) { return TechniqueCookError::MissingName; }
+        if (o.name.size() == 0U)
+        {
+            return TechniqueCookError::MissingName;
+        }
         for (crd::usize k = 0; k < i; ++k)
         {
             if (str_eq(desc.options[k].name, sv(o.name)))
@@ -313,10 +455,24 @@ crd::containers::String emit_technique_toml(const TechniqueDesc& desc, crd::memo
         int   n   = 0;
         bool  neg = v < 0;
         unsigned long long u = neg ? static_cast<unsigned long long>(-v) : static_cast<unsigned long long>(v);
-        if (u == 0U) { buf[n++] = '0'; }
-        while (u > 0U) { buf[n++] = static_cast<char>('0' + (u % 10U)); u /= 10U; }
-        if (neg) { buf[n++] = '-'; }
-        for (int i = n - 1; i >= 0; --i) { const char one[2] = {buf[i], '\0'}; out.append(static_cast<const char*>(one)); }
+        if (u == 0U)
+        {
+            buf[n++] = '0';
+        }
+        while (u > 0U)
+        {
+            buf[n++] = static_cast<char>('0' + (u % 10U));
+            u /= 10U;
+        }
+        if (neg)
+        {
+            buf[n++] = '-';
+        }
+        for (int i = n - 1; i >= 0; --i)
+        {
+            const char one[2] = {buf[i], '\0'};
+            out.append(static_cast<const char*>(one));
+        }
     };
 
     put("schema = ");
@@ -326,7 +482,10 @@ crd::containers::String emit_technique_toml(const TechniqueDesc& desc, crd::memo
     put("\"\nsurface = \"");
     put_sv(desc.surface);
     put("\"\nbody = \"");
-    if (desc.body_kind == TechniqueBodyKind::Builtin) { put("builtin:"); }
+    if (desc.body_kind == TechniqueBodyKind::Builtin)
+    {
+        put("builtin:");
+    }
     put_sv(desc.body);
     put("\"\n");
 
@@ -398,8 +557,14 @@ crd::containers::Array<crd::u8> cook_technique(const TechniqueDesc& desc, crd::m
 bool read_technique(crd::containers::ConstSpan<crd::u8> bytes, TechniqueDesc& out)
 {
     Cursor c{bytes, 0, true};
-    if (c.u32v() != kFourCC || !c.ok) { return false; }
-    if (c.u32v() != kBlobVersion) { return false; }
+    if (c.u32v() != kFourCC || !c.ok)
+    {
+        return false;
+    }
+    if (c.u32v() != kBlobVersion)
+    {
+        return false;
+    }
     // ⛔ RESET FIRST — the same load-button scar the TOML parser above carries: deserializing into a reused
     // descriptor APPENDED the blob's bindings and options to whatever was already there.
     out.name.clear();
@@ -416,7 +581,10 @@ bool read_technique(crd::containers::ConstSpan<crd::u8> bytes, TechniqueDesc& ou
 
     auto*          alloc = out.bindings.allocator();
     const crd::u32 nb    = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < nb; ++i)
     {
         TechniqueBindingDesc b(alloc);
@@ -427,7 +595,10 @@ bool read_technique(crd::containers::ConstSpan<crd::u8> bytes, TechniqueDesc& ou
         out.bindings.push_back(static_cast<TechniqueBindingDesc&&>(b));
     }
     const crd::u32 no = c.u32v();
-    if (!c.ok) { return false; }
+    if (!c.ok)
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < no; ++i)
     {
         TechniqueOptionDesc o(alloc);
@@ -451,7 +622,10 @@ TechniqueCookError verify_technique_bindings(const TechniqueDesc& tech,
         // Only PASS frequency is the graph author's responsibility. Frame/material/object inputs are the engine's
         // to supply and are checked by the renderer's resolver instead — asking the graph to declare them would
         // make every asset restate the camera.
-        if (b.freq != BindFrequency::Pass) { continue; }
+        if (b.freq != BindFrequency::Pass)
+        {
+            continue;
+        }
         // ⛔ AND only the RESOURCE-class ones. A frame graph's `reads` list describes RESOURCE FLOW — it is what
         // the lifetime analysis, the barriers and the aliasing allocator are derived from. A pass-frequency VALUE
         // (`csm_light_vp`, `csm_map_size`) is not a graph resource at all; it is engine state the renderer's
@@ -461,17 +635,27 @@ TechniqueCookError verify_technique_bindings(const TechniqueDesc& tech,
         // Value bindings are still CHECKED, just one layer down: `resolve_scene_bindings` returns false for a
         // declared binding the renderer cannot supply, and `init_programs` fails. What is verified HERE is the
         // half only the graph can get wrong — and, crucially, the half that fails SILENTLY if unchecked.
-        if (!crd::kir::technique::bind_type_is_texture(b.type)) { continue; }
+        if (!crd::kir::technique::bind_type_is_texture(b.type))
+        {
+            continue;
+        }
 
         const crd::framecook::FrameResourceDesc* res = nullptr;
         bool                                     found = false;
         for (crd::usize k = 0; k < pass.reads.size(); ++k)
         {
-            if (!str_eq(pass.reads[k].name, sv(b.name))) { continue; }
+            if (!str_eq(pass.reads[k].name, sv(b.name)))
+            {
+                continue;
+            }
             found = true;
             for (crd::usize r = 0; r < graph.resources.size(); ++r)
             {
-                if (str_eq(graph.resources[r].name, sv(b.name))) { res = &graph.resources[r]; break; }
+                if (str_eq(graph.resources[r].name, sv(b.name)))
+                {
+                    res = &graph.resources[r];
+                    break;
+                }
             }
             break;
         }

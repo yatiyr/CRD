@@ -42,7 +42,11 @@ Operation* build_gemm_op(Context& ctx, Module& m)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const b  = func::func_body_block(f);
@@ -81,11 +85,17 @@ TEST_CASE("ceir 22b: synth_gemm runs A*B bit-exact on a Vulkan device (== eval_c
     static float b_data[kK * kN];
     for (int mm = 0; mm < kM; ++mm)
     {
-        for (int kk = 0; kk < kK; ++kk) { a_data[mm * kK + kk] = static_cast<float>(((mm + kk) % 7) - 3); }
+        for (int kk = 0; kk < kK; ++kk)
+        {
+            a_data[mm * kK + kk] = static_cast<float>(((mm + kk) % 7) - 3);
+        }
     }
     for (int kk = 0; kk < kK; ++kk)
     {
-        for (int nn = 0; nn < kN; ++nn) { b_data[kk * kN + nn] = static_cast<float>(((kk + 2 * nn) % 5) - 2); }
+        for (int nn = 0; nn < kN; ++nn)
+        {
+            b_data[kk * kN + nn] = static_cast<float>(((kk + 2 * nn) % 5) - 2);
+        }
     }
     // the INDEPENDENT reference: ref[m,n] = sum_k A[m,k]*B[k,n] (the GEMM DEFINITION — not the synthesized graph).
     static float ref[kM * kN];
@@ -94,14 +104,21 @@ TEST_CASE("ceir 22b: synth_gemm runs A*B bit-exact on a Vulkan device (== eval_c
         for (int nn = 0; nn < kN; ++nn)
         {
             float acc = 0.0F;
-            for (int kk = 0; kk < kK; ++kk) { acc += a_data[mm * kK + kk] * b_data[kk * kN + nn]; }
+            for (int kk = 0; kk < kK; ++kk)
+            {
+                acc += a_data[mm * kK + kk] * b_data[kk * kN + nn];
+            }
             ref[mm * kN + nn] = acc;
         }
     }
 
     // ── DEVICE (soft-skip with no adapter) ──
     kir::KirBackendVulkan vk(&kalloc);
-    if (!vk.valid()) { WARN("no Vulkan device — skipping the CEIR-22b gemm device gate"); return; }
+    if (!vk.valid())
+    {
+        WARN("no Vulkan device — skipping the CEIR-22b gemm device gate");
+        return;
+    }
     kir::KirBackendCpu cpu(&kalloc);
 
     const float* inputs[2] = {static_cast<const float*>(a_data), static_cast<const float*>(b_data)};

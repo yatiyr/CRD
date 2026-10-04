@@ -49,7 +49,10 @@ struct StubStorage final : gpu::IStorageBuffer
     [[nodiscard]] u32 size_bytes() const noexcept override { return static_cast<u32>(bytes.size()); }
     [[nodiscard]] u32 read_u32(u32 index) const noexcept override
     {
-        if ((index + 1U) * 4U > bytes.size()) { return 0U; }
+        if ((index + 1U) * 4U > bytes.size())
+        {
+            return 0U;
+        }
         u32 v = 0;
         std::memcpy(&v, bytes.data() + index * 4U, 4U);
         return v;
@@ -110,7 +113,10 @@ struct StubRaster final : gpu::IRasterContext
                                       u32 size_bytes) override
     {
         auto& s = static_cast<StubStorage&>(storage);
-        if (static_cast<usize>(byte_offset) + size_bytes > s.bytes.size()) { return false; }
+        if (static_cast<usize>(byte_offset) + size_bytes > s.bytes.size())
+        {
+            return false;
+        }
         std::memcpy(s.bytes.data() + byte_offset, data, size_bytes);
         uploads.push_back(UploadRecord{byte_offset, size_bytes});
         return true;
@@ -131,7 +137,10 @@ struct StubRaster final : gpu::IRasterContext
         const f32 z      = (corner & 4U) != 0U ? 0.5F : -0.5F;
         const f32 rec[12] = {x, y, z, 0, 1, 0, 0, 0, 0, 0, 0, 1};
         const auto* b     = reinterpret_cast<const u8*>(rec);
-        for (u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const u32 idx[36] = {0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
                          2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5};
@@ -139,7 +148,10 @@ struct StubRaster final : gpu::IRasterContext
     for (u32 v : idx)
     {
         const auto* b = reinterpret_cast<const u8*>(&v);
-        for (u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     containers::Array<u8> prim(a);
     prim.resize(4U + 32U);
@@ -165,7 +177,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
 
     containers::Array<u8> pool(a);
     const char name[] = "cube";
-    for (char c : name) { pool.push_back(static_cast<u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<u8>(c));
+    }
 
     containers::Array<resources::ManifestEntry> entries(a);
     resources::ManifestEntry e;
@@ -184,7 +199,10 @@ void write_mesh_pack(const platform::fs::Path& path, const resources::ResourceId
     resources::CrdrWriter p2(a, pack_id, resources::kFourCC_PACK);
     resources::manifest_write(p2, containers::as_const_span(entries), containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (u8 b : art_bytes) { pack.push_back(b); }
+    for (u8 b : art_bytes)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(platform::fs::write_file_binary(path, containers::as_const_span(pack)));
 }
 
@@ -233,7 +251,10 @@ TEST_CASE("scene-render: chunk-grain extraction -- structural sync builds groups
           "[scene-render][geo7]")
 {
     Rig rig;
-    for (int i = 0; i < 100; ++i) { (void)rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F); }
+    for (int i = 0; i < 100; ++i)
+    {
+        (void)rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F);
+    }
 
     const auto s1 = rig.renderer.sync(rig.world);
     CHECK(s1.structural_rebuild);
@@ -270,7 +291,10 @@ TEST_CASE("scene-render: THE partial-re-upload gate -- move ONE entity, exactly 
 {
     Rig rig;
     containers::Array<scene::EntityId> entities(&galloc());
-    for (int i = 0; i < 500; ++i) { entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F)); }
+    for (int i = 0; i < 500; ++i)
+    {
+        entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F));
+    }
     (void)rig.renderer.sync(rig.world);
     rig.raster.uploads.clear();
 
@@ -324,7 +348,10 @@ TEST_CASE("REN-41 velocity: a moved-then-static instance reads ZERO velocity the
 {
     Rig                                rig;
     containers::Array<scene::EntityId> entities(&galloc());
-    for (int i = 0; i < 500; ++i) { entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F)); }
+    for (int i = 0; i < 500; ++i)
+    {
+        entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F));
+    }
     (void)rig.renderer.sync(rig.world); // frame 0: rebuild — prev_world == world for all (self-shadow)
     CHECK(rig.renderer.debug_max_velocity_residual() == 0.0F);
 
@@ -352,7 +379,10 @@ TEST_CASE("REN-41 velocity: a moved-then-static instance reads ZERO velocity the
 TEST_CASE("scene-render: a structural change (spawn) triggers a rebuild", "[scene-render][geo7]")
 {
     Rig rig;
-    for (int i = 0; i < 10; ++i) { (void)rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F); }
+    for (int i = 0; i < 10; ++i)
+    {
+        (void)rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F);
+    }
     (void)rig.renderer.sync(rig.world);
 
     (void)rig.spawn_cube(99.0F, 0.0F, 0.0F);
@@ -400,7 +430,10 @@ TEST_CASE("scene-render: frustum planes + AABB test -- in front passes, behind c
 TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[scene-render][raf9]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator      alloc(16U << 20U, nullptr, "raf9-id-load");
     scenerender::SceneRenderer r(&alloc);
     REQUIRE(r.set_asset_root(root));
@@ -426,7 +459,10 @@ TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[sc
 TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default program set (no drift)", "[scene-render][ceir34]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator alloc(1U << 20U, nullptr, "e4-manifest-drift");
     containers::String    path(&alloc);
     path.append(root);
@@ -458,24 +494,49 @@ TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default pr
     while (p < end)
     {
         const char* const ls = p;
-        while (p < end && *p != '\n') { ++p; }
+        while (p < end && *p != '\n')
+        {
+            ++p;
+        }
         containers::StringView line(ls, static_cast<usize>(p - ls));
-        if (p < end) { ++p; }
+        if (p < end)
+        {
+            ++p;
+        }
         usize a = 0;
-        while (a < line.size() && (line[a] == ' ' || line[a] == '\t' || line[a] == '\r')) { ++a; }
-        if (a >= line.size() || line[a] == '#') { continue; } // blank / comment
+        while (a < line.size() && (line[a] == ' ' || line[a] == '\t' || line[a] == '\r'))
+        {
+            ++a;
+        }
+        if (a >= line.size() || line[a] == '#') // blank / comment
+        {
+            continue;
+        }
         // second whitespace-delimited token == the id
         usize j = a;
-        while (j < line.size() && line[j] != ' ' && line[j] != '\t') { ++j; }        // skip kind
-        while (j < line.size() && (line[j] == ' ' || line[j] == '\t')) { ++j; }      // skip gap
+        while (j < line.size() && line[j] != ' ' && line[j] != '\t') // skip kind
+        {
+            ++j;
+        }
+        while (j < line.size() && (line[j] == ' ' || line[j] == '\t')) // skip gap
+        {
+            ++j;
+        }
         const usize ids = j;
-        while (j < line.size() && line[j] != ' ' && line[j] != '\t' && line[j] != '\r') { ++j; } // the id
+        while (j < line.size() && line[j] != ' ' && line[j] != '\t' && line[j] != '\r') // the id
+        {
+            ++j;
+        }
         const containers::StringView id(line.data() + ids, j - ids);
         ++lines;
         int match = -1;
         for (int k = 0; k < expected_count; ++k)
         {
-            if (id == containers::StringView(kExpectedIds[k])) { match = k; break; }
+            if (id == containers::StringView(kExpectedIds[k]))
+            {
+                match = k;
+                break;
+            }
         }
         INFO("manifest id: " << (match < 0 ? "<UNKNOWN>" : kExpectedIds[match]));
         REQUIRE(match >= 0);   // an id NOT in the expected default set (a rename/addition) fails LOUD
@@ -563,7 +624,10 @@ TEST_CASE("CEIR-31b-3-a-ii: apply_spec_set patches the committed ui_blur spec-co
           "[scenerender][ceir31b]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-aii-specapply");
 
     containers::String text(&alloc);
@@ -652,7 +716,10 @@ TEST_CASE("CEIR-31b-3-c-ii: the blur H and V passes build DISTINCT spec-sets; th
           "[scenerender][ceir31b]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-cii-specseat");
 
     containers::String text(&alloc);
@@ -679,7 +746,11 @@ TEST_CASE("CEIR-31b-3-c-ii: the blur H and V passes build DISTINCT spec-sets; th
     const auto set_val = [](const framecook::SpecSet& s, u32 id, double& out) -> bool {
         for (u32 i = 0; i < s.count; ++i)
         {
-            if (s.items[i].id == id) { out = s.items[i].value; return true; }
+            if (s.items[i].id == id)
+            {
+                out = s.items[i].value;
+                return true;
+            }
         }
         return false;
     };
@@ -754,7 +825,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-2: build_pass_spec_set resolves the derived blur st
           "[scenerender][ceir31b]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-g2-derive");
 
     containers::String text(&alloc);
@@ -780,7 +854,10 @@ TEST_CASE("CEIR-31b-4-b-iv-g-2: build_pass_spec_set resolves the derived blur st
     const auto step_of = [](const framecook::SpecSet& s) -> double {
         for (u32 i = 0; i < s.count; ++i)
         {
-            if (s.items[i].id == 2U) { return s.items[i].value; }
+            if (s.items[i].id == 2U)
+            {
+                return s.items[i].value;
+            }
         }
         return -1.0;
     };
@@ -843,7 +920,10 @@ TEST_CASE("REN-41/CEIR-15f-2: the live cook is gated by the CEIR semantic verifi
 TEST_CASE("REN-41: every shipped authored default asset cooks (parses + validates)", "[scene-render][ren38][ren41]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     memory::TlsfAllocator alloc(16U << 20U, nullptr, "ren41-cook");
 
     const auto read_shipped = [&](const char* rel, containers::String& out) {

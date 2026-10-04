@@ -84,13 +84,19 @@ crd::u64 tnumel(ce::Context& c, ce::TypeId t)
 {
     const ce::Type sh = c.type_of(c.type_of(t).members[1]);
     crd::u64       n  = 1;
-    for (crd::usize i = 0; i < sh.members.size(); ++i) { n *= c.type_of(sh.members[i]).count; }
+    for (crd::usize i = 0; i < sh.members.size(); ++i)
+    {
+        n *= c.type_of(sh.members[i]).count;
+    }
     return n;
 }
 crd::u32 const_grid(ce::Context& c, const ce::Value* v)
 {
     const ce::Operation* const d = v->defining_op();
-    if (d == nullptr) { return 1U; }
+    if (d == nullptr)
+    {
+        return 1U;
+    }
     const ce::AttrValue av = c.attr_value(d->attr(crd::containers::StringView("value")));
     return av.i > 0 ? static_cast<crd::u32>(av.i) : 1U;
 }
@@ -112,15 +118,24 @@ struct Resolver
 bool load_emit_ckir_hlsl(const char* path, kir::KGraph& g, kir::GlslKernel& kern, crd::memory::IAllocator* alloc, crd::u32 local_size_x = 0U)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
     f.seekg(0);
     crd::containers::Array<char> src(alloc);
     src.resize(static_cast<crd::usize>(sz), '\0');
     f.read(src.data(), sz);
     kir::KEntry ke;
-    if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ke).ok) { return false; }
-    if (local_size_x != 0U) { ke.local_size[0] = local_size_x; }
+    if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ke).ok)
+    {
+        return false;
+    }
+    if (local_size_x != 0U)
+    {
+        ke.local_size[0] = local_size_x;
+    }
     return kir::emit_compute_kernel_hlsl(g, ke, alloc, kern);
 }
 
@@ -140,7 +155,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         //    Max(Contract,0), which emit_contract_hlsl UNWRAPS to `max(acc, 0.0)`); push{M,K,N,1} + grid M·N + nbind 3 IDENTICAL.
         const ceg::GemmEpilogue ep = st.kind == ceg::StageKind::GemmRelu ? ceg::GemmEpilogue::Relu : ceg::GemmEpilogue::None;
         const ceg::GraphSynth   s  = ceg::synth_gemm(c, *st.op, g, ep);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_hlsl(g, s.output, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_hlsl(g, s.output, kern))
+        {
+            return rs;
+        }
         const crd::u32 m     = dim_ext(c, st.op->operand(0U)->type(), 0U);
         const crd::u32 k     = dim_ext(c, st.op->operand(0U)->type(), 1U);
         const crd::u32 nn    = dim_ext(c, st.op->operand(1U)->type(), 1U);
@@ -153,7 +171,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Fft)
     {
         const ceg::FftSynth s = ceg::synth_fft(c, *st.op, g);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_compute_kernel_hlsl(g, s.plan.entry, res.alloc, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_compute_kernel_hlsl(g, s.plan.entry, res.alloc, kern))
+        {
+            return rs;
+        }
         rs.gx    = 1U;
         pushsize = 0U;
         nbind    = 6;
@@ -161,7 +182,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Reduce)
     {
         const ceg::GraphSynth s = ceg::synth_reduce(c, *st.op, g);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_reduce_hlsl(g, s.output, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_reduce_hlsl(g, s.output, kern))
+        {
+            return rs;
+        }
         const crd::u64 in_n  = tnumel(c, st.op->operand(0U)->type());
         const crd::u64 out_n = tnumel(c, st.op->result(0U)->type());
         const crd::u32 pc[4] = {static_cast<crd::u32>(out_n), static_cast<crd::u32>(in_n / (out_n == 0U ? 1U : out_n)), 0U, 0U};
@@ -172,14 +196,20 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     }
     else if (st.kind == ceg::StageKind::QuantGemm)
     {
-        if (!load_emit_ckir_hlsl(CRD_REPO_DIR "/assets/ckir/quant_gemm_q8.ckir", g, kern, res.alloc)) { return rs; }
+        if (!load_emit_ckir_hlsl(CRD_REPO_DIR "/assets/ckir/quant_gemm_q8.ckir", g, kern, res.alloc))
+        {
+            return rs;
+        }
         rs.gx    = 1U; // one workgroup of M*N threads
         pushsize = 0U;
         nbind    = static_cast<int>(st.nbind); // 4: A,W_q8,scale,D
     }
     else if (st.kind == ceg::StageKind::Dequant)
     {
-        if (!load_emit_ckir_hlsl(CRD_REPO_DIR "/assets/ckir/quant_dequantize_q8_sym.ckir", g, kern, res.alloc)) { return rs; }
+        if (!load_emit_ckir_hlsl(CRD_REPO_DIR "/assets/ckir/quant_dequantize_q8_sym.ckir", g, kern, res.alloc))
+        {
+            return rs;
+        }
         rs.gx    = 1U; // one workgroup of K*N threads
         pushsize = 0U;
         nbind    = static_cast<int>(st.nbind); // 3: W_q8,scale,out
@@ -204,7 +234,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const ceg::GraphSynth s = ceg::synth_elementwise(c, *st.op, g);
             ok = s.reject == ceg::SynthReject::None && kir::emit_elementwise_hlsl(g, s.output, res.alloc, kern); // fused emitter needs scratch
         }
-        if (!ok) { return rs; }
+        if (!ok)
+        {
+            return rs;
+        }
         const crd::u64 out_n = tnumel(c, st.op->result(0U)->type());
         const crd::u32 pc[4] = {static_cast<crd::u32>(out_n), 0U, 0U, 0U};
         std::memcpy(rs.push, pc, sizeof(pc));
@@ -216,22 +249,46 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     {
         const ce::AttrValue kv   = c.attr_value(st.op->attr(crd::containers::StringView("kernel")));
         const char*         path = nullptr;
-        if (kv.s == crd::containers::StringView("viz_magnitude")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir"; }
-        else if (kv.s == crd::containers::StringView("viz_normalize")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir"; }
-        else if (kv.s == crd::containers::StringView("relu")) { path = CRD_REPO_DIR "/assets/ckir/relu.ckir"; } // CEIR-23c MLP activation
-        else if (kv.s == crd::containers::StringView("relu_vjp")) { path = CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir"; } // CEIR-25c MLP-backward relu VJP
+        if (kv.s == crd::containers::StringView("viz_magnitude"))
+        {
+            path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("viz_normalize"))
+        {
+            path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("relu")) // CEIR-23c MLP activation
+        {
+            path = CRD_REPO_DIR "/assets/ckir/relu.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("relu_vjp")) // CEIR-25c MLP-backward relu VJP
+        {
+            path = CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir";
+        }
         // CEIR-26d-3: the @transpose baked dispatch is RETIRED — attention's Kᵀ is now the shape-generic tensor.transpose (synth).
-        else if (kv.s == crd::containers::StringView("softmax")) { path = CRD_REPO_DIR "/assets/ckir/softmax.ckir"; } // CEIR-24b attention softmax
-        if (path == nullptr) { return rs; }
+        else if (kv.s == crd::containers::StringView("softmax")) // CEIR-24b attention softmax
+        {
+            path = CRD_REPO_DIR "/assets/ckir/softmax.ckir";
+        }
+        if (path == nullptr)
+        {
+            return rs;
+        }
         std::ifstream f(path, std::ios::binary | std::ios::ate);
-        if (!f.good()) { return rs; }
+        if (!f.good())
+        {
+            return rs;
+        }
         const std::streamsize sz = f.tellg();
         f.seekg(0);
         crd::containers::Array<char> src(res.alloc);
         src.resize(static_cast<crd::usize>(sz), '\0');
         f.read(src.data(), sz);
         kir::KEntry ve;
-        if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ve).ok) { return rs; }
+        if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ve).ok)
+        {
+            return rs;
+        }
         // CEIR-26d cook-time kernel-shape specialization (per-kernel, keyed by symbol — the 20b binding-table precedent):
         if (kv.s == crd::containers::StringView("softmax"))
         {
@@ -242,7 +299,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const crd::u32              wop = 3U + st.nbind - st.n_out; // probs [Sq, Sk]
             const ceg::KernelShapeError kse = ceg::bind_authored_local_size(
                 ve.local_size[0], dim_ext(c, st.op->operand(wop)->type(), 0U), ceg::kMaxAuthoredLocalSize); // Sq (one lane per row), capped
-            if (kse != ceg::KernelShapeError::None) { return rs; }
+            if (kse != ceg::KernelShapeError::None)
+            {
+                return rs;
+            }
             (void)g.set_spec_const(0U, static_cast<crd::f64>(dim_ext(c, st.op->operand(wop)->type(), 1U))); // Sk
         }
         else if (st.n_out >= 1U)
@@ -252,9 +312,15 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const crd::u32              wop = 3U + st.nbind - st.n_out; // first trailing-write operand (grid 0..2, then binds)
             const ceg::KernelShapeError kse = ceg::bind_authored_local_size(
                 ve.local_size[0], tnumel(c, st.op->operand(wop)->type()), ceg::kMaxAuthoredLocalSize);
-            if (kse != ceg::KernelShapeError::None) { return rs; } // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            if (kse != ceg::KernelShapeError::None) // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            {
+                return rs;
+            }
         }
-        if (!kir::emit_compute_kernel_hlsl(g, ve, res.alloc, kern)) { return rs; }
+        if (!kir::emit_compute_kernel_hlsl(g, ve, res.alloc, kern))
+        {
+            return rs;
+        }
         rs.gx    = const_grid(c, st.op->operand(0U));
         rs.gy    = const_grid(c, st.op->operand(1U));
         rs.gz    = const_grid(c, st.op->operand(2U));
@@ -262,9 +328,15 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         nbind    = static_cast<int>(st.nbind);
     }
 
-    if (res.n >= 16) { return rs; }
+    if (res.n >= 16)
+    {
+        return rs;
+    }
     res.pipes[res.n] = res.compute->create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbind, pushsize);
-    if (res.pipes[res.n] == nullptr) { return rs; }
+    if (res.pipes[res.n] == nullptr)
+    {
+        return rs;
+    }
     rs.pipeline  = res.pipes[res.n].get();
     rs.push_size = pushsize;
     ++res.n;
@@ -303,7 +375,10 @@ bool run_quant_module_n(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx,
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
     const crd::usize nb = plan.buffers.size();
-    if (nb > 40U || n_outs > 8U) { return false; }
+    if (nb > 40U || n_outs > 8U)
+    {
+        return false;
+    }
     std::unique_ptr<g::ComputeBuffer> dev[40];
     std::unique_ptr<g::ComputeBuffer> up[40];
     g::ComputeBuffer*                 bufs[40] = {};
@@ -315,31 +390,60 @@ bool run_quant_module_n(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx,
         //    storage TENANT (role Intermediate, alias_of>=0 from assign_shared_storage). Teardown is RAII on dev[40] (a tenant leaves
         //    dev[i] null ⇒ ONLY the landlord is destroyed, NO double-destroy); the ExternalIn upload keys on role (below) so a tenant
         //    is not seeded; the rb readback keys on the output Value (never a tenant) — all THREE predicates verified vs the runner.
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes; // round the 1-byte int8 zp up (DX12 raw-view alignment)
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
-        if (dev[i] == nullptr) { return false; }
+        if (dev[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i]               = dev[i].get();
         ++alloc_count;
         const QuantSeed* seed = nullptr;
         if (pb.role == ceg::BufferRole::ExternalIn)
         {
-            for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+            for (crd::usize s = 0; s < n_seeds; ++s)
+            {
+                if (seeds[s].value == pb.value)
+                {
+                    seed = &seeds[s];
+                    break;
+                }
+            }
         }
-        if (seed == nullptr) { continue; } // Intermediate/Output, and the unbound zp/C ExternalIns — no host seed
+        if (seed == nullptr) // Intermediate/Output, and the unbound zp/C ExternalIns — no host seed
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
-        if (up[i] == nullptr) { return false; }
+        if (up[i] == nullptr)
+        {
+            return false;
+        }
         void* raw = up[i]->map();
-        if (raw == nullptr) { return false; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
         if (seed->packed != nullptr)
         {
             auto* w = static_cast<crd::u32*>(raw);
-            for (crd::u32 e = 0; e < seed->count; ++e) { w[e] = seed->packed[e]; } // u32-packed int8 — bits, not float
+            for (crd::u32 e = 0; e < seed->count; ++e) // u32-packed int8 — bits, not float
+            {
+                w[e] = seed->packed[e];
+            }
         }
         else
         {
             auto* d = static_cast<float*>(raw);
-            for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; }
+            for (crd::u32 e = 0; e < seed->count; ++e)
+            {
+                d[e] = seed->floats[e];
+            }
         }
         up[i]->unmap();
     }
@@ -348,14 +452,29 @@ bool run_quant_module_n(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx,
     crd::i32                          out_idx[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
     for (crd::usize o = 0; o < n_outs; ++o)
     {
-        for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == outs[o].value) { out_idx[o] = static_cast<crd::i32>(i); } }
-        if (out_idx[o] < 0) { return false; }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].value == outs[o].value)
+            {
+                out_idx[o] = static_cast<crd::i32>(i);
+            }
+        }
+        if (out_idx[o] < 0)
+        {
+            return false;
+        }
         // ⛔ CEIR-26f-4 (advisor): a named-out that is ALIASED (alias_of>=0 — a tenant or view) has dev[out_idx]==null ⇒ the copy
         //    below null-derefs. Safe today because every named-out is func.return'd (⇒ pinned ⇒ not shareable), but this is a TYPED
         //    REJECT for the latent pin-readback misuse (the [[feedback_plan_output_by_traversal_is_not_ssa_liveness...]] scar).
-        if (plan.buffers[static_cast<crd::usize>(out_idx[o])].alias_of >= 0) { return false; }
+        if (plan.buffers[static_cast<crd::usize>(out_idx[o])].alias_of >= 0)
+        {
+            return false;
+        }
         rb[o] = compute.create_buffer(plan.buffers[static_cast<crd::usize>(out_idx[o])].bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
-        if (rb[o] == nullptr) { return false; }
+        if (rb[o] == nullptr)
+        {
+            return false;
+        }
     }
 
     Resolver res;
@@ -363,11 +482,26 @@ bool run_quant_module_n(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx,
     res.alloc     = alloc;
     res.compute   = &compute;
     auto& rec     = compute.begin();
-    for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
-    for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (up[i] != nullptr)
+        {
+            rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+        }
+    }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (up[i] != nullptr)
+        {
+            rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+        }
+    }
     const ceg::ExecuteError ee = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                               crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb));
-    if (ee != ceg::ExecuteError::None) { return false; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     // ⛔ record EVERY out barrier + copy BEFORE the single submit_and_wait (a barrier/copy after submit is a no-op → the 2nd readback
     //    races). The GpuToCpu rb is host-visible after the copy + the submit's fence — the existing single-output pattern, no rb barrier.
     for (crd::usize o = 0; o < n_outs; ++o)
@@ -379,11 +513,20 @@ bool run_quant_module_n(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx,
     for (crd::usize o = 0; o < n_outs; ++o)
     {
         const auto* got = static_cast<const float*>(rb[o]->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < outs[o].len; ++e) { outs[o].dst[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < outs[o].len; ++e)
+        {
+            outs[o].dst[e] = got[e];
+        }
         rb[o]->unmap();
     }
-    if (n_allocated != nullptr) { *n_allocated = alloc_count; } // CEIR-26f-4: distinct physical buffers (26f-3b-mirror asserts the delta)
+    if (n_allocated != nullptr) // CEIR-26f-4: distinct physical buffers (26f-3b-mirror asserts the delta)
+    {
+        *n_allocated = alloc_count;
+    }
     return true;
 }
 
@@ -410,7 +553,10 @@ double median_of(double* v, crd::u32 k)
     {
         const double t = v[i];
         crd::u32     j = i;
-        for (; j > 0 && v[j - 1] > t; --j) { v[j] = v[j - 1]; }
+        for (; j > 0 && v[j - 1] > t; --j)
+        {
+            v[j] = v[j - 1];
+        }
         v[j] = t;
     }
     return v[k / 2U];
@@ -418,9 +564,15 @@ double median_of(double* v, crd::u32 k)
 crd::u64 plan_sig(crd::memory::IAllocator* a, const ceg::TensorPipelinePlan& p)
 {
     crd::containers::Array<crd::u32> buf(a);
-    for (crd::usize i = 0; i < p.stages.size(); ++i) { buf.push_back(static_cast<crd::u32>(p.stages[i].kind)); }
+    for (crd::usize i = 0; i < p.stages.size(); ++i)
+    {
+        buf.push_back(static_cast<crd::u32>(p.stages[i].kind));
+    }
     buf.push_back(0xFFFFFFFFU); // separate the stage-kind run from the alias_of run
-    for (crd::usize i = 0; i < p.buffers.size(); ++i) { buf.push_back(static_cast<crd::u32>(p.buffers[i].alias_of + 1)); } // -1 (none) -> 0
+    for (crd::usize i = 0; i < p.buffers.size(); ++i) // -1 (none) -> 0
+    {
+        buf.push_back(static_cast<crd::u32>(p.buffers[i].alias_of + 1));
+    }
     return crd::containers::fnv1a_64(buf.data(), buf.size() * sizeof(crd::u32));
 }
 ce::Module* measure_tune_entry(crd::gpu::Dx12ComputeContext& compute, ce::Context& ctx, crd::memory::IAllocator* root,
@@ -448,7 +600,10 @@ ce::Module* measure_tune_entry(crd::gpu::Dx12ComputeContext& compute, ce::Contex
         const ceg::TensorPipelinePlan plan = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[c]);
         REQUIRE(plan.reject == ceg::PlanReject::None);
         sig_out[c] = plan_sig(root, plan);
-        for (crd::u32 w = 0; w < n_warmup; ++w) { REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, got.data(), out_len)); }
+        for (crd::u32 w = 0; w < n_warmup; ++w)
+        {
+            REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, got.data(), out_len));
+        }
         double ms[n_timed] = {};
         for (crd::u32 t = 0; t < n_timed; ++t)
         {
@@ -461,21 +616,47 @@ ce::Module* measure_tune_entry(crd::gpu::Dx12ComputeContext& compute, ce::Contex
         if (c != 0U)
         {
             int first_mismatch = -1;
-            for (crd::u32 i = 0; i < out_len && first_mismatch < 0; ++i) { if (got[i] != ref[i]) { first_mismatch = static_cast<int>(i); } }
+            for (crd::u32 i = 0; i < out_len && first_mismatch < 0; ++i)
+            {
+                if (got[i] != ref[i])
+                {
+                    first_mismatch = static_cast<int>(i);
+                }
+            }
             CAPTURE(c, first_mismatch);
             CHECK(first_mismatch == -1);
         }
     }
 
     crd::u32 wi = 0; // argmin median across plan-CLASSES...
-    for (crd::u32 c = 1; c < 4U; ++c) { if (medians_out[c] < medians_out[wi]) { wi = c; } }
-    for (crd::u32 c = 0; c < wi; ++c) { if (sig_out[c] == sig_out[wi]) { wi = c; break; } } // ...collapsed to the canonical member (stable)
-    if (winner != nullptr) { *winner = cfgs[wi]; }
+    for (crd::u32 c = 1; c < 4U; ++c)
+    {
+        if (medians_out[c] < medians_out[wi])
+        {
+            wi = c;
+        }
+    }
+    for (crd::u32 c = 0; c < wi; ++c) // ...collapsed to the canonical member (stable)
+    {
+        if (sig_out[c] == sig_out[wi])
+        {
+            wi = c;
+            break;
+        }
+    }
+    if (winner != nullptr)
+    {
+        *winner = cfgs[wi];
+    }
 
     const crd::u64 ph = ce::tune::program_hash(ctx, payload, root);
     ce::Module* const emit = ctx.create_module();
     ce::Block*        eb   = emit->body()->first_block();
-    if (eb == nullptr) { eb = ctx.create_block(0U); emit->body()->append(eb); }
+    if (eb == nullptr)
+    {
+        eb = ctx.create_block(0U);
+        emit->body()->append(eb);
+    }
     ce::Operation* const e = ce::tune::build_entry(ctx, ctx.attr_string(device), ctx.attr_string(env),
                                                    ctx.attr_int(static_cast<crd::i64>(ph)), ctx.attr_string(shape),
                                                    ctx.attr_bool(cfgs[wi].fuse_gemm_relu), ctx.attr_bool(cfgs[wi].share_intermediate_storage));
@@ -496,7 +677,11 @@ MlpPayload build_mlp_payload(ce::Context& ctx, crd::u32 mrows, crd::u32 d0, crd:
 {
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -533,7 +718,11 @@ TEST_CASE("ceir35 Q7: compile-time decomposition -- CEIR lowering+codegen vs DXC
     (void)ce::ml::register_dialect(ctx);
     crd::memory::TlsfAllocator   alloc(64U << 20U);
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device -- skipping the CEIR-35 Q7 compile-decomposition DX12 twin"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device -- skipping the CEIR-35 Q7 compile-decomposition DX12 twin");
+        return;
+    }
 
     constexpr crd::u32 mrows = 32;
     constexpr crd::u32 d0    = 64;
@@ -546,7 +735,10 @@ TEST_CASE("ceir35 Q7: compile-time decomposition -- CEIR lowering+codegen vs DXC
     constexpr crd::u32 n_timed = 15;
 
     double lower_ms[n_timed] = {};
-    for (crd::u32 w = 0; w < n_warmup; ++w) { (void)ceg::plan_tensor_pipeline(ctx, *pay.m, &root, opts); }
+    for (crd::u32 w = 0; w < n_warmup; ++w)
+    {
+        (void)ceg::plan_tensor_pipeline(ctx, *pay.m, &root, opts);
+    }
     for (crd::u32 t = 0; t < n_timed; ++t)
     {
         const auto                    a = std::chrono::steady_clock::now();
@@ -599,11 +791,20 @@ TEST_CASE("ceir35 Q7: compile-time decomposition -- CEIR lowering+codegen vs DXC
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
     double dxc_ms[n_timed] = {};
-    for (crd::u32 w = 0; w < n_warmup; ++w) { for (crd::usize i = 0; i < plan.stages.size(); ++i) { (void)compile_stage(plan.stages[i]); } }
+    for (crd::u32 w = 0; w < n_warmup; ++w)
+    {
+        for (crd::usize i = 0; i < plan.stages.size(); ++i)
+        {
+            (void)compile_stage(plan.stages[i]);
+        }
+    }
     for (crd::u32 t = 0; t < n_timed; ++t)
     {
         double acc = 0.0;
-        for (crd::usize i = 0; i < plan.stages.size(); ++i) { acc += compile_stage(plan.stages[i]); }
+        for (crd::usize i = 0; i < plan.stages.size(); ++i)
+        {
+            acc += compile_stage(plan.stages[i]);
+        }
         dxc_ms[t] = acc;
     }
     const double t_dxc = median_of(dxc_ms, n_timed);
@@ -635,7 +836,11 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
     (void)ce::ml::register_dialect(ctx);
     crd::memory::TlsfAllocator   devalloc(256U << 20U);
     crd::gpu::Dx12ComputeContext compute(&devalloc);
-    if (!compute.valid()) { WARN("no D3D12 device -- skipping the CEIR-35 Q7 executor-overhead DX12 twin"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device -- skipping the CEIR-35 Q7 executor-overhead DX12 twin");
+        return;
+    }
     namespace g = crd::gpu;
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
@@ -652,7 +857,13 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
     const crd::usize nb = plan.buffers.size();
     REQUIRE(nb <= 40U);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -662,9 +873,18 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed      seeds[3] = {{pay.x, x_in.data(), nullptr, mrows * d0}, {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                      {pay.w2, w2_in.data(), nullptr, d1 * d2}};
     constexpr crd::usize n_seeds  = 3;
@@ -676,28 +896,57 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
         REQUIRE(dev[i] != nullptr);
         bufs[i] = dev[i].get();
-        if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+        if (pb.role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         const QuantSeed* seed = nullptr;
-        for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
-        if (seed == nullptr) { continue; }
+        for (crd::usize s = 0; s < n_seeds; ++s)
+        {
+            if (seeds[s].value == pb.value)
+            {
+                seed = &seeds[s];
+                break;
+            }
+        }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
         REQUIRE(up[i] != nullptr);
         auto* const d = static_cast<float*>(up[i]->map());
         REQUIRE(d != nullptr);
-        for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            d[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
         for (crd::usize i = 0; i < nb; ++i)
         {
-            if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+            }
         }
         compute.submit_and_wait();
     }
@@ -715,7 +964,13 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
         REQUIRE(resolved[j].pipeline != nullptr);
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(out_idx >= 0);
     std::unique_ptr<g::ComputeBuffer> rb =
         compute.create_buffer(plan.buffers[static_cast<crd::usize>(out_idx)].bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
@@ -735,7 +990,10 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
         {
             const ceg::PlanStage& st       = plan.stages[j];
             g::ComputeBuffer*     binds[8] = {};
-            for (crd::u32 i = 0; i < st.nbind; ++i) { binds[i] = bufs[static_cast<crd::usize>(st.bind[i])]; }
+            for (crd::u32 i = 0; i < st.nbind; ++i)
+            {
+                binds[i] = bufs[static_cast<crd::usize>(st.bind[i])];
+            }
             rec.dispatch(*resolved[j].pipeline, crd::containers::ConstSpan<g::ComputeBuffer*>(binds, st.nbind), resolved[j].push,
                          resolved[j].push_size, resolved[j].gx, resolved[j].gy, resolved[j].gz);
             if (j + 1 < ns)
@@ -795,14 +1053,20 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
             REQUIRE(ceg::execute_tensor_pipeline(plan, rec, cached, &cs, crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb))
                     == ceg::ExecuteError::None);
         }
-        else { hand_roll(rec); }
+        else
+        {
+            hand_roll(rec);
+        }
         rec.barrier(*bufs[static_cast<crd::usize>(out_idx)], g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
         rec.copy(*bufs[static_cast<crd::usize>(out_idx)], *rb, 0U, 0U, plan.buffers[static_cast<crd::usize>(out_idx)].bytes);
         compute.submit_and_wait();
         dst.resize(out_len, 0.0F);
         const auto* got = static_cast<const float*>(rb->map());
         REQUIRE(got != nullptr);
-        for (crd::usize e = 0; e < out_len; ++e) { dst[e] = got[e]; }
+        for (crd::usize e = 0; e < out_len; ++e)
+        {
+            dst[e] = got[e];
+        }
         rb->unmap();
     };
     crd::containers::Array<float> out_a(&root);
@@ -810,7 +1074,14 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (DX12)", "[ceir]
     readback(true, out_a);
     readback(false, out_b);
     int mism = -1;
-    for (crd::usize e = 0; e < out_len; ++e) { if (out_a[e] != out_b[e]) { mism = static_cast<int>(e); break; } }
+    for (crd::usize e = 0; e < out_len; ++e)
+    {
+        if (out_a[e] != out_b[e])
+        {
+            mism = static_cast<int>(e);
+            break;
+        }
+    }
     CHECK(mism == -1);
 
     const double median_a_rec = median_of(a_rec, n_timed);
@@ -841,7 +1112,11 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (DX12)", "[ceir][ceir35][
     (void)ce::ml::register_dialect(ctx);
     crd::memory::TlsfAllocator   devalloc(256U << 20U);
     crd::gpu::Dx12ComputeContext compute(&devalloc);
-    if (!compute.valid()) { WARN("no D3D12 device -- skipping the CEIR-35 Q7 reuse-amortization DX12 twin"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device -- skipping the CEIR-35 Q7 reuse-amortization DX12 twin");
+        return;
+    }
     namespace g = crd::gpu;
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
@@ -864,9 +1139,18 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (DX12)", "[ceir][ceir35][
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed      seeds[3] = {{pay.x, x_in.data(), nullptr, mrows * d0}, {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                      {pay.w2, w2_in.data(), nullptr, d1 * d2}};
     constexpr crd::usize n_seeds  = 3;
@@ -877,28 +1161,57 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (DX12)", "[ceir][ceir35][
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         dev[i]            = compute.create_buffer(sz, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
         REQUIRE(dev[i] != nullptr);
         bufs[i] = dev[i].get();
-        if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+        if (pb.role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         const QuantSeed* seed = nullptr;
-        for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
-        if (seed == nullptr) { continue; }
+        for (crd::usize s = 0; s < n_seeds; ++s)
+        {
+            if (seeds[s].value == pb.value)
+            {
+                seed = &seeds[s];
+                break;
+            }
+        }
+        if (seed == nullptr)
+        {
+            continue;
+        }
         up[i] = compute.create_buffer(sz, transfer_src, g::ComputeMemory::CpuToGpu);
         REQUIRE(up[i] != nullptr);
         auto* const d = static_cast<float*>(up[i]->map());
         REQUIRE(d != nullptr);
-        for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; }
+        for (crd::u32 e = 0; e < seed->count; ++e)
+        {
+            d[e] = seed->floats[e];
+        }
         up[i]->unmap();
     }
     {
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
         for (crd::usize i = 0; i < nb; ++i)
         {
-            if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+            }
         }
         compute.submit_and_wait();
     }
@@ -944,7 +1257,10 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (DX12)", "[ceir][ceir35][
         REQUIRE(ee == ceg::ExecuteError::None);
         compute.submit_and_wait();
         const auto c1 = std::chrono::steady_clock::now();
-        if (t >= n_warmup) { cold_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count(); }
+        if (t >= n_warmup)
+        {
+            cold_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count();
+        }
     }
     double warm_ms[n_timed] = {};
     for (crd::u32 t = 0; t < n_warmup + n_timed; ++t)
@@ -957,7 +1273,10 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (DX12)", "[ceir][ceir35][
         REQUIRE(ee == ceg::ExecuteError::None);
         compute.submit_and_wait();
         const auto c1 = std::chrono::steady_clock::now();
-        if (t >= n_warmup) { warm_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count(); }
+        if (t >= n_warmup)
+        {
+            warm_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count();
+        }
     }
 
     const double c = median_of(cold_ms, n_timed);
@@ -1039,11 +1358,18 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
         mx_ref     = mx_ref > mag_ref[k] ? mx_ref : mag_ref[k];
     }
     crd::f64 norm_ref[kL];
-    for (int k = 0; k < kL; ++k) { norm_ref[k] = mag_ref[k] / mx_ref; }
+    for (int k = 0; k < kL; ++k)
+    {
+        norm_ref[k] = mag_ref[k] / mx_ref;
+    }
 
     // ── DEVICE (soft-skip with no D3D12 adapter) ──
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-22c-3e pipeline gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-22c-3e pipeline gate");
+        return;
+    }
     namespace g = crd::gpu;
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
@@ -1057,7 +1383,10 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
     int            fft_n   = 0;
     for (crd::usize s = 0; s < plan.stages.size(); ++s)
     {
-        if (plan.stages[s].kind != ceg::StageKind::Fft) { continue; }
+        if (plan.stages[s].kind != ceg::StageKind::Fft)
+        {
+            continue;
+        }
         twr_buf = plan.stages[s].bind[2];
         twi_buf = plan.stages[s].bind[3];
         fft_n   = static_cast<int>(plan.buffers[static_cast<crd::usize>(twr_buf)].bytes / 4ULL) * 2;
@@ -1065,7 +1394,10 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
     crd::i32 out_idx = -1;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == ceg::BufferRole::Output) { out_idx = static_cast<crd::i32>(i); }
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
     }
     REQUIRE(out_idx >= 0);
 
@@ -1077,7 +1409,11 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.role == ceg::BufferRole::Alias)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         dev[i] = compute.create_buffer(pb.bytes, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
         REQUIRE(dev[i] != nullptr);
         bufs[i] = dev[i].get();
@@ -1087,8 +1423,20 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
             REQUIRE(up[i] != nullptr);
             auto*          dst = static_cast<float*>(up[i]->map());
             const crd::u64 cnt = pb.bytes / 4ULL;
-            if (static_cast<crd::i32>(i) == a_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-            else if (static_cast<crd::i32>(i) == b_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
+            if (static_cast<crd::i32>(i) == a_buf)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = a_data[e];
+                }
+            }
+            else if (static_cast<crd::i32>(i) == b_buf)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = b_data[e];
+                }
+            }
             else if (static_cast<crd::i32>(i) == twr_buf)
             {
                 for (crd::u64 e = 0; e < cnt; ++e)
@@ -1103,7 +1451,13 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
                     dst[e] = static_cast<float>(-crd::math::sin(two_pi * static_cast<crd::f64>(e) / static_cast<crd::f64>(fft_n)));
                 }
             }
-            else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } } // C (unused), im0 (Zeros)
+            else // C (unused), im0 (Zeros)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = 0.0F;
+                }
+            }
             up[i]->unmap();
         }
     }
@@ -1119,11 +1473,17 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
     auto& rec = compute.begin();
     for (crd::usize i = 0; i < nb; ++i)
     {
-        if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); }
+        if (up[i] != nullptr)
+        {
+            rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+        }
     }
     for (crd::usize i = 0; i < nb; ++i)
     {
-        if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); }
+        if (up[i] != nullptr)
+        {
+            rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+        }
     }
     const ceg::ExecuteError ee = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                               crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb));
@@ -1141,7 +1501,11 @@ TEST_CASE("ceir 22c-3e: the PARSE-LOADED design-B pipeline runs on DX12 (portabl
     {
         const float d = got[k] - static_cast<float>(norm_ref[k]);
         const float e = d < 0.0F ? -d : d;
-        if (e > worst_err) { worst_err = e; worst = k; }
+        if (e > worst_err)
+        {
+            worst_err = e;
+            worst = k;
+        }
     }
     rb->unmap();
     INFO("worst bin " << worst << " err " << worst_err << " tol " << tol);
@@ -1177,7 +1541,11 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
     {
         ce::Module* const m   = ctx.create_module();
         ce::Block*        top = m->body()->first_block();
-        if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+        if (top == nullptr)
+        {
+            top = ctx.create_block(0U);
+            m->body()->append(top);
+        }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
         top->append(f);
         ce::Block* const b   = ce::func::func_body_block(f);
@@ -1221,14 +1589,23 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
     REQUIRE(plan_u.stages[2].kind == ceg::StageKind::Gemm);
 
     float a_data[rows * inner];
-    for (crd::u32 i = 0; i < rows * inner; ++i) { a_data[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4); }
+    for (crd::u32 i = 0; i < rows * inner; ++i)
+    {
+        a_data[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4);
+    }
     crd::i32 wq_i[inner * cols];
-    for (crd::u32 i = 0; i < inner * cols; ++i) { wq_i[i] = static_cast<crd::i32>((i * 37U + 11U) % 256U) - 128; }
+    for (crd::u32 i = 0; i < inner * cols; ++i)
+    {
+        wq_i[i] = static_cast<crd::i32>((i * 37U + 11U) % 256U) - 128;
+    }
     crd::u32 packed[inner * cols / 4U];
     for (crd::u32 w = 0; w < inner * cols / 4U; ++w)
     {
         crd::u32 word = 0;
-        for (crd::u32 j = 0; j < 4U; ++j) { word |= static_cast<crd::u32>(wq_i[4U * w + j] & 0xFF) << (8U * j); }
+        for (crd::u32 j = 0; j < 4U; ++j)
+        {
+            word |= static_cast<crd::u32>(wq_i[4U * w + j] & 0xFF) << (8U * j);
+        }
         packed[w] = word;
     }
     const float scale = 0.125F;
@@ -1238,14 +1615,21 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
         for (crd::u32 ncol = 0; ncol < cols; ++ncol)
         {
             float acc = 0.0F;
-            for (crd::u32 k = 0; k < inner; ++k) { acc += a_data[mrow * inner + k] * static_cast<float>(wq_i[k * cols + ncol]); }
+            for (crd::u32 k = 0; k < inner; ++k)
+            {
+                acc += a_data[mrow * inner + k] * static_cast<float>(wq_i[k * cols + ncol]);
+            }
             oracle[mrow * cols + ncol] = acc * scale;
         }
     }
 
     // ── DEVICE (soft-skip with no D3D12 adapter) ──
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-23b-2d fused QuantGemm gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-23b-2d fused QuantGemm gate");
+        return;
+    }
 
     float d_fused[rows * cols]   = {};
     float d_unfused[rows * cols] = {};
@@ -1312,7 +1696,10 @@ TEST_CASE("ceir 23c-d: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
     constexpr crd::u32 inner = 8U;
     constexpr crd::u32 cols  = 8U;
     float              x[rows * inner];
-    for (crd::u32 i = 0; i < rows * inner; ++i) { x[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4); }
+    for (crd::u32 i = 0; i < rows * inner; ++i)
+    {
+        x[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4);
+    }
     crd::i32 wq1[inner * cols];
     crd::i32 wq2[inner * cols];
     for (crd::u32 i = 0; i < inner * cols; ++i)
@@ -1324,7 +1711,10 @@ TEST_CASE("ceir 23c-d: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 wd = 0; wd < inner * cols / 4U; ++wd)
         {
             crd::u32 word = 0;
-            for (crd::u32 j = 0; j < 4U; ++j) { word |= static_cast<crd::u32>(w[4U * wd + j] & 0xFF) << (8U * j); }
+            for (crd::u32 j = 0; j < 4U; ++j)
+            {
+                word |= static_cast<crd::u32>(w[4U * wd + j] & 0xFF) << (8U * j);
+            }
             p[wd] = word;
         }
     };
@@ -1341,7 +1731,10 @@ TEST_CASE("ceir 23c-d: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 n = 0; n < cols; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < inner; ++kk) { acc += x[m * inner + kk] * static_cast<float>(wq1[kk * cols + n]); }
+            for (crd::u32 kk = 0; kk < inner; ++kk)
+            {
+                acc += x[m * inner + kk] * static_cast<float>(wq1[kk * cols + n]);
+            }
             const float v    = acc * s1;
             h1[m * cols + n] = v > 0.0F ? v : 0.0F;
         }
@@ -1351,14 +1744,21 @@ TEST_CASE("ceir 23c-d: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 n = 0; n < cols; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < inner; ++kk) { acc += h1[m * inner + kk] * static_cast<float>(wq2[kk * cols + n]); }
+            for (crd::u32 kk = 0; kk < inner; ++kk)
+            {
+                acc += h1[m * inner + kk] * static_cast<float>(wq2[kk * cols + n]);
+            }
             oracle[m * cols + n] = acc * s2;
         }
     }
 
     // ── DEVICE (soft-skip with no D3D12 adapter) ──
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-23c-d quant-MLP gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-23c-d quant-MLP gate");
+        return;
+    }
 
     const QuantSeed seeds[5] = {{x_val, x, nullptr, rows * inner}, {w1_val, nullptr, p1, inner * cols / 4U},
                                 {s1_val, &s1, nullptr, 1U},        {w2_val, nullptr, p2, inner * cols / 4U},
@@ -1394,7 +1794,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on DX12 (tr
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1417,8 +1821,14 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on DX12 (tr
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
@@ -1436,22 +1846,36 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on DX12 (tr
         for (crd::u32 j = 0; j < sk; ++j)
         {
             float dot = 0.0F;
-            for (crd::u32 d = 0; d < dd; ++d) { dot += q_in[i * dd + d] * k_in[j * dd + d]; }
+            for (crd::u32 d = 0; d < dd; ++d)
+            {
+                dot += q_in[i * dd + d] * k_in[j * dd + d];
+            }
             sc[j] = dot * inv_sqrt_d;
             mx    = crd::math::max(mx, sc[j]);
         }
         float denom = 0.0F;
-        for (crd::u32 j = 0; j < sk; ++j) { sc[j] = crd::math::exp(sc[j] - mx); denom += sc[j]; }
+        for (crd::u32 j = 0; j < sk; ++j)
+        {
+            sc[j] = crd::math::exp(sc[j] - mx);
+            denom += sc[j];
+        }
         for (crd::u32 kk = 0; kk < dv; ++kk)
         {
             float acc = 0.0F;
-            for (crd::u32 j = 0; j < sk; ++j) { acc += (sc[j] / denom) * v_in[j * dv + kk]; }
+            for (crd::u32 j = 0; j < sk; ++j)
+            {
+                acc += (sc[j] / denom) * v_in[j * dv + kk];
+            }
             oracle[i * dv + kk] = acc;
         }
     }
 
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-24b-4 attention gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-24b-4 attention gate");
+        return;
+    }
 
     const QuantSeed seeds[4] = {{q_val, q_in, nullptr, sq * dd},
                                 {k_val, k_in, nullptr, sk * dd},
@@ -1489,7 +1913,11 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1512,8 +1940,14 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
@@ -1533,22 +1967,36 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
         for (crd::u32 j = 0; j < sk; ++j)
         {
             float dot = 0.0F;
-            for (crd::u32 d = 0; d < dd; ++d) { dot += q_in[i * dd + d] * k_in[j * dd + d]; }
+            for (crd::u32 d = 0; d < dd; ++d)
+            {
+                dot += q_in[i * dd + d] * k_in[j * dd + d];
+            }
             sc[j] = dot * inv_sqrt_d;
             mx    = crd::math::max(mx, sc[j]);
         }
         float denom = 0.0F;
-        for (crd::u32 j = 0; j < sk; ++j) { sc[j] = crd::math::exp(sc[j] - mx); denom += sc[j]; }
+        for (crd::u32 j = 0; j < sk; ++j)
+        {
+            sc[j] = crd::math::exp(sc[j] - mx);
+            denom += sc[j];
+        }
         for (crd::u32 kk = 0; kk < dv; ++kk)
         {
             float acc = 0.0F;
-            for (crd::u32 j = 0; j < sk; ++j) { acc += (sc[j] / denom) * v_in[j * dv + kk]; }
+            for (crd::u32 j = 0; j < sk; ++j)
+            {
+                acc += (sc[j] / denom) * v_in[j * dv + kk];
+            }
             oracle[i * dv + kk] = acc;
         }
     }
 
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-26d-3c generic-attention gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-26d-3c generic-attention gate");
+        return;
+    }
 
     const QuantSeed seeds[4] = {{q_val, q_in, nullptr, sq * dd},
                                 {k_val, k_in, nullptr, sk * dd},
@@ -1563,7 +2011,10 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     crd::u32 tenants = 0;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].alias_of >= 0 && plan.buffers[i].role == ceg::BufferRole::Intermediate) { ++tenants; }
+        if (plan.buffers[i].alias_of >= 0 && plan.buffers[i].role == ceg::BufferRole::Intermediate)
+        {
+            ++tenants;
+        }
     }
     REQUIRE(tenants == 1U);                                                  // probs→Kt — the ONE tenant (device-free 26f-2b(e))
     CHECK(n_alloc == static_cast<crd::u32>(plan.buffers.size()) - tenants);  // ⭐ EXACT physical-buffer count (identity)
@@ -1598,7 +2049,11 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on DX
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1627,7 +2082,10 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on DX
         crd::u32 n = 0;
         for (crd::usize i = 0; i < p.buffers.size(); ++i)
         {
-            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate) { ++n; }
+            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate)
+            {
+                ++n;
+            }
         }
         return n;
     };
@@ -1641,14 +2099,24 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on DX
     for (crd::usize i = 0; i < plan_share.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan_share.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
 
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-26f-3b aliasing differential"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-26f-3b aliasing differential");
+        return;
+    }
 
     const float     q_in[sq * dd] = {0.1F, 0.2F, 0.3F, 0.4F, 0.5F, 0.6F, 0.7F, 0.8F};
     const float     k_in[sk * dd] = {0.2F, 0.1F, 0.0F, 0.3F, 0.4F, 0.5F, 0.6F, 0.1F, 0.7F, 0.2F, 0.3F, 0.9F};
@@ -1674,7 +2142,10 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on DX
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < sq * dv && first_mismatch < 0; ++i)
     {
-        if (out_share[i] != out_noshare[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_share[i] != out_noshare[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -1703,7 +2174,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on DX12 (gemm/rel
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1728,16 +2203,28 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on DX12 (gemm/rel
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
     float x_in[mrows * d0];
     float w1_in[d0 * d1];
     float w2_in[d1 * d2];
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
 
     float oracle[mrows * d2] = {};
     for (crd::u32 mm = 0; mm < mrows; ++mm)
@@ -1746,19 +2233,29 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on DX12 (gemm/rel
         for (crd::u32 n = 0; n < d1; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + n]; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + n];
+            }
             h1[n] = crd::math::max(acc, 0.0F);
         }
         for (crd::u32 j = 0; j < d2; ++j)
         {
             float acc = 0.0F;
-            for (crd::u32 n = 0; n < d1; ++n) { acc += h1[n] * w2_in[n * d2 + j]; }
+            for (crd::u32 n = 0; n < d1; ++n)
+            {
+                acc += h1[n] * w2_in[n * d2 + j];
+            }
             oracle[mm * d2 + j] = acc;
         }
     }
 
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-24b-4 MLP gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-24b-4 MLP gate");
+        return;
+    }
 
     const QuantSeed seeds[3] = {{x_val, x_in, nullptr, mrows * d0}, {w1_val, w1_in, nullptr, d0 * d1}, {w2_val, w2_in, nullptr, d1 * d2}};
     float d_out[mrows * d2] = {};
@@ -1781,7 +2278,11 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
 {
     crd::memory::GrowableTlsfAllocator devroot;
     crd::gpu::Dx12ComputeContext       compute(&devroot);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-26d-2d non-32 MLP gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-26d-2d non-32 MLP gate");
+        return;
+    }
 
     const auto run_mlp = [&](crd::u32 d1) -> bool {
         constexpr crd::u32 mrows = 4;
@@ -1797,7 +2298,11 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
         (void)ce::ml::register_dialect(ctx);
         ce::Module* const m   = ctx.create_module();
         ce::Block*        top = m->body()->first_block();
-        if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+        if (top == nullptr)
+        {
+            top = ctx.create_block(0U);
+            m->body()->append(top);
+        }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
         top->append(f);
         ce::Block* const b   = ce::func::func_body_block(f);
@@ -1828,7 +2333,10 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
         const ce::Value* out_val = nullptr;
         for (crd::usize i = 0; i < plan.buffers.size(); ++i)
         {
-            if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+            if (plan.buffers[i].role == ceg::BufferRole::Output)
+            {
+                out_val = plan.buffers[i].value;
+            }
         }
         REQUIRE(out_val != nullptr);
 
@@ -1862,9 +2370,18 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
         x_in.resize(mrows * d0, 0.0F);
         w1_in.resize(d0 * d1, 0.0F);
         w2_in.resize(d1 * d2, 0.0F);
-        for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-        for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-        for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+        for (crd::u32 i = 0; i < mrows * d0; ++i)
+        {
+            x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+        }
+        for (crd::u32 i = 0; i < d0 * d1; ++i)
+        {
+            w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+        }
+        for (crd::u32 i = 0; i < d1 * d2; ++i)
+        {
+            w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+        }
 
         crd::containers::Array<float> oracle(&root);
         oracle.resize(mrows * d2, 0.0F);
@@ -1875,13 +2392,19 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
             for (crd::u32 nnn = 0; nnn < d1; ++nnn)
             {
                 float acc = 0.0F;
-                for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
+                for (crd::u32 kk = 0; kk < d0; ++kk)
+                {
+                    acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+                }
                 h1[nnn] = crd::math::max(acc, 0.0F);
             }
             for (crd::u32 j = 0; j < d2; ++j)
             {
                 float acc = 0.0F;
-                for (crd::u32 nnn = 0; nnn < d1; ++nnn) { acc += h1[nnn] * w2_in[nnn * d2 + j]; }
+                for (crd::u32 nnn = 0; nnn < d1; ++nnn)
+                {
+                    acc += h1[nnn] * w2_in[nnn * d2 + j];
+                }
                 oracle[mm * d2 + j] = acc;
             }
         }
@@ -1917,7 +2440,11 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
 {
     crd::memory::GrowableTlsfAllocator devroot;
     crd::gpu::Dx12ComputeContext       compute(&devroot);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-26e-4 fusion differential"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-26e-4 fusion differential");
+        return;
+    }
 
     constexpr crd::u32 mrows = 4;
     constexpr crd::u32 d0    = 8;
@@ -1933,7 +2460,11 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1963,13 +2494,19 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
     REQUIRE(plan_u.stages.size() == 3U); // Gemm + VizDispatch(relu) + Gemm
     REQUIRE(plan_f.stages.size() == 2U); // GemmRelu + Gemm (N-1)
     bool has_gemmrelu = false;
-    for (crd::usize i = 0; i < plan_f.stages.size(); ++i) { has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu; }
+    for (crd::usize i = 0; i < plan_f.stages.size(); ++i)
+    {
+        has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu;
+    }
     REQUIRE(has_gemmrelu);
 
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan_f.buffers.size(); ++i)
     {
-        if (plan_f.buffers[i].role == ceg::BufferRole::Output) { out_val = plan_f.buffers[i].value; }
+        if (plan_f.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan_f.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
@@ -1980,9 +2517,18 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
 
     int neg_count = 0;
     for (crd::u32 mm = 0; mm < mrows; ++mm)
@@ -1990,8 +2536,14 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
         for (crd::u32 nnn = 0; nnn < d1; ++nnn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
-            if (acc < 0.0F) { ++neg_count; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+            }
+            if (acc < 0.0F)
+            {
+                ++neg_count;
+            }
         }
     }
     REQUIRE(neg_count > 0); // relu flips ≥1 element — the witness has teeth
@@ -2009,7 +2561,10 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < mrows * d2 && first_mismatch < 0; ++i)
     {
-        if (out_f[i] != out_u[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_f[i] != out_u[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -2029,7 +2584,11 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
 {
     crd::memory::GrowableTlsfAllocator devroot;
     crd::gpu::Dx12ComputeContext       compute(&devroot);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-27b two-schedule differential"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-27b two-schedule differential");
+        return;
+    }
 
     constexpr crd::u32 mrows = 4;
     constexpr crd::u32 d0    = 8;
@@ -2048,7 +2607,11 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     // ── the PAYLOAD: an fp32 2-layer MLP (x·W1 → relu → ·W2) ──
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2094,13 +2657,19 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     REQUIRE(plan_u.stages.size() == 3U); // no-fuse: Gemm + VizDispatch(relu) + Gemm
     REQUIRE(plan_f.stages.size() == 2U); // fuse: GemmRelu + Gemm
     bool has_gemmrelu = false;
-    for (crd::usize i = 0; i < plan_f.stages.size(); ++i) { has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu; }
+    for (crd::usize i = 0; i < plan_f.stages.size(); ++i)
+    {
+        has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu;
+    }
     REQUIRE(has_gemmrelu);
     const auto count_tenants = [](const ceg::TensorPipelinePlan& p) {
         crd::u32 n = 0;
         for (crd::usize i = 0; i < p.buffers.size(); ++i)
         {
-            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate) { ++n; }
+            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate)
+            {
+                ++n;
+            }
         }
         return n;
     };
@@ -2110,7 +2679,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan_f.buffers.size(); ++i)
     {
-        if (plan_f.buffers[i].role == ceg::BufferRole::Output) { out_val = plan_f.buffers[i].value; }
+        if (plan_f.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan_f.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
@@ -2120,17 +2692,32 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     int neg_count = 0;
     for (crd::u32 mm = 0; mm < mrows; ++mm)
     {
         for (crd::u32 nnn = 0; nnn < d1; ++nnn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
-            if (acc < 0.0F) { ++neg_count; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+            }
+            if (acc < 0.0F)
+            {
+                ++neg_count;
+            }
         }
     }
     REQUIRE(neg_count > 0); // relu flips ≥1 element — the differential has teeth
@@ -2149,7 +2736,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < mrows * d2 && first_mismatch < 0; ++i)
     {
-        if (out_f[i] != out_u[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_f[i] != out_u[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -2171,7 +2761,11 @@ TEST_CASE("ceir 25b-4a: a transpose+broadcast+elementwise chain runs device-resi
     (void)ce::tensor::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2195,14 +2789,27 @@ TEST_CASE("ceir 25b-4a: a transpose+broadcast+elementwise chain runs device-resi
     static float in0_data[6] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
     static float in1_data[3] = {10.0F, 20.0F, 30.0F};
     float              ref[6];
-    for (int r = 0; r < 3; ++r) { for (int cc = 0; cc < 2; ++cc) { ref[r * 2 + cc] = in0_data[cc * 3 + r] + in1_data[r]; } }
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int cc = 0; cc < 2; ++cc)
+        {
+            ref[r * 2 + cc] = in0_data[cc * 3 + r] + in1_data[r];
+        }
+    }
 
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-25b-4a chain gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-25b-4a chain gate");
+        return;
+    }
     const QuantSeed seeds[2] = {{in0, in0_data, nullptr, 6U}, {in1, in1_data, nullptr, 3U}};
     float           got[6]   = {};
     REQUIRE(run_quant_module(compute, ctx, &root, plan, seeds, 2U, ew->result(0U), got, 6U));
-    for (int i = 0; i < 6; ++i) { CHECK(got[i] == ref[i]); } // pure data-movement + add of exact f32 ⇒ EXACT
+    for (int i = 0; i < 6; ++i) // pure data-movement + add of exact f32 ⇒ EXACT
+    {
+        CHECK(got[i] == ref[i]);
+    }
 }
 
 // CEIR-25b-4b / 25c-2: the FD-witness functors SumGemmAA + MlpLoss are SHARED with the Vulkan pipeline TU — ONE definition in
@@ -2227,7 +2834,11 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
     (void)ce::tensor::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2265,25 +2876,44 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
     //    f(A)=sum(gemm(A,A)) — both f64, so the ANALYTIC ref is VALIDATED before it judges the device (never a hand-computed ref). ──
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     double av[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { av[i] = 0.4 + 0.17 * static_cast<double>(i) - 0.03 * static_cast<double>((i * 5) % 7); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        av[i] = 0.4 + 0.17 * static_cast<double>(i) - 0.03 * static_cast<double>((i * 5) % 7);
+    }
     double dc[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { dc[i] = 1.0; }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        dc[i] = 1.0;
+    }
     double ga[nn * nn];
     double gb[nn * nn];
     nnr::matmul_vjp(av, av, dc, ga, gb, nn, nn, nn);
     double ref[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { ref[i] = ga[i] + gb[i]; }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        ref[i] = ga[i] + gb[i];
+    }
     double g_fd[nn * nn];
     crd::hesap::autodiff::testing::grad_fd<nn * nn>(SumGemmAA{nn}, av, g_fd);
-    for (int i = 0; i < nn * nn; ++i) { CHECK(crd::math::abs(ref[i] - g_fd[i]) <= 1e-5 * (1.0 + crd::math::abs(ref[i]))); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        CHECK(crd::math::abs(ref[i] - g_fd[i]) <= 1e-5 * (1.0 + crd::math::abs(ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed A + the all-ones dLoss BY VALUE; the dead β=0 accumulators (carg + the two backward
     //    gemm C-operands) auto-zero (unseeded ExternalIn → zeros). Read back grads[0] (the plan's single Output). ──
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-25b-4b backward-pass gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-25b-4b backward-pass gate");
+        return;
+    }
 
     float av_f[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { av_f[i] = static_cast<float>(av[i]); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        av_f[i] = static_cast<float>(av[i]);
+    }
     float           ones[nn]       = {1.0F, 1.0F, 1.0F};
     const QuantSeed seeds[2]       = {{a, av_f, nullptr, static_cast<crd::u32>(nn * nn)}, {gr.seed, ones, nullptr, static_cast<crd::u32>(nn)}};
     float           got[nn * nn]   = {};
@@ -2312,7 +2942,11 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly dropped t
     (void)ce::compute::register_compute_ops(ctx); // compute.dispatch — the authored-kernel stage
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2372,17 +3006,28 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly dropped t
     double x_d[nel];
     double gy_d[nel];
     double gx_ref[nel];
-    for (crd::u32 i = 0; i < nel; ++i) { x_d[i] = static_cast<double>(x_f[i]); gy_d[i] = static_cast<double>(gy_f[i]); }
+    for (crd::u32 i = 0; i < nel; ++i)
+    {
+        x_d[i] = static_cast<double>(x_f[i]);
+        gy_d[i] = static_cast<double>(gy_f[i]);
+    }
     nnr::relu_vjp(x_d, gy_d, gx_ref, static_cast<int>(nel));
 
     // ── DEVICE (soft-skip with no adapter): seed x + gy BY VALUE; read back gx (the plan's single Output). ──
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-25c-1b relu_vjp gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-25c-1b relu_vjp gate");
+        return;
+    }
 
     const QuantSeed seeds[2] = {{x, x_f, nullptr, nel}, {gy, gy_f, nullptr, nel}};
     float           got[nel] = {};
     REQUIRE(run_quant_module(compute, ctx, &root, plan, seeds, 2U, gx, got, static_cast<crd::usize>(nel)));
-    for (crd::u32 i = 0; i < nel; ++i) { CHECK(got[i] == static_cast<float>(gx_ref[i])); } // pure select ⇒ EXACT
+    for (crd::u32 i = 0; i < nel; ++i) // pure select ⇒ EXACT
+    {
+        CHECK(got[i] == static_cast<float>(gx_ref[i]));
+    }
 }
 
 // CEIR-25c-2 (DX12 leg) — the §138 ML PROOF crown mirror: an ml.mlp(x[8,4], W1[4,4], W2[4,4]){relu} differentiated by vjp_mlp then
@@ -2403,7 +3048,11 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2446,14 +3095,26 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     double md[mrows * d2];
     for (int i = 0; i < mrows; ++i)
     {
-        for (int a = 0; a < d0; ++a) { xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0; } // [0.5, 1.0]
+        for (int a = 0; a < d0; ++a) // [0.5, 1.0]
+        {
+            xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0;
+        }
     }
     for (int a = 0; a < d0; ++a)
     {
-        for (int c = 0; c < d1; ++c) { w1d[a * d1 + c] = (c < 2 ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a)); }
+        for (int c = 0; c < d1; ++c)
+        {
+            w1d[a * d1 + c] = (c < 2 ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a));
+        }
     }
-    for (int i = 0; i < d1 * d2; ++i) { w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2; }
-    for (int i = 0; i < mrows * d2; ++i) { md[i] = 0.2 + 0.11 * static_cast<double>(i); }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2;
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        md[i] = 0.2 + 0.11 * static_cast<double>(i);
+    }
 
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     double z1[mrows * d1];
@@ -2468,7 +3129,10 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     {
         neg += z1[i] <= 0.0 ? 1 : 0;
         const double a = crd::math::abs(z1[i]);
-        if (a < minabs) { minabs = a; }
+        if (a < minabs)
+        {
+            minabs = a;
+        }
     }
     REQUIRE(neg > 0);
     REQUIRE(neg < mrows * d1);
@@ -2476,12 +3140,22 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     bool m_distinct = false;
     for (int i = 0; i < mrows * d2 && !m_distinct; ++i)
     {
-        for (int j = i + 1; j < mrows * d2; ++j) { if (md[i] != md[j]) { m_distinct = true; break; } }
+        for (int j = i + 1; j < mrows * d2; ++j)
+        {
+            if (md[i] != md[j])
+            {
+                m_distinct = true;
+                break;
+            }
+        }
     }
     REQUIRE(m_distinct);
 
     double dz2[mrows * d2];
-    for (int i = 0; i < mrows * d2; ++i) { dz2[i] = md[i]; }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        dz2[i] = md[i];
+    }
     double dh1[mrows * d1];
     double dw2ref[d1 * d2];
     nnr::matmul_vjp(h1, w2d, dz2, dh1, dw2ref, mrows, d1, d2);
@@ -2496,40 +3170,80 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     {
         for (int c = 0; c < d1; ++c)
         {
-            if (c >= 2) { CHECK(dw1ref[a * d1 + c] == 0.0); }
-            else { CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05); }
+            if (c >= 2)
+            {
+                CHECK(dw1ref[a * d1 + c] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05);
+            }
         }
     }
     for (int c = 0; c < d1; ++c)
     {
         for (int e = 0; e < d2; ++e)
         {
-            if (c >= 2) { CHECK(dw2ref[c * d2 + e] == 0.0); }
-            else { CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05); }
+            if (c >= 2)
+            {
+                CHECK(dw2ref[c * d2 + e] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05);
+            }
         }
     }
 
     constexpr int nw = d0 * d1 + d1 * d2;
     double        wflat[nw];
-    for (int i = 0; i < d0 * d1; ++i) { wflat[i] = w1d[i]; }
-    for (int i = 0; i < d1 * d2; ++i) { wflat[d0 * d1 + i] = w2d[i]; }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        wflat[i] = w1d[i];
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        wflat[d0 * d1 + i] = w2d[i];
+    }
     double gfd[nw];
     crd::hesap::autodiff::testing::grad_fd<nw>(MlpLoss{xd, md, mrows, d0, d1, d2}, wflat, gfd);
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed x, W1, W2, dLoss=M BY VALUE; read back BOTH dW1 + dW2 (via run_quant_module_n). ──
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-25c-2 MLP backward gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-25c-2 MLP backward gate");
+        return;
+    }
 
     float xf[mrows * d0];
     float w1f[d0 * d1];
     float w2f[d1 * d2];
     float mf[mrows * d2];
-    for (int i = 0; i < mrows * d0; ++i) { xf[i] = static_cast<float>(xd[i]); }
-    for (int i = 0; i < d0 * d1; ++i) { w1f[i] = static_cast<float>(w1d[i]); }
-    for (int i = 0; i < d1 * d2; ++i) { w2f[i] = static_cast<float>(w2d[i]); }
-    for (int i = 0; i < mrows * d2; ++i) { mf[i] = static_cast<float>(md[i]); }
+    for (int i = 0; i < mrows * d0; ++i)
+    {
+        xf[i] = static_cast<float>(xd[i]);
+    }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        w1f[i] = static_cast<float>(w1d[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2f[i] = static_cast<float>(w2d[i]);
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        mf[i] = static_cast<float>(md[i]);
+    }
     const QuantSeed seeds[4]        = {{xin, xf, nullptr, mrows * d0}, {w1, w1f, nullptr, d0 * d1},
                                        {w2, w2f, nullptr, d1 * d2}, {gr.seed, mf, nullptr, mrows * d2}};
     float           dw1got[d0 * d1] = {};
@@ -2537,8 +3251,14 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     const QuantOut  outs[2]         = {{grads[0], dw1got, static_cast<crd::usize>(d0 * d1)},
                                        {grads[1], dw2got, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan, seeds, 4U, outs, 2U));
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── CEIR-26a-3 DCE DIFFERENTIAL (leg (b), DX12 mirror of the Vulkan leg): for a SEMANTICS-PRESERVING pass the reference is the RAW
     //    program's OWN device output, BIT-EXACT (not hesap-within-tol). PIN the readback gradients (func.return roots them — readback-by-
@@ -2558,10 +3278,22 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     const QuantOut outs_dce[2]         = {{grads[0], dw1got_dce, static_cast<crd::usize>(d0 * d1)},
                                           {grads[1], dw2got_dce, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan_dce, seeds, 4U, outs_dce, 2U)); // SAME seeds — every input Value survives DCE
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(dw1got_dce[i] == dw1got[i]); } // BIT-EXACT vs the raw device output — DCE touched nothing observable
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(dw2got_dce[i] == dw2got[i]); }
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got_dce[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got_dce[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i) // BIT-EXACT vs the raw device output — DCE touched nothing observable
+    {
+        CHECK(dw1got_dce[i] == dw1got[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(dw2got_dce[i] == dw2got[i]);
+    }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got_dce[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got_dce[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 }
 
 // CEIR-26d-4c (DX12 leg) — the vjp shape-specialization PROVING gate MIRROR: the SAME vjp_mlp backward as the Vulkan 26d-4b but on
@@ -2584,7 +3316,11 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2627,14 +3363,26 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     double md[mrows * d2];
     for (int i = 0; i < mrows; ++i)
     {
-        for (int a = 0; a < d0; ++a) { xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0; } // [0.5, 1.0]
+        for (int a = 0; a < d0; ++a) // [0.5, 1.0]
+        {
+            xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0;
+        }
     }
     for (int a = 0; a < d0; ++a)
     {
-        for (int c = 0; c < d1; ++c) { w1d[a * d1 + c] = (c < dhalf ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a)); }
+        for (int c = 0; c < d1; ++c)
+        {
+            w1d[a * d1 + c] = (c < dhalf ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a));
+        }
     }
-    for (int i = 0; i < d1 * d2; ++i) { w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2; }
-    for (int i = 0; i < mrows * d2; ++i) { md[i] = 0.2 + 0.11 * static_cast<double>(i); }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2;
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        md[i] = 0.2 + 0.11 * static_cast<double>(i);
+    }
 
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     double z1[mrows * d1];
@@ -2649,14 +3397,20 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     {
         neg += z1[i] <= 0.0 ? 1 : 0;
         const double a = crd::math::abs(z1[i]);
-        if (a < minabs) { minabs = a; }
+        if (a < minabs)
+        {
+            minabs = a;
+        }
     }
     REQUIRE(neg > 0);
     REQUIRE(neg < mrows * d1);
     REQUIRE(minabs > 0.05);
 
     double dz2[mrows * d2];
-    for (int i = 0; i < mrows * d2; ++i) { dz2[i] = md[i]; }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        dz2[i] = md[i];
+    }
     double dh1[mrows * d1];
     double dw2ref[d1 * d2];
     nnr::matmul_vjp(h1, w2d, dz2, dh1, dw2ref, mrows, d1, d2);
@@ -2671,40 +3425,80 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     {
         for (int c = 0; c < d1; ++c)
         {
-            if (c >= dhalf) { CHECK(dw1ref[a * d1 + c] == 0.0); }
-            else { CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05); }
+            if (c >= dhalf)
+            {
+                CHECK(dw1ref[a * d1 + c] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05);
+            }
         }
     }
     for (int c = 0; c < d1; ++c)
     {
         for (int e = 0; e < d2; ++e)
         {
-            if (c >= dhalf) { CHECK(dw2ref[c * d2 + e] == 0.0); }
-            else { CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05); }
+            if (c >= dhalf)
+            {
+                CHECK(dw2ref[c * d2 + e] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05);
+            }
         }
     }
 
     constexpr int nw = d0 * d1 + d1 * d2;
     double        wflat[nw];
-    for (int i = 0; i < d0 * d1; ++i) { wflat[i] = w1d[i]; }
-    for (int i = 0; i < d1 * d2; ++i) { wflat[d0 * d1 + i] = w2d[i]; }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        wflat[i] = w1d[i];
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        wflat[d0 * d1 + i] = w2d[i];
+    }
     double gfd[nw];
     crd::hesap::autodiff::testing::grad_fd<nw>(MlpLoss{xd, md, mrows, d0, d1, d2}, wflat, gfd);
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed x, W1, W2, dLoss=M BY VALUE; read back BOTH dW1 + dW2. ──
     crd::gpu::Dx12ComputeContext compute(&root);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-26d-4c non-32 vjp gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-26d-4c non-32 vjp gate");
+        return;
+    }
 
     float xf[mrows * d0];
     float w1f[d0 * d1];
     float w2f[d1 * d2];
     float mf[mrows * d2];
-    for (int i = 0; i < mrows * d0; ++i) { xf[i] = static_cast<float>(xd[i]); }
-    for (int i = 0; i < d0 * d1; ++i) { w1f[i] = static_cast<float>(w1d[i]); }
-    for (int i = 0; i < d1 * d2; ++i) { w2f[i] = static_cast<float>(w2d[i]); }
-    for (int i = 0; i < mrows * d2; ++i) { mf[i] = static_cast<float>(md[i]); }
+    for (int i = 0; i < mrows * d0; ++i)
+    {
+        xf[i] = static_cast<float>(xd[i]);
+    }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        w1f[i] = static_cast<float>(w1d[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2f[i] = static_cast<float>(w2d[i]);
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        mf[i] = static_cast<float>(md[i]);
+    }
     const QuantSeed seeds[4]        = {{xin, xf, nullptr, mrows * d0}, {w1, w1f, nullptr, d0 * d1},
                                        {w2, w2f, nullptr, d1 * d2}, {gr.seed, mf, nullptr, mrows * d2}};
     float           dw1got[d0 * d1] = {};
@@ -2712,8 +3506,14 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     const QuantOut  outs[2]         = {{grads[0], dw1got, static_cast<crd::usize>(d0 * d1)},
                                        {grads[1], dw2got, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan, seeds, 4U, outs, 2U));
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 }
 
 // CEIR-26b-2c (DX12) — the DirectX-12 leg of the canonicalize reshape-fold BIT-EXACT differential (26b-2 -> COMPLETE). Mirrors
@@ -2733,7 +3533,11 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
 
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2782,7 +3586,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         for (int j = 0; j < kSide; ++j)
         {
             crd::f64 acc = 0.0;
-            for (int k = 0; k < kSide; ++k) { acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]); }
+            for (int k = 0; k < kSide; ++k)
+            {
+                acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]);
+            }
             dref[i * kSide + j] = acc;
         }
     }
@@ -2792,7 +3599,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     for (int kk = 0; kk < kL; ++kk)
     {
         crd::f64 fr = 0.0;
-        for (int l = 0; l < kL; ++l) { fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL)); }
+        for (int l = 0; l < kL; ++l)
+        {
+            fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL));
+        }
         s_ref += fr;
         const crd::f64 am = fr < 0.0 ? -fr : fr;
         maxmag            = maxmag > am ? maxmag : am;
@@ -2800,7 +3610,11 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
 
     // device soft-skip.
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device -- skipping the CEIR-26b-2c reshape-fold differential"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device -- skipping the CEIR-26b-2c reshape-fold differential");
+        return;
+    }
 
     // the runner: the DX12 portable dev/up/rb materialization (Alias shares dev; ExternalIn uploaded a/b + fft twiddles; the
     // Output read back via a dedicated rb copy), execute as ONE submit, return the reduce scalar.
@@ -2816,14 +3630,24 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         int      fftn = 0;
         for (crd::usize s = 0; s < plan.stages.size(); ++s)
         {
-            if (plan.stages[s].kind != ceg::StageKind::Fft) { continue; }
+            if (plan.stages[s].kind != ceg::StageKind::Fft)
+            {
+                continue;
+            }
             twr  = plan.stages[s].bind[2];
             twi  = plan.stages[s].bind[3];
             fftn = static_cast<int>(plan.buffers[static_cast<crd::usize>(twr)].bytes / 4ULL) * 2;
         }
         crd::i32 out_idx = -1;
         int      n_out   = 0;
-        for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_idx = static_cast<crd::i32>(i); ++n_out; } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].role == ceg::BufferRole::Output)
+            {
+                out_idx = static_cast<crd::i32>(i);
+                ++n_out;
+            }
+        }
         REQUIRE(out_idx >= 0);
         REQUIRE(n_out == 1); // exactly ONE Output (the rank-0 reduce) — a 2nd would make bit-exact compare the wrong scalar to itself
         std::unique_ptr<g::ComputeBuffer> dev[40];
@@ -2832,20 +3656,57 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         for (crd::usize i = 0; i < nb; ++i)
         {
             const ceg::PlanBuffer& pb = plan.buffers[i];
-            if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+            if (pb.role == ceg::BufferRole::Alias)
+            {
+                bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+                continue;
+            }
             dev[i] = compute.create_buffer(pb.bytes, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
             REQUIRE(dev[i] != nullptr);
             bufs[i] = dev[i].get();
-            if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+            if (pb.role != ceg::BufferRole::ExternalIn)
+            {
+                continue;
+            }
             up[i] = compute.create_buffer(pb.bytes, transfer_src, g::ComputeMemory::CpuToGpu);
             REQUIRE(up[i] != nullptr);
             auto*          dst = static_cast<float*>(up[i]->map());
             const crd::u64 cnt = pb.bytes / 4ULL;
-            if (pb.value == a_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-            else if (pb.value == b_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-            else if (static_cast<crd::i32>(i) == twr) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = static_cast<float>(crd::math::cos(two_pi * static_cast<crd::f64>(e) / static_cast<crd::f64>(fftn))); } }
-            else if (static_cast<crd::i32>(i) == twi) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = static_cast<float>(-crd::math::sin(two_pi * static_cast<crd::f64>(e) / static_cast<crd::f64>(fftn))); } }
-            else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } }
+            if (pb.value == a_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = a_data[e];
+                }
+            }
+            else if (pb.value == b_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = b_data[e];
+                }
+            }
+            else if (static_cast<crd::i32>(i) == twr)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = static_cast<float>(crd::math::cos(two_pi * static_cast<crd::f64>(e) / static_cast<crd::f64>(fftn)));
+                }
+            }
+            else if (static_cast<crd::i32>(i) == twi)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = static_cast<float>(-crd::math::sin(two_pi * static_cast<crd::f64>(e) / static_cast<crd::f64>(fftn)));
+                }
+            }
+            else
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = 0.0F;
+                }
+            }
             up[i]->unmap();
         }
         auto rb = compute.create_buffer(plan.buffers[static_cast<crd::usize>(out_idx)].bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
@@ -2855,8 +3716,20 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         res.alloc     = &alloc;
         res.compute   = &compute;
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+            }
+        }
         const ceg::ExecuteError ee = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                                   crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb));
         REQUIRE(ee == ceg::ExecuteError::None);
@@ -2877,7 +3750,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     int raw_alias = 0;
     for (crd::usize i = 0; i < raw_plan.buffers.size(); ++i)
     {
-        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias) { continue; }
+        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias)
+        {
+            continue;
+        }
         ++raw_alias;
         // the runner's one-level bufs[i]=bufs[alias_of] resolves the r_out->r_in->gemm chain transitively ONLY because plan
         // buffers are walk-ordered producer-first (alias_of < i). GATE it: a reorder would silently null-deref the raw run.
@@ -2898,7 +3774,13 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     REQUIRE(opt_plan.reject == ceg::PlanReject::None);
     REQUIRE(opt_plan.stages.size() == 3U);
     int opt_alias = 0;
-    for (crd::usize i = 0; i < opt_plan.buffers.size(); ++i) { if (opt_plan.buffers[i].role == ceg::BufferRole::Alias) { ++opt_alias; } }
+    for (crd::usize i = 0; i < opt_plan.buffers.size(); ++i)
+    {
+        if (opt_plan.buffers[i].role == ceg::BufferRole::Alias)
+        {
+            ++opt_alias;
+        }
+    }
     CHECK(opt_alias == 1); // 2 -> 1
     const float opt_s = run(opt_plan);
 
@@ -2931,7 +3813,11 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
 
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2982,7 +3868,10 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         for (int j = 0; j < kSide; ++j)
         {
             crd::f64 acc = 0.0;
-            for (int kk = 0; kk < kSide; ++kk) { acc += static_cast<crd::f64>(a_data[i * kSide + kk]) * static_cast<crd::f64>(b_data[kk * kSide + j]); }
+            for (int kk = 0; kk < kSide; ++kk)
+            {
+                acc += static_cast<crd::f64>(a_data[i * kSide + kk]) * static_cast<crd::f64>(b_data[kk * kSide + j]);
+            }
             max_ref = max_ref > acc ? max_ref : acc;
             sum_ref += acc;
         }
@@ -2992,7 +3881,11 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
 
     // device soft-skip.
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device -- skipping the CEIR-26c-2c duplicate-gemm differential"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device -- skipping the CEIR-26c-2c duplicate-gemm differential");
+        return;
+    }
 
     // the runner: DX12 portable dev/up/rb; both reduce outputs read back via a FRESH rb + copy each (BY OP IDENTITY ra=max, rb=sum).
     const auto run = [&](const ceg::TensorPipelinePlan& plan, float* out_max, float* out_sum) {
@@ -3006,9 +3899,18 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         crd::i32 sum_idx = -1;
         for (crd::usize s = 0; s < plan.stages.size(); ++s)
         {
-            if (plan.stages[s].kind != ceg::StageKind::Reduce) { continue; }
-            if (plan.stages[s].op == ra) { max_idx = plan.stages[s].bind[1]; }
-            else if (plan.stages[s].op == rb) { sum_idx = plan.stages[s].bind[1]; }
+            if (plan.stages[s].kind != ceg::StageKind::Reduce)
+            {
+                continue;
+            }
+            if (plan.stages[s].op == ra)
+            {
+                max_idx = plan.stages[s].bind[1];
+            }
+            else if (plan.stages[s].op == rb)
+            {
+                sum_idx = plan.stages[s].bind[1];
+            }
         }
         REQUIRE(max_idx >= 0);
         REQUIRE(sum_idx >= 0);
@@ -3019,18 +3921,43 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         for (crd::usize i = 0; i < nb; ++i)
         {
             const ceg::PlanBuffer& pb = plan.buffers[i];
-            if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+            if (pb.role == ceg::BufferRole::Alias)
+            {
+                bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+                continue;
+            }
             dev[i] = compute.create_buffer(pb.bytes, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
             REQUIRE(dev[i] != nullptr);
             bufs[i] = dev[i].get();
-            if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+            if (pb.role != ceg::BufferRole::ExternalIn)
+            {
+                continue;
+            }
             up[i] = compute.create_buffer(pb.bytes, transfer_src, g::ComputeMemory::CpuToGpu);
             REQUIRE(up[i] != nullptr);
             auto*          dst = static_cast<float*>(up[i]->map());
             const crd::u64 cnt = pb.bytes / 4ULL;
-            if (pb.value == a_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-            else if (pb.value == b_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-            else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } }
+            if (pb.value == a_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = a_data[e];
+                }
+            }
+            else if (pb.value == b_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = b_data[e];
+                }
+            }
+            else
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = 0.0F;
+                }
+            }
             up[i]->unmap();
         }
         auto rb_max = compute.create_buffer(plan.buffers[static_cast<crd::usize>(max_idx)].bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
@@ -3042,8 +3969,20 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         res.alloc     = &alloc;
         res.compute   = &compute;
         auto& rec = compute.begin();
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes); } }
-        for (crd::usize i = 0; i < nb; ++i) { if (up[i] != nullptr) { rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead); } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.copy(*up[i], *dev[i], 0U, 0U, plan.buffers[i].bytes);
+            }
+        }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (up[i] != nullptr)
+            {
+                rec.barrier(*dev[i], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+            }
+        }
         const ceg::ExecuteError ee = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                                   crd::containers::ConstSpan<g::ComputeBuffer*>(bufs, nb));
         REQUIRE(ee == ceg::ExecuteError::None);
@@ -3070,16 +4009,28 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     crd::i32 raw_g_b = -1;
     for (crd::usize s = 0; s < raw_plan.stages.size(); ++s)
     {
-        if (raw_plan.stages[s].kind != ceg::StageKind::Gemm) { continue; }
-        if (raw_g_a < 0) { raw_g_a = raw_plan.stages[s].bind[2]; }
-        else { raw_g_b = raw_plan.stages[s].bind[2]; }
+        if (raw_plan.stages[s].kind != ceg::StageKind::Gemm)
+        {
+            continue;
+        }
+        if (raw_g_a < 0)
+        {
+            raw_g_a = raw_plan.stages[s].bind[2];
+        }
+        else
+        {
+            raw_g_b = raw_plan.stages[s].bind[2];
+        }
     }
     REQUIRE(raw_g_a >= 0);
     REQUIRE(raw_g_b >= 0);
     REQUIRE(raw_g_a != raw_g_b);
     for (crd::usize i = 0; i < raw_plan.buffers.size(); ++i)
     {
-        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias) { continue; }
+        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias)
+        {
+            continue;
+        }
         REQUIRE(raw_plan.buffers[i].alias_of >= 0);
         REQUIRE(static_cast<crd::usize>(raw_plan.buffers[i].alias_of) < i); // producer-first (one-level alias resolution)
     }
@@ -3102,7 +4053,10 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     REQUIRE(opt_plan.reject == ceg::PlanReject::None);
     REQUIRE(opt_plan.stages.size() == 3U);
     int opt_gemm = 0;
-    for (crd::usize s = 0; s < opt_plan.stages.size(); ++s) { opt_gemm += opt_plan.stages[s].kind == ceg::StageKind::Gemm ? 1 : 0; }
+    for (crd::usize s = 0; s < opt_plan.stages.size(); ++s)
+    {
+        opt_gemm += opt_plan.stages[s].kind == ceg::StageKind::Gemm ? 1 : 0;
+    }
     REQUIRE(opt_gemm == 1);
     // wiring + the gemm operand value-identity (the check that caught the merged-declare bug on Vulkan).
     crd::i32 o_gemm  = -1;
@@ -3112,10 +4066,24 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     crd::i32 o_sumin = -1;
     for (crd::usize s = 0; s < opt_plan.stages.size(); ++s)
     {
-        if (opt_plan.stages[s].kind == ceg::StageKind::Gemm) { o_ga = opt_plan.stages[s].bind[0]; o_gb = opt_plan.stages[s].bind[1]; o_gemm = opt_plan.stages[s].bind[2]; }
-        if (opt_plan.stages[s].kind != ceg::StageKind::Reduce) { continue; }
-        if (opt_plan.stages[s].op == ra) { o_maxin = opt_plan.stages[s].bind[0]; }
-        else if (opt_plan.stages[s].op == rb) { o_sumin = opt_plan.stages[s].bind[0]; }
+        if (opt_plan.stages[s].kind == ceg::StageKind::Gemm)
+        {
+            o_ga = opt_plan.stages[s].bind[0];
+            o_gb = opt_plan.stages[s].bind[1];
+            o_gemm = opt_plan.stages[s].bind[2];
+        }
+        if (opt_plan.stages[s].kind != ceg::StageKind::Reduce)
+        {
+            continue;
+        }
+        if (opt_plan.stages[s].op == ra)
+        {
+            o_maxin = opt_plan.stages[s].bind[0];
+        }
+        else if (opt_plan.stages[s].op == rb)
+        {
+            o_sumin = opt_plan.stages[s].bind[0];
+        }
     }
     REQUIRE(o_maxin >= 0);
     REQUIRE(o_sumin >= 0);
@@ -3153,9 +4121,17 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
 {
     crd::memory::GrowableTlsfAllocator devroot;
     crd::gpu::Dx12ComputeContext       compute(&devroot);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-28d autotuner measurer"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-28d autotuner measurer");
+        return;
+    }
     auto gpuctx = crd::gpu::create_dx12_gpu_context(); // the adapter NAME lives on the gpu context (mirrors Vk reading it off VulkanGpuContext)
-    if (gpuctx == nullptr) { WARN("no D3D12 gpu context — skipping the CEIR-28d device key"); return; }
+    if (gpuctx == nullptr)
+    {
+        WARN("no D3D12 gpu context — skipping the CEIR-28d device key");
+        return;
+    }
 
     constexpr crd::u32 mrows = 4;
     constexpr crd::u32 d0    = 8;
@@ -3174,7 +4150,11 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
     // ── the PAYLOAD: the 26e-3b fp32 2-layer MLP (x·W1 → relu → ·W2) ──
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3194,7 +4174,13 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
     const ceg::TensorPipelinePlan plan0 = ceg::plan_tensor_pipeline(ctx, *m, &root, def_opts);
     REQUIRE(plan0.reject == ceg::PlanReject::None);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < plan0.buffers.size(); ++i) { if (plan0.buffers[i].role == ceg::BufferRole::Output) { out_val = plan0.buffers[i].value; } }
+    for (crd::usize i = 0; i < plan0.buffers.size(); ++i)
+    {
+        if (plan0.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan0.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -3205,9 +4191,18 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed seeds[3] = {{x_val, x_in.data(), nullptr, mrows * d0},
                                 {w1_val, w1_in.data(), nullptr, d0 * d1},
                                 {w2_val, w2_in.data(), nullptr, d1 * d2}};
@@ -3255,7 +4250,13 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
     out_r.resize(out_len, 0.0F);
     REQUIRE(run_quant_module(compute, ctx, &root, plan_r, seeds, 3U, out_val, out_r.data(), out_len));
     int replay_mismatch = -1;
-    for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i) { if (out_r[i] != out0[i]) { replay_mismatch = static_cast<int>(i); } }
+    for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i)
+    {
+        if (out_r[i] != out0[i])
+        {
+            replay_mismatch = static_cast<int>(i);
+        }
+    }
     CAPTURE(replay_mismatch);
     CHECK(replay_mismatch == -1);
 
@@ -3275,9 +4276,17 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
 {
     crd::memory::GrowableTlsfAllocator devroot;
     crd::gpu::Dx12ComputeContext       compute(&devroot);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-28z-2 DX12 committed-cache anti-drift"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-28z-2 DX12 committed-cache anti-drift");
+        return;
+    }
     auto gpuctx = crd::gpu::create_dx12_gpu_context();
-    if (gpuctx == nullptr) { WARN("no D3D12 gpu context — skipping the CEIR-28z-2 device key"); return; }
+    if (gpuctx == nullptr)
+    {
+        WARN("no D3D12 gpu context — skipping the CEIR-28z-2 device key");
+        return;
+    }
 
     constexpr crd::u32 mrows = 4;
     constexpr crd::u32 d0    = 8;
@@ -3295,7 +4304,11 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
 
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3315,7 +4328,13 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
     const ceg::TensorPipelinePlan plan0 = ceg::plan_tensor_pipeline(ctx, *m, &root, def_opts);
     REQUIRE(plan0.reject == ceg::PlanReject::None);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < plan0.buffers.size(); ++i) { if (plan0.buffers[i].role == ceg::BufferRole::Output) { out_val = plan0.buffers[i].value; } }
+    for (crd::usize i = 0; i < plan0.buffers.size(); ++i)
+    {
+        if (plan0.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan0.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -3325,9 +4344,18 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed seeds[3] = {{x_val, x_in.data(), nullptr, mrows * d0},
                                 {w1_val, w1_in.data(), nullptr, d0 * d1},
                                 {w2_val, w2_in.data(), nullptr, d1 * d2}};
@@ -3382,7 +4410,13 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
 
     // ── find THIS device's row (dx12:RTX on this box) → anti-drift + replay ──
     int mi = -1;
-    for (crd::u32 i = 0; i < n_rows; ++i) { if (entries[i].device == device && entries[i].env == env) { mi = static_cast<int>(i); } }
+    for (crd::u32 i = 0; i < n_rows; ++i)
+    {
+        if (entries[i].device == device && entries[i].env == env)
+        {
+            mi = static_cast<int>(i);
+        }
+    }
     if (mi >= 0)
     {
         const ce::tune::TuneEntry& row = entries[static_cast<crd::usize>(mi)];
@@ -3409,7 +4443,13 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
         out_r.resize(out_len, 0.0F);
         REQUIRE(run_quant_module(compute, ctx, &root, plan_r, seeds, 3U, out_val, out_r.data(), out_len));
         int replay_mismatch = -1;
-        for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i) { if (out_r[i] != out0[i]) { replay_mismatch = static_cast<int>(i); } }
+        for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i)
+        {
+            if (out_r[i] != out0[i])
+            {
+                replay_mismatch = static_cast<int>(i);
+            }
+        }
         CAPTURE(replay_mismatch);
         CHECK(replay_mismatch == -1);
     }

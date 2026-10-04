@@ -88,7 +88,10 @@ crd::u64 tnumel(ce::Context& c, ce::TypeId t)
 {
     const ce::Type sh = c.type_of(c.type_of(t).members[1]);
     crd::u64       n  = 1;
-    for (crd::usize i = 0; i < sh.members.size(); ++i) { n *= c.type_of(sh.members[i]).count; }
+    for (crd::usize i = 0; i < sh.members.size(); ++i)
+    {
+        n *= c.type_of(sh.members[i]).count;
+    }
     return n;
 }
 
@@ -106,7 +109,10 @@ struct Resolver
 crd::u32 const_grid(ce::Context& c, const ce::Value* v)
 {
     const ce::Operation* const d = v->defining_op();
-    if (d == nullptr) { return 1U; }
+    if (d == nullptr)
+    {
+        return 1U;
+    }
     const ce::AttrValue av = c.attr_value(d->attr(crd::containers::StringView("value")));
     return av.i > 0 ? static_cast<crd::u32>(av.i) : 1U;
 }
@@ -119,15 +125,24 @@ crd::u32 const_grid(ce::Context& c, const ce::Value* v)
 bool load_emit_ckir(const char* path, kir::KGraph& g, kir::GlslKernel& kern, crd::memory::IAllocator* alloc, crd::u32 local_size_x = 0U)
 {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.good()) { return false; }
+    if (!f.good())
+    {
+        return false;
+    }
     const std::streamsize sz = f.tellg();
     f.seekg(0);
     crd::containers::Array<char> src(alloc);
     src.resize(static_cast<crd::usize>(sz), '\0');
     f.read(src.data(), sz);
     kir::KEntry ke;
-    if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ke).ok) { return false; }
-    if (local_size_x != 0U) { ke.local_size[0] = local_size_x; }
+    if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ke).ok)
+    {
+        return false;
+    }
+    if (local_size_x != 0U)
+    {
+        ke.local_size[0] = local_size_x;
+    }
     return kir::emit_compute_kernel_glsl(g, ke, alloc, kern);
 }
 
@@ -147,7 +162,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
         //    emit_contract_glsl UNWRAPS to `max(acc, 0.0)`); the push blob {M,K,N,1} + grid M·N + nbind 3 are IDENTICAL by construction.
         const ceg::GemmEpilogue ep = st.kind == ceg::StageKind::GemmRelu ? ceg::GemmEpilogue::Relu : ceg::GemmEpilogue::None;
         const ceg::GraphSynth   s  = ceg::synth_gemm(c, *st.op, g, ep);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_glsl(g, s.output, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_contract_glsl(g, s.output, kern))
+        {
+            return rs;
+        }
         const crd::u32 m = dim_ext(c, st.op->operand(0U)->type(), 0U);
         const crd::u32 k = dim_ext(c, st.op->operand(0U)->type(), 1U);
         const crd::u32 nn = dim_ext(c, st.op->operand(1U)->type(), 1U);
@@ -160,7 +178,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Fft)
     {
         const ceg::FftSynth s = ceg::synth_fft(c, *st.op, g);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_compute_kernel_glsl(g, s.plan.entry, res.alloc, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_compute_kernel_glsl(g, s.plan.entry, res.alloc, kern))
+        {
+            return rs;
+        }
         rs.gx    = 1U; // one workgroup (local_size = n/2)
         pushsize = 0U;
         nbind    = 6;
@@ -168,7 +189,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Reduce)
     {
         const ceg::GraphSynth s = ceg::synth_reduce(c, *st.op, g);
-        if (s.reject != ceg::SynthReject::None || !kir::emit_reduce_glsl(g, s.output, kern)) { return rs; }
+        if (s.reject != ceg::SynthReject::None || !kir::emit_reduce_glsl(g, s.output, kern))
+        {
+            return rs;
+        }
         const crd::u64 in_n  = tnumel(c, st.op->operand(0U)->type());
         const crd::u64 out_n = tnumel(c, st.op->result(0U)->type());
         const crd::u32 pc[4] = {static_cast<crd::u32>(out_n), static_cast<crd::u32>(in_n / (out_n == 0U ? 1U : out_n)), 0U, 0U};
@@ -180,7 +204,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::QuantGemm)
     {
         // the FUSED symmetric per-tensor dequant-gemm kernel (CEIR-23b-2c); 1 workgroup of M*N threads, 4 binds {A,W_q8,scale,D}.
-        if (!load_emit_ckir(CRD_REPO_DIR "/assets/ckir/quant_gemm_q8.ckir", g, kern, res.alloc)) { return rs; }
+        if (!load_emit_ckir(CRD_REPO_DIR "/assets/ckir/quant_gemm_q8.ckir", g, kern, res.alloc))
+        {
+            return rs;
+        }
         rs.gx    = 1U;
         pushsize = 0U;
         nbind    = static_cast<int>(st.nbind); // 4
@@ -188,7 +215,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     else if (st.kind == ceg::StageKind::Dequant)
     {
         // the UNFUSED symmetric dequant kernel (CEIR-23b-2a); 1 workgroup of K*N threads, 3 binds {W_q8,scale,out}.
-        if (!load_emit_ckir(CRD_REPO_DIR "/assets/ckir/quant_dequantize_q8_sym.ckir", g, kern, res.alloc)) { return rs; }
+        if (!load_emit_ckir(CRD_REPO_DIR "/assets/ckir/quant_dequantize_q8_sym.ckir", g, kern, res.alloc))
+        {
+            return rs;
+        }
         rs.gx    = 1U;
         pushsize = 0U;
         nbind    = static_cast<int>(st.nbind); // 3
@@ -213,7 +243,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const ceg::GraphSynth s = ceg::synth_elementwise(c, *st.op, g);
             ok = s.reject == ceg::SynthReject::None && kir::emit_elementwise_glsl(g, s.output, res.alloc, kern); // fused emitter needs scratch
         }
-        if (!ok) { return rs; }
+        if (!ok)
+        {
+            return rs;
+        }
         const crd::u64 out_n  = tnumel(c, st.op->result(0U)->type());
         const crd::u32 pc[4]  = {static_cast<crd::u32>(out_n), 0U, 0U, 0U};
         std::memcpy(rs.push, pc, sizeof(pc));
@@ -225,22 +258,46 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
     {    // emit_compute_kernel_glsl; the grid is the asset's OWN arith.const operands (the asset-drives-it rule, not numel).
         const ce::AttrValue kv   = c.attr_value(st.op->attr(crd::containers::StringView("kernel")));
         const char*         path = nullptr;
-        if (kv.s == crd::containers::StringView("viz_magnitude")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir"; }
-        else if (kv.s == crd::containers::StringView("viz_normalize")) { path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir"; }
-        else if (kv.s == crd::containers::StringView("relu")) { path = CRD_REPO_DIR "/assets/ckir/relu.ckir"; } // CEIR-23c MLP activation
-        else if (kv.s == crd::containers::StringView("relu_vjp")) { path = CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir"; } // CEIR-25c MLP-backward relu VJP
+        if (kv.s == crd::containers::StringView("viz_magnitude"))
+        {
+            path = CRD_REPO_DIR "/assets/ckir/tensor_viz_magnitude.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("viz_normalize"))
+        {
+            path = CRD_REPO_DIR "/assets/ckir/tensor_viz_normalize.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("relu")) // CEIR-23c MLP activation
+        {
+            path = CRD_REPO_DIR "/assets/ckir/relu.ckir";
+        }
+        else if (kv.s == crd::containers::StringView("relu_vjp")) // CEIR-25c MLP-backward relu VJP
+        {
+            path = CRD_REPO_DIR "/assets/ckir/relu_vjp.ckir";
+        }
         // CEIR-26d-3: the @transpose baked dispatch is RETIRED — attention's Kᵀ is now the shape-generic tensor.transpose (synth).
-        else if (kv.s == crd::containers::StringView("softmax")) { path = CRD_REPO_DIR "/assets/ckir/softmax.ckir"; } // CEIR-24b attention softmax
-        if (path == nullptr) { return rs; }
+        else if (kv.s == crd::containers::StringView("softmax")) // CEIR-24b attention softmax
+        {
+            path = CRD_REPO_DIR "/assets/ckir/softmax.ckir";
+        }
+        if (path == nullptr)
+        {
+            return rs;
+        }
         std::ifstream f(path, std::ios::binary | std::ios::ate);
-        if (!f.good()) { return rs; }
+        if (!f.good())
+        {
+            return rs;
+        }
         const std::streamsize sz = f.tellg();
         f.seekg(0);
         crd::containers::Array<char> src(res.alloc);
         src.resize(static_cast<crd::usize>(sz), '\0');
         f.read(src.data(), sz);
         kir::KEntry ve;
-        if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ve).ok) { return rs; }
+        if (!kir::ckir_read(crd::containers::StringView(src.data(), static_cast<crd::usize>(sz)), g, ve).ok)
+        {
+            return rs;
+        }
         // CEIR-26d cook-time kernel-shape specialization (per-kernel, keyed by symbol — the 20b binding-table precedent):
         if (kv.s == crd::containers::StringView("softmax"))
         {
@@ -252,7 +309,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const crd::u32              wop = 3U + st.nbind - st.n_out; // probs [Sq, Sk]
             const ceg::KernelShapeError kse = ceg::bind_authored_local_size(
                 ve.local_size[0], dim_ext(c, st.op->operand(wop)->type(), 0U), ceg::kMaxAuthoredLocalSize); // Sq (one lane per row), capped
-            if (kse != ceg::KernelShapeError::None) { return rs; }
+            if (kse != ceg::KernelShapeError::None)
+            {
+                return rs;
+            }
             (void)g.set_spec_const(0U, static_cast<crd::f64>(dim_ext(c, st.op->operand(wop)->type(), 1U))); // Sk
         }
         else if (st.n_out >= 1U)
@@ -262,9 +322,15 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
             const crd::u32              wop = 3U + st.nbind - st.n_out; // first trailing-write operand (grid 0..2, then binds)
             const ceg::KernelShapeError kse = ceg::bind_authored_local_size(
                 ve.local_size[0], tnumel(c, st.op->operand(wop)->type()), ceg::kMaxAuthoredLocalSize);
-            if (kse != ceg::KernelShapeError::None) { return rs; } // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            if (kse != ceg::KernelShapeError::None) // unbound / exceeds the single-workgroup cap ⇒ UnresolvedKernel
+            {
+                return rs;
+            }
         }
-        if (!kir::emit_compute_kernel_glsl(g, ve, res.alloc, kern)) { return rs; }
+        if (!kir::emit_compute_kernel_glsl(g, ve, res.alloc, kern))
+        {
+            return rs;
+        }
         rs.gx    = const_grid(c, st.op->operand(0U));
         rs.gy    = const_grid(c, st.op->operand(1U));
         rs.gz    = const_grid(c, st.op->operand(2U));
@@ -274,7 +340,10 @@ ceg::ResolvedStage resolve_stage(const ceg::PlanStage& st, void* user)
 
     const auto spv = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
                                                      "ceir_pipe", res.alloc);
-    if (!spv.ok || res.n >= 16) { return rs; }
+    if (!spv.ok || res.n >= 16)
+    {
+        return rs;
+    }
     res.pipes[res.n] = res.compute->create_pipeline_from_spirv(
         crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), nbind, pushsize);
     rs.pipeline  = res.pipes[res.n].get();
@@ -312,9 +381,18 @@ bool run_quant_module_n(crd::gpu::VulkanComputeContext& compute, ce::Context& ct
                         crd::usize n_outs, crd::u32* n_allocated = nullptr)
 {
     const crd::usize nb = plan.buffers.size();
-    if (nb > 32U || n_outs > 8U) { return false; }
+    if (nb > 32U || n_outs > 8U)
+    {
+        return false;
+    }
     const auto is_named_out = [&](const ce::Value* v) {
-        for (crd::usize o = 0; o < n_outs; ++o) { if (outs[o].value == v) { return true; } }
+        for (crd::usize o = 0; o < n_outs; ++o)
+        {
+            if (outs[o].value == v)
+            {
+                return true;
+            }
+        }
         return false;
     };
     std::unique_ptr<crd::gpu::ComputeBuffer> owned[32];
@@ -327,36 +405,74 @@ bool run_quant_module_n(crd::gpu::VulkanComputeContext& compute, ce::Context& ct
         //    (role Intermediate, alias_of>=0 from assign_shared_storage). Widened from role==Alias (26f-2b hole was plan-side;
         //    this is the device-side twin — the tenant is alloc-skipped, so aliasing goes LIVE). owned[i] stays null ⇒ RAII
         //    destroys ONLY the landlord (no double-destroy); the ExternalIn upload keys on role (below) so a tenant is not seeded.
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-        if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-        else if (pb.role == ceg::BufferRole::Output) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
-        if (is_named_out(pb.value)) { mem = crd::gpu::ComputeMemory::GpuToCpu; } // ⛔ (b): host-readable regardless of role (dW2)
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            mem = crd::gpu::ComputeMemory::CpuToGpu;
+        }
+        else if (pb.role == ceg::BufferRole::Output)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
+        if (is_named_out(pb.value)) // ⛔ (b): host-readable regardless of role (dW2)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes; // round the 1-byte int8 zp up (raw-view alignment)
         owned[i]          = compute.create_buffer(sz, crd::gpu::compute_usage::storage, mem);
-        if (owned[i] == nullptr) { return false; }
+        if (owned[i] == nullptr)
+        {
+            return false;
+        }
         bufs[i] = owned[i].get();
         ++alloc_count;
-        if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+        if (pb.role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         void* raw = owned[i]->map();
-        if (raw == nullptr) { return false; }
+        if (raw == nullptr)
+        {
+            return false;
+        }
         const QuantSeed* seed = nullptr;
-        for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+        for (crd::usize s = 0; s < n_seeds; ++s)
+        {
+            if (seeds[s].value == pb.value)
+            {
+                seed = &seeds[s];
+                break;
+            }
+        }
         if (seed != nullptr && seed->packed != nullptr)
         {
             auto* w = static_cast<crd::u32*>(raw);
-            for (crd::u32 e = 0; e < seed->count; ++e) { w[e] = seed->packed[e]; } // u32-packed int8 — bits, not float
+            for (crd::u32 e = 0; e < seed->count; ++e) // u32-packed int8 — bits, not float
+            {
+                w[e] = seed->packed[e];
+            }
         }
         else if (seed != nullptr)
         {
             auto* d = static_cast<float*>(raw);
-            for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; }
+            for (crd::u32 e = 0; e < seed->count; ++e)
+            {
+                d[e] = seed->floats[e];
+            }
         }
         else
         {
             auto*          d   = static_cast<float*>(raw);
             const crd::u64 cnt = pb.bytes / 4ULL;
-            for (crd::u64 e = 0; e < cnt; ++e) { d[e] = 0.0F; } // unseeded ExternalIn (zp / β=0 accumulator C) → zeros
+            for (crd::u64 e = 0; e < cnt; ++e) // unseeded ExternalIn (zp / β=0 accumulator C) → zeros
+            {
+                d[e] = 0.0F;
+            }
         }
         owned[i]->unmap();
     }
@@ -368,29 +484,53 @@ bool run_quant_module_n(crd::gpu::VulkanComputeContext& compute, ce::Context& ct
     auto&                   rec = compute.begin();
     const ceg::ExecuteError ee  = ceg::execute_tensor_pipeline(plan, rec, &resolve_stage, &res,
                                                                crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(bufs, nb));
-    if (ee != ceg::ExecuteError::None) { return false; }
+    if (ee != ceg::ExecuteError::None)
+    {
+        return false;
+    }
     // ⛔ record EVERY ShaderWrite→HostRead barrier BEFORE the single submit_and_wait — a barrier recorded after submit is a no-op on
     //    already-completed work and the 2nd readback races.
     crd::i32 out_idx[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
     for (crd::usize o = 0; o < n_outs; ++o)
     {
-        for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == outs[o].value) { out_idx[o] = static_cast<crd::i32>(i); } }
-        if (out_idx[o] < 0) { return false; }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].value == outs[o].value)
+            {
+                out_idx[o] = static_cast<crd::i32>(i);
+            }
+        }
+        if (out_idx[o] < 0)
+        {
+            return false;
+        }
         // ⛔ CEIR-26f-4 (advisor): a named-out that is ALIASED (alias_of>=0 — a tenant or view) has owned[out_idx]==null ⇒ the
         //    map() below null-derefs. Safe today because every named-out is func.return'd (⇒ pinned ⇒ not shareable), but this is a
         //    TYPED REJECT for the latent pin-readback misuse (the [[feedback_plan_output_by_traversal_is_not_ssa_liveness...]] scar).
-        if (plan.buffers[static_cast<crd::usize>(out_idx[o])].alias_of >= 0) { return false; }
+        if (plan.buffers[static_cast<crd::usize>(out_idx[o])].alias_of >= 0)
+        {
+            return false;
+        }
         rec.barrier(*bufs[static_cast<crd::usize>(out_idx[o])], crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::HostRead);
     }
     compute.submit_and_wait();
     for (crd::usize o = 0; o < n_outs; ++o)
     {
         const auto* got = static_cast<const float*>(owned[static_cast<crd::usize>(out_idx[o])]->map());
-        if (got == nullptr) { return false; }
-        for (crd::usize e = 0; e < outs[o].len; ++e) { outs[o].dst[e] = got[e]; }
+        if (got == nullptr)
+        {
+            return false;
+        }
+        for (crd::usize e = 0; e < outs[o].len; ++e)
+        {
+            outs[o].dst[e] = got[e];
+        }
         owned[static_cast<crd::usize>(out_idx[o])]->unmap();
     }
-    if (n_allocated != nullptr) { *n_allocated = alloc_count; } // CEIR-26f-3a: distinct physical buffers (26f-3b asserts the exact delta)
+    if (n_allocated != nullptr) // CEIR-26f-3a: distinct physical buffers (26f-3b asserts the exact delta)
+    {
+        *n_allocated = alloc_count;
+    }
     return true;
 }
 
@@ -418,7 +558,11 @@ MlpPayload build_mlp_payload(ce::Context& ctx, crd::u32 mrows, crd::u32 d0, crd:
 {
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -456,7 +600,10 @@ double median_of(double* v, crd::u32 k)
     {
         const double t = v[i];
         crd::u32     j = i;
-        for (; j > 0 && v[j - 1] > t; --j) { v[j] = v[j - 1]; }
+        for (; j > 0 && v[j - 1] > t; --j)
+        {
+            v[j] = v[j - 1];
+        }
         v[j] = t;
     }
     return v[k / 2U];
@@ -466,9 +613,15 @@ double median_of(double* v, crd::u32 k)
 crd::u64 plan_sig(crd::memory::IAllocator* a, const ceg::TensorPipelinePlan& p)
 {
     crd::containers::Array<crd::u32> buf(a);
-    for (crd::usize i = 0; i < p.stages.size(); ++i) { buf.push_back(static_cast<crd::u32>(p.stages[i].kind)); }
+    for (crd::usize i = 0; i < p.stages.size(); ++i)
+    {
+        buf.push_back(static_cast<crd::u32>(p.stages[i].kind));
+    }
     buf.push_back(0xFFFFFFFFU); // separate the stage-kind run from the alias_of run
-    for (crd::usize i = 0; i < p.buffers.size(); ++i) { buf.push_back(static_cast<crd::u32>(p.buffers[i].alias_of + 1)); } // -1 (none) -> 0
+    for (crd::usize i = 0; i < p.buffers.size(); ++i) // -1 (none) -> 0
+    {
+        buf.push_back(static_cast<crd::u32>(p.buffers[i].alias_of + 1));
+    }
     return crd::containers::fnv1a_64(buf.data(), buf.size() * sizeof(crd::u32));
 }
 ce::Module* measure_tune_entry(crd::gpu::VulkanComputeContext& compute, ce::Context& ctx, crd::memory::IAllocator* root,
@@ -498,7 +651,10 @@ ce::Module* measure_tune_entry(crd::gpu::VulkanComputeContext& compute, ce::Cont
         const ceg::TensorPipelinePlan plan = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[c]);
         REQUIRE(plan.reject == ceg::PlanReject::None);
         sig_out[c] = plan_sig(root, plan); // the plan's identity (before timing) — the winner-collapse + discriminating gate key
-        for (crd::u32 w = 0; w < n_warmup; ++w) { REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, got.data(), out_len)); }
+        for (crd::u32 w = 0; w < n_warmup; ++w)
+        {
+            REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, got.data(), out_len));
+        }
         double ms[n_timed] = {};
         for (crd::u32 t = 0; t < n_timed; ++t)
         {
@@ -511,21 +667,47 @@ ce::Module* measure_tune_entry(crd::gpu::VulkanComputeContext& compute, ce::Cont
         if (c != 0U) // the FREE oracle-gate: every config bit-EXACT to the default (share-inert or not, values are identical)
         {
             int first_mismatch = -1;
-            for (crd::u32 i = 0; i < out_len && first_mismatch < 0; ++i) { if (got[i] != ref[i]) { first_mismatch = static_cast<int>(i); } }
+            for (crd::u32 i = 0; i < out_len && first_mismatch < 0; ++i)
+            {
+                if (got[i] != ref[i])
+                {
+                    first_mismatch = static_cast<int>(i);
+                }
+            }
             CAPTURE(c, first_mismatch);
             CHECK(first_mismatch == -1);
         }
     }
 
     crd::u32 wi = 0; // argmin median across plan-CLASSES...
-    for (crd::u32 c = 1; c < 4U; ++c) { if (medians_out[c] < medians_out[wi]) { wi = c; } }
-    for (crd::u32 c = 0; c < wi; ++c) { if (sig_out[c] == sig_out[wi]) { wi = c; break; } } // ...collapsed to the canonical member (stable)
-    if (winner != nullptr) { *winner = cfgs[wi]; }
+    for (crd::u32 c = 1; c < 4U; ++c)
+    {
+        if (medians_out[c] < medians_out[wi])
+        {
+            wi = c;
+        }
+    }
+    for (crd::u32 c = 0; c < wi; ++c) // ...collapsed to the canonical member (stable)
+    {
+        if (sig_out[c] == sig_out[wi])
+        {
+            wi = c;
+            break;
+        }
+    }
+    if (winner != nullptr)
+    {
+        *winner = cfgs[wi];
+    }
 
     const crd::u64 ph = ce::tune::program_hash(ctx, payload, root); // key by the POST-EXPANSION program the planner consumed
     ce::Module* const emit = ctx.create_module();
     ce::Block*        eb   = emit->body()->first_block();
-    if (eb == nullptr) { eb = ctx.create_block(0U); emit->body()->append(eb); }
+    if (eb == nullptr)
+    {
+        eb = ctx.create_block(0U);
+        emit->body()->append(eb);
+    }
     ce::Operation* const e = ce::tune::build_entry(ctx, ctx.attr_string(device), ctx.attr_string(env),
                                                    ctx.attr_int(static_cast<crd::i64>(ph)), ctx.attr_string(shape),
                                                    ctx.attr_bool(cfgs[wi].fuse_gemm_relu), ctx.attr_bool(cfgs[wi].share_intermediate_storage));
@@ -546,7 +728,11 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
     (void)ce::tensor::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const  b   = ce::func::func_body_block(f);
@@ -593,7 +779,10 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
         for (int j = 0; j < kSide; ++j)
         {
             crd::f64 acc = 0.0;
-            for (int k = 0; k < kSide; ++k) { acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]); }
+            for (int k = 0; k < kSide; ++k)
+            {
+                acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]);
+            }
             dref[i * kSide + j] = acc; // D flattened row-major == E
         }
     }
@@ -603,7 +792,10 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
     for (int kk = 0; kk < kL; ++kk)
     {
         crd::f64 fr = 0.0;
-        for (int l = 0; l < kL; ++l) { fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL)); }
+        for (int l = 0; l < kL; ++l)
+        {
+            fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL));
+        }
         s_ref += fr;
         const crd::f64 am = fr < 0.0 ? -fr : fr;
         maxmag = maxmag > am ? maxmag : am;
@@ -614,7 +806,11 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-22c pipeline gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-22c pipeline gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -633,8 +829,14 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
             continue;
         }
         crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly; // Intermediate = device-resident (no host round-trip)
-        if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-        else if (pb.role == ceg::BufferRole::Output) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            mem = crd::gpu::ComputeMemory::CpuToGpu;
+        }
+        else if (pb.role == ceg::BufferRole::Output)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
         owned[i] = compute.create_buffer(pb.bytes, crd::gpu::compute_usage::storage, mem);
         REQUIRE(owned[i] != nullptr);
         bufs[i] = owned[i].get();
@@ -643,9 +845,27 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
             auto* dst = static_cast<float*>(owned[i]->map());
             REQUIRE(dst != nullptr);
             const crd::u64 cnt = pb.bytes / 4ULL;
-            if (pb.value == a_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-            else if (pb.value == b_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-            else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } } // C (unused, β=0), im0 (Zeros), and twiddles (filled below)
+            if (pb.value == a_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = a_data[e];
+                }
+            }
+            else if (pb.value == b_in)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = b_data[e];
+                }
+            }
+            else // C (unused, β=0), im0 (Zeros), and twiddles (filled below)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = 0.0F;
+                }
+            }
             owned[i]->unmap();
         }
     }
@@ -653,7 +873,10 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
     for (crd::usize s = 0; s < plan.stages.size(); ++s)
     {
         const ceg::PlanStage& st = plan.stages[s];
-        if (st.kind != ceg::StageKind::Fft) { continue; }
+        if (st.kind != ceg::StageKind::Fft)
+        {
+            continue;
+        }
         const crd::i32 btr = st.bind[2];
         const crd::i32 bti = st.bind[3];
         const int      half = static_cast<int>(plan.buffers[static_cast<crd::usize>(btr)].bytes / 4ULL);
@@ -679,7 +902,13 @@ TEST_CASE("ceir 22c-2: the sec-137 GEMM->FFT->reduction pipeline runs device-res
     res.alloc     = &root;
     res.compute   = &compute;
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_idx = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(out_idx >= 0);
 
     auto& rec = compute.begin();
@@ -776,14 +1005,21 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
         mx_ref     = mx_ref > mag_ref[k] ? mx_ref : mag_ref[k];
     }
     crd::f64 norm_ref[kL];
-    for (int k = 0; k < kL; ++k) { norm_ref[k] = mag_ref[k] / mx_ref; }
+    for (int k = 0; k < kL; ++k)
+    {
+        norm_ref[k] = mag_ref[k] / mx_ref;
+    }
 
     // ── DEVICE (soft-skip with no adapter) ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-22c-3d pipeline gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-22c-3d pipeline gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -798,10 +1034,20 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.role == ceg::BufferRole::Alias)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-        if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-        else if (pb.role == ceg::BufferRole::Output) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            mem = crd::gpu::ComputeMemory::CpuToGpu;
+        }
+        else if (pb.role == ceg::BufferRole::Output)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
         owned[i] = compute.create_buffer(pb.bytes, crd::gpu::compute_usage::storage, mem);
         REQUIRE(owned[i] != nullptr);
         bufs[i] = owned[i].get();
@@ -810,9 +1056,27 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
             auto* dst = static_cast<float*>(owned[i]->map());
             REQUIRE(dst != nullptr);
             const crd::u64 cnt = pb.bytes / 4ULL;
-            if (static_cast<crd::i32>(i) == a_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-            else if (static_cast<crd::i32>(i) == b_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-            else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } } // C (unused, β=0), im0 (Zeros), twiddles (filled below)
+            if (static_cast<crd::i32>(i) == a_buf)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = a_data[e];
+                }
+            }
+            else if (static_cast<crd::i32>(i) == b_buf)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = b_data[e];
+                }
+            }
+            else // C (unused, β=0), im0 (Zeros), twiddles (filled below)
+            {
+                for (crd::u64 e = 0; e < cnt; ++e)
+                {
+                    dst[e] = 0.0F;
+                }
+            }
             owned[i]->unmap();
         }
     }
@@ -820,7 +1084,10 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
     for (crd::usize s = 0; s < plan.stages.size(); ++s)
     {
         const ceg::PlanStage& st = plan.stages[s];
-        if (st.kind != ceg::StageKind::Fft) { continue; }
+        if (st.kind != ceg::StageKind::Fft)
+        {
+            continue;
+        }
         const crd::i32 btr  = st.bind[2];
         const crd::i32 bti  = st.bind[3];
         const int      half = static_cast<int>(plan.buffers[static_cast<crd::usize>(btr)].bytes / 4ULL);
@@ -845,7 +1112,13 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
     res.alloc     = &root;
     res.compute   = &compute;
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_idx = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(out_idx >= 0);
     REQUIRE(plan.buffers[static_cast<crd::usize>(out_idx)].bytes == static_cast<crd::u64>(kL) * 4ULL); // norm is the [64] spectrum
 
@@ -873,7 +1146,11 @@ TEST_CASE("ceir 22c-3d: the PARSE-LOADED design-B pipeline (gemm->fft->mag->redu
     {
         const float d = got[k] - static_cast<float>(norm_ref[k]);
         const float e = d < 0.0F ? -d : d;
-        if (e > worst_err) { worst_err = e; worst = k; }
+        if (e > worst_err)
+        {
+            worst_err = e;
+            worst = k;
+        }
     }
     owned[static_cast<crd::usize>(out_idx)]->unmap();
     INFO("worst bin " << worst << " err " << worst_err << " tol " << tol);
@@ -977,14 +1254,21 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
         sig_max             = sig_max > afi ? sig_max : afi;
     }
     crd::f64 norm_ref[kL];
-    for (int k = 0; k < kL; ++k) { norm_ref[k] = mag_ref[k] / mx_ref; }
+    for (int k = 0; k < kL; ++k)
+    {
+        norm_ref[k] = mag_ref[k] / mx_ref;
+    }
 
     // ── DEVICE (soft-skip) ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-22c-3d per-stage gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-22c-3d per-stage gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -997,7 +1281,13 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
     const crd::i32   mx_buf   = plan.stages[3].bind[1]; // reduce(max) output (rank-0)
     crd::i32         norm_buf = -1;
     const crd::usize nb       = plan.buffers.size();
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { norm_buf = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            norm_buf = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(norm_buf >= 0);
     REQUIRE(nb <= 40U);
 
@@ -1005,7 +1295,10 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
     const auto readback = [](std::unique_ptr<crd::gpu::ComputeBuffer>& buf, float* out, int count) {
         const auto* p = static_cast<const float*>(buf->map());
         REQUIRE(p != nullptr);
-        for (int e = 0; e < count; ++e) { out[e] = p[e]; }
+        for (int e = 0; e < count; ++e)
+        {
+            out[e] = p[e];
+        }
         buf->unmap();
     };
 
@@ -1018,11 +1311,21 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
         for (crd::usize i = 0; i < nb; ++i)
         {
             const ceg::PlanBuffer& pb = plan.buffers[i];
-            if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+            if (pb.role == ceg::BufferRole::Alias)
+            {
+                bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+                continue;
+            }
             crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-            if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
+            if (pb.role == ceg::BufferRole::ExternalIn)
+            {
+                mem = crd::gpu::ComputeMemory::CpuToGpu;
+            }
             // Output is host-read; an Intermediate is host-read too ONLY on the instrumented run (else device-resident GpuOnly).
-            else if (pb.role == ceg::BufferRole::Output || readable) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+            else if (pb.role == ceg::BufferRole::Output || readable)
+            {
+                mem = crd::gpu::ComputeMemory::GpuToCpu;
+            }
             owned[i] = compute.create_buffer(pb.bytes, crd::gpu::compute_usage::storage, mem);
             REQUIRE(owned[i] != nullptr);
             bufs[i] = owned[i].get();
@@ -1031,16 +1334,37 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
                 auto* dst = static_cast<float*>(owned[i]->map());
                 REQUIRE(dst != nullptr);
                 const crd::u64 cnt = pb.bytes / 4ULL;
-                if (static_cast<crd::i32>(i) == a_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-                else if (static_cast<crd::i32>(i) == b_buf) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-                else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } }
+                if (static_cast<crd::i32>(i) == a_buf)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = a_data[e];
+                    }
+                }
+                else if (static_cast<crd::i32>(i) == b_buf)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = b_data[e];
+                    }
+                }
+                else
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = 0.0F;
+                    }
+                }
                 owned[i]->unmap();
             }
         }
         for (crd::usize s = 0; s < plan.stages.size(); ++s)
         {
             const ceg::PlanStage& st = plan.stages[s];
-            if (st.kind != ceg::StageKind::Fft) { continue; }
+            if (st.kind != ceg::StageKind::Fft)
+            {
+                continue;
+            }
             const int half = static_cast<int>(plan.buffers[static_cast<crd::usize>(st.bind[2])].bytes / 4ULL);
             const int n    = half * 2;
             auto*     tr   = static_cast<float*>(owned[static_cast<crd::usize>(st.bind[2])]->map());
@@ -1096,7 +1420,10 @@ TEST_CASE("ceir 22c-3d: per-stage oracle + determinism (each device stage matche
     run_once(true, norm_b, d_dev, fr_dev, fi_dev, mag_dev, mx_dev);       // INSTRUMENTED (readable intermediates)
 
     // ── (a) DETERMINISM: making the intermediates host-readable did NOT perturb the terminal (bit-exact, catches nondeterminism) ──
-    for (int k = 0; k < kL; ++k) { CHECK(norm_a[k] == norm_b[k]); }
+    for (int k = 0; k < kL; ++k)
+    {
+        CHECK(norm_a[k] == norm_b[k]);
+    }
 
     // ── (b) PER-STAGE vs the INDEPENDENT ref (DERIVED tolerances). gemm: small-int products, f32-exact. fft: ≤ 2e-3·sig_max
     //    per bin. magnitude: ≤ √2·(that). reduce(max): a bin selection, ≤ the magnitude bound. normalize: the 5.7e-3 quotient. ──
@@ -1148,7 +1475,11 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
     {
         ce::Module* const m   = ctx.create_module();
         ce::Block*        top = m->body()->first_block();
-        if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+        if (top == nullptr)
+        {
+            top = ctx.create_block(0U);
+            m->body()->append(top);
+        }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
         top->append(f);
         ce::Block* const b   = ce::func::func_body_block(f);
@@ -1194,14 +1525,23 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
 
     // ── data (A as 0.25-multiples · int8 weights → every f32 intermediate is EXACT: the device result is bit-exact to the ref) ──
     float a_data[rows * inner];
-    for (crd::u32 i = 0; i < rows * inner; ++i) { a_data[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4); }
+    for (crd::u32 i = 0; i < rows * inner; ++i)
+    {
+        a_data[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4);
+    }
     crd::i32 wq_i[inner * cols];
-    for (crd::u32 i = 0; i < inner * cols; ++i) { wq_i[i] = static_cast<crd::i32>((i * 37U + 11U) % 256U) - 128; }
+    for (crd::u32 i = 0; i < inner * cols; ++i)
+    {
+        wq_i[i] = static_cast<crd::i32>((i * 37U + 11U) % 256U) - 128;
+    }
     crd::u32 packed[inner * cols / 4U];
     for (crd::u32 w = 0; w < inner * cols / 4U; ++w)
     {
         crd::u32 word = 0;
-        for (crd::u32 j = 0; j < 4U; ++j) { word |= static_cast<crd::u32>(wq_i[4U * w + j] & 0xFF) << (8U * j); }
+        for (crd::u32 j = 0; j < 4U; ++j)
+        {
+            word |= static_cast<crd::u32>(wq_i[4U * w + j] & 0xFF) << (8U * j);
+        }
         packed[w] = word;
     }
     const float scale = 0.125F;
@@ -1211,7 +1551,10 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
         for (crd::u32 ncol = 0; ncol < cols; ++ncol)
         {
             float acc = 0.0F;
-            for (crd::u32 k = 0; k < inner; ++k) { acc += a_data[mrow * inner + k] * static_cast<float>(wq_i[k * cols + ncol]); }
+            for (crd::u32 k = 0; k < inner; ++k)
+            {
+                acc += a_data[mrow * inner + k] * static_cast<float>(wq_i[k * cols + ncol]);
+            }
             oracle[mrow * cols + ncol] = acc * scale;
         }
     }
@@ -1221,7 +1564,11 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-23b-2d fused QuantGemm gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-23b-2d fused QuantGemm gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1295,7 +1642,10 @@ TEST_CASE("ceir 23c-c: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
     constexpr crd::u32 cols  = 8U;
     // data (0.25-multiple x · int8 weights · power-of-2 scales → every f32 intermediate across BOTH layers is EXACT).
     float x[rows * inner];
-    for (crd::u32 i = 0; i < rows * inner; ++i) { x[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4); }
+    for (crd::u32 i = 0; i < rows * inner; ++i)
+    {
+        x[i] = 0.25F * static_cast<float>(static_cast<int>((i * 13U + 5U) % 9U) - 4);
+    }
     crd::i32 wq1[inner * cols];
     crd::i32 wq2[inner * cols];
     for (crd::u32 i = 0; i < inner * cols; ++i)
@@ -1307,7 +1657,10 @@ TEST_CASE("ceir 23c-c: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 wd = 0; wd < inner * cols / 4U; ++wd)
         {
             crd::u32 word = 0;
-            for (crd::u32 j = 0; j < 4U; ++j) { word |= static_cast<crd::u32>(w[4U * wd + j] & 0xFF) << (8U * j); }
+            for (crd::u32 j = 0; j < 4U; ++j)
+            {
+                word |= static_cast<crd::u32>(w[4U * wd + j] & 0xFF) << (8U * j);
+            }
             p[wd] = word;
         }
     };
@@ -1325,7 +1678,10 @@ TEST_CASE("ceir 23c-c: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 n = 0; n < cols; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < inner; ++kk) { acc += x[m * inner + kk] * static_cast<float>(wq1[kk * cols + n]); }
+            for (crd::u32 kk = 0; kk < inner; ++kk)
+            {
+                acc += x[m * inner + kk] * static_cast<float>(wq1[kk * cols + n]);
+            }
             const float v = acc * s1;
             h1[m * cols + n] = v > 0.0F ? v : 0.0F; // relu
         }
@@ -1335,7 +1691,10 @@ TEST_CASE("ceir 23c-c: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
         for (crd::u32 n = 0; n < cols; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < inner; ++kk) { acc += h1[m * inner + kk] * static_cast<float>(wq2[kk * cols + n]); }
+            for (crd::u32 kk = 0; kk < inner; ++kk)
+            {
+                acc += h1[m * inner + kk] * static_cast<float>(wq2[kk * cols + n]);
+            }
             oracle[m * cols + n] = acc * s2;
         }
     }
@@ -1345,7 +1704,11 @@ TEST_CASE("ceir 23c-c: the PARSE-LOADED quant-MLP (QuantGemm->relu->QuantGemm) r
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-23c-c quant-MLP gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-23c-c quant-MLP gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1386,7 +1749,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on Vulkan (
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1411,8 +1778,14 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on Vulkan (
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
@@ -1431,16 +1804,26 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on Vulkan (
         for (crd::u32 j = 0; j < sk; ++j)
         {
             float dot = 0.0F;
-            for (crd::u32 d = 0; d < dd; ++d) { dot += q_in[i * dd + d] * k_in[j * dd + d]; }
+            for (crd::u32 d = 0; d < dd; ++d)
+            {
+                dot += q_in[i * dd + d] * k_in[j * dd + d];
+            }
             sc[j] = dot * inv_sqrt_d;
             mx    = crd::math::max(mx, sc[j]);
         }
         float denom = 0.0F;
-        for (crd::u32 j = 0; j < sk; ++j) { sc[j] = crd::math::exp(sc[j] - mx); denom += sc[j]; }
+        for (crd::u32 j = 0; j < sk; ++j)
+        {
+            sc[j] = crd::math::exp(sc[j] - mx);
+            denom += sc[j];
+        }
         for (crd::u32 kk = 0; kk < dv; ++kk)
         {
             float acc = 0.0F;
-            for (crd::u32 j = 0; j < sk; ++j) { acc += (sc[j] / denom) * v_in[j * dv + kk]; }
+            for (crd::u32 j = 0; j < sk; ++j)
+            {
+                acc += (sc[j] / denom) * v_in[j * dv + kk];
+            }
             oracle[i * dv + kk] = acc;
         }
     }
@@ -1450,7 +1833,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on Vulkan (
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-24b-4 attention gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-24b-4 attention gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1492,7 +1879,11 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1515,8 +1906,14 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
@@ -1536,16 +1933,26 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
         for (crd::u32 j = 0; j < sk; ++j)
         {
             float dot = 0.0F;
-            for (crd::u32 d = 0; d < dd; ++d) { dot += q_in[i * dd + d] * k_in[j * dd + d]; }
+            for (crd::u32 d = 0; d < dd; ++d)
+            {
+                dot += q_in[i * dd + d] * k_in[j * dd + d];
+            }
             sc[j] = dot * inv_sqrt_d;
             mx    = crd::math::max(mx, sc[j]);
         }
         float denom = 0.0F;
-        for (crd::u32 j = 0; j < sk; ++j) { sc[j] = crd::math::exp(sc[j] - mx); denom += sc[j]; }
+        for (crd::u32 j = 0; j < sk; ++j)
+        {
+            sc[j] = crd::math::exp(sc[j] - mx);
+            denom += sc[j];
+        }
         for (crd::u32 kk = 0; kk < dv; ++kk)
         {
             float acc = 0.0F;
-            for (crd::u32 j = 0; j < sk; ++j) { acc += (sc[j] / denom) * v_in[j * dv + kk]; }
+            for (crd::u32 j = 0; j < sk; ++j)
+            {
+                acc += (sc[j] / denom) * v_in[j * dv + kk];
+            }
             oracle[i * dv + kk] = acc;
         }
     }
@@ -1555,7 +1962,11 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-26d-3c generic-attention gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-26d-3c generic-attention gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1576,7 +1987,10 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
     crd::u32 tenants = 0;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].alias_of >= 0 && plan.buffers[i].role == ceg::BufferRole::Intermediate) { ++tenants; }
+        if (plan.buffers[i].alias_of >= 0 && plan.buffers[i].role == ceg::BufferRole::Intermediate)
+        {
+            ++tenants;
+        }
     }
     REQUIRE(tenants == 1U);                                                  // probs→Kt — the ONE tenant
     CHECK(n_alloc == static_cast<crd::u32>(plan.buffers.size()) - tenants);  // ⭐ EXACT physical-buffer count (identity)
@@ -1609,7 +2023,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on Vulkan (gemm/r
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1634,7 +2052,10 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on Vulkan (gemm/r
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan.buffers.size(); ++i)
     {
-        if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
@@ -1642,9 +2063,18 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on Vulkan (gemm/r
     float x_in[mrows * d0];
     float w1_in[d0 * d1];
     float w2_in[d1 * d2];
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); } // -1.2..1.9
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i) // -1.2..1.9
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
 
     float oracle[mrows * d2] = {};
     for (crd::u32 mm = 0; mm < mrows; ++mm)
@@ -1653,13 +2083,19 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on Vulkan (gemm/r
         for (crd::u32 n = 0; n < d1; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + n]; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + n];
+            }
             h1[n] = crd::math::max(acc, 0.0F); // relu
         }
         for (crd::u32 j = 0; j < d2; ++j)
         {
             float acc = 0.0F;
-            for (crd::u32 n = 0; n < d1; ++n) { acc += h1[n] * w2_in[n * d2 + j]; }
+            for (crd::u32 n = 0; n < d1; ++n)
+            {
+                acc += h1[n] * w2_in[n * d2 + j];
+            }
             oracle[mm * d2 + j] = acc;
         }
     }
@@ -1668,7 +2104,11 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on Vulkan (gemm/r
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-24b-4 MLP gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-24b-4 MLP gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1696,7 +2136,11 @@ TEST_CASE("ceir 26d-2c: a non-32-width ml.mlp runs device-resident on Vulkan (re
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-26d-2c non-32 MLP gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-26d-2c non-32 MLP gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1716,7 +2160,11 @@ TEST_CASE("ceir 26d-2c: a non-32-width ml.mlp runs device-resident on Vulkan (re
         (void)ce::ml::register_dialect(ctx);
         ce::Module* const m   = ctx.create_module();
         ce::Block*        top = m->body()->first_block();
-        if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+        if (top == nullptr)
+        {
+            top = ctx.create_block(0U);
+            m->body()->append(top);
+        }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
         top->append(f);
         ce::Block* const b   = ce::func::func_body_block(f);
@@ -1747,7 +2195,10 @@ TEST_CASE("ceir 26d-2c: a non-32-width ml.mlp runs device-resident on Vulkan (re
         const ce::Value* out_val = nullptr;
         for (crd::usize i = 0; i < plan.buffers.size(); ++i)
         {
-            if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+            if (plan.buffers[i].role == ceg::BufferRole::Output)
+            {
+                out_val = plan.buffers[i].value;
+            }
         }
         REQUIRE(out_val != nullptr);
 
@@ -1782,9 +2233,18 @@ TEST_CASE("ceir 26d-2c: a non-32-width ml.mlp runs device-resident on Vulkan (re
         x_in.resize(mrows * d0, 0.0F);
         w1_in.resize(d0 * d1, 0.0F);
         w2_in.resize(d1 * d2, 0.0F);
-        for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-        for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-        for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+        for (crd::u32 i = 0; i < mrows * d0; ++i)
+        {
+            x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+        }
+        for (crd::u32 i = 0; i < d0 * d1; ++i)
+        {
+            w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+        }
+        for (crd::u32 i = 0; i < d1 * d2; ++i)
+        {
+            w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+        }
 
         crd::containers::Array<float> oracle(&root);
         oracle.resize(mrows * d2, 0.0F);
@@ -1795,13 +2255,19 @@ TEST_CASE("ceir 26d-2c: a non-32-width ml.mlp runs device-resident on Vulkan (re
             for (crd::u32 nnn = 0; nnn < d1; ++nnn)
             {
                 float acc = 0.0F;
-                for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
+                for (crd::u32 kk = 0; kk < d0; ++kk)
+                {
+                    acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+                }
                 h1[nnn] = crd::math::max(acc, 0.0F);
             }
             for (crd::u32 j = 0; j < d2; ++j)
             {
                 float acc = 0.0F;
-                for (crd::u32 nnn = 0; nnn < d1; ++nnn) { acc += h1[nnn] * w2_in[nnn * d2 + j]; }
+                for (crd::u32 nnn = 0; nnn < d1; ++nnn)
+                {
+                    acc += h1[nnn] * w2_in[nnn * d2 + j];
+                }
                 oracle[mm * d2 + j] = acc;
             }
         }
@@ -1844,7 +2310,11 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-26e-3b fusion differential"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-26e-3b fusion differential");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1862,7 +2332,11 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -1892,14 +2366,20 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
     REQUIRE(plan_u.stages.size() == 3U); // Gemm + VizDispatch(relu) + Gemm (unfused)
     REQUIRE(plan_f.stages.size() == 2U); // GemmRelu + Gemm (fused — N-1)
     bool has_gemmrelu = false;
-    for (crd::usize i = 0; i < plan_f.stages.size(); ++i) { has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu; }
+    for (crd::usize i = 0; i < plan_f.stages.size(); ++i)
+    {
+        has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu;
+    }
     REQUIRE(has_gemmrelu);
 
     // out_val — the terminal Output buffer's SSA value (the SAME in both plans; the module is shared).
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan_f.buffers.size(); ++i)
     {
-        if (plan_f.buffers[i].role == ceg::BufferRole::Output) { out_val = plan_f.buffers[i].value; }
+        if (plan_f.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan_f.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
@@ -1910,9 +2390,18 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
 
     // ⛔ NON-VACUOUS (advisor): the differential is meaningless if relu is identity — REQUIRE ≥1 pre-activation z1 = x·W1 < 0.
     int neg_count = 0;
@@ -1921,8 +2410,14 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
         for (crd::u32 nnn = 0; nnn < d1; ++nnn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
-            if (acc < 0.0F) { ++neg_count; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+            }
+            if (acc < 0.0F)
+            {
+                ++neg_count;
+            }
         }
     }
     REQUIRE(neg_count > 0); // relu actually flips ≥1 element — the fusion witness has teeth
@@ -1943,7 +2438,10 @@ TEST_CASE("ceir 26e-3b: the gemm-relu fusion is BIT-EXACT vs the unfused program
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < mrows * d2 && first_mismatch < 0; ++i)
     {
-        if (out_f[i] != out_u[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_f[i] != out_u[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -1967,7 +2465,11 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-27b two-schedule differential"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-27b two-schedule differential");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -1988,7 +2490,11 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     // ── the PAYLOAD: an fp32 2-layer MLP (x·W1 → relu → ·W2), the 26e-3b module ──
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2034,7 +2540,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     REQUIRE(plan_u.stages.size() == 3U); // no-fuse schedule: Gemm + VizDispatch(relu) + Gemm
     REQUIRE(plan_f.stages.size() == 2U); // fuse schedule: GemmRelu + Gemm (N-1)
     bool has_gemmrelu = false;
-    for (crd::usize i = 0; i < plan_f.stages.size(); ++i) { has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu; }
+    for (crd::usize i = 0; i < plan_f.stages.size(); ++i)
+    {
+        has_gemmrelu = has_gemmrelu || plan_f.stages[i].kind == ceg::StageKind::GemmRelu;
+    }
     REQUIRE(has_gemmrelu);
     // ⛔ share is program-global-INERT on the MLP (26f-3a no-disjoint-pair): BOTH schedules produce ZERO tenants — the schedules
     //    DIFFER only in fusion, so the plan-shape difference is entirely the fuse directive's (share is authored + read, nothing to alias).
@@ -2042,7 +2551,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
         crd::u32 n = 0;
         for (crd::usize i = 0; i < p.buffers.size(); ++i)
         {
-            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate) { ++n; }
+            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate)
+            {
+                ++n;
+            }
         }
         return n;
     };
@@ -2053,7 +2565,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     const ce::Value* out_val = nullptr;
     for (crd::usize i = 0; i < plan_f.buffers.size(); ++i)
     {
-        if (plan_f.buffers[i].role == ceg::BufferRole::Output) { out_val = plan_f.buffers[i].value; }
+        if (plan_f.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan_f.buffers[i].value;
+        }
     }
     REQUIRE(out_val != nullptr);
 
@@ -2064,17 +2579,32 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     int neg_count = 0;
     for (crd::u32 mm = 0; mm < mrows; ++mm)
     {
         for (crd::u32 nnn = 0; nnn < d1; ++nnn)
         {
             float acc = 0.0F;
-            for (crd::u32 kk = 0; kk < d0; ++kk) { acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn]; }
-            if (acc < 0.0F) { ++neg_count; }
+            for (crd::u32 kk = 0; kk < d0; ++kk)
+            {
+                acc += x_in[mm * d0 + kk] * w1_in[kk * d1 + nnn];
+            }
+            if (acc < 0.0F)
+            {
+                ++neg_count;
+            }
         }
     }
     REQUIRE(neg_count > 0); // relu actually flips ≥1 element — the differential has teeth
@@ -2093,7 +2623,10 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < mrows * d2 && first_mismatch < 0; ++i)
     {
-        if (out_f[i] != out_u[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_f[i] != out_u[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -2134,7 +2667,10 @@ TEST_CASE("ceir35 Q7: compile-time decomposition -- CEIR lowering+codegen vs gls
 
     // ── phase L: the CEIR-owned IR lowering (device-free) — plan_tensor_pipeline over the expanded module ──
     double lower_ms[n_timed] = {};
-    for (crd::u32 w = 0; w < n_warmup; ++w) { (void)ceg::plan_tensor_pipeline(ctx, *pay.m, &root, opts); }
+    for (crd::u32 w = 0; w < n_warmup; ++w)
+    {
+        (void)ceg::plan_tensor_pipeline(ctx, *pay.m, &root, opts);
+    }
     for (crd::u32 t = 0; t < n_timed; ++t)
     {
         const auto                    a = std::chrono::steady_clock::now();
@@ -2194,11 +2730,20 @@ TEST_CASE("ceir35 Q7: compile-time decomposition -- CEIR lowering+codegen vs gls
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
     double spirv_ms[n_timed] = {};
-    for (crd::u32 w = 0; w < n_warmup; ++w) { for (crd::usize i = 0; i < plan.stages.size(); ++i) { (void)compile_stage(plan.stages[i]); } }
+    for (crd::u32 w = 0; w < n_warmup; ++w)
+    {
+        for (crd::usize i = 0; i < plan.stages.size(); ++i)
+        {
+            (void)compile_stage(plan.stages[i]);
+        }
+    }
     for (crd::u32 t = 0; t < n_timed; ++t)
     {
         double acc = 0.0;
-        for (crd::usize i = 0; i < plan.stages.size(); ++i) { acc += compile_stage(plan.stages[i]); }
+        for (crd::usize i = 0; i < plan.stages.size(); ++i)
+        {
+            acc += compile_stage(plan.stages[i]);
+        }
         spirv_ms[t] = acc;
     }
     const double t_spirv = median_of(spirv_ms, n_timed);
@@ -2228,7 +2773,11 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device -- skipping the CEIR-35 Q7 executor-overhead board"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device -- skipping the CEIR-35 Q7 executor-overhead board");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -2252,7 +2801,13 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
     const crd::usize nb = plan.buffers.size();
     REQUIRE(nb <= 32U);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -2262,9 +2817,18 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed seeds[3]   = {{pay.x, x_in.data(), nullptr, mrows * d0}, {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                   {pay.w2, w2_in.data(), nullptr, d1 * d2}};
     constexpr crd::usize n_seeds = 3;
@@ -2275,23 +2839,55 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-        if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-        else if (pb.role == ceg::BufferRole::Output || pb.value == out_val) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            mem = crd::gpu::ComputeMemory::CpuToGpu;
+        }
+        else if (pb.role == ceg::BufferRole::Output || pb.value == out_val)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         owned[i]          = compute.create_buffer(sz, crd::gpu::compute_usage::storage, mem);
         REQUIRE(owned[i] != nullptr);
         bufs[i] = owned[i].get();
-        if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+        if (pb.role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         void* raw = owned[i]->map();
         REQUIRE(raw != nullptr);
         const QuantSeed* seed = nullptr;
-        for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+        for (crd::usize s = 0; s < n_seeds; ++s)
+        {
+            if (seeds[s].value == pb.value)
+            {
+                seed = &seeds[s];
+                break;
+            }
+        }
         auto* const    d   = static_cast<float*>(raw);
         const crd::u64 cnt = pb.bytes / 4ULL;
-        if (seed != nullptr) { for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; } }
-        else { for (crd::u64 e = 0; e < cnt; ++e) { d[e] = 0.0F; } }
+        if (seed != nullptr)
+        {
+            for (crd::u32 e = 0; e < seed->count; ++e)
+            {
+                d[e] = seed->floats[e];
+            }
+        }
+        else
+        {
+            for (crd::u64 e = 0; e < cnt; ++e)
+            {
+                d[e] = 0.0F;
+            }
+        }
         owned[i]->unmap();
     }
 
@@ -2309,13 +2905,22 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
         REQUIRE(resolved[j].pipeline != nullptr);
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(out_idx >= 0);
     const auto read_out = [&](crd::containers::Array<float>& dst) {
         dst.resize(out_len, 0.0F);
         const auto* g = static_cast<const float*>(owned[static_cast<crd::usize>(out_idx)]->map());
         REQUIRE(g != nullptr);
-        for (crd::usize e = 0; e < out_len; ++e) { dst[e] = g[e]; }
+        for (crd::usize e = 0; e < out_len; ++e)
+        {
+            dst[e] = g[e];
+        }
         owned[static_cast<crd::usize>(out_idx)]->unmap();
     };
 
@@ -2366,7 +2971,10 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
         {
             const ceg::PlanStage&    st       = plan.stages[j];
             crd::gpu::ComputeBuffer* binds[8] = {};
-            for (crd::u32 i = 0; i < st.nbind; ++i) { binds[i] = bufs[static_cast<crd::usize>(st.bind[i])]; }
+            for (crd::u32 i = 0; i < st.nbind; ++i)
+            {
+                binds[i] = bufs[static_cast<crd::usize>(st.bind[i])];
+            }
             rec.dispatch(*resolved[j].pipeline, crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, st.nbind), resolved[j].push,
                          resolved[j].push_size, resolved[j].gx, resolved[j].gy, resolved[j].gz);
             if (j + 1 < ns) // inter-stage barrier on each of the stage's n_out written outputs (the last n_out binds) — before the next reads
@@ -2394,7 +3002,14 @@ TEST_CASE("ceir35 Q7: executor overhead vs hand-rolled dispatch (Vulkan)", "[cei
     // the two record paths dispatch the SAME kernels with the SAME args ⇒ BIT-IDENTICAL output (the "same GPU work" proof the GPU
     // parity claim rests on — a differing pixel would mean the arms are NOT the same work and the timing comparison is meaningless)
     int mism = -1;
-    for (crd::usize e = 0; e < out_len; ++e) { if (out_a[e] != out_b[e]) { mism = static_cast<int>(e); break; } }
+    for (crd::usize e = 0; e < out_len; ++e)
+    {
+        if (out_a[e] != out_b[e])
+        {
+            mism = static_cast<int>(e);
+            break;
+        }
+    }
     CHECK(mism == -1);
 
     const double median_a_rec = median_of(a_rec, n_timed);
@@ -2425,7 +3040,11 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device -- skipping the CEIR-35 Q7 reuse-amortization board"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device -- skipping the CEIR-35 Q7 reuse-amortization board");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -2449,7 +3068,13 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
     const crd::usize nb = plan.buffers.size();
     REQUIRE(nb <= 32U);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
 
     crd::containers::Array<float> x_in(&root);
@@ -2458,9 +3083,18 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed      seeds[3] = {{pay.x, x_in.data(), nullptr, mrows * d0}, {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                      {pay.w2, w2_in.data(), nullptr, d1 * d2}};
     constexpr crd::usize n_seeds  = 3;
@@ -2470,27 +3104,65 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
     for (crd::usize i = 0; i < nb; ++i)
     {
         const ceg::PlanBuffer& pb = plan.buffers[i];
-        if (pb.alias_of >= 0) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+        if (pb.alias_of >= 0)
+        {
+            bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+            continue;
+        }
         crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-        if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-        else if (pb.role == ceg::BufferRole::Output || pb.value == out_val) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+        if (pb.role == ceg::BufferRole::ExternalIn)
+        {
+            mem = crd::gpu::ComputeMemory::CpuToGpu;
+        }
+        else if (pb.role == ceg::BufferRole::Output || pb.value == out_val)
+        {
+            mem = crd::gpu::ComputeMemory::GpuToCpu;
+        }
         const crd::u64 sz = pb.bytes < 16ULL ? 16ULL : pb.bytes;
         owned[i]          = compute.create_buffer(sz, crd::gpu::compute_usage::storage, mem);
         REQUIRE(owned[i] != nullptr);
         bufs[i] = owned[i].get();
-        if (pb.role != ceg::BufferRole::ExternalIn) { continue; }
+        if (pb.role != ceg::BufferRole::ExternalIn)
+        {
+            continue;
+        }
         void* raw = owned[i]->map();
         REQUIRE(raw != nullptr);
         const QuantSeed* seed = nullptr;
-        for (crd::usize s = 0; s < n_seeds; ++s) { if (seeds[s].value == pb.value) { seed = &seeds[s]; break; } }
+        for (crd::usize s = 0; s < n_seeds; ++s)
+        {
+            if (seeds[s].value == pb.value)
+            {
+                seed = &seeds[s];
+                break;
+            }
+        }
         auto* const    d   = static_cast<float*>(raw);
         const crd::u64 cnt = pb.bytes / 4ULL;
-        if (seed != nullptr) { for (crd::u32 e = 0; e < seed->count; ++e) { d[e] = seed->floats[e]; } }
-        else { for (crd::u64 e = 0; e < cnt; ++e) { d[e] = 0.0F; } }
+        if (seed != nullptr)
+        {
+            for (crd::u32 e = 0; e < seed->count; ++e)
+            {
+                d[e] = seed->floats[e];
+            }
+        }
+        else
+        {
+            for (crd::u64 e = 0; e < cnt; ++e)
+            {
+                d[e] = 0.0F;
+            }
+        }
         owned[i]->unmap();
     }
     crd::i32 out_idx = -1;
-    for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].value == out_val) { out_idx = static_cast<crd::i32>(i); } }
+    for (crd::usize i = 0; i < nb; ++i)
+    {
+        if (plan.buffers[i].value == out_val)
+        {
+            out_idx = static_cast<crd::i32>(i);
+        }
+    }
     REQUIRE(out_idx >= 0);
     const crd::usize ns = plan.stages.size();
     REQUIRE(ns <= 16U);
@@ -2537,7 +3209,10 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
         rec.barrier(*bufs[static_cast<crd::usize>(out_idx)], crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::HostRead);
         compute.submit_and_wait();
         const auto c1 = std::chrono::steady_clock::now();
-        if (t >= n_warmup) { cold_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count(); }
+        if (t >= n_warmup)
+        {
+            cold_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count();
+        }
     }
 
     // ── WARM: every subsequent run — reuse the lowered plan + the built pipelines; pay only record + GPU ──
@@ -2553,7 +3228,10 @@ TEST_CASE("ceir35 Q7: plan+pipeline reuse amortization (Vulkan)", "[ceir][ceir35
         rec.barrier(*bufs[static_cast<crd::usize>(out_idx)], crd::gpu::ComputeAccess::ShaderWrite, crd::gpu::ComputeAccess::HostRead);
         compute.submit_and_wait();
         const auto c1 = std::chrono::steady_clock::now();
-        if (t >= n_warmup) { warm_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count(); }
+        if (t >= n_warmup)
+        {
+            warm_ms[t - n_warmup] = std::chrono::duration<double, std::milli>(c1 - c0).count();
+        }
     }
 
     const double c = median_of(cold_ms, n_timed);
@@ -2579,7 +3257,11 @@ TEST_CASE("ceir 28b-2a: the sec-80 autotuner measures the 4-config PlanOptions s
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-28b-2a autotuner measurer"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-28b-2a autotuner measurer");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -2606,7 +3288,13 @@ TEST_CASE("ceir 28b-2a: the sec-80 autotuner measures the 4-config PlanOptions s
     const ceg::TensorPipelinePlan plan0 = ceg::plan_tensor_pipeline(ctx, *m, &root, def_opts);
     REQUIRE(plan0.reject == ceg::PlanReject::None);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < plan0.buffers.size(); ++i) { if (plan0.buffers[i].role == ceg::BufferRole::Output) { out_val = plan0.buffers[i].value; } }
+    for (crd::usize i = 0; i < plan0.buffers.size(); ++i)
+    {
+        if (plan0.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan0.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -2617,9 +3305,18 @@ TEST_CASE("ceir 28b-2a: the sec-80 autotuner measures the 4-config PlanOptions s
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed seeds[3] = {{pay.x, x_in.data(), nullptr, mrows * d0},
                                 {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                 {pay.w2, w2_in.data(), nullptr, d1 * d2}};
@@ -2668,7 +3365,13 @@ TEST_CASE("ceir 28b-2a: the sec-80 autotuner measures the 4-config PlanOptions s
     out_r.resize(out_len, 0.0F);
     REQUIRE(run_quant_module(compute, ctx, &root, plan_r, seeds, 3U, out_val, out_r.data(), out_len));
     int replay_mismatch = -1;
-    for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i) { if (out_r[i] != out0[i]) { replay_mismatch = static_cast<int>(i); } }
+    for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i)
+    {
+        if (out_r[i] != out0[i])
+        {
+            replay_mismatch = static_cast<int>(i);
+        }
+    }
     CAPTURE(replay_mismatch);
     CHECK(replay_mismatch == -1);
 
@@ -2699,7 +3402,11 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-28b-2b committed-cache anti-drift"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-28b-2b committed-cache anti-drift");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -2725,7 +3432,13 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
     const ceg::TensorPipelinePlan plan0 = ceg::plan_tensor_pipeline(ctx, *m, &root, def_opts);
     REQUIRE(plan0.reject == ceg::PlanReject::None);
     const ce::Value* out_val = nullptr;
-    for (crd::usize i = 0; i < plan0.buffers.size(); ++i) { if (plan0.buffers[i].role == ceg::BufferRole::Output) { out_val = plan0.buffers[i].value; } }
+    for (crd::usize i = 0; i < plan0.buffers.size(); ++i)
+    {
+        if (plan0.buffers[i].role == ceg::BufferRole::Output)
+        {
+            out_val = plan0.buffers[i].value;
+        }
+    }
     REQUIRE(out_val != nullptr);
     const crd::u32 out_len = mrows * d2;
 
@@ -2735,9 +3448,18 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
     x_in.resize(mrows * d0, 0.0F);
     w1_in.resize(d0 * d1, 0.0F);
     w2_in.resize(d1 * d2, 0.0F);
-    for (crd::u32 i = 0; i < mrows * d0; ++i) { x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12); }
-    for (crd::u32 i = 0; i < d0 * d1; ++i) { w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3); }
-    for (crd::u32 i = 0; i < d1 * d2; ++i) { w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2); }
+    for (crd::u32 i = 0; i < mrows * d0; ++i)
+    {
+        x_in[i] = 0.1F * static_cast<float>(static_cast<int>(i) - 12);
+    }
+    for (crd::u32 i = 0; i < d0 * d1; ++i)
+    {
+        w1_in[i] = 0.05F * static_cast<float>(static_cast<int>(i % 7) - 3);
+    }
+    for (crd::u32 i = 0; i < d1 * d2; ++i)
+    {
+        w2_in[i] = 0.1F * static_cast<float>(static_cast<int>(i % 5) - 2);
+    }
     const QuantSeed seeds[3] = {{pay.x, x_in.data(), nullptr, mrows * d0},
                                 {pay.w1, w1_in.data(), nullptr, d0 * d1},
                                 {pay.w2, w2_in.data(), nullptr, d1 * d2}};
@@ -2797,7 +3519,13 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
 
     // ── find THIS device's row (exactly one on a known device) ──
     int mi = -1;
-    for (crd::u32 i = 0; i < n_rows; ++i) { if (entries[i].device == device && entries[i].env == env) { mi = static_cast<int>(i); } }
+    for (crd::u32 i = 0; i < n_rows; ++i)
+    {
+        if (entries[i].device == device && entries[i].env == env)
+        {
+            mi = static_cast<int>(i);
+        }
+    }
     if (mi >= 0)
     {
         const ce::tune::TuneEntry& row = entries[static_cast<crd::usize>(mi)];
@@ -2827,7 +3555,13 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
         out_r.resize(out_len, 0.0F);
         REQUIRE(run_quant_module(compute, ctx, &root, plan_r, seeds, 3U, out_val, out_r.data(), out_len));
         int replay_mismatch = -1;
-        for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i) { if (out_r[i] != out0[i]) { replay_mismatch = static_cast<int>(i); } }
+        for (crd::u32 i = 0; i < out_len && replay_mismatch < 0; ++i)
+        {
+            if (out_r[i] != out0[i])
+            {
+                replay_mismatch = static_cast<int>(i);
+            }
+        }
         CAPTURE(replay_mismatch);
         CHECK(replay_mismatch == -1);
     }
@@ -2863,7 +3597,11 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on Vu
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -2892,7 +3630,10 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on Vu
         crd::u32 n = 0;
         for (crd::usize i = 0; i < p.buffers.size(); ++i)
         {
-            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate) { ++n; }
+            if (p.buffers[i].alias_of >= 0 && p.buffers[i].role == ceg::BufferRole::Intermediate)
+            {
+                ++n;
+            }
         }
         return n;
     };
@@ -2907,8 +3648,14 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on Vu
     for (crd::usize i = 0; i < plan_share.buffers.size(); ++i)
     {
         const ceg::PlanBuffer& pb = plan_share.buffers[i];
-        if (pb.role == ceg::BufferRole::Output) { out_val = pb.value; }
-        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL) { scale_val = pb.value; }
+        if (pb.role == ceg::BufferRole::Output)
+        {
+            out_val = pb.value;
+        }
+        else if (pb.role == ceg::BufferRole::ExternalIn && tnumel(ctx, pb.value->type()) == 1ULL)
+        {
+            scale_val = pb.value;
+        }
     }
     REQUIRE(out_val != nullptr);
     REQUIRE(scale_val != nullptr);
@@ -2918,7 +3665,11 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on Vu
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-26f-3b aliasing differential"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-26f-3b aliasing differential");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -2946,7 +3697,10 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on Vu
     int first_mismatch = -1;
     for (crd::u32 i = 0; i < sq * dv && first_mismatch < 0; ++i)
     {
-        if (out_share[i] != out_noshare[i]) { first_mismatch = static_cast<int>(i); }
+        if (out_share[i] != out_noshare[i])
+        {
+            first_mismatch = static_cast<int>(i);
+        }
     }
     CAPTURE(first_mismatch);
     if (first_mismatch >= 0)
@@ -2979,7 +3733,11 @@ TEST_CASE("ceir 24c-2b: an ml.mlp CLAIMED by the coopvec provider dispatches nat
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3003,11 +3761,17 @@ TEST_CASE("ceir 24c-2b: an ml.mlp CLAIMED by the coopvec provider dispatches nat
     float w2[d1 * d2];
     for (crd::u32 i = 0; i < d0; ++i)
     {
-        for (crd::u32 j = 0; j < d1; ++j) { w1[i * d1 + j] = 0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U); }
+        for (crd::u32 j = 0; j < d1; ++j)
+        {
+            w1[i * d1 + j] = 0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U);
+        }
     }
     for (crd::u32 i = 0; i < d1; ++i)
     {
-        for (crd::u32 j = 0; j < d2; ++j) { w2[i * d2 + j] = 0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U); }
+        for (crd::u32 j = 0; j < d2; ++j)
+        {
+            w2[i * d2 + j] = 0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U);
+        }
     }
     const float* wptrs[2] = {&w1[0], &w2[0]};
     crd::containers::Array<crd::u16> wf16(&root);
@@ -3037,9 +3801,17 @@ TEST_CASE("ceir 24c-2b: an ml.mlp CLAIMED by the coopvec provider dispatches nat
     gcfg.backend  = crd::gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto devctx   = crd::gpu::create_vulkan_gpu_context(gcfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-24c-2b coopvec gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-24c-2b coopvec gate");
+        return;
+    }
     auto* const vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
-    if (!vk->cooperative_vector()) { WARN("no VK_NV_cooperative_vector (non-NVIDIA) — the coopvec CLAIM path is unavailable; CKIR expansion (24b-4) is the portable fallback"); return; }
+    if (!vk->cooperative_vector())
+    {
+        WARN("no VK_NV_cooperative_vector (non-NVIDIA) — the coopvec CLAIM path is unavailable; CKIR expansion (24b-4) is the portable fallback");
+        return;
+    }
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
 
@@ -3063,7 +3835,10 @@ TEST_CASE("ceir 24c-2b: an ml.mlp CLAIMED by the coopvec provider dispatches nat
         auto        stg  = compute.create_buffer(nbytes, transfer_src, crd::gpu::ComputeMemory::CpuToGpu);
         auto*       p    = static_cast<crd::u8*>(stg->map());
         const auto* srcb = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+        for (crd::u64 i = 0; i < nbytes; ++i)
+        {
+            p[i] = srcb[i];
+        }
         stg->unmap();
         auto& rc = compute.begin();
         rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -3120,11 +3895,17 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
     float      w2[d1 * d2];
     for (crd::u32 i = 0; i < d0; ++i)
     {
-        for (crd::u32 j = 0; j < d1; ++j) { w1[i * d1 + j] = r16(0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U)); }
+        for (crd::u32 j = 0; j < d1; ++j)
+        {
+            w1[i * d1 + j] = r16(0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U));
+        }
     }
     for (crd::u32 i = 0; i < d1; ++i)
     {
-        for (crd::u32 j = 0; j < d2; ++j) { w2[i * d2 + j] = r16(0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U)); }
+        for (crd::u32 j = 0; j < d2; ++j)
+        {
+            w2[i * d2 + j] = r16(0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U));
+        }
     }
     float x_in[n_s * d0];
     for (crd::u32 s = 0; s < n_s; ++s)
@@ -3141,13 +3922,19 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
         for (crd::u32 n = 0; n < d1; ++n)
         {
             float acc = 0.0F;
-            for (crd::u32 c = 0; c < d0; ++c) { acc += x_in[s * d0 + c] * w1[c * d1 + n]; }
+            for (crd::u32 c = 0; c < d0; ++c)
+            {
+                acc += x_in[s * d0 + c] * w1[c * d1 + n];
+            }
             h1[n] = acc < 0.0F ? 0.0F : acc; // relu
         }
         for (crd::u32 o = 0; o < d2; ++o)
         {
             float acc = 0.0F;
-            for (crd::u32 n = 0; n < d1; ++n) { acc += h1[n] * w2[n * d2 + o]; }
+            for (crd::u32 n = 0; n < d1; ++n)
+            {
+                acc += h1[n] * w2[n * d2 + o];
+            }
             oracle[s * d2 + o] = acc;
         }
     }
@@ -3157,7 +3944,11 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
     gcfg.backend  = crd::gpu::GpuBackend::Vulkan;
     gcfg.headless = true;
     auto devctx   = crd::gpu::create_vulkan_gpu_context(gcfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-24c-3 crown"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-24c-3 crown");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
@@ -3172,7 +3963,11 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
         (void)ce::ml::register_dialect(ctx);
         m               = ctx.create_module();
         ce::Block* top  = m->body()->first_block();
-        if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+        if (top == nullptr)
+        {
+            top = ctx.create_block(0U);
+            m->body()->append(top);
+        }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
         top->append(f);
         ce::Block* const b   = ce::func::func_body_block(f);
@@ -3209,14 +4004,20 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
         const ce::Value* out_val = nullptr;
         for (crd::usize i = 0; i < plan.buffers.size(); ++i)
         {
-            if (plan.buffers[i].role == ceg::BufferRole::Output) { out_val = plan.buffers[i].value; }
+            if (plan.buffers[i].role == ceg::BufferRole::Output)
+            {
+                out_val = plan.buffers[i].value;
+            }
         }
         REQUIRE(out_val != nullptr);
         const QuantSeed seeds[3] = {{xv, x_in, nullptr, n_s * d0}, {w1v, w1, nullptr, d0 * d1}, {w2v, w2, nullptr, d1 * d2}};
         REQUIRE(run_quant_module(compute, ctx, &root, plan, seeds, 3U, out_val, d_ckir, n_s * d2));
     }
     // the CKIR partition (f32) tracks the f32 oracle tightly.
-    for (crd::u32 i = 0; i < n_s * d2; ++i) { CHECK(crd::math::abs(d_ckir[i] - oracle[i]) <= 2e-3F * (1.0F + crd::math::abs(oracle[i]))); }
+    for (crd::u32 i = 0; i < n_s * d2; ++i)
+    {
+        CHECK(crd::math::abs(d_ckir[i] - oracle[i]) <= 2e-3F * (1.0F + crd::math::abs(oracle[i])));
+    }
 
     if (!vk->cooperative_vector())
     {
@@ -3249,7 +4050,10 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
         bf16.resize(static_cast<crd::usize>(mlp.bias_count()), crd::math::f32_to_f16_bits(0.0F));
         crd::containers::Array<crd::u16> in_h(&root);
         in_h.resize(static_cast<crd::usize>(n_s) * d0);
-        for (crd::u32 i = 0; i < n_s * d0; ++i) { in_h[i] = crd::math::f32_to_f16_bits(x_in[i]); }
+        for (crd::u32 i = 0; i < n_s * d0; ++i)
+        {
+            in_h[i] = crd::math::f32_to_f16_bits(x_in[i]);
+        }
 
         crd::kir::GlslKernel kern(&root);
         REQUIRE(nn::emit_coopvec_mlp_glsl(mlp, kern));
@@ -3270,7 +4074,10 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
             auto        stg  = compute.create_buffer(nbytes, transfer_src, crd::gpu::ComputeMemory::CpuToGpu);
             auto*       p    = static_cast<crd::u8*>(stg->map());
             const auto* srcb = static_cast<const crd::u8*>(src);
-            for (crd::u64 i = 0; i < nbytes; ++i) { p[i] = srcb[i]; }
+            for (crd::u64 i = 0; i < nbytes; ++i)
+            {
+                p[i] = srcb[i];
+            }
             stg->unmap();
             auto& rc = compute.begin();
             rc.copy(*stg, dst, 0U, 0U, nbytes);
@@ -3293,7 +4100,10 @@ TEST_CASE("ceir 24c-3: the sec-136 crown -- ONE ml.mlp, two partition strategies
             compute.submit_and_wait();
         }
         const auto* out = static_cast<const crd::u16*>(rb->map());
-        for (crd::u32 i = 0; i < n_s * d2; ++i) { d_coop[i] = crd::math::f16_bits_to_f32(out[i]); }
+        for (crd::u32 i = 0; i < n_s * d2; ++i)
+        {
+            d_coop[i] = crd::math::f16_bits_to_f32(out[i]);
+        }
         rb->unmap();
     }
 
@@ -3319,7 +4129,11 @@ TEST_CASE("ceir 25b-4a: a transpose+broadcast+elementwise chain runs device-resi
     (void)ce::tensor::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3344,21 +4158,34 @@ TEST_CASE("ceir 25b-4a: a transpose+broadcast+elementwise chain runs device-resi
     static float in0_data[6] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
     static float in1_data[3] = {10.0F, 20.0F, 30.0F};
     float              ref[6];
-    for (int r = 0; r < 3; ++r) { for (int cc = 0; cc < 2; ++cc) { ref[r * 2 + cc] = in0_data[cc * 3 + r] + in1_data[r]; } }
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int cc = 0; cc < 2; ++cc)
+        {
+            ref[r * 2 + cc] = in0_data[cc * 3 + r] + in1_data[r];
+        }
+    }
 
     // ── DEVICE (soft-skip with no adapter) ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-25b-4a chain gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-25b-4a chain gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
     const QuantSeed seeds[2] = {{in0, in0_data, nullptr, 6U}, {in1, in1_data, nullptr, 3U}};
     float           got[6]   = {};
     REQUIRE(run_quant_module(compute, ctx, &root, plan, seeds, 2U, ew->result(0U), got, 6U));
-    for (int i = 0; i < 6; ++i) { CHECK(got[i] == ref[i]); } // pure data-movement + add of exact f32 ⇒ EXACT
+    for (int i = 0; i < 6; ++i) // pure data-movement + add of exact f32 ⇒ EXACT
+    {
+        CHECK(got[i] == ref[i]);
+    }
 }
 
 // CEIR-25b-4b / 25c-2: the FD-witness functors SumGemmAA + MlpLoss are SHARED with the DX12 pipeline TU — ONE definition in
@@ -3383,7 +4210,11 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
     (void)ce::tensor::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3421,17 +4252,29 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
     //    f(A)=sum(gemm(A,A)) — both f64, so the ANALYTIC ref is VALIDATED before it judges the device (never a hand-computed ref). ──
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     double av[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { av[i] = 0.4 + 0.17 * static_cast<double>(i) - 0.03 * static_cast<double>((i * 5) % 7); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        av[i] = 0.4 + 0.17 * static_cast<double>(i) - 0.03 * static_cast<double>((i * 5) % 7);
+    }
     double dc[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { dc[i] = 1.0; }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        dc[i] = 1.0;
+    }
     double ga[nn * nn];
     double gb[nn * nn];
     nnr::matmul_vjp(av, av, dc, ga, gb, nn, nn, nn);
     double ref[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { ref[i] = ga[i] + gb[i]; }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        ref[i] = ga[i] + gb[i];
+    }
     double g_fd[nn * nn];
     crd::hesap::autodiff::testing::grad_fd<nn * nn>(SumGemmAA{nn}, av, g_fd);
-    for (int i = 0; i < nn * nn; ++i) { CHECK(crd::math::abs(ref[i] - g_fd[i]) <= 1e-5 * (1.0 + crd::math::abs(ref[i]))); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        CHECK(crd::math::abs(ref[i] - g_fd[i]) <= 1e-5 * (1.0 + crd::math::abs(ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed A + the all-ones dLoss BY VALUE; the dead β=0 accumulators (carg + the two backward
     //    gemm C-operands) auto-zero (unseeded ExternalIn → zeros). Read back grads[0] (the plan's single Output). ──
@@ -3439,12 +4282,19 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-25b-4b backward-pass gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-25b-4b backward-pass gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
     float av_f[nn * nn];
-    for (int i = 0; i < nn * nn; ++i) { av_f[i] = static_cast<float>(av[i]); }
+    for (int i = 0; i < nn * nn; ++i)
+    {
+        av_f[i] = static_cast<float>(av[i]);
+    }
     float           ones[nn]       = {1.0F, 1.0F, 1.0F};
     const QuantSeed seeds[2]       = {{a, av_f, nullptr, static_cast<crd::u32>(nn * nn)}, {gr.seed, ones, nullptr, static_cast<crd::u32>(nn)}};
     float           got[nn * nn]   = {};
@@ -3475,7 +4325,11 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly inputs) r
     (void)ce::compute::register_compute_ops(ctx); // compute.dispatch — the authored-kernel stage
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3535,7 +4389,11 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly inputs) r
     double x_d[nel];
     double gy_d[nel];
     double gx_ref[nel];
-    for (crd::u32 i = 0; i < nel; ++i) { x_d[i] = static_cast<double>(x_f[i]); gy_d[i] = static_cast<double>(gy_f[i]); }
+    for (crd::u32 i = 0; i < nel; ++i)
+    {
+        x_d[i] = static_cast<double>(x_f[i]);
+        gy_d[i] = static_cast<double>(gy_f[i]);
+    }
     nnr::relu_vjp(x_d, gy_d, gx_ref, static_cast<int>(nel));
 
     // ── DEVICE (soft-skip with no adapter): seed x + gy BY VALUE; read back gx (the plan's single Output). ──
@@ -3543,14 +4401,21 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly inputs) r
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-25c-1b relu_vjp gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-25c-1b relu_vjp gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
     const QuantSeed seeds[2] = {{x, x_f, nullptr, nel}, {gy, gy_f, nullptr, nel}};
     float           got[nel] = {};
     REQUIRE(run_quant_module(compute, ctx, &root, plan, seeds, 2U, gx, got, static_cast<crd::usize>(nel)));
-    for (crd::u32 i = 0; i < nel; ++i) { CHECK(got[i] == static_cast<float>(gx_ref[i])); } // pure select ⇒ EXACT
+    for (crd::u32 i = 0; i < nel; ++i) // pure select ⇒ EXACT
+    {
+        CHECK(got[i] == static_cast<float>(gx_ref[i]));
+    }
 }
 
 // CEIR-25c-2 — the §138 ML PROOF crown (MLP-backward leg): an ml.mlp(x[8,4], W1[4,4], W2[4,4]){relu} differentiated by vjp_mlp (the
@@ -3573,7 +4438,11 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3618,14 +4487,26 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     double md[mrows * d2];
     for (int i = 0; i < mrows; ++i)
     {
-        for (int a = 0; a < d0; ++a) { xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0; } // [0.5, 1.0]
+        for (int a = 0; a < d0; ++a) // [0.5, 1.0]
+        {
+            xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0;
+        }
     }
     for (int a = 0; a < d0; ++a)
     {
-        for (int c = 0; c < d1; ++c) { w1d[a * d1 + c] = (c < 2 ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a)); }
+        for (int c = 0; c < d1; ++c)
+        {
+            w1d[a * d1 + c] = (c < 2 ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a));
+        }
     }
-    for (int i = 0; i < d1 * d2; ++i) { w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2; }
-    for (int i = 0; i < mrows * d2; ++i) { md[i] = 0.2 + 0.11 * static_cast<double>(i); } // NON-uniform mask
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2;
+    }
+    for (int i = 0; i < mrows * d2; ++i) // NON-uniform mask
+    {
+        md[i] = 0.2 + 0.11 * static_cast<double>(i);
+    }
 
     // ── the DIALECT-INDEPENDENT reference (all hesap): forward matmul/relu -> z1,h1,z2; backward matmul_vjp/relu_vjp composed. ──
     namespace nnr = crd::hesap::autodiff::reverse::nn;
@@ -3642,7 +4523,10 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     {
         neg += z1[i] <= 0.0 ? 1 : 0;
         const double a = crd::math::abs(z1[i]);
-        if (a < minabs) { minabs = a; }
+        if (a < minabs)
+        {
+            minabs = a;
+        }
     }
     REQUIRE(neg > 0);
     REQUIRE(neg < mrows * d1);
@@ -3651,12 +4535,22 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     bool m_distinct = false;
     for (int i = 0; i < mrows * d2 && !m_distinct; ++i)
     {
-        for (int j = i + 1; j < mrows * d2; ++j) { if (md[i] != md[j]) { m_distinct = true; break; } }
+        for (int j = i + 1; j < mrows * d2; ++j)
+        {
+            if (md[i] != md[j])
+            {
+                m_distinct = true;
+                break;
+            }
+        }
     }
     REQUIRE(m_distinct);
 
     double dz2[mrows * d2];
-    for (int i = 0; i < mrows * d2; ++i) { dz2[i] = md[i]; } // dLoss/dout = M (loss = <M, out>)
+    for (int i = 0; i < mrows * d2; ++i) // dLoss/dout = M (loss = <M, out>)
+    {
+        dz2[i] = md[i];
+    }
     double dh1[mrows * d1];
     double dw2ref[d1 * d2];
     nnr::matmul_vjp(h1, w2d, dz2, dh1, dw2ref, mrows, d1, d2); // dh1 = dz2·W2ᵀ; dW2 = h1ᵀ·dz2
@@ -3673,35 +4567,63 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     {
         for (int c = 0; c < d1; ++c)
         {
-            if (c >= 2) { CHECK(dw1ref[a * d1 + c] == 0.0); }
-            else { CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05); }
+            if (c >= 2)
+            {
+                CHECK(dw1ref[a * d1 + c] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05);
+            }
         }
     }
     for (int c = 0; c < d1; ++c)
     {
         for (int e = 0; e < d2; ++e)
         {
-            if (c >= 2) { CHECK(dw2ref[c * d2 + e] == 0.0); }
-            else { CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05); }
+            if (c >= 2)
+            {
+                CHECK(dw2ref[c * d2 + e] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05);
+            }
         }
     }
 
     // ── FD witness on L(W) = <M, mlp(x,W)>, W = [W1;W2] flattened — validates the analytic ref BEFORE it judges the device. ──
     constexpr int nw = d0 * d1 + d1 * d2;
     double        wflat[nw];
-    for (int i = 0; i < d0 * d1; ++i) { wflat[i] = w1d[i]; }
-    for (int i = 0; i < d1 * d2; ++i) { wflat[d0 * d1 + i] = w2d[i]; }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        wflat[i] = w1d[i];
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        wflat[d0 * d1 + i] = w2d[i];
+    }
     double gfd[nw];
     crd::hesap::autodiff::testing::grad_fd<nw>(MlpLoss{xd, md, mrows, d0, d1, d2}, wflat, gfd);
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed x, W1, W2, dLoss=M BY VALUE; read back BOTH dW1 (Output) + dW2 (Intermediate, via (b)). ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-25c-2 MLP backward gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-25c-2 MLP backward gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -3709,10 +4631,22 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     float w1f[d0 * d1];
     float w2f[d1 * d2];
     float mf[mrows * d2];
-    for (int i = 0; i < mrows * d0; ++i) { xf[i] = static_cast<float>(xd[i]); }
-    for (int i = 0; i < d0 * d1; ++i) { w1f[i] = static_cast<float>(w1d[i]); }
-    for (int i = 0; i < d1 * d2; ++i) { w2f[i] = static_cast<float>(w2d[i]); }
-    for (int i = 0; i < mrows * d2; ++i) { mf[i] = static_cast<float>(md[i]); }
+    for (int i = 0; i < mrows * d0; ++i)
+    {
+        xf[i] = static_cast<float>(xd[i]);
+    }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        w1f[i] = static_cast<float>(w1d[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2f[i] = static_cast<float>(w2d[i]);
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        mf[i] = static_cast<float>(md[i]);
+    }
     const QuantSeed seeds[4]        = {{xin, xf, nullptr, mrows * d0}, {w1, w1f, nullptr, d0 * d1},
                                        {w2, w2f, nullptr, d1 * d2}, {gr.seed, mf, nullptr, mrows * d2}};
     float           dw1got[d0 * d1] = {};
@@ -3721,8 +4655,14 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
                                        {grads[1], dw2got, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan, seeds, 4U, outs, 2U));
     // device f32 (chained matmuls + relu_vjp) vs the f64 analytic ref — DERIVED relative tolerance (small dots, |ref| ~ O(1)).
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── CEIR-26a-3 DCE DIFFERENTIAL (leg (b) of the band-lock): for a SEMANTICS-PRESERVING pass the reference is NOT hesap-within-tol
     //    (a 1e-5 perturbation would pass) — it is the RAW program's OWN device output, BIT-EXACT. PIN the readback gradients first (a
@@ -3742,11 +4682,23 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
     const QuantOut outs_dce[2]         = {{grads[0], dw1got_dce, static_cast<crd::usize>(d0 * d1)},
                                           {grads[1], dw2got_dce, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan_dce, seeds, 4U, outs_dce, 2U)); // SAME seeds — every input Value survives DCE
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(dw1got_dce[i] == dw1got[i]); } // BIT-EXACT vs the raw device output — DCE touched nothing observable
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(dw2got_dce[i] == dw2got[i]); }
+    for (int i = 0; i < d0 * d1; ++i) // BIT-EXACT vs the raw device output — DCE touched nothing observable
+    {
+        CHECK(dw1got_dce[i] == dw1got[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(dw2got_dce[i] == dw2got[i]);
+    }
     // the DCE'd output also stands alone vs hesap (transitivity, but reads as "dce'd == hesap" on its own).
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got_dce[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got_dce[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got_dce[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got_dce[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 }
 
 // CEIR-26d-4b (Vulkan) — the vjp shape-specialization PROVING gate (the grad.cpp MlpBakedShapeUnsupported reject FLIPS to a run):
@@ -3770,7 +4722,11 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     (void)ce::ml::register_dialect(ctx);
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3814,14 +4770,26 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     double md[mrows * d2];
     for (int i = 0; i < mrows; ++i)
     {
-        for (int a = 0; a < d0; ++a) { xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0; } // [0.5, 1.0]
+        for (int a = 0; a < d0; ++a) // [0.5, 1.0]
+        {
+            xd[i * d0 + a] = 0.5 + 0.5 * static_cast<double>((i * 3 + a) % 7) / 6.0;
+        }
     }
     for (int a = 0; a < d0; ++a)
     {
-        for (int c = 0; c < d1; ++c) { w1d[a * d1 + c] = (c < dhalf ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a)); }
+        for (int c = 0; c < d1; ++c)
+        {
+            w1d[a * d1 + c] = (c < dhalf ? 1.0 : -1.0) * (0.3 + 0.1 * static_cast<double>(a));
+        }
     }
-    for (int i = 0; i < d1 * d2; ++i) { w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2; }
-    for (int i = 0; i < mrows * d2; ++i) { md[i] = 0.2 + 0.11 * static_cast<double>(i); } // NON-uniform mask
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2d[i] = static_cast<double>((i * 3 + 2) % 9 - 4) * 0.2;
+    }
+    for (int i = 0; i < mrows * d2; ++i) // NON-uniform mask
+    {
+        md[i] = 0.2 + 0.11 * static_cast<double>(i);
+    }
 
     namespace nnr = crd::hesap::autodiff::reverse::nn;
     double z1[mrows * d1];
@@ -3836,14 +4804,20 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     {
         neg += z1[i] <= 0.0 ? 1 : 0;
         const double a = crd::math::abs(z1[i]);
-        if (a < minabs) { minabs = a; }
+        if (a < minabs)
+        {
+            minabs = a;
+        }
     }
     REQUIRE(neg > 0);
     REQUIRE(neg < mrows * d1);
     REQUIRE(minabs > 0.05); // z1 off the relu kink so the FD witness is valid
 
     double dz2[mrows * d2];
-    for (int i = 0; i < mrows * d2; ++i) { dz2[i] = md[i]; }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        dz2[i] = md[i];
+    }
     double dh1[mrows * d1];
     double dw2ref[d1 * d2];
     nnr::matmul_vjp(h1, w2d, dz2, dh1, dw2ref, mrows, d1, d2);
@@ -3859,35 +4833,63 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     {
         for (int c = 0; c < d1; ++c)
         {
-            if (c >= dhalf) { CHECK(dw1ref[a * d1 + c] == 0.0); }
-            else { CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05); }
+            if (c >= dhalf)
+            {
+                CHECK(dw1ref[a * d1 + c] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw1ref[a * d1 + c]) > 0.05);
+            }
         }
     }
     for (int c = 0; c < d1; ++c)
     {
         for (int e = 0; e < d2; ++e)
         {
-            if (c >= dhalf) { CHECK(dw2ref[c * d2 + e] == 0.0); }
-            else { CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05); }
+            if (c >= dhalf)
+            {
+                CHECK(dw2ref[c * d2 + e] == 0.0);
+            }
+            else
+            {
+                CHECK(crd::math::abs(dw2ref[c * d2 + e]) > 0.05);
+            }
         }
     }
 
     // ── FD witness on L(W) = <M, mlp(x,W)> — validates the analytic ref BEFORE it judges the device. ──
     constexpr int nw = d0 * d1 + d1 * d2;
     double        wflat[nw];
-    for (int i = 0; i < d0 * d1; ++i) { wflat[i] = w1d[i]; }
-    for (int i = 0; i < d1 * d2; ++i) { wflat[d0 * d1 + i] = w2d[i]; }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        wflat[i] = w1d[i];
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        wflat[d0 * d1 + i] = w2d[i];
+    }
     double gfd[nw];
     crd::hesap::autodiff::testing::grad_fd<nw>(MlpLoss{xd, md, mrows, d0, d1, d2}, wflat, gfd);
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(gfd[i] - dw1ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(gfd[d0 * d1 + i] - dw2ref[i]) <= 1e-5 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 
     // ── DEVICE (soft-skip with no adapter): seed x, W1, W2, dLoss=M BY VALUE; read back BOTH dW1 (Output) + dW2 (Intermediate). ──
     crd::gpu::GpuContextConfig cfg;
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-26d-4b non-32 vjp gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-26d-4b non-32 vjp gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -3895,10 +4897,22 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     float w1f[d0 * d1];
     float w2f[d1 * d2];
     float mf[mrows * d2];
-    for (int i = 0; i < mrows * d0; ++i) { xf[i] = static_cast<float>(xd[i]); }
-    for (int i = 0; i < d0 * d1; ++i) { w1f[i] = static_cast<float>(w1d[i]); }
-    for (int i = 0; i < d1 * d2; ++i) { w2f[i] = static_cast<float>(w2d[i]); }
-    for (int i = 0; i < mrows * d2; ++i) { mf[i] = static_cast<float>(md[i]); }
+    for (int i = 0; i < mrows * d0; ++i)
+    {
+        xf[i] = static_cast<float>(xd[i]);
+    }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        w1f[i] = static_cast<float>(w1d[i]);
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        w2f[i] = static_cast<float>(w2d[i]);
+    }
+    for (int i = 0; i < mrows * d2; ++i)
+    {
+        mf[i] = static_cast<float>(md[i]);
+    }
     const QuantSeed seeds[4]        = {{xin, xf, nullptr, mrows * d0}, {w1, w1f, nullptr, d0 * d1},
                                        {w2, w2f, nullptr, d1 * d2}, {gr.seed, mf, nullptr, mrows * d2}};
     float           dw1got[d0 * d1] = {};
@@ -3906,8 +4920,14 @@ TEST_CASE("ceir 26d-4b: the vjp_mlp backward at a NON-32 interior width (h1=64) 
     const QuantOut  outs[2]         = {{grads[0], dw1got, static_cast<crd::usize>(d0 * d1)},
                                        {grads[1], dw2got, static_cast<crd::usize>(d1 * d2)}};
     REQUIRE(run_quant_module_n(compute, ctx, &root, plan, seeds, 4U, outs, 2U));
-    for (int i = 0; i < d0 * d1; ++i) { CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i]))); }
-    for (int i = 0; i < d1 * d2; ++i) { CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i]))); }
+    for (int i = 0; i < d0 * d1; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw1got[i]) - dw1ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw1ref[i])));
+    }
+    for (int i = 0; i < d1 * d2; ++i)
+    {
+        CHECK(crd::math::abs(static_cast<double>(dw2got[i]) - dw2ref[i]) <= 1e-4 * (1.0 + crd::math::abs(dw2ref[i])));
+    }
 }
 
 // CEIR-26b-2b (Vulkan) — the canonicalize reshape-fold BIT-EXACT vs the RAW device output (the 26a semantics-preserving-pass
@@ -3928,7 +4948,11 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
 
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -3979,7 +5003,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         for (int j = 0; j < kSide; ++j)
         {
             crd::f64 acc = 0.0;
-            for (int k = 0; k < kSide; ++k) { acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]); }
+            for (int k = 0; k < kSide; ++k)
+            {
+                acc += static_cast<crd::f64>(a_data[i * kSide + k]) * static_cast<crd::f64>(b_data[k * kSide + j]);
+            }
             dref[i * kSide + j] = acc;
         }
     }
@@ -3989,7 +5016,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     for (int kk = 0; kk < kL; ++kk)
     {
         crd::f64 fr = 0.0;
-        for (int l = 0; l < kL; ++l) { fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL)); }
+        for (int l = 0; l < kL; ++l)
+        {
+            fr += dref[l] * crd::math::cos(two_pi * static_cast<crd::f64>(kk) * static_cast<crd::f64>(l) / static_cast<crd::f64>(kL));
+        }
         s_ref += fr;
         const crd::f64 am = fr < 0.0 ? -fr : fr;
         maxmag            = maxmag > am ? maxmag : am;
@@ -4000,7 +5030,11 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device -- skipping the CEIR-26b-2b reshape-fold differential"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device -- skipping the CEIR-26b-2b reshape-fold differential");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -4014,10 +5048,20 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         for (crd::usize i = 0; i < nb; ++i)
         {
             const ceg::PlanBuffer& pb = plan.buffers[i];
-            if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+            if (pb.role == ceg::BufferRole::Alias)
+            {
+                bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+                continue;
+            }
             crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-            if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-            else if (pb.role == ceg::BufferRole::Output) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+            if (pb.role == ceg::BufferRole::ExternalIn)
+            {
+                mem = crd::gpu::ComputeMemory::CpuToGpu;
+            }
+            else if (pb.role == ceg::BufferRole::Output)
+            {
+                mem = crd::gpu::ComputeMemory::GpuToCpu;
+            }
             owned[i] = compute.create_buffer(pb.bytes, crd::gpu::compute_usage::storage, mem);
             REQUIRE(owned[i] != nullptr);
             bufs[i] = owned[i].get();
@@ -4026,16 +5070,37 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
                 auto* dst = static_cast<float*>(owned[i]->map());
                 REQUIRE(dst != nullptr);
                 const crd::u64 cnt = pb.bytes / 4ULL;
-                if (pb.value == a_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-                else if (pb.value == b_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-                else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } }
+                if (pb.value == a_in)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = a_data[e];
+                    }
+                }
+                else if (pb.value == b_in)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = b_data[e];
+                    }
+                }
+                else
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = 0.0F;
+                    }
+                }
                 owned[i]->unmap();
             }
         }
         for (crd::usize s = 0; s < plan.stages.size(); ++s)
         {
             const ceg::PlanStage& st = plan.stages[s];
-            if (st.kind != ceg::StageKind::Fft) { continue; }
+            if (st.kind != ceg::StageKind::Fft)
+            {
+                continue;
+            }
             const crd::i32 btr  = st.bind[2];
             const crd::i32 bti  = st.bind[3];
             const int      half = static_cast<int>(plan.buffers[static_cast<crd::usize>(btr)].bytes / 4ULL);
@@ -4059,7 +5124,14 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         res.compute   = &compute;
         crd::i32 out_idx = -1;
         int      n_out   = 0;
-        for (crd::usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == ceg::BufferRole::Output) { out_idx = static_cast<crd::i32>(i); ++n_out; } }
+        for (crd::usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].role == ceg::BufferRole::Output)
+            {
+                out_idx = static_cast<crd::i32>(i);
+                ++n_out;
+            }
+        }
         REQUIRE(out_idx >= 0);
         REQUIRE(n_out == 1); // exactly ONE Output (the rank-0 reduce) — a 2nd would make bit-exact compare the wrong scalar to itself
         auto&                   rec = compute.begin();
@@ -4082,7 +5154,10 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     int raw_alias = 0;
     for (crd::usize i = 0; i < raw_plan.buffers.size(); ++i)
     {
-        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias) { continue; }
+        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias)
+        {
+            continue;
+        }
         ++raw_alias;
         // ⛔ the runner's one-level bufs[i]=bufs[alias_of] resolves the r_out->r_in->gemm chain transitively ONLY because plan
         //    buffers are walk-ordered producer-first (alias_of < i). GATE it: a reorder would silently null-deref the raw run.
@@ -4103,7 +5178,13 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
     REQUIRE(opt_plan.reject == ceg::PlanReject::None);
     REQUIRE(opt_plan.stages.size() == 3U);
     int opt_alias = 0;
-    for (crd::usize i = 0; i < opt_plan.buffers.size(); ++i) { if (opt_plan.buffers[i].role == ceg::BufferRole::Alias) { ++opt_alias; } }
+    for (crd::usize i = 0; i < opt_plan.buffers.size(); ++i)
+    {
+        if (opt_plan.buffers[i].role == ceg::BufferRole::Alias)
+        {
+            ++opt_alias;
+        }
+    }
     CHECK(opt_alias == 1); // 2 -> 1
     const float opt_s = run(opt_plan);
 
@@ -4138,7 +5219,11 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
 
     ce::Module* const m   = ctx.create_module();
     ce::Block*        top = m->body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m->body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m->body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const b   = ce::func::func_body_block(f);
@@ -4197,7 +5282,10 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         for (int j = 0; j < kSide; ++j)
         {
             crd::f64 acc = 0.0;
-            for (int kk = 0; kk < kSide; ++kk) { acc += static_cast<crd::f64>(a_data[i * kSide + kk]) * static_cast<crd::f64>(b_data[kk * kSide + j]); }
+            for (int kk = 0; kk < kSide; ++kk)
+            {
+                acc += static_cast<crd::f64>(a_data[i * kSide + kk]) * static_cast<crd::f64>(b_data[kk * kSide + j]);
+            }
             max_ref = max_ref > acc ? max_ref : acc; // max over all 64 gemm outputs
             sum_ref += acc;                          // sum over all 64
         }
@@ -4210,7 +5298,11 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device -- skipping the CEIR-26c-2b duplicate-gemm differential"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device -- skipping the CEIR-26c-2b duplicate-gemm differential");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -4228,10 +5320,19 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         crd::i32 sum_idx = -1;
         for (crd::usize s = 0; s < plan.stages.size(); ++s)
         {
-            if (plan.stages[s].kind != ceg::StageKind::Reduce) { continue; }
+            if (plan.stages[s].kind != ceg::StageKind::Reduce)
+            {
+                continue;
+            }
             const crd::i32 ob = plan.stages[s].bind[1]; // reduce: bind[0]=input, bind[1]=output
-            if (plan.stages[s].op == ra) { max_idx = ob; }
-            else if (plan.stages[s].op == rb) { sum_idx = ob; }
+            if (plan.stages[s].op == ra)
+            {
+                max_idx = ob;
+            }
+            else if (plan.stages[s].op == rb)
+            {
+                sum_idx = ob;
+            }
         }
         REQUIRE(max_idx >= 0);
         REQUIRE(sum_idx >= 0);
@@ -4239,11 +5340,24 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         for (crd::usize i = 0; i < nb; ++i)
         {
             const ceg::PlanBuffer& pb = plan.buffers[i];
-            if (pb.role == ceg::BufferRole::Alias) { bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)]; continue; }
+            if (pb.role == ceg::BufferRole::Alias)
+            {
+                bufs[i] = bufs[static_cast<crd::usize>(pb.alias_of)];
+                continue;
+            }
             crd::gpu::ComputeMemory mem = crd::gpu::ComputeMemory::GpuOnly;
-            if (pb.role == ceg::BufferRole::ExternalIn) { mem = crd::gpu::ComputeMemory::CpuToGpu; }
-            else if (pb.role == ceg::BufferRole::Output) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
-            if (static_cast<crd::i32>(i) == max_idx || static_cast<crd::i32>(i) == sum_idx) { mem = crd::gpu::ComputeMemory::GpuToCpu; }
+            if (pb.role == ceg::BufferRole::ExternalIn)
+            {
+                mem = crd::gpu::ComputeMemory::CpuToGpu;
+            }
+            else if (pb.role == ceg::BufferRole::Output)
+            {
+                mem = crd::gpu::ComputeMemory::GpuToCpu;
+            }
+            if (static_cast<crd::i32>(i) == max_idx || static_cast<crd::i32>(i) == sum_idx)
+            {
+                mem = crd::gpu::ComputeMemory::GpuToCpu;
+            }
             owned[i] = compute.create_buffer(pb.bytes, crd::gpu::compute_usage::storage, mem);
             REQUIRE(owned[i] != nullptr);
             bufs[i] = owned[i].get();
@@ -4252,9 +5366,27 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
                 auto* dst = static_cast<float*>(owned[i]->map());
                 REQUIRE(dst != nullptr);
                 const crd::u64 cnt = pb.bytes / 4ULL;
-                if (pb.value == a_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = a_data[e]; } }
-                else if (pb.value == b_in) { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = b_data[e]; } }
-                else { for (crd::u64 e = 0; e < cnt; ++e) { dst[e] = 0.0F; } }
+                if (pb.value == a_in)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = a_data[e];
+                    }
+                }
+                else if (pb.value == b_in)
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = b_data[e];
+                    }
+                }
+                else
+                {
+                    for (crd::u64 e = 0; e < cnt; ++e)
+                    {
+                        dst[e] = 0.0F;
+                    }
+                }
                 owned[i]->unmap();
             }
         }
@@ -4287,9 +5419,18 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     crd::i32 raw_g_b = -1;
     for (crd::usize s = 0; s < raw_plan.stages.size(); ++s)
     {
-        if (raw_plan.stages[s].kind != ceg::StageKind::Gemm) { continue; }
-        if (raw_g_a < 0) { raw_g_a = raw_plan.stages[s].bind[2]; }
-        else { raw_g_b = raw_plan.stages[s].bind[2]; }
+        if (raw_plan.stages[s].kind != ceg::StageKind::Gemm)
+        {
+            continue;
+        }
+        if (raw_g_a < 0)
+        {
+            raw_g_a = raw_plan.stages[s].bind[2];
+        }
+        else
+        {
+            raw_g_b = raw_plan.stages[s].bind[2];
+        }
     }
     REQUIRE(raw_g_a >= 0);
     REQUIRE(raw_g_b >= 0);
@@ -4298,7 +5439,10 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     //    because plan buffers are walk-ordered producer-first (alias_of < i); a reorder would silently null-deref.
     for (crd::usize i = 0; i < raw_plan.buffers.size(); ++i)
     {
-        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias) { continue; }
+        if (raw_plan.buffers[i].role != ceg::BufferRole::Alias)
+        {
+            continue;
+        }
         REQUIRE(raw_plan.buffers[i].alias_of >= 0);
         REQUIRE(static_cast<crd::usize>(raw_plan.buffers[i].alias_of) < i);
     }
@@ -4321,14 +5465,20 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     REQUIRE(opt_plan.reject == ceg::PlanReject::None);
     REQUIRE(opt_plan.stages.size() == 3U);
     int opt_gemm = 0;
-    for (crd::usize s = 0; s < opt_plan.stages.size(); ++s) { opt_gemm += opt_plan.stages[s].kind == ceg::StageKind::Gemm ? 1 : 0; }
+    for (crd::usize s = 0; s < opt_plan.stages.size(); ++s)
+    {
+        opt_gemm += opt_plan.stages[s].kind == ceg::StageKind::Gemm ? 1 : 0;
+    }
     REQUIRE(opt_gemm == 1);
     // ⛔ advisor 3-check (the fork-on-ALIAS defect the device-free plan gate cannot see — OPT is RE-planned after 2 erasures):
     // (1) OPT alias-order gate (RAW had it; OPT did not); (2) both reduces bind the SAME merged alias; (3) it aliases THIS plan's
     // gemm output.
     for (crd::usize i = 0; i < opt_plan.buffers.size(); ++i)
     {
-        if (opt_plan.buffers[i].role != ceg::BufferRole::Alias) { continue; }
+        if (opt_plan.buffers[i].role != ceg::BufferRole::Alias)
+        {
+            continue;
+        }
         REQUIRE(opt_plan.buffers[i].alias_of >= 0);
         REQUIRE(static_cast<crd::usize>(opt_plan.buffers[i].alias_of) < i); // producer-first
     }
@@ -4339,10 +5489,24 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
     crd::i32 o_sumin = -1;
     for (crd::usize s = 0; s < opt_plan.stages.size(); ++s)
     {
-        if (opt_plan.stages[s].kind == ceg::StageKind::Gemm) { o_ga = opt_plan.stages[s].bind[0]; o_gb = opt_plan.stages[s].bind[1]; o_gemm = opt_plan.stages[s].bind[2]; }
-        if (opt_plan.stages[s].kind != ceg::StageKind::Reduce) { continue; }
-        if (opt_plan.stages[s].op == ra) { o_maxin = opt_plan.stages[s].bind[0]; }
-        else if (opt_plan.stages[s].op == rb) { o_sumin = opt_plan.stages[s].bind[0]; }
+        if (opt_plan.stages[s].kind == ceg::StageKind::Gemm)
+        {
+            o_ga = opt_plan.stages[s].bind[0];
+            o_gb = opt_plan.stages[s].bind[1];
+            o_gemm = opt_plan.stages[s].bind[2];
+        }
+        if (opt_plan.stages[s].kind != ceg::StageKind::Reduce)
+        {
+            continue;
+        }
+        if (opt_plan.stages[s].op == ra)
+        {
+            o_maxin = opt_plan.stages[s].bind[0];
+        }
+        else if (opt_plan.stages[s].op == rb)
+        {
+            o_sumin = opt_plan.stages[s].bind[0];
+        }
     }
     REQUIRE(o_maxin >= 0);
     REQUIRE(o_sumin >= 0);

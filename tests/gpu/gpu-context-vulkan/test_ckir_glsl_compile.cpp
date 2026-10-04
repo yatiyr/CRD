@@ -143,7 +143,20 @@ TEST_CASE("B9/RT-1a: inline rayQuery compute kernel lowers to correct GLSL and H
 {
     const auto has = [](const kir::GlslKernel& k, const char* needle) {
         const char* hay = k.source.c_str();
-        for (const char* p = hay; *p != '\0'; ++p) { const char* a = p; const char* b = needle; while (*b != '\0' && *a == *b) { ++a; ++b; } if (*b == '\0') { return true; } }
+        for (const char* p = hay; *p != '\0'; ++p)
+        {
+            const char* a = p;
+            const char* b = needle;
+            while (*b != '\0' && *a == *b)
+            {
+                ++a;
+                ++b;
+            }
+            if (*b == '\0')
+            {
+                return true;
+            }
+        }
         return false;
     };
     crd::memory::TlsfAllocator alloc(16 << 20);
@@ -237,9 +250,18 @@ TEST_CASE("D-007 IB-2: ReSTIR GI passes lower to valid GLSL and HLSL", "[kir][gl
     {
         kir::KGraph g(&alloc);
         kir::KEntry e;
-        if (pass == 0) { e = kir::rt::build_restir_gi_temporal_kernel(g, cfg); }
-        else if (pass == 1) { e = kir::rt::build_restir_gi_spatial_kernel(g, cfg); }
-        else { e = kir::rt::build_restir_gi_shade_kernel(g, cfg); }
+        if (pass == 0)
+        {
+            e = kir::rt::build_restir_gi_temporal_kernel(g, cfg);
+        }
+        else if (pass == 1)
+        {
+            e = kir::rt::build_restir_gi_spatial_kernel(g, cfg);
+        }
+        else
+        {
+            e = kir::rt::build_restir_gi_shade_kernel(g, cfg);
+        }
         kir::GlslKernel kg(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kg));
         INFO("pass=" << names[pass] << " GLSL:\n" << kg.source.c_str());
@@ -302,9 +324,18 @@ TEST_CASE("D-007 RT-5: spatiotemporal ReSTIR passes lower to valid GLSL and HLSL
     {
         kir::KGraph g(&alloc);
         kir::KEntry e;
-        if (pass == 0) { e = kir::rt::build_restir_temporal_kernel(g, cfg); }
-        else if (pass == 1) { e = kir::rt::build_restir_spatial_kernel(g, cfg); }
-        else { e = kir::rt::build_restir_shade_kernel(g, cfg); }
+        if (pass == 0)
+        {
+            e = kir::rt::build_restir_temporal_kernel(g, cfg);
+        }
+        else if (pass == 1)
+        {
+            e = kir::rt::build_restir_spatial_kernel(g, cfg);
+        }
+        else
+        {
+            e = kir::rt::build_restir_shade_kernel(g, cfg);
+        }
         kir::GlslKernel kg(&alloc);
         REQUIRE(kir::emit_compute_kernel_glsl(g, e, &alloc, kg));
         INFO("pass=" << names[pass] << " GLSL:\n" << kg.source.c_str());

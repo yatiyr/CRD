@@ -24,9 +24,15 @@ namespace
 void build_spd(crd::f64* a, int n)
 {
     crd::f64 m[64];
-    for (int i = 0; i < n * n; ++i) { m[i] = 0.3 + 0.2 * std::sin(1.0 + i * 1.7); }
+    for (int i = 0; i < n * n; ++i)
+    {
+        m[i] = 0.3 + 0.2 * std::sin(1.0 + i * 1.7);
+    }
     mj::gemm_tn(m, m, a, n, n, n); // Mᵀ M
-    for (int i = 0; i < n; ++i) { a[i * n + i] += static_cast<crd::f64>(n); }
+    for (int i = 0; i < n; ++i)
+    {
+        a[i * n + i] += static_cast<crd::f64>(n);
+    }
 }
 } // namespace
 
@@ -44,10 +50,17 @@ TEST_CASE("gemm_jvp == FD", "[autodiff][matrix]")
     mj::gemm_jvp(a, b, da, db, dc, n, n, n, sc);
     const crd::f64 eps = 1e-6;
     crd::f64       ap[n * n], bp[n * n], c0[n * n], c1[n * n];
-    for (int i = 0; i < n * n; ++i) { ap[i] = a[i] + eps * da[i]; bp[i] = b[i] + eps * db[i]; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        ap[i] = a[i] + eps * da[i];
+        bp[i] = b[i] + eps * db[i];
+    }
     mj::gemm(a, b, c0, n, n, n);
     mj::gemm(ap, bp, c1, n, n, n);
-    for (int i = 0; i < n * n; ++i) { CHECK_THAT(dc[i], WithinRel((c1[i] - c0[i]) / eps, 1e-4)); }
+    for (int i = 0; i < n * n; ++i)
+    {
+        CHECK_THAT(dc[i], WithinRel((c1[i] - c0[i]) / eps, 1e-4));
+    }
 }
 
 TEST_CASE("solve_spd_jvp == FD (factor reuse)", "[autodiff][matrix]")
@@ -55,32 +68,59 @@ TEST_CASE("solve_spd_jvp == FD (factor reuse)", "[autodiff][matrix]")
     constexpr int n = 4;
     crd::f64      a[n * n], l[n * n], b[n], x[n], da[n * n], db[n], dx[n], r[n];
     build_spd(a, n);
-    for (int i = 0; i < n; ++i) { b[i] = 1.0 + 0.3 * i; }
+    for (int i = 0; i < n; ++i)
+    {
+        b[i] = 1.0 + 0.3 * i;
+    }
     mj::cholesky(a, l, n);
     mj::trisolve_lower(l, b, x, n, 1);
     mj::trisolve_lower_t(l, x, x, n, 1); // x = A⁻¹b
     crd::f64 dsym[n * n];
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { dsym[i * n + j] = 0.02 * std::cos(1.0 + i + 2.0 * j); }
+        for (int j = 0; j < n; ++j)
+        {
+            dsym[i * n + j] = 0.02 * std::cos(1.0 + i + 2.0 * j);
+        }
     }
     for (int i = 0; i < n; ++i) // symmetrize dA (perturbation must keep A SPD-symmetric)
     {
-        for (int j = i + 1; j < n; ++j) { dsym[j * n + i] = dsym[i * n + j]; }
+        for (int j = i + 1; j < n; ++j)
+        {
+            dsym[j * n + i] = dsym[i * n + j];
+        }
     }
-    for (int i = 0; i < n; ++i) { da[i * n + i] = dsym[i * n + i]; }
-    for (int i = 0; i < n * n; ++i) { da[i] = dsym[i]; }
-    for (int i = 0; i < n; ++i) { db[i] = 0.1 * (i + 1); }
+    for (int i = 0; i < n; ++i)
+    {
+        da[i * n + i] = dsym[i * n + i];
+    }
+    for (int i = 0; i < n * n; ++i)
+    {
+        da[i] = dsym[i];
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        db[i] = 0.1 * (i + 1);
+    }
     mj::solve_spd_jvp(l, x, da, db, dx, n, 1, r);
 
     const crd::f64 eps = 1e-6;
     crd::f64       ap[n * n], lp[n * n], bp[n], xp[n];
-    for (int i = 0; i < n * n; ++i) { ap[i] = a[i] + eps * da[i]; }
-    for (int i = 0; i < n; ++i) { bp[i] = b[i] + eps * db[i]; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        ap[i] = a[i] + eps * da[i];
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        bp[i] = b[i] + eps * db[i];
+    }
     mj::cholesky(ap, lp, n);
     mj::trisolve_lower(lp, bp, xp, n, 1);
     mj::trisolve_lower_t(lp, xp, xp, n, 1);
-    for (int i = 0; i < n; ++i) { CHECK_THAT(dx[i], WithinRel((xp[i] - x[i]) / eps, 1e-4)); }
+    for (int i = 0; i < n; ++i)
+    {
+        CHECK_THAT(dx[i], WithinRel((xp[i] - x[i]) / eps, 1e-4));
+    }
 }
 
 TEST_CASE("logdet_spd_jvp == FD (value-only, degeneracy-free)", "[autodiff][matrix]")
@@ -90,11 +130,17 @@ TEST_CASE("logdet_spd_jvp == FD (value-only, degeneracy-free)", "[autodiff][matr
     build_spd(a, n);
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { da[i * n + j] = 0.03 * std::cos(2.0 + i + j); }
+        for (int j = 0; j < n; ++j)
+        {
+            da[i * n + j] = 0.03 * std::cos(2.0 + i + j);
+        }
     }
     for (int i = 0; i < n; ++i)
     {
-        for (int j = i + 1; j < n; ++j) { da[j * n + i] = da[i * n + j]; }
+        for (int j = i + 1; j < n; ++j)
+        {
+            da[j * n + i] = da[i * n + j];
+        }
     }
     mj::cholesky(a, l, n);
     const crd::f64 dld = mj::logdet_spd_jvp(l, da, n, m1, m2);
@@ -102,11 +148,20 @@ TEST_CASE("logdet_spd_jvp == FD (value-only, degeneracy-free)", "[autodiff][matr
     const crd::f64 eps = 1e-6;
     crd::f64       ap[n * n], lp[n * n];
     crd::f64       ld0 = 0.0;
-    for (int i = 0; i < n; ++i) { ld0 += 2.0 * std::log(l[i * n + i]); }
-    for (int i = 0; i < n * n; ++i) { ap[i] = a[i] + eps * da[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        ld0 += 2.0 * std::log(l[i * n + i]);
+    }
+    for (int i = 0; i < n * n; ++i)
+    {
+        ap[i] = a[i] + eps * da[i];
+    }
     mj::cholesky(ap, lp, n);
     crd::f64 ld1 = 0.0;
-    for (int i = 0; i < n; ++i) { ld1 += 2.0 * std::log(lp[i * n + i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        ld1 += 2.0 * std::log(lp[i * n + i]);
+    }
     CHECK_THAT(dld, WithinRel((ld1 - ld0) / eps, 1e-4));
 }
 
@@ -156,21 +211,33 @@ TEST_CASE("cholesky_jvp == FD", "[autodiff][matrix]")
     build_spd(a, n);
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j < n; ++j) { da[i * n + j] = 0.01 * std::cos(1.0 + i + j); }
+        for (int j = 0; j < n; ++j)
+        {
+            da[i * n + j] = 0.01 * std::cos(1.0 + i + j);
+        }
     }
     for (int i = 0; i < n; ++i)
     {
-        for (int j = i + 1; j < n; ++j) { da[j * n + i] = da[i * n + j]; }
+        for (int j = i + 1; j < n; ++j)
+        {
+            da[j * n + i] = da[i * n + j];
+        }
     }
     mj::cholesky(a, l, n);
     mj::cholesky_jvp(l, da, dl, n, m1, m2);
     const crd::f64 eps = 1e-6;
     crd::f64       ap[n * n], lp[n * n];
-    for (int i = 0; i < n * n; ++i) { ap[i] = a[i] + eps * da[i]; }
+    for (int i = 0; i < n * n; ++i)
+    {
+        ap[i] = a[i] + eps * da[i];
+    }
     mj::cholesky(ap, lp, n);
     for (int i = 0; i < n; ++i)
     {
-        for (int j = 0; j <= i; ++j) { CHECK_THAT(dl[i * n + j], WithinAbs((lp[i * n + j] - l[i * n + j]) / eps, 1e-4)); }
+        for (int j = 0; j <= i; ++j)
+        {
+            CHECK_THAT(dl[i * n + j], WithinAbs((lp[i * n + j] - l[i * n + j]) / eps, 1e-4));
+        }
     }
 }
 
@@ -183,11 +250,20 @@ TEST_CASE("conv_jvp (DSP filter) == FD + FFT JVP linearity", "[autodiff][matrix]
     su::conv_jvp(h, dh, nh, x, dx, nx, dy, sc);
     const crd::f64 eps = 1e-6;
     crd::f64       hp[nh], xp[nx], y0[ny], y1[ny];
-    for (int i = 0; i < nh; ++i) { hp[i] = h[i] + eps * dh[i]; }
-    for (int i = 0; i < nx; ++i) { xp[i] = x[i] + eps * dx[i]; }
+    for (int i = 0; i < nh; ++i)
+    {
+        hp[i] = h[i] + eps * dh[i];
+    }
+    for (int i = 0; i < nx; ++i)
+    {
+        xp[i] = x[i] + eps * dx[i];
+    }
     su::conv(h, nh, x, nx, y0);
     su::conv(hp, nh, xp, nx, y1);
-    for (int i = 0; i < ny; ++i) { CHECK_THAT(dy[i], WithinAbs((y1[i] - y0[i]) / eps, 1e-4)); }
+    for (int i = 0; i < ny; ++i)
+    {
+        CHECK_THAT(dy[i], WithinAbs((y1[i] - y0[i]) / eps, 1e-4));
+    }
 
     // FFT JVP: linear ⇒ (dft(x+ε·dx) − dft(x))/ε == dft(dx)
     constexpr int        n = 8;
@@ -199,7 +275,10 @@ TEST_CASE("conv_jvp (DSP filter) == FD + FFT JVP linearity", "[autodiff][matrix]
     }
     su::dft(cx, y0c, n);
     su::dft_jvp(cdx, dyc, n);
-    for (int i = 0; i < n; ++i) { xp2[i] = cx[i] + eps * cdx[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        xp2[i] = cx[i] + eps * cdx[i];
+    }
     su::dft(xp2, y1c, n);
     for (int i = 0; i < n; ++i)
     {

@@ -97,7 +97,10 @@ double furnace_albedo_at(crd::memory::IAllocator& alloc, double theta_d, double 
     const double* inp[4] = {sto.data(), cto.data(), pho.data(), hh.data()};
     kir::eval_cpu(g, inp, &alloc, node, got.data());
     double acc = 0.0;
-    for (int i = 0; i < k_n; ++i) { acc += got[static_cast<crd::usize>(i)] * w[static_cast<crd::usize>(i)]; }
+    for (int i = 0; i < k_n; ++i)
+    {
+        acc += got[static_cast<crd::usize>(i)] * w[static_cast<crd::usize>(i)];
+    }
     return acc * dth * dph / static_cast<double>(k_nh);
 }
 } // namespace
@@ -124,7 +127,10 @@ TEST_CASE("B18-c: hair scattering-moment LUT == furnace albedo, and is forward-d
         const double ab      = at(bin, 1);
         const double ref     = furnace_albedo_at(alloc, theta_d, 0.2);
         const double rel     = crd::math::abs((af + ab) - ref) / (crd::math::abs(ref) + 1.0e-9);
-        if (rel > worstrel) { worstrel = rel; }
+        if (rel > worstrel)
+        {
+            worstrel = rel;
+        }
         INFO("bin=" << bin << " theta_d=" << theta_d << " a_f=" << af << " a_b=" << ab << " sum=" << (af + ab)
                     << " furnace=" << ref << " rel=" << rel);
         CHECK(af > 0.0);
@@ -353,7 +359,10 @@ TEST_CASE("B18-c: deep opacity maps conserve opacity, darken monotonically, and 
         {
             const double tp = out[static_cast<crd::usize>(p) * 2U];
             const double d  = crd::math::abs(tp - t0);
-            if (d > spread) { spread = d; }
+            if (d > spread)
+            {
+                spread = d;
+            }
         }
         INFO("t=" << t << " T=" << t0 << " opacity=" << out[1] << " cross-pixel spread=" << spread);
         CHECK(spread < 1.0e-6);   // ⭐ CONFORMANCE: z0 varies by 3.2 across pixels, yet T at equal relative depth is identical
@@ -428,7 +437,10 @@ TEST_CASE("B18-c: volumetric MS is anisotropic, extends single scattering, and b
     INFO("sigma_t perpendicular=" << st(out3, 0) << " parallel=" << st(out3, k_lanes - 1) << " (sigma_t_perp=" << k_sig_perp << ")");
     CHECK(st(out3, 0) == Catch::Approx(k_sig_perp).epsilon(1.0e-5));
     CHECK(st(out3, k_lanes - 1) < k_sig_perp * 0.2);
-    for (int k = 1; k < k_lanes; ++k) { CHECK(st(out3, k) <= st(out3, k - 1) + 1.0e-6); } // monotone toward parallel
+    for (int k = 1; k < k_lanes; ++k) // monotone toward parallel
+    {
+        CHECK(st(out3, k) <= st(out3, k - 1) + 1.0e-6);
+    }
 
     // (b) N=1 must reproduce single scattering EXACTLY: σ_s·P·exp(−σ_t·d)
     for (int k : {0, 7, 23})

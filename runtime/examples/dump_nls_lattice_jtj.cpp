@@ -113,11 +113,17 @@ Csr build_lattice_jacobian(crd::u32 s)
             {
                 const crd::u32 i = (z * s + y) * s + x;
                 if (x + 1U < s)
+                {
                     add_edge(i, i + 1U);
+                }
                 if (y + 1U < s)
+                {
                     add_edge(i, i + s);
+                }
                 if (z + 1U < s)
+                {
                     add_edge(i, i + s * s);
+                }
             }
         }
     }

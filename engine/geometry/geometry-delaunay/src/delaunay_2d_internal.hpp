@@ -88,7 +88,10 @@ inline crd::u32 edge_index(const Tri& t, crd::u32 a, crd::u32 b) noexcept
 {
     for (crd::u32 k = 0; k < 3U; ++k)
     {
-        if (t.v[k] == a && t.v[(k + 1U) % 3U] == b) { return k; }
+        if (t.v[k] == a && t.v[(k + 1U) % 3U] == b)
+        {
+            return k;
+        }
     }
     return 3U;
 }
@@ -117,17 +120,32 @@ void build_super_triangle(crd::containers::ConstSpan<crd::math::Vec2<T>> pts,
     T ymax = pts[0].y;
     for (crd::usize i = 1; i < pts.size(); ++i)
     {
-        if (pts[i].x < xmin) { xmin = pts[i].x; }
-        if (pts[i].x > xmax) { xmax = pts[i].x; }
-        if (pts[i].y < ymin) { ymin = pts[i].y; }
-        if (pts[i].y > ymax) { ymax = pts[i].y; }
+        if (pts[i].x < xmin)
+        {
+            xmin = pts[i].x;
+        }
+        if (pts[i].x > xmax)
+        {
+            xmax = pts[i].x;
+        }
+        if (pts[i].y < ymin)
+        {
+            ymin = pts[i].y;
+        }
+        if (pts[i].y > ymax)
+        {
+            ymax = pts[i].y;
+        }
     }
     const T cx = (xmin + xmax) * static_cast<T>(0.5);
     const T cy = (ymin + ymax) * static_cast<T>(0.5);
     const T dx = xmax - xmin;
     const T dy = ymax - ymin;
     T       maxd = dx > dy ? dx : dy;
-    if (maxd <= static_cast<T>(0)) { maxd = static_cast<T>(1); }
+    if (maxd <= static_cast<T>(0))
+    {
+        maxd = static_cast<T>(1);
+    }
     const T scale = maxd * static_cast<T>(1000);
     out_s0 = crd::math::Vec2<T>{cx - static_cast<T>(3) * scale, cy - scale};
     out_s1 = crd::math::Vec2<T>{cx + static_cast<T>(3) * scale, cy - scale};
@@ -146,8 +164,14 @@ crd::u32 locate_triangle(const TriPool&                                    pool,
     crd::u32 cur = hint;
     for (crd::u32 step = 0; step < max_steps; ++step)
     {
-        if (cur == kNullTri) { return kNullTri; }
-        if (!pool.alive(cur)) { return kNullTri; }
+        if (cur == kNullTri)
+        {
+            return kNullTri;
+        }
+        if (!pool.alive(cur))
+        {
+            return kNullTri;
+        }
         const Tri&  t = pool[cur];
         const auto& a = aug_pts[t.v[0]];
         const auto& b = aug_pts[t.v[1]];
@@ -160,10 +184,22 @@ crd::u32 locate_triangle(const TriPool&                                    pool,
             return cur;
         }
         crd::u32 cross_edge = 3U;
-        if (s0 < static_cast<T>(0)) { cross_edge = 0U; }
-        else if (s1 < static_cast<T>(0)) { cross_edge = 1U; }
-        else if (s2 < static_cast<T>(0)) { cross_edge = 2U; }
-        if (cross_edge >= 3U) { return cur; }
+        if (s0 < static_cast<T>(0))
+        {
+            cross_edge = 0U;
+        }
+        else if (s1 < static_cast<T>(0))
+        {
+            cross_edge = 1U;
+        }
+        else if (s2 < static_cast<T>(0))
+        {
+            cross_edge = 2U;
+        }
+        if (cross_edge >= 3U)
+        {
+            return cur;
+        }
         cur = t.nbr[cross_edge];
     }
     return kNullTri;
@@ -197,10 +233,22 @@ crd::u32 insert_point(TriPool&                                          pool,
         for (crd::u32 k = 0; k < 3U; ++k)
         {
             const crd::u32 nbr = t.nbr[k];
-            if (nbr == kNullTri) { continue; }
-            if (nbr >= is_bad.size()) { is_bad.resize(nbr + 1U, crd::u8{0}); }
-            if (is_bad[nbr] != 0U) { continue; }
-            if (!pool.alive(nbr)) { continue; }
+            if (nbr == kNullTri)
+            {
+                continue;
+            }
+            if (nbr >= is_bad.size())
+            {
+                is_bad.resize(nbr + 1U, crd::u8{0});
+            }
+            if (is_bad[nbr] != 0U)
+            {
+                continue;
+            }
+            if (!pool.alive(nbr))
+            {
+                continue;
+            }
             const Tri& tn = pool[nbr];
             const T s = crd::geometry::primitives::incircle(
                 aug_pts[tn.v[0]], aug_pts[tn.v[1]], aug_pts[tn.v[2]], q_pos);
@@ -229,7 +277,10 @@ crd::u32 insert_point(TriPool&                                          pool,
         {
             const crd::u32 nbr     = t.nbr[k];
             const bool     nbr_bad = (nbr != kNullTri) && (nbr < is_bad.size()) && (is_bad[nbr] != 0U);
-            if (nbr_bad) { continue; }
+            if (nbr_bad)
+            {
+                continue;
+            }
             CavityEdge e{};
             e.a         = t.v[k];
             e.b         = t.v[(k + 1U) % 3U];
@@ -260,7 +311,10 @@ crd::u32 insert_point(TriPool&                                          pool,
         {
             Tri&           outer = pool[e.outer_nbr];
             const crd::u32 ek    = edge_index(outer, e.b, e.a);
-            if (ek < 3U) { outer.nbr[ek] = nti; }
+            if (ek < 3U)
+            {
+                outer.nbr[ek] = nti;
+            }
         }
         new_tris.push_back(nti);
     }
@@ -275,7 +329,10 @@ crd::u32 insert_point(TriPool&                                          pool,
         {
             for (crd::u32 j = 0; j < new_tris.size(); ++j)
             {
-                if (i == j) { continue; }
+                if (i == j)
+                {
+                    continue;
+                }
                 const Tri& tj = pool[new_tris[j]];
                 if (tj.v[1] == ti_a && tj.v[2] == q_idx)
                 {
@@ -288,7 +345,10 @@ crd::u32 insert_point(TriPool&                                          pool,
         {
             for (crd::u32 j = 0; j < new_tris.size(); ++j)
             {
-                if (i == j) { continue; }
+                if (i == j)
+                {
+                    continue;
+                }
                 const Tri& tj = pool[new_tris[j]];
                 if (tj.v[0] == ti_b && tj.v[2] == q_idx)
                 {

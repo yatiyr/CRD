@@ -74,16 +74,31 @@ void draw_control_panel(crd::draw::OverlayPassConfig& cfg)
             bool on = (mask & bit) != 0U;
             if (ImGui::Checkbox(kCategoryLabels[i], &on))
             {
-                if (on) { mask |=  bit; }
-                else    { mask &= ~bit; }
+                if (on)
+                {
+                    mask |=  bit;
+                }
+                else
+                {
+                    mask &= ~bit;
+                }
             }
             // 4 columns of checkboxes
-            if ((i % 4) != 3 && i + 1 < kCategoryCount) { ImGui::SameLine(); }
+            if ((i % 4) != 3 && i + 1 < kCategoryCount)
+            {
+                ImGui::SameLine();
+            }
         }
         cfg.category_mask = mask;
-        if (ImGui::Button("All"))  { cfg.category_mask = 0xFFFFFFFFU; }
+        if (ImGui::Button("All"))
+        {
+            cfg.category_mask = 0xFFFFFFFFU;
+        }
         ImGui::SameLine();
-        if (ImGui::Button("None")) { cfg.category_mask = 0U; }
+        if (ImGui::Button("None"))
+        {
+            cfg.category_mask = 0U;
+        }
     }
 
     // ------ Theme picker ------
@@ -109,7 +124,10 @@ void draw_control_panel(crd::draw::OverlayPassConfig& cfg)
                     // the same frame.
                     cfg.grid.apply_theme();
                 }
-                if (is_selected) { ImGui::SetItemDefaultFocus(); }
+                if (is_selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
             ImGui::EndCombo();
         }

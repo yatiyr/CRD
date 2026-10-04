@@ -36,14 +36,20 @@ namespace crd::tests
     for (crd::u32 cnr = 0; cnr < 4U; ++cnr)
     {
         const auto* b = reinterpret_cast<const crd::u8*>(quad[cnr]);
-        for (crd::u32 k = 0; k < 48U; ++k) { verts.push_back(b[k]); }
+        for (crd::u32 k = 0; k < 48U; ++k)
+        {
+            verts.push_back(b[k]);
+        }
     }
     const crd::u32                  idx[6] = {0, 1, 2, 2, 1, 3};
     crd::containers::Array<crd::u8> indices(a);
     for (crd::u32 v : idx)
     {
         const auto* b = reinterpret_cast<const crd::u8*>(&v);
-        for (crd::u32 k = 0; k < 4U; ++k) { indices.push_back(b[k]); }
+        for (crd::u32 k = 0; k < 4U; ++k)
+        {
+            indices.push_back(b[k]);
+        }
     }
     crd::containers::Array<crd::u8> prim(a);
     prim.resize(4U + 32U);
@@ -71,7 +77,10 @@ inline void write_one_pack(crd::memory::IAllocator* a, const crd::platform::fs::
     for (const char* p = name;; ++p)
     {
         pool.push_back(static_cast<crd::u8>(*p));
-        if (*p == '\0') { break; }
+        if (*p == '\0')
+        {
+            break;
+        }
     }
     crd::containers::Array<crd::resources::ManifestEntry> entries(a);
     crd::resources::ManifestEntry                         e;
@@ -89,7 +98,10 @@ inline void write_one_pack(crd::memory::IAllocator* a, const crd::platform::fs::
     crd::resources::CrdrWriter p2(a, pack_id, crd::resources::kFourCC_PACK);
     crd::resources::manifest_write(p2, crd::containers::as_const_span(entries), crd::containers::as_const_span(pool));
     auto pack = p2.finish();
-    for (crd::u8 b : art) { pack.push_back(b); }
+    for (crd::u8 b : art)
+    {
+        pack.push_back(b);
+    }
     REQUIRE(crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack)));
 }
 } // namespace crd::tests

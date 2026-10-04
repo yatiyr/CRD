@@ -69,21 +69,39 @@ namespace detail
 template <typename T>
 [[nodiscard]] inline T spai_conj(T v) noexcept
 {
-    if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-    else { return v; }
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return T{v.re, -v.im};
+    }
+    else
+    {
+        return v;
+    }
 }
 template <typename T>
 [[nodiscard]] inline crd::hesap::dense::RealType<T> spai_mag(T v) noexcept
 {
     using R = crd::hesap::dense::RealType<T>;
-    if constexpr (crd::hesap::dense::is_complex_v<T>) { return std::sqrt(v.re * v.re + v.im * v.im); }
-    else { return v < R(0) ? -v : v; }
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return std::sqrt(v.re * v.re + v.im * v.im);
+    }
+    else
+    {
+        return v < R(0) ? -v : v;
+    }
 }
 template <typename T>
 [[nodiscard]] inline crd::hesap::dense::RealType<T> spai_abs2(T v) noexcept
 {
-    if constexpr (crd::hesap::dense::is_complex_v<T>) { return v.re * v.re + v.im * v.im; }
-    else { return v * v; }
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return v.re * v.re + v.im * v.im;
+    }
+    else
+    {
+        return v * v;
+    }
 }
 
 // Per-column local-problem row cap. A column whose I-set exceeds this falls back
@@ -173,7 +191,10 @@ private:
     {
         for (crd::u32 p = c.col_ptr[k]; p < c.col_ptr[k + 1]; ++p)
         {
-            if (c.col_row[p] == k) { return c.col_val[p]; }
+            if (c.col_row[p] == k)
+            {
+                return c.col_val[p];
+            }
         }
         return T{};
     }
@@ -196,7 +217,10 @@ private:
             {
                 const crd::u32 j = c.col_row[p];
                 w.jlist[jn++]    = j;
-                if (j == k) { has_diag = true; }
+                if (j == k)
+                {
+                    has_diag = true;
+                }
             }
             if (!has_diag && jn < c.cap_J)
             {
@@ -209,7 +233,10 @@ private:
             w.jlist[0] = k;
             jn         = 1;
         }
-        for (crd::u32 jl = 0; jl < jn; ++jl) { w.jmark[w.jlist[jl]] = 1; }
+        for (crd::u32 jl = 0; jl < jn; ++jl)
+        {
+            w.jmark[w.jlist[jl]] = 1;
+        }
 
         crd::u32 in = 0;
         for (;;)
@@ -225,7 +252,11 @@ private:
                     const crd::u32 i = c.col_row[p];
                     if (w.imark[i] < 0)
                     {
-                        if (in >= c.cap_I) { overflow = true; break; }
+                        if (in >= c.cap_I)
+                        {
+                            overflow = true;
+                            break;
+                        }
                         w.imark[i]   = 0; // present; local index assigned after the sort
                         w.ilist[in++] = i;
                     }
@@ -233,21 +264,36 @@ private:
             }
             if (overflow)
             {
-                for (crd::u32 t = 0; t < in; ++t) { w.imark[w.ilist[t]] = -1; }
-                for (crd::u32 jl = 0; jl < jn; ++jl) { w.jmark[w.jlist[jl]] = -1; }
+                for (crd::u32 t = 0; t < in; ++t)
+                {
+                    w.imark[w.ilist[t]] = -1;
+                }
+                for (crd::u32 jl = 0; jl < jn; ++jl)
+                {
+                    w.jmark[w.jlist[jl]] = -1;
+                }
                 // diagonal fallback m_k = e_k / A[k,k]
                 T akk = diag_of(c, k);
-                if (detail::spai_mag(akk) < smlnum) { akk = T(R(1)); }
+                if (detail::spai_mag(akk) < smlnum)
+                {
+                    akk = T(R(1));
+                }
                 sr[0]            = k;
                 sv[0]            = T(R(1)) / akk;
                 c.stage_cnt[k]   = 1;
                 return;
             }
             std::sort(w.ilist.data(), w.ilist.data() + in);
-            for (crd::u32 t = 0; t < in; ++t) { w.imark[w.ilist[t]] = static_cast<crd::i32>(t); }
+            for (crd::u32 t = 0; t < in; ++t)
+            {
+                w.imark[w.ilist[t]] = static_cast<crd::i32>(t);
+            }
 
             // ---- assemble Â (row-major in×jn) + rhs ê ----
-            for (crd::usize idx = 0; idx < static_cast<crd::usize>(in) * jn; ++idx) { w.adense[idx] = T{}; }
+            for (crd::usize idx = 0; idx < static_cast<crd::usize>(in) * jn; ++idx)
+            {
+                w.adense[idx] = T{};
+            }
             for (crd::u32 jl = 0; jl < jn; ++jl)
             {
                 const crd::u32 j = w.jlist[jl];
@@ -257,7 +303,10 @@ private:
                     w.adense[static_cast<crd::usize>(il) * jn + jl]          = c.col_val[p];
                 }
             }
-            for (crd::u32 t = 0; t < in; ++t) { w.rhs[t] = (w.ilist[t] == k) ? T(R(1)) : T{}; }
+            for (crd::u32 t = 0; t < in; ++t)
+            {
+                w.rhs[t] = (w.ilist[t] == k) ? T(R(1)) : T{};
+            }
 
             // ---- thin-QR LS: Â = Q·R, then m̂ = R⁻¹(Qᴴ ê) ----
             crd::hesap::iterative::detail::block_qr<T>(w.adense.data(), in, jn, w.cm.data(), w.rmat.data());
@@ -286,7 +335,10 @@ private:
                     acc = acc - w.rmat[static_cast<crd::usize>(j) * jn + kk] * w.cvec[kk];
                 }
                 T piv = w.rmat[static_cast<crd::usize>(j) * jn + j];
-                if (detail::spai_mag(piv) < rfloor) { piv = T(rfloor); }
+                if (detail::spai_mag(piv) < rfloor)
+                {
+                    piv = T(rfloor);
+                }
                 w.cvec[j] = acc / piv;
             }
 
@@ -297,7 +349,10 @@ private:
             }
 
             // ---- adaptive: residual r = A·m_k − e_k on rows I (+ row k if k∉I) ----
-            for (crd::u32 t = 0; t < in; ++t) { w.rhs[t] = T{}; }
+            for (crd::u32 t = 0; t < in; ++t)
+            {
+                w.rhs[t] = T{};
+            }
             for (crd::u32 jl = 0; jl < jn; ++jl)
             {
                 const T        mv = w.cvec[jl];
@@ -312,10 +367,16 @@ private:
             R          rn2    = k_in_i ? R(0) : R(1); // e_k on row k not in I contributes 1
             for (crd::u32 t = 0; t < in; ++t)
             {
-                if (w.ilist[t] == k) { w.rhs[t] = w.rhs[t] - T(R(1)); }
+                if (w.ilist[t] == k)
+                {
+                    w.rhs[t] = w.rhs[t] - T(R(1));
+                }
                 rn2 += detail::spai_abs2(w.rhs[t]);
             }
-            if (std::sqrt(rn2) <= c.epsilon) { break; }
+            if (std::sqrt(rn2) <= c.epsilon)
+            {
+                break;
+            }
 
             // ---- candidate columns: new cols in CSR rows where r ≠ 0 (+ row k) ----
             crd::u32 cand_n = 0;
@@ -332,12 +393,21 @@ private:
             };
             for (crd::u32 t = 0; t < in; ++t)
             {
-                if (detail::spai_abs2(w.rhs[t]) > R(0)) { scan_row(w.ilist[t]); }
+                if (detail::spai_abs2(w.rhs[t]) > R(0))
+                {
+                    scan_row(w.ilist[t]);
+                }
             }
-            if (!k_in_i) { scan_row(k); }
+            if (!k_in_i)
+            {
+                scan_row(k);
+            }
             if (cand_n == 0)
             {
-                for (crd::u32 t = 0; t < cand_n; ++t) { w.cmark[w.clist[t]] = -1; }
+                for (crd::u32 t = 0; t < cand_n; ++t)
+                {
+                    w.cmark[w.clist[t]] = -1;
+                }
                 break;
             }
 
@@ -370,20 +440,38 @@ private:
                 crd::u32 best = cand_n;
                 for (crd::u32 t = 0; t < cand_n; ++t)
                 {
-                    if (w.cmark[w.clist[t]] != 1) { continue; } // already consumed
-                    if (best == cand_n || w.cprofit[t] > w.cprofit[best]) { best = t; }
+                    if (w.cmark[w.clist[t]] != 1) // already consumed
+                    {
+                        continue;
+                    }
+                    if (best == cand_n || w.cprofit[t] > w.cprofit[best])
+                    {
+                        best = t;
+                    }
                 }
-                if (best == cand_n) { break; }
+                if (best == cand_n)
+                {
+                    break;
+                }
                 const crd::u32 ell = w.clist[best];
                 w.cmark[ell]       = 2; // consumed
                 w.jmark[ell]       = 1;
                 w.jlist[jn++]      = ell;
                 ++added;
             }
-            for (crd::u32 t = 0; t < cand_n; ++t) { w.cmark[w.clist[t]] = -1; } // reset markers
+            for (crd::u32 t = 0; t < cand_n; ++t) // reset markers
+            {
+                w.cmark[w.clist[t]] = -1;
+            }
             // reset I markers; the next iteration rebuilds I for the enlarged J
-            for (crd::u32 t = 0; t < in; ++t) { w.imark[w.ilist[t]] = -1; }
-            if (added == 0) { break; }
+            for (crd::u32 t = 0; t < in; ++t)
+            {
+                w.imark[w.ilist[t]] = -1;
+            }
+            if (added == 0)
+            {
+                break;
+            }
         }
 
         // ---- store m̂ over J into the staging slot ----
@@ -393,8 +481,14 @@ private:
             sv[jl] = w.cvec[jl];
         }
         c.stage_cnt[k] = jn;
-        for (crd::u32 t = 0; t < in; ++t) { w.imark[w.ilist[t]] = -1; }
-        for (crd::u32 jl = 0; jl < jn; ++jl) { w.jmark[w.jlist[jl]] = -1; }
+        for (crd::u32 t = 0; t < in; ++t)
+        {
+            w.imark[w.ilist[t]] = -1;
+        }
+        for (crd::u32 jl = 0; jl < jn; ++jl)
+        {
+            w.jmark[w.jlist[jl]] = -1;
+        }
     }
 
     static Csr build_spai(const Csr& a, SpaiPattern pattern, R epsilon, crd::u32 max_per_col,
@@ -402,7 +496,10 @@ private:
     {
         const crd::u32 n = a.rows();
         crd::hesap::sparse::TripletBuilder<T> tb(alloc, n, n);
-        if (n == 0) { return tb.compress(); }
+        if (n == 0)
+        {
+            return tb.compress();
+        }
 
         auto        acsc    = crd::hesap::sparse::to_csc<T>(a, alloc);
         const auto* col_ptr = acsc.pattern().outer_ptr.data();
@@ -420,13 +517,25 @@ private:
         crd::u32 cap_J = (pattern == SpaiPattern::Static)
                              ? (max_col_nnz + 1U)
                              : (max_per_col != 0 ? max_per_col : std::max<crd::u32>(10U, 3U * max_col_nnz));
-        if (cap_J > n) { cap_J = n; }
-        if (cap_J == 0) { cap_J = 1; }
+        if (cap_J > n)
+        {
+            cap_J = n;
+        }
+        if (cap_J == 0)
+        {
+            cap_J = 1;
+        }
         crd::u64 cap_i64 = static_cast<crd::u64>(cap_J) * max_col_nnz + 1U;
         const crd::u32 row_lim = detail::kSpaiLocalMax < n ? detail::kSpaiLocalMax : n;
         crd::u32       cap_I   = static_cast<crd::u32>(cap_i64 < row_lim ? cap_i64 : row_lim);
-        if (cap_I < 1) { cap_I = 1; }
-        if (cap_J > cap_I) { cap_J = cap_I; }
+        if (cap_I < 1)
+        {
+            cap_I = 1;
+        }
+        if (cap_J > cap_I)
+        {
+            cap_J = cap_I;
+        }
 
         const crd::u32 workers = crd::jobs::num_workers() == 0 ? 1U : crd::jobs::num_workers();
         crd::containers::Array<ColScratch> ws(alloc);
@@ -467,7 +576,10 @@ private:
 
         const crd::u32 jobs    = workers < n ? workers : n;
         auto*          counter = crd::jobs::parallel_for(n, jobs, [pc = &ctx](crd::u32 b, crd::u32 e) {
-            for (crd::u32 k = b; k < e; ++k) { process_column(*pc, k); }
+            for (crd::u32 k = b; k < e; ++k)
+            {
+                process_column(*pc, k);
+            }
         });
         crd::jobs::wait(counter);
         crd::jobs::frame_reset(); // reclaim the parallel_for JobDecls (Krylov-loop hygiene)
@@ -478,7 +590,10 @@ private:
             const crd::u32* sr  = stage_row.data() + static_cast<crd::usize>(k) * cap_J;
             const T*        sv  = stage_val.data() + static_cast<crd::usize>(k) * cap_J;
             const crd::u32  cnt = stage_cnt[k];
-            for (crd::u32 t = 0; t < cnt; ++t) { tb.add(sr[t], k, sv[t]); }
+            for (crd::u32 t = 0; t < cnt; ++t)
+            {
+                tb.add(sr[t], k, sv[t]);
+            }
         }
         return tb.compress();
     }

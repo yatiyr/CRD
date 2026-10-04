@@ -94,9 +94,18 @@ inline VoronoiStatus3 propagate_status(DelaunayStatus3 s) noexcept
 // Sort 3 u32s ascending in place via fixed comparisons.
 inline void sort3(crd::u32& a, crd::u32& b, crd::u32& c) noexcept
 {
-    if (a > b) { std::swap(a, b); }
-    if (b > c) { std::swap(b, c); }
-    if (a > b) { std::swap(a, b); }
+    if (a > b)
+    {
+        std::swap(a, b);
+    }
+    if (b > c)
+    {
+        std::swap(b, c);
+    }
+    if (a > b)
+    {
+        std::swap(a, b);
+    }
 }
 
 // Rebuild Delaunay tet face adjacency from `tet_indices`. For T tets, emits
@@ -138,10 +147,22 @@ void build_tet_face_adjacency(const crd::containers::Array<crd::u32>& tet_indice
     }
     crd::containers::sort(hfs.data(), hfs.data() + hfs.size(),
                           [](const HalfFace& l, const HalfFace& r) noexcept {
-                              if (l.v0 != r.v0) { return l.v0 < r.v0; }
-                              if (l.v1 != r.v1) { return l.v1 < r.v1; }
-                              if (l.v2 != r.v2) { return l.v2 < r.v2; }
-                              if (l.tet != r.tet) { return l.tet < r.tet; }
+                              if (l.v0 != r.v0)
+                              {
+                                  return l.v0 < r.v0;
+                              }
+                              if (l.v1 != r.v1)
+                              {
+                                  return l.v1 < r.v1;
+                              }
+                              if (l.v2 != r.v2)
+                              {
+                                  return l.v2 < r.v2;
+                              }
+                              if (l.tet != r.tet)
+                              {
+                                  return l.tet < r.tet;
+                              }
                               return l.k < r.k;
                           });
     for (crd::u32 i = 0; i + 1U < hfs.size(); ++i)
@@ -191,9 +212,18 @@ void build_edge_fans(const crd::containers::Array<crd::u32>& tet_indices,
     }
     crd::containers::sort(out_edges.data(), out_edges.data() + out_edges.size(),
                           [](const HalfEdge& l, const HalfEdge& r) noexcept {
-                              if (l.vmin != r.vmin) { return l.vmin < r.vmin; }
-                              if (l.vmax != r.vmax) { return l.vmax < r.vmax; }
-                              if (l.tet  != r.tet)  { return l.tet  < r.tet;  }
+                              if (l.vmin != r.vmin)
+                              {
+                                  return l.vmin < r.vmin;
+                              }
+                              if (l.vmax != r.vmax)
+                              {
+                                  return l.vmax < r.vmax;
+                              }
+                              if (l.tet  != r.tet)
+                              {
+                                  return l.tet  < r.tet;
+                              }
                               return l.edge_idx < r.edge_idx;
                           });
 }
@@ -203,7 +233,10 @@ inline crd::u32 local_index_of_3d(const crd::containers::Array<crd::u32>& tet_in
 {
     for (crd::u32 k = 0; k < 4U; ++k)
     {
-        if (tet_indices[4U * t + k] == site) { return k; }
+        if (tet_indices[4U * t + k] == site)
+        {
+            return k;
+        }
     }
     return 4U;
 }
@@ -216,7 +249,10 @@ inline crd::u32 entered_face_of(const crd::containers::Array<crd::u32>& tet_nbrs
 {
     for (crd::u32 k = 0; k < 4U; ++k)
     {
-        if (tet_nbrs[4U * to + k] == from) { return k; }
+        if (tet_nbrs[4U * to + k] == from)
+        {
+            return k;
+        }
     }
     return 4U;
 }
@@ -246,17 +282,35 @@ EdgeFanResult walk_edge_fan(crd::u32                                  s,
 
     const crd::u32 si_start = local_index_of_3d(tet_indices, start_t, s);
     const crd::u32 ni_start = local_index_of_3d(tet_indices, start_t, n);
-    if (si_start >= 4U || ni_start >= 4U) { res.error = true; return res; }
+    if (si_start >= 4U || ni_start >= 4U)
+    {
+        res.error = true;
+        return res;
+    }
 
     // The 2 fan-faces of start_t are the 2 indices in {0,1,2,3} \ {si, ni}.
     crd::u32 face_a = 4U;
     crd::u32 face_b = 4U;
     for (crd::u32 k = 0; k < 4U; ++k)
     {
-        if (k == si_start || k == ni_start) { continue; }
-        if (face_a == 4U) { face_a = k; } else { face_b = k; }
+        if (k == si_start || k == ni_start)
+        {
+            continue;
+        }
+        if (face_a == 4U)
+        {
+            face_a = k;
+        }
+        else
+        {
+            face_b = k;
+        }
     }
-    if (face_b == 4U) { res.error = true; return res; }
+    if (face_b == 4U)
+    {
+        res.error = true;
+        return res;
+    }
 
     // Forward walk: cross face_a first.
     bool fwd_closed = false;
@@ -264,24 +318,43 @@ EdgeFanResult walk_edge_fan(crd::u32                                  s,
     crd::u32 cur  = tet_nbrs[4U * start_t + face_a];
     while (cur != kNullNbr)
     {
-        if (cur == start_t) { fwd_closed = true; break; }
+        if (cur == start_t)
+        {
+            fwd_closed = true;
+            break;
+        }
         res.fan_tets.push_back(cur);
         // In cur, find the OTHER fan-face (the one not pointing back at prev).
         const crd::u32 si_cur = local_index_of_3d(tet_indices, cur, s);
         const crd::u32 ni_cur = local_index_of_3d(tet_indices, cur, n);
-        if (si_cur >= 4U || ni_cur >= 4U) { res.error = true; return res; }
+        if (si_cur >= 4U || ni_cur >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         const crd::u32 entered = entered_face_of(tet_nbrs, cur, prev);
-        if (entered >= 4U) { res.error = true; return res; }
+        if (entered >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         // Two fan-faces of cur: indices in {0,1,2,3} \ {si_cur, ni_cur}.
         // Exit via the one that isn't `entered`.
         crd::u32 exit_face = 4U;
         for (crd::u32 k = 0; k < 4U; ++k)
         {
-            if (k == si_cur || k == ni_cur || k == entered) { continue; }
+            if (k == si_cur || k == ni_cur || k == entered)
+            {
+                continue;
+            }
             exit_face = k;
             break;
         }
-        if (exit_face >= 4U) { res.error = true; return res; }
+        if (exit_face >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         prev = cur;
         cur  = tet_nbrs[4U * cur + exit_face];
     }
@@ -306,17 +379,32 @@ EdgeFanResult walk_edge_fan(crd::u32                                  s,
         backward.push_back(cur);
         const crd::u32 si_cur = local_index_of_3d(tet_indices, cur, s);
         const crd::u32 ni_cur = local_index_of_3d(tet_indices, cur, n);
-        if (si_cur >= 4U || ni_cur >= 4U) { res.error = true; return res; }
+        if (si_cur >= 4U || ni_cur >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         const crd::u32 entered = entered_face_of(tet_nbrs, cur, prev);
-        if (entered >= 4U) { res.error = true; return res; }
+        if (entered >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         crd::u32 exit_face = 4U;
         for (crd::u32 k = 0; k < 4U; ++k)
         {
-            if (k == si_cur || k == ni_cur || k == entered) { continue; }
+            if (k == si_cur || k == ni_cur || k == entered)
+            {
+                continue;
+            }
             exit_face = k;
             break;
         }
-        if (exit_face >= 4U) { res.error = true; return res; }
+        if (exit_face >= 4U)
+        {
+            res.error = true;
+            return res;
+        }
         prev = cur;
         cur  = tet_nbrs[4U * cur + exit_face];
     }
@@ -402,7 +490,10 @@ voronoi_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
         // run_start..i is the set of tets containing edge (vmin, vmax).
         // Skip if vmin >= n (super-tet edges shouldn't appear here since
         // delaunay_3d strips them, but defensive).
-        if (vmin >= n || vmax >= n) { continue; }
+        if (vmin >= n || vmax >= n)
+        {
+            continue;
+        }
 
         // The starting tet for the fan walk: lowest tet id in the run
         // (deterministic). Take from edges[run_start] which is the smallest
@@ -504,7 +595,11 @@ voronoi_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> sites,
         cell.is_bounded = true;
         for (const auto& face : cell.faces)
         {
-            if (face.is_unbounded) { cell.is_bounded = false; break; }
+            if (face.is_unbounded)
+            {
+                cell.is_bounded = false;
+                break;
+            }
         }
     }
 
@@ -521,10 +616,19 @@ convex_hull_for_cell(const VoronoiResult3<T>&                          result,
 {
     VoronoiCellHull3<T> hull{alloc};
 
-    if (cell_index >= result.cells.size()) { return hull; }
+    if (cell_index >= result.cells.size())
+    {
+        return hull;
+    }
     const auto& cell = result.cells[cell_index];
-    if (!cell.is_bounded) { return hull; }
-    if (cell.faces.size() < 4U) { return hull; } // a bounded polyhedron needs >= 4 faces
+    if (!cell.is_bounded)
+    {
+        return hull;
+    }
+    if (cell.faces.size() < 4U) // a bounded polyhedron needs >= 4 faces
+    {
+        return hull;
+    }
 
     const auto& site = sites[cell.site_index];
 

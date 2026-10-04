@@ -100,7 +100,10 @@ public:
     // or nullptr if the context is invalid or the registry is full.
     IGpuContext* add(std::unique_ptr<IGpuContext> ctx) noexcept
     {
-        if (ctx == nullptr || !ctx->valid() || m_count >= kMax) { return nullptr; }
+        if (ctx == nullptr || !ctx->valid() || m_count >= kMax)
+        {
+            return nullptr;
+        }
         m_contexts[m_count] = std::move(ctx);
         return m_contexts[m_count++].get();
     }
@@ -108,7 +111,13 @@ public:
     // First live context for a backend, or nullptr.
     [[nodiscard]] IGpuContext* get(GpuBackend backend) noexcept
     {
-        for (int i = 0; i < m_count; ++i) { if (m_contexts[i]->backend() == backend) { return m_contexts[i].get(); } }
+        for (int i = 0; i < m_count; ++i)
+        {
+            if (m_contexts[i]->backend() == backend)
+            {
+                return m_contexts[i].get();
+            }
+        }
         return nullptr;
     }
 

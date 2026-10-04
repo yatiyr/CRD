@@ -43,9 +43,18 @@ namespace detail
 {
     const int ca = ncomp(g, a);
     const int cb = ncomp(g, b);
-    if (ca == cb) { return g.binary(op, a, b); }
-    if (ca == 1) { return g.binary(op, g.splat(a, cb), b); }
-    if (cb == 1) { return g.binary(op, a, g.splat(b, ca)); }
+    if (ca == cb)
+    {
+        return g.binary(op, a, b);
+    }
+    if (ca == 1)
+    {
+        return g.binary(op, g.splat(a, cb), b);
+    }
+    if (cb == 1)
+    {
+        return g.binary(op, a, g.splat(b, ca));
+    }
     return g.binary(op, a, b); // two mismatched vectors — a caller error; `ckir_shape.hpp`'s checker (run by
                                // every cooker) refuses the graph BY NAME instead of letting the shader compiler
                                // fail far from the asset (the 38-E7 pcf-uv scar)
@@ -54,8 +63,14 @@ namespace detail
 [[nodiscard]] inline int tern(KGraph& g, KOp op, int a, int b, int c)
 {
     int w = ncomp(g, a);
-    if (ncomp(g, b) > w) { w = ncomp(g, b); }
-    if (ncomp(g, c) > w) { w = ncomp(g, c); }
+    if (ncomp(g, b) > w)
+    {
+        w = ncomp(g, b);
+    }
+    if (ncomp(g, c) > w)
+    {
+        w = ncomp(g, c);
+    }
     const auto up = [&](int x) { return (ncomp(g, x) == 1 && w > 1) ? g.splat(x, w) : x; };
     return g.ternary(op, up(a), up(b), up(c));
 }
@@ -65,7 +80,10 @@ namespace detail
 [[nodiscard]] inline int sel(KGraph& g, int cond, int a, int b)
 {
     int w = ncomp(g, a);
-    if (ncomp(g, b) > w) { w = ncomp(g, b); }
+    if (ncomp(g, b) > w)
+    {
+        w = ncomp(g, b);
+    }
     const auto up = [&](int x) { return (ncomp(g, x) == 1 && w > 1) ? g.splat(x, w) : x; };
     return g.select(cond, up(a), up(b));
 }
@@ -78,12 +96,24 @@ template <class F>
     const int n = ncomp(g, a);
     const int m = ncomp(g, b);
     const int w = n > m ? n : m;
-    if (w == 1) { return f(g, a, b); }
+    if (w == 1)
+    {
+        return f(g, a, b);
+    }
     const auto ch = [&](int x, int c) { return ncomp(g, x) == 1 ? x : g.swizzle(x, c); };
     int        out[4] = {-1, -1, -1, -1};
-    for (int c = 0; c < w; ++c) { out[c] = f(g, ch(a, c), ch(b, c)); }
-    if (w == 2) { return g.vec2(out[0], out[1]); }
-    if (w == 3) { return g.vec3(out[0], out[1], out[2]); }
+    for (int c = 0; c < w; ++c)
+    {
+        out[c] = f(g, ch(a, c), ch(b, c));
+    }
+    if (w == 2)
+    {
+        return g.vec2(out[0], out[1]);
+    }
+    if (w == 3)
+    {
+        return g.vec3(out[0], out[1], out[2]);
+    }
     return g.vec4(out[0], out[1], out[2], out[3]);
 }
 } // namespace detail
@@ -554,7 +584,10 @@ namespace detail
 {
     const int d = g.dot(viewdir, normal);
     int       f = faceforward ? g.unary(KOp::Abs, d) : g.binary(KOp::Mul, d, detail::konst(g, d, -1.0)); // -dot == dot*-1
-    if (invert) { f = g.binary(KOp::Sub, detail::konst(g, f, 1.0), f); }
+    if (invert)
+    {
+        f = g.binary(KOp::Sub, detail::konst(g, f, 1.0), f);
+    }
     return f;
 }
 // gooch_shade(normal, viewdir, warm_color, cool_color, specular_intensity, shininess, light_direction) — Gooch warm/cool

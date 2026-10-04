@@ -12,7 +12,10 @@ namespace
 inline void fnv_fold(crd::u64& h, const void* data, crd::usize n) noexcept
 {
     const auto* p = static_cast<const unsigned char*>(data);
-    for (crd::usize i = 0; i < n; ++i) { h = (h ^ p[i]) * 0x00000100000001B3ULL; }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        h = (h ^ p[i]) * 0x00000100000001B3ULL;
+    }
 }
 inline void fnv_fold_u64(crd::u64& h, crd::u64 v) noexcept { fnv_fold(h, &v, sizeof v); }
 inline void fnv_fold_u32(crd::u64& h, crd::u32 v) noexcept { fnv_fold(h, &v, sizeof v); }
@@ -37,20 +40,51 @@ StringView node_kind_name(NodeKind k) noexcept
 
 bool node_kind_from_name(StringView s, NodeKind& out) noexcept
 {
-    if (s == StringView("program")) { out = NodeKind::Program; return true; }
-    if (s == StringView("event_handler")) { out = NodeKind::EventHandler; return true; }
-    if (s == StringView("state_decl")) { out = NodeKind::StateDecl; return true; }
-    if (s == StringView("query")) { out = NodeKind::Query; return true; }
-    if (s == StringView("parallel_for")) { out = NodeKind::ParallelFor; return true; }
-    if (s == StringView("await")) { out = NodeKind::Await; return true; }
-    if (s == StringView("state_update")) { out = NodeKind::StateUpdate; return true; }
+    if (s == StringView("program"))
+    {
+        out = NodeKind::Program;
+        return true;
+    }
+    if (s == StringView("event_handler"))
+    {
+        out = NodeKind::EventHandler;
+        return true;
+    }
+    if (s == StringView("state_decl"))
+    {
+        out = NodeKind::StateDecl;
+        return true;
+    }
+    if (s == StringView("query"))
+    {
+        out = NodeKind::Query;
+        return true;
+    }
+    if (s == StringView("parallel_for"))
+    {
+        out = NodeKind::ParallelFor;
+        return true;
+    }
+    if (s == StringView("await"))
+    {
+        out = NodeKind::Await;
+        return true;
+    }
+    if (s == StringView("state_update"))
+    {
+        out = NodeKind::StateUpdate;
+        return true;
+    }
     return false;
 }
 
 StringRef SourceModel::intern(StringView s)
 {
     const auto off = static_cast<crd::u32>(m_strings.size());
-    for (crd::usize i = 0; i < s.size(); ++i) { m_strings.push_back(s[i]); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        m_strings.push_back(s[i]);
+    }
     return StringRef{off, static_cast<crd::u32>(s.size())};
 }
 
@@ -64,7 +98,10 @@ crd::u32 SourceModel::add_node(NodeKind kind, StringView name, crd::u32 parent, 
     n.loc          = loc;
     n.name         = intern(name); // NOTE: intern may reallocate m_strings; `n` is a live ref into m_nodes (unaffected)
     n.parent       = parent;
-    if (parent != kInvalidNode) { m_nodes[parent].children.push_back(idx); }
+    if (parent != kInvalidNode)
+    {
+        m_nodes[parent].children.push_back(idx);
+    }
     return idx;
 }
 
@@ -95,7 +132,10 @@ void SourceModel::add_edge(crd::u32 from_node, crd::u32 from_pin, crd::u32 to_no
     {
         const Edge& x        = m_edges[pos];
         const bool  x_before = (x.to_node < to_node) || (x.to_node == to_node && x.to_pin < to_pin);
-        if (!x_before) { break; } // insert BEFORE the first edge whose consumer key is >= e's
+        if (!x_before) // insert BEFORE the first edge whose consumer key is >= e's
+        {
+            break;
+        }
         ++pos;
     }
     m_edges.insert(pos, e);
@@ -105,7 +145,13 @@ void SourceModel::set_layout(StableId id, crd::f32 x, crd::f32 y, crd::u32 group
 {
     for (Layout& l : m_layout)
     {
-        if (l.id == id) { l.x = x; l.y = y; l.group = group; return; } // last-write-wins per id
+        if (l.id == id) // last-write-wins per id
+        {
+            l.x = x;
+            l.y = y;
+            l.group = group;
+            return;
+        }
     }
     m_layout.push_back(Layout{id, x, y, group});
 }
@@ -138,8 +184,14 @@ void SourceModel::derive_ids() noexcept
                 for (crd::u32 k = 0; k < par.children.size(); ++k)
                 {
                     const crd::u32 sib = par.children[k];
-                    if (sib == i) { break; }
-                    if (m_nodes[sib].kind == n.kind && m_nodes[sib].name.len == 0U) { ++ordinal; }
+                    if (sib == i)
+                    {
+                        break;
+                    }
+                    if (m_nodes[sib].kind == n.kind && m_nodes[sib].name.len == 0U)
+                    {
+                        ++ordinal;
+                    }
                 }
             }
             fnv_fold_u32(h, ordinal);
@@ -175,7 +227,10 @@ crd::u64 SourceModel::semantic_hash() const noexcept
             fnv_fold(h, ak.data(), ak.size());
             fnv_fold(h, av.data(), av.size());
         }
-        for (const crd::u32 c : n.children) { fnv_fold_u64(h, m_nodes[c].id.value); }
+        for (const crd::u32 c : n.children)
+        {
+            fnv_fold_u64(h, m_nodes[c].id.value);
+        }
     }
     for (const Edge& e : m_edges)
     {
@@ -191,7 +246,10 @@ crd::u32 SourceModel::root() const noexcept
 {
     for (crd::u32 i = 0; i < m_nodes.size(); ++i)
     {
-        if (m_nodes[i].kind == NodeKind::Program) { return i; }
+        if (m_nodes[i].kind == NodeKind::Program)
+        {
+            return i;
+        }
     }
     return kInvalidNode;
 }

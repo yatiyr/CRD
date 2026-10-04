@@ -106,7 +106,11 @@ template <int W>
     HessRow<W> r;
     r.f0 = s * x.f0;
     r.f1 = s * x.f1;
-    for (int k = 0; k < W; ++k) { r.f2[k] = s * x.f2[k]; r.f12[k] = s * x.f12[k]; }
+    for (int k = 0; k < W; ++k)
+    {
+        r.f2[k] = s * x.f2[k];
+        r.f12[k] = s * x.f12[k];
+    }
     return r;
 }
 template <int W>

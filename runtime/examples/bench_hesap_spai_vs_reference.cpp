@@ -211,6 +211,7 @@ static Mtx make_laplace_2d(crd::i32 g) // SPD 5-point
     m.n = g * g;
     m.ok = true;
     for (crd::i32 y = 0; y < g; ++y)
+    {
         for (crd::i32 x = 0; x < g; ++x)
         {
             const crd::i32 i = y * g + x;
@@ -232,6 +233,7 @@ static Mtx make_laplace_2d(crd::i32 g) // SPD 5-point
                 m.trips.push_back({i, i - g, -1.0});
             }
         }
+    }
     return m;
 }
 
@@ -241,6 +243,7 @@ static Mtx make_conv_diff_2d(crd::i32 g, crd::f64 beta) // nonsym 5-point
     m.n = g * g;
     m.ok = true;
     for (crd::i32 y = 0; y < g; ++y)
+    {
         for (crd::i32 x = 0; x < g; ++x)
         {
             const crd::i32 i = y * g + x;
@@ -262,6 +265,7 @@ static Mtx make_conv_diff_2d(crd::i32 g, crd::f64 beta) // nonsym 5-point
                 m.trips.push_back({i, i - g, -1.0 - beta});
             }
         }
+    }
     return m;
 }
 

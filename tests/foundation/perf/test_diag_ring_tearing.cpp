@@ -48,7 +48,9 @@ TEST_CASE("ring: frame-history reads are free of torn records under a wrapping w
                     const crd::u64 fi = rec.frame_index;
                     const crd::u64 v  = rec.values[id.value].bits;
                     if (fi != 0U && v != fi)
+                    {
                         torn.fetch_add(1U, std::memory_order_relaxed);
+                    }
                 }
             }
         });

@@ -23,8 +23,14 @@ struct Aabb
     {
         for (crd::u32 a = 0U; a < 3U; ++a)
         {
-            if (c[a] - r < mn[a]) mn[a] = c[a] - r;
-            if (c[a] + r > mx[a]) mx[a] = c[a] + r;
+            if (c[a] - r < mn[a])
+            {
+                mn[a] = c[a] - r;
+            }
+            if (c[a] + r > mx[a])
+            {
+                mx[a] = c[a] + r;
+            }
         }
     }
 
@@ -32,8 +38,14 @@ struct Aabb
     {
         for (crd::u32 a = 0U; a < 3U; ++a)
         {
-            if (o.mn[a] < mn[a]) mn[a] = o.mn[a];
-            if (o.mx[a] > mx[a]) mx[a] = o.mx[a];
+            if (o.mn[a] < mn[a])
+            {
+                mn[a] = o.mn[a];
+            }
+            if (o.mx[a] > mx[a])
+            {
+                mx[a] = o.mx[a];
+            }
         }
     }
 
@@ -63,8 +75,20 @@ void merge_sphere(const crd::f32* c1, crd::f32 r1,
 
     if (d < 1.0e-12F)
     {
-        if (r1 >= r2) { oc[0] = c1[0]; oc[1] = c1[1]; oc[2] = c1[2]; out_r = r1; }
-        else          { oc[0] = c2[0]; oc[1] = c2[1]; oc[2] = c2[2]; out_r = r2; }
+        if (r1 >= r2)
+        {
+            oc[0] = c1[0];
+            oc[1] = c1[1];
+            oc[2] = c1[2];
+            out_r = r1;
+        }
+        else
+        {
+            oc[0] = c2[0];
+            oc[1] = c2[1];
+            oc[2] = c2[2];
+            out_r = r2;
+        }
         return;
     }
     if (d + r2 <= r1)
@@ -115,11 +139,20 @@ SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
         for (crd::u32 i = begin; i < end; ++i)
         {
             const crd::f32 c = clusters[idx[i]].center[axis];
-            if (c < cmin) cmin = c;
-            if (c > cmax) cmax = c;
+            if (c < cmin)
+            {
+                cmin = c;
+            }
+            if (c > cmax)
+            {
+                cmax = c;
+            }
         }
         const crd::f32 extent = cmax - cmin;
-        if (extent < 1.0e-12F) continue;
+        if (extent < 1.0e-12F)
+        {
+            continue;
+        }
 
         SahBin bins[kBinCount]{};
         const crd::f32 scale = static_cast<crd::f32>(kBinCount) / extent;
@@ -127,7 +160,10 @@ SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
         {
             const auto& cl = clusters[idx[i]];
             crd::u32 b = static_cast<crd::u32>((cl.center[axis] - cmin) * scale);
-            if (b >= kBinCount) b = kBinCount - 1U;
+            if (b >= kBinCount)
+            {
+                b = kBinCount - 1U;
+            }
             bins[b].bounds.expand_sphere(cl.center, cl.radius);
             bins[b].count++;
         }
@@ -139,7 +175,10 @@ SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
         for (crd::u32 k = 1U; k < kBinCount; ++k)
         {
             prefix_bounds[k] = prefix_bounds[k - 1U];
-            if (bins[k].bounds.valid()) prefix_bounds[k].merge(bins[k].bounds);
+            if (bins[k].bounds.valid())
+            {
+                prefix_bounds[k].merge(bins[k].bounds);
+            }
             prefix_count[k] = prefix_count[k - 1U] + bins[k].count;
         }
 
@@ -163,7 +202,10 @@ SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
                 }
             }
 
-            if (bins[k].bounds.valid()) right_bounds.merge(bins[k].bounds);
+            if (bins[k].bounds.valid())
+            {
+                right_bounds.merge(bins[k].bounds);
+            }
             right_count += bins[k].count;
         }
     }
@@ -178,8 +220,14 @@ SahSplit find_best_split(const DagCluster* clusters, const crd::u32* idx,
             for (crd::u32 i = begin; i < end; ++i)
             {
                 const crd::f32 c = clusters[idx[i]].center[axis];
-                if (c < cmin) cmin = c;
-                if (c > cmax) cmax = c;
+                if (c < cmin)
+                {
+                    cmin = c;
+                }
+                if (c > cmax)
+                {
+                    cmax = c;
+                }
             }
             if (cmax - cmin > best_extent)
             {
@@ -204,7 +252,9 @@ crd::u32 partition_indices(crd::u32* idx, crd::u32 begin, crd::u32 end,
     while (lo < hi)
     {
         if (clusters[idx[lo]].center[axis] < threshold)
+        {
             ++lo;
+        }
         else
         {
             --hi;
@@ -213,8 +263,14 @@ crd::u32 partition_indices(crd::u32* idx, crd::u32 begin, crd::u32 end,
             idx[hi] = tmp;
         }
     }
-    if (lo == begin) ++lo;
-    if (lo == end)   --lo;
+    if (lo == begin)
+    {
+        ++lo;
+    }
+    if (lo == end)
+    {
+        --lo;
+    }
     return lo;
 }
 
@@ -239,11 +295,20 @@ struct BvhBuilder
         for (crd::u32 i = begin; i < end; ++i)
         {
             const auto& c = clusters[idx[i]];
-            if (c.error > node.max_error)               node.max_error        = c.error;
-            if (c.parent_error < node.min_parent_error)  node.min_parent_error = c.parent_error;
+            if (c.error > node.max_error)
+            {
+                node.max_error        = c.error;
+            }
+            if (c.parent_error < node.min_parent_error)
+            {
+                node.min_parent_error = c.parent_error;
+            }
         }
 
-        if (depth > max_depth) max_depth = depth;
+        if (depth > max_depth)
+        {
+            max_depth = depth;
+        }
 
         if (end - begin == 1U)
         {
@@ -295,7 +360,10 @@ ClusterBvhReport build_cluster_bvh(const DagCluster* clusters, crd::u32 cluster_
 
     crd::containers::Array<crd::u32> indices(scratch);
     indices.resize(cluster_count);
-    for (crd::u32 i = 0U; i < cluster_count; ++i) indices[i] = i;
+    for (crd::u32 i = 0U; i < cluster_count; ++i)
+    {
+        indices[i] = i;
+    }
 
     BvhBuilder builder{clusters, indices.data(), out.nodes, 0U, 0U, 0U};
     builder.build(0U, cluster_count, 0U);
@@ -304,7 +372,9 @@ ClusterBvhReport build_cluster_bvh(const DagCluster* clusters, crd::u32 cluster_
     out.leaf_count = builder.leaf_count;
     out.depth      = builder.max_depth;
     if (out.node_count < max_nodes)
+    {
         out.nodes.resize(out.node_count);
+    }
 
     report.status     = ClusterBvhStatus::Ok;
     report.node_count = out.node_count;

@@ -61,7 +61,11 @@ TEST_CASE("B15-b cloud density: in [0,1], vanishes at the slab floor/ceiling, gr
     // (1) density ∈ [0,1].
     double lo = 1e30;
     double hi = -1e30;
-    for (int i = 0; i < n; ++i) { lo = d_hi[uz(i)] < lo ? d_hi[uz(i)] : lo; hi = d_hi[uz(i)] > hi ? d_hi[uz(i)] : hi; }
+    for (int i = 0; i < n; ++i)
+    {
+        lo = d_hi[uz(i)] < lo ? d_hi[uz(i)] : lo;
+        hi = d_hi[uz(i)] > hi ? d_hi[uz(i)] : hi;
+    }
     CHECK(lo >= 0.0);
     CHECK(hi <= 1.0 + 1e-6);
 
@@ -70,8 +74,14 @@ TEST_CASE("B15-b cloud density: in [0,1], vanishes at the slab floor/ceiling, gr
     double mid_max  = 0.0;
     for (int i = 0; i < n; ++i)
     {
-        if (h01[uz(i)] < 0.05 || h01[uz(i)] > 0.98) { edge_max = d_hi[uz(i)] > edge_max ? d_hi[uz(i)] : edge_max; }
-        if (h01[uz(i)] > 0.25 && h01[uz(i)] < 0.4) { mid_max = d_hi[uz(i)] > mid_max ? d_hi[uz(i)] : mid_max; }
+        if (h01[uz(i)] < 0.05 || h01[uz(i)] > 0.98)
+        {
+            edge_max = d_hi[uz(i)] > edge_max ? d_hi[uz(i)] : edge_max;
+        }
+        if (h01[uz(i)] > 0.25 && h01[uz(i)] < 0.4)
+        {
+            mid_max = d_hi[uz(i)] > mid_max ? d_hi[uz(i)] : mid_max;
+        }
     }
     CHECK(edge_max < 0.02); // the slab boundaries are clear sky
     CHECK(mid_max > 0.1);   // mid-layer has real cloud
@@ -79,7 +89,11 @@ TEST_CASE("B15-b cloud density: in [0,1], vanishes at the slab floor/ceiling, gr
     // (3) COVERAGE: more coverage ⇒ more cloud (higher mean density).
     double mean_lo = 0.0;
     double mean_hi = 0.0;
-    for (int i = 0; i < n; ++i) { mean_lo += d_lo[uz(i)]; mean_hi += d_hi[uz(i)]; }
+    for (int i = 0; i < n; ++i)
+    {
+        mean_lo += d_lo[uz(i)];
+        mean_hi += d_hi[uz(i)];
+    }
     mean_lo /= n;
     mean_hi /= n;
     CHECK(mean_hi > mean_lo);
@@ -89,7 +103,10 @@ TEST_CASE("B15-b cloud density: in [0,1], vanishes at the slab floor/ceiling, gr
     crd::containers::Array<crd::f64> again(&alloc);
     run(0.85, again);
     double ddiff = 0.0;
-    for (int i = 0; i < n; ++i) { ddiff = std::fabs(again[uz(i)] - d_hi[uz(i)]) > ddiff ? std::fabs(again[uz(i)] - d_hi[uz(i)]) : ddiff; }
+    for (int i = 0; i < n; ++i)
+    {
+        ddiff = std::fabs(again[uz(i)] - d_hi[uz(i)]) > ddiff ? std::fabs(again[uz(i)] - d_hi[uz(i)]) : ddiff;
+    }
     CHECK(ddiff == 0.0);
 }
 
@@ -174,7 +191,11 @@ TEST_CASE("B15-b cloud ray-march: Beer-Powder transmittance + phase inscatter ov
     // (3) more COVERAGE ⇒ denser ⇒ lower mean transmittance (more opaque).
     double mt_lo = 0.0;
     double mt_hi = 0.0;
-    for (int i = 0; i < ns; ++i) { mt_lo += o_lo[uz(i * 4 + 3)]; mt_hi += o_hi[uz(i * 4 + 3)]; }
+    for (int i = 0; i < ns; ++i)
+    {
+        mt_lo += o_lo[uz(i * 4 + 3)];
+        mt_hi += o_hi[uz(i * 4 + 3)];
+    }
     mt_lo /= ns;
     mt_hi /= ns;
     CHECK(mt_hi < mt_lo);

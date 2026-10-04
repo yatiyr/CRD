@@ -34,7 +34,10 @@ TEST_CASE("v17-a: CKIR elementwise + reduce matches crd::math oracle", "[kir][ck
     kir::eval_cpu(g, inputs, &alloc, red, out);
 
     f64 expect = 0.0;
-    for (const f64 v : xin) { expect += crd::math::exp(v) + v * v; }
+    for (const f64 v : xin)
+    {
+        expect += crd::math::exp(v) + v * v;
+    }
     CHECK_THAT(out[0], WithinRel(expect, 1e-14));
 }
 
@@ -72,7 +75,10 @@ TEST_CASE("v17-a: CKIR movement -- permute + broadcast + reshape", "[kir][ckir]"
     kir::eval_cpu(g, inputs, &alloc, tp, out);
     // transpose of [[1,2,3],[4,5,6]] = [[1,4],[2,5],[3,6]]
     const f64 expect[6] = {1, 4, 2, 5, 3, 6};
-    for (int i = 0; i < 6; ++i) { CHECK(out[i] == expect[i]); }
+    for (int i = 0; i < 6; ++i)
+    {
+        CHECK(out[i] == expect[i]);
+    }
 
     // broadcast a [1,3] row to [2,3]
     kir::KGraph      g2(&alloc);
@@ -83,7 +89,10 @@ TEST_CASE("v17-a: CKIR movement -- permute + broadcast + reshape", "[kir][ckir]"
     f64              out2[6]    = {};
     kir::eval_cpu(g2, in2, &alloc, bc, out2);
     const f64 expect2[6] = {7, 8, 9, 7, 8, 9};
-    for (int i = 0; i < 6; ++i) { CHECK(out2[i] == expect2[i]); }
+    for (int i = 0; i < 6; ++i)
+    {
+        CHECK(out2[i] == expect2[i]);
+    }
 }
 
 TEST_CASE("v17-a: CKIR composed graph -- matmul then bias then max(0,.) then sum", "[kir][ckir]")

@@ -62,20 +62,32 @@ public:
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
         const auto* p = m_perm.perm.data();
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rp[i] = r[p[i]]; }          // rp = P·r
+        for (crd::u32 i = 0; i < m_n; ++i) // rp = P·r
+        {
+            m_rp[i] = r[p[i]];
+        }
         (void)m_inner.apply(crd::containers::ConstSpan<T>{m_rp.data(), m_n},
                             crd::containers::Span<T>{m_zp.data(), m_n});    // zp = M_inner⁻¹·rp
-        for (crd::u32 i = 0; i < m_n; ++i) { z[p[i]] = m_zp[i]; }          // z  = Pᵀ·zp
+        for (crd::u32 i = 0; i < m_n; ++i) // z  = Pᵀ·zp
+        {
+            z[p[i]] = m_zp[i];
+        }
         return true;
     }
 
     [[nodiscard]] bool apply_adjoint(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
         const auto* p = m_perm.perm.data();
-        for (crd::u32 i = 0; i < m_n; ++i) { m_rp[i] = r[p[i]]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_rp[i] = r[p[i]];
+        }
         (void)m_inner.apply_adjoint(crd::containers::ConstSpan<T>{m_rp.data(), m_n},
                                     crd::containers::Span<T>{m_zp.data(), m_n});
-        for (crd::u32 i = 0; i < m_n; ++i) { z[p[i]] = m_zp[i]; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            z[p[i]] = m_zp[i];
+        }
         return true;
     }
 

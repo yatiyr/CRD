@@ -96,7 +96,10 @@ template <crd::math::MathScalar T>
     const V w{p3.x - p1.x, p3.y - p1.y, p3.z - p1.z};
 
     const T u_len2 = (u.x * u.x) + (u.y * u.y) + (u.z * u.z);
-    if (!(u_len2 > T{0})) { return AttributeGradient<T>{V{T{0}, T{0}, T{0}}, s1}; }
+    if (!(u_len2 > T{0}))
+    {
+        return AttributeGradient<T>{V{T{0}, T{0}, T{0}}, s1};
+    }
     const T inv_u_len = T{1} / crd::math::length(u);
     const V e1{u.x * inv_u_len, u.y * inv_u_len, u.z * inv_u_len};
 
@@ -104,7 +107,10 @@ template <crd::math::MathScalar T>
     const T w_dot_e1 = (w.x * e1.x) + (w.y * e1.y) + (w.z * e1.z);
     const V w_perp{w.x - (w_dot_e1 * e1.x), w.y - (w_dot_e1 * e1.y), w.z - (w_dot_e1 * e1.z)};
     const T wp_len2 = (w_perp.x * w_perp.x) + (w_perp.y * w_perp.y) + (w_perp.z * w_perp.z);
-    if (!(wp_len2 > T{0})) { return AttributeGradient<T>{V{T{0}, T{0}, T{0}}, s1}; } // collinear ⇒ degenerate
+    if (!(wp_len2 > T{0})) // collinear ⇒ degenerate
+    {
+        return AttributeGradient<T>{V{T{0}, T{0}, T{0}}, s1};
+    }
     const T inv_wp_len = T{1} / crd::math::length(w_perp);
     const V e2{w_perp.x * inv_wp_len, w_perp.y * inv_wp_len, w_perp.z * inv_wp_len};
 
@@ -197,7 +203,10 @@ template <crd::math::MathScalar T, crd::u32 M>
     Quadric<T> r = q.geom;
     if constexpr (M > 0U)
     {
-        if (!(q.weight > T{0})) { return r; }
+        if (!(q.weight > T{0}))
+        {
+            return r;
+        }
         const T inv_n = T{1} / q.weight;
         for (crd::u32 j = 0; j < M; ++j)
         {

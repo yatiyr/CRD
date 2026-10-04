@@ -70,7 +70,11 @@ TEST_CASE("v17-i: D3D12 IComputeContext runs a kernel through the backend-agnost
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
@@ -104,8 +108,20 @@ TEST_CASE("v17-i: D3D12 IComputeContext runs a kernel through the backend-agnost
     REQUIRE(ub != nullptr);
     REQUIRE(rb != nullptr);
 
-    { auto* p = static_cast<float*>(ua->map()); for (int i = 0; i < kN; ++i) { p[i] = av[i]; } ua->unmap(); }
-    { auto* p = static_cast<float*>(ub->map()); for (int i = 0; i < kN; ++i) { p[i] = bv[i]; } ub->unmap(); }
+    {
+        auto* p = static_cast<float*>(ua->map());
+        for (int i = 0; i < kN; ++i)
+        {
+            p[i] = av[i];
+        }
+        ua->unmap(); }
+    {
+        auto* p = static_cast<float*>(ub->map());
+        for (int i = 0; i < kN; ++i)
+        {
+            p[i] = bv[i];
+        }
+        ub->unmap(); }
 
     auto& rec = ctx.begin();
     rec.copy(*ua, *ga, 0U, 0U, bytes);
@@ -121,7 +137,10 @@ TEST_CASE("v17-i: D3D12 IComputeContext runs a kernel through the backend-agnost
     int         mism = 0;
     for (int i = 0; i < kN; ++i)
     {
-        if (out[i] != expect[i]) { ++mism; }
+        if (out[i] != expect[i])
+        {
+            ++mism;
+        }
     }
     rb->unmap();
     CHECK(mism == 0);
@@ -140,7 +159,11 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::MlpConfig mcfg;
     mcfg.batch_tile = 64;
@@ -158,8 +181,14 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle
     w64.resize(static_cast<crd::usize>(n_w));
     crd::containers::Array<crd::f64> out64(&alloc);
     out64.resize(static_cast<crd::usize>(n_in));
-    for (int i = 0; i < n_in; ++i) { in64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6))); }
-    for (int i = 0; i < n_w; ++i) { w64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5))); }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6)));
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w64[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5)));
+    }
     kir::KernelBuffer bufs[3] = {{in64.data(), n_in, 0, 0}, {w64.data(), n_w, 0, 1}, {out64.data(), n_in, 0, 2}};
     kir::eval_cpu_kernel(graph, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(batch));
 
@@ -174,15 +203,30 @@ TEST_CASE("v17 NRC: CKIR fused-MLP FP32 forward DISPATCHES on DX12 == CPU oracle
     w32.resize(static_cast<crd::usize>(n_w));
     crd::containers::Array<float> out32(&alloc);
     out32.resize(static_cast<crd::usize>(n_in));
-    for (int i = 0; i < n_in; ++i) { in32[static_cast<crd::usize>(i)] = static_cast<float>(in64[static_cast<crd::usize>(i)]); }
-    for (int i = 0; i < n_w; ++i) { w32[static_cast<crd::usize>(i)] = static_cast<float>(w64[static_cast<crd::usize>(i)]); }
-    for (int i = 0; i < n_in; ++i) { out32[static_cast<crd::usize>(i)] = -1.0F; }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in32[static_cast<crd::usize>(i)] = static_cast<float>(in64[static_cast<crd::usize>(i)]);
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w32[static_cast<crd::usize>(i)] = static_cast<float>(w64[static_cast<crd::usize>(i)]);
+    }
+    for (int i = 0; i < n_in; ++i)
+    {
+        out32[static_cast<crd::usize>(i)] = -1.0F;
+    }
     float*    host[3] = {in32.data(), w32.data(), out32.data()};
     const int lens[3] = {n_in, n_w, n_in};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 3, static_cast<crd::u32>(batch));
 
     int bad = 0;
-    for (int i = 0; i < n_in; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
+    for (int i = 0; i < n_in; ++i)
+    {
+        if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0); // FP32 precise, no FMA ⇒ bit-IDENTICAL to Vulkan + the oracle
 }
 
@@ -192,7 +236,11 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on DX12 == CPU oracle (U
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(32U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     const auto uz = [](int v) { return static_cast<crd::usize>(v); };
 
     kir::SvgfConfig   scfg;
@@ -214,7 +262,10 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on DX12 == CPU oracle (U
     auto rnd = [&]() { s = s * 1664525U + 1013904223U; return static_cast<double>(s >> 8) / static_cast<double>(1U << 24); };
     for (int p = 0; p < np; ++p)
     {
-        for (int c = 0; c < 3; ++c) { color[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5); }
+        for (int c = 0; c < 3; ++c)
+        {
+            color[uz(p * 3 + c)] = 0.4 + 0.3 * (rnd() - 0.5);
+        }
         var[uz(p)]          = 0.05;
         gbuf[uz(p * 4 + 0)] = 1.0 + 0.1 * rnd();
         gbuf[uz(p * 4 + 1)] = 0.0;
@@ -240,10 +291,22 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on DX12 == CPU oracle (U
     hv.resize(uz(np));
     hco.resize(uz(np * 3));
     hvo.resize(uz(np));
-    for (int i = 0; i < np * 3; ++i) { hc[uz(i)] = static_cast<float>(color[uz(i)]); }
-    for (int i = 0; i < np * 4; ++i) { hg[uz(i)] = static_cast<float>(gbuf[uz(i)]); }
-    for (int i = 0; i < np; ++i) { hv[uz(i)] = static_cast<float>(var[uz(i)]); }
-    for (int i = 0; i < np * 3; ++i) { hco[uz(i)] = -9.0F; }
+    for (int i = 0; i < np * 3; ++i)
+    {
+        hc[uz(i)] = static_cast<float>(color[uz(i)]);
+    }
+    for (int i = 0; i < np * 4; ++i)
+    {
+        hg[uz(i)] = static_cast<float>(gbuf[uz(i)]);
+    }
+    for (int i = 0; i < np; ++i)
+    {
+        hv[uz(i)] = static_cast<float>(var[uz(i)]);
+    }
+    for (int i = 0; i < np * 3; ++i)
+    {
+        hco[uz(i)] = -9.0F;
+    }
     float*    host[5] = {hc.data(), hg.data(), hv.data(), hco.data(), hvo.data()};
     const int lens[5] = {np * 3, np * 4, np, np * 3, np};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 5, static_cast<crd::u32>(np / 64));
@@ -254,7 +317,10 @@ TEST_CASE("B14-c: CKIR SVGF a-trous denoiser DISPATCHES on DX12 == CPU oracle (U
         const double ref = col_out[uz(i)];
         const double got = static_cast<double>(hco[uz(i)]);
         const double rel = std::fabs(got - ref) / (std::fabs(ref) + 1e-3);
-        if (rel > maxrel) { maxrel = rel; }
+        if (rel > maxrel)
+        {
+            maxrel = rel;
+        }
     }
     std::printf("[DX12 SVGF a-trous 32x32] maxrel(GPU vs oracle) = %.2e\n", maxrel);
     CHECK(maxrel < 1e-4);
@@ -270,7 +336,10 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on DX12 == C
     {
         namespace kir = crd::kir;
         g::Dx12ComputeContext      ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
         const double kpi = kir::hair::kPi;
 
@@ -306,8 +375,14 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on DX12 == C
         crd::containers::Array<float> h1(&alloc);
         h0.resize(uz(n * 6));
         h1.resize(uz(n));
-        for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-        for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+        for (int i = 0; i < n * 6; ++i)
+        {
+            h0[uz(i)] = static_cast<float>(in[uz(i)]);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            h1[uz(i)] = -9.0F;
+        }
         float*    host[2] = {h0.data(), h1.data()};
         const int lens[2] = {n * 6, n};
         crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
@@ -319,8 +394,18 @@ TEST_CASE("B18-a: CKIR hair BCSDF (Chiang R/TT/TRT/TRRT) DISPATCHES on DX12 == C
             const double gv = static_cast<double>(h1[uz(i)]);
             const double ov = out[uz(i)];
             const double ad = std::fabs(gv - ov);
-            if (ad > maxabs) { maxabs = ad; }
-            if (std::fabs(ov) > 1.0e-3) { const double rel = ad / std::fabs(ov); if (rel > maxrel) { maxrel = rel; } }
+            if (ad > maxabs)
+            {
+                maxabs = ad;
+            }
+            if (std::fabs(ov) > 1.0e-3)
+            {
+                const double rel = ad / std::fabs(ov);
+                if (rel > maxrel)
+                {
+                    maxrel = rel;
+                }
+            }
         }
         std::printf("[DX12 hair BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
         CHECK(maxabs < hair_abs_bar());
@@ -338,7 +423,10 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on DX12 ==
     {
         namespace kir = crd::kir;
         g::Dx12ComputeContext      ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
         const double kpi = kir::hair::kPi;
 
@@ -378,8 +466,14 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on DX12 ==
         crd::containers::Array<float> h1(&alloc);
         h0.resize(uz(n * 6));
         h1.resize(uz(n));
-        for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-        for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+        for (int i = 0; i < n * 6; ++i)
+        {
+            h0[uz(i)] = static_cast<float>(in[uz(i)]);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            h1[uz(i)] = -9.0F;
+        }
         float*    host[2] = {h0.data(), h1.data()};
         const int lens[2] = {n * 6, n};
         crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
@@ -391,8 +485,18 @@ TEST_CASE("B18-b: CKIR fur BCSDF (medulla double-cylinder) DISPATCHES on DX12 ==
             const double gv = static_cast<double>(h1[uz(i)]);
             const double ov = out[uz(i)];
             const double ad = std::fabs(gv - ov);
-            if (ad > maxabs) { maxabs = ad; }
-            if (std::fabs(ov) > 1.0e-3) { const double rel = ad / std::fabs(ov); if (rel > maxrel) { maxrel = rel; } }
+            if (ad > maxabs)
+            {
+                maxabs = ad;
+            }
+            if (std::fabs(ov) > 1.0e-3)
+            {
+                const double rel = ad / std::fabs(ov);
+                if (rel > maxrel)
+                {
+                    maxrel = rel;
+                }
+            }
         }
         std::printf("[DX12 fur BCSDF] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
         CHECK(maxabs < hair_abs_bar());
@@ -410,26 +514,52 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
         namespace kir = crd::kir;
         namespace hms = crd::kir::hairms;
         g::Dx12ComputeContext      ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         const auto uz = [](int v) { return static_cast<crd::usize>(v); };
 
         const auto both = [&](kir::KGraph& gg, const kir::KEntry& e, double** data, const int* lens, int nbuf, int check,
                               crd::u32 groups, const char* name) -> double {
             crd::containers::Array<double> snap(&alloc);
             int total = 0;
-            for (int i = 0; i < nbuf; ++i) { total += lens[i]; }
+            for (int i = 0; i < nbuf; ++i)
+            {
+                total += lens[i];
+            }
             snap.resize(uz(total), 0.0);
             int off = 0;
-            for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { snap[uz(off + j)] = data[i][j]; } off += lens[i]; }
+            for (int i = 0; i < nbuf; ++i)
+            {
+                for (int j = 0; j < lens[i]; ++j)
+                {
+                    snap[uz(off + j)] = data[i][j];
+                }
+                off += lens[i];
+            }
 
             kir::KernelBuffer bufs[6];
-            for (int i = 0; i < nbuf; ++i) { bufs[i] = {data[i], lens[i], 0U, static_cast<crd::u8>(i)}; }
+            for (int i = 0; i < nbuf; ++i)
+            {
+                bufs[i] = {data[i], lens[i], 0U, static_cast<crd::u8>(i)};
+            }
             kir::eval_cpu_kernel(gg, e, bufs, nbuf, e.local_size[0], &alloc, groups);
             crd::containers::Array<double> ref(&alloc);
             ref.resize(uz(lens[check]), 0.0);
-            for (int j = 0; j < lens[check]; ++j) { ref[uz(j)] = data[check][j]; }
+            for (int j = 0; j < lens[check]; ++j)
+            {
+                ref[uz(j)] = data[check][j];
+            }
             off = 0;
-            for (int i = 0; i < nbuf; ++i) { for (int j = 0; j < lens[i]; ++j) { data[i][j] = snap[uz(off + j)]; } off += lens[i]; }
+            for (int i = 0; i < nbuf; ++i)
+            {
+                for (int j = 0; j < lens[i]; ++j)
+                {
+                    data[i][j] = snap[uz(off + j)];
+                }
+                off += lens[i];
+            }
 
             kir::GlslKernel kern(&alloc);
             REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, kern));
@@ -442,7 +572,10 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
             for (int i = 0; i < nbuf; ++i)
             {
                 host[i] = host_store.data() + off;
-                for (int j = 0; j < lens[i]; ++j) { host[i][j] = static_cast<float>(data[i][j]); }
+                for (int j = 0; j < lens[i]; ++j)
+                {
+                    host[i][j] = static_cast<float>(data[i][j]);
+                }
                 off += lens[i];
             }
             crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, nbuf, groups);
@@ -451,7 +584,10 @@ TEST_CASE("B18-c: hair multiple-scattering tiers DISPATCH on DX12 == CPU oracle"
             {
                 const double d = static_cast<double>(host[check][j]) - ref[uz(j)];
                 const double a = d < 0.0 ? -d : d;
-                if (a > worst) { worst = a; }
+                if (a > worst)
+                {
+                    worst = a;
+                }
             }
             std::printf("[DX12 B18-c %s] maxabs(GPU vs oracle) = %.3e\n", name, worst);
             return worst;
@@ -521,7 +657,11 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc0(1U << 20U);
     g::Dx12ComputeContext      ctx(&alloc0);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     const auto uz = [](int v) { return static_cast<crd::usize>(v); };
     crd::memory::TlsfAllocator alloc(64U << 20U);
 
@@ -544,9 +684,15 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     for (int s = 0; s < nseg; ++s)
     {
         const crd::usize o = uz(s * 8);
-        for (int k = 0; k < 3; ++k) { segs[o + uz(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + uz(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 3U] = 0.05 + rnd() * 0.25;
-        for (int k = 0; k < 3; ++k) { segs[o + 4U + uz(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + 4U + uz(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 7U] = 0.05 + rnd() * 0.25;
     }
     for (int r = 0; r < nray; ++r)
@@ -561,8 +707,14 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     }
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(nray * 6 + nseg * 8), 0.0);
-    for (int j = 0; j < nray * 6; ++j) { snap[uz(j)] = rays[uz(j)]; }
-    for (int j = 0; j < nseg * 8; ++j) { snap[uz(nray * 6 + j)] = segs[uz(j)]; }
+    for (int j = 0; j < nray * 6; ++j)
+    {
+        snap[uz(j)] = rays[uz(j)];
+    }
+    for (int j = 0; j < nseg * 8; ++j)
+    {
+        snap[uz(nray * 6 + j)] = segs[uz(j)];
+    }
 
     kir::KernelBuffer bufs[3] = {{rays.data(), nray * 6, 0U, 0U},
                                  {segs.data(), nseg * 8, 0U, 1U},
@@ -570,7 +722,10 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     kir::eval_cpu_kernel(g, e, bufs, 3, e.local_size[0], &alloc, static_cast<crd::u32>(nray / 64));
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(nray * 2), 0.0);
-    for (int j = 0; j < nray * 2; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < nray * 2; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_hlsl(g, e, &alloc, kern));
@@ -580,8 +735,14 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     host_store.resize(uz(nray * 6 + nseg * 8 + nray * 2), 0.0F);
     float*    host[3] = {host_store.data(), host_store.data() + nray * 6, host_store.data() + nray * 6 + nseg * 8};
     const int lens[3] = {nray * 6, nseg * 8, nray * 2};
-    for (int j = 0; j < nray * 6; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
-    for (int j = 0; j < nseg * 8; ++j) { host[1][j] = static_cast<float>(snap[uz(nray * 6 + j)]); }
+    for (int j = 0; j < nray * 6; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
+    for (int j = 0; j < nseg * 8; ++j)
+    {
+        host[1][j] = static_cast<float>(snap[uz(nray * 6 + j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 3, static_cast<crd::u32>(nray / 64));
 
     // Compare only where the CPU reference actually HIT. A miss is sentinel-valued (1e30), and comparing sentinels in
@@ -593,8 +754,15 @@ TEST_CASE("B18-f: CKIR linear-swept-sphere intersector DISPATCHES on DX12 == CPU
     {
         const bool cpu_hit = ref[uz(r * 2)] < 1.0e29;
         const bool gpu_hit = static_cast<double>(host[2][r * 2]) < 1.0e29;
-        if (cpu_hit != gpu_hit) { ++disagree; continue; }
-        if (!cpu_hit) { continue; }
+        if (cpu_hit != gpu_hit)
+        {
+            ++disagree;
+            continue;
+        }
+        if (!cpu_hit)
+        {
+            continue;
+        }
         ++hits;
         // t and u are compared together on purpose: a `u` that disagrees while `t` matches means the two sides picked
         // DIFFERENT surfaces at the same distance, which is a shading defect even though the depth buffer would agree.
@@ -616,7 +784,11 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on DX12 == CPU oracle", "[
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(32U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     const auto uz = [](int v) { return static_cast<crd::usize>(v); };
 
     kir::hairgeom::StrandLodConfig lc;
@@ -643,13 +815,19 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on DX12 == CPU oracle", "[
     }
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(nb * 5), 0.0);
-    for (int j = 0; j < nb * 5; ++j) { snap[uz(j)] = in[uz(j)]; }
+    for (int j = 0; j < nb * 5; ++j)
+    {
+        snap[uz(j)] = in[uz(j)];
+    }
 
     kir::KernelBuffer bufs[2] = {{in.data(), nb * 5, 0U, 0U}, {out.data(), nb * 4, 0U, 1U}};
     kir::eval_cpu_kernel(gg, e, bufs, 2, e.local_size[0], &alloc, static_cast<crd::u32>(nb / 64));
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(nb * 4), 0.0);
-    for (int j = 0; j < nb * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < nb * 4; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, kern));
@@ -660,7 +838,10 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on DX12 == CPU oracle", "[
     host_store.resize(uz(nb * 9), 0.0F);
     float*    host[2] = {host_store.data(), host_store.data() + nb * 5};
     const int lens[2] = {nb * 5, nb * 4};
-    for (int j = 0; j < nb * 5; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
+    for (int j = 0; j < nb * 5; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, static_cast<crd::u32>(nb / 64));
 
     double worst = 0.0;
@@ -671,10 +852,19 @@ TEST_CASE("B18-d: CKIR strand LOD pre-pass DISPATCHES on DX12 == CPU oracle", "[
         {
             const double d = static_cast<double>(host[1][b * 4 + k]) - ref[uz(b * 4 + k)];
             const double a = d < 0.0 ? -d : d;
-            if (a > worst) { worst = a; }
+            if (a > worst)
+            {
+                worst = a;
+            }
         }
-        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)]) { ++cp_mismatch; }
-        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)]) { ++cp_mismatch; }
+        if (static_cast<double>(host[1][b * 4 + 0]) != ref[uz(b * 4 + 0)])
+        {
+            ++cp_mismatch;
+        }
+        if (static_cast<double>(host[1][b * 4 + 1]) != ref[uz(b * 4 + 1)])
+        {
+            ++cp_mismatch;
+        }
     }
     std::printf("[DX12 B18-d LOD] %d bundles  maxabs(GPU vs oracle) = %.3e  discrete mismatches = %d\n", nb, worst,
                 cp_mismatch);
@@ -691,7 +881,11 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     const auto uz = [](int v) { return static_cast<crd::usize>(v); };
 
     kir::hairgeom::HairFilterConfig fc; // 10x9 = 90 px over 2 groups of 64 ⇒ 38 tail lanes, deliberately out of range
@@ -714,7 +908,10 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
     for (int i = 0; i < np; ++i)
     {
-        for (int c = 0; c < 3; ++c) { col[uz(i * 3 + c)] = rnd(); }
+        for (int c = 0; c < 3; ++c)
+        {
+            col[uz(i * 3 + c)] = rnd();
+        }
         const double a     = rnd() * 6.2831853;
         tan[uz(i * 2 + 0)] = crd::math::cos(a);
         tan[uz(i * 2 + 1)] = crd::math::sin(a);
@@ -722,9 +919,18 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     }
     crd::containers::Array<double> snap(&alloc);
     snap.resize(uz(np * 6), 0.0);
-    for (int j = 0; j < np * 3; ++j) { snap[uz(j)] = col[uz(j)]; }
-    for (int j = 0; j < np * 2; ++j) { snap[uz(np * 3 + j)] = tan[uz(j)]; }
-    for (int j = 0; j < np; ++j) { snap[uz(np * 5 + j)] = dep[uz(j)]; }
+    for (int j = 0; j < np * 3; ++j)
+    {
+        snap[uz(j)] = col[uz(j)];
+    }
+    for (int j = 0; j < np * 2; ++j)
+    {
+        snap[uz(np * 3 + j)] = tan[uz(j)];
+    }
+    for (int j = 0; j < np; ++j)
+    {
+        snap[uz(np * 5 + j)] = dep[uz(j)];
+    }
 
     const crd::u32    groups  = (static_cast<crd::u32>(np) + e.local_size[0] - 1U) / e.local_size[0];
     kir::KernelBuffer bufs[4] = {{col.data(), np * 3, 0U, 0U},
@@ -734,7 +940,10 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     kir::eval_cpu_kernel(gg, e, bufs, 4, e.local_size[0], &alloc, groups);
     crd::containers::Array<double> ref(&alloc);
     ref.resize(uz(np * 4), 0.0);
-    for (int j = 0; j < np * 4; ++j) { ref[uz(j)] = out[uz(j)]; }
+    for (int j = 0; j < np * 4; ++j)
+    {
+        ref[uz(j)] = out[uz(j)];
+    }
 
     kir::GlslKernel kern(&alloc);
     REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, kern));
@@ -745,9 +954,18 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     host_store.resize(uz(np * 10), 0.0F);
     float*    host[4] = {host_store.data(), host_store.data() + np * 3, host_store.data() + np * 5, host_store.data() + np * 6};
     const int lens[4] = {np * 3, np * 2, np, np * 4};
-    for (int j = 0; j < np * 3; ++j) { host[0][j] = static_cast<float>(snap[uz(j)]); }
-    for (int j = 0; j < np * 2; ++j) { host[1][j] = static_cast<float>(snap[uz(np * 3 + j)]); }
-    for (int j = 0; j < np; ++j) { host[2][j] = static_cast<float>(snap[uz(np * 5 + j)]); }
+    for (int j = 0; j < np * 3; ++j)
+    {
+        host[0][j] = static_cast<float>(snap[uz(j)]);
+    }
+    for (int j = 0; j < np * 2; ++j)
+    {
+        host[1][j] = static_cast<float>(snap[uz(np * 3 + j)]);
+    }
+    for (int j = 0; j < np; ++j)
+    {
+        host[2][j] = static_cast<float>(snap[uz(np * 5 + j)]);
+    }
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 4, groups);
 
     double worst = 0.0;
@@ -755,12 +973,18 @@ TEST_CASE("B18-e: CKIR hair compositing filter DISPATCHES on DX12 == CPU oracle"
     {
         const double d = static_cast<double>(host[3][j]) - ref[uz(j)];
         const double a = d < 0.0 ? -d : d;
-        if (a > worst) { worst = a; }
+        if (a > worst)
+        {
+            worst = a;
+        }
     }
     std::printf("[DX12 B18-e filter] %dx%d over %u groups (%d tail lanes)  maxabs(GPU vs oracle) = %.3e\n",
                 fc.width, fc.height, groups, static_cast<int>(groups * e.local_size[0]) - np, worst);
     CHECK(worst < 1.0e-5);
-    for (int i = 0; i < np; ++i) { CHECK(host[3][i * 4 + 3] > 0.0F); }
+    for (int i = 0; i < np; ++i)
+    {
+        CHECK(host[3][i * 4 + 3] > 0.0F);
+    }
 }
 
 
@@ -773,7 +997,10 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on DX12 == CPU oracle 
     {
         namespace kir = crd::kir;
         g::Dx12ComputeContext      ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         const auto   uz  = [](int v) { return static_cast<crd::usize>(v); };
         const double kpi = kir::hair::kPi;
 
@@ -813,8 +1040,14 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on DX12 == CPU oracle 
         crd::containers::Array<float> h1(&alloc);
         h0.resize(uz(n * 6));
         h1.resize(uz(n));
-        for (int i = 0; i < n * 6; ++i) { h0[uz(i)] = static_cast<float>(in[uz(i)]); }
-        for (int i = 0; i < n; ++i) { h1[uz(i)] = -9.0F; }
+        for (int i = 0; i < n * 6; ++i)
+        {
+            h0[uz(i)] = static_cast<float>(in[uz(i)]);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            h1[uz(i)] = -9.0F;
+        }
         float*    host[2] = {h0.data(), h1.data()};
         const int lens[2] = {n * 6, n};
         crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, static_cast<crd::u32>(n / 64));
@@ -826,8 +1059,18 @@ TEST_CASE("B18-b: CKIR Huang microfacet R lobe DISPATCHES on DX12 == CPU oracle 
             const double gv = static_cast<double>(h1[uz(i)]);
             const double ov = out[uz(i)];
             const double ad = std::fabs(gv - ov);
-            if (ad > maxabs) { maxabs = ad; }
-            if (std::fabs(ov) > 1.0e-3) { const double rel = ad / std::fabs(ov); if (rel > maxrel) { maxrel = rel; } }
+            if (ad > maxabs)
+            {
+                maxabs = ad;
+            }
+            if (std::fabs(ov) > 1.0e-3)
+            {
+                const double rel = ad / std::fabs(ov);
+                if (rel > maxrel)
+                {
+                    maxrel = rel;
+                }
+            }
         }
         std::printf("[DX12 Huang full] maxabs(GPU vs oracle) = %.3e  maxrel = %.3e\n", maxabs, maxrel);
         // See the Vulkan Huang gate for the tolerance rationale: maxabs stays tight (1e-5); maxrel is looser than the hair/fur
@@ -843,7 +1086,11 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::MlpConfig mcfg;
     mcfg.batch_tile = 64;
@@ -861,7 +1108,10 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     a_all.resize(static_cast<crd::usize>(n_a));
     crd::containers::Array<float> w_f(&alloc);
     w_f.resize(static_cast<crd::usize>(n_w));
-    for (int i = 0; i < n_w; ++i) { w_f[static_cast<crd::usize>(i)] = 0.1F * static_cast<float>((i * 5) % 11 - 5); }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w_f[static_cast<crd::usize>(i)] = 0.1F * static_cast<float>((i * 5) % 11 - 5);
+    }
     for (int r = 0; r < batch; ++r)
     {
         for (int c = 0; c < wd; ++c)
@@ -910,12 +1160,21 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     REQUIRE(pipe_a != nullptr);
     crd::containers::Array<float> dz(&alloc);
     dz.resize(static_cast<crd::usize>(n_dz));
-    for (int i = 0; i < n_dz; ++i) { dz[static_cast<crd::usize>(i)] = -7.0F; }
+    for (int i = 0; i < n_dz; ++i)
+    {
+        dz[static_cast<crd::usize>(i)] = -7.0F;
+    }
     float*    host_a[4] = {a_all.data(), w_f.data(), gout.data(), dz.data()};
     const int lens_a[4] = {n_a, n_w, bw, n_dz};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe_a, host_a, lens_a, 4, static_cast<crd::u32>(batch));
     int bad_dz = 0;
-    for (int i = 0; i < n_dz; ++i) { if (dz[static_cast<crd::usize>(i)] != ref_dz[static_cast<crd::usize>(i)]) { ++bad_dz; } }
+    for (int i = 0; i < n_dz; ++i)
+    {
+        if (dz[static_cast<crd::usize>(i)] != ref_dz[static_cast<crd::usize>(i)])
+        {
+            ++bad_dz;
+        }
+    }
     CHECK(bad_dz == 0);
 
     kir::KGraph       g_b(&alloc);
@@ -926,12 +1185,21 @@ TEST_CASE("v17 NRC: CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW) DISPAT
     REQUIRE(pipe_b != nullptr);
     crd::containers::Array<float> dw(&alloc);
     dw.resize(static_cast<crd::usize>(n_dw));
-    for (int i = 0; i < n_dw; ++i) { dw[static_cast<crd::usize>(i)] = -7.0F; }
+    for (int i = 0; i < n_dw; ++i)
+    {
+        dw[static_cast<crd::usize>(i)] = -7.0F;
+    }
     float*    host_b[3] = {a_all.data(), dz.data(), dw.data()};
     const int lens_b[3] = {n_a, n_dz, n_dw};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe_b, host_b, lens_b, 3, static_cast<crd::u32>(nl * wd));
     int bad_dw = 0;
-    for (int i = 0; i < n_dw; ++i) { if (dw[static_cast<crd::usize>(i)] != ref_dw[static_cast<crd::usize>(i)]) { ++bad_dw; } }
+    for (int i = 0; i < n_dw; ++i)
+    {
+        if (dw[static_cast<crd::usize>(i)] != ref_dw[static_cast<crd::usize>(i)])
+        {
+            ++bad_dw;
+        }
+    }
     CHECK(bad_dw == 0); // bit-IDENTICAL to Vulkan + the oracle (FP32 precise, deterministic ascending reduction)
 }
 
@@ -941,7 +1209,11 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on D
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph       graph(&alloc);
     constexpr int     ls = 256;
@@ -950,7 +1222,11 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on D
     // 1) the CPU ORACLE (f64 buffers, F32-rounded ops) — the bit-exact reference (SAME graph, SAME oracle as the Vulkan test).
     crd::f64 in64[ls];
     crd::f64 out64[ls];
-    for (int i = 0; i < ls; ++i) { in64[i] = 1.0 + 3.0 * static_cast<crd::f64>(i); out64[i] = -1.0; } // exact in f32
+    for (int i = 0; i < ls; ++i) // exact in f32
+    {
+        in64[i] = 1.0 + 3.0 * static_cast<crd::f64>(i);
+        out64[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in64, ls, 0, 0}, {out64, ls, 0, 1}};
     kir::eval_cpu_kernel(graph, e, bufs, 2, static_cast<crd::u32>(ls), &alloc);
 
@@ -963,14 +1239,24 @@ TEST_CASE("B-cmp: CKIR compute KERNEL (shared memory + barriers) DISPATCHES on D
     // 3) dispatch ONE workgroup on the portable surface, read back.
     float in32[ls];
     float out32[ls];
-    for (int i = 0; i < ls; ++i) { in32[i] = static_cast<float>(in64[i]); out32[i] = -1.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in32[i] = static_cast<float>(in64[i]);
+        out32[i] = -1.0F;
+    }
     float*    host[2] = {in32, out32};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, 1U);
 
     // 4) GPU == oracle, bit-for-bit (reverse is pure data movement ⇒ exact on every vendor + identical to Vulkan).
     int bad = 0;
-    for (int i = 0; i < ls; ++i) { if (out32[i] != static_cast<float>(out64[i])) { ++bad; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out32[i] != static_cast<float>(out64[i]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(out32[0] == static_cast<float>(in64[ls - 1])); // spot-check the reversal actually happened
     CHECK(out32[ls - 1] == static_cast<float>(in64[0]));
@@ -982,7 +1268,11 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph       graph(&alloc);
     constexpr int     t  = 8;
@@ -991,7 +1281,11 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
 
     crd::f64 in64[nn];
     crd::f64 out64[nn];
-    for (int i = 0; i < nn; ++i) { in64[i] = static_cast<crd::f64>(i); out64[i] = -1.0; }
+    for (int i = 0; i < nn; ++i)
+    {
+        in64[i] = static_cast<crd::f64>(i);
+        out64[i] = -1.0;
+    }
     kir::KernelBuffer bufs[2] = {{in64, nn, 0, 0}, {out64, nn, 0, 1}};
     kir::eval_cpu_kernel(graph, e, bufs, 2, static_cast<crd::u32>(t), &alloc);
 
@@ -1002,13 +1296,23 @@ TEST_CASE("B-cmp: CKIR TRANSPOSE kernel (For loops + barrier + cross-thread) DIS
 
     float in32[nn];
     float out32[nn];
-    for (int i = 0; i < nn; ++i) { in32[i] = static_cast<float>(in64[i]); out32[i] = -1.0F; }
+    for (int i = 0; i < nn; ++i)
+    {
+        in32[i] = static_cast<float>(in64[i]);
+        out32[i] = -1.0F;
+    }
     float*    host[2] = {in32, out32};
     const int lens[2] = {nn, nn};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, 1U);
 
     int bad = 0;
-    for (int i = 0; i < nn; ++i) { if (out32[i] != static_cast<float>(out64[i])) { ++bad; } }
+    for (int i = 0; i < nn; ++i)
+    {
+        if (out32[i] != static_cast<float>(out64[i]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
     CHECK(out32[1] == static_cast<float>(in64[t])); // out[0][1] == in[1][0] — the transpose actually happened
 }
@@ -1023,7 +1327,11 @@ TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPAT
     namespace vb  = crd::kir::visbuffer;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     const crd::kir_test::SwRasterScene scene = crd::kir_test::make_sw_raster_scene();
     kir::KGraph                        graph(&alloc);
@@ -1041,7 +1349,13 @@ TEST_CASE("B4-vis: CKIR software rasterizer (atomicMin visibility buffer) DISPAT
 
     const int npix = static_cast<int>(scene.cfg.width * scene.cfg.height);
     int       bad  = 0;
-    for (int i = 0; i < npix; ++i) { if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)]) { ++bad; } }
+    for (int i = 0; i < npix; ++i)
+    {
+        if (vis_gpu[static_cast<crd::usize>(i)] != vis_cpu[static_cast<crd::usize>(i)])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0); // BIT-EXACT: the GPU visibility keys equal the CPU oracle's (atomicMin is order-independent)
 
     const crd::u32 w  = scene.cfg.width;
@@ -1065,7 +1379,11 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on DX12 == 
     namespace vb  = crd::kir::visbuffer;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     const crd::kir_test::DaisScene   scene = crd::kir_test::make_dais_scene();
     crd::containers::Array<crd::u32> vis(&alloc);
@@ -1096,7 +1414,10 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on DX12 == 
         const float cp  = shade_cpu[static_cast<crd::usize>(i)];
         const float acp = absf(cp) > 1.0e-6F ? absf(cp) : 1.0e-6F;
         const float rel = absf(gp - cp) / acp;
-        if (rel > max_rel) { max_rel = rel; }
+        if (rel > max_rel)
+        {
+            max_rel = rel;
+        }
     }
     WARN("[DAIS dx12] max relative error (GPU vs oracle) = " << max_rel);
     CHECK(max_rel < 1.0e-6F); // ≈ a few f32 ULP — the single perspective-normalize divide's hardware imprecision
@@ -1109,7 +1430,10 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on DX12 == 
         if (v != 0.0F)
         {
             ++covered;
-            if (v < 1.9F || v > 32.1F) { ++outrange; } // a covered pixel is a convex blend of the {2,8,32} attributes
+            if (v < 1.9F || v > 32.1F) // a covered pixel is a convex blend of the {2,8,32} attributes
+            {
+                ++outrange;
+            }
         }
     }
     CHECK(covered > 100);  // the perspective triangle rasterized + shaded a good fraction of the 32x32
@@ -1129,13 +1453,20 @@ TEST_CASE("B4-vis-3: CKIR HZB two-pass occlusion cull DISPATCHES on DX12 == CPU 
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     const crd::kir_test::HzbScene scene = crd::kir_test::make_hzb_scene();
     bool                          emit_ok = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
     crd::containers::Array<crd::u32> vis_cpu(&alloc);
@@ -1160,7 +1491,11 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on DX12 (deferred store + p
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     crd::kir::oit::AbufferConfig acfg;
     acfg.width      = 32U;
@@ -1175,7 +1510,10 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on DX12 (deferred store + p
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1190,7 +1528,10 @@ TEST_CASE("D-007 B17-c: exact-reference A-buffer OIT on DX12 (deferred store + p
     for (crd::usize i = 0; i < gpu_out.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(gpu_out[i]) - cpu[i]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     INFO("A-buffer exact-composite worst |GPU - oracle| = " << worst);
     CHECK(worst == 0.0); // deterministic sorted order + pure f32 mul/add/sub ⇒ BIT-EXACT
@@ -1208,7 +1549,10 @@ TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on DX12 (value-retu
     crd::memory::TlsfAllocator alloc(16U << 20U);
     crd::gpu_test::qualify_dx12_workload(&alloc, [&]() {
         g::Dx12ComputeContext ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
         crd::kir::oit::AbufferConfig acfg;
         acfg.width      = 32U;
         acfg.height     = 32U;
@@ -1237,7 +1581,10 @@ TEST_CASE("D-007 B17-c: scalable atomic linked-list A-buffer on DX12 (value-retu
         {
             const double d = std::fabs(static_cast<double>(gpu_out[i]) - exact_cpu[i]);
             REQUIRE(std::isfinite(d)); // NaN must not leave the maximum at a false zero.
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
         }
         INFO("atomic A-buffer vs static-slot exact reference: worst |Delta| = " << worst);
         CHECK(worst == 0.0); // Preserve the bit-exact static-slot oracle.
@@ -1253,7 +1600,11 @@ TEST_CASE("CEIR-18a-1 GATE (DX12): the Forward+ cull producer's per-cluster ligh
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     using Scene      = crd::kir_test::ClusterCullScene;
     const auto scene = crd::kir_test::make_cluster_cull_scene();
@@ -1266,7 +1617,10 @@ TEST_CASE("CEIR-18a-1 GATE (DX12): the Forward+ cull producer's per-cluster ligh
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1282,8 +1636,20 @@ TEST_CASE("CEIR-18a-1 GATE (DX12): the Forward+ cull producer's per-cluster ligh
     REQUIRE(gpu_cnt.size() == static_cast<crd::usize>(Scene::count_len));
 
     crd::u32 diffs = 0U;
-    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
-    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_list.size(); ++i)
+    {
+        if (gpu_list[i] != oracle_list[i])
+        {
+            ++diffs;
+        }
+    }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i)
+    {
+        if (gpu_cnt[i] != oracle_cnt[i])
+        {
+            ++diffs;
+        }
+    }
     INFO("18a-1 DX12 GPU-vs-oracle diffs (list+count) = " << diffs);
     CHECK(diffs == 0U);
 
@@ -1295,7 +1661,10 @@ TEST_CASE("CEIR-18a-1 GATE (DX12): the Forward+ cull producer's per-cluster ligh
         {
             CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
         }
-        if (scene.expected_count[c] == 0) { ++empty; }
+        if (scene.expected_count[c] == 0)
+        {
+            ++empty;
+        }
     }
     CHECK(empty >= 1U);
     CHECK(empty < static_cast<crd::u32>(Scene::num_clusters));
@@ -1311,7 +1680,11 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered cull producer's per-cluster li
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(48U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     using Scene      = crd::kir_test::ClusterCullScene3D;
     const auto scene = crd::kir_test::make_cluster_cull_scene_3d();
@@ -1324,7 +1697,10 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered cull producer's per-cluster li
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1340,8 +1716,20 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered cull producer's per-cluster li
     REQUIRE(gpu_cnt.size() == static_cast<crd::usize>(Scene::count_len));
 
     crd::u32 diffs = 0U;
-    for (crd::usize i = 0; i < gpu_list.size(); ++i) { if (gpu_list[i] != oracle_list[i]) { ++diffs; } }
-    for (crd::usize i = 0; i < gpu_cnt.size(); ++i) { if (gpu_cnt[i] != oracle_cnt[i]) { ++diffs; } }
+    for (crd::usize i = 0; i < gpu_list.size(); ++i)
+    {
+        if (gpu_list[i] != oracle_list[i])
+        {
+            ++diffs;
+        }
+    }
+    for (crd::usize i = 0; i < gpu_cnt.size(); ++i)
+    {
+        if (gpu_cnt[i] != oracle_cnt[i])
+        {
+            ++diffs;
+        }
+    }
     INFO("18b DX12 GPU-vs-oracle diffs (list+count) = " << diffs);
     CHECK(diffs == 0U);
 
@@ -1353,7 +1741,10 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered cull producer's per-cluster li
         {
             CHECK(static_cast<int>(oracle_list[static_cast<crd::usize>(c * Scene::cap + k)]) == scene.expected_list[c][k]);
         }
-        if (scene.expected_count[c] == 0) { ++empty; }
+        if (scene.expected_count[c] == 0)
+        {
+            ++empty;
+        }
     }
     CHECK(empty >= 1U);
     CHECK(empty < static_cast<crd::u32>(Scene::num_clusters));
@@ -1367,8 +1758,14 @@ TEST_CASE("CEIR-18b GATE (DX12): the 3D clustered cull producer's per-cluster li
     for (int k = 0; k < Scene::cap; ++k)
     {
         const crd::usize kk = static_cast<crd::usize>(k);
-        if (static_cast<int>(gpu_list[c0_base + kk]) == 1) { c0_has_l1 = true; }
-        if (static_cast<int>(gpu_list[c32_base + kk]) == 0) { c32_has_l0 = true; }
+        if (static_cast<int>(gpu_list[c0_base + kk]) == 1)
+        {
+            c0_has_l1 = true;
+        }
+        if (static_cast<int>(gpu_list[c32_base + kk]) == 0)
+        {
+            c32_has_l0 = true;
+        }
     }
     CHECK(static_cast<int>(gpu_list[c0_base]) == 0);
     CHECK(static_cast<int>(gpu_list[c32_base]) == 1);
@@ -1386,7 +1783,11 @@ TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash cove
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     crd::kir::oit::AbufferConfig acfg;
     acfg.width      = 32U;
@@ -1402,7 +1803,10 @@ TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash cove
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1416,7 +1820,10 @@ TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash cove
     for (crd::usize i = 0; i < st_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(st_gpu[i]) - st_cpu[i]);
-        if (d > worst) { worst = d; }
+        if (d > worst)
+        {
+            worst = d;
+        }
     }
     INFO("stochastic GPU vs oracle worst |Delta| = " << worst);
     CHECK(worst == 0.0); // deterministic hash + 32-bit-exact oracle ⇒ bit-identical DX12 == oracle == Vulkan
@@ -1435,7 +1842,10 @@ TEST_CASE("D-007 B17-c: stochastic transparency on DX12 (deterministic-hash cove
     for (int ch = 0; ch < 3; ++ch)
     {
         const double b = std::fabs(mean[ch] / static_cast<double>(wh) - exact_cpu[static_cast<crd::usize>(ch)]);
-        if (b > bias) { bias = b; }
+        if (b > bias)
+        {
+            bias = b;
+        }
     }
     INFO("stochastic bias(S=32) vs exact = " << bias);
     CHECK(bias < 0.02);                                                                // unbiased estimator of the exact over
@@ -1451,7 +1861,11 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconst
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(32U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     crd::kir::oit::AbufferConfig acfg;
     acfg.width      = 32U;
@@ -1470,7 +1884,10 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconst
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1487,22 +1904,34 @@ TEST_CASE("D-007 B17-b: moment-based OIT (MBOIT) on DX12 (4-power-moment reconst
     for (crd::usize i = 0; i < mb_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
-        if (d > worst_ulp) { worst_ulp = d; }
+        if (d > worst_ulp)
+        {
+            worst_ulp = d;
+        }
     }
     INFO("MBOIT GPU vs oracle worst |Δ| = " << worst_ulp);
     CHECK(worst_ulp < 1.0e-5);
 
     const auto q = [](double v) {
         double c = v;
-        if (c < 0.0) { c = 0.0; }
-        else if (c > 1.0) { c = 1.0; }
+        if (c < 0.0)
+        {
+            c = 0.0;
+        }
+        else if (c > 1.0)
+        {
+            c = 1.0;
+        }
         return static_cast<int>(std::lround(c * 255.0));
     };
     int        mboit_err = 0;
     for (int ch = 0; ch < 3; ++ch)
     {
         const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
-        if (d > mboit_err) { mboit_err = d; }
+        if (d > mboit_err)
+        {
+            mboit_err = d;
+        }
     }
     const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
                                                                     crd::gputest::oit_exact_composite_rgba8(scene));
@@ -1520,7 +1949,11 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic -- 3 mas
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(32U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     crd::kir::oit::AbufferConfig acfg;
     acfg.width      = 32U;
@@ -1540,7 +1973,10 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic -- 3 mas
     bool       emit_ok   = true;
     const auto make_pipe = [&](const kir::KGraph& gr, const kir::KEntry& en, int nbufs) {
         kir::GlslKernel kern(&alloc);
-        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern)) { emit_ok = false; }
+        if (!kir::emit_compute_kernel_hlsl(gr, en, &alloc, kern))
+        {
+            emit_ok = false;
+        }
         return ctx.create_pipeline_from_hlsl(crd::containers::to_view(kern.source), nbufs, 0U);
     };
 
@@ -1557,22 +1993,34 @@ TEST_CASE("D-007 B17-b: 6-moment MBOIT on DX12 (larger Cholesky + cubic -- 3 mas
     for (crd::usize i = 0; i < mb_gpu.size(); ++i)
     {
         const double d = std::fabs(static_cast<double>(mb_gpu[i]) - mb_cpu[i]);
-        if (d > worst_ulp) { worst_ulp = d; }
+        if (d > worst_ulp)
+        {
+            worst_ulp = d;
+        }
     }
     INFO("MBOIT6 GPU vs oracle worst |Δ| = " << worst_ulp);
     CHECK(worst_ulp < 5.0e-3);
 
     const auto q = [](double v) {
         double c = v;
-        if (c < 0.0) { c = 0.0; }
-        else if (c > 1.0) { c = 1.0; }
+        if (c < 0.0)
+        {
+            c = 0.0;
+        }
+        else if (c > 1.0)
+        {
+            c = 1.0;
+        }
         return static_cast<int>(std::lround(c * 255.0));
     };
     int        mboit_err = 0;
     for (int ch = 0; ch < 3; ++ch)
     {
         const int d = std::abs(q(mb_cpu[static_cast<crd::usize>(ch)]) - q(exact_cpu[static_cast<crd::usize>(ch)]));
-        if (d > mboit_err) { mboit_err = d; }
+        if (d > mboit_err)
+        {
+            mboit_err = d;
+        }
     }
     const crd::u32 wboit_err = crd::gputest::rgba8_max_channel_diff(crd::gputest::wboit_oracle_pixel(scene),
                                                                     crd::gputest::oit_exact_composite_rgba8(scene));
@@ -1587,7 +2035,11 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on DX12 == CPU or
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph          graph(&alloc);
     constexpr int        n    = 64;
@@ -1629,14 +2081,30 @@ TEST_CASE("B-cmp Phase 1: CKIR radix-2 Stockham FFT DISPATCHES on DX12 == CPU or
     float h_twi[half];
     float h_or[n];
     float h_oi[n];
-    for (int i = 0; i < n; ++i) { h_ir[i] = static_cast<float>(ir[i]); h_ii[i] = static_cast<float>(ii[i]); h_or[i] = -99.0F; h_oi[i] = -99.0F; }
-    for (int k = 0; k < half; ++k) { h_twr[k] = static_cast<float>(twr[k]); h_twi[k] = static_cast<float>(twi[k]); }
+    for (int i = 0; i < n; ++i)
+    {
+        h_ir[i] = static_cast<float>(ir[i]);
+        h_ii[i] = static_cast<float>(ii[i]);
+        h_or[i] = -99.0F;
+        h_oi[i] = -99.0F;
+    }
+    for (int k = 0; k < half; ++k)
+    {
+        h_twr[k] = static_cast<float>(twr[k]);
+        h_twi[k] = static_cast<float>(twi[k]);
+    }
     float*    host[6] = {h_ir, h_ii, h_twr, h_twi, h_or, h_oi};
     const int lens[6] = {n, n, half, half, n, n};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 6, 1U);
 
     int bad = 0; // `precise` HLSL temps ⇒ BIT-EXACT vs the oracle (identical to the Vulkan FFT result)
-    for (int k = 0; k < n; ++k) { if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k])) { ++bad; } }
+    for (int k = 0; k < n; ++k)
+    {
+        if (h_or[k] != static_cast<float>(orr[k]) || h_oi[k] != static_cast<float>(oi[k]))
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -1648,7 +2116,11 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on DX12 
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph          g0(&alloc); // one graph per unique entry (a CKIR emitter emits all of a graph's decls)
     kir::KGraph          g1(&alloc);
@@ -1662,14 +2134,22 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on DX12 
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[16];
     float*    h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -1678,9 +2158,22 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on DX12 
         h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5);
         h64[plan.in_im][i] = static_cast<crd::f64>((i * 5 + 1) % 7 - 3);
     }
-    for (int k = 0; k < cc; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc); h64[plan.tw_col_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a)); }
-    for (int k = 0; k < rr; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr); h64[plan.tw_row_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a)); }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int k = 0; k < cc; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int k = 0; k < rr; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr);
+        h64[plan.tw_row_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -1701,8 +2194,14 @@ TEST_CASE("B-cmp Phase 2: CKIR 2-D FFT (6-dispatch pipeline) DISPATCHES on DX12 
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
     {
-        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     CHECK(badr == 0);
     CHECK(badi == 0);
@@ -1717,7 +2216,11 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on DX12 == C
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(96U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph          g0(&alloc);
     kir::KGraph          g1(&alloc);
@@ -1730,14 +2233,22 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on DX12 == C
 
     int off[16];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[16];
     float*    h32[16];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -1754,7 +2265,10 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on DX12 == C
         h64[plan.tw_row_re][k] = h64[plan.tw_col_re][k];
         h64[plan.tw_row_im][k] = h64[plan.tw_col_im][k];
     }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -1775,8 +2289,14 @@ TEST_CASE("B16-a-2: CKIR BATCHED strided inverse 2-D FFT DISPATCHES on DX12 == C
     int badi = 0;
     for (int i = 0; i < rc * batch; ++i)
     {
-        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     CHECK(badr == 0);
     CHECK(badi == 0);
@@ -1790,7 +2310,11 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on DX12 == C
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(96U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph          g0(&alloc);
     kir::KGraph          g1(&alloc);
@@ -1805,14 +2329,22 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on DX12 == C
 
     int off[20];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[20];
     float*    h32[20];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
@@ -1823,9 +2355,22 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on DX12 == C
         h64[plan.filt_re][i] = f32d(static_cast<crd::f64>((i * 3 + 1) % 9 - 4) * 0.25);
         h64[plan.filt_im][i] = f32d(static_cast<crd::f64>((i * 2 + 5) % 7 - 3) * 0.25);
     }
-    for (int k = 0; k < cc; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc); h64[plan.tw_col_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a)); }
-    for (int k = 0; k < rr; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr); h64[plan.tw_row_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a)); }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int k = 0; k < cc; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int k = 0; k < rr; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr);
+        h64[plan.tw_row_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -1846,8 +2391,14 @@ TEST_CASE("B-cmp Phase 3: CKIR FUSED 2-D FFT-convolution DISPATCHES on DX12 == C
     int badi = 0;
     for (int i = 0; i < rr * cc; ++i)
     {
-        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; }
-        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i])) { ++badi; }
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+        if (h32[plan.res_im][i] != static_cast<float>(h64[plan.res_im][i]))
+        {
+            ++badi;
+        }
     }
     CHECK(badr == 0);
     CHECK(badi == 0);
@@ -1862,7 +2413,11 @@ TEST_CASE("B-cmp: CKIR R2C REAL 2-D fused conv DISPATCHES on DX12 == CPU oracle 
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(96U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph          g0(&alloc);
     kir::KGraph          g1(&alloc);
@@ -1876,26 +2431,50 @@ TEST_CASE("B-cmp: CKIR R2C REAL 2-D fused conv DISPATCHES on DX12 == CPU oracle 
 
     int off[20];
     int total = 0;
-    for (int b = 0; b < plan.nbuffers; ++b) { off[b] = total; total += plan.buffers[b].size; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        off[b] = total;
+        total += plan.buffers[b].size;
+    }
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<float>    a32(&alloc);
     a64.resize(static_cast<crd::usize>(total), 0.0);
     a32.resize(static_cast<crd::usize>(total), 0.0F);
     crd::f64* h64[20];
     float*    h32[20];
-    for (int b = 0; b < plan.nbuffers; ++b) { h64[b] = a64.data() + off[b]; h32[b] = a32.data() + off[b]; }
+    for (int b = 0; b < plan.nbuffers; ++b)
+    {
+        h64[b] = a64.data() + off[b];
+        h32[b] = a32.data() + off[b];
+    }
 
     constexpr crd::f64 two_pi = 6.28318530717958647693;
     const auto         f32d   = [](crd::f64 v) { return static_cast<crd::f64>(static_cast<float>(v)); };
-    for (int i = 0; i < rr * cc; ++i) { h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5); } // REAL image
+    for (int i = 0; i < rr * cc; ++i) // REAL image
+    {
+        h64[plan.in_re][i] = static_cast<crd::f64>((i * 7 + 3) % 11 - 5);
+    }
     for (int i = 0; i < rr * hw; ++i) // arbitrary HALF filter (bit-exact GPU==oracle is filter-independent)
     {
         h64[plan.filt_re][i] = f32d(static_cast<crd::f64>((i * 3 + 1) % 9 - 4) * 0.25);
         h64[plan.filt_im][i] = f32d(static_cast<crd::f64>((i * 2 + 5) % 7 - 3) * 0.25);
     }
-    for (int k = 0; k < cc; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc); h64[plan.tw_col_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a)); }
-    for (int k = 0; k < rr; ++k) { const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr); h64[plan.tw_row_re][k] = f32d(crd::math::cos(a)); h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a)); }
-    for (int i = 0; i < total; ++i) { a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]); }
+    for (int k = 0; k < cc; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(cc);
+        h64[plan.tw_col_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_col_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int k = 0; k < rr; ++k)
+    {
+        const crd::f64 a = two_pi * static_cast<crd::f64>(k) / static_cast<crd::f64>(rr);
+        h64[plan.tw_row_re][k] = f32d(crd::math::cos(a));
+        h64[plan.tw_row_im][k] = f32d(-crd::math::sin(a));
+    }
+    for (int i = 0; i < total; ++i)
+    {
+        a32[static_cast<crd::usize>(i)] = static_cast<float>(a64[static_cast<crd::usize>(i)]);
+    }
 
     crd::kir_test::run_fft2d_cpu(plan, h64, &alloc);
 
@@ -1913,7 +2492,13 @@ TEST_CASE("B-cmp: CKIR R2C REAL 2-D fused conv DISPATCHES on DX12 == CPU oracle 
     crd::kir_test::dispatch_fft2d(ctx, plan, pipes, h32);
 
     int badr = 0;
-    for (int i = 0; i < rr * cc; ++i) { if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i])) { ++badr; } }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        if (h32[plan.res_re][i] != static_cast<float>(h64[plan.res_re][i]))
+        {
+            ++badr;
+        }
+    }
     CHECK(badr == 0);
 }
 
@@ -1924,13 +2509,21 @@ TEST_CASE("B-cmp: CKIR device REDUCTION DISPATCHES on DX12 == CPU oracle bit-exa
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int n = 65536;
     crd::containers::Array<crd::f64> x64(&alloc);
     crd::containers::Array<float>    x32(&alloc);
     x64.resize(n); x32.resize(n);
-    for (int i = 0; i < n; ++i) { x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251 - 125); x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n; ++i)
+    {
+        x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251 - 125);
+        x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]);
+    }
 
     const kir::KOp ops[2] = {kir::KOp::Add, kir::KOp::Max};
     for (int oi = 0; oi < 2; ++oi)
@@ -1975,12 +2568,20 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on DX12 == CPU oracle bit-exact", 
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int n = 65536;
     crd::containers::Array<crd::f64> x64(&alloc); crd::containers::Array<float> x32(&alloc);
     x64.resize(n); x32.resize(n);
-    for (int i = 0; i < n; ++i) { x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5); x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n; ++i)
+    {
+        x64[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 7 + 3) % 5);
+        x32[static_cast<crd::usize>(i)] = static_cast<float>(x64[static_cast<crd::usize>(i)]);
+    }
 
     for (int incl = 0; incl < 2; ++incl)
     {
@@ -2023,7 +2624,13 @@ TEST_CASE("B-cmp: CKIR device SCAN DISPATCHES on DX12 == CPU oracle bit-exact", 
         crd::kir_test::dispatch_kernel_1wg(ctx, *p2, hb2, lb2, 3, static_cast<crd::u32>(nb));
 
         int bad = 0;
-        for (int i = 0; i < n; ++i) { if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)])) { ++bad; } }
+        for (int i = 0; i < n; ++i)
+        {
+            if (out32[static_cast<crd::usize>(i)] != static_cast<float>(out64[static_cast<crd::usize>(i)]))
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -2037,7 +2644,11 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
@@ -2046,7 +2657,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     // REN-38 llvmpipe campaign (DX12 face): the shape is DEVICE-DERIVED — a WARP software adapter reports
     // wave width 4, where the warp-32 shape is silently wrong. Correctness is shape-independent.
     const crd::u32 dev_lanes = ctx.subgroup_size();
-    if (dev_lanes == 0U || dev_lanes > 32U) { SKIP("no u32-maskable wave width reported"); }
+    if (dev_lanes == 0U || dev_lanes > 32U)
+    {
+        SKIP("no u32-maskable wave width reported");
+    }
     const kir::SortConfig scfg    = kir::pick_sort_config(dev_lanes, ctx.shared_memory_bytes(), 1024, false);
     const int             threads = scfg.threads;
     const int             radix_bits = scfg.radix_bits;
@@ -2066,7 +2680,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
         kir::GlslKernel k(&alloc);
         REQUIRE(kir::emit_compute_kernel_hlsl(gg, e, &alloc, k));
         auto pipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(k.source), nb, 0U);
-        if (pipe == nullptr) { WARN("[" << nm << "] HLSL pipeline failed"); }
+        if (pipe == nullptr)
+        {
+            WARN("[" << nm << "] HLSL pipeline failed");
+        }
         return pipe;
     };
     kir::KGraph gof1(&alloc); kir::KGraph gof2(&alloc);
@@ -2076,7 +2693,11 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     g::ComputePipeline* po2 = po2_s.get();
     crd::containers::Array<kir::KGraph> ghg(&alloc);
     crd::containers::Array<kir::KGraph> gsg(&alloc);
-    for (int p = 0; p < npasses; ++p) { ghg.emplace_back(&alloc); gsg.emplace_back(&alloc); }
+    for (int p = 0; p < npasses; ++p)
+    {
+        ghg.emplace_back(&alloc);
+        gsg.emplace_back(&alloc);
+    }
     for (int p = 0; p < npasses; ++p)
     {
         const crd::usize up = static_cast<crd::usize>(p);
@@ -2090,7 +2711,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     REQUIRE(po1 != nullptr); REQUIRE(po2 != nullptr);
 
     crd::containers::Array<crd::u32> keys(&alloc); keys.resize(n);
-    for (int i = 0; i < n; ++i) { keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U); }
+    for (int i = 0; i < n; ++i)
+    {
+        keys[static_cast<crd::usize>(i)] = (static_cast<crd::u32>(i) * 1103515245U + 12345U) ^ (static_cast<crd::u32>(i) << 13U);
+    }
 
     auto d_a  = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
     auto d_b  = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
@@ -2101,7 +2725,10 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     {
         auto stg = ctx.create_buffer(static_cast<crd::u64>(n) * sizeof(crd::u32), transfer_src, g::ComputeMemory::CpuToGpu);
         auto* p  = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < n; ++i) { p[i] = keys[static_cast<crd::usize>(i)]; }
+        for (int i = 0; i < n; ++i)
+        {
+            p[i] = keys[static_cast<crd::usize>(i)];
+        }
         stg->unmap();
         auto& rec = ctx.begin();
         rec.copy(*stg, *d_a, 0U, 0U, static_cast<crd::u64>(n) * sizeof(crd::u32));
@@ -2140,7 +2767,15 @@ TEST_CASE("B-cmp: CKIR radix sort DISPATCHES on DX12 == sorted permutation", "[d
     int      bad = 0;
     crd::u32 ix  = 0U;
     crd::u32 sx  = 0U;
-    for (int i = 0; i < n; ++i) { if (i > 0 && o[i - 1] > o[i]) { ++bad; } ix ^= keys[static_cast<crd::usize>(i)]; sx ^= o[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        if (i > 0 && o[i - 1] > o[i])
+        {
+            ++bad;
+        }
+        ix ^= keys[static_cast<crd::usize>(i)];
+        sx ^= o[i];
+    }
     rb->unmap();
     CHECK(bad == 0);   // fully sorted
     CHECK(ix == sx);   // permutation of the input
@@ -2154,7 +2789,11 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     namespace kir = crd::kir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
     using g::compute_usage::transfer_src;
@@ -2164,14 +2803,23 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     constexpr int no  = crd::gputest::kSubgroupNOut;
     kir::KGraph       g0(&alloc);
     const crd::u32 sg_lanes = ctx.subgroup_size(); // REN-38: DEVICE width shapes kernel + oracle
-    if (sg_lanes == 0U || sg_lanes > 32U) { SKIP("no u32-maskable wave width reported"); }
+    if (sg_lanes == 0U || sg_lanes > 32U)
+    {
+        SKIP("no u32-maskable wave width reported");
+    }
     const kir::KEntry e = crd::gputest::build_subgroup_ops_kernel(g0, t_n, static_cast<int>(sg_lanes));
 
     crd::containers::Array<crd::u32> xin(&alloc);   xin.resize(uz(t_n));
-    for (int i = 0; i < t_n; ++i) { xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU; }
+    for (int i = 0; i < t_n; ++i)
+    {
+        xin[uz(i)] = (static_cast<crd::u32>(i) * 2654435761U) & 0xFFU;
+    }
     crd::containers::Array<crd::f64> xin64(&alloc); xin64.resize(uz(t_n));
     crd::containers::Array<crd::f64> out64(&alloc); out64.resize(uz(no * t_n), 0.0);
-    for (int i = 0; i < t_n; ++i) { xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]); }
+    for (int i = 0; i < t_n; ++i)
+    {
+        xin64[uz(i)] = static_cast<crd::f64>(xin[uz(i)]);
+    }
     kir::KernelBuffer bufs[2] = {{xin64.data(), t_n, 0, 0}, {out64.data(), no * t_n, 0, 1}};
     kir::eval_cpu_kernel(g0, e, bufs, 2, static_cast<crd::u32>(t_n), &alloc, 1U, sg_lanes);
 
@@ -2185,7 +2833,10 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     {
         auto  stg = ctx.create_buffer(static_cast<crd::u64>(t_n) * 4U, transfer_src, g::ComputeMemory::CpuToGpu);
         auto* p   = static_cast<crd::u32*>(stg->map());
-        for (int i = 0; i < t_n; ++i) { p[i] = xin[uz(i)]; }
+        for (int i = 0; i < t_n; ++i)
+        {
+            p[i] = xin[uz(i)];
+        }
         stg->unmap();
         auto& rc = ctx.begin();
         rc.copy(*stg, *d_in, 0U, 0U, static_cast<crd::u64>(t_n) * 4U);
@@ -2201,7 +2852,13 @@ TEST_CASE("D-007 B11: CKIR wave/subgroup ops DISPATCH on DX12 == oracle bit-exac
     { auto& r2 = ctx.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(no * t_n) * 4U); ctx.submit_and_wait(); }
     const auto* out = static_cast<const crd::u32*>(rb->map());
     int bad = 0;
-    for (int i = 0; i < no * t_n; ++i) { if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)]))) { ++bad; } }
+    for (int i = 0; i < no * t_n; ++i)
+    {
+        if (out[uz(i)] != static_cast<crd::u32>(static_cast<crd::i64>(out64[uz(i)])))
+        {
+            ++bad;
+        }
+    }
     rb->unmap();
     CHECK(bad == 0); // DX12 HLSL wave ops == CPU oracle, bit-exact (== the Vulkan result)
 }
@@ -2214,7 +2871,11 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on DX12 -- a compute pass deci
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     using g::compute_usage::indirect;
     using g::compute_usage::storage;
     using g::compute_usage::transfer_dst;
@@ -2240,7 +2901,15 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on DX12 -- a compute pass deci
     constexpr int n_v = 256;
     int           ref = 0;
     crd::containers::Array<crd::u32> vals(&alloc); vals.resize(uz(n_v));
-    for (int i = 0; i < n_v; ++i) { const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U; vals[uz(i)] = v; if ((v & 1U) == 0U) { ++ref; } }
+    for (int i = 0; i < n_v; ++i)
+    {
+        const crd::u32 v = (static_cast<crd::u32>(i) * 2654435761U) >> 3U;
+        vals[uz(i)] = v;
+        if ((v & 1U) == 0U)
+        {
+            ++ref;
+        }
+    }
 
     auto d_in   = ctx.create_buffer(static_cast<crd::u64>(n_v) * 4U, storage | transfer_dst, g::ComputeMemory::GpuOnly);
     auto d_args = ctx.create_buffer(3U * 4U, storage | indirect | transfer_dst, g::ComputeMemory::GpuOnly);
@@ -2249,7 +2918,11 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on DX12 -- a compute pass deci
     const auto up = [&](g::ComputeBuffer& dst, const void* src, crd::u64 nb) {
         auto stg = ctx.create_buffer(nb, transfer_src, g::ComputeMemory::CpuToGpu);
         auto* p = static_cast<crd::u8*>(stg->map()); const auto* s = static_cast<const crd::u8*>(src);
-        for (crd::u64 i = 0; i < nb; ++i) { p[i] = s[i]; } stg->unmap();
+        for (crd::u64 i = 0; i < nb; ++i)
+        {
+            p[i] = s[i];
+        }
+        stg->unmap();
         auto& rc = ctx.begin(); rc.copy(*stg, dst, 0U, 0U, nb); ctx.submit_and_wait();
     };
     const crd::u32 cfgv = static_cast<crd::u32>(n_v);
@@ -2272,7 +2945,13 @@ TEST_CASE("D-007 C5: GPU-driven indirect dispatch on DX12 -- a compute pass deci
     { auto& r2 = ctx.begin(); r2.copy(*d_out, *rb, 0U, 0U, static_cast<crd::u64>(n_v) * 4U); ctx.submit_and_wait(); }
     const auto* out = static_cast<const crd::u32*>(rb->map());
     int written = 0;
-    for (int i = 0; i < n_v; ++i) { if (out[uz(i)] != 0U) { ++written; } }
+    for (int i = 0; i < n_v; ++i)
+    {
+        if (out[uz(i)] != 0U)
+        {
+            ++written;
+        }
+    }
     rb->unmap();
     std::printf("[c5-indirect] DX12: GPU counted %d even inputs -> ExecuteIndirect launched %d groups (CPU ref = %d)\n", written, written, ref);
     CHECK(written == ref);
@@ -2287,7 +2966,11 @@ TEST_CASE("D-007 D2: DX12 runs the COOKED DXIL from a .crdr bundle (zero runtime
     namespace sc  = crd::shadercook;
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int ls = 32;
     kir::KGraph       g(&alloc);
@@ -2311,12 +2994,22 @@ TEST_CASE("D-007 D2: DX12 runs the COOKED DXIL from a .crdr bundle (zero runtime
 
     float in_h[ls];
     float out_h[ls];
-    for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+    for (int i = 0; i < ls; ++i)
+    {
+        in_h[i] = static_cast<float>(i) + 0.5F;
+        out_h[i] = 0.0F;
+    }
     float*    host[2] = {in_h, out_h};
     const int lens[2] = {ls, ls};
     crd::kir_test::dispatch_kernel_1wg(ctx, *pipe, host, lens, 2, 1U);
     int mism = 0;
-    for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++mism; } }
+    for (int i = 0; i < ls; ++i)
+    {
+        if (out_h[i] != in_h[ls - 1 - i])
+        {
+            ++mism;
+        }
+    }
     std::printf("[cook] DX12 ran COOKED DXIL (%u B) from the .crdr bundle: %d/%d reversed\n", ck.dxil_bytes, ls - mism, ls);
     CHECK(mism == 0);
 }
@@ -2332,7 +3025,10 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
         namespace kir = crd::kir;
         namespace sc  = crd::shadercook;
         g::Dx12ComputeContext      ctx(&alloc);
-        if (!ctx.valid()) { SKIP("no D3D12 device available"); }
+        if (!ctx.valid())
+        {
+            SKIP("no D3D12 device available");
+        }
 
         constexpr int     ls = 32;
         kir::KGraph       gg(&alloc);
@@ -2350,12 +3046,22 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
         const auto run = [&](g::Dx12ComputeContext& c, crd::gpu::ComputePipeline& pipe) {
             float in_h[ls];
             float out_h[ls];
-            for (int i = 0; i < ls; ++i) { in_h[i] = static_cast<float>(i) + 0.5F; out_h[i] = 0.0F; }
+            for (int i = 0; i < ls; ++i)
+            {
+                in_h[i] = static_cast<float>(i) + 0.5F;
+                out_h[i] = 0.0F;
+            }
             float*    host[2] = {in_h, out_h};
             const int lens[2] = {ls, ls};
             crd::kir_test::dispatch_kernel_1wg(c, pipe, host, lens, 2, 1U);
             int bad = 0;
-            for (int i = 0; i < ls; ++i) { if (out_h[i] != in_h[ls - 1 - i]) { ++bad; } }
+            for (int i = 0; i < ls; ++i)
+            {
+                if (out_h[i] != in_h[ls - 1 - i])
+                {
+                    ++bad;
+                }
+            }
             return bad;
         };
 
@@ -2387,7 +3093,10 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
         float* hosts[1] = {values};
         const int lengths[1] = {32};
         crd::kir_test::dispatch_kernel_1wg(ctx2, *added, hosts, lengths, 1, 1U);
-        for (int i = 0; i != 32; ++i) { CHECK(values[i] == static_cast<float>(i + 17)); }
+        for (int i = 0; i != 32; ++i)
+        {
+            CHECK(values[i] == static_cast<float>(i + 17));
+        }
         crd::containers::Array<crd::u8> expanded(&alloc);
         ctx2.pipeline_cache_data(expanded);
         REQUIRE(expanded.size() > 48U);
@@ -2398,7 +3107,10 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
             auto warm_added = ctx2.create_pipeline_from_hlsl(added_hlsl, 1, 0U);
             REQUIRE(warm_added != nullptr);
             crd::kir_test::dispatch_kernel_1wg(ctx2, *warm_added, hosts, lengths, 1, 1U);
-            for (int i = 0; i != 32; ++i) { CHECK(values[i] == static_cast<float>(i + 17)); }
+            for (int i = 0; i != 32; ++i)
+            {
+                CHECK(values[i] == static_cast<float>(i + 17));
+            }
         }
         const auto reject = [&](const auto& corrupt) {
             crd::containers::Array<crd::u8> bad(&alloc);
@@ -2413,14 +3125,29 @@ TEST_CASE("D-007 D4: DX12 persistent pipeline library (PSO cache) warm restart",
         reject([](auto& bad) { bad.resize(1U); });
         reject([](auto& bad) { bad.resize(31U); });
         reject([](auto& bad) { bad[0] ^= 1U; });
-        reject([](auto& bad) { for (crd::usize i = 8U; i != 16U; ++i) { bad[i] = 0xffU; } });
-        reject([](auto& bad) { for (crd::usize i = 16U; i != 24U; ++i) { bad[i] = 0xffU; } });
+        reject([](auto& bad)
+        {
+            for (crd::usize i = 8U; i != 16U; ++i)
+            {
+                bad[i] = 0xffU;
+            }
+        });
+        reject([](auto& bad)
+        {
+            for (crd::usize i = 16U; i != 24U; ++i)
+            {
+                bad[i] = 0xffU;
+            }
+        });
         reject([](auto& bad) { bad[bad.size() - 1U] ^= 1U; });
         reject([](auto& bad) { bad.push_back(0U); });
         reject([](auto& bad) {
             std::memcpy(bad.data() + 40U, bad.data() + 32U, 8U); // Duplicate indexed name with valid payload checksum.
             const crd::u64 hash = crd::containers::fnv1a_64(bad.data() + 32U, bad.size() - 32U);
-            for (crd::u32 i = 0; i != 8U; ++i) { bad[24U + i] = static_cast<crd::u8>(hash >> (i * 8U)); }
+            for (crd::u32 i = 0; i != 8U; ++i)
+            {
+                bad[24U + i] = static_cast<crd::u8>(hash >> (i * 8U));
+            }
         });
         REQUIRE(ctx2.warm_pipeline_cache({})); // Explicit empty reset, then cold creation still dispatches.
         auto reset_pipe = ctx2.create_pipeline_from_dxil(dxil, 2, 0U);
@@ -2439,7 +3166,11 @@ TEST_CASE("D3D12 compute pipeline mints one Program identity, not a Resource one
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     const crd::usize prog_before = g::identity_registry().live_count(g::ObjectKind::Program);
     const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
@@ -2477,7 +3208,11 @@ TEST_CASE("D3D12 compute buffer mints one Resource identity per buffer",
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     const crd::usize res_before  = g::identity_registry().live_count(g::ObjectKind::Resource);
     const crd::usize prog_before = g::identity_registry().live_count(g::ObjectKind::Program);

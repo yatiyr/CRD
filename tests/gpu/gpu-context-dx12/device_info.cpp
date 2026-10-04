@@ -42,7 +42,10 @@ public:
 
     [[nodiscard]] bool query(bool& software, bool& render) const
     {
-        if (m_opened < 0) { return false; }
+        if (m_opened < 0)
+        {
+            return false;
+        }
         D3DKMT_ADAPTERTYPE type{};
         D3DKMT_QUERYADAPTERINFO request{};
         request.hAdapter = m_adapter.hAdapter;
@@ -52,7 +55,10 @@ public:
         const NTSTATUS result = D3DKMTQueryAdapterInfo(&request);
         std::printf("DX12 census: kernel_query=0x%08lx flags=%08x software=%u render=%u\n",
                     static_cast<unsigned long>(result), type.Value, type.SoftwareDevice, type.RenderSupported);
-        if (result < 0) { return false; }
+        if (result < 0)
+        {
+            return false;
+        }
         software = type.SoftwareDevice != 0U;
         render = type.RenderSupported != 0U;
         return true;
@@ -174,7 +180,10 @@ int main()
     {
         shader_model.HighestShaderModel = candidate;
         shader_model_result = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model));
-        if (SUCCEEDED(shader_model_result)) { break; }
+        if (SUCCEEDED(shader_model_result))
+        {
+            break;
+        }
     }
     std::printf("DX12 census: shader_model_hr=0x%08lx highest=0x%02x\n", static_cast<unsigned long>(shader_model_result),
                 static_cast<unsigned int>(shader_model.HighestShaderModel));

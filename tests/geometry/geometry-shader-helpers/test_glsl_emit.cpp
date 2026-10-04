@@ -241,7 +241,11 @@ TEST_CASE("v9e-b GLSL conformance: prelude compiles to SPIR-V (smoke)",
 TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance",
           "[shader_helpers][glsl][gpu][conformance]")
 {
-    if (headless_requested()) { SUCCEED("headless"); return; }
+    if (headless_requested())
+    {
+        SUCCEED("headless");
+        return;
+    }
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
 
     // RET-7 (ADR-0105): the dispatch runs on the ONE graphics layer — IComputeContext, no rhi device.

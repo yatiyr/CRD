@@ -28,8 +28,15 @@ crd::u32 parse_ranks(const char* expr, crd::u32* ranks) noexcept
     crd::u32 r = 0;
     for (const char* p = expr; *p != '\0' && *p != '-'; ++p)
     {
-        if (*p == ',') { ranks[n_ops++] = r; r = 0; }
-        else { ++r; }
+        if (*p == ',')
+        {
+            ranks[n_ops++] = r;
+            r = 0;
+        }
+        else
+        {
+            ++r;
+        }
     }
     ranks[n_ops++] = r;
     return n_ops;
@@ -37,9 +44,15 @@ crd::u32 parse_ranks(const char* expr, crd::u32* ranks) noexcept
 
 void build_idx_size(const char* names, const crd::u64* sizes, crd::u64* idx_size) noexcept
 {
-    for (crd::u32 i = 0; i < kEinsumMaxIndices; ++i) { idx_size[i] = 1; }
+    for (crd::u32 i = 0; i < kEinsumMaxIndices; ++i)
+    {
+        idx_size[i] = 1;
+    }
     crd::u32 n = 0;
-    for (const char* p = names; *p != '\0'; ++p, ++n) { idx_size[static_cast<crd::u32>(*p - 'a')] = sizes[n]; }
+    for (const char* p = names; *p != '\0'; ++p, ++n)
+    {
+        idx_size[static_cast<crd::u32>(*p - 'a')] = sizes[n];
+    }
 }
 
 TensorStatus forward_einsum(const EinsumExpr& e, const crd::u64* idx_size, const TensorView<const f64>* views,
@@ -47,7 +60,10 @@ TensorStatus forward_einsum(const EinsumExpr& e, const crd::u64* idx_size, const
 {
     EinsumPlan         plan;
     const TensorStatus st = einsum_plan_build(e, idx_size, EinsumOptimize::Optimal, plan);
-    if (st != TensorStatus::Ok) { return st; }
+    if (st != TensorStatus::Ok)
+    {
+        return st;
+    }
     return einsum_execute<f64>(plan, {views, n_ops}, out, alloc);
 }
 
@@ -85,7 +101,10 @@ TEST_CASE("v16-c: einsum VJP over the real EinsumPlan == central FD, and is dete
         for (crd::u32 t = 0; t < n_ops; ++t)
         {
             crd::u64 shape[kMaxRank];
-            for (crd::u32 d = 0; d < e.term[t].count; ++d) { shape[d] = idx_size[e.term[t].idx[d]]; }
+            for (crd::u32 d = 0; d < e.term[t].count; ++d)
+            {
+                shape[d] = idx_size[e.term[t].idx[d]];
+            }
             ops[t] = Tensor<f64>(&alloc, {shape, e.term[t].count});
             for (crd::u64 i = 0; i < ops[t].size(); ++i)
             {
@@ -96,9 +115,15 @@ TEST_CASE("v16-c: einsum VJP over the real EinsumPlan == central FD, and is dete
 
         // output cotangent ȳ (same shape/order as the forward output)
         crd::u64 out_shape[kMaxRank];
-        for (crd::u32 d = 0; d < e.out_count; ++d) { out_shape[d] = idx_size[e.out_idx[d]]; }
+        for (crd::u32 d = 0; d < e.out_count; ++d)
+        {
+            out_shape[d] = idx_size[e.out_idx[d]];
+        }
         Tensor<f64> cten(&alloc, {out_shape, e.out_count});
-        for (crd::u64 i = 0; i < cten.size(); ++i) { cten.data()[i] = 0.3 * std::cos(0.2 + 0.9 * static_cast<f64>(i)); }
+        for (crd::u64 i = 0; i < cten.size(); ++i)
+        {
+            cten.data()[i] = 0.3 * std::cos(0.2 + 0.9 * static_cast<f64>(i));
+        }
         const TensorView<const f64> cview = cten.view();
 
         // scalar loss = Σ ȳ·Y (recomputes the forward from the current operand buffers)
@@ -107,7 +132,10 @@ TEST_CASE("v16-c: einsum VJP over the real EinsumPlan == central FD, and is dete
             Tensor<f64> yl(&alloc);
             REQUIRE(forward_einsum(e, idx_size, views, n_ops, yl, &alloc) == TensorStatus::Ok);
             f64 s = 0.0;
-            for (crd::u64 i = 0; i < yl.size(); ++i) { s += cten.data()[i] * yl.data()[i]; }
+            for (crd::u64 i = 0; i < yl.size(); ++i)
+            {
+                s += cten.data()[i] * yl.data()[i];
+            }
             return s;
         };
 
@@ -146,8 +174,14 @@ TEST_CASE("v16-c: einsum matmul VJP == the dense nn::matmul_vjp", "[hesap][tenso
     const crd::u64 bs[] = {static_cast<crd::u64>(kk), static_cast<crd::u64>(p)};
     Tensor<f64>    a(&alloc, as);
     Tensor<f64>    b(&alloc, bs);
-    for (int i = 0; i < m * kk; ++i) { a.data()[i] = 0.2 + 0.1 * i; }
-    for (int i = 0; i < kk * p; ++i) { b.data()[i] = -0.3 + 0.15 * i; }
+    for (int i = 0; i < m * kk; ++i)
+    {
+        a.data()[i] = 0.2 + 0.1 * i;
+    }
+    for (int i = 0; i < kk * p; ++i)
+    {
+        b.data()[i] = -0.3 + 0.15 * i;
+    }
 
     crd::u64       idx_size[kEinsumMaxIndices];
     const crd::u64 sizes_ijk[] = {static_cast<crd::u64>(m), static_cast<crd::u64>(p), static_cast<crd::u64>(kk)};
@@ -160,7 +194,10 @@ TEST_CASE("v16-c: einsum matmul VJP == the dense nn::matmul_vjp", "[hesap][tenso
     const TensorView<const f64> views[2] = {a.view(), b.view()};
     const crd::u64              cs[]     = {static_cast<crd::u64>(m), static_cast<crd::u64>(p)};
     Tensor<f64>                 gc(&alloc, cs);
-    for (int i = 0; i < m * p; ++i) { gc.data()[i] = 0.5 - 0.2 * i; }
+    for (int i = 0; i < m * p; ++i)
+    {
+        gc.data()[i] = 0.5 - 0.2 * i;
+    }
 
     Tensor<f64> g_a(&alloc);
     Tensor<f64> g_b(&alloc);
@@ -173,6 +210,12 @@ TEST_CASE("v16-c: einsum matmul VJP == the dense nn::matmul_vjp", "[hesap][tenso
 
     REQUIRE(g_a.size() == static_cast<crd::usize>(m * kk));
     REQUIRE(g_b.size() == static_cast<crd::usize>(kk * p));
-    for (int i = 0; i < m * kk; ++i) { CHECK_THAT(g_a.data()[i], WithinAbs(g_a_dense[i], 1e-11)); }
-    for (int i = 0; i < kk * p; ++i) { CHECK_THAT(g_b.data()[i], WithinAbs(g_b_dense[i], 1e-11)); }
+    for (int i = 0; i < m * kk; ++i)
+    {
+        CHECK_THAT(g_a.data()[i], WithinAbs(g_a_dense[i], 1e-11));
+    }
+    for (int i = 0; i < kk * p; ++i)
+    {
+        CHECK_THAT(g_b.data()[i], WithinAbs(g_b_dense[i], 1e-11));
+    }
 }

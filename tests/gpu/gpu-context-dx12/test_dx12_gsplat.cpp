@@ -46,7 +46,11 @@ TEST_CASE("D-007 B19 cross-backend: 2DGS render + relight DISPATCH on DX12 == CP
 {
     crd::memory::TlsfAllocator alloc(96U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int imw = 32;
     constexpr int imh = 32;
@@ -81,8 +85,14 @@ TEST_CASE("D-007 B19 cross-backend: 2DGS render + relight DISPATCH on DX12 == CP
     crd::containers::Array<float> cam32(&alloc);
     prep32.resize(uz(ns) * 19U, 0.0F);
     cam32.resize(20U, 0.0F);
-    for (int i = 0; i < ns * 19; ++i) { prep32[uz(i)] = static_cast<float>(prep[uz(i)]); }
-    for (int i = 0; i < 20; ++i) { cam32[uz(i)] = static_cast<float>(cam[uz(i)]); }
+    for (int i = 0; i < ns * 19; ++i)
+    {
+        prep32[uz(i)] = static_cast<float>(prep[uz(i)]);
+    }
+    for (int i = 0; i < 20; ++i)
+    {
+        cam32[uz(i)] = static_cast<float>(cam[uz(i)]);
+    }
 
     // ── base render ──
     kir::gsplat::Gsplat2dRenderConfig rc;
@@ -106,7 +116,14 @@ TEST_CASE("D-007 B19 cross-backend: 2DGS render + relight DISPATCH on DX12 == CP
     rimg32.resize(uz(imw * imh) * 8U, 0.0F);
     { float* hb[4] = {prep32.data(), cam32.data(), rpar32.data(), rimg32.data()}; const int ln[4] = {ns * 19, 20, 5, imw * imh * 8}; crd::kir_test::dispatch_kernel_1wg(ctx, *rpipe, hb, ln, 4, static_cast<crd::u32>((imw * imh + 63) / 64)); }
     float worst_r = 0.0F;
-    for (int i = 0; i < imw * imh * 8; ++i) { const float d = crd::math::abs(rimg32[uz(i)] - static_cast<float>(rref[uz(i)])); if (d > worst_r) { worst_r = d; } }
+    for (int i = 0; i < imw * imh * 8; ++i)
+    {
+        const float d = crd::math::abs(rimg32[uz(i)] - static_cast<float>(rref[uz(i)]));
+        if (d > worst_r)
+        {
+            worst_r = d;
+        }
+    }
     CHECK(worst_r < 2.0e-3F); // 2DGS render on DX12 == oracle
 
     // ── relight render ──
@@ -128,11 +145,22 @@ TEST_CASE("D-007 B19 cross-backend: 2DGS render + relight DISPATCH on DX12 == CP
     REQUIRE(lpipe != nullptr);
     crd::containers::Array<float> lpar32(&alloc);
     crd::containers::Array<float> limg32(&alloc);
-    lpar32.resize(13U, 0.0F); for (int i = 0; i < 13; ++i) { lpar32[uz(i)] = static_cast<float>(lpar[uz(i)]); }
+    lpar32.resize(13U, 0.0F);
+    for (int i = 0; i < 13; ++i)
+    {
+        lpar32[uz(i)] = static_cast<float>(lpar[uz(i)]);
+    }
     limg32.resize(uz(imw * imh) * 4U, 0.0F);
     { float* hb[4] = {prep32.data(), cam32.data(), lpar32.data(), limg32.data()}; const int ln[4] = {ns * 19, 20, 13, imw * imh * 4}; crd::kir_test::dispatch_kernel_1wg(ctx, *lpipe, hb, ln, 4, static_cast<crd::u32>((imw * imh + 63) / 64)); }
     float worst_l = 0.0F;
-    for (int i = 0; i < imw * imh * 4; ++i) { const float d = crd::math::abs(limg32[uz(i)] - static_cast<float>(lref[uz(i)])); if (d > worst_l) { worst_l = d; } }
+    for (int i = 0; i < imw * imh * 4; ++i)
+    {
+        const float d = crd::math::abs(limg32[uz(i)] - static_cast<float>(lref[uz(i)]));
+        if (d > worst_l)
+        {
+            worst_l = d;
+        }
+    }
     std::printf("[B19 DX12] 2DGS render worst %.3e; relight worst %.3e\n", worst_r, worst_l);
     CHECK(worst_l < 2.0e-3F); // relightable PBR render on DX12 == oracle
 }
@@ -141,7 +169,11 @@ TEST_CASE("D-007 B19-f cross-backend: differentiable forward + backward DISPATCH
 {
     crd::memory::TlsfAllocator alloc(64U << 20U);
     g::Dx12ComputeContext      ctx(&alloc);
-    if (!ctx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!ctx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::gsplat::GsplatDiffConfig cfg;
     cfg.width = 32; cfg.height = 32; cfg.local_size = 64;
@@ -168,13 +200,28 @@ TEST_CASE("D-007 B19-f cross-backend: differentiable forward + backward DISPATCH
     auto bpipe = ctx.create_pipeline_from_hlsl(crd::containers::to_view(bk.source), 3, 0U);
     REQUIRE(bpipe != nullptr);
     crd::containers::Array<float> p32(&alloc); crd::containers::Array<float> t32(&alloc); crd::containers::Array<float> g32(&alloc);
-    p32.resize(5U, 0.0F); for (int i = 0; i < 5; ++i) { p32[uz(i)] = static_cast<float>(params[uz(i)]); }
-    t32.resize(uz(np), 0.0F); for (int i = 0; i < np; ++i) { t32[uz(i)] = static_cast<float>(target[uz(i)]); }
+    p32.resize(5U, 0.0F);
+    for (int i = 0; i < 5; ++i)
+    {
+        p32[uz(i)] = static_cast<float>(params[uz(i)]);
+    }
+    t32.resize(uz(np), 0.0F);
+    for (int i = 0; i < np; ++i)
+    {
+        t32[uz(i)] = static_cast<float>(target[uz(i)]);
+    }
     g32.resize(5U, 0.0F);
     { float* hb[3] = {p32.data(), t32.data(), g32.data()}; const int ln[3] = {5, np, 5}; crd::kir_test::dispatch_kernel_1wg(ctx, *bpipe, hb, ln, 3, 1U); }
 
     float worst = 0.0F;
-    for (int k = 0; k < 5; ++k) { const float rel = crd::math::abs(g32[uz(k)] - static_cast<float>(gref[uz(k)])) / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F); if (rel > worst) { worst = rel; } }
+    for (int k = 0; k < 5; ++k)
+    {
+        const float rel = crd::math::abs(g32[uz(k)] - static_cast<float>(gref[uz(k)])) / (crd::math::abs(static_cast<float>(gref[uz(k)])) + 1.0e-4F);
+        if (rel > worst)
+        {
+            worst = rel;
+        }
+    }
     std::printf("[B19-f DX12] training backward gradient worst rel = %.3e\n", worst);
     CHECK(worst < 1.0e-3F); // the training gradient on DX12 == oracle (Vulkan-matched)
 }

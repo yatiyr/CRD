@@ -237,11 +237,25 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     const V3D L = crd::math::cross(N1, N2);
     int        axis = 0;
     crd::f64   max_abs = scalar_abs(L.x);
-    if (scalar_abs(L.y) > max_abs) { axis = 1; max_abs = scalar_abs(L.y); }
-    if (scalar_abs(L.z) > max_abs) { axis = 2; max_abs = scalar_abs(L.z); }
+    if (scalar_abs(L.y) > max_abs)
+    {
+        axis = 1;
+        max_abs = scalar_abs(L.y);
+    }
+    if (scalar_abs(L.z) > max_abs)
+    {
+        axis = 2;
+        max_abs = scalar_abs(L.z);
+    }
     auto       get_axis = [axis](const V3D& v) {
-        if (axis == 0) { return v.x; }
-        if (axis == 1) { return v.y; }
+        if (axis == 0)
+        {
+            return v.x;
+        }
+        if (axis == 1)
+        {
+            return v.y;
+        }
         return v.z;
     };
     const crd::f64 q1a = get_axis(p1a);
@@ -254,7 +268,10 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
     const crd::f64 t2_max = q2a < q2b ? q2b : q2a;
     const crd::f64 overlap_min = t1_min > t2_min ? t1_min : t2_min;
     const crd::f64 overlap_max = t1_max < t2_max ? t1_max : t2_max;
-    if (overlap_max <= overlap_min) { return std::nullopt; }
+    if (overlap_max <= overlap_min)
+    {
+        return std::nullopt;
+    }
 
     // Look up 3D points whose axis values match overlap_min / overlap_max.
     auto closest = [&](crd::f64 target) -> V3D {
@@ -262,11 +279,22 @@ std::optional<TriTriSegment3D> moller_tri_tri_intersect(
         V3D      best      = p1a;
         crd::f64 diff;
         diff = scalar_abs(q1b - target);
-        if (diff < best_diff) { best_diff = diff; best = p1b; }
+        if (diff < best_diff)
+        {
+            best_diff = diff;
+            best = p1b;
+        }
         diff = scalar_abs(q2a - target);
-        if (diff < best_diff) { best_diff = diff; best = p2a; }
+        if (diff < best_diff)
+        {
+            best_diff = diff;
+            best = p2a;
+        }
         diff = scalar_abs(q2b - target);
-        if (diff < best_diff) { best = p2b; }
+        if (diff < best_diff)
+        {
+            best = p2b;
+        }
         return best;
     };
 
@@ -300,9 +328,18 @@ TriAABB<T> compute_tri_aabb(const crd::math::Vec3<T>& a,
 template <crd::math::MathScalar T>
 inline bool aabb_overlap(const TriAABB<T>& a, const TriAABB<T>& b) noexcept
 {
-    if (a.hi.x < b.lo.x || b.hi.x < a.lo.x) { return false; }
-    if (a.hi.y < b.lo.y || b.hi.y < a.lo.y) { return false; }
-    if (a.hi.z < b.lo.z || b.hi.z < a.lo.z) { return false; }
+    if (a.hi.x < b.lo.x || b.hi.x < a.lo.x)
+    {
+        return false;
+    }
+    if (a.hi.y < b.lo.y || b.hi.y < a.lo.y)
+    {
+        return false;
+    }
+    if (a.hi.z < b.lo.z || b.hi.z < a.lo.z)
+    {
+        return false;
+    }
     return true;
 }
 
@@ -326,7 +363,10 @@ crd::math::Vec2<T> project_to_2d(const crd::math::Vec3<T>& p, int drop_axis,
         case 1: a = p.z; b = p.x; break;
         default: a = p.x; b = p.y; break;
     }
-    if (flip_winding) { return crd::math::Vec2<T>{b, a}; }
+    if (flip_winding)
+    {
+        return crd::math::Vec2<T>{b, a};
+    }
     return crd::math::Vec2<T>{a, b};
 }
 
@@ -367,7 +407,10 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
                                    crd::containers::Array<crd::u32>&                out_indices,
                                    crd::memory::IAllocator*                         alloc)
 {
-    if (segments.empty()) { return false; } // caller emits T as-is
+    if (segments.empty()) // caller emits T as-is
+    {
+        return false;
+    }
 
     const auto& pa = positions[va];
     const auto& pb = positions[vb];
@@ -420,17 +463,26 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
         }
     }
 
-    if (points_2d.size() < 3U) { return false; } // degenerate
+    if (points_2d.size() < 3U) // degenerate
+    {
+        return false;
+    }
 
     // Build constraints. Triangle boundary edges + segment edges. Use
     // canonical-pair form to avoid duplicates.
     crd::containers::Array<crd::geometry::polygon::CdtEdge> constraints(alloc);
     auto push_edge = [&](crd::u32 a, crd::u32 b) {
-        if (a == b) { return; }
+        if (a == b)
+        {
+            return;
+        }
         for (crd::u32 i = 0; i < constraints.size(); ++i)
         {
             const auto& e = constraints[i];
-            if ((e.a == a && e.b == b) || (e.a == b && e.b == a)) { return; }
+            if ((e.a == a && e.b == b) || (e.a == b && e.b == a))
+            {
+                return;
+            }
         }
         constraints.push_back(crd::geometry::polygon::CdtEdge{a, b});
     };
@@ -506,7 +558,10 @@ bool retriangulate_with_segments(const crd::containers::Array<crd::math::Vec3<T>
         const T s2 = signed_sub_area(t_p2, t_p0, centroid_x, centroid_y);
         const bool inside_t = (s0 * t_sign >= T{0}) && (s1 * t_sign >= T{0})
                               && (s2 * t_sign >= T{0});
-        if (!inside_t) { continue; }
+        if (!inside_t)
+        {
+            continue;
+        }
         // Map and emit in original (3D-CCW) orientation. If we flipped
         // winding for the projection, un-flip on output.
         const crd::u32 ga = unique_to_global[a];
@@ -537,7 +592,10 @@ HalfEdgeMesh<T> remove_self_intersections(const HalfEdgeMesh<T>&                
 {
     RemoveSelfIntersectionsReport report{};
     auto                          report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr
@@ -600,8 +658,14 @@ HalfEdgeMesh<T> remove_self_intersections(const HalfEdgeMesh<T>&                
     {
         for (crd::u32 j = i + 1; j < tri_count; ++j)
         {
-            if (!aabb_overlap(aabbs[i], aabbs[j])) { continue; }
-            if (share_vertex(i, j)) { continue; }
+            if (!aabb_overlap(aabbs[i], aabbs[j]))
+            {
+                continue;
+            }
+            if (share_vertex(i, j))
+            {
+                continue;
+            }
             ++report.candidate_pairs_tested;
             const auto& v0 = positions[indices[3U * i + 0]];
             const auto& v1 = positions[indices[3U * i + 1]];
@@ -610,7 +674,10 @@ HalfEdgeMesh<T> remove_self_intersections(const HalfEdgeMesh<T>&                
             const auto& u1 = positions[indices[3U * j + 1]];
             const auto& u2 = positions[indices[3U * j + 2]];
             auto seg = moller_tri_tri_intersect(v0, v1, v2, u0, u1, u2);
-            if (!seg) { continue; }
+            if (!seg)
+            {
+                continue;
+            }
             ++report.intersection_pairs_detected;
             // Append the segment's endpoints to the positions array, share
             // global indices between T_i and T_j.

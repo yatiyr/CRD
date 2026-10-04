@@ -511,6 +511,12 @@ TEST_CASE("Destroying a child cleans up its reverse-index entry", "[scene][relat
     // Parent survives. Traverse from parent must NOT report the dead child.
     CHECK(w.is_alive(parent));
     crd::u32 child_visits = 0;
-    w.traverse_relation<ChildOf>(parent, [&](EntityId, crd::u32 d) { if (d > 0U) { ++child_visits; } });
+    w.traverse_relation<ChildOf>(parent, [&](EntityId, crd::u32 d)
+    {
+        if (d > 0U)
+        {
+            ++child_visits;
+        }
+    });
     CHECK(child_visits == 0U);
 }

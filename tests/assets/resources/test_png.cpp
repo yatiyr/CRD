@@ -45,7 +45,10 @@ void begin_png(crd::containers::Array<crd::u8>& png, crd::memory::IAllocator* a,
                crd::u8 color_type, crd::u8 interlace)
 {
     static constexpr crd::u8 kSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-    for (crd::u8 s : kSig) { png.push_back(s); }
+    for (crd::u8 s : kSig)
+    {
+        png.push_back(s);
+    }
     crd::containers::Array<crd::u8> ihdr(a);
     push_be32(ihdr, w);
     push_be32(ihdr, h);
@@ -72,8 +75,14 @@ void add_idat_end(crd::containers::Array<crd::u8>& png, crd::memory::IAllocator*
     const int pa = p > a ? p - a : a - p;
     const int pb = p > b ? p - b : b - p;
     const int pc = p > c ? p - c : c - p;
-    if (pa <= pb && pa <= pc) { return static_cast<crd::u8>(a); }
-    if (pb <= pc) { return static_cast<crd::u8>(b); }
+    if (pa <= pb && pa <= pc)
+    {
+        return static_cast<crd::u8>(a);
+    }
+    if (pb <= pc)
+    {
+        return static_cast<crd::u8>(b);
+    }
     return static_cast<crd::u8>(c);
 }
 
@@ -110,7 +119,10 @@ TEST_CASE("resources: PNG all five FILTERS reconstruct exactly (RGBA8)", "[resou
     crd::u8                    ref[h][w * 4];
     for (crd::u32 y = 0; y < h; ++y)
     {
-        for (crd::u32 x = 0; x < w * 4U; ++x) { ref[y][x] = static_cast<crd::u8>(13U + 17U * y + 29U * x); }
+        for (crd::u32 x = 0; x < w * 4U; ++x)
+        {
+            ref[y][x] = static_cast<crd::u8>(13U + 17U * y + 29U * x);
+        }
     }
     crd::containers::Array<crd::u8> raw(&alloc);
     for (crd::u32 y = 0; y < h; ++y)
@@ -142,7 +154,10 @@ TEST_CASE("resources: PNG color-type coverage -- RGB, gray1, gray+alpha, palette
         const crd::u8                   px[6] = {10, 20, 30, 200, 210, 220}; // 2x1
         crd::containers::Array<crd::u8> raw(&alloc);
         raw.push_back(0);
-        for (crd::u8 v : px) { raw.push_back(v); }
+        for (crd::u8 v : px)
+        {
+            raw.push_back(v);
+        }
         crd::containers::Array<crd::u8> png(&alloc);
         begin_png(png, &alloc, 2, 1, 8, 2, 0);
         add_idat_end(png, &alloc, raw);
@@ -176,7 +191,10 @@ TEST_CASE("resources: PNG color-type coverage -- RGB, gray1, gray+alpha, palette
         const crd::u8                   px[4] = {100, 50, 200, 250}; // 2x1: (g,a)(g,a)
         crd::containers::Array<crd::u8> raw(&alloc);
         raw.push_back(0);
-        for (crd::u8 v : px) { raw.push_back(v); }
+        for (crd::u8 v : px)
+        {
+            raw.push_back(v);
+        }
         crd::containers::Array<crd::u8> png(&alloc);
         begin_png(png, &alloc, 2, 1, 8, 4, 0);
         add_idat_end(png, &alloc, raw);
@@ -194,7 +212,10 @@ TEST_CASE("resources: PNG color-type coverage -- RGB, gray1, gray+alpha, palette
         begin_png(png, &alloc, 4, 1, 4, 3, 0);
         crd::containers::Array<crd::u8> plte(&alloc); // 3 entries: red, green, blue
         const crd::u8                   pal[9] = {255, 0, 0, 0, 255, 0, 0, 0, 255};
-        for (crd::u8 v : pal) { plte.push_back(v); }
+        for (crd::u8 v : pal)
+        {
+            plte.push_back(v);
+        }
         add_chunk(png, "PLTE", plte);
         crd::containers::Array<crd::u8> trns(&alloc); // entry 1 (green) half-transparent
         trns.push_back(255);
@@ -220,12 +241,18 @@ TEST_CASE("resources: PNG color-type coverage -- RGB, gray1, gray+alpha, palette
         begin_png(png, &alloc, 2, 1, 8, 2, 0);
         crd::containers::Array<crd::u8> trns(&alloc); // key = (10,20,30) as 16-bit fields
         const crd::u8                   key[6] = {0, 10, 0, 20, 0, 30};
-        for (crd::u8 v : key) { trns.push_back(v); }
+        for (crd::u8 v : key)
+        {
+            trns.push_back(v);
+        }
         add_chunk(png, "tRNS", trns);
         crd::containers::Array<crd::u8> raw(&alloc);
         raw.push_back(0);
         const crd::u8 px[6] = {10, 20, 30, 99, 20, 30}; // first pixel IS the key
-        for (crd::u8 v : px) { raw.push_back(v); }
+        for (crd::u8 v : px)
+        {
+            raw.push_back(v);
+        }
         add_idat_end(png, &alloc, raw);
         PngImage img(&alloc);
         REQUIRE(png_decode(crd::containers::as_const_span(png), img, &alloc) == PngError::Ok);
@@ -237,7 +264,10 @@ TEST_CASE("resources: PNG color-type coverage -- RGB, gray1, gray+alpha, palette
         crd::containers::Array<crd::u8> raw(&alloc);
         raw.push_back(0);
         const crd::u8 px[6] = {0xAB, 0xCD, 0x12, 0x34, 0xFF, 0x00}; // one pixel: R=0xABCD G=0x1234 B=0xFF00
-        for (crd::u8 v : px) { raw.push_back(v); }
+        for (crd::u8 v : px)
+        {
+            raw.push_back(v);
+        }
         crd::containers::Array<crd::u8> png(&alloc);
         begin_png(png, &alloc, 1, 1, 16, 2, 0);
         add_idat_end(png, &alloc, raw);
@@ -275,7 +305,10 @@ TEST_CASE("resources: PNG Adam7 INTERLACE scatters correctly (8x8 RGBA)", "[reso
             raw.push_back(0); // filter: None
             for (crd::u32 x = x0[pass]; x < n; x += dx[pass])
             {
-                for (int c = 0; c < 4; ++c) { raw.push_back(ref[(y * n + x) * 4U + static_cast<crd::u32>(c)]); }
+                for (int c = 0; c < 4; ++c)
+                {
+                    raw.push_back(ref[(y * n + x) * 4U + static_cast<crd::u32>(c)]);
+                }
             }
         }
     }

@@ -93,11 +93,20 @@ void build_wavefront_work(FrameGraphBuilder& fb, memory::IAllocator* a)
 // StringView has no find(); a small substring test (the module text contains a frame.history op iff the routing fired).
 [[nodiscard]] bool sv_contains(StringView hay, StringView needle)
 {
-    if (needle.size() == 0U) { return true; }
-    if (hay.size() < needle.size()) { return false; }
+    if (needle.size() == 0U)
+    {
+        return true;
+    }
+    if (hay.size() < needle.size())
+    {
+        return false;
+    }
     for (crd::usize i = 0; i + needle.size() <= hay.size(); ++i)
     {
-        if (StringView(hay.data() + i, needle.size()) == needle) { return true; }
+        if (StringView(hay.data() + i, needle.size()) == needle)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -132,9 +141,15 @@ void build_wavefront_work(FrameGraphBuilder& fb, memory::IAllocator* a)
     ceir::Block* const gb = graph_block(ctx, m);
     for (ceir::Operation* op = gb != nullptr ? gb->first_op() : nullptr; op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) != op_kind) { continue; }
+        if (ctx.op_name(op->kind()) != op_kind)
+        {
+            continue;
+        }
         const ceir::AttrId a = op->attr(StringView("name"));
-        if (a.valid() && ctx.attr_value(a).s == name) { return op; }
+        if (a.valid() && ctx.attr_value(a).s == name)
+        {
+            return op;
+        }
     }
     return nullptr;
 }
@@ -142,7 +157,10 @@ void build_wavefront_work(FrameGraphBuilder& fb, memory::IAllocator* a)
 {
     for (crd::u32 i = 0; i < static_cast<crd::u32>(d.passes.size()); ++i)
     {
-        if (StringView(d.passes[i].name.data(), d.passes[i].name.size()) == name) { return &d.passes[i]; }
+        if (StringView(d.passes[i].name.data(), d.passes[i].name.size()) == name)
+        {
+            return &d.passes[i];
+        }
     }
     return nullptr;
 }
@@ -150,7 +168,10 @@ void build_wavefront_work(FrameGraphBuilder& fb, memory::IAllocator* a)
 {
     for (crd::u32 i = 0; i < static_cast<crd::u32>(refs.size()); ++i)
     {
-        if (StringView(refs[i].name.data(), refs[i].name.size()) == name) { return true; }
+        if (StringView(refs[i].name.data(), refs[i].name.size()) == name)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -257,7 +278,10 @@ void build_pingpong_writeonly(FrameGraphBuilder& fb, memory::IAllocator* a)
     const String   toml = emit_frame_toml(d, a);
     FrameGraphDesc d2(a);
     const FrameCookError pe = parse_frame_toml(StringView(toml.data(), toml.size()), d2);
-    if (pe != FrameCookError::Ok) { return pe; }
+    if (pe != FrameCookError::Ok)
+    {
+        return pe;
+    }
     return validate_frame_graph(d2);
 }
 
@@ -1431,8 +1455,14 @@ TEST_CASE("ceir 15d-3: narrowing keeps disjoint transient lifetimes distinct (no
     const ceir::ResourceLifetime* lb = nullptr;
     for (crd::usize i = 0; i < lt.size(); ++i)
     {
-        if (lt[i].declare == da) { la = &lt[i]; }
-        if (lt[i].declare == db) { lb = &lt[i]; }
+        if (lt[i].declare == da)
+        {
+            la = &lt[i];
+        }
+        if (lt[i].declare == db)
+        {
+            lb = &lt[i];
+        }
     }
     REQUIRE(la != nullptr);
     REQUIRE(lb != nullptr);

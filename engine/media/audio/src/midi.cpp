@@ -46,15 +46,24 @@ namespace
             {
                 const crd::u8 b = u8v();
                 v = (v << 7U) | (b & 0x7FU);
-                if ((b & 0x80U) == 0) { return v; }
+                if ((b & 0x80U) == 0)
+                {
+                    return v;
+                }
             }
             ok = false;
             return 0;
         }
         void skip(crd::usize n)
         {
-            if (pos + n > size) { ok = false; }
-            else { pos += n; }
+            if (pos + n > size)
+            {
+                ok = false;
+            }
+            else
+            {
+                pos += n;
+            }
         }
     };
 
@@ -77,7 +86,10 @@ namespace
     void push_bytes(crd::containers::Array<crd::u8>& out, const void* p, crd::usize n)
     {
         const auto* b = static_cast<const crd::u8*>(p);
-        for (crd::usize i = 0; i < n; ++i) { out.push_back(b[i]); }
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            out.push_back(b[i]);
+        }
     }
 
     // insertion by tick keeps merged format-1 tracks ordered without a sort dependency (events per track
@@ -90,11 +102,20 @@ namespace
         while (lo < hi)
         {
             const crd::usize mid = (lo + hi) / 2;
-            if (arr[mid].tick <= item.tick) { lo = mid + 1; }
-            else { hi = mid; }
+            if (arr[mid].tick <= item.tick)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
         arr.push_back(item); // grow, then shift into place
-        for (crd::usize i = arr.size() - 1; i > lo; --i) { arr[i] = arr[i - 1]; }
+        for (crd::usize i = arr.size() - 1; i > lo; --i)
+        {
+            arr[i] = arr[i - 1];
+        }
         arr[lo] = item;
     }
 } // namespace
@@ -111,9 +132,18 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
     const crd::u16 format   = rd_be16(bytes.data() + 8);
     const crd::u16 ntracks  = rd_be16(bytes.data() + 10);
     const crd::u16 division = rd_be16(bytes.data() + 12);
-    if (format > 1) { return MidiError::UnsupportedFormat; }
-    if ((division & 0x8000U) != 0) { return MidiError::UnsupportedFormat; } // SMPTE division — typed refusal
-    if (division == 0 || ntracks == 0) { return MidiError::Malformed; }
+    if (format > 1)
+    {
+        return MidiError::UnsupportedFormat;
+    }
+    if ((division & 0x8000U) != 0) // SMPTE division — typed refusal
+    {
+        return MidiError::UnsupportedFormat;
+    }
+    if (division == 0 || ntracks == 0)
+    {
+        return MidiError::Malformed;
+    }
     out.division = division;
 
     crd::usize pos = 14;
@@ -124,7 +154,10 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
             return MidiError::Malformed;
         }
         const crd::u32 len = rd_be32(bytes.data() + pos + 4);
-        if (pos + 8 + len > bytes.size()) { return MidiError::Malformed; }
+        if (pos + 8 + len > bytes.size())
+        {
+            return MidiError::Malformed;
+        }
         ByteReader br{bytes.data() + pos + 8, len, 0, true};
         pos += 8 + len;
 
@@ -136,14 +169,23 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
         {
             tick += br.vlq();
             crd::u8 b = br.u8v();
-            if (!br.ok) { return MidiError::Malformed; }
+            if (!br.ok)
+            {
+                return MidiError::Malformed;
+            }
             if (b < 0x80U) // running status
             {
-                if (status < 0x80U) { return MidiError::Malformed; }
+                if (status < 0x80U)
+                {
+                    return MidiError::Malformed;
+                }
                 --br.pos;
                 b = status;
             }
-            else { status = b; }
+            else
+            {
+                status = b;
+            }
 
             const crd::u8 kind    = b & 0xF0U;
             const crd::u8 channel = b & 0x0FU;
@@ -204,8 +246,14 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
                 c.channel = channel;
                 c.kind    = kind == 0xC0U ? 3 : 2;
                 const crd::u8 v = br.u8v() & 0x7FU;
-                if (kind == 0xC0U) { c.index = v; }
-                else { c.value = static_cast<crd::i32>(midi1_velocity_to_32(v) >> 1U); }
+                if (kind == 0xC0U)
+                {
+                    c.index = v;
+                }
+                else
+                {
+                    c.value = static_cast<crd::i32>(midi1_velocity_to_32(v) >> 1U);
+                }
                 insert_by_tick(out.controls, c);
                 break;
             }
@@ -234,17 +282,33 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
                                             (static_cast<crd::u32>(br.u8v()) << 8U) | br.u8v();
                         insert_by_tick(out.tempo, tp);
                     }
-                    else if (type == 0x2FU) { ended = true; br.skip(mlen); }
-                    else { br.skip(mlen); }
+                    else if (type == 0x2FU)
+                    {
+                        ended = true;
+                        br.skip(mlen);
+                    }
+                    else
+                    {
+                        br.skip(mlen);
+                    }
                 }
-                else if (b == 0xF0U || b == 0xF7U) { br.skip(br.vlq()); } // sysex
-                else { return MidiError::Malformed; }
+                else if (b == 0xF0U || b == 0xF7U) // sysex
+                {
+                    br.skip(br.vlq());
+                }
+                else
+                {
+                    return MidiError::Malformed;
+                }
                 status = 0; // meta/sysex clear running status
                 break;
             }
             default: return MidiError::Malformed;
             }
-            if (!br.ok) { return MidiError::Malformed; }
+            if (!br.ok)
+            {
+                return MidiError::Malformed;
+            }
         }
         // dangling note-ons close at end-of-track (honest: a truncated performance still imports)
         for (int ch = 0; ch < 16; ++ch)
@@ -269,7 +333,10 @@ MidiError midi_parse_smf(crd::containers::ConstSpan<crd::u8> bytes, MidiResource
 
 crd::time::RationalTime midi_tick_to_time(const MidiResource& midi, crd::i64 tick) noexcept
 {
-    if (tick < 0 || midi.division == 0) { return {}; }
+    if (tick < 0 || midi.division == 0)
+    {
+        return {};
+    }
     // seconds = Σ segment_ticks × us_per_quarter / (division × 1e6) — accumulate EXACTLY in rational time
     crd::time::RationalTime acc{0, crd::time::kRate24};
     crd::i64                seg_start = 0;
@@ -282,12 +349,18 @@ crd::time::RationalTime midi_tick_to_time(const MidiResource& midi, crd::i64 tic
             // dt ticks at rate (division × 1e6) / us_per_quarter ticks-per-second
             const crd::time::RationalRate r = crd::time::make_rate(
                 static_cast<crd::i64>(midi.division) * 1000000LL, static_cast<crd::i64>(seg_uspq));
-            if (!r.valid()) { return {}; }
+            if (!r.valid())
+            {
+                return {};
+            }
             acc = crd::time::add(acc, crd::time::RationalTime{seg_end - seg_start, r});
         }
         if (i < midi.tempo.size())
         {
-            if (midi.tempo[i].tick >= tick) { break; }
+            if (midi.tempo[i].tick >= tick)
+            {
+                break;
+            }
             seg_start = midi.tempo[i].tick;
             seg_uspq  = midi.tempo[i].us_per_quarter;
         }
@@ -299,10 +372,16 @@ crd::containers::Array<crd::u8> midi_build(const MidiResource& midi, const crd::
                                            crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> empty(alloc);
-    if (midi.division == 0) { return empty; }
+    if (midi.division == 0)
+    {
+        return empty;
+    }
     for (crd::usize i = 1; i < midi.notes.size(); ++i) // tick order IS the format
     {
-        if (midi.notes[i].tick < midi.notes[i - 1].tick) { return empty; }
+        if (midi.notes[i].tick < midi.notes[i - 1].tick)
+        {
+            return empty;
+        }
     }
 
     MidiHeaders h;
@@ -329,7 +408,10 @@ crd::containers::Array<crd::u8> midi_build(const MidiResource& midi, const crd::
 void* MidiLoader::load(const crd::resources::LoadContext& ctx)
 {
     crd::resources::CrdrFile file(&m_owned);
-    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok) { return nullptr; }
+    if (crd::resources::crdr_read(ctx.bytes, file, &m_owned) != crd::resources::CrdrError::Ok)
+    {
+        return nullptr;
+    }
     const crd::resources::CrdrChunk* nt = crd::resources::crdr_find_chunk(file, kFourCC_MdNt);
     const crd::resources::CrdrChunk* cc = crd::resources::crdr_find_chunk(file, kFourCC_MdCc);
     const crd::resources::CrdrChunk* tp = crd::resources::crdr_find_chunk(file, kFourCC_MdTp);
@@ -347,7 +429,10 @@ void* MidiLoader::load(const crd::resources::LoadContext& ctx)
         return nullptr;
     }
     void* raw = m_payload->try_allocate(sizeof(MidiResource), alignof(MidiResource));
-    if (raw == nullptr) { return nullptr; }
+    if (raw == nullptr)
+    {
+        return nullptr;
+    }
     auto* m     = new (raw) MidiResource(m_payload);
     m->division = h.division;
     m->notes.resize(h.note_count);
@@ -356,15 +441,24 @@ void* MidiLoader::load(const crd::resources::LoadContext& ctx)
         std::memcpy(m->notes.data(), nt->payload.data() + sizeof(h), nt->payload.size() - sizeof(h));
     }
     m->controls.resize(h.control_count);
-    if (h.control_count > 0) { std::memcpy(m->controls.data(), cc->payload.data(), cc->payload.size()); }
+    if (h.control_count > 0)
+    {
+        std::memcpy(m->controls.data(), cc->payload.data(), cc->payload.size());
+    }
     m->tempo.resize(h.tempo_count);
-    if (h.tempo_count > 0) { std::memcpy(m->tempo.data(), tp->payload.data(), tp->payload.size()); }
+    if (h.tempo_count > 0)
+    {
+        std::memcpy(m->tempo.data(), tp->payload.data(), tp->payload.size());
+    }
     return m;
 }
 
 void MidiLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto*                    m = static_cast<MidiResource*>(payload);
     crd::memory::IAllocator* a = m_payload;
     m->~MidiResource();

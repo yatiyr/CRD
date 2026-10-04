@@ -63,7 +63,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 void make_quad(crd::containers::Array<Vec3<f32>>& pos,
@@ -74,7 +77,10 @@ void make_quad(crd::containers::Array<Vec3<f32>>& pos,
     pos.push_back(Vec3<f32>{1, 1, 0});
     pos.push_back(Vec3<f32>{0, 1, 0});
     const u32 tris[] = {0, 1, 2,  0, 2, 3};
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 } // anonymous namespace
@@ -231,7 +237,10 @@ TEST_CASE("loop_subdivide: boundary edge midpoint is the geometric midpoint",
     bool found = false;
     for (u32 v = 0; v < out.vertex_pool_size(); ++v)
     {
-        if (!out.vertex_alive(v)) { continue; }
+        if (!out.vertex_alive(v))
+        {
+            continue;
+        }
         const auto& p = out.vertex(v).position;
         if (std::abs(p.x - 0.5F) < 1e-6F && std::abs(p.y) < 1e-6F && std::abs(p.z) < 1e-6F)
         {
@@ -263,7 +272,10 @@ TEST_CASE("loop_subdivide: determinism - same input yields byte-identical output
     REQUIRE(out_a.face_count() == out_b.face_count());
     for (u32 v = 0; v < out_a.vertex_pool_size(); ++v)
     {
-        if (!out_a.vertex_alive(v)) { continue; }
+        if (!out_a.vertex_alive(v))
+        {
+            continue;
+        }
         REQUIRE(out_b.vertex_alive(v));
         const auto& pa = out_a.vertex(v).position;
         const auto& pb = out_b.vertex(v).position;
@@ -295,7 +307,10 @@ TEST_CASE("loop_subdivide: f64 precision tier subdivides a cube",
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 
     HalfEdgeMesh<f64> m{&f.alloc};
     REQUIRE(m.build_from(crd::containers::ConstSpan<Vec3<f64>>{pos.data(), pos.size()},

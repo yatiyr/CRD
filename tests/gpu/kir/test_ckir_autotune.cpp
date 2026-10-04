@@ -58,7 +58,14 @@ TEST_CASE("AS-1a: the hand-tuned v17-e winner is a VALID member of the search sp
     const int              nc = at::enumerate_contract_schedules(1024, 1024, 1024, lim, cand, 4096);
     REQUIRE(nc > 0);
     bool found = false;
-    for (int i = 0; i < nc; ++i) { if (same_schedule(cand[i], w)) { found = true; break; } }
+    for (int i = 0; i < nc; ++i)
+    {
+        if (same_schedule(cand[i], w))
+        {
+            found = true;
+            break;
+        }
+    }
     CHECK(found);
     std::printf("[AS-1a] search space for 1024^3: %d valid schedules; hand-tuned winner present=%d\n", nc, found ? 1 : 0);
 }
@@ -77,7 +84,10 @@ TEST_CASE("AS-1a: EVERY enumerated schedule is self-consistent + fits the device
         const bool val_ok = at::contract_schedule_valid(cand[i], 1024, 1024, 1024, lim);
         const bool fits   = res_ok && r.threads <= lim.max_threads && r.smem <= lim.smem_bytes && r.accum <= lim.max_accum
                          && (cand[i].nt == static_cast<int>(r.threads));
-        if (!(res_ok && val_ok && fits)) { ++bad; }
+        if (!(res_ok && val_ok && fits))
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
     std::printf("[AS-1a] all %d enumerated schedules valid + fit (smem<=48KB, threads<=1024, accum<=128)\n", nc);
@@ -273,7 +283,13 @@ TEST_CASE("AS-4: the auto-scheduler generalizes to REDUCE -- valid schedule spac
 
     // the hand-tuned v17-e / B-cmp winner (256 threads, per_thread=8) is a MEMBER of the space the autotuner searches.
     bool has_handtuned = false;
-    for (int i = 0; i < cnt; ++i) { if (space[i].threads == 256 && space[i].per_thread == 8) { has_handtuned = true; } }
+    for (int i = 0; i < cnt; ++i)
+    {
+        if (space[i].threads == 256 && space[i].per_thread == 8)
+        {
+            has_handtuned = true;
+        }
+    }
     CHECK(has_handtuned);
 
     // an out-of-range / non-power-of-two / non-dividing schedule is REJECTED (never emitted).
@@ -294,7 +310,11 @@ TEST_CASE("AS-4: the auto-scheduler generalizes to REDUCE -- valid schedule spac
     int       topk[6];
     const int got = at::rank_reduce_top_k_cost(space, cnt, n, spec, topk, 6);
     REQUIRE(got > 0);
-    for (int t = 0; t < got; ++t) { CHECK(topk[t] >= 0); CHECK(topk[t] < cnt); }
+    for (int t = 0; t < got; ++t)
+    {
+        CHECK(topk[t] >= 0);
+        CHECK(topk[t] < cnt);
+    }
 
     std::printf("[AS-4] reduce schedule space: %d valid schedules for N=%d (hand-tuned 256x8 a member); cost model ranks saturating > starved; top-%d selected\n",
                 cnt, n, got);
@@ -319,7 +339,13 @@ TEST_CASE("AS-4: the flash-attention (BR,BC) schedule space is valid + the defau
     }
 
     bool has_default = false;
-    for (int i = 0; i < cnt; ++i) { if (space[i].br == 64 && space[i].bc == 32) { has_default = true; } }
+    for (int i = 0; i < cnt; ++i)
+    {
+        if (space[i].br == 64 && space[i].bc == 32)
+        {
+            has_default = true;
+        }
+    }
     CHECK(has_default); // the fixed select_attention_tile default is in the searched space
 
     CHECK(!at::attention_schedule_valid(dim, at::AttentionSchedule{48, 32}, lim));   // BR 48 not a power of two

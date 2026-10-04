@@ -42,7 +42,10 @@ namespace
         fs::Path sdk_path = fs::Path(sdk) / "Bin" / "dxcompiler.dll";
         std::free(sdk);
         auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
-        if (lib.is_valid()) { return lib; }
+        if (lib.is_valid())
+        {
+            return lib;
+        }
     }
     else
     {
@@ -62,7 +65,10 @@ namespace
     {
         const bool last = (i + 1 == n);
         auto       lib  = crd::platform::DynamicLibrary::open(candidates[i], /*log_on_failure=*/last);
-        if (lib.is_valid()) { return lib; }
+        if (lib.is_valid())
+        {
+            return lib;
+        }
     }
     return crd::platform::DynamicLibrary{};
 }
@@ -136,7 +142,10 @@ ShaderCompileResult compile_hlsl_to_spirv(ShaderStage stage, crd::containers::St
                            /*include handler*/ nullptr, __uuidof(IDxcResult), reinterpret_cast<void**>(&dxc_result));
     if (FAILED(hr) || dxc_result == nullptr)
     {
-        if (dxc_result != nullptr) { dxc_result->Release(); }
+        if (dxc_result != nullptr)
+        {
+            dxc_result->Release();
+        }
         compiler->Release();
         result.error_message = crd::containers::String("dxc: Compile() failed", a);
         return result;
@@ -158,7 +167,10 @@ ShaderCompileResult compile_hlsl_to_spirv(ShaderStage stage, crd::containers::St
         {
             result.error_message = crd::containers::String("dxc: compile failed (no error blob)", a);
         }
-        if (errors != nullptr) { errors->Release(); }
+        if (errors != nullptr)
+        {
+            errors->Release();
+        }
         dxc_result->Release();
         compiler->Release();
         return result;
@@ -168,7 +180,10 @@ ShaderCompileResult compile_hlsl_to_spirv(ShaderStage stage, crd::containers::St
     hr = dxc_result->GetOutput(DXC_OUT_OBJECT, __uuidof(IDxcBlob), reinterpret_cast<void**>(&spirv_blob), nullptr);
     if (FAILED(hr) || spirv_blob == nullptr || spirv_blob->GetBufferSize() == 0U)
     {
-        if (spirv_blob != nullptr) { spirv_blob->Release(); }
+        if (spirv_blob != nullptr)
+        {
+            spirv_blob->Release();
+        }
         dxc_result->Release();
         compiler->Release();
         result.error_message = crd::containers::String("dxc: compile succeeded but no SPIR-V output", a);
@@ -178,7 +193,10 @@ ShaderCompileResult compile_hlsl_to_spirv(ShaderStage stage, crd::containers::St
     const auto*      spirv_bytes = static_cast<const crd::u8*>(spirv_blob->GetBufferPointer());
     const crd::usize spirv_size  = static_cast<crd::usize>(spirv_blob->GetBufferSize());
     result.spirv.resize(spirv_size);
-    for (crd::usize i = 0U; i < spirv_size; ++i) { result.spirv[i] = spirv_bytes[i]; }
+    for (crd::usize i = 0U; i < spirv_size; ++i)
+    {
+        result.spirv[i] = spirv_bytes[i];
+    }
     result.ok = true;
 
     spirv_blob->Release();

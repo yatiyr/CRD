@@ -60,7 +60,9 @@ inline void append_u64(cont::String& out, crd::u64 v)
         v /= 10U;
     }
     while (n-- > 0)
+    {
         out.push_back(buf[n]);
+    }
 }
 
 // Signed decimal.
@@ -83,7 +85,9 @@ inline void append_i64(cont::String& out, crd::i64 v)
 inline void append_us_from_ns(cont::String& out, crd::i64 ns)
 {
     if (ns < 0)
+    {
         ns = 0; // MonotonicClock-relative endpoints and durations are non-negative; clamp defensively.
+    }
     const crd::u64 whole = static_cast<crd::u64>(ns) / 1000ULL;
     const crd::u64 frac  = static_cast<crd::u64>(ns) % 1000ULL;
     append_u64(out, whole);
@@ -104,12 +108,16 @@ inline void append_f64_fixed(cont::String& out, double v)
     }
     const bool neg = v < 0.0;
     if (neg)
+    {
         v = -v;
+    }
     const crd::u64 scaled = static_cast<crd::u64>(std::llround(v * 1'000'000.0));
     const crd::u64 whole  = scaled / 1'000'000ULL;
     crd::u64       frac   = scaled % 1'000'000ULL;
     if (neg && (whole != 0U || frac != 0U))
+    {
         out.push_back('-');
+    }
     append_u64(out, whole);
     out.push_back('.');
     char fbuf[6];
@@ -119,7 +127,9 @@ inline void append_f64_fixed(cont::String& out, double v)
         frac /= 10ULL;
     }
     for (int i = 0; i < 6; ++i)
+    {
         out.push_back(fbuf[i]);
+    }
 }
 
 } // namespace crd::perf::detail

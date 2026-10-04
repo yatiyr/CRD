@@ -36,7 +36,10 @@ namespace
 
 float csm_split_practical_cpu(float near_p, float far_p, float lambda, crd::u32 i, crd::u32 count)
 {
-    if (count == 0U) { return far_p; }
+    if (count == 0U)
+    {
+        return far_p;
+    }
     const float si = static_cast<float>(i + 1U) / static_cast<float>(count);
     // near*(far/near)^si  —  the logarithmic (perspective-correct) term
     const float lg = near_p * crd::math::pow(far_p / near_p, si);
@@ -51,8 +54,14 @@ CsmCascades compute_csm_cascades(const crd::math::Mat4f& view, const crd::math::
     CsmCascades out;
     // clamped, never truncated silently — a caller asking for 8 cascades gets 4 and can observe it in `count`
     crd::u32 want = cfg.cascade_count;
-    if (want < 1U) { want = 1U; }
-    if (want > kMaxCascades) { want = kMaxCascades; }
+    if (want < 1U)
+    {
+        want = 1U;
+    }
+    if (want > kMaxCascades)
+    {
+        want = kMaxCascades;
+    }
     out.count = want;
     const crd::u32 map_size = cfg.map_size < 1U ? 1U : cfg.map_size;
 
@@ -69,8 +78,14 @@ CsmCascades compute_csm_cascades(const crd::math::Mat4f& view, const crd::math::
     // light basis: normalize, and pick an up hint that is never parallel to it
     crd::math::Vec3f ld = light_dir;
     const float      ll = crd::math::sqrt(ld.x * ld.x + ld.y * ld.y + ld.z * ld.z);
-    if (ll < 1.0e-6F) { ld = {0.0F, -1.0F, 0.0F}; } // degenerate input -> straight down, never NaN
-    else { ld = {ld.x / ll, ld.y / ll, ld.z / ll}; }
+    if (ll < 1.0e-6F) // degenerate input -> straight down, never NaN
+    {
+        ld = {0.0F, -1.0F, 0.0F};
+    }
+    else
+    {
+        ld = {ld.x / ll, ld.y / ll, ld.z / ll};
+    }
     const crd::math::Vec3f up_hint =
         crd::math::abs(ld.y) > 0.99F ? crd::math::Vec3f{0.0F, 0.0F, 1.0F} : crd::math::Vec3f{0.0F, 1.0F, 0.0F};
 
@@ -90,7 +105,10 @@ CsmCascades compute_csm_cascades(const crd::math::Mat4f& view, const crd::math::
         // camera does not resize the cascade. When the centre would fall beyond the far plane the far corners
         // dominate, so it is clamped there.
         float centre_dist = (near_i + far_i) * (k2 + 1.0F) * 0.5F;
-        if (centre_dist > far_i) { centre_dist = far_i; }
+        if (centre_dist > far_i)
+        {
+            centre_dist = far_i;
+        }
         const float dx     = tx * far_i;
         const float dy     = ty * far_i;
         const float ddz    = far_i - centre_dist;
@@ -100,8 +118,14 @@ CsmCascades compute_csm_cascades(const crd::math::Mat4f& view, const crd::math::
         const float ny      = ty * near_i;
         const float ndz     = near_i - centre_dist;
         const float r_near  = crd::math::sqrt(nx * nx + ny * ny + ndz * ndz);
-        if (r_near > radius) { radius = r_near; }
-        if (radius < 1.0e-4F) { radius = 1.0e-4F; } // never a zero-extent ortho
+        if (r_near > radius)
+        {
+            radius = r_near;
+        }
+        if (radius < 1.0e-4F) // never a zero-extent ortho
+        {
+            radius = 1.0e-4F;
+        }
 
         // the slice's sphere centre in WORLD space (view space looks down -Z)
         const crd::math::Vec3f centre_ws = xform_point(inv_view, {0.0F, 0.0F, -centre_dist});

@@ -72,15 +72,24 @@ Block* graph_body(Context& ctx, Operation* g)
 Value* mkres(Context& ctx, const Kit& k, Block* rb, TypeId fmt, const char* lifetime)
 {
     Operation* const d = ctx.create_operation(k.decl, {}, 1U, ctx.type_image(ImageDim::Dim2D, fmt));
-    if (lifetime[0] != '\0') { ctx.set_attr(d, "lifetime", ctx.attr_string(StringView(lifetime))); }
+    if (lifetime[0] != '\0')
+    {
+        ctx.set_attr(d, "lifetime", ctx.attr_string(StringView(lifetime)));
+    }
     rb->append(d);
     return d->result(0U);
 }
 Value* mkdrawlist(Context& ctx, const Kit& k, Block* rb, const char* cull, const char* sort)
 {
     Operation* const op = ctx.create_operation(k.dl, {}, 1U, frame::type_draw_list(ctx));
-    if (cull[0] != '\0') { ctx.set_attr(op, "cull", ctx.attr_string(StringView(cull))); }
-    if (sort[0] != '\0') { ctx.set_attr(op, "sort", ctx.attr_string(StringView(sort))); }
+    if (cull[0] != '\0')
+    {
+        ctx.set_attr(op, "cull", ctx.attr_string(StringView(cull)));
+    }
+    if (sort[0] != '\0')
+    {
+        ctx.set_attr(op, "sort", ctx.attr_string(StringView(sort)));
+    }
     rb->append(op);
     return op->result(0U);
 }
@@ -89,7 +98,10 @@ Value* mkhistory(Context& ctx, const Kit& k, Block* rb, Value* hist_resource, i6
     Value* ops[1] = {hist_resource};
     // result type = the operand's underlying resource type (a DISTINCT op result ⇒ its own resource_root).
     Operation* const op = ctx.create_operation(k.hist, ConstSpan<Value*>(ops, 1U), 1U, hist_resource->type());
-    if (frames_back != 0) { ctx.set_attr(op, "frames_back", ctx.attr_int(frames_back)); }
+    if (frames_back != 0)
+    {
+        ctx.set_attr(op, "frames_back", ctx.attr_int(frames_back));
+    }
     rb->append(op);
     return op->result(0U);
 }

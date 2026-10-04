@@ -230,7 +230,10 @@ Operation* draw_op(Context& c, const Kit& k, Block* rb, Value* vc, Value* ic, Va
     Value* ops[16];
     ops[0] = vc;
     ops[1] = ic;
-    for (crd::u32 i = 0; i < nb; ++i) { ops[2 + i] = binds[i]; }
+    for (crd::u32 i = 0; i < nb; ++i)
+    {
+        ops[2 + i] = binds[i];
+    }
     Operation* const op = c.create_operation(k.draw, ConstSpan<Value*>(ops, 2U + nb), 0U);
     c.set_attr(op, "program", c.attr_symbol(StringView(prog)));
     c.set_attr(op, "access", c.attr_string(StringView(access)));
@@ -282,7 +285,10 @@ Operation* dispatch_bufs(Context& c, const Kit& k, Block* b, Value* grid, Value*
     ops[0] = grid;
     ops[1] = grid;
     ops[2] = grid;
-    for (crd::u32 i = 0; i < nbind; ++i) { ops[3 + i] = binds[i]; }
+    for (crd::u32 i = 0; i < nbind; ++i)
+    {
+        ops[3 + i] = binds[i];
+    }
     Operation* const d = c.create_operation(k.disp, ConstSpan<Value*>(ops, 3U + nbind), 0U);
     c.set_attr(d, "kernel", c.attr_symbol(StringView(kernel)));
     c.set_attr(d, "access", c.attr_string(StringView(access)));
@@ -717,7 +723,11 @@ TEST_CASE("ceir 14b: a dispatch writing B then a scope-with-a-draw-binding-B emi
     int begin = -1;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
     {
-        if (cmds[i].kind == LoweredKind::BeginRender) { begin = static_cast<int>(i); break; }
+        if (cmds[i].kind == LoweredKind::BeginRender)
+        {
+            begin = static_cast<int>(i);
+            break;
+        }
     }
     REQUIRE(begin > 0);
     CHECK(cmds[static_cast<crd::u32>(begin - 1)].kind == LoweredKind::Barrier); // a barrier lands BEFORE the scope
@@ -820,7 +830,11 @@ TEST_CASE("ceir 14c: draw_indirect lowers preserving max_draws + args identity (
     const LoweredCommand* draw_cmd = nullptr;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(cmds.size()); ++i)
     {
-        if (cmds[i].kind == LoweredKind::Draw) { draw_cmd = &cmds[i]; break; }
+        if (cmds[i].kind == LoweredKind::Draw)
+        {
+            draw_cmd = &cmds[i];
+            break;
+        }
     }
     REQUIRE(draw_cmd != nullptr);
     CHECK(draw_cmd->op == di); // ⭐ the lowered Draw's op back-pointer IS the draw_indirect — the 14z executor reads from here
@@ -2237,7 +2251,10 @@ crd::gpu::IRasterProgram* c17_expected(const C17Item& it, StringView phase)
     {
         return it.program_depth != nullptr ? it.program_depth : it.program;
     }
-    if (phase == StringView("velocity")) { return it.program_velocity != nullptr ? it.program_velocity : it.program; }
+    if (phase == StringView("velocity"))
+    {
+        return it.program_velocity != nullptr ? it.program_velocity : it.program;
+    }
     return it.program; // opaque / transparent / forward
 }
 // the host resolve tables (the 17c callbacks' backing). draw_handle = item index+1 (0=null). program→u64 + storage→u64
@@ -2250,15 +2267,24 @@ struct C17Host
     crd::containers::Array<crd::gpu::IStorageBuffer*>* stores = nullptr;
     static crd::u32 phase_idx(StringView p) noexcept
     {
-        if (p == StringView("shadow") || p == StringView("depth")) { return 1U; }
-        if (p == StringView("velocity")) { return 2U; }
+        if (p == StringView("shadow") || p == StringView("depth"))
+        {
+            return 1U;
+        }
+        if (p == StringView("velocity"))
+        {
+            return 2U;
+        }
         return 0U; // opaque / transparent
     }
     SceneResolveHandle prog_handle(crd::gpu::IRasterProgram* p)
     {
         for (crd::u32 i = 0; i < progs->size(); ++i)
         {
-            if ((*progs)[i] == p) { return i + 1U; }
+            if ((*progs)[i] == p)
+            {
+                return i + 1U;
+            }
         }
         progs->push_back(p);
         return static_cast<SceneResolveHandle>(progs->size());
@@ -2267,7 +2293,10 @@ struct C17Host
     {
         for (crd::u32 i = 0; i < stores->size(); ++i)
         {
-            if ((*stores)[i] == s) { return i + 1U; }
+            if ((*stores)[i] == s)
+            {
+                return i + 1U;
+            }
         }
         stores->push_back(s);
         return static_cast<SceneResolveHandle>(stores->size());
@@ -2289,18 +2318,30 @@ SceneResolveHandle c17_technique(void* /*u*/, SceneResolveHandle material, Strin
 SceneResolveHandle c17_program(void* u, SceneResolveHandle technique, SceneResolveHandle draw)
 {
     auto* const h = static_cast<C17Host*>(u);
-    if (draw < 1U || draw > h->count) { return 0U; }
+    if (draw < 1U || draw > h->count)
+    {
+        return 0U;
+    }
     const C17Item& it   = h->items[static_cast<crd::u32>(draw) - 1U];
     const crd::u32 pidx = static_cast<crd::u32>(technique % 8U);
     crd::gpu::IRasterProgram* twin = it.program;
-    if (pidx == 1U) { twin = it.program_depth != nullptr ? it.program_depth : it.program; }
-    else if (pidx == 2U) { twin = it.program_velocity != nullptr ? it.program_velocity : it.program; }
+    if (pidx == 1U)
+    {
+        twin = it.program_depth != nullptr ? it.program_depth : it.program;
+    }
+    else if (pidx == 2U)
+    {
+        twin = it.program_velocity != nullptr ? it.program_velocity : it.program;
+    }
     return h->prog_handle(twin);
 }
 SceneResolveHandle c17_geometry(void* u, SceneResolveHandle draw)
 {
     auto* const h = static_cast<C17Host*>(u);
-    if (draw < 1U || draw > h->count) { return 0U; }
+    if (draw < 1U || draw > h->count)
+    {
+        return 0U;
+    }
     return h->store_handle(h->items[static_cast<crd::u32>(draw) - 1U].storage);
 }
 } // namespace

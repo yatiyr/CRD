@@ -51,7 +51,9 @@ std::atomic<bool>     g_low_ran             {false};
 void record_starv(const crd::jobs::StarvationReport& r, void* /*user*/) noexcept
 {
     if (r.lane < 3U)
+    {
         g_starv_fires[r.lane].fetch_add(1, std::memory_order_relaxed);
+    }
     g_starv_last_backlog.store(r.backlog, std::memory_order_relaxed);
     g_starv_last_compl.store(r.completions, std::memory_order_relaxed);
 }
@@ -144,7 +146,9 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
           "[jobs][diag][starvation]")
 {
     for (auto& f : g_starv_fires)
+    {
         f.store(0, std::memory_order_relaxed);
+    }
     g_starv_last_backlog.store(0, std::memory_order_relaxed);
     g_low_ran.store(false, std::memory_order_relaxed);
     crd::jobs::set_starvation_handler(&record_starv, nullptr);
@@ -162,7 +166,9 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
     constexpr int      kNormalJobs = 300;
     crd::jobs::JobDecl  normals[kNormalJobs];
     for (auto& j : normals)
+    {
         j.fn = &busy_1ms; // default priority = Normal
+    }
     crd::jobs::Counter* const nc = crd::jobs::run({normals, static_cast<crd::usize>(kNormalJobs)});
 
     // Seed one Low-priority job behind the deep Normal queue: it sits in the Low injection queue, which the busy
@@ -175,7 +181,9 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
     // Poll (bounded) for the watchdog to report Low starvation -- it fires after K=3 windows (~60ms). main does
     // not pump while polling (sleep, not wait), so only the busy worker drains, keeping Low starved.
     for (int i = 0; i < 400 && g_starv_fires[kLow].load(std::memory_order_relaxed) == 0; ++i)
+    {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     CHECK(g_starv_fires[kLow].load(std::memory_order_relaxed) >= 1);   // the Low lane was reported starved
     CHECK(g_starv_fires[kHigh].load(std::memory_order_relaxed) == 0);  // High has no backlog -> never flagged
@@ -194,7 +202,9 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
 TEST_CASE("starvation watchdog: a healthy multi-lane stream never fires", "[jobs][diag][starvation]")
 {
     for (auto& f : g_starv_fires)
+    {
         f.store(0, std::memory_order_relaxed);
+    }
     crd::jobs::set_starvation_handler(&record_starv, nullptr);
 
     crd::jobs::Config cfg;

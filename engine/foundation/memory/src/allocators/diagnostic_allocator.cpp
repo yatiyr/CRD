@@ -111,7 +111,9 @@ DiagnosticAllocator::DiagnosticAllocator(IAllocator* backing, const DiagnosticCo
         // GCC -Werror=class-memaccess rejects it. Value-init each record instead; Record{} is byte-identical to the
         // old zero-fill here (state = kStateEmpty = 0, user = nullptr, every other field's default is 0).
         for (usize i = 0; i < m_cfg.max_live_records; ++i)
+        {
             ::new (static_cast<void*>(&m_records[i])) Record{};
+        }
         std::memset(m_stacks, 0, stk_bytes);         // StackEntry is trivially-copyable
         std::memset(m_quarantine, 0, q_bytes);       // QuarantineEntry is trivially-copyable
         m_ok = true;

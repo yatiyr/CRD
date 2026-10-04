@@ -67,14 +67,20 @@ public:
     [[nodiscard]] u32        num_uses() const noexcept
     {
         u32 n = 0;
-        for (const Use* u = m_first_use; u != nullptr; u = u->next) { ++n; }
+        for (const Use* u = m_first_use; u != nullptr; u = u->next)
+        {
+            ++n;
+        }
         return n;
     }
 
     // RAUW: repoint every use of THIS value to `other`, splicing the chains. O(uses), zero allocation (§12).
     void replace_all_uses_with(Value* other) noexcept
     {
-        if (other == this) { return; }
+        if (other == this)
+        {
+            return;
+        }
         while (m_first_use != nullptr)
         {
             Use* const u = m_first_use;
@@ -89,7 +95,10 @@ public:
     {
         u->next = m_first_use;
         u->prev = &m_first_use;
-        if (m_first_use != nullptr) { m_first_use->prev = &u->next; }
+        if (m_first_use != nullptr)
+        {
+            m_first_use->prev = &u->next;
+        }
         m_first_use = u;
     }
 
@@ -97,7 +106,10 @@ public:
     void remove_use(Use* u) noexcept
     {
         *(u->prev) = u->next;
-        if (u->next != nullptr) { u->next->prev = u->prev; }
+        if (u->next != nullptr)
+        {
+            u->next->prev = u->prev;
+        }
         u->next  = nullptr;
         u->prev  = nullptr;
         u->value = nullptr;
@@ -172,7 +184,10 @@ public:
     {
         for (u32 k = 0; k < m_num_attrs; ++k)
         {
-            if (m_attrs[k].name == name) { return m_attrs[k].value; }
+            if (m_attrs[k].name == name)
+            {
+                return m_attrs[k].value;
+            }
         }
         return {};
     }
@@ -226,7 +241,10 @@ public:
     [[nodiscard]] u32        num_ops() const noexcept
     {
         u32 n = 0;
-        for (const Operation* op = m_first; op != nullptr; op = op->next_in_block()) { ++n; }
+        for (const Operation* op = m_first; op != nullptr; op = op->next_in_block())
+        {
+            ++n;
+        }
         return n;
     }
 
@@ -235,8 +253,14 @@ public:
         op->m_parent = this;
         op->m_next   = nullptr;
         op->m_prev   = m_last;
-        if (m_last != nullptr) { m_last->m_next = op; }
-        else { m_first = op; }
+        if (m_last != nullptr)
+        {
+            m_last->m_next = op;
+        }
+        else
+        {
+            m_first = op;
+        }
         m_last = op;
     }
 
@@ -252,8 +276,14 @@ public:
         op->m_parent = this;
         op->m_next   = before;
         op->m_prev   = before->m_prev;
-        if (before->m_prev != nullptr) { before->m_prev->m_next = op; }
-        else { m_first = op; }
+        if (before->m_prev != nullptr)
+        {
+            before->m_prev->m_next = op;
+        }
+        else
+        {
+            m_first = op;
+        }
         before->m_prev = op;
     }
 
@@ -267,10 +297,22 @@ private:
 
     void unlink(Operation* op) noexcept
     {
-        if (op->m_prev != nullptr) { op->m_prev->m_next = op->m_next; }
-        else { m_first = op->m_next; }
-        if (op->m_next != nullptr) { op->m_next->m_prev = op->m_prev; }
-        else { m_last = op->m_prev; }
+        if (op->m_prev != nullptr)
+        {
+            op->m_prev->m_next = op->m_next;
+        }
+        else
+        {
+            m_first = op->m_next;
+        }
+        if (op->m_next != nullptr)
+        {
+            op->m_next->m_prev = op->m_prev;
+        }
+        else
+        {
+            m_last = op->m_prev;
+        }
         op->m_next   = nullptr;
         op->m_prev   = nullptr;
         op->m_parent = nullptr;
@@ -299,8 +341,14 @@ public:
         b->m_parent = this;
         b->m_next   = nullptr;
         b->m_prev   = m_last;
-        if (m_last != nullptr) { m_last->m_next = b; }
-        else { m_first = b; }
+        if (m_last != nullptr)
+        {
+            m_last->m_next = b;
+        }
+        else
+        {
+            m_first = b;
+        }
         m_last = b;
     }
 
@@ -350,10 +398,16 @@ inline void Operation::set_operand(u32 i, Value* v) noexcept
 {
     CRD_ASSERT_MSG(i < m_num_operands, "operand index out of range");
     Use& use = m_operands[i];
-    if (use.value != nullptr) { use.value->remove_use(&use); }
+    if (use.value != nullptr)
+    {
+        use.value->remove_use(&use);
+    }
     use.owner = this;
     use.value = v;
-    if (v != nullptr) { v->add_use(&use); }
+    if (v != nullptr)
+    {
+        v->add_use(&use);
+    }
 }
 
 inline void Operation::erase() noexcept
@@ -364,10 +418,16 @@ inline void Operation::erase() noexcept
     }
     for (u32 i = 0; i < m_num_operands; ++i)
     {
-        if (m_operands[i].value != nullptr) { m_operands[i].value->remove_use(&m_operands[i]); }
+        if (m_operands[i].value != nullptr)
+        {
+            m_operands[i].value->remove_use(&m_operands[i]);
+        }
     }
     m_num_operands = 0;
-    if (m_parent != nullptr) { m_parent->unlink(this); }
+    if (m_parent != nullptr)
+    {
+        m_parent->unlink(this);
+    }
     m_erased = true;
 }
 } // namespace crd::ceir

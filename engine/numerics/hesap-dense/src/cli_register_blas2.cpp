@@ -84,14 +84,20 @@ CommandResult impl_gemv_f32(const CommandArgs& args)
     Vec x(args.alloc, cn);
     Vec y(args.alloc, rn);
     for (crd::usize i = 0; i < cn; ++i)
+    {
         x(i) = static_cast<T>(x_arr[i]);
+    }
     for (crd::usize i = 0; i < rn; ++i)
+    {
         y(i) = static_cast<T>(y_in[i]);
+    }
     crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, a_mat.cview(), x.span(), beta, y.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(rn);
     for (crd::usize i = 0; i < rn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(y(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -124,14 +130,20 @@ CommandResult impl_gemv_f64(const CommandArgs& args)
     Vec x(args.alloc, cn);
     Vec y(args.alloc, rn);
     for (crd::usize i = 0; i < cn; ++i)
+    {
         x(i) = static_cast<T>(x_arr[i]);
+    }
     for (crd::usize i = 0; i < rn; ++i)
+    {
         y(i) = static_cast<T>(y_in[i]);
+    }
     crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, a_mat.cview(), x.span(), beta, y.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(rn);
     for (crd::usize i = 0; i < rn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(y(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -155,19 +167,29 @@ CommandResult impl_symv_f32(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Sym a_sym(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     Vec y(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(x_arr[i]);
+    }
     for (crd::usize i = 0; i < nn; ++i)
+    {
         y(i) = static_cast<T>(y_in[i]);
+    }
     crd::hesap::dense::symv<T>(alpha, a_sym, x.span(), beta, y.span());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(y(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -189,19 +211,29 @@ CommandResult impl_symv_f64(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Sym a_sym(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             a_sym.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     Vec y(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(x_arr[i]);
+    }
     for (crd::usize i = 0; i < nn; ++i)
+    {
         y(i) = static_cast<T>(y_in[i]);
+    }
     crd::hesap::dense::symv<T>(alpha, a_sym, x.span(), beta, y.span());
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(y(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -222,16 +254,24 @@ CommandResult impl_trsv_lower_f32(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Tri tri_l(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             tri_l.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(b_arr[i]);
+    }
     crd::hesap::dense::trsv<T, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(x(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -250,16 +290,24 @@ CommandResult impl_trsv_lower_f64(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Tri tri_l(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = 0; j <= i; ++j)
+        {
             tri_l.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(b_arr[i]);
+    }
     crd::hesap::dense::trsv<T, TriangularSide::Lower, TriangularDiag::Explicit>(tri_l, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(x(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -278,16 +326,24 @@ CommandResult impl_trsv_upper_f32(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Tri tri_u(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = i; j < nn; ++j)
+        {
             tri_u.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(b_arr[i]);
+    }
     crd::hesap::dense::trsv<T, TriangularSide::Upper, TriangularDiag::Explicit>(tri_u, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(x(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 
@@ -306,16 +362,24 @@ CommandResult impl_trsv_upper_f64(const CommandArgs& args)
     const crd::usize nn = static_cast<crd::usize>(n);
     Tri tri_u(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         for (crd::usize j = i; j < nn; ++j)
+        {
             tri_u.at(i, j) = static_cast<T>(a_flat[i * nn + j]);
+        }
+    }
     Vec x(args.alloc, nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         x(i) = static_cast<T>(b_arr[i]);
+    }
     crd::hesap::dense::trsv<T, TriangularSide::Upper, TriangularDiag::Explicit>(tri_u, x.span(), Trans::None);
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(nn);
     for (crd::usize i = 0; i < nn; ++i)
+    {
         out.push_back(static_cast<crd::f64>(x(i)));
+    }
     return binary_result(args.alloc, crd::containers::ConstSpan<crd::f64>{out.data(), out.size()});
 }
 

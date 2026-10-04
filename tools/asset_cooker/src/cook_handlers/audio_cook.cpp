@@ -23,12 +23,21 @@ constexpr crd::u32 kAudioHandlerVersion = 1U;
 [[nodiscard]] bool ends_with(crd::containers::StringView path, const char* suffix)
 {
     const crd::usize n = std::strlen(suffix);
-    if (path.size() < n) { return false; }
+    if (path.size() < n)
+    {
+        return false;
+    }
     for (crd::usize i = 0; i < n; ++i)
     {
         char c = path[path.size() - n + i];
-        if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-        if (c != suffix[i]) { return false; }
+        if (c >= 'A' && c <= 'Z')
+        {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+        if (c != suffix[i])
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -38,9 +47,15 @@ CookResult audio_buffer_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
     result.type_fourcc     = crd::audio::kFourCC_ABUF;
     result.handler_version = kAudioHandlerVersion;
-    if (ctx.io == nullptr) { return result; }
+    if (ctx.io == nullptr)
+    {
+        return result;
+    }
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!ctx.io->read_source(src)) { return result; }
+    if (!ctx.io->read_source(src))
+    {
+        return result;
+    }
 
     crd::audio::AudioPcm pcm(ctx.allocator);
     bool                 decoded = false;
@@ -58,7 +73,10 @@ CookResult audio_buffer_handler(const CookContext& ctx)
         decoded =
             crd::audio::flac_decode(crd::containers::as_const_span(src), pcm) == crd::audio::FlacError::Ok;
     }
-    if (!decoded) { return result; }
+    if (!decoded)
+    {
+        return result;
+    }
 
     result.cooked_bytes = crd::audio::audio_buffer_build(pcm, ctx.id, ctx.allocator);
     result.ok           = result.cooked_bytes.size() > 0;
@@ -70,9 +88,15 @@ CookResult midi_handler(const CookContext& ctx)
     CookResult result(ctx.allocator);
     result.type_fourcc     = crd::audio::kFourCC_MIDI;
     result.handler_version = kAudioHandlerVersion;
-    if (ctx.io == nullptr) { return result; }
+    if (ctx.io == nullptr)
+    {
+        return result;
+    }
     crd::containers::Array<crd::u8> src(ctx.allocator);
-    if (!ctx.io->read_source(src)) { return result; }
+    if (!ctx.io->read_source(src))
+    {
+        return result;
+    }
 
     crd::audio::MidiResource midi(ctx.allocator);
     if (crd::audio::midi_parse_smf(crd::containers::as_const_span(src), midi) != crd::audio::MidiError::Ok)

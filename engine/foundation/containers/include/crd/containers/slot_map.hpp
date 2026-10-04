@@ -79,7 +79,9 @@ public:
     bool erase(Handle h) noexcept
     {
         if (!contains(h))
+        {
             return false;
+        }
 
         const crd::u32 idx = h.index;
         {
@@ -89,7 +91,9 @@ public:
         m_occupied[idx] = 0U;
         ++m_generation[idx];
         if (m_generation[idx] == 0U) // explicit wrap guard: never reuse the null generation
+        {
             m_generation[idx] = 1U;
+        }
         m_free.push_back(idx);
         --m_size;
         return true;

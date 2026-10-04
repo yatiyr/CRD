@@ -30,17 +30,26 @@ constexpr u32 kChunkStid = make_fourcc('S', 'T', 'I', 'D'); // CEIR-8d stable id
 void put_u8(ByteArray& b, u8 v) { b.push_back(v); }
 void put_u32(ByteArray& b, u32 v)
 {
-    for (u32 s = 0; s < 32U; s += 8U) { b.push_back(static_cast<u8>((v >> s) & 0xFFU)); }
+    for (u32 s = 0; s < 32U; s += 8U)
+    {
+        b.push_back(static_cast<u8>((v >> s) & 0xFFU));
+    }
 }
 void put_u64(ByteArray& b, u64 v)
 {
-    for (u32 s = 0; s < 64U; s += 8U) { b.push_back(static_cast<u8>((v >> s) & 0xFFU)); }
+    for (u32 s = 0; s < 64U; s += 8U)
+    {
+        b.push_back(static_cast<u8>((v >> s) & 0xFFU));
+    }
 }
 void put_i64(ByteArray& b, i64 v) { put_u64(b, static_cast<u64>(v)); }
 void put_str(ByteArray& b, containers::StringView s)
 {
     put_u32(b, static_cast<u32>(s.size()));
-    for (usize i = 0; i < s.size(); ++i) { b.push_back(static_cast<u8>(s[i])); }
+    for (usize i = 0; i < s.size(); ++i)
+    {
+        b.push_back(static_cast<u8>(s[i]));
+    }
 }
 
 // A bounds-checked read cursor (the CKIR-serialize idiom): any short read latches `ok=false` and yields zeroes, so
@@ -53,23 +62,38 @@ struct Cursor
 
     [[nodiscard]] bool have(u64 n) noexcept
     {
-        if (!ok || pos + n > in.size()) { ok = false; }
+        if (!ok || pos + n > in.size())
+        {
+            ok = false;
+        }
         return ok;
     }
     [[nodiscard]] u8 u8v() noexcept { return have(1U) ? in[pos++] : static_cast<u8>(0); }
     [[nodiscard]] u32 u32v() noexcept
     {
-        if (!have(4U)) { return 0U; }
+        if (!have(4U))
+        {
+            return 0U;
+        }
         u32 v = 0;
-        for (u32 i = 0; i < 4U; ++i) { v |= static_cast<u32>(in[pos + i]) << (i * 8U); }
+        for (u32 i = 0; i < 4U; ++i)
+        {
+            v |= static_cast<u32>(in[pos + i]) << (i * 8U);
+        }
         pos += 4U;
         return v;
     }
     [[nodiscard]] u64 u64v() noexcept
     {
-        if (!have(8U)) { return 0U; }
+        if (!have(8U))
+        {
+            return 0U;
+        }
         u64 v = 0;
-        for (u32 i = 0; i < 8U; ++i) { v |= static_cast<u64>(in[pos + i]) << (i * 8U); }
+        for (u32 i = 0; i < 8U; ++i)
+        {
+            v |= static_cast<u64>(in[pos + i]) << (i * 8U);
+        }
         pos += 8U;
         return v;
     }
@@ -109,7 +133,10 @@ public:
     // is id-independent — ADR-0114 §2.4), so a no-STID blob is byte-identical to a pre-8d blob ⇒ zero content churn.
     [[nodiscard]] ByteArray run(const Module& module, bool with_stid)
     {
-        if (with_stid) { m_ctx.assign_stable_ids(module); } // one-time pre-order assignment (idempotent)
+        if (with_stid) // one-time pre-order assignment (idempotent)
+        {
+            m_ctx.assign_stable_ids(module);
+        }
         assign_ids(module.body());   // pass 0
         encode_region(module.body()); // pass 1 → fills the pools + m_body
 
@@ -122,7 +149,10 @@ public:
         emit_srcm(out);
         emit_attr(out);
         emit_chunk(out, kChunkBody, m_body);
-        if (with_stid) { emit_stid(out, module); } // LAST: an additive, forward-skippable identity chunk (no version bump)
+        if (with_stid) // LAST: an additive, forward-skippable identity chunk (no version bump)
+        {
+            emit_stid(out, module);
+        }
         return out;
     }
 
@@ -135,18 +165,27 @@ public:
         gather_ops(module.body(), ops);
         put_u32(p, static_cast<u32>(ops.size()));
         put_u64(p, module.stable_id_watermark()); // CEIR-8d: the monotone high-water mark (prevents post-erase id reuse)
-        for (usize i = 0; i < ops.size(); ++i) { put_u64(p, ops[i]->stable_id().value); }
+        for (usize i = 0; i < ops.size(); ++i)
+        {
+            put_u64(p, ops[i]->stable_id().value);
+        }
         emit_chunk(out, kChunkStid, p);
     }
     static void gather_ops(Region* r, containers::Array<Operation*>& out) // pre-order, MATCHING the decoder's rebuild order
     {
-        if (r == nullptr) { return; }
+        if (r == nullptr)
+        {
+            return;
+        }
         for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
         {
             for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
             {
                 out.push_back(op);
-                for (u32 i = 0; i < op->num_regions(); ++i) { gather_ops(op->region(i), out); }
+                for (u32 i = 0; i < op->num_regions(); ++i)
+                {
+                    gather_ops(op->region(i), out);
+                }
             }
         }
     }
@@ -155,21 +194,36 @@ private:
     // pass 0 — identical to print.cpp::assign_ids (block-args → op-results → recurse op-regions)
     void assign_ids(Region* r)
     {
-        if (r == nullptr) { return; }
+        if (r == nullptr)
+        {
+            return;
+        }
         for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
         {
-            for (u32 i = 0; i < b->num_args(); ++i) { m_ids.insert(b->arg(i), m_next++); }
+            for (u32 i = 0; i < b->num_args(); ++i)
+            {
+                m_ids.insert(b->arg(i), m_next++);
+            }
             for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
             {
-                for (u32 i = 0; i < op->num_results(); ++i) { m_ids.insert(op->result(i), m_next++); }
-                for (u32 i = 0; i < op->num_regions(); ++i) { assign_ids(op->region(i)); }
+                for (u32 i = 0; i < op->num_results(); ++i)
+                {
+                    m_ids.insert(op->result(i), m_next++);
+                }
+                for (u32 i = 0; i < op->num_regions(); ++i)
+                {
+                    assign_ids(op->region(i));
+                }
             }
         }
     }
 
     [[nodiscard]] u32 intern_str(containers::StringView s)
     {
-        if (const u32* const p = m_strp_index.find(s)) { return *p; }
+        if (const u32* const p = m_strp_index.find(s))
+        {
+            return *p;
+        }
         const auto idx = static_cast<u32>(m_strp.size());
         m_strp.push_back(s);
         m_strp_index.insert(s, idx);
@@ -177,18 +231,27 @@ private:
     }
     [[nodiscard]] u32 intern_attr(AttrId id)
     {
-        if (const u32* const p = m_attr_index.find(id.value)) { return *p; }
+        if (const u32* const p = m_attr_index.find(id.value))
+        {
+            return *p;
+        }
         const AttrValue v = m_ctx.attr_value(id);
         // ⛔ CEIR-8b CHILD-FIRST (the intern_type_pool shape): pool every CHILD attr (and its backing strings/types)
         // BEFORE this record's index is assigned, so an aggregate/wrapper record never references an ATTR index >= its
         // own (the decoder rejects a forward ref by construction; attrs are a DAG — child-first interning forbids cycles).
         if (v.kind == AttrKind::Array || v.kind == AttrKind::Dict)
         {
-            for (usize i = 0; i < v.elems.size(); ++i) { (void)intern_attr(v.elems[i]); }
+            for (usize i = 0; i < v.elems.size(); ++i)
+            {
+                (void)intern_attr(v.elems[i]);
+            }
         }
         if (v.kind == AttrKind::Dict)
         {
-            for (usize i = 0; i < v.keys.size(); ++i) { (void)intern_str(v.keys[i]); }
+            for (usize i = 0; i < v.keys.size(); ++i)
+            {
+                (void)intern_str(v.keys[i]);
+            }
         }
         else if (v.kind == AttrKind::TypedConst)
         {
@@ -200,8 +263,14 @@ private:
             (void)intern_str(m_ctx.attr_class_name(v.attr_class)); // the class STRING survives to an unregistered decoder
             (void)intern_attr(v.payload);
         }
-        else if (v.kind == AttrKind::String || v.kind == AttrKind::SymbolRef) { (void)intern_str(v.s); }
-        else if (v.kind == AttrKind::Type) { (void)type_ref(v.t); }
+        else if (v.kind == AttrKind::String || v.kind == AttrKind::SymbolRef)
+        {
+            (void)intern_str(v.s);
+        }
+        else if (v.kind == AttrKind::Type)
+        {
+            (void)type_ref(v.t);
+        }
         const auto idx = static_cast<u32>(m_attr.size());
         m_attr.push_back(id);
         m_attr_index.insert(id.value, idx);
@@ -209,7 +278,10 @@ private:
     }
     [[nodiscard]] u32 intern_srcm(u32 file_id) // returns the 0-based SRCM index for a (nonzero) file id
     {
-        if (const u32* const p = m_srcm_index.find(file_id)) { return *p; }
+        if (const u32* const p = m_srcm_index.find(file_id))
+        {
+            return *p;
+        }
         const auto idx = static_cast<u32>(m_srcm.size());
         m_srcm.push_back(intern_str(m_ctx.file_path(file_id))); // SRCM stores the STRP index of the path
         m_srcm_index.insert(file_id, idx);
@@ -222,13 +294,22 @@ private:
     // until its children exist). Deduped by the Context TypeId (identical types already share one id, so this is exact).
     [[nodiscard]] u32 intern_type_pool(TypeId id)
     {
-        if (const u32* const p = m_type_index.find(id.value)) { return *p; }
+        if (const u32* const p = m_type_index.find(id.value))
+        {
+            return *p;
+        }
         const Type              t = m_ctx.type_of(id);
         containers::Array<u32>  kids(m_alloc);
-        for (usize i = 0; i < t.members.size(); ++i) { kids.push_back(intern_type_pool(t.members[i])); } // recurse FIRST
+        for (usize i = 0; i < t.members.size(); ++i) // recurse FIRST
+        {
+            kids.push_back(intern_type_pool(t.members[i]));
+        }
         const u32              name_strp = intern_str(t.name); // "" for scalars (deduped to one STRP entry)
         containers::Array<u32> labs(m_alloc);
-        for (usize i = 0; i < t.labels.size(); ++i) { labs.push_back(intern_str(t.labels[i])); }
+        for (usize i = 0; i < t.labels.size(); ++i)
+        {
+            labs.push_back(intern_str(t.labels[i]));
+        }
         const auto idx = m_type_count; // assigned AFTER children — the child-first invariant
         m_type_index.insert(id.value, idx);
         put_u8(m_type_body, static_cast<u8>(t.kind));
@@ -237,10 +318,16 @@ private:
         put_u32(m_type_body, t.count);
         put_u32(m_type_body, t.cols);
         put_u32(m_type_body, static_cast<u32>(kids.size()));
-        for (usize i = 0; i < kids.size(); ++i) { put_u32(m_type_body, kids[i]); }
+        for (usize i = 0; i < kids.size(); ++i)
+        {
+            put_u32(m_type_body, kids[i]);
+        }
         put_u32(m_type_body, name_strp);
         put_u32(m_type_body, static_cast<u32>(labs.size()));
-        for (usize i = 0; i < labs.size(); ++i) { put_u32(m_type_body, labs[i]); }
+        for (usize i = 0; i < labs.size(); ++i)
+        {
+            put_u32(m_type_body, labs[i]);
+        }
         // CEIR-8a (ADR-0111): an Extern record carries a TRAILING class-string (STRP) + schema version — ONLY on
         // kind==Extern, so pre-8a decoders (which reject the out-of-range Extern kind) are unaffected → NO version bump.
         // The class STRING (not the runtime id) is what an unregistered decoder round-trips (mirrors op-name encoding).
@@ -259,20 +346,35 @@ private:
     {
         put_u8(m_body, static_cast<u8>(r->kind())); // ⛔ the region kind as a byte (a cast — I6 forbids a kind-method dispatch)
         u32 nb = 0;
-        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region()) { ++nb; }
+        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+        {
+            ++nb;
+        }
         put_u32(m_body, nb);
-        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region()) { encode_block(b); }
+        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+        {
+            encode_block(b);
+        }
     }
     void encode_block(Block* b)
     {
         put_u32(m_body, b->num_args());
         // per-arg type refs (v2). The in-memory block model is uniform (create_block gives every arg one type), so these
         // are equal today; writing one ref PER arg keeps the format ready for distinct per-arg types with no v3 bump.
-        for (u32 i = 0; i < b->num_args(); ++i) { put_u32(m_body, type_ref(b->arg(i)->type())); }
+        for (u32 i = 0; i < b->num_args(); ++i)
+        {
+            put_u32(m_body, type_ref(b->arg(i)->type()));
+        }
         u32 nops = 0;
-        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { ++nops; }
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            ++nops;
+        }
         put_u32(m_body, nops);
-        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { encode_op(op); }
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            encode_op(op);
+        }
     }
     void encode_op(Operation* op)
     {
@@ -286,7 +388,10 @@ private:
         }
         put_u32(m_body, op->num_results());
         // per-result type refs (v2) — uniform today (all equal), one ref per result for future distinct result typing.
-        for (u32 i = 0; i < op->num_results(); ++i) { put_u32(m_body, type_ref(op->result(i)->type())); }
+        for (u32 i = 0; i < op->num_results(); ++i)
+        {
+            put_u32(m_body, type_ref(op->result(i)->type()));
+        }
         put_u32(m_body, op->num_regions());
         put_u32(m_body, op->num_attrs());
         for (u32 i = 0; i < op->num_attrs(); ++i)
@@ -298,41 +403,59 @@ private:
         put_u32(m_body, loc.file_id != 0U ? intern_srcm(loc.file_id) + 1U : 0U); // 1-based ref; 0 = no source file
         put_u32(m_body, loc.line);
         put_u32(m_body, loc.col);
-        for (u32 i = 0; i < op->num_regions(); ++i) { encode_region(op->region(i)); }
+        for (u32 i = 0; i < op->num_regions(); ++i)
+        {
+            encode_region(op->region(i));
+        }
     }
 
     void emit_chunk(ByteArray& out, u32 fourcc, const ByteArray& payload)
     {
         put_u32(out, fourcc);
         put_u32(out, static_cast<u32>(payload.size()));
-        for (usize i = 0; i < payload.size(); ++i) { out.push_back(payload[i]); }
+        for (usize i = 0; i < payload.size(); ++i)
+        {
+            out.push_back(payload[i]);
+        }
     }
     void emit_strp(ByteArray& out)
     {
         ByteArray p(m_alloc);
         put_u32(p, static_cast<u32>(m_strp.size()));
-        for (usize i = 0; i < m_strp.size(); ++i) { put_str(p, m_strp[i]); }
+        for (usize i = 0; i < m_strp.size(); ++i)
+        {
+            put_str(p, m_strp[i]);
+        }
         emit_chunk(out, kChunkStrp, p);
     }
     void emit_type(ByteArray& out)
     {
         ByteArray p(m_alloc);
         put_u32(p, m_type_count); // record count; the records themselves were appended in child-first index order
-        for (usize i = 0; i < m_type_body.size(); ++i) { p.push_back(m_type_body[i]); }
+        for (usize i = 0; i < m_type_body.size(); ++i)
+        {
+            p.push_back(m_type_body[i]);
+        }
         emit_chunk(out, kChunkType, p);
     }
     void emit_srcm(ByteArray& out)
     {
         ByteArray p(m_alloc);
         put_u32(p, static_cast<u32>(m_srcm.size()));
-        for (usize i = 0; i < m_srcm.size(); ++i) { put_u32(p, m_srcm[i]); } // STRP index of each path
+        for (usize i = 0; i < m_srcm.size(); ++i) // STRP index of each path
+        {
+            put_u32(p, m_srcm[i]);
+        }
         emit_chunk(out, kChunkSrcm, p);
     }
     void emit_attr(ByteArray& out)
     {
         ByteArray p(m_alloc);
         put_u32(p, static_cast<u32>(m_attr.size()));
-        for (usize i = 0; i < m_attr.size(); ++i) { encode_attr_value(p, m_ctx.attr_value(m_attr[i])); }
+        for (usize i = 0; i < m_attr.size(); ++i)
+        {
+            encode_attr_value(p, m_ctx.attr_value(m_attr[i]));
+        }
         emit_chunk(out, kChunkAttr, p);
     }
     void encode_attr_value(ByteArray& p, const AttrValue& v)
@@ -350,7 +473,10 @@ private:
         // to pre-8b, so every existing module's content hash (stable_hash over this blob) is unchanged (no recook).
         case AttrKind::Array:
             put_u32(p, static_cast<u32>(v.elems.size()));
-            for (usize i = 0; i < v.elems.size(); ++i) { put_u32(p, intern_attr(v.elems[i])); } // child ATTR-pool indices
+            for (usize i = 0; i < v.elems.size(); ++i) // child ATTR-pool indices
+            {
+                put_u32(p, intern_attr(v.elems[i]));
+            }
             break;
         case AttrKind::Dict:
             put_u32(p, static_cast<u32>(v.keys.size()));
@@ -410,10 +536,19 @@ public:
         m_module = m_ctx.create_module();
         m_bc     = Cursor{m_body};
         decode_region(m_module->body());
-        if (m_ok && !m_bc.ok) { fail(m_body_off + m_bc.pos, "truncated BODY chunk"); }
+        if (m_ok && !m_bc.ok)
+        {
+            fail(m_body_off + m_bc.pos, "truncated BODY chunk");
+        }
         resolve_fixups();
-        if (m_ok) { decode_stid(); } // CEIR-8d: apply stable ids AFTER the full body (m_ops is complete + pre-ordered)
-        if (!m_ok) { return err_result(); }
+        if (m_ok) // CEIR-8d: apply stable ids AFTER the full body (m_ops is complete + pre-ordered)
+        {
+            decode_stid();
+        }
+        if (!m_ok)
+        {
+            return err_result();
+        }
         return ParseResult{m_module, true, 0U, ""};
     }
 
@@ -436,13 +571,33 @@ private:
     {
         Cursor c{m_bytes};
         const u32 magic = c.u32v();
-        if (!c.ok) { fail(0U, "truncated header"); return false; }
-        if (magic != kBinaryMagic) { fail(0U, "not a CEIR binary blob (bad magic)"); return false; }
+        if (!c.ok)
+        {
+            fail(0U, "truncated header");
+            return false;
+        }
+        if (magic != kBinaryMagic)
+        {
+            fail(0U, "not a CEIR binary blob (bad magic)");
+            return false;
+        }
         const u32 version = c.u32v();
-        if (!c.ok) { fail(4U, "truncated header"); return false; }
-        if (version != kBinaryVersion) { fail(4U, "unsupported CEIR binary version"); return false; }
+        if (!c.ok)
+        {
+            fail(4U, "truncated header");
+            return false;
+        }
+        if (version != kBinaryVersion)
+        {
+            fail(4U, "unsupported CEIR binary version");
+            return false;
+        }
         m_chunk_count = c.u32v();
-        if (!c.ok) { fail(8U, "truncated header"); return false; }
+        if (!c.ok)
+        {
+            fail(8U, "truncated header");
+            return false;
+        }
         m_scan_pos = c.pos; // 12
         return true;
     }
@@ -457,23 +612,70 @@ private:
             const u64 hdr_off = c.pos;
             const u32 fourcc  = c.u32v();
             const u32 size    = c.u32v();
-            if (!c.ok) { fail(hdr_off, "truncated chunk header"); return false; }
-            if (c.pos + size > m_bytes.size()) { fail(c.pos, "chunk payload overruns the blob"); return false; }
+            if (!c.ok)
+            {
+                fail(hdr_off, "truncated chunk header");
+                return false;
+            }
+            if (c.pos + size > m_bytes.size())
+            {
+                fail(c.pos, "chunk payload overruns the blob");
+                return false;
+            }
             const containers::ConstSpan<u8> payload = m_bytes.subspan(c.pos, size);
-            if (fourcc == kChunkStrp) { m_strp = payload; m_strp_off = c.pos; m_has_strp = true; }
-            else if (fourcc == kChunkType) { m_type = payload; m_type_off = c.pos; }
-            else if (fourcc == kChunkSrcm) { m_srcm = payload; m_srcm_off = c.pos; }
-            else if (fourcc == kChunkAttr) { m_attr = payload; m_attr_off = c.pos; }
-            else if (fourcc == kChunkBody) { m_body = payload; m_body_off = c.pos; m_has_body = true; }
-            else if (fourcc == kChunkStid) { m_stid = payload; m_stid_off = c.pos; m_has_stid = true; } // CEIR-8d
+            if (fourcc == kChunkStrp)
+            {
+                m_strp = payload;
+                m_strp_off = c.pos;
+                m_has_strp = true;
+            }
+            else if (fourcc == kChunkType)
+            {
+                m_type = payload;
+                m_type_off = c.pos;
+            }
+            else if (fourcc == kChunkSrcm)
+            {
+                m_srcm = payload;
+                m_srcm_off = c.pos;
+            }
+            else if (fourcc == kChunkAttr)
+            {
+                m_attr = payload;
+                m_attr_off = c.pos;
+            }
+            else if (fourcc == kChunkBody)
+            {
+                m_body = payload;
+                m_body_off = c.pos;
+                m_has_body = true;
+            }
+            else if (fourcc == kChunkStid) // CEIR-8d
+            {
+                m_stid = payload;
+                m_stid_off = c.pos;
+                m_has_stid = true;
+            }
             // else: unknown chunk — skipped by length (forward compatibility)
             c.pos += size;
         }
         // Every byte must belong to a declared chunk — trailing junk is a malformed blob (forward-compat is served by
         // the unknown-chunk skip WITHIN the declared count, not by a permissive tail).
-        if (c.pos != m_bytes.size()) { fail(c.pos, "trailing bytes after the last chunk"); return false; }
-        if (!m_has_strp) { fail(0U, "missing STRP chunk"); return false; }
-        if (!m_has_body) { fail(0U, "missing BODY chunk"); return false; }
+        if (c.pos != m_bytes.size())
+        {
+            fail(c.pos, "trailing bytes after the last chunk");
+            return false;
+        }
+        if (!m_has_strp)
+        {
+            fail(0U, "missing STRP chunk");
+            return false;
+        }
+        if (!m_has_body)
+        {
+            fail(0U, "missing BODY chunk");
+            return false;
+        }
         return true;
     }
 
@@ -484,11 +686,19 @@ private:
         for (u32 i = 0; i < n; ++i)
         {
             const u32 len = c.u32v();
-            if (!c.have(len)) { fail(m_strp_off + c.pos, "truncated STRP entry"); return false; }
+            if (!c.have(len))
+            {
+                fail(m_strp_off + c.pos, "truncated STRP entry");
+                return false;
+            }
             m_strings.push_back(containers::StringView(reinterpret_cast<const char*>(m_strp.data() + c.pos), len));
             c.pos += len;
         }
-        if (!c.ok) { fail(m_strp_off + c.pos, "malformed STRP chunk"); return false; }
+        if (!c.ok)
+        {
+            fail(m_strp_off + c.pos, "malformed STRP chunk");
+            return false;
+        }
         return true;
     }
 
@@ -497,7 +707,10 @@ private:
     // the decode Context, giving a fresh TypeId per pool slot (`m_types_decoded[i]`).
     [[nodiscard]] bool decode_type() noexcept
     {
-        if (m_type.size() == 0) { return true; } // optional (a module with no typed values)
+        if (m_type.size() == 0) // optional (a module with no typed values)
+        {
+            return true;
+        }
         Cursor    c{m_type};
         const u32 n = c.u32v();
         for (u32 i = 0; i < n; ++i)
@@ -507,9 +720,21 @@ private:
             const u8  fk        = c.u8v();
             const u32 count     = c.u32v();
             const u32 cols      = c.u32v();
-            if (!c.ok) { fail(m_type_off + c.pos, "truncated TYPE record"); return false; }
-            if (kind > static_cast<u8>(TypeKind::Extern)) { fail(m_type_off + c.pos, "invalid type kind"); return false; }
-            if (fk > static_cast<u8>(FloatKind::F8E5M2)) { fail(m_type_off + c.pos, "invalid float kind"); return false; }
+            if (!c.ok)
+            {
+                fail(m_type_off + c.pos, "truncated TYPE record");
+                return false;
+            }
+            if (kind > static_cast<u8>(TypeKind::Extern))
+            {
+                fail(m_type_off + c.pos, "invalid type kind");
+                return false;
+            }
+            if (fk > static_cast<u8>(FloatKind::F8E5M2))
+            {
+                fail(m_type_off + c.pos, "invalid float kind");
+                return false;
+            }
             // keyword-table-mapped scalars must be in range (else the printer maps them to nothing — silently lossy).
             // FREE numerics (int width, vector/array count) stay unbounded: `!i7` legitimately round-trips.
             if (kind == static_cast<u8>(TypeKind::Buffer) && count > static_cast<u32>(BufferMode::Typed))
@@ -538,24 +763,48 @@ private:
                 return false;
             }
             const u32 nch = c.u32v();
-            if (!c.have(static_cast<u64>(nch) * 4U)) { fail(m_type_off + c.pos, "TYPE child count overruns the chunk"); return false; }
+            if (!c.have(static_cast<u64>(nch) * 4U))
+            {
+                fail(m_type_off + c.pos, "TYPE child count overruns the chunk");
+                return false;
+            }
             containers::Array<TypeId> kids(m_ctx.allocator());
             for (u32 k = 0; k < nch; ++k)
             {
                 const u32 ref = c.u32v();
-                if (ref >= i) { fail(m_type_off + c.pos, "TYPE record references a forward/self index"); return false; }
+                if (ref >= i)
+                {
+                    fail(m_type_off + c.pos, "TYPE record references a forward/self index");
+                    return false;
+                }
                 kids.push_back(m_types_decoded[ref]); // child-first: ref < i is already decoded
             }
             const u32 name_strp = c.u32v();
-            if (!c.ok) { fail(m_type_off + c.pos, "truncated TYPE record"); return false; }
-            if (name_strp >= m_strings.size()) { fail(m_type_off + c.pos, "TYPE name index out of range"); return false; }
+            if (!c.ok)
+            {
+                fail(m_type_off + c.pos, "truncated TYPE record");
+                return false;
+            }
+            if (name_strp >= m_strings.size())
+            {
+                fail(m_type_off + c.pos, "TYPE name index out of range");
+                return false;
+            }
             const u32 nlab = c.u32v();
-            if (!c.have(static_cast<u64>(nlab) * 4U)) { fail(m_type_off + c.pos, "TYPE label count overruns the chunk"); return false; }
+            if (!c.have(static_cast<u64>(nlab) * 4U))
+            {
+                fail(m_type_off + c.pos, "TYPE label count overruns the chunk");
+                return false;
+            }
             containers::Array<containers::StringView> labs(m_ctx.allocator());
             for (u32 l = 0; l < nlab; ++l)
             {
                 const u32 sidx = c.u32v();
-                if (sidx >= m_strings.size()) { fail(m_type_off + c.pos, "TYPE label index out of range"); return false; }
+                if (sidx >= m_strings.size())
+                {
+                    fail(m_type_off + c.pos, "TYPE label index out of range");
+                    return false;
+                }
                 labs.push_back(m_strings[sidx]);
             }
             // CEIR-8a (ADR-0111): an Extern record's trailing class-string + version. The class STRING is resolved to an
@@ -566,14 +815,27 @@ private:
             {
                 const u32 cls_strp = c.u32v();
                 ext_version        = c.u32v();
-                if (!c.ok) { fail(m_type_off + c.pos, "truncated Extern TYPE record"); return false; }
-                if (cls_strp >= m_strings.size()) { fail(m_type_off + c.pos, "Extern class index out of range"); return false; }
+                if (!c.ok)
+                {
+                    fail(m_type_off + c.pos, "truncated Extern TYPE record");
+                    return false;
+                }
+                if (cls_strp >= m_strings.size())
+                {
+                    fail(m_type_off + c.pos, "Extern class index out of range");
+                    return false;
+                }
                 const containers::StringView cn = m_strings[cls_strp];
                 usize                        dot   = 0;
                 bool                         found = false;
                 for (usize di = 0; di < cn.size(); ++di)
                 {
-                    if (cn[di] == '.') { dot = di; found = true; break; }
+                    if (cn[di] == '.')
+                    {
+                        dot = di;
+                        found = true;
+                        break;
+                    }
                 }
                 if (!found || dot == 0U || dot + 1U >= cn.size())
                 {
@@ -598,7 +860,11 @@ private:
             // count exceeds its members) would drive an out-of-bounds members[i] in any later consumer — reject it here.
             // CANONICAL subsumes well-formedness (arity) AND rejects junk in an ignored field (a name on an Int, an
             // extent on a Dynamic dim, a 'dyn'-named symbolic dim) — such a record prints lossily, breaking form-agreement.
-            if (!type_is_canonical(t)) { fail(m_type_off + c.pos, "non-canonical or structurally-invalid TYPE record"); return false; }
+            if (!type_is_canonical(t))
+            {
+                fail(m_type_off + c.pos, "non-canonical or structurally-invalid TYPE record");
+                return false;
+            }
             // the tri-split DECODER arm: a composite kind's members (already decoded — child-first) must be the right
             // kinds, else interning would assert / a consumer would mis-render.
             if (t.kind == TypeKind::View && !m_ctx.view_combination_valid(t.members[0], t.count))
@@ -646,45 +912,79 @@ private:
             }
             m_types_decoded.push_back(m_ctx.intern_type(t));
         }
-        if (!c.ok) { fail(m_type_off + c.pos, "malformed TYPE chunk"); return false; }
+        if (!c.ok)
+        {
+            fail(m_type_off + c.pos, "malformed TYPE chunk");
+            return false;
+        }
         return true;
     }
 
     // Map a 1-based BODY/ATTR type ref (0 = none) to a decoded TypeId; out-of-range is malformed.
     [[nodiscard]] TypeId type_from_ref(u32 ref, u64 off) noexcept
     {
-        if (ref == 0U) { return TypeId{}; }
-        if (static_cast<usize>(ref - 1U) >= m_types_decoded.size()) { fail(off, "type reference out of range"); return {}; }
+        if (ref == 0U)
+        {
+            return TypeId{};
+        }
+        if (static_cast<usize>(ref - 1U) >= m_types_decoded.size())
+        {
+            fail(off, "type reference out of range");
+            return {};
+        }
         return m_types_decoded[ref - 1U];
     }
 
     [[nodiscard]] bool decode_srcm() noexcept
     {
-        if (m_srcm.size() == 0) { return true; } // optional
+        if (m_srcm.size() == 0) // optional
+        {
+            return true;
+        }
         Cursor    c{m_srcm};
         const u32 n = c.u32v();
         for (u32 i = 0; i < n; ++i)
         {
             const u32 sidx = c.u32v();
-            if (!c.ok) { break; }
-            if (sidx >= m_strings.size()) { fail(m_srcm_off + c.pos, "SRCM path index out of range"); return false; }
+            if (!c.ok)
+            {
+                break;
+            }
+            if (sidx >= m_strings.size())
+            {
+                fail(m_srcm_off + c.pos, "SRCM path index out of range");
+                return false;
+            }
             m_files.push_back(m_ctx.register_file(m_strings[sidx]));
         }
-        if (!c.ok) { fail(m_srcm_off + c.pos, "malformed SRCM chunk"); return false; }
+        if (!c.ok)
+        {
+            fail(m_srcm_off + c.pos, "malformed SRCM chunk");
+            return false;
+        }
         return true;
     }
 
     [[nodiscard]] bool decode_attr() noexcept
     {
-        if (m_attr.size() == 0) { return true; } // optional
+        if (m_attr.size() == 0) // optional
+        {
+            return true;
+        }
         Cursor    c{m_attr};
         const u32 n = c.u32v();
         for (u32 i = 0; i < n; ++i)
         {
             const u8 kind = c.u8v();
-            if (!c.ok) { break; }
+            if (!c.ok)
+            {
+                break;
+            }
             AttrId id{};
-            if (kind == static_cast<u8>(AttrKind::Int)) { id = m_ctx.attr_int(c.i64v()); }
+            if (kind == static_cast<u8>(AttrKind::Int))
+            {
+                id = m_ctx.attr_int(c.i64v());
+            }
             else if (kind == static_cast<u8>(AttrKind::Float))
             {
                 AttrValue v;
@@ -692,11 +992,18 @@ private:
                 v.f    = c.u64v(); // the raw f64 bit pattern (NaN/signed-zero exact — no f64 register round-trip)
                 id     = m_ctx.intern_attr(v);
             }
-            else if (kind == static_cast<u8>(AttrKind::Bool)) { id = m_ctx.attr_bool(c.u8v() != 0U); }
+            else if (kind == static_cast<u8>(AttrKind::Bool))
+            {
+                id = m_ctx.attr_bool(c.u8v() != 0U);
+            }
             else if (kind == static_cast<u8>(AttrKind::String) || kind == static_cast<u8>(AttrKind::SymbolRef))
             {
                 const u32 sidx = c.u32v();
-                if (sidx >= m_strings.size()) { fail(m_attr_off + c.pos, "ATTR string index out of range"); return false; }
+                if (sidx >= m_strings.size())
+                {
+                    fail(m_attr_off + c.pos, "ATTR string index out of range");
+                    return false;
+                }
                 id = kind == static_cast<u8>(AttrKind::String) ? m_ctx.attr_string(m_strings[sidx])
                                                                : m_ctx.attr_symbol(m_strings[sidx]);
             }
@@ -704,7 +1011,10 @@ private:
             {
                 const u32 ref = c.u32v();
                 const TypeId ty = type_from_ref(ref, m_attr_off + c.pos);
-                if (!m_ok) { return false; }
+                if (!m_ok)
+                {
+                    return false;
+                }
                 id = m_ctx.attr_type(ty);
             }
             // ── CEIR-8b (ADR-0112) aggregate + wrapper kinds. Child ATTR-pool refs are child-first (ref < i, already
@@ -713,34 +1023,74 @@ private:
             else if (kind == static_cast<u8>(AttrKind::Array))
             {
                 const u32 ne = c.u32v();
-                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR array record"); return false; }
-                if (ne > kMaxDecodeCount) { fail(m_attr_off + c.pos, "ATTR array element count exceeds the cap"); return false; }
-                if (!c.have(static_cast<u64>(ne) * 4U)) { fail(m_attr_off + c.pos, "ATTR array elements overrun the chunk"); return false; }
+                if (!c.ok)
+                {
+                    fail(m_attr_off + c.pos, "truncated ATTR array record");
+                    return false;
+                }
+                if (ne > kMaxDecodeCount)
+                {
+                    fail(m_attr_off + c.pos, "ATTR array element count exceeds the cap");
+                    return false;
+                }
+                if (!c.have(static_cast<u64>(ne) * 4U))
+                {
+                    fail(m_attr_off + c.pos, "ATTR array elements overrun the chunk");
+                    return false;
+                }
                 containers::Array<AttrId> es(m_ctx.allocator());
                 for (u32 e = 0; e < ne; ++e)
                 {
                     const u32 ref = c.u32v();
-                    if (static_cast<usize>(ref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR array element references a forward/self index"); return false; }
+                    if (static_cast<usize>(ref) >= m_attrs.size())
+                    {
+                        fail(m_attr_off + c.pos, "ATTR array element references a forward/self index");
+                        return false;
+                    }
                     es.push_back(m_attrs[ref]); // child-first: ref < i is already decoded
                 }
                 const AttrValue v = AttrValue::of_array(containers::ConstSpan<AttrId>(es.data(), es.size()));
-                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR array record"); return false; }
+                if (!attr_is_canonical(v))
+                {
+                    fail(m_attr_off + c.pos, "non-canonical ATTR array record");
+                    return false;
+                }
                 id = m_ctx.intern_attr(v);
             }
             else if (kind == static_cast<u8>(AttrKind::Dict))
             {
                 const u32 nd = c.u32v();
-                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR dict record"); return false; }
-                if (nd > kMaxDecodeCount) { fail(m_attr_off + c.pos, "ATTR dict entry count exceeds the cap"); return false; }
-                if (!c.have(static_cast<u64>(nd) * 8U)) { fail(m_attr_off + c.pos, "ATTR dict entries overrun the chunk"); return false; }
+                if (!c.ok)
+                {
+                    fail(m_attr_off + c.pos, "truncated ATTR dict record");
+                    return false;
+                }
+                if (nd > kMaxDecodeCount)
+                {
+                    fail(m_attr_off + c.pos, "ATTR dict entry count exceeds the cap");
+                    return false;
+                }
+                if (!c.have(static_cast<u64>(nd) * 8U))
+                {
+                    fail(m_attr_off + c.pos, "ATTR dict entries overrun the chunk");
+                    return false;
+                }
                 containers::Array<containers::StringView> ks(m_ctx.allocator());
                 containers::Array<AttrId>                 vs(m_ctx.allocator());
                 for (u32 e = 0; e < nd; ++e)
                 {
                     const u32 sidx = c.u32v();
                     const u32 ref  = c.u32v();
-                    if (sidx >= m_strings.size()) { fail(m_attr_off + c.pos, "ATTR dict key index out of range"); return false; }
-                    if (static_cast<usize>(ref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR dict value references a forward/self index"); return false; }
+                    if (sidx >= m_strings.size())
+                    {
+                        fail(m_attr_off + c.pos, "ATTR dict key index out of range");
+                        return false;
+                    }
+                    if (static_cast<usize>(ref) >= m_attrs.size())
+                    {
+                        fail(m_attr_off + c.pos, "ATTR dict value references a forward/self index");
+                        return false;
+                    }
                     ks.push_back(m_strings[sidx]);
                     vs.push_back(m_attrs[ref]);
                 }
@@ -748,20 +1098,43 @@ private:
                 // attr_is_canonical rather than silently repaired — the on-disk order must already be canonical.
                 const AttrValue v = AttrValue::of_dict(containers::ConstSpan<containers::StringView>(ks.data(), ks.size()),
                                                        containers::ConstSpan<AttrId>(vs.data(), vs.size()));
-                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical or unsorted ATTR dict record"); return false; }
+                if (!attr_is_canonical(v))
+                {
+                    fail(m_attr_off + c.pos, "non-canonical or unsorted ATTR dict record");
+                    return false;
+                }
                 id = m_ctx.intern_attr(v);
             }
             else if (kind == static_cast<u8>(AttrKind::TypedConst))
             {
                 const u32 tref = c.u32v();
                 const u32 pref = c.u32v();
-                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR typed-const record"); return false; }
+                if (!c.ok)
+                {
+                    fail(m_attr_off + c.pos, "truncated ATTR typed-const record");
+                    return false;
+                }
                 const TypeId ty = type_from_ref(tref, m_attr_off + c.pos);
-                if (!m_ok) { return false; }
-                if (static_cast<usize>(pref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR typed-const payload references a forward/self index"); return false; }
+                if (!m_ok)
+                {
+                    return false;
+                }
+                if (static_cast<usize>(pref) >= m_attrs.size())
+                {
+                    fail(m_attr_off + c.pos, "ATTR typed-const payload references a forward/self index");
+                    return false;
+                }
                 const AttrValue v = AttrValue::of_typed_const(ty, m_attrs[pref]);
-                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR typed-const record"); return false; }
-                if (!m_ctx.verify_attr_extern(v)) { fail(m_attr_off + c.pos, "ATTR typed-const payload must not itself be a wrapper"); return false; }
+                if (!attr_is_canonical(v))
+                {
+                    fail(m_attr_off + c.pos, "non-canonical ATTR typed-const record");
+                    return false;
+                }
+                if (!m_ctx.verify_attr_extern(v))
+                {
+                    fail(m_attr_off + c.pos, "ATTR typed-const payload must not itself be a wrapper");
+                    return false;
+                }
                 id = m_ctx.intern_attr(v);
             }
             else if (kind == static_cast<u8>(AttrKind::Extern))
@@ -769,21 +1142,46 @@ private:
                 const u32 cls_strp = c.u32v();
                 const u32 version  = c.u32v();
                 const u32 pref     = c.u32v();
-                if (!c.ok) { fail(m_attr_off + c.pos, "truncated ATTR extern record"); return false; }
-                if (cls_strp >= m_strings.size()) { fail(m_attr_off + c.pos, "ATTR extern class index out of range"); return false; }
-                if (static_cast<usize>(pref) >= m_attrs.size()) { fail(m_attr_off + c.pos, "ATTR extern payload references a forward/self index"); return false; }
+                if (!c.ok)
+                {
+                    fail(m_attr_off + c.pos, "truncated ATTR extern record");
+                    return false;
+                }
+                if (cls_strp >= m_strings.size())
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern class index out of range");
+                    return false;
+                }
+                if (static_cast<usize>(pref) >= m_attrs.size())
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern payload references a forward/self index");
+                    return false;
+                }
                 const containers::StringView cn = m_strings[cls_strp]; // the class STRING is what an unregistered decoder round-trips
                 usize                        dot   = 0;
                 bool                         found = false;
                 for (usize di = 0; di < cn.size(); ++di)
                 {
-                    if (cn[di] == '.') { dot = di; found = true; break; }
+                    if (cn[di] == '.')
+                    {
+                        dot = di;
+                        found = true;
+                        break;
+                    }
                 }
-                if (!found || dot == 0U || dot + 1U >= cn.size()) { fail(m_attr_off + c.pos, "ATTR extern class name must be 'dialect.attr'"); return false; }
+                if (!found || dot == 0U || dot + 1U >= cn.size())
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern class name must be 'dialect.attr'");
+                    return false;
+                }
                 const AttrClassId cls = m_ctx.intern_attr_class(containers::StringView(cn.data(), dot),
                                                                 containers::StringView(cn.data() + dot + 1U, cn.size() - dot - 1U));
                 const AttrValue v = AttrValue::of_extern(cls, version, m_attrs[pref]);
-                if (!attr_is_canonical(v)) { fail(m_attr_off + c.pos, "non-canonical ATTR extern record"); return false; }
+                if (!attr_is_canonical(v))
+                {
+                    fail(m_attr_off + c.pos, "non-canonical ATTR extern record");
+                    return false;
+                }
                 // a REGISTERED class range-checks its schema version (a NEWER record than this loader knows = reject) and
                 // runs its verify hook (+ the wrapper-composition gate); an UNREGISTERED class preserves opaquely (U-§56).
                 if (const AttrClassInfo* const info = m_ctx.attr_class_info(cls); info != nullptr && version > info->version)
@@ -791,13 +1189,25 @@ private:
                     fail(m_attr_off + c.pos, "ATTR extern record is a newer class schema version than this loader knows");
                     return false;
                 }
-                if (!m_ctx.verify_attr_extern(v)) { fail(m_attr_off + c.pos, "ATTR extern class verify hook rejected the record"); return false; }
+                if (!m_ctx.verify_attr_extern(v))
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern class verify hook rejected the record");
+                    return false;
+                }
                 id = m_ctx.intern_attr(v);
             }
-            else { fail(m_attr_off + c.pos, "unknown attribute kind"); return false; }
+            else
+            {
+                fail(m_attr_off + c.pos, "unknown attribute kind");
+                return false;
+            }
             m_attrs.push_back(id);
         }
-        if (!c.ok) { fail(m_attr_off + c.pos, "malformed ATTR chunk"); return false; }
+        if (!c.ok)
+        {
+            fail(m_attr_off + c.pos, "malformed ATTR chunk");
+            return false;
+        }
         return true;
     }
 
@@ -829,7 +1239,11 @@ private:
     u32 m_region_depth = 0U; // REPO.DEV.9 fuzz finding: the same nesting cap as the text parser
     void decode_region(Region* r)
     {
-        if (m_region_depth >= 64U) { fail(m_body_off + m_bc.pos, "region nesting too deep"); return; }
+        if (m_region_depth >= 64U)
+        {
+            fail(m_body_off + m_bc.pos, "region nesting too deep");
+            return;
+        }
         ++m_region_depth;
         decode_region_body(r);
         --m_region_depth;
@@ -837,33 +1251,68 @@ private:
     void decode_region_body(Region* r)
     {
         const u8 kind = m_bc.u8v();
-        if (kind > static_cast<u8>(RegionKind::SsaCfg)) { fail(m_body_off + m_bc.pos, "invalid region kind"); return; }
+        if (kind > static_cast<u8>(RegionKind::SsaCfg))
+        {
+            fail(m_body_off + m_bc.pos, "invalid region kind");
+            return;
+        }
         m_ctx.set_region_kind(r, static_cast<RegionKind>(kind));
         const u32 nb = m_bc.u32v();
-        if (!m_bc.ok) { return; }
+        if (!m_bc.ok)
+        {
+            return;
+        }
         // Each block is >= 8 bytes (num_args + num_ops; a 0-arg block carries no per-arg type refs) — a block count that
         // overruns the chunk is malformed, so reject BEFORE the loop rather than spin (defence over the per-block ok-break).
-        if (!m_bc.have(static_cast<u64>(nb) * 8U)) { fail(m_body_off + m_bc.pos, "block count overruns the chunk"); return; }
-        for (u32 i = 0; i < nb && m_ok; ++i) { decode_block(r); }
+        if (!m_bc.have(static_cast<u64>(nb) * 8U))
+        {
+            fail(m_body_off + m_bc.pos, "block count overruns the chunk");
+            return;
+        }
+        for (u32 i = 0; i < nb && m_ok; ++i)
+        {
+            decode_block(r);
+        }
     }
     void decode_block(Region* r)
     {
         const u32 num_args = m_bc.u32v();
         // Each arg now carries a type ref (4 bytes) — bound them by the chunk AND cap num_args (it drives allocation).
-        if (num_args > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "block-arg count exceeds the cap"); return; }
-        if (!m_bc.have(static_cast<u64>(num_args) * 4U)) { fail(m_body_off + m_bc.pos, "block-arg type refs overrun the chunk"); return; }
+        if (num_args > kMaxDecodeCount)
+        {
+            fail(m_body_off + m_bc.pos, "block-arg count exceeds the cap");
+            return;
+        }
+        if (!m_bc.have(static_cast<u64>(num_args) * 4U))
+        {
+            fail(m_body_off + m_bc.pos, "block-arg type refs overrun the chunk");
+            return;
+        }
         TypeId arg0{};
         for (u32 i = 0; i < num_args; ++i)
         {
             const TypeId t = type_from_ref(m_bc.u32v(), m_body_off + m_bc.pos);
-            if (i == 0U) { arg0 = t; } // uniform block model: every arg shares one type today (all refs equal)
+            if (i == 0U) // uniform block model: every arg shares one type today (all refs equal)
+            {
+                arg0 = t;
+            }
         }
         const u32 num_ops = m_bc.u32v();
-        if (!m_bc.ok || !m_ok) { fail(m_body_off + m_bc.pos, "truncated block header"); return; }
+        if (!m_bc.ok || !m_ok)
+        {
+            fail(m_body_off + m_bc.pos, "truncated block header");
+            return;
+        }
         Block* const b = m_ctx.create_block(num_args, arg0);
         r->append(b);
-        for (u32 i = 0; i < num_args; ++i) { register_value(b->arg(i)); }
-        for (u32 i = 0; i < num_ops && m_ok; ++i) { decode_op(b); }
+        for (u32 i = 0; i < num_args; ++i)
+        {
+            register_value(b->arg(i));
+        }
+        for (u32 i = 0; i < num_ops && m_ok; ++i)
+        {
+            decode_op(b);
+        }
     }
     void decode_op(Block* b)
     {
@@ -871,7 +1320,11 @@ private:
         const u32 num_operands = m_bc.u32v();
         // Each operand is 4 stream bytes — a count that overruns the chunk is malformed. Guard BEFORE the loop: the
         // Cursor latches to zero on a short read but does NOT stop the loop, so a hostile 4e9 would push 4e9 zeros.
-        if (!m_bc.have(static_cast<u64>(num_operands) * 4U)) { fail(m_body_off + m_bc.pos, "operand count overruns the chunk"); return; }
+        if (!m_bc.have(static_cast<u64>(num_operands) * 4U))
+        {
+            fail(m_body_off + m_bc.pos, "operand count overruns the chunk");
+            return;
+        }
         containers::Array<u32>    operand_ids(m_ctx.allocator());
         containers::Array<Value*> operand_vals(m_ctx.allocator());
         for (u32 i = 0; i < num_operands; ++i)
@@ -882,19 +1335,38 @@ private:
         }
         const u32 num_results = m_bc.u32v();
         // Each result now carries a type ref (4 bytes) — cap num_results (drives allocation) AND bound the refs.
-        if (num_results > kMaxDecodeCount) { fail(m_body_off + m_bc.pos, "result count exceeds the cap"); return; }
-        if (!m_bc.have(static_cast<u64>(num_results) * 4U)) { fail(m_body_off + m_bc.pos, "result type refs overrun the chunk"); return; }
+        if (num_results > kMaxDecodeCount)
+        {
+            fail(m_body_off + m_bc.pos, "result count exceeds the cap");
+            return;
+        }
+        if (!m_bc.have(static_cast<u64>(num_results) * 4U))
+        {
+            fail(m_body_off + m_bc.pos, "result type refs overrun the chunk");
+            return;
+        }
         TypeId result0{};
         for (u32 i = 0; i < num_results; ++i)
         {
             const TypeId t = type_from_ref(m_bc.u32v(), m_body_off + m_bc.pos);
-            if (i == 0U) { result0 = t; } // uniform result model: all result refs equal today
+            if (i == 0U) // uniform result model: all result refs equal today
+            {
+                result0 = t;
+            }
         }
         const u32 num_regions = m_bc.u32v();
         const u32 num_attrs   = m_bc.u32v();
         // each attr is 8 stream bytes and each region is >= 5 (kind + block count) — bound those by the chunk length.
-        if (!m_bc.have(static_cast<u64>(num_attrs) * 8U)) { fail(m_body_off + m_bc.pos, "attribute count overruns the chunk"); return; }
-        if (!m_bc.have(static_cast<u64>(num_regions) * 5U)) { fail(m_body_off + m_bc.pos, "region count overruns the chunk"); return; }
+        if (!m_bc.have(static_cast<u64>(num_attrs) * 8U))
+        {
+            fail(m_body_off + m_bc.pos, "attribute count overruns the chunk");
+            return;
+        }
+        if (!m_bc.have(static_cast<u64>(num_regions) * 5U))
+        {
+            fail(m_body_off + m_bc.pos, "region count overruns the chunk");
+            return;
+        }
         containers::Array<u32> attr_name_idx(m_ctx.allocator());
         containers::Array<u32> attr_val_idx(m_ctx.allocator());
         for (u32 i = 0; i < num_attrs; ++i)
@@ -905,13 +1377,20 @@ private:
         const u32 srcm_ref = m_bc.u32v();
         const u32 line     = m_bc.u32v();
         const u32 col      = m_bc.u32v();
-        if (!m_bc.ok) { fail(m_body_off + m_bc.pos, "truncated operation record"); return; }
+        if (!m_bc.ok)
+        {
+            fail(m_body_off + m_bc.pos, "truncated operation record");
+            return;
+        }
 
         containers::StringView dialect;
         containers::StringView opname;
         if (!split_op_name(str(name_idx), dialect, opname))
         {
-            if (m_ok) { fail(m_body_off + m_bc.pos, "operation name is not 'dialect.op'"); }
+            if (m_ok)
+            {
+                fail(m_body_off + m_bc.pos, "operation name is not 'dialect.op'");
+            }
             return;
         }
         if (dialect.size() + 1U + opname.size() >= Context::kMaxOpNameBytes) // REPO.DEV.9 fuzz finding: reject, never assert
@@ -927,39 +1406,70 @@ private:
         b->append(op);
         m_ops.push_back(op); // CEIR-8d: collect ops in pre-order (BEFORE the region recursion) — MATCHES the encoder's
                              // gather_ops order, so decode_stid can zip stable ids onto ops by index.
-        for (u32 i = 0; i < num_results; ++i) { register_value(op->result(i)); }
+        for (u32 i = 0; i < num_results; ++i)
+        {
+            register_value(op->result(i));
+        }
         for (usize i = 0; i < operand_ids.size(); ++i)
         {
-            if (operand_vals[i] == nullptr) { m_fixups.push_back(Fixup{op, static_cast<u32>(i), operand_ids[i]}); }
+            if (operand_vals[i] == nullptr)
+            {
+                m_fixups.push_back(Fixup{op, static_cast<u32>(i), operand_ids[i]});
+            }
         }
         for (usize i = 0; i < attr_name_idx.size(); ++i)
         {
             const containers::StringView an = str(attr_name_idx[i]);
             const AttrId                 av = attr_at(attr_val_idx[i]);
-            if (!m_ok) { return; }
-            if (an.size() == 0U) { fail(m_body_off + m_bc.pos, "empty attribute name"); return; } // REPO.DEV.9 fuzz finding
+            if (!m_ok)
+            {
+                return;
+            }
+            if (an.size() == 0U) // REPO.DEV.9 fuzz finding
+            {
+                fail(m_body_off + m_bc.pos, "empty attribute name");
+                return;
+            }
             m_ctx.set_attr(op, an, av);
         }
         u32 file_id = 0U;
         if (srcm_ref != 0U)
         {
-            if (srcm_ref - 1U >= m_files.size()) { fail(m_body_off + m_bc.pos, "source-loc file ref out of range"); return; }
+            if (srcm_ref - 1U >= m_files.size())
+            {
+                fail(m_body_off + m_bc.pos, "source-loc file ref out of range");
+                return;
+            }
             file_id = m_files[srcm_ref - 1U];
         }
         op->set_loc(SourceLoc{file_id, line, col});
 
-        if (!detail::register_symbol(m_ctx, *m_module, op)) { fail(m_body_off + m_bc.pos, "duplicate symbol definition"); return; }
-        for (u32 i = 0; i < num_regions && m_ok; ++i) { decode_region(op->region(i)); }
+        if (!detail::register_symbol(m_ctx, *m_module, op))
+        {
+            fail(m_body_off + m_bc.pos, "duplicate symbol definition");
+            return;
+        }
+        for (u32 i = 0; i < num_regions && m_ok; ++i)
+        {
+            decode_region(op->region(i));
+        }
     }
 
     void resolve_fixups() noexcept
     {
-        if (!m_ok) { return; }
+        if (!m_ok)
+        {
+            return;
+        }
         for (usize i = 0; i < m_fixups.size(); ++i)
         {
             const Fixup& f = m_fixups[i];
             Value* const v = resolve(f.id);
-            if (v == nullptr) { fail(m_body_off, "operand references an undefined SSA value"); return; }
+            if (v == nullptr)
+            {
+                fail(m_body_off, "operand references an undefined SSA value");
+                return;
+            }
             f.op->set_operand(f.idx, v);
         }
     }
@@ -969,24 +1479,55 @@ private:
     // MALFORMED — reject, never assert. A pre-8d blob (no STID) leaves ops at id 0 (assigned lazily on the next persist).
     void decode_stid() noexcept
     {
-        if (!m_has_stid) { return; }
+        if (!m_has_stid)
+        {
+            return;
+        }
         Cursor    c{m_stid};
         const u32 n         = c.u32v();
         const u64 watermark = c.u64v(); // CEIR-8d: the monotone high-water mark (restored so a post-load edit can't reuse)
-        if (!c.ok) { fail(m_stid_off + c.pos, "truncated STID chunk"); return; }
-        if (static_cast<usize>(n) != m_ops.size()) { fail(m_stid_off + c.pos, "STID op count does not match the BODY"); return; }
-        if (!c.have(static_cast<u64>(n) * 8U)) { fail(m_stid_off + c.pos, "STID ids overrun the chunk"); return; }
+        if (!c.ok)
+        {
+            fail(m_stid_off + c.pos, "truncated STID chunk");
+            return;
+        }
+        if (static_cast<usize>(n) != m_ops.size())
+        {
+            fail(m_stid_off + c.pos, "STID op count does not match the BODY");
+            return;
+        }
+        if (!c.have(static_cast<u64>(n) * 8U))
+        {
+            fail(m_stid_off + c.pos, "STID ids overrun the chunk");
+            return;
+        }
         containers::HashMap<u64, u8> seen(m_ctx.allocator());
         for (u32 i = 0; i < n; ++i)
         {
             const u64 id = c.u64v();
-            if (id == 0U) { fail(m_stid_off + c.pos, "STID contains an invalid (0) stable id"); return; }
-            if (id > watermark) { fail(m_stid_off + c.pos, "STID id exceeds the watermark"); return; } // monotone invariant
-            if (seen.find(id) != nullptr) { fail(m_stid_off + c.pos, "STID contains a duplicate stable id"); return; }
+            if (id == 0U)
+            {
+                fail(m_stid_off + c.pos, "STID contains an invalid (0) stable id");
+                return;
+            }
+            if (id > watermark) // monotone invariant
+            {
+                fail(m_stid_off + c.pos, "STID id exceeds the watermark");
+                return;
+            }
+            if (seen.find(id) != nullptr)
+            {
+                fail(m_stid_off + c.pos, "STID contains a duplicate stable id");
+                return;
+            }
             seen.insert(id, 1U);
             m_ctx.set_stable_id(m_ops[i], StableId{id});
         }
-        if (!c.ok) { fail(m_stid_off + c.pos, "truncated STID chunk"); return; }
+        if (!c.ok)
+        {
+            fail(m_stid_off + c.pos, "truncated STID chunk");
+            return;
+        }
         m_ctx.set_stable_id_watermark(m_module, watermark);
     }
 

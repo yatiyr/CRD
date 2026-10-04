@@ -65,7 +65,10 @@ bool all_tets_meet_dihedral_quality(const TetRefineResult<T>& r, T threshold_deg
         const u32 id = r.tet_indices[4U * t + 3U];
         const T d = min_dihedral_of_tet_rad<T>(r.vertices[ia], r.vertices[ib],
                                                   r.vertices[ic], r.vertices[id]);
-        if (d < threshold_rad) { return false; }
+        if (d < threshold_rad)
+        {
+            return false;
+        }
     }
     return true;
 }

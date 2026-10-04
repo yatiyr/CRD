@@ -426,7 +426,10 @@ TEST_CASE("ceir 31a-2a: apply_delay shifts bit-exact and the executor dispatches
         const crd::i64              d = ds[di];
         containers::Array<crd::f32> bus(&root);
         bus.resize(static_cast<usize>(n) * 2U, 0.0F);
-        for (usize k = 0; k < bus.size(); ++k) { bus[k] = in_buf[k]; }
+        for (usize k = 0; k < bus.size(); ++k)
+        {
+            bus[k] = in_buf[k];
+        }
         audio::apply_delay(bus.data(), n, d);
         for (crd::i64 f = 0; f < n; ++f)
         {
@@ -561,8 +564,14 @@ TEST_CASE("ceir 31a-2b: apply_compressor tracks a two-segment step within tolera
         const crd::f64 over    = env_db - thr;
         const crd::f64 gain_db = (over > 0.0) ? over * slope : 0.0;
         const crd::f64 gain    = std::pow(10.0, gain_db / 20.0);
-        if (over > 0.0) { ++above_thr; }
-        else if (f >= n_attack) { ++unity_release; }
+        if (over > 0.0)
+        {
+            ++above_thr;
+        }
+        else if (f >= n_attack)
+        {
+            ++unity_release;
+        }
 
         for (crd::i64 c = 0; c < 2; ++c)
         {
@@ -571,7 +580,10 @@ TEST_CASE("ceir 31a-2b: apply_compressor tracks a two-segment step within tolera
             const crd::f64 got   = static_cast<crd::f64>(bus[static_cast<usize>(f * 2 + c)]);
             const crd::f64 rel   = std::fabs(got - ref) / floor;
             CHECK(rel <= 1.0e-5); // the stated CONTRACT tolerance (two libms + recurrence-vs-closed-form, f64)
-            if (rel > max_dev_rel) { max_dev_rel = rel; }
+            if (rel > max_dev_rel)
+            {
+                max_dev_rel = rel;
+            }
         }
     }
     // the step exercises BOTH regimes: compression (attack + early release above threshold) AND a release CROSSING below
@@ -709,7 +721,11 @@ TEST_CASE("ceir 31a-3: execute_audio_graph_ceir walks the committed full-chain a
     ceir::Operation* pf = nullptr;
     for (ceir::Operation* op = pr.module->body()->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
-        if (ctx.op_name(op->kind()) == StringView("func.func")) { pf = op; break; }
+        if (ctx.op_name(op->kind()) == StringView("func.func"))
+        {
+            pf = op;
+            break;
+        }
     }
     REQUIRE(pf != nullptr);
     ceir::Operation* op_gain   = nullptr;
@@ -719,10 +735,22 @@ TEST_CASE("ceir 31a-3: execute_audio_graph_ceir walks the committed full-chain a
     for (ceir::Operation* op = pf->region(0)->first_block()->first_op(); op != nullptr; op = op->next_in_block())
     {
         const StringView nm = ctx.op_name(op->kind());
-        if (nm == StringView("audio.gain")) { op_gain = op; }
-        else if (nm == StringView("audio.biquad")) { op_biquad = op; }
-        else if (nm == StringView("audio.delay")) { op_delay = op; }
-        else if (nm == StringView("audio.compressor")) { op_comp = op; }
+        if (nm == StringView("audio.gain"))
+        {
+            op_gain = op;
+        }
+        else if (nm == StringView("audio.biquad"))
+        {
+            op_biquad = op;
+        }
+        else if (nm == StringView("audio.delay"))
+        {
+            op_delay = op;
+        }
+        else if (nm == StringView("audio.compressor"))
+        {
+            op_comp = op;
+        }
     }
     REQUIRE(op_gain != nullptr);
     REQUIRE(op_biquad != nullptr);
@@ -757,7 +785,10 @@ TEST_CASE("ceir 31a-3: execute_audio_graph_ceir walks the committed full-chain a
     const usize span     = static_cast<usize>(n) * 2U;
     auto        zeroed   = [&](containers::Array<crd::f32>& a) { a.resize(span, 0.0F); };
     auto        sum_into = [&](containers::Array<crd::f32>& dst, const containers::Array<crd::f32>& srcb) {
-        for (usize k = 0; k < span; ++k) { dst[k] += srcb[k]; }
+        for (usize k = 0; k < span; ++k)
+        {
+            dst[k] += srcb[k];
+        }
     };
 
     containers::Array<crd::f32> b0(&root); // %0 source@a

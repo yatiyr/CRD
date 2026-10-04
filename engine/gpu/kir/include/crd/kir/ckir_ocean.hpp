@@ -84,7 +84,10 @@ inline constexpr double kCapillary = 7.4e-5; // σ/ρ (surface tension / water d
 [[nodiscard]] inline int log2i(int n) noexcept
 {
     int l = 0;
-    while ((1 << l) < n) { ++l; }
+    while ((1 << l) < n)
+    {
+        ++l;
+    }
     return l;
 }
 
@@ -483,7 +486,12 @@ inline void evolve_pack(KGraph& g, int kx, int kz, int km, int ar, int ai, int b
             const int inm = add(add(mul(gidx, ku(uw(static_cast<crd::u32>(rs)))), jidx), ku(uw(static_cast<crd::u32>(m * quarter))));
             const int sr  = g.shared_load(sre, inm);
             const int sii = g.shared_load(sim, inm);
-            if (m == 0) { ar[0] = sr; ai[0] = sii; continue; }
+            if (m == 0)
+            {
+                ar[0] = sr;
+                ai[0] = sii;
+                continue;
+            }
             const int twidx = mul(jidx, ku(uw(static_cast<crd::u32>(m * nl))));
             const int wr    = g.buffer_load(tw_re, twidx);
             const int wi    = g.unary(KOp::Neg, g.buffer_load(tw_im, twidx)); // inverse conjugates

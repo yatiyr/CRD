@@ -125,10 +125,19 @@ T min_dihedral_of_tet_rad(const crd::math::Vec3<T>& v0,
         }
         T cos_d = (n1.x * n2.x + n1.y * n2.y + n1.z * n2.z)
                 / crd::math::sqrt(n1_len2 * n2_len2);
-        if (cos_d > static_cast<T>(1))  { cos_d = static_cast<T>(1); }
-        if (cos_d < static_cast<T>(-1)) { cos_d = static_cast<T>(-1); }
+        if (cos_d > static_cast<T>(1))
+        {
+            cos_d = static_cast<T>(1);
+        }
+        if (cos_d < static_cast<T>(-1))
+        {
+            cos_d = static_cast<T>(-1);
+        }
         const T d = crd::math::acos(cos_d);
-        if (d < min_rad) { min_rad = d; }
+        if (d < min_rad)
+        {
+            min_rad = d;
+        }
     }
     return min_rad;
 }
@@ -142,7 +151,11 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     TetRefineResult<T> result{alloc};
     const crd::u32 n_in = static_cast<crd::u32>(points.size());
 
-    if (n_in < 4U) { result.status = TetRefineStatus::TooFewPoints; return result; }
+    if (n_in < 4U)
+    {
+        result.status = TetRefineStatus::TooFewPoints;
+        return result;
+    }
     for (crd::u32 i = 0; i < n_in; ++i)
     {
         if (!is_finite_vec3(points[i]))
@@ -162,7 +175,10 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     // Working vertex array. Initialise from input; Steiner points appended.
     crd::containers::Array<crd::math::Vec3<T>> vertices(alloc);
     vertices.reserve(n_in);
-    for (crd::u32 i = 0; i < n_in; ++i) { vertices.push_back(points[i]); }
+    for (crd::u32 i = 0; i < n_in; ++i)
+    {
+        vertices.push_back(points[i]);
+    }
 
     // Compute bbox + padded bounds + bbox-scaled eps² (D121, D122).
     T xmin = vertices[0].x;
@@ -173,19 +189,40 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     T zmax = vertices[0].z;
     for (crd::u32 i = 1; i < n_in; ++i)
     {
-        if (vertices[i].x < xmin) { xmin = vertices[i].x; }
-        if (vertices[i].x > xmax) { xmax = vertices[i].x; }
-        if (vertices[i].y < ymin) { ymin = vertices[i].y; }
-        if (vertices[i].y > ymax) { ymax = vertices[i].y; }
-        if (vertices[i].z < zmin) { zmin = vertices[i].z; }
-        if (vertices[i].z > zmax) { zmax = vertices[i].z; }
+        if (vertices[i].x < xmin)
+        {
+            xmin = vertices[i].x;
+        }
+        if (vertices[i].x > xmax)
+        {
+            xmax = vertices[i].x;
+        }
+        if (vertices[i].y < ymin)
+        {
+            ymin = vertices[i].y;
+        }
+        if (vertices[i].y > ymax)
+        {
+            ymax = vertices[i].y;
+        }
+        if (vertices[i].z < zmin)
+        {
+            zmin = vertices[i].z;
+        }
+        if (vertices[i].z > zmax)
+        {
+            zmax = vertices[i].z;
+        }
     }
     const T dx = xmax - xmin;
     const T dy = ymax - ymin;
     const T dz = zmax - zmin;
     const T diag = crd::math::sqrt(dx * dx + dy * dy + dz * dz);
     T pad = diag * static_cast<T>(0.1);
-    if (pad <= static_cast<T>(0)) { pad = static_cast<T>(0.1); }
+    if (pad <= static_cast<T>(0))
+    {
+        pad = static_cast<T>(0.1);
+    }
     const T xlo = xmin - pad;
     const T ylo = ymin - pad;
     const T zlo = zmin - pad;
@@ -193,7 +230,10 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     const T yhi = ymax + pad;
     const T zhi = zmax + pad;
     T dup_eps = diag * static_cast<T>(1e-6);
-    if (dup_eps <= static_cast<T>(0)) { dup_eps = static_cast<T>(1e-9); }
+    if (dup_eps <= static_cast<T>(0))
+    {
+        dup_eps = static_cast<T>(1e-9);
+    }
     const T eps_sq = dup_eps * dup_eps;
 
     // Initial Delaunay.
@@ -225,7 +265,10 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
             const crd::u32 id = tet_indices[4U * t + 3U];
             const T d = min_dihedral_of_tet_rad<T>(
                 vertices[ia], vertices[ib], vertices[ic], vertices[id]);
-            if (d >= min_dihedral_rad) { continue; }
+            if (d >= min_dihedral_rad)
+            {
+                continue;
+            }
             any_bad = true;
 
             // Compute circumcentre.
@@ -233,10 +276,22 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
                 vertices[ia], vertices[ib], vertices[ic], vertices[id]);
 
             // Domain check (D121): inside padded input bbox.
-            if (!is_finite_vec3(cc))                  { continue; }
-            if (cc.x < xlo || cc.x > xhi)             { continue; }
-            if (cc.y < ylo || cc.y > yhi)             { continue; }
-            if (cc.z < zlo || cc.z > zhi)             { continue; }
+            if (!is_finite_vec3(cc))
+            {
+                continue;
+            }
+            if (cc.x < xlo || cc.x > xhi)
+            {
+                continue;
+            }
+            if (cc.y < ylo || cc.y > yhi)
+            {
+                continue;
+            }
+            if (cc.z < zlo || cc.z > zhi)
+            {
+                continue;
+            }
 
             // Near-duplicate check (D122).
             bool near_existing = false;
@@ -251,12 +306,18 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
                     break;
                 }
             }
-            if (near_existing) { continue; }
+            if (near_existing)
+            {
+                continue;
+            }
 
             // Actionable bad tet -- insert Steiner and re-Delaunay.
             vertices.push_back(cc);
             ++result.steiner_count;
-            if (result.steiner_count > opts.max_steiner) { break; }
+            if (result.steiner_count > opts.max_steiner)
+            {
+                break;
+            }
 
             auto del_it = delaunay_3d<T>(
                 crd::containers::ConstSpan<crd::math::Vec3<T>>{vertices.data(), vertices.size()},
@@ -284,7 +345,10 @@ tet_refine_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
             // prevent progress. Halt as NotConverged.
             break;
         }
-        if (result.steiner_count > opts.max_steiner) { break; }
+        if (result.steiner_count > opts.max_steiner)
+        {
+            break;
+        }
     }
 
     if (!result.converged && result.status == TetRefineStatus::Ok)

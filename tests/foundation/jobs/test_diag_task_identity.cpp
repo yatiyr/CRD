@@ -40,7 +40,9 @@ crd::usize distinct_count(It begin, crd::usize n) noexcept
             }
         }
         if (!seen)
+        {
             ++d;
+        }
     }
     return d;
 }

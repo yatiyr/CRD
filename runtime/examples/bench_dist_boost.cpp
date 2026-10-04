@@ -77,14 +77,20 @@ void row(const char* name, const double* xin, CF cf, BF bf)
         [&]
         {
             double s = 0;
-            for (int i = 0; i < 8; ++i) s += cf(xin[i]);
+            for (int i = 0; i < 8; ++i)
+            {
+                s += cf(xin[i]);
+            }
             return s;
         });
     const double tb = per_call(
         [&]
         {
             double s = 0;
-            for (int i = 0; i < 8; ++i) s += bf(xin[i]);
+            for (int i = 0; i < 8; ++i)
+            {
+                s += bf(xin[i]);
+            }
             return s;
         });
     std::printf("%-18s  %8.2f  %8.2f   %5.2fx %s%s\n", name, tc, tb, tb / tc, (tb > tc ? "WIN " : "lose"), flag);

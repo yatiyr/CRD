@@ -106,9 +106,18 @@ void build_tri_adjacency(const crd::containers::Array<crd::u32>& tri_indices,
     }
     crd::containers::sort(hes.data(), hes.data() + hes.size(),
                           [](const HalfEdge& l, const HalfEdge& r) noexcept {
-                              if (l.a != r.a) { return l.a < r.a; }
-                              if (l.b != r.b) { return l.b < r.b; }
-                              if (l.tri != r.tri) { return l.tri < r.tri; }
+                              if (l.a != r.a)
+                              {
+                                  return l.a < r.a;
+                              }
+                              if (l.b != r.b)
+                              {
+                                  return l.b < r.b;
+                              }
+                              if (l.tri != r.tri)
+                              {
+                                  return l.tri < r.tri;
+                              }
                               return l.k < r.k;
                           });
     for (crd::u32 i = 0; i + 1U < hes.size(); ++i)
@@ -133,7 +142,10 @@ inline crd::u32 local_index_of(const crd::containers::Array<crd::u32>& tri_indic
 {
     for (crd::u32 k = 0; k < 3U; ++k)
     {
-        if (tri_indices[3U * t + k] == site) { return k; }
+        if (tri_indices[3U * t + k] == site)
+        {
+            return k;
+        }
     }
     return 3U;
 }
@@ -224,8 +236,15 @@ voronoi_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
         for (crd::u32 step = 0; step < tri_count; ++step)
         {
             const crd::u32 nxt = tri_nbrs[3U * cur + (csi + 2U) % 3U];
-            if (nxt == kNullNbr) { ccw_hit_hull = true; break; }
-            if (nxt == start_tri)  { break; }
+            if (nxt == kNullNbr)
+            {
+                ccw_hit_hull = true;
+                break;
+            }
+            if (nxt == start_tri)
+            {
+                break;
+            }
             const crd::u32 nsi = local_index_of(del.triangle_indices, nxt, s);
             if (nsi >= 3U)
             {
@@ -253,7 +272,10 @@ voronoi_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
             for (crd::u32 step = 0; step < tri_count; ++step)
             {
                 const crd::u32 nxt = tri_nbrs[3U * cur + csi];
-                if (nxt == kNullNbr) { break; }
+                if (nxt == kNullNbr)
+                {
+                    break;
+                }
                 const crd::u32 nsi = local_index_of(del.triangle_indices, nxt, s);
                 if (nsi >= 3U)
                 {
@@ -330,7 +352,9 @@ voronoi_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> sites,
             {
                 cw_term_tri = start_tri;
                 cw_term_si  = start_si;
-            } else {
+            }
+            else
+            {
                 cw_term_tri = cw_tris.back();
                 cw_term_si  = local_index_of(del.triangle_indices, cw_term_tri, s);
             }

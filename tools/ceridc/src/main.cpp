@@ -21,7 +21,10 @@ crd::memory::GrowableTlsfAllocator g_alloc;
 {
     for (int i = 2; i < argc - 1; ++i)
     {
-        if (std::strcmp(argv[i], name) == 0) { return argv[i + 1]; }
+        if (std::strcmp(argv[i], name) == 0)
+        {
+            return argv[i + 1];
+        }
     }
     return def;
 }
@@ -30,7 +33,10 @@ crd::memory::GrowableTlsfAllocator g_alloc;
 {
     for (int i = 2; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], name) == 0) { return true; }
+        if (std::strcmp(argv[i], name) == 0)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -64,7 +70,10 @@ int run_mcp_loop()
     while (std::fgets(line, static_cast<int>(k_cap), stdin) != nullptr)
     {
         const crd::usize len = std::strlen(line);
-        if (len == 0) { continue; }
+        if (len == 0)
+        {
+            continue;
+        }
         const crd::containers::String response = crd::ceridc::mcp_handle(
             {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc);
         if (!response.empty())
@@ -89,7 +98,10 @@ int main(int argc, char* argv[])
     crd::cooker::register_builtin_handlers(); // cook + every import format the processor speaks
 
     const char* verb = argv[1];
-    if (std::strcmp(verb, "mcp") == 0) { return run_mcp_loop(); }
+    if (std::strcmp(verb, "mcp") == 0)
+    {
+        return run_mcp_loop();
+    }
     if (std::strcmp(verb, "import") == 0 && argc >= 3)
     {
         return emit(crd::ceridc::verb_import(argv[2], &g_alloc));

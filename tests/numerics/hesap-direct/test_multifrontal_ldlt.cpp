@@ -1679,9 +1679,21 @@ sp::SparseMatrix<double, sp::SparseFormat::Csc> indef_laplacian_3d(crd::u32 k, d
             {
                 const crd::u32 d = id(i, j, l);
                 tb.add(d, d, 6.0 - sigma);
-                if (i + 1 < k) { tb.add(d, id(i + 1, j, l), -1.0); tb.add(id(i + 1, j, l), d, -1.0); }
-                if (j + 1 < k) { tb.add(d, id(i, j + 1, l), -1.0); tb.add(id(i, j + 1, l), d, -1.0); }
-                if (l + 1 < k) { tb.add(d, id(i, j, l + 1), -1.0); tb.add(id(i, j, l + 1), d, -1.0); }
+                if (i + 1 < k)
+                {
+                    tb.add(d, id(i + 1, j, l), -1.0);
+                    tb.add(id(i + 1, j, l), d, -1.0);
+                }
+                if (j + 1 < k)
+                {
+                    tb.add(d, id(i, j + 1, l), -1.0);
+                    tb.add(id(i, j + 1, l), d, -1.0);
+                }
+                if (l + 1 < k)
+                {
+                    tb.add(d, id(i, j, l + 1), -1.0);
+                    tb.add(id(i, j, l + 1), d, -1.0);
+                }
             }
         }
     }

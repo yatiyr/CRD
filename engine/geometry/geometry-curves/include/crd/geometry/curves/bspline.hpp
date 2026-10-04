@@ -67,9 +67,15 @@ template <crd::math::MathValue T> struct BSpline3
         : points(alloc), knots(alloc), closed(closed_in)
     {
         points.reserve(control_points.size());
-        for (const auto& p : control_points) { points.push_back(p); }
+        for (const auto& p : control_points)
+        {
+            points.push_back(p);
+        }
         knots.reserve(knot_vector.size());
-        for (const auto& k : knot_vector) { knots.push_back(k); }
+        for (const auto& k : knot_vector)
+        {
+            knots.push_back(k);
+        }
     }
 
     // Factory: produce a uniform open B-spline. Knot vector is
@@ -86,22 +92,34 @@ template <crd::math::MathValue T> struct BSpline3
 
         BSpline3<T> result(alloc);
         result.points.reserve(n);
-        for (const auto& p : control_points) { result.points.push_back(p); }
+        for (const auto& p : control_points)
+        {
+            result.points.push_back(p);
+        }
 
         // Knot vector size = n + degree + 1.
         const crd::u32 n_knots = n + k_degree + 1U;
         result.knots.reserve(n_knots);
 
         // First (degree + 1) = 4 knots are 0.
-        for (crd::u32 i = 0U; i <= k_degree; ++i) { result.knots.push_back(static_cast<T>(0)); }
+        for (crd::u32 i = 0U; i <= k_degree; ++i)
+        {
+            result.knots.push_back(static_cast<T>(0));
+        }
         // Interior knots go from 1 .. (n - degree - 1) — one less than the
         // number of interior segments. For n=4 there are 0 interior knots
         // beyond the boundary multiplicity; for n=5 there's 1; etc.
         const crd::u32 n_interior = (n > k_degree + 1U) ? (n - k_degree - 1U) : 0U;
-        for (crd::u32 i = 1U; i <= n_interior; ++i) { result.knots.push_back(static_cast<T>(i)); }
+        for (crd::u32 i = 1U; i <= n_interior; ++i)
+        {
+            result.knots.push_back(static_cast<T>(i));
+        }
         // Last (degree + 1) = 4 knots clamp to (n - degree).
         const T end_value = static_cast<T>(n - k_degree);
-        for (crd::u32 i = 0U; i <= k_degree; ++i) { result.knots.push_back(end_value); }
+        for (crd::u32 i = 0U; i <= k_degree; ++i)
+        {
+            result.knots.push_back(end_value);
+        }
 
         return result;
     }

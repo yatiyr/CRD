@@ -120,7 +120,10 @@ TEST_CASE("ckir TraceRayCurves oracle matches closed-form capsule geometry", "[c
         CHECK(crd::math::abs(t - (3.0 - r)) < 1.0e-6);
         CHECK(crd::math::abs(u - (0.5 + 0.4 * static_cast<double>(i)) / 4.0) < 1.0e-5);
     }
-    for (int i = 8; i < 12; ++i) { CHECK(out[static_cast<crd::usize>(i) * 2U + 0U] > 1.0e29); }
+    for (int i = 8; i < 12; ++i)
+    {
+        CHECK(out[static_cast<crd::usize>(i) * 2U + 0U] > 1.0e29);
+    }
 }
 
 TEST_CASE("ckir TraceRayCurves oracle agrees with the ckir_lss trace kernel", "[ckir][lss][curvert]")
@@ -142,9 +145,15 @@ TEST_CASE("ckir TraceRayCurves oracle agrees with the ckir_lss trace kernel", "[
     for (int s = 0; s < nseg; ++s)
     {
         const crd::usize o = static_cast<crd::usize>(s) * 8U;
-        for (int k = 0; k < 3; ++k) { segs[o + static_cast<crd::usize>(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + static_cast<crd::usize>(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 3U] = 0.05 + rnd() * 0.25;
-        for (int k = 0; k < 3; ++k) { segs[o + 4U + static_cast<crd::usize>(k)] = rnd() * 2.0 - 1.0; }
+        for (int k = 0; k < 3; ++k)
+        {
+            segs[o + 4U + static_cast<crd::usize>(k)] = rnd() * 2.0 - 1.0;
+        }
         segs[o + 7U] = 0.05 + rnd() * 0.25;
     }
     rays.resize(static_cast<crd::usize>(kRays) * 6U, 0.0);
@@ -182,12 +191,18 @@ TEST_CASE("ckir TraceRayCurves oracle agrees with the ckir_lss trace kernel", "[
         const bool   hb = b < 1.0e29;
         INFO("ray " << i << ": TraceRayCurves t = " << a << ", ckir_lss t = " << b);
         CHECK(ha == hb); // the two implementations must agree on WHICH rays hit, first of all
-        if (!ha) { continue; }
+        if (!ha)
+        {
+            continue;
+        }
         ++hits;
         const double dt = crd::math::abs(a - b);
         const double du = crd::math::abs(out_rt[static_cast<crd::usize>(i) * 2U + 1U]
                                          - out_lss[static_cast<crd::usize>(i) * 2U + 1U]);
-        if (dt > worst_t) { worst_t = dt; }
+        if (dt > worst_t)
+        {
+            worst_t = dt;
+        }
         // ⚠ A TIE IS NOT A DEFECT. When two DIFFERENT segments' end-caps sit at numerically equal distance, strict `<`
         //   resolves differently under different f32 association, and the winner's axial coordinate flips between the
         //   tip of one (u = 1) and the root of another (u = 0). Both answers are geometrically correct — which
@@ -197,8 +212,15 @@ TEST_CASE("ckir TraceRayCurves oracle agrees with the ckir_lss trace kernel", "[
         const double ua = out_rt[static_cast<crd::usize>(i) * 2U + 1U];
         const double ub = out_lss[static_cast<crd::usize>(i) * 2U + 1U];
         const bool   caps = (ua < 1.0e-6 || ua > 1.0 - 1.0e-6) && (ub < 1.0e-6 || ub > 1.0 - 1.0e-6);
-        if (du > 1.0e-4 && dt < 1.0e-5 && caps) { ++ties; continue; }
-        if (du > worst_u) { worst_u = du; }
+        if (du > 1.0e-4 && dt < 1.0e-5 && caps)
+        {
+            ++ties;
+            continue;
+        }
+        if (du > worst_u)
+        {
+            worst_u = du;
+        }
     }
     INFO("hits " << hits << " of " << kRays << ", worst |dt| = " << worst_t << ", worst |du| = " << worst_u
                  << ", cap ties " << ties);

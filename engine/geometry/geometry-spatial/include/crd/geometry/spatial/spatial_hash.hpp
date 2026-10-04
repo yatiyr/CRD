@@ -193,11 +193,17 @@ public:
         {
             const crd::usize old = m_per_object_gen.size();
             m_per_object_gen.resize(object_capacity);
-            for (crd::usize i = old; i < object_capacity; ++i) { m_per_object_gen[i] = 0; }
+            for (crd::usize i = old; i < object_capacity; ++i)
+            {
+                m_per_object_gen[i] = 0;
+            }
         }
         if (m_current_gen == std::numeric_limits<crd::u64>::max())
         {
-            for (crd::usize i = 0; i < m_per_object_gen.size(); ++i) { m_per_object_gen[i] = 0; }
+            for (crd::usize i = 0; i < m_per_object_gen.size(); ++i)
+            {
+                m_per_object_gen[i] = 0;
+            }
             m_current_gen = 0;
         }
         ++m_current_gen;
@@ -398,9 +404,18 @@ template <MathScalar T>
 template <typename Fn>
 void SpatialHash<T>::overlap(const AABB3<T>& query, Fn&& on_hit) const
 {
-    if (m_object_count == 0) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
-    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z) { return; }
+    if (m_object_count == 0)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
+    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z)
+    {
+        return;
+    }
 
     const crd::u64 gen = next_query_generation();
     // Tree-state visited policy — writes through `mutable` field via
@@ -418,9 +433,18 @@ template <MathScalar T>
 template <typename Fn>
 void SpatialHash<T>::overlap(const AABB3<T>& query, SpatialHashScratch& scratch, Fn&& on_hit) const
 {
-    if (m_object_count == 0) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
-    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z) { return; }
+    if (m_object_count == 0)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
+    if (query.min.x > query.max.x || query.min.y > query.max.y || query.min.z > query.max.z)
+    {
+        return;
+    }
 
     const crd::u64 gen = scratch.prepare_for_query(m_objects.size());
     auto was_visited = [&scratch, gen](crd::u32 obj_idx) noexcept -> bool {
@@ -436,8 +460,14 @@ template <MathScalar T>
 template <typename Fn>
 void SpatialHash<T>::radius(const Vec3<T>& point, T r, Fn&& on_hit) const
 {
-    if (m_object_count == 0 || r < T{0}) { return; }
-    if (!crd::geometry::primitives::is_finite(point)) { return; }
+    if (m_object_count == 0 || r < T{0})
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(point))
+    {
+        return;
+    }
     const crd::u64 gen = next_query_generation();
     auto was_visited = [this, gen](crd::u32 obj_idx) noexcept -> bool {
         return m_objects[obj_idx].last_query_gen == gen;
@@ -452,8 +482,14 @@ template <MathScalar T>
 template <typename Fn>
 void SpatialHash<T>::radius(const Vec3<T>& point, T r, SpatialHashScratch& scratch, Fn&& on_hit) const
 {
-    if (m_object_count == 0 || r < T{0}) { return; }
-    if (!crd::geometry::primitives::is_finite(point)) { return; }
+    if (m_object_count == 0 || r < T{0})
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(point))
+    {
+        return;
+    }
     const crd::u64 gen = scratch.prepare_for_query(m_objects.size());
     auto was_visited = [&scratch, gen](crd::u32 obj_idx) noexcept -> bool {
         return scratch.was_visited(obj_idx, gen);
@@ -484,20 +520,27 @@ void SpatialHash<T>::overlap_traverse_(const AABB3<T>& query,
 
     // Canonical visit order: z, y, x — deterministic emission across runs.
     for (crd::i32 iz = min_z; iz <= max_z; ++iz)
-    for (crd::i32 iy = min_y; iy <= max_y; ++iy)
-    for (crd::i32 ix = min_x; ix <= max_x; ++ix)
     {
-        const crd::u32 h = hash_cell(ix, iy, iz);
-        const auto& bucket = m_buckets[h];
-        for (crd::usize i = 0; i < bucket.size(); ++i)
+        for (crd::i32 iy = min_y; iy <= max_y; ++iy)
         {
-            const crd::u32 obj_idx = bucket[i];
-            if (was_visited(obj_idx)) { continue; }
-            mark_visited(obj_idx);
-            const ObjectEntry& obj = m_objects[obj_idx];
-            if (aabb_isect(obj.aabb, query))
+            for (crd::i32 ix = min_x; ix <= max_x; ++ix)
             {
-                on_hit(obj.payload);
+                const crd::u32 h = hash_cell(ix, iy, iz);
+                const auto& bucket = m_buckets[h];
+                for (crd::usize i = 0; i < bucket.size(); ++i)
+                {
+                    const crd::u32 obj_idx = bucket[i];
+                    if (was_visited(obj_idx))
+                    {
+                        continue;
+                    }
+                    mark_visited(obj_idx);
+                    const ObjectEntry& obj = m_objects[obj_idx];
+                    if (aabb_isect(obj.aabb, query))
+                    {
+                        on_hit(obj.payload);
+                    }
+                }
             }
         }
     }
@@ -525,27 +568,42 @@ void SpatialHash<T>::radius_traverse_(const Vec3<T>& point, T r,
             const T v = p[static_cast<crd::usize>(i)];
             const T lo = a.min[static_cast<crd::usize>(i)];
             const T hi = a.max[static_cast<crd::usize>(i)];
-            if (v < lo)      { const T d = lo - v; d2 += d * d; }
-            else if (v > hi) { const T d = v - hi; d2 += d * d; }
+            if (v < lo)
+            {
+                const T d = lo - v;
+                d2 += d * d;
+            }
+            else if (v > hi)
+            {
+                const T d = v - hi;
+                d2 += d * d;
+            }
         }
         return d2;
     };
 
     for (crd::i32 iz = min_z; iz <= max_z; ++iz)
-    for (crd::i32 iy = min_y; iy <= max_y; ++iy)
-    for (crd::i32 ix = min_x; ix <= max_x; ++ix)
     {
-        const crd::u32 h = hash_cell(ix, iy, iz);
-        const auto& bucket = m_buckets[h];
-        for (crd::usize i = 0; i < bucket.size(); ++i)
+        for (crd::i32 iy = min_y; iy <= max_y; ++iy)
         {
-            const crd::u32 obj_idx = bucket[i];
-            if (was_visited(obj_idx)) { continue; }
-            mark_visited(obj_idx);
-            const ObjectEntry& obj = m_objects[obj_idx];
-            if (pt_aabb_d2(point, obj.aabb) <= r2)
+            for (crd::i32 ix = min_x; ix <= max_x; ++ix)
             {
-                on_hit(obj.payload);
+                const crd::u32 h = hash_cell(ix, iy, iz);
+                const auto& bucket = m_buckets[h];
+                for (crd::usize i = 0; i < bucket.size(); ++i)
+                {
+                    const crd::u32 obj_idx = bucket[i];
+                    if (was_visited(obj_idx))
+                    {
+                        continue;
+                    }
+                    mark_visited(obj_idx);
+                    const ObjectEntry& obj = m_objects[obj_idx];
+                    if (pt_aabb_d2(point, obj.aabb) <= r2)
+                    {
+                        on_hit(obj.payload);
+                    }
+                }
             }
         }
     }

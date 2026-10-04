@@ -15,10 +15,14 @@ namespace
 void copy_bounded(char* dst, crd::usize dst_cap, cont::StringView src) noexcept
 {
     if (dst_cap == 0U)
+    {
         return;
+    }
     const crd::usize n = (src.size() < dst_cap - 1U) ? src.size() : dst_cap - 1U;
     if (n > 0U)
+    {
         std::memcpy(dst, src.data(), n);
+    }
     dst[n] = '\0';
 }
 
@@ -52,21 +56,29 @@ struct DiagnosticRecorder::Impl
 bool DiagnosticRecorder::init(crd::u32 capacity) noexcept
 {
     if (m_impl != nullptr || capacity == 0U || capacity > kMaxPolicyEvents)
+    {
         return false;
+    }
 
     m_impl = new (std::nothrow) Impl();
     if (m_impl == nullptr)
+    {
         return false;
+    }
 
     m_impl->cap = capacity;
     m_impl->ring.reserve(capacity);
     for (crd::u32 i = 0; i < capacity; ++i)
+    {
         m_impl->ring.emplace_back(); // in-place default ctor (DiagnosticEvent{} would need String's explicit default ctor)
+    }
 
     static constexpr crd::u32 kMaxReaders = 256U;
     m_impl->readers.reserve(kMaxReaders);
     for (crd::u32 i = 0; i < kMaxReaders; ++i)
+    {
         m_impl->readers.emplace_back();
+    }
 
     return true;
 }
@@ -86,13 +98,17 @@ void DiagnosticRecorder::record(const DiagnosticEvent& e)
 {
     Impl* impl = m_impl;
     if (impl == nullptr) // early-init / late-shutdown: a no-op, never a fault
+    {
         return;
+    }
 
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
     impl->ring[impl->head] = e; // String move/copy-assign; overwrites the oldest slot
     impl->head             = (impl->head + 1U) % impl->cap;
     if (impl->live < impl->cap)
+    {
         ++impl->live;
+    }
     ++impl->total;
 }
 
@@ -101,7 +117,9 @@ void DiagnosticRecorder::snapshot(cont::Array<DiagnosticEvent>& out) const
     out.clear();
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return;
+    }
 
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
     out.reserve(impl->live);
@@ -118,7 +136,9 @@ crd::u32 DiagnosticRecorder::count() const noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return 0U;
+    }
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
     return impl->live;
 }
@@ -127,7 +147,9 @@ crd::u64 DiagnosticRecorder::total_recorded() const noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return 0U;
+    }
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
     return impl->total;
 }
@@ -142,7 +164,9 @@ ReaderToken DiagnosticRecorder::register_reader() noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return ReaderToken{};
+    }
 
     std::lock_guard<std::mutex> guard(impl->reader_mutex);
     for (crd::u32 i = 0; i < impl->readers.size(); ++i)
@@ -161,16 +185,22 @@ bool DiagnosticRecorder::deregister_reader(ReaderToken token) noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr || !token.valid())
+    {
         return false;
+    }
 
     std::lock_guard<std::mutex> guard(impl->reader_mutex);
     if (token.slot >= impl->readers.size())
+    {
         return false;
+    }
 
     ReaderSlot& slot = impl->readers[token.slot];
     // Generation-checked retirement: a stale token whose slot was reused is rejected.
     if (!slot.active || slot.generation != token.generation)
+    {
         return false;
+    }
 
     slot.active = false;
     ++slot.generation; // retire: any outstanding copy of this token is now stale
@@ -182,7 +212,9 @@ crd::u32 DiagnosticRecorder::reader_count() const noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return 0U;
+    }
     std::lock_guard<std::mutex> guard(impl->reader_mutex);
     return impl->reader_live;
 }
@@ -191,7 +223,9 @@ void DiagnosticRecorder::capture_emergency(const DiagnosticEvent& e) noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return;
+    }
 
     // Deliberately NOT ring_mutex: the emergency record must be writable even while a thread
     // holds the ring/log lock (the "crash while the log mutex is held" case).
@@ -210,7 +244,9 @@ EmergencyRecord DiagnosticRecorder::emergency() const noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr)
+    {
         return EmergencyRecord{};
+    }
     std::lock_guard<std::mutex> guard(impl->emergency_mutex);
     return impl->emergency;
 }

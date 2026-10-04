@@ -42,17 +42,26 @@ void push_u32(containers::Array<crd::u8>& out, crd::u32 v)
 }
 void push_u64(containers::Array<crd::u8>& out, crd::u64 v)
 {
-    for (crd::u32 b = 0; b < 8U; ++b) { out.push_back(static_cast<crd::u8>((v >> (b * 8U)) & 0xFFU)); }
+    for (crd::u32 b = 0; b < 8U; ++b)
+    {
+        out.push_back(static_cast<crd::u8>((v >> (b * 8U)) & 0xFFU));
+    }
 }
 void push_str(containers::Array<crd::u8>& out, containers::StringView s)
 {
     push_u32(out, static_cast<crd::u32>(s.size()));
-    for (crd::usize i = 0; i < s.size(); ++i) { out.push_back(static_cast<crd::u8>(s[i])); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        out.push_back(static_cast<crd::u8>(s[i]));
+    }
 }
 void push_list(containers::Array<crd::u8>& out, const containers::Array<containers::StringView>& list)
 {
     push_u32(out, static_cast<crd::u32>(list.size()));
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(list.size()); ++i) { push_str(out, list[i]); }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(list.size()); ++i)
+    {
+        push_str(out, list[i]);
+    }
 }
 // Serialize the §106 dependency record field-by-field LE (⛔ never a struct blast — the struct-padding-in-content-hash
 // scar). ⭐ CEIR-13c (schema v5): the ckir_refs list is appended LAST — each ref = {name string, u64 interface_hash, u8
@@ -80,7 +89,10 @@ struct Reader
     crd::usize     off = 0;
     [[nodiscard]] bool u32(crd::u32& out) noexcept
     {
-        if (off + 4U > n) { return false; }
+        if (off + 4U > n)
+        {
+            return false;
+        }
         out = static_cast<crd::u32>(p[off]) | (static_cast<crd::u32>(p[off + 1U]) << 8U)
               | (static_cast<crd::u32>(p[off + 2U]) << 16U) | (static_cast<crd::u32>(p[off + 3U]) << 24U);
         off += 4U;
@@ -89,23 +101,38 @@ struct Reader
     [[nodiscard]] bool str(containers::StringView& out) noexcept
     {
         crd::u32 len = 0;
-        if (!u32(len)) { return false; }
-        if (off + len > n) { return false; }
+        if (!u32(len))
+        {
+            return false;
+        }
+        if (off + len > n)
+        {
+            return false;
+        }
         out = containers::StringView(reinterpret_cast<const char*>(p + off), len);
         off += len;
         return true;
     }
     [[nodiscard]] bool u64(crd::u64& out) noexcept
     {
-        if (off + 8U > n) { return false; }
+        if (off + 8U > n)
+        {
+            return false;
+        }
         out = 0U;
-        for (crd::u32 b = 0; b < 8U; ++b) { out |= static_cast<crd::u64>(p[off + b]) << (b * 8U); }
+        for (crd::u32 b = 0; b < 8U; ++b)
+        {
+            out |= static_cast<crd::u64>(p[off + b]) << (b * 8U);
+        }
         off += 8U;
         return true;
     }
     [[nodiscard]] bool byte(crd::u8& out) noexcept
     {
-        if (off + 1U > n) { return false; }
+        if (off + 1U > n)
+        {
+            return false;
+        }
         out = p[off];
         off += 1U;
         return true;
@@ -115,11 +142,17 @@ struct Reader
 [[nodiscard]] bool parse_list(Context& ctx, Reader& rd, containers::Array<containers::StringView>& list)
 {
     crd::u32 count = 0;
-    if (!rd.u32(count)) { return false; }
+    if (!rd.u32(count))
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < count; ++i)
     {
         containers::StringView s;
-        if (!rd.str(s)) { return false; }
+        if (!rd.str(s))
+        {
+            return false;
+        }
         list.push_back(ctx.intern_symbol(s));
     }
     return true;
@@ -128,13 +161,19 @@ struct Reader
 [[nodiscard]] bool parse_krefs(Context& ctx, Reader& rd, containers::Array<KernelRefDep>& list)
 {
     crd::u32 count = 0;
-    if (!rd.u32(count)) { return false; }
+    if (!rd.u32(count))
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < count; ++i)
     {
         containers::StringView name;
         crd::u64               iface  = 0U;
         crd::u8                pinned = 0U;
-        if (!(rd.str(name) && rd.u64(iface) && rd.byte(pinned))) { return false; }
+        if (!(rd.str(name) && rd.u64(iface) && rd.byte(pinned)))
+        {
+            return false;
+        }
         list.push_back(KernelRefDep{ctx.intern_symbol(name), iface, pinned != 0U});
     }
     return true;
@@ -156,7 +195,10 @@ struct KernelContractViolation
 [[nodiscard]] KernelContractViolation scan_kernel_contracts(const Context& ctx, const Region* r, KernelResolveFn fn,
                                                             void* user) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -166,9 +208,15 @@ struct KernelContractViolation
                 // ⛔ an identity that cannot be READ cannot resolve (absent / non-Symbol @kernel) → KernelUnresolved (the
                 // 13a access-fold consistency; a raw-deserialized dispatch must not cook clean by skipping the check).
                 const AttrValue sv = ctx.attr_value(op->attr(info->kernel_ref_symbol));
-                if (sv.kind != AttrKind::SymbolRef) { return {op, CookError::KernelUnresolved}; }
+                if (sv.kind != AttrKind::SymbolRef)
+                {
+                    return {op, CookError::KernelUnresolved};
+                }
                 crd::u64 actual = 0U;
-                if (!fn(sv.s, user, actual)) { return {op, CookError::KernelUnresolved}; } // existence ALWAYS checked
+                if (!fn(sv.s, user, actual)) // existence ALWAYS checked
+                {
+                    return {op, CookError::KernelUnresolved};
+                }
                 if (!info->kernel_ref_interface.empty())
                 {
                     // ⛔ hash checked IFF PINNED (a PRESENT Int attr). The `iid.valid()` guard is load-bearing: an ABSENT
@@ -187,7 +235,10 @@ struct KernelContractViolation
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const KernelContractViolation e = scan_kernel_contracts(ctx, op->region(i), fn, user);
-                if (e.error != CookError::Ok) { return e; }
+                if (e.error != CookError::Ok)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -314,7 +365,10 @@ CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, m
     hdr.dependency_count = 0U;
     const crd::usize          hsz = crd::renderasset::cooked_blob_header_size(0U);
     containers::Array<crd::u8> header(scratch);
-    for (crd::usize i = 0; i < hsz; ++i) { header.push_back(0U); }
+    for (crd::usize i = 0; i < hsz; ++i)
+    {
+        header.push_back(0U);
+    }
     (void)crd::renderasset::write_cooked_header(header.data(), hsz, hdr, nullptr);
 
     // 5. the structured §106 dependency chunk.

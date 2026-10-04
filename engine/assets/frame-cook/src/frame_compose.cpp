@@ -35,7 +35,10 @@ void copy_str(crd::containers::String& dst, const crd::containers::String& s)
 }
 void set_where(crd::containers::String* where, const crd::containers::String& s)
 {
-    if (where != nullptr) { copy_str(*where, s); }
+    if (where != nullptr)
+    {
+        copy_str(*where, s);
+    }
 }
 
 // Rewrite one name from an included graph into the includer's scope. A `bind` entry wins; otherwise the name is
@@ -97,7 +100,10 @@ void copy_pass_body(const FramePassDesc& s, FramePassDesc& d)
         FrameParam p(d.params.allocator());
         copy_str(p.name, s.params[i].name);
         p.type = s.params[i].type;
-        for (crd::u32 c = 0; c < 4U; ++c) { p.v[c] = s.params[i].v[c]; }
+        for (crd::u32 c = 0; c < 4U; ++c)
+        {
+            p.v[c] = s.params[i].v[c];
+        }
         copy_str(p.str, s.params[i].str); // RAF-12.3: the String payload (shader/kernel/draw_list/view/technique/…)
         d.params.push_back(static_cast<FrameParam&&>(p));
     }
@@ -108,8 +114,14 @@ void append_graph(const FrameGraphDesc& src, const FrameIncludeDesc* inc, FrameG
 {
     auto*      alloc = out.resources.allocator();
     const auto name_of = [&](const crd::containers::String& s, crd::containers::String& d) {
-        if (inc == nullptr) { copy_str(d, s); }
-        else { rewrite(s, *inc, d); }
+        if (inc == nullptr)
+        {
+            copy_str(d, s);
+        }
+        else
+        {
+            rewrite(s, *inc, d);
+        }
     };
 
     for (crd::usize i = 0; i < src.resources.size(); ++i)
@@ -201,13 +213,19 @@ constexpr crd::u32 kMaxIncludeDepth = 8U;
 FrameCookError expand(const FrameGraphDesc& src, const FrameIncludeDesc* inc, FrameGraphResolveFn resolve,
                       void* user, crd::u32 depth, FrameGraphDesc& out, crd::containers::String* where)
 {
-    if (depth > kMaxIncludeDepth) { return FrameCookError::IncludeCycle; }
+    if (depth > kMaxIncludeDepth)
+    {
+        return FrameCookError::IncludeCycle;
+    }
     append_graph(src, inc, out);
 
     for (crd::usize i = 0; i < src.includes.size(); ++i)
     {
         const FrameIncludeDesc& ci = src.includes[i];
-        if (ci.graph.size() == 0U || ci.as.size() == 0U) { return FrameCookError::IncludeMissingName; }
+        if (ci.graph.size() == 0U || ci.as.size() == 0U)
+        {
+            return FrameCookError::IncludeMissingName;
+        }
         const FrameGraphDesc* sub =
             resolve(crd::containers::StringView(ci.graph.c_str(), ci.graph.size()), user);
         if (sub == nullptr)
@@ -219,7 +237,10 @@ FrameCookError expand(const FrameGraphDesc& src, const FrameIncludeDesc* inc, Fr
         // `vp.main.bloom.*` — two viewports each running a bloom chain stay disjoint all the way down.
         FrameIncludeDesc eff(out.resources.allocator());
         copy_str(eff.graph, ci.graph);
-        if (inc == nullptr) { copy_str(eff.as, ci.as); }
+        if (inc == nullptr)
+        {
+            copy_str(eff.as, ci.as);
+        }
         else
         {
             eff.as.append(inc->as.c_str());
@@ -232,12 +253,21 @@ FrameCookError expand(const FrameGraphDesc& src, const FrameIncludeDesc* inc, Fr
             FrameBinding fb(out.resources.allocator());
             copy_str(fb.from, ci.bind[b].from);
             // the TARGET of a bind is spelled in the INCLUDER's scope, so it needs the includer's rewrite
-            if (inc == nullptr) { copy_str(fb.to, ci.bind[b].to); }
-            else { rewrite(ci.bind[b].to, *inc, fb.to); }
+            if (inc == nullptr)
+            {
+                copy_str(fb.to, ci.bind[b].to);
+            }
+            else
+            {
+                rewrite(ci.bind[b].to, *inc, fb.to);
+            }
             eff.bind.push_back(static_cast<FrameBinding&&>(fb));
         }
         const FrameCookError e = expand(*sub, &eff, resolve, user, depth + 1U, out, where);
-        if (e != FrameCookError::Ok) { return e; }
+        if (e != FrameCookError::Ok)
+        {
+            return e;
+        }
     }
     return FrameCookError::Ok;
 }
@@ -247,7 +277,10 @@ FrameCookError expand(const FrameGraphDesc& src, const FrameIncludeDesc* inc, Fr
 FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolveFn resolve, void* user,
                                    FrameGraphDesc& out, crd::containers::String* where)
 {
-    if (resolve == nullptr) { return FrameCookError::UnresolvedInclude; }
+    if (resolve == nullptr)
+    {
+        return FrameCookError::UnresolvedInclude;
+    }
     out.schema = desc.schema;
     copy_str(out.name, desc.name);
     copy_str(out.fallback, desc.fallback);
@@ -259,7 +292,10 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
     }
 
     const FrameCookError e = expand(desc, nullptr, resolve, user, 0U, out, where);
-    if (e != FrameCookError::Ok) { return e; }
+    if (e != FrameCookError::Ok)
+    {
+        return e;
+    }
 
     // ── INJECTION. The pass is already in `out` (it is declared in this asset); what an anchor decides is WHERE
     // in the declaration order it sits. Declaration order is only a tie-break — the dependency sort still runs
@@ -274,7 +310,11 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
         const FrameAnchorDesc* anchor = nullptr;
         for (crd::usize a = 0; a < out.anchors.size(); ++a)
         {
-            if (str_eq(out.anchors[a].name, inj.anchor)) { anchor = &out.anchors[a]; break; }
+            if (str_eq(out.anchors[a].name, inj.anchor))
+            {
+                anchor = &out.anchors[a];
+                break;
+            }
         }
         if (anchor == nullptr)
         {
@@ -284,7 +324,11 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
         crd::i64 pass_idx = -1;
         for (crd::usize p = 0; p < out.passes.size(); ++p)
         {
-            if (str_eq(out.passes[p].name, inj.pass)) { pass_idx = static_cast<crd::i64>(p); break; }
+            if (str_eq(out.passes[p].name, inj.pass))
+            {
+                pass_idx = static_cast<crd::i64>(p);
+                break;
+            }
         }
         if (pass_idx < 0)
         {
@@ -304,7 +348,10 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
                 }
             }
         }
-        if (slot > static_cast<crd::i64>(out.passes.size())) { slot = static_cast<crd::i64>(out.passes.size()); }
+        if (slot > static_cast<crd::i64>(out.passes.size()))
+        {
+            slot = static_cast<crd::i64>(out.passes.size());
+        }
         // Move the pass into the slot by rotation. ⛔ Rotate rather than erase+insert: `FramePassDesc` owns
         // allocator-backed strings and arrays, and a copy through a temporary would be both a needless allocation
         // and a chance to drop a field the next time one is added.
@@ -334,7 +381,10 @@ FrameCookError flatten_frame_graph(const FrameGraphDesc& desc, FrameGraphResolve
 
     // The flattened graph faces the SAME 19+ rejections a hand-authored one does. A composed graph must not get a
     // weaker contract than a typed one, or composition becomes the unsafe path.
-    if (const FrameCookError e2 = validate_frame_graph(out, where); e2 != FrameCookError::Ok) { return e2; }
+    if (const FrameCookError e2 = validate_frame_graph(out, where); e2 != FrameCookError::Ok)
+    {
+        return e2;
+    }
 
     // ⛔ CEIR-15e: composition is fully RESOLVED now — every include was expanded into plain passes and every inject
     // was positioned at its anchor. Anchors carried forward through `append_graph` ONLY so a parent inject could find a

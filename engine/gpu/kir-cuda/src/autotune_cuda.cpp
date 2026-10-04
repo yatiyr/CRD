@@ -23,12 +23,18 @@ bool sampled_correct(const float* c, int m, int n, int k)
         const int i   = (s * 977) % m;
         const int j   = (s * 1471) % n;
         double    acc = 0.0;
-        for (int kk = 0; kk < k; ++kk) { acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j)); }
+        for (int kk = 0; kk < k; ++kk)
+        {
+            acc += static_cast<double>(av_at(i, kk)) * static_cast<double>(bv_at(kk, j));
+        }
         const float ref = static_cast<float>(acc);
         const float got = c[static_cast<crd::usize>(i) * n + j];
         const float rel = (got - ref) / (1.0F + (ref < 0.0F ? -ref : ref));
         const float ar  = rel < 0.0F ? -rel : rel;
-        if (ar > maxrel) { maxrel = ar; }
+        if (ar > maxrel)
+        {
+            maxrel = ar;
+        }
     }
     return maxrel < 3e-3F;
 }
@@ -41,7 +47,10 @@ AutotuneResult autotune_contract(KirBackendCuda& cu, int m, int n, int k, int to
     res.m = m;
     res.n = n;
     res.k = k;
-    if (!cu.valid() || m <= 0 || n <= 0 || k <= 0) { return res; }
+    if (!cu.valid() || m <= 0 || n <= 0 || k <= 0)
+    {
+        return res;
+    }
 
     KGraph    g(a);
     const int ain = g.input(make_shape({m, k}), DType::F32);
@@ -54,13 +63,28 @@ AutotuneResult autotune_contract(KirBackendCuda& cu, int m, int n, int k, int to
     av.resize(static_cast<crd::usize>(m) * k);
     bv.resize(static_cast<crd::usize>(k) * n);
     out.resize(static_cast<crd::usize>(m) * n);
-    for (int i = 0; i < m; ++i) { for (int kk = 0; kk < k; ++kk) { av[static_cast<crd::usize>(i) * k + kk] = av_at(i, kk); } }
-    for (int kk = 0; kk < k; ++kk) { for (int j = 0; j < n; ++j) { bv[static_cast<crd::usize>(kk) * n + j] = bv_at(kk, j); } }
+    for (int i = 0; i < m; ++i)
+    {
+        for (int kk = 0; kk < k; ++kk)
+        {
+            av[static_cast<crd::usize>(i) * k + kk] = av_at(i, kk);
+        }
+    }
+    for (int kk = 0; kk < k; ++kk)
+    {
+        for (int j = 0; j < n; ++j)
+        {
+            bv[static_cast<crd::usize>(kk) * n + j] = bv_at(kk, j);
+        }
+    }
     const float* inputs[] = {av.data(), bv.data()};
 
     const auto measure = [&](const TileSchedule& s) -> ContractTiming {
         const ContractTiming r = cu.time_contract_schedule(g, c, s, inputs, 2, out.data(), 3, 12);
-        if (r.ok && !sampled_correct(out.data(), m, n, k)) { return ContractTiming{}; } // determinism gate: wrong can't win
+        if (r.ok && !sampled_correct(out.data(), m, n, k)) // determinism gate: wrong can't win
+        {
+            return ContractTiming{};
+        }
         return r;
     };
 
@@ -97,7 +121,10 @@ AutotuneResult autotune_contract(KirBackendCuda& cu, int m, int n, int k, int to
         for (int t = 0; t < ntop; ++t)
         {
             const ContractTiming r = measure(cand[static_cast<crd::usize>(idx[static_cast<crd::usize>(t)])]);
-            if (!r.ok) { continue; }
+            if (!r.ok)
+            {
+                continue;
+            }
             ++res.measured;
             ++res.correct;
             if (r.min_ms < best_ms)
@@ -113,7 +140,10 @@ AutotuneResult autotune_contract(KirBackendCuda& cu, int m, int n, int k, int to
     if (measure_naive)
     {
         const ContractTiming nr = cu.time_contract_schedule(g, c, TileSchedule{}, inputs, 2, out.data(), 3, 6);
-        if (nr.ok && sampled_correct(out.data(), m, n, k)) { res.naive_ms = nr.min_ms; }
+        if (nr.ok && sampled_correct(out.data(), m, n, k))
+        {
+            res.naive_ms = nr.min_ms;
+        }
     }
 
     res.ok = have;

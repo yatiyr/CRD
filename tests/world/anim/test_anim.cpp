@@ -50,11 +50,20 @@ anim::SkeletonResource make_chain()
     for (u32 j = 0; j < 3U; ++j)
     {
         s.parents.push_back(parents[j]);
-        for (f32 v : rests[j]) { s.rest.push_back(v); }
+        for (f32 v : rests[j])
+        {
+            s.rest.push_back(v);
+        }
         // IBM filled by the test cases (identity here)
-        for (u32 c = 0; c < 16U; ++c) { s.inverse_binds.push_back((c % 5U) == 0U ? 1.0F : 0.0F); }
+        for (u32 c = 0; c < 16U; ++c)
+        {
+            s.inverse_binds.push_back((c % 5U) == 0U ? 1.0F : 0.0F);
+        }
         s.name_offsets.push_back(static_cast<u32>(s.name_pool.size()));
-        for (const char* p = names[j]; *p != '\0'; ++p) { s.name_pool.push_back(*p); }
+        for (const char* p = names[j]; *p != '\0'; ++p)
+        {
+            s.name_pool.push_back(*p);
+        }
         s.name_pool.push_back('\0');
     }
     return s;
@@ -66,7 +75,10 @@ anim::SkeletonResource make_chain()
     for (int i = 0; i < 16; ++i)
     {
         const f32 want = (i % 5) == 0 ? 1.0F : 0.0F;
-        if (f[i] < want - tol || f[i] > want + tol) { return false; }
+        if (f[i] < want - tol || f[i] > want + tol)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -125,7 +137,10 @@ TEST_CASE("anim: THE bind-pose identity gate + hierarchy composition oracle", "[
     CHECK(world[2].c3.x == 2.0F); // tip world = root·mid·tip translations composed
     CHECK(world[2].c3.y == 1.0F);
     anim::compute_skin_palette(skel, {world, 3U}, {palette, 3U});
-    for (u32 j = 0; j < 3U; ++j) { CHECK(mat_near_identity(palette[j], 1.0e-6F)); }
+    for (u32 j = 0; j < 3U; ++j)
+    {
+        CHECK(mat_near_identity(palette[j], 1.0e-6F));
+    }
 }
 
 TEST_CASE("anim: clip sampling -- SLERP for linear rotation, exact keys, rest for untracked", "[anim][geo8]")
@@ -146,7 +161,10 @@ TEST_CASE("anim: clip sampling -- SLERP for linear rotation, exact keys, rest fo
     clip.tracks.push_back(track);
     const f32 s45 = 0.70710678F;
     const f32 data_vals[10] = {0.0F, 2.0F, /*q0*/ 0, 0, 0, 1, /*q1: 90° Z*/ 0, 0, s45, s45};
-    for (f32 v : data_vals) { clip.data.push_back(v); }
+    for (f32 v : data_vals)
+    {
+        clip.data.push_back(v);
+    }
 
     anim::JointPose poses[3];
     anim::sample_clip(clip, skel, 0.0F, {poses, 3U});
@@ -192,7 +210,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
     {
         fox_path.append(root);
     }
-    else { fox_path.append("assets/source"); }
+    else
+    {
+        fox_path.append("assets/source");
+    }
     fox_path.append("/Fox.glb");
 
     containers::Array<u8> glb(&galloc());
@@ -207,7 +228,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
     const u32 nj = static_cast<u32>(asset.skins[0].joints.size());
     CHECK(nj >= 20U);
     bool any_skinned_mesh = false;
-    for (const auto& m : asset.meshes) { any_skinned_mesh = any_skinned_mesh || m.has_skin(); }
+    for (const auto& m : asset.meshes)
+    {
+        any_skinned_mesh = any_skinned_mesh || m.has_skin();
+    }
     CHECK(any_skinned_mesh);
 
     // keep the RAW reference channel data before the cook mutates/remaps anything
@@ -224,7 +248,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
         const auto& walk = asset.animations[1];
         for (const auto& ch : walk.channels)
         {
-            if (ch.interp == 2U) { continue; } // cubic keys checked via the engine gates; Fox is step/linear
+            if (ch.interp == 2U) // cubic keys checked via the engine gates; Fox is step/linear
+            {
+                continue;
+            }
             for (usize k = 0; k < ch.times.size(); ++k)
             {
                 RefKey r{};
@@ -232,7 +259,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
                 r.path  = ch.path;
                 r.t     = ch.times[k];
                 r.comps = ch.components;
-                for (u32 c = 0; c < ch.components && c < 4U; ++c) { r.v[c] = ch.values[k * ch.components + c]; }
+                for (u32 c = 0; c < ch.components && c < 4U; ++c)
+                {
+                    r.v[c] = ch.values[k * ch.components + c];
+                }
                 refs.push_back(r);
             }
         }
@@ -256,7 +286,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
     const containers::Array<u8>* walk_bytes = nullptr;
     for (const auto& extra : cooked.extra_artifacts)
     {
-        if (extra.type_fourcc == anim::kFourCC_SKEL) { skel_bytes = &extra.cooked_bytes; }
+        if (extra.type_fourcc == anim::kFourCC_SKEL)
+        {
+            skel_bytes = &extra.cooked_bytes;
+        }
         if (extra.type_fourcc == anim::kFourCC_ANIM
             && std::strstr(extra.name.c_str(), "Walk") != nullptr)
         {
@@ -274,7 +307,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
     auto* skel     = static_cast<anim::SkeletonResource*>(sl.load(lctx));
     REQUIRE(skel != nullptr);
     REQUIRE(skel->joint_count() == nj);
-    for (u32 j = 0; j < nj; ++j) { CHECK(skel->parents[j] < static_cast<i32>(j)); } // topological, always
+    for (u32 j = 0; j < nj; ++j) // topological, always
+    {
+        CHECK(skel->parents[j] < static_cast<i32>(j));
+    }
 
     anim::AnimClipLoader al;
     lctx.bytes  = containers::as_const_span(*walk_bytes);
@@ -288,7 +324,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
         const char* nname = asset.nodes[static_cast<usize>(node)].name.c_str();
         for (u32 j = 0; j < nj; ++j)
         {
-            if (std::strcmp(skel->joint_name(j), nname) == 0) { return static_cast<i32>(j); }
+            if (std::strcmp(skel->joint_name(j), nname) == 0)
+            {
+                return static_cast<i32>(j);
+            }
         }
         return -1;
     };
@@ -301,7 +340,10 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
     for (const auto& r : refs)
     {
         const i32 j = joint_of_node(r.node);
-        if (j < 0) { continue; }
+        if (j < 0)
+        {
+            continue;
+        }
         anim::sample_clip(*clip, *skel, r.t, {poses.data(), poses.size()});
         const anim::JointPose& pose = poses[static_cast<u32>(j)];
         if (r.path == 0U) // translation — the cook applied position_scale 1.0: bit-exact

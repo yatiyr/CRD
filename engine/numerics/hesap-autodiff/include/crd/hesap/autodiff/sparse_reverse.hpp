@@ -27,7 +27,10 @@ inline void csr_spmv(const int* row_ptr, const int* col_idx, const crd::f64* val
     for (int i = 0; i < m; ++i)
     {
         crd::f64 s = 0.0;
-        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e) { s += vals[e] * x[col_idx[e]]; }
+        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e)
+        {
+            s += vals[e] * x[col_idx[e]];
+        }
         y[i] = s;
     }
 }
@@ -35,7 +38,10 @@ inline void csr_spmv(const int* row_ptr, const int* col_idx, const crd::f64* val
 inline void csr_spmv_vjp(const int* row_ptr, const int* col_idx, const crd::f64* vals, const crd::f64* x,
                          const crd::f64* gy, crd::f64* gvals, crd::f64* gx, int m, int n) noexcept
 {
-    for (int j = 0; j < n; ++j) { gx[j] = 0.0; }
+    for (int j = 0; j < n; ++j)
+    {
+        gx[j] = 0.0;
+    }
     for (int i = 0; i < m; ++i)
     {
         const crd::f64 gyi = gy[i];
@@ -54,13 +60,19 @@ inline void csr_spmm(const int* row_ptr, const int* col_idx, const crd::f64* val
 {
     for (int i = 0; i < m; ++i)
     {
-        for (int c = 0; c < p; ++c) { y[i * p + c] = 0.0; }
+        for (int c = 0; c < p; ++c)
+        {
+            y[i * p + c] = 0.0;
+        }
         for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e)
         {
             const crd::f64  v  = vals[e];
             const crd::f64* xr = x + static_cast<crd::i64>(col_idx[e]) * p;
             crd::f64*       yr = y + static_cast<crd::i64>(i) * p;
-            for (int c = 0; c < p; ++c) { yr[c] += v * xr[c]; }
+            for (int c = 0; c < p; ++c)
+            {
+                yr[c] += v * xr[c];
+            }
         }
     }
 }
@@ -68,7 +80,10 @@ inline void csr_spmm(const int* row_ptr, const int* col_idx, const crd::f64* val
 inline void csr_spmm_vjp(const int* row_ptr, const int* col_idx, const crd::f64* vals, const crd::f64* x,
                          const crd::f64* gy, crd::f64* gvals, crd::f64* gx, int m, int n, int p) noexcept
 {
-    for (crd::i64 i = 0; i < static_cast<crd::i64>(n) * p; ++i) { gx[i] = 0.0; }
+    for (crd::i64 i = 0; i < static_cast<crd::i64>(n) * p; ++i)
+    {
+        gx[i] = 0.0;
+    }
     for (int i = 0; i < m; ++i)
     {
         const crd::f64* gyr = gy + static_cast<crd::i64>(i) * p;
@@ -92,7 +107,10 @@ inline void csr_spmm_vjp(const int* row_ptr, const int* col_idx, const crd::f64*
 // ---- a self-contained dense LU (partial pivoting) — the SOLVE's stored factor (reused for A and Aᵀ) -----------
 inline void dense_lu_factor(crd::f64* a, int* piv, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { piv[i] = i; }
+    for (int i = 0; i < n; ++i)
+    {
+        piv[i] = i;
+    }
     for (int k = 0; k < n; ++k)
     {
         int      p  = k;
@@ -100,7 +118,11 @@ inline void dense_lu_factor(crd::f64* a, int* piv, int n) noexcept
         for (int i = k + 1; i < n; ++i)
         {
             const crd::f64 v = crd::math::abs(a[i * n + k]);
-            if (v > mx) { mx = v; p = i; }
+            if (v > mx)
+            {
+                mx = v;
+                p = i;
+            }
         }
         if (p != k)
         {
@@ -119,18 +141,33 @@ inline void dense_lu_factor(crd::f64* a, int* piv, int n) noexcept
         {
             const crd::f64 f = a[i * n + k] / akk;
             a[i * n + k]     = f;
-            for (int j = k + 1; j < n; ++j) { a[i * n + j] -= f * a[k * n + j]; }
+            for (int j = k + 1; j < n; ++j)
+            {
+                a[i * n + j] -= f * a[k * n + j];
+            }
         }
     }
 }
 // Solve A·x = b using the stored factor (P·A = L·U). x may not alias b.
 inline void dense_lu_solve(const crd::f64* a, const int* piv, const crd::f64* b, crd::f64* x, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { x[i] = b[piv[i]]; }               // apply P
-    for (int i = 0; i < n; ++i) { for (int j = 0; j < i; ++j) { x[i] -= a[i * n + j] * x[j]; } } // L·y = Pb (unit diag)
+    for (int i = 0; i < n; ++i) // apply P
+    {
+        x[i] = b[piv[i]];
+    }
+    for (int i = 0; i < n; ++i) // L·y = Pb (unit diag)
+    {
+        for (int j = 0; j < i; ++j)
+        {
+            x[i] -= a[i * n + j] * x[j];
+        }
+    }
     for (int i = n - 1; i >= 0; --i)
     {
-        for (int j = i + 1; j < n; ++j) { x[i] -= a[i * n + j] * x[j]; }
+        for (int j = i + 1; j < n; ++j)
+        {
+            x[i] -= a[i * n + j] * x[j];
+        }
         x[i] /= a[i * n + i]; // U·x = y
     }
 }
@@ -141,14 +178,23 @@ inline void dense_lu_solve_t(const crd::f64* a, const int* piv, const crd::f64* 
     for (int i = 0; i < n; ++i) // Uᵀ·v = b (forward; Uᵀ lower-tri, diag = U_ii)
     {
         crd::f64 s = b[i];
-        for (int j = 0; j < i; ++j) { s -= a[j * n + i] * tmp[j]; }
+        for (int j = 0; j < i; ++j)
+        {
+            s -= a[j * n + i] * tmp[j];
+        }
         tmp[i] = s / a[i * n + i];
     }
     for (int i = n - 1; i >= 0; --i) // Lᵀ·w = v (back; Lᵀ upper-tri, unit diag) — in place
     {
-        for (int j = i + 1; j < n; ++j) { tmp[i] -= a[j * n + i] * tmp[j]; }
+        for (int j = i + 1; j < n; ++j)
+        {
+            tmp[i] -= a[j * n + i] * tmp[j];
+        }
     }
-    for (int i = 0; i < n; ++i) { x[piv[i]] = tmp[i]; } // x = Pᵀ·w
+    for (int i = 0; i < n; ++i) // x = Pᵀ·w
+    {
+        x[piv[i]] = tmp[i];
+    }
 }
 
 // ---- sparse solve  A·x = b  (A n×n CSR) --------------------------------------------------------------------
@@ -156,10 +202,16 @@ inline void dense_lu_solve_t(const crd::f64* a, const int* piv, const crd::f64* 
 inline void csr_solve(const int* row_ptr, const int* col_idx, const crd::f64* vals, const crd::f64* b, crd::f64* x,
                       int n, crd::f64* a, int* piv) noexcept
 {
-    for (crd::i64 i = 0; i < static_cast<crd::i64>(n) * n; ++i) { a[i] = 0.0; }
+    for (crd::i64 i = 0; i < static_cast<crd::i64>(n) * n; ++i)
+    {
+        a[i] = 0.0;
+    }
     for (int i = 0; i < n; ++i)
     {
-        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e) { a[static_cast<crd::i64>(i) * n + col_idx[e]] = vals[e]; }
+        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e)
+        {
+            a[static_cast<crd::i64>(i) * n + col_idx[e]] = vals[e];
+        }
     }
     dense_lu_factor(a, piv, n);
     dense_lu_solve(a, piv, b, x, n);
@@ -172,10 +224,16 @@ inline void csr_solve_vjp(const int* row_ptr, const int* col_idx, const crd::f64
                           crd::f64* tmp) noexcept
 {
     dense_lu_solve_t(a, piv, cx, z, n, tmp); // z = A⁻ᵀ·cx = b̄
-    for (int j = 0; j < n; ++j) { gb[j] = z[j]; }
+    for (int j = 0; j < n; ++j)
+    {
+        gb[j] = z[j];
+    }
     for (int i = 0; i < n; ++i)
     {
-        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e) { gvals[e] = -z[i] * x[col_idx[e]]; }
+        for (int e = row_ptr[i]; e < row_ptr[i + 1]; ++e)
+        {
+            gvals[e] = -z[i] * x[col_idx[e]];
+        }
     }
 }
 

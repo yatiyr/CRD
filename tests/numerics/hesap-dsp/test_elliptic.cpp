@@ -77,7 +77,12 @@ TEST_CASE("dsp elliptic: ellipap analog prototype matches scipy (poles + zeros +
     crd::containers::Array<f64> pre(zpk.p.allocator());
     crd::containers::Array<f64> pim(zpk.p.allocator());
     crd::containers::Array<crd::usize> ord(zpk.p.allocator());
-    for (usize i = 0; i < zpk.p.size(); ++i) { pre.push_back(zpk.p[i].re); pim.push_back(zpk.p[i].im); ord.push_back(i); }
+    for (usize i = 0; i < zpk.p.size(); ++i)
+    {
+        pre.push_back(zpk.p[i].re);
+        pim.push_back(zpk.p[i].im);
+        ord.push_back(i);
+    }
     std::sort(ord.data(), ord.data() + ord.size(), [&](usize a, usize b) {
         return key(pre[a]) != key(pre[b]) ? key(pre[a]) < key(pre[b]) : key(pim[a]) < key(pim[b]); });
     REQUIRE(zpk.p.size() * 2 == sizeof(ref_ellipap4_poles) / sizeof(double));

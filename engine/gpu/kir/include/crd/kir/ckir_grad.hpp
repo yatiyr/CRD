@@ -20,15 +20,25 @@ namespace grad_detail
 // NOLINTNEXTLINE(readability-non-const-parameter) -- perm is written (perm[k]=...); the check misfires on header-only fns
 inline void swap_last2(const Shape& sh, crd::u8* perm) noexcept
 {
-    for (int k = 0; k < sh.rank; ++k) { perm[k] = static_cast<crd::u8>(k); }
-    if (sh.rank >= 2) { perm[sh.rank - 1] = static_cast<crd::u8>(sh.rank - 2); perm[sh.rank - 2] = static_cast<crd::u8>(sh.rank - 1); }
+    for (int k = 0; k < sh.rank; ++k)
+    {
+        perm[k] = static_cast<crd::u8>(k);
+    }
+    if (sh.rank >= 2)
+    {
+        perm[sh.rank - 1] = static_cast<crd::u8>(sh.rank - 2);
+        perm[sh.rank - 2] = static_cast<crd::u8>(sh.rank - 1);
+    }
 }
 } // namespace grad_detail
 
 // accumulate a cotangent contribution into cot[node] (sum over consumers = a fresh Add node).
 inline void accumulate(KGraph& g, int* cot, int node, int contrib)
 {
-    if (contrib < 0) { return; }
+    if (contrib < 0)
+    {
+        return;
+    }
     cot[node] = (cot[node] < 0) ? contrib : g.binary(KOp::Add, cot[node], contrib);
 }
 
@@ -39,12 +49,18 @@ inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator*
 {
     const int n   = g.size();
     auto*     cot = static_cast<int*>(scratch->allocate(sizeof(int) * static_cast<crd::usize>(n), alignof(int)));
-    for (int i = 0; i < n; ++i) { cot[i] = -1; }
+    for (int i = 0; i < n; ++i)
+    {
+        cot[i] = -1;
+    }
     cot[output] = seed;
 
     for (int i = n - 1; i >= 0; --i)
     {
-        if (cot[i] < 0) { continue; }
+        if (cot[i] < 0)
+        {
+            continue;
+        }
         const KNode    node = g.node(i); // COPY — g grows below
         const int      gi   = cot[i];
         const Shape    ash  = node.a >= 0 ? g.node(node.a).shape : Shape{};
@@ -115,14 +131,23 @@ inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator*
         case KOp::Permute: // dA = permute(gi, inverse perm)
         {
             crd::u8 inv[kMaxRank];
-            for (int k = 0; k < node.shape.rank; ++k) { inv[node.perm[k]] = static_cast<crd::u8>(k); }
+            for (int k = 0; k < node.shape.rank; ++k)
+            {
+                inv[node.perm[k]] = static_cast<crd::u8>(k);
+            }
             accumulate(g, cot, node.a, g.permute(gi, inv));
             break;
         }
         case KOp::Broadcast: // dA = sum gi over the axes that were size-1 in A but expanded in the output
         {
             crd::u32 bmask = 0;
-            for (int k = 0; k < node.shape.rank; ++k) { if (ash.dims[k] == 1 && node.shape.dims[k] > 1) { bmask |= (1U << k); } }
+            for (int k = 0; k < node.shape.rank; ++k)
+            {
+                if (ash.dims[k] == 1 && node.shape.dims[k] > 1)
+                {
+                    bmask |= (1U << k);
+                }
+            }
             accumulate(g, cot, node.a, g.reduce(KOp::ReduceSum, gi, bmask));
             break;
         }
@@ -151,8 +176,18 @@ inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator*
         }
     }
 
-    for (int k = 0; k < n_inputs; ++k) { grad_of_input[k] = -1; }
-    for (int i = 0; i < n; ++i) { const KNode& nd = g.node(i); if (nd.op == KOp::Input) { grad_of_input[nd.iidx] = cot[i]; } }
+    for (int k = 0; k < n_inputs; ++k)
+    {
+        grad_of_input[k] = -1;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        const KNode& nd = g.node(i);
+        if (nd.op == KOp::Input)
+        {
+            grad_of_input[nd.iidx] = cot[i];
+        }
+    }
     scratch->deallocate(cot);
 }
 

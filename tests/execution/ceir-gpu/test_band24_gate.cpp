@@ -65,7 +65,11 @@ void build_band24(Context& ctx, Module& m)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const b = func::func_body_block(f);
@@ -185,7 +189,11 @@ void build_two_mlps(Context& ctx, Module& m)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const b = func::func_body_block(f);
@@ -213,7 +221,11 @@ void build_two_blocks(Context& ctx, Module& m)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const fa = func::create_func(ctx, m, "fa", Visibility::Public, 0U);
     top->append(fa);
     Block* const ba = func::func_body_block(fa);
@@ -427,7 +439,10 @@ TEST_CASE("ceir 29a-2: greedy-grow fuses a maximal subgraph run; a non-ml op spl
         CHECK(part.claimed_by(0) == 1U);   // mlp claimed
         CHECK(part.fallback() == 1U);      // attention falls back
         CHECK(part.subgraphs_of(0) == 0U); // coopvec is per-op (claims_subgraphs=false default)
-        for (crd::usize i = 0; i < part.assignments.size(); ++i) { CHECK(part.assignments[i].subgraph == -1); }
+        for (crd::usize i = 0; i < part.assignments.size(); ++i)
+        {
+            CHECK(part.assignments[i].subgraph == -1);
+        }
     }
 
     // (5) MONOTONIC ACROSS BLOCKS — one module, an mlp in each of two func bodies; a claims_subgraphs=true provider.
@@ -834,7 +849,10 @@ TEST_CASE("ceir 29c-1: plan_tensor_pipeline_partitioned tags each stage with its
         CHECK(p.stages.size() == blind.stages.size());   // metadata-only: no stage added/dropped by the tag
         CHECK(p.buffers.size() == blind.buffers.size());
         usize k = 0;
-        while (k < p.stages.size() && p.stages[k].provider == 0) { ++k; }
+        while (k < p.stages.size() && p.stages[k].provider == 0)
+        {
+            ++k;
+        }
         CHECK(k > 0U);              // the mlp claimed at least one stage
         CHECK(k < p.stages.size()); // ...and the attention's stages remain (the two-class split is real)
         for (usize s = 0; s < p.stages.size(); ++s)
@@ -866,7 +884,10 @@ TEST_CASE("ceir 29c-1: plan_tensor_pipeline_partitioned tags each stage with its
         // NON-VACUOUS: the mlp prefix genuinely contains a standalone relu dispatch (else contiguity would pass trivially — the
         // whole point is that a VizDispatch stage read the lineage correctly).
         usize n_viz = 0;
-        for (usize s = 0; s < k; ++s) { n_viz += plan.stages[s].kind == gpu::StageKind::VizDispatch ? 1U : 0U; }
+        for (usize s = 0; s < k; ++s)
+        {
+            n_viz += plan.stages[s].kind == gpu::StageKind::VizDispatch ? 1U : 0U;
+        }
         CHECK(n_viz > 0U);
     }
 

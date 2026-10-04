@@ -45,20 +45,28 @@ FeedResult feed_window(LivelockTracker& t, std::initializer_list<ProgressNode> n
     ProgressNode in[16];
     crd::usize   n = 0U;
     for (const ProgressNode& node : nodes)
+    {
         in[n++] = node;
+    }
     ProgressNode out[16]{};
     const crd::usize c = t.feed(std::span<const ProgressNode>(in, n), std::span<ProgressNode>(out, 16));
     FeedResult   r{c, {}};
     for (crd::usize i = 0U; i < c && i < 8U; ++i)
+    {
         r.ids[i] = out[i].task_id;
+    }
     return r;
 }
 
 bool contains(const FeedResult& r, crd::u64 id) noexcept
 {
     for (crd::usize i = 0U; i < r.count && i < 8U; ++i)
+    {
         if (r.ids[i] == id)
+        {
             return true;
+        }
+    }
     return false;
 }
 
@@ -79,7 +87,9 @@ void record_livelock(const crd::jobs::LivelockReport& r, void* /*user*/) noexcep
 {
     const int i = g_ll_fires.fetch_add(1, std::memory_order_relaxed);
     if (i >= 0 && i < 8)
+    {
         g_ll_ids[i].store(r.task_id, std::memory_order_relaxed);
+    }
 }
 void count_hang(const crd::jobs::HangReport& /*r*/, void* /*user*/) noexcept
 {
@@ -89,8 +99,12 @@ bool ll_fired_for(crd::u64 id) noexcept
 {
     const int n = g_ll_fires.load(std::memory_order_relaxed);
     for (int i = 0; i < n && i < 8; ++i)
+    {
         if (g_ll_ids[i].load(std::memory_order_relaxed) == id)
+        {
             return true;
+        }
+    }
     return false;
 }
 
@@ -101,7 +115,9 @@ void job_a(void* /*data*/) noexcept
     g_a_task.store(crd::jobs::current_task_id(), std::memory_order_release);
     crd::jobs::note_progress(); // opt in (epoch -> 1), then never again
     while (!g_b_flag.load(std::memory_order_acquire) && !g_escape.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
     g_a_flag.store(true, std::memory_order_release);
 }
 void job_b(void* /*data*/) noexcept
@@ -109,7 +125,9 @@ void job_b(void* /*data*/) noexcept
     g_b_task.store(crd::jobs::current_task_id(), std::memory_order_release);
     crd::jobs::note_progress();
     while (!g_a_flag.load(std::memory_order_acquire) && !g_escape.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
     g_b_flag.store(true, std::memory_order_release);
 }
 
@@ -129,13 +147,17 @@ void unmonitored_job(void* /*data*/) noexcept
 {
     const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
     while (std::chrono::steady_clock::now() < end && !g_escape.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
 }
 
 void gated_child(void* /*data*/) noexcept
 {
     while (!g_gate.load(std::memory_order_acquire))
+    {
         std::this_thread::yield();
+    }
 }
 
 // A monitored root that opts in and then PARKS on a gated child. While parked (waiting_on != nullptr) it is
@@ -164,7 +186,9 @@ TEST_CASE("livelock tracker: an advancing epoch never fires", "[jobs][diag][live
 {
     LivelockTracker t{3U};
     for (crd::u32 e = 1U; e <= 8U; ++e)
+    {
         CHECK(feed_window(t, {pn(0U, 0U, 100U, e)}).count == 0U); // epoch advances every window
+    }
 }
 
 TEST_CASE("livelock tracker: two monitored tasks fire independently", "[jobs][diag][livelock]")
@@ -233,11 +257,15 @@ TEST_CASE("livelock watchdog: a mutual livelock is reported for both tasks and n
 
     // Wait until both tasks are live (so we have their ids), then poll for the livelock report.
     while (g_a_task.load(std::memory_order_acquire) == 0 || g_b_task.load(std::memory_order_acquire) == 0)
+    {
         std::this_thread::yield();
+    }
     const crd::u64 ida = g_a_task.load(std::memory_order_relaxed);
     const crd::u64 idb = g_b_task.load(std::memory_order_relaxed);
     for (int i = 0; i < 400 && !(ll_fired_for(ida) && ll_fired_for(idb)); ++i)
+    {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     CHECK(ll_fired_for(ida));                                     // task A reported livelocked
     CHECK(ll_fired_for(idb));                                     // task B reported livelocked

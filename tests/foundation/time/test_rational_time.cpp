@@ -63,7 +63,10 @@ TEST_CASE("the NTSC drift gate: 24 hours of 23.976 accumulated one tick at a tim
     // one hour of frames per addition step keeps the loop cheap while exercising add() 24× + a tail
     const crd::i64     frames_per_hour = 3600LL * 24000LL / 1001LL; // 86313 (floor — NTSC hours are not integral)
     RationalTime       t               = make_time(0, ntsc);
-    for (int h = 0; h < 24; ++h) { t = add(t, make_time(frames_per_hour, ntsc)); }
+    for (int h = 0; h < 24; ++h)
+    {
+        t = add(t, make_time(frames_per_hour, ntsc));
+    }
     CHECK(t.value == frames_per_hour * 24);
     CHECK(t.rate == ntsc);
 

@@ -231,10 +231,34 @@ int main()
             }
             return best;
         };
-        const double slog = tloop([&] { for (int i = 0; i < kM; ++i) b[i] = dd::crd_log1(a[i]); });
-        const double vlog = tloop([&] { for (int i = 0; i < kM; i += 4) _mm256_store_pd(b + i, dd::crd_log4(_mm256_load_pd(a + i))); });
-        const double slg = tloop([&] { for (int i = 0; i < kM; ++i) b[i] = dd::crd_lgamma_lz1(a[i]); });
-        const double vlg = tloop([&] { for (int i = 0; i < kM; i += 4) _mm256_store_pd(b + i, dd::crd_lgamma_lz4(_mm256_load_pd(a + i))); });
+        const double slog = tloop([&]
+        {
+            for (int i = 0; i < kM; ++i)
+            {
+                b[i] = dd::crd_log1(a[i]);
+            }
+        });
+        const double vlog = tloop([&]
+        {
+            for (int i = 0; i < kM; i += 4)
+            {
+                _mm256_store_pd(b + i, dd::crd_log4(_mm256_load_pd(a + i)));
+            }
+        });
+        const double slg = tloop([&]
+        {
+            for (int i = 0; i < kM; ++i)
+            {
+                b[i] = dd::crd_lgamma_lz1(a[i]);
+            }
+        });
+        const double vlg = tloop([&]
+        {
+            for (int i = 0; i < kM; i += 4)
+            {
+                _mm256_store_pd(b + i, dd::crd_lgamma_lz4(_mm256_load_pd(a + i)));
+            }
+        });
         std::printf("\n# compute-bound microbench (in-cache, 1 thread) ns/elem — raw SIMD primitive throughput\n");
         std::printf("log             scalar %6.3f   simd %6.3f   speedup %.2fx\n", slog, vlog, slog / vlog);
         std::printf("lgamma(Lanczos) scalar %6.3f   simd %6.3f   speedup %.2fx\n", slg, vlg, slg / vlg);

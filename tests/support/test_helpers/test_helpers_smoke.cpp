@@ -163,7 +163,10 @@ TEST_CASE("CRD_PERF_BUDGET_LE passes for a fast lambda", "[test_helpers][perf]")
     // lambda + accepts the budget; v9 slices set realistic budgets per kernel.
     CRD_PERF_BUDGET_LE("trivial_noop", 1000.0, [&]{
         volatile int x = 0;
-        for (int i = 0; i < 100; ++i) { x += i; }
+        for (int i = 0; i < 100; ++i)
+        {
+            x += i;
+        }
         (void)x;
     });
     SUCCEED("CRD_PERF_BUDGET_LE accepted the budget");

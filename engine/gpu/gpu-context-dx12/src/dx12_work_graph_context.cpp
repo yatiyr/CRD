@@ -75,7 +75,10 @@ struct Dx12WorkGraphContext::Impl
 
     [[nodiscard]] bool submit_and_wait()
     {
-        if (!ok) { return false; }
+        if (!ok)
+        {
+            return false;
+        }
         bool submitted = false;
         if (FAILED(detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), fence_val, submitted))
             || FAILED(detail::dx12_wait(device.Get(), fence.Get(), fence_val, event))
@@ -93,14 +96,29 @@ Dx12WorkGraphContext::Dx12WorkGraphContext() : m_impl(std::make_unique<Impl>())
 {
     auto&                impl = *m_impl;
     ComPtr<ID3D12Device> dev0;
-    if (FAILED(impl.validation.create(dev0))) { return; }
-    if (FAILED(dev0.As(&impl.device))) { return; } // ID3D12Device9: CreateStateObject(work graph) + OPTIONS21
+    if (FAILED(impl.validation.create(dev0)))
+    {
+        return;
+    }
+    if (FAILED(dev0.As(&impl.device))) // ID3D12Device9: CreateStateObject(work graph) + OPTIONS21
+    {
+        return;
+    }
     D3D12_FEATURE_DATA_D3D12_OPTIONS21 o21{};
-    if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &o21, sizeof(o21)))) { return; }
-    if (o21.WorkGraphsTier < D3D12_WORK_GRAPHS_TIER_1_0) { return; } // no Work Graphs ⇒ valid() false, caller skips
+    if (FAILED(impl.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &o21, sizeof(o21))))
+    {
+        return;
+    }
+    if (o21.WorkGraphsTier < D3D12_WORK_GRAPHS_TIER_1_0) // no Work Graphs ⇒ valid() false, caller skips
+    {
+        return;
+    }
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue)))) { return; }
+    if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue))))
+    {
+        return;
+    }
     if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
     {
         return;
@@ -111,15 +129,24 @@ Dx12WorkGraphContext::Dx12WorkGraphContext() : m_impl(std::make_unique<Impl>())
     {
         return;
     }
-    if (FAILED(l0.As(&impl.list))) { return; } // ID3D12GraphicsCommandList10: SetProgram + DispatchGraph
-    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence)))) { return; }
+    if (FAILED(l0.As(&impl.list))) // ID3D12GraphicsCommandList10: SetProgram + DispatchGraph
+    {
+        return;
+    }
+    if (FAILED(impl.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&impl.fence))))
+    {
+        return;
+    }
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     impl.ok    = (impl.event != nullptr);
 }
 
 Dx12WorkGraphContext::~Dx12WorkGraphContext()
 {
-    if (m_impl->event != nullptr) { CloseHandle(m_impl->event); }
+    if (m_impl->event != nullptr)
+    {
+        CloseHandle(m_impl->event);
+    }
 }
 
 bool Dx12WorkGraphContext::valid() const noexcept { return m_impl->ok && SUCCEEDED(m_impl->device->GetDeviceRemovedReason()); }
@@ -128,7 +155,10 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
                                           crd::containers::ConstSpan<Binding> bindings)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || node_dxil.size() == 0U || program_name == nullptr || bindings.size() == 0U) { return false; }
+    if (!impl.ok || node_dxil.size() == 0U || program_name == nullptr || bindings.size() == 0U)
+    {
+        return false;
+    }
     crd::containers::Array<wchar_t> wprog;
     for (const char* pc = program_name; *pc != '\0'; ++pc)
     {
@@ -153,7 +183,10 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     rsd.Desc_1_1.pParameters   = params.data();
     ComPtr<ID3DBlob> rs_blob;
     ComPtr<ID3DBlob> rs_err;
-    if (FAILED(D3D12SerializeVersionedRootSignature(&rsd, &rs_blob, &rs_err))) { return false; }
+    if (FAILED(D3D12SerializeVersionedRootSignature(&rsd, &rs_blob, &rs_err)))
+    {
+        return false;
+    }
     ComPtr<ID3D12RootSignature> root_sig;
     if (FAILED(impl.device->CreateRootSignature(0, rs_blob->GetBufferPointer(), rs_blob->GetBufferSize(),
                                                 IID_PPV_ARGS(&root_sig))))
@@ -182,11 +215,17 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     sod.NumSubobjects = 3U;
     sod.pSubobjects   = sub;
     ComPtr<ID3D12StateObject> state;
-    if (FAILED(impl.device->CreateStateObject(&sod, IID_PPV_ARGS(&state)))) { return false; }
+    if (FAILED(impl.device->CreateStateObject(&sod, IID_PPV_ARGS(&state))))
+    {
+        return false;
+    }
 
     ComPtr<ID3D12StateObjectProperties1> props1;
     ComPtr<ID3D12WorkGraphProperties>    wgprops;
-    if (FAILED(state.As(&props1)) || FAILED(state.As(&wgprops))) { return false; }
+    if (FAILED(state.As(&props1)) || FAILED(state.As(&wgprops)))
+    {
+        return false;
+    }
     const D3D12_PROGRAM_IDENTIFIER prog_id = props1->GetProgramIdentifier(wprog.data());
     const UINT                     wg_index = wgprops->GetWorkGraphIndex(wprog.data());
     D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS mem{};
@@ -196,7 +235,10 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     {
         backing = make_buffer(impl.device.Get(), mem.MaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (backing == nullptr) { return false; }
+        if (backing == nullptr)
+        {
+            return false;
+        }
     }
 
     // ── device UAV buffers (+ UPLOAD staging: memcpy the input, or zeros, then copy in) ──
@@ -214,11 +256,20 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
                                   D3D12_RESOURCE_STATE_COPY_DEST);
         up_bufs[i]  = make_buffer(impl.device.Get(), bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
                                   D3D12_RESOURCE_STATE_GENERIC_READ);
-        if (dev_bufs[i] == nullptr || up_bufs[i] == nullptr) { return false; }
+        if (dev_bufs[i] == nullptr || up_bufs[i] == nullptr)
+        {
+            return false;
+        }
         void* p = nullptr;
         up_bufs[i]->Map(0, nullptr, &p);
-        if (bindings[i].upload != nullptr) { std::memcpy(p, bindings[i].upload, static_cast<size_t>(bindings[i].bytes)); }
-        else { std::memset(p, 0, static_cast<size_t>(bytes)); } // zero-init (the output counter starts at 0)
+        if (bindings[i].upload != nullptr)
+        {
+            std::memcpy(p, bindings[i].upload, static_cast<size_t>(bindings[i].bytes));
+        }
+        else // zero-init (the output counter starts at 0)
+        {
+            std::memset(p, 0, static_cast<size_t>(bytes));
+        }
         up_bufs[i]->Unmap(0, nullptr);
         impl.list->CopyResource(dev_bufs[i].Get(), up_bufs[i].Get());
         transition(impl.list.Get(), dev_bufs[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -249,18 +300,30 @@ bool Dx12WorkGraphContext::dispatch_graph(crd::containers::ConstSpan<crd::u8> no
     // ── readback: UAV -> COPY_SOURCE -> a READBACK buffer, still in this one-shot list ──
     for (crd::u32 i = 0; i < nb; ++i)
     {
-        if (bindings[i].readback == nullptr) { continue; }
+        if (bindings[i].readback == nullptr)
+        {
+            continue;
+        }
         uav_barrier(impl.list.Get(), dev_bufs[i].Get());
         transition(impl.list.Get(), dev_bufs[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
         rb_bufs[i] = make_buffer(impl.device.Get(), bindings[i].bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
                                  D3D12_RESOURCE_STATE_COPY_DEST);
-        if (rb_bufs[i] == nullptr) { return false; }
+        if (rb_bufs[i] == nullptr)
+        {
+            return false;
+        }
         impl.list->CopyResource(rb_bufs[i].Get(), dev_bufs[i].Get());
     }
-    if (!impl.submit_and_wait()) { return false; }
+    if (!impl.submit_and_wait())
+    {
+        return false;
+    }
     for (crd::u32 i = 0; i < nb; ++i)
     {
-        if (bindings[i].readback == nullptr) { continue; }
+        if (bindings[i].readback == nullptr)
+        {
+            continue;
+        }
         void*             p     = nullptr;
         const D3D12_RANGE range = {0, static_cast<SIZE_T>(bindings[i].bytes)};
         rb_bufs[i]->Map(0, &range, &p);

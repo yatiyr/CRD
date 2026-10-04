@@ -106,7 +106,10 @@ TEST_CASE("ceir 8c: a >=bit-32 callee family lifts transitively into the caller'
         m->body()->append(top);
         Operation* const callee = fn::create_func(ctx, *m, "callee", Visibility::Private, 0U); // NOT exported
         top->append(callee);
-        if (callee_has_agent) { fn::func_body_block(callee)->append(ctx.create_operation(a, {}, 0U)); }
+        if (callee_has_agent)
+        {
+            fn::func_body_block(callee)->append(ctx.create_operation(a, {}, 0U));
+        }
         Operation* const caller = fn::create_func(ctx, *m, "caller", Visibility::Public, 0U);
         top->append(caller);
         fn::func_body_block(caller)->append(fn::create_call(ctx, "callee", ConstSpan<Value*>{}, 0U));

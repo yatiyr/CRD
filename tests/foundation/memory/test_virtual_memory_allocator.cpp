@@ -118,7 +118,10 @@ TEST_CASE("vma purge decommits the tail and recommit re-zeroes", "[vmalloc]")
 {
     VirtualMemoryAllocator a(small_cfg());
     auto* p = static_cast<crd::u8*>(a.allocate(200 * 1024));
-    for (crd::usize i = 0; i < 200 * 1024; ++i) { p[i] = 0xCD; }
+    for (crd::usize i = 0; i < 200 * 1024; ++i)
+    {
+        p[i] = 0xCD;
+    }
     const crd::usize committed_before = a.committed_bytes();
     REQUIRE(committed_before > 0);
 
@@ -136,24 +139,36 @@ TEST_CASE("vma reallocate grows the top allocation in place", "[vmalloc]")
 {
     VirtualMemoryAllocator a(small_cfg());
     auto* p = static_cast<crd::u8*>(a.allocate(64));
-    for (int i = 0; i < 64; ++i) { p[i] = static_cast<crd::u8>(i); }
+    for (int i = 0; i < 64; ++i)
+    {
+        p[i] = static_cast<crd::u8>(i);
+    }
 
     void* grown = a.reallocate(p, 64, 4096);
     REQUIRE(grown == p); // top allocation grows without moving
     auto* g = static_cast<crd::u8*>(grown);
-    for (int i = 0; i < 64; ++i) { REQUIRE(g[i] == static_cast<crd::u8>(i)); } // data preserved
+    for (int i = 0; i < 64; ++i) // data preserved
+    {
+        REQUIRE(g[i] == static_cast<crd::u8>(i));
+    }
 }
 
 TEST_CASE("vma reallocate copies when not the top allocation", "[vmalloc]")
 {
     VirtualMemoryAllocator a(small_cfg());
     auto* p = static_cast<crd::u8*>(a.allocate(64));
-    for (int i = 0; i < 64; ++i) { p[i] = static_cast<crd::u8>(0xA0 + i); }
+    for (int i = 0; i < 64; ++i)
+    {
+        p[i] = static_cast<crd::u8>(0xA0 + i);
+    }
     a.allocate(64); // p is no longer the top
 
     auto* moved = static_cast<crd::u8*>(a.reallocate(p, 64, 128));
     REQUIRE(moved != p); // had to relocate
-    for (int i = 0; i < 64; ++i) { REQUIRE(moved[i] == static_cast<crd::u8>(0xA0 + i)); }
+    for (int i = 0; i < 64; ++i)
+    {
+        REQUIRE(moved[i] == static_cast<crd::u8>(0xA0 + i));
+    }
 }
 
 TEST_CASE("vma try_allocate returns nullptr past the reservation (graceful OOM)", "[vmalloc]")
@@ -200,7 +215,10 @@ TEST_CASE("vma fresh commit reads back zero", "[vmalloc]")
 {
     VirtualMemoryAllocator a(small_cfg());
     auto* p = static_cast<crd::u8*>(a.allocate(8 * 1024));
-    for (crd::usize i = 0; i < 8 * 1024; ++i) { REQUIRE(p[i] == 0); }
+    for (crd::usize i = 0; i < 8 * 1024; ++i)
+    {
+        REQUIRE(p[i] == 0);
+    }
 }
 
 TEST_CASE("vma low allocation survives a purge of higher pages (stable address)", "[vmalloc]")

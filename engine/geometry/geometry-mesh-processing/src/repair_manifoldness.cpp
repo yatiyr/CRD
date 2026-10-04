@@ -150,7 +150,10 @@ void repair_non_manifold_edges_phase(crd::containers::Array<crd::math::Vec3<T>>&
     {
         const crd::u32 u = he_origin(indices, h);
         const crd::u32 v = he_dest(indices, h);
-        if (u == v) { continue; } // skip degenerate
+        if (u == v) // skip degenerate
+        {
+            continue;
+        }
         const crd::u64 key = edge_key(u, v);
         auto* slot = edge_to_hes.find(key);
         if (slot == nullptr)
@@ -171,14 +174,20 @@ void repair_non_manifold_edges_phase(crd::containers::Array<crd::math::Vec3<T>>&
     crd::containers::Array<crd::u64> non_manifold_keys(alloc);
     for (auto it = edge_to_hes.begin(); it != edge_to_hes.end(); ++it)
     {
-        if (it.value().size() > 2U) { non_manifold_keys.push_back(it.key()); }
+        if (it.value().size() > 2U)
+        {
+            non_manifold_keys.push_back(it.key());
+        }
     }
     for (crd::u32 ki = 0; ki < non_manifold_keys.size(); ++ki)
     {
         auto* hes_ptr = edge_to_hes.find(non_manifold_keys[ki]);
         CRD_ASSERT(hes_ptr != nullptr);
         auto& hes = *hes_ptr;
-        if (hes.size() <= 2U) { continue; }
+        if (hes.size() <= 2U)
+        {
+            continue;
+        }
 
         ++report.non_manifold_edges_detected;
 
@@ -190,8 +199,14 @@ void repair_non_manifold_edges_phase(crd::containers::Array<crd::math::Vec3<T>>&
             const crd::u32 h = hes[i];
             const crd::u32 u = he_origin(indices, h);
             const crd::u32 v = he_dest(indices, h);
-            if (u < v) { forwards.push_back(h); }
-            else        { backwards.push_back(h); }
+            if (u < v)
+            {
+                forwards.push_back(h);
+            }
+            else
+            {
+                backwards.push_back(h);
+            }
         }
 
         const crd::u32 pair_count = forwards.size() < backwards.size()
@@ -284,8 +299,14 @@ bool share_edge_through_vertex(const crd::containers::Array<crd::u32>& indices,
     for (crd::u32 c = 0; c < 3U; ++c)
     {
         const crd::u32 tb_v = tb_verts[c];
-        if (tb_v == v) { continue; }
-        if (tb_v == ta_v0 || tb_v == ta_v1 || tb_v == ta_v2) { return true; }
+        if (tb_v == v)
+        {
+            continue;
+        }
+        if (tb_v == ta_v0 || tb_v == ta_v1 || tb_v == ta_v2)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -315,8 +336,14 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
 
     for (crd::u32 v = 0; v < vert_pool; ++v)
     {
-        if (!temp.vertex_alive(v)) { continue; }
-        if (processed[v] != 0U) { continue; }
+        if (!temp.vertex_alive(v))
+        {
+            continue;
+        }
+        if (processed[v] != 0U)
+        {
+            continue;
+        }
         processed[v] = 1U;
 
         // Walk-count = #outgoings visited by the CW fan walk (closes on
@@ -328,24 +355,40 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
         crd::u32 slot_count = 0;
         for (crd::u32 h = 0; h < temp.he_pool_size(); ++h)
         {
-            if (temp.he_alive(h) && temp.he(h).origin == v) { ++slot_count; }
+            if (temp.he_alive(h) && temp.he(h).origin == v)
+            {
+                ++slot_count;
+            }
         }
 
-        if (walk_count == slot_count) { continue; }
+        if (walk_count == slot_count)
+        {
+            continue;
+        }
         ++report.bowtie_vertices_detected;
 
         // Bowtie detected. Identify fans by BFS over triangle-to-triangle
         // adjacency at v.
         crd::containers::Array<crd::u32> tris_at_v(alloc);
         collect_triangles_at_vertex(indices, v, tris_at_v);
-        if (tris_at_v.size() < 2U) { continue; }
+        if (tris_at_v.size() < 2U)
+        {
+            continue;
+        }
 
         // Disjoint-set / union-find via parent array.
         crd::containers::Array<crd::u32> parent(alloc);
         parent.resize(tris_at_v.size(), crd::u32{0});
-        for (crd::u32 i = 0; i < parent.size(); ++i) { parent[i] = i; }
+        for (crd::u32 i = 0; i < parent.size(); ++i)
+        {
+            parent[i] = i;
+        }
         auto find_root = [&](crd::u32 x) {
-            while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
             return x;
         };
         auto unite = [&](crd::u32 a, crd::u32 b) {
@@ -353,8 +396,14 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
             const crd::u32 rb = find_root(b);
             if (ra != rb)
             {
-                if (ra < rb) { parent[rb] = ra; }
-                else          { parent[ra] = rb; }
+                if (ra < rb)
+                {
+                    parent[rb] = ra;
+                }
+                else
+                {
+                    parent[ra] = rb;
+                }
             }
         };
 
@@ -378,7 +427,10 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
         auto find_or_make_fan_index = [&](crd::u32 r) -> crd::u32 {
             for (crd::u32 fi = 0; fi < fan_roots.size(); ++fi)
             {
-                if (fan_roots[fi] == r) { return fi; }
+                if (fan_roots[fi] == r)
+                {
+                    return fi;
+                }
             }
             fan_roots.push_back(r);
             crd::containers::Array<crd::u32> lst(alloc);
@@ -392,14 +444,20 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
             fan_tris[fi].push_back(tris_at_v[i]);
         }
 
-        if (fan_roots.size() < 2U) { continue; } // false positive — single fan
+        if (fan_roots.size() < 2U) // false positive — single fan
+        {
+            continue;
+        }
 
         // First fan (= the fan containing the lowest-indexed triangle)
         // keeps `v`. Sort fan indices by their MIN triangle id so we
         // deterministically pick that fan.
         crd::containers::Array<crd::u32> fan_order(alloc);
         fan_order.resize(fan_roots.size(), crd::u32{0});
-        for (crd::u32 i = 0; i < fan_roots.size(); ++i) { fan_order[i] = i; }
+        for (crd::u32 i = 0; i < fan_roots.size(); ++i)
+        {
+            fan_order[i] = i;
+        }
         // Insertion sort by min triangle id.
         for (crd::u32 i = 1; i < fan_order.size(); ++i)
         {
@@ -410,7 +468,10 @@ void repair_bowtie_vertices_phase(crd::containers::Array<crd::math::Vec3<T>>& po
             {
                 const crd::u32 kj = fan_order[j - 1];
                 const crd::u32 mj = fan_tris[kj][0];
-                if (mj <= mi) { break; }
+                if (mj <= mi)
+                {
+                    break;
+                }
                 fan_order[j] = fan_order[j - 1];
                 --j;
             }
@@ -442,7 +503,10 @@ HalfEdgeMesh<T> repair_manifoldness(const HalfEdgeMesh<T>&               input,
 {
     RepairManifoldnessReport report{};
     auto                      report_out = [&] {
-        if (out_report != nullptr) { *out_report = report; }
+        if (out_report != nullptr)
+        {
+            *out_report = report;
+        }
     };
 
     crd::memory::IAllocator* alloc = opts.output_allocator != nullptr

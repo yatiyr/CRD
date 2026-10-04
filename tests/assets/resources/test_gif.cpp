@@ -100,7 +100,10 @@ Array<crd::u8> lzw_encode(const crd::u8* idx, crd::usize n, crd::u8 min_cs, crd:
             ++next;
             // Encoder grows one code LATER than the decoder: the decoder assigns entries one step behind (its first
             // code after a clear adds nothing), so it hits 2^width one code later. Pair with it via `next == 2^width+1`.
-            if (next == (1U << width) + 1U && width < 12U) { ++width; }
+            if (next == (1U << width) + 1U && width < 12U)
+            {
+                ++width;
+            }
         }
         else
         {
@@ -126,13 +129,22 @@ Array<crd::u8> build_gif(crd::memory::IAllocator* a, crd::u32 w, crd::u32 h, con
     Array<crd::u8> g(a);
     const bool     use89 = transparent >= 0;
     const char*    sig   = use89 ? "GIF89a" : "GIF87a";
-    for (int i = 0; i < 6; ++i) { g.push_back(static_cast<crd::u8>(sig[i])); }
+    for (int i = 0; i < 6; ++i)
+    {
+        g.push_back(static_cast<crd::u8>(sig[i]));
+    }
 
     crd::u8 nbits = 0;
-    while ((2U << nbits) < pn) { ++nbits; } // 2^(nbits+1) >= pn
+    while ((2U << nbits) < pn) // 2^(nbits+1) >= pn
+    {
+        ++nbits;
+    }
     const crd::u32 gsz     = 2U << nbits;   // padded table entries
     crd::u8        min_cs  = static_cast<crd::u8>(nbits + 1U);
-    if (min_cs < 2U) { min_cs = 2U; }
+    if (min_cs < 2U)
+    {
+        min_cs = 2U;
+    }
 
     put16le(g, static_cast<crd::u16>(w));
     put16le(g, static_cast<crd::u16>(h));
@@ -182,13 +194,19 @@ Array<crd::u8> build_gif(crd::memory::IAllocator* a, crd::u32 w, crd::u32 h, con
         {
             for (crd::u32 y = starts[pass]; y < h; y += steps[pass])
             {
-                for (crd::u32 x = 0; x < w; ++x) { order.push_back(idx[y * w + x]); }
+                for (crd::u32 x = 0; x < w; ++x)
+                {
+                    order.push_back(idx[y * w + x]);
+                }
             }
         }
     }
     else
     {
-        for (crd::u32 i = 0; i < w * h; ++i) { order.push_back(idx[i]); }
+        for (crd::u32 i = 0; i < w * h; ++i)
+        {
+            order.push_back(idx[i]);
+        }
     }
 
     const Array<crd::u8> lzw = lzw_encode(order.data(), order.size(), min_cs, a);
@@ -196,9 +214,15 @@ Array<crd::u8> build_gif(crd::memory::IAllocator* a, crd::u32 w, crd::u32 h, con
     while (off < lzw.size())
     {
         crd::usize chunk = lzw.size() - off;
-        if (chunk > 255U) { chunk = 255U; }
+        if (chunk > 255U)
+        {
+            chunk = 255U;
+        }
         g.push_back(static_cast<crd::u8>(chunk));
-        for (crd::usize i = 0; i < chunk; ++i) { g.push_back(lzw[off + i]); }
+        for (crd::usize i = 0; i < chunk; ++i)
+        {
+            g.push_back(lzw[off + i]);
+        }
         off += chunk;
     }
     g.push_back(0x00); // block terminator
@@ -218,7 +242,10 @@ TEST_CASE("resources: GIF solid + patterned round-trip (RGBA8, dict + KwKwK)", "
     crd::u8            idx[w * h];
     for (crd::u32 y = 0; y < h; ++y)
     {
-        for (crd::u32 x = 0; x < w; ++x) { idx[y * w + x] = static_cast<crd::u8>(((x / 2U) + y) % 4U); }
+        for (crd::u32 x = 0; x < w; ++x)
+        {
+            idx[y * w + x] = static_cast<crd::u8>(((x / 2U) + y) % 4U);
+        }
     }
     const Array<crd::u8> gif = build_gif(&alloc, w, h, pal, 4, idx, -1, false);
 
@@ -249,7 +276,10 @@ TEST_CASE("resources: GIF code-width GROWTH across many entries", "[resources][g
     crd::u8            idx[w * h];
     for (crd::u32 y = 0; y < h; ++y)
     {
-        for (crd::u32 x = 0; x < w; ++x) { idx[y * w + x] = static_cast<crd::u8>((x + y) % 4U); }
+        for (crd::u32 x = 0; x < w; ++x)
+        {
+            idx[y * w + x] = static_cast<crd::u8>((x + y) % 4U);
+        }
     }
     const Array<crd::u8> gif = build_gif(&alloc, w, h, pal, 4, idx, -1, false);
     GifImage             img(&alloc);
@@ -276,7 +306,10 @@ TEST_CASE("resources: GIF89a transparency index becomes alpha 0", "[resources][g
     {
         const bool transp = (idx[i] == 1U);
         CHECK(img.pixels[i * 4U + 3U] == (transp ? 0U : 255U));
-        if (!transp) { CHECK(img.pixels[i * 4U + 0U] == 255U); } // index 0 = red, opaque
+        if (!transp) // index 0 = red, opaque
+        {
+            CHECK(img.pixels[i * 4U + 0U] == 255U);
+        }
     }
 }
 
@@ -289,7 +322,10 @@ TEST_CASE("resources: GIF interlace de-scatters to row-major", "[resources][gif]
     crd::u8                    idx[w * h];
     for (crd::u32 y = 0; y < h; ++y)
     {
-        for (crd::u32 x = 0; x < w; ++x) { idx[y * w + x] = static_cast<crd::u8>((y * 3U + x) % 2U); }
+        for (crd::u32 x = 0; x < w; ++x)
+        {
+            idx[y * w + x] = static_cast<crd::u8>((y * 3U + x) % 2U);
+        }
     }
     const Array<crd::u8> gif = build_gif(&alloc, w, h, pal, 2, idx, -1, /*interlace=*/true);
     GifImage             img(&alloc);

@@ -25,6 +25,7 @@ template <typename T> SparseMatrix<T, SparseFormat::Csr> laplace2d(crd::memory::
     const crd::u32 n = g * g;
     TripletBuilder<T> b(a, n, n);
     for (crd::u32 y = 0; y < g; ++y)
+    {
         for (crd::u32 x = 0; x < g; ++x)
         {
             const crd::u32 i = y * g + x;
@@ -46,6 +47,7 @@ template <typename T> SparseMatrix<T, SparseFormat::Csr> laplace2d(crd::memory::
                 b.add(i, i - g, T(-1));
             }
         }
+    }
     return b.compress();
 }
 } // namespace

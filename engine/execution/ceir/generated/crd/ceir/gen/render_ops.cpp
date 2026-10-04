@@ -17,117 +17,311 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_color_attachment(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_depth_attachment(const Context& /*ctx*/, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
     return true;
 }
 [[nodiscard]] bool verify_draw(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 2U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_draw_indexed(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 3U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_draw_indirect(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_draw_indirect_count(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 2U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 2U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_mesh_dispatch(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 3U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 3U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_mesh_dispatch_indirect(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() < 1U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() < 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_mesh_dispatch_list(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("primitive");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("primitive");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_scene_draw_list(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("program");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("access");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("program");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("access");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_scope(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 1U) { return false; }
-    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U) { return false; }
-    { const AttrId a = op.attr("width");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("height");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 1U)
+    {
+        return false;
+    }
+    if (op.region(0U)->first_block() != nullptr && op.region(0U)->first_block()->num_args() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("width");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("height");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

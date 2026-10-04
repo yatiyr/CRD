@@ -25,7 +25,9 @@ static bool spin_until(const std::atomic<int>& v, int target, int timeout_ms = 3
     while (v.load(std::memory_order_acquire) < target)
     {
         if (std::chrono::steady_clock::now() > deadline)
+        {
             return false;
+        }
         std::this_thread::yield();
     }
     return true;
@@ -154,7 +156,9 @@ TEST_CASE("worker_pool: pinned job executes via pump on thread 0", "[jobs][worke
     // Thread 0 must pump — worker threads never check thread 0's pinned slot.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (done.load() == 0 && std::chrono::steady_clock::now() < deadline)
+    {
         (void)pool.pump();
+    }
 
     REQUIRE(done.load() == 1);
     pool.shutdown();
@@ -175,7 +179,9 @@ TEST_CASE("worker_pool: multiple jobs all execute", "[jobs][worker_pool]")
     constexpr int k_jobs = 100;
     std::atomic<int> done{0};
     for (int i = 0; i < k_jobs; ++i)
+    {
         pool.push(make_inc_job(&done));
+    }
 
     REQUIRE(spin_until(done, k_jobs, 5000));
     pool.shutdown();
@@ -246,7 +252,9 @@ TEST_CASE("worker_pool: concurrent multi-thread stress", "[jobs][worker_pool]")
     constexpr int k_jobs = 1000;
     std::atomic<int> done{0};
     for (int i = 0; i < k_jobs; ++i)
+    {
         pool.push(make_inc_job(&done));
+    }
 
     REQUIRE(spin_until(done, k_jobs, 10000));
     pool.shutdown();
@@ -803,7 +811,9 @@ TEST_CASE("worker_pool: shutdown with pending raw jobs does not crash", "[jobs][
     // Shutdown must not assert or crash due to leftover items in the queue.
     std::atomic<int> counter{0};
     for (int i = 0; i < 8; ++i)
+    {
         pool.push(make_inc_job(&counter));
+    }
 
     pool.shutdown(); // must succeed cleanly
     // counter may be < 8 — no jobs ran — that is expected and acceptable.

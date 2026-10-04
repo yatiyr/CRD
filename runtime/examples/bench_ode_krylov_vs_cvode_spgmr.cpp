@@ -116,7 +116,9 @@ void cvode_spgmr_solve(Params& p, const cont::Array<f64>& u0, double rtol, doubl
     N_Vector y = N_VNew_Serial(n, ctx);
     double* yd = N_VGetArrayPointer(y);
     for (int i = 0; i < n; ++i)
+    {
         yd[i] = u0[i];
+    }
     void* mem = CVodeCreate(CV_BDF, ctx);
     CVodeInit(mem, cv_rhs, 0.0, y);
     CVodeSStolerances(mem, rtol, rtol * 1e-3);
@@ -131,7 +133,9 @@ void cvode_spgmr_solve(Params& p, const cont::Array<f64>& u0, double rtol, doubl
     double* yo = N_VGetArrayPointer(y);
     y_out.resize(n);
     for (int i = 0; i < n; ++i)
+    {
         y_out[i] = yo[i];
+    }
     CVodeFree(&mem);
     SUNLinSolFree(LS);
     N_VDestroy(y);
@@ -152,11 +156,13 @@ int main()
     cont::Array<f64> u0(&alloc);
     u0.resize(n);
     for (int i = 0; i < p.nx; ++i)
+    {
         for (int j = 0; j < p.ny; ++j)
         {
             const double x = i * p.dx, yv = j * p.dy;
             u0[i * p.ny + j] = std::exp(-((x - kPi) * (x - kPi) + (yv - kPi) * (yv - kPi)));
         }
+    }
 
     // Reference: CVODE-SPGMR at rtol 1e-13.
     cont::Array<f64> uref(&alloc);
@@ -168,7 +174,9 @@ int main()
     {
         double m = 0.0;
         for (int i = 0; i < n; ++i)
+        {
             m = std::max(m, std::abs(u[i] - uref[i]));
+        }
         return m;
     };
 
@@ -195,7 +203,9 @@ int main()
                                [&]
                                {
                                    for (int i = 0; i < n; ++i)
+                                   {
                                        uc[i] = u0[i];
+                                   }
                                    ode::KrylovOdeLinearSolver<f64> ks(&alloc, 60, 0.05, 2000);
                                    ode::OdeOptions<f64> o;
                                    o.rtol = rtol;
@@ -234,11 +244,19 @@ int main()
     {
         int ci = -1, ai = -1;
         for (int k = 0; k < kN; ++k)
+        {
             if (c_err[k] <= target && (ci < 0 || c_ms[k] < c_ms[ci]))
+            {
                 ci = k;
+            }
+        }
         for (int k = 0; k < kN; ++k)
+        {
             if (a_err[k] <= target && (ai < 0 || a_ms[k] < a_ms[ai]))
+            {
                 ai = k;
+            }
+        }
         if (ci < 0 || ai < 0)
         {
             std::printf("%-10.0e | (not reached in sweep)\n", target);

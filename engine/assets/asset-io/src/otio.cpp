@@ -26,7 +26,10 @@ namespace
 
     void set_detail(OtioDiag* diag, const char* what, const char* schema)
     {
-        if (diag == nullptr) { return; }
+        if (diag == nullptr)
+        {
+            return;
+        }
         std::snprintf(diag->detail, sizeof(diag->detail), "%s%s%s", what, schema != nullptr ? ": " : "",
                       schema != nullptr ? schema : "");
     }
@@ -35,11 +38,17 @@ namespace
     [[nodiscard]] bool schema_is(const JsonDoc& doc, crd::u32 obj, const char* name)
     {
         const crd::u32 s = json::find(doc, obj, "OTIO_SCHEMA");
-        if (s == json::kInvalid || doc.nodes[s].type != json::JsonType::String) { return false; }
+        if (s == json::kInvalid || doc.nodes[s].type != json::JsonType::String)
+        {
+            return false;
+        }
         const char*      text = doc.strings.data() + doc.nodes[s].str_off;
         const crd::u32   len  = doc.nodes[s].str_len;
         const crd::usize n    = std::strlen(name);
-        if (len < n + 2 || std::memcmp(text, name, n) != 0) { return false; }
+        if (len < n + 2 || std::memcmp(text, name, n) != 0)
+        {
+            return false;
+        }
         return text[n] == '.';
     }
 
@@ -48,13 +57,19 @@ namespace
     {
         buf[0]           = '\0';
         const crd::u32 s = json::find(doc, obj, "OTIO_SCHEMA");
-        if (s != json::kInvalid) { (void)json::str_value(doc, s, buf, cap); }
+        if (s != json::kInvalid)
+        {
+            (void)json::str_value(doc, s, buf, cap);
+        }
     }
 
     void read_string(const JsonDoc& doc, crd::u32 node, crd::containers::String& out)
     {
         out = "";
-        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::String) { return; }
+        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::String)
+        {
+            return;
+        }
         out.append(doc.strings.data() + doc.nodes[node].str_off, doc.nodes[node].str_len);
     }
 
@@ -65,8 +80,14 @@ namespace
 
     [[nodiscard]] bool parse_rational_time(const JsonDoc& doc, crd::u32 node, crd::time::RationalTime& out)
     {
-        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::Object) { return false; }
-        if (!schema_is(doc, node, "RationalTime")) { return false; }
+        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::Object)
+        {
+            return false;
+        }
+        if (!schema_is(doc, node, "RationalTime"))
+        {
+            return false;
+        }
         const crd::f64 rate  = json::as_f64(doc, json::find(doc, node, "rate"), 0.0);
         const crd::f64 value = json::as_f64(doc, json::find(doc, node, "value"), 0.0);
         out                  = crd::time::time_from_f64(value, rate);
@@ -75,10 +96,22 @@ namespace
 
     [[nodiscard]] bool parse_time_range(const JsonDoc& doc, crd::u32 node, crd::time::TimeRange& out)
     {
-        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::Object) { return false; }
-        if (!schema_is(doc, node, "TimeRange")) { return false; }
-        if (!parse_rational_time(doc, json::find(doc, node, "start_time"), out.start)) { return false; }
-        if (!parse_rational_time(doc, json::find(doc, node, "duration"), out.duration)) { return false; }
+        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::Object)
+        {
+            return false;
+        }
+        if (!schema_is(doc, node, "TimeRange"))
+        {
+            return false;
+        }
+        if (!parse_rational_time(doc, json::find(doc, node, "start_time"), out.start))
+        {
+            return false;
+        }
+        if (!parse_rational_time(doc, json::find(doc, node, "duration"), out.duration))
+        {
+            return false;
+        }
         return out.valid();
     }
 
@@ -121,7 +154,10 @@ namespace
             else // GeneratorReference et al. — the edit survives, the media is unresolvable here
             {
                 ref.kind = OtioMediaKind::Missing;
-                if (ctx.diag != nullptr) { ++ctx.diag->degraded_media_refs; }
+                if (ctx.diag != nullptr)
+                {
+                    ++ctx.diag->degraded_media_refs;
+                }
             }
         }
         ctx.out.media.push_back(std::move(ref));
@@ -154,10 +190,16 @@ namespace
             }
             else
             {
-                if (ctx.diag != nullptr) { ++ctx.diag->skipped_effects; }
+                if (ctx.diag != nullptr)
+                {
+                    ++ctx.diag->skipped_effects;
+                }
                 continue;
             }
-            if (first == kOtioInvalid) { first = static_cast<crd::u32>(ctx.out.effects.size()); }
+            if (first == kOtioInvalid)
+            {
+                first = static_cast<crd::u32>(ctx.out.effects.size());
+            }
             ctx.out.effects.push_back(fx);
             ++count;
         }
@@ -177,7 +219,10 @@ namespace
         for (crd::u32 i = 0; i < n; ++i)
         {
             const crd::u32 m = json::at(ctx.doc, markers_node, i);
-            if (!schema_is(ctx.doc, m, "Marker")) { continue; } // unknown marker schema: skip, markers are annotations
+            if (!schema_is(ctx.doc, m, "Marker")) // unknown marker schema: skip, markers are annotations
+            {
+                continue;
+            }
             ImportedMarker marker(ctx.alloc);
             read_string(ctx.doc, json::find(ctx.doc, m, "name"), marker.name);
             read_string(ctx.doc, json::find(ctx.doc, m, "color"), marker.color);
@@ -186,7 +231,10 @@ namespace
                 set_detail(ctx.diag, "marker without a valid marked_range", nullptr);
                 return false;
             }
-            if (first == kOtioInvalid) { first = static_cast<crd::u32>(ctx.out.markers.size()); }
+            if (first == kOtioInvalid)
+            {
+                first = static_cast<crd::u32>(ctx.out.markers.size());
+            }
             ctx.out.markers.push_back(std::move(marker));
             ++count;
         }
@@ -292,8 +340,14 @@ namespace
         read_string(ctx.doc, json::find(ctx.doc, node, "name"), track.name);
         read_string(ctx.doc, json::find(ctx.doc, node, "kind"), track.kind_name);
         track.kind = OtioTrackKind::Other;
-        if (std::strcmp(track.kind_name.c_str(), "Video") == 0) { track.kind = OtioTrackKind::Video; }
-        else if (std::strcmp(track.kind_name.c_str(), "Audio") == 0) { track.kind = OtioTrackKind::Audio; }
+        if (std::strcmp(track.kind_name.c_str(), "Video") == 0)
+        {
+            track.kind = OtioTrackKind::Video;
+        }
+        else if (std::strcmp(track.kind_name.c_str(), "Audio") == 0)
+        {
+            track.kind = OtioTrackKind::Audio;
+        }
 
         track.first_item        = static_cast<crd::u32>(ctx.out.items.size());
         const crd::u32 children = json::find(ctx.doc, node, "children");
@@ -301,7 +355,10 @@ namespace
         for (crd::u32 i = 0; i < n; ++i)
         {
             const OtioResult r = parse_item(ctx, json::at(ctx.doc, children, i));
-            if (r != OtioResult::Ok) { return r; }
+            if (r != OtioResult::Ok)
+            {
+                return r;
+            }
         }
         track.item_count = static_cast<crd::u32>(ctx.out.items.size()) - track.first_item;
 
@@ -361,7 +418,10 @@ OtioResult otio_parse(crd::containers::ConstSpan<crd::u8> bytes, ImportedTimelin
     for (crd::u32 i = 0; i < n; ++i)
     {
         const OtioResult r = parse_track(ctx, json::at(doc, children, i));
-        if (r != OtioResult::Ok) { return r; }
+        if (r != OtioResult::Ok)
+        {
+            return r;
+        }
     }
     if (!parse_markers(ctx, json::find(doc, stack, "markers"), out.first_marker, out.marker_count))
     {

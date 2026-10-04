@@ -80,14 +80,20 @@ template <crd::math::MathScalar T>
 [[nodiscard]] constexpr Quadric<T> operator+(const Quadric<T>& a, const Quadric<T>& b) noexcept
 {
     Quadric<T> r{};
-    for (int i = 0; i < 10; ++i) { r.data[i] = a.data[i] + b.data[i]; }
+    for (int i = 0; i < 10; ++i)
+    {
+        r.data[i] = a.data[i] + b.data[i];
+    }
     return r;
 }
 
 template <crd::math::MathScalar T>
 constexpr Quadric<T>& operator+=(Quadric<T>& a, const Quadric<T>& b) noexcept
 {
-    for (int i = 0; i < 10; ++i) { a.data[i] += b.data[i]; }
+    for (int i = 0; i < 10; ++i)
+    {
+        a.data[i] += b.data[i];
+    }
     return a;
 }
 
@@ -95,7 +101,10 @@ template <crd::math::MathScalar T>
 [[nodiscard]] constexpr Quadric<T> operator*(const Quadric<T>& q, T s) noexcept
 {
     Quadric<T> r{};
-    for (int i = 0; i < 10; ++i) { r.data[i] = q.data[i] * s; }
+    for (int i = 0; i < 10; ++i)
+    {
+        r.data[i] = q.data[i] * s;
+    }
     return r;
 }
 
@@ -144,7 +153,10 @@ template <crd::math::MathScalar T>
 
     // det = a(df - e²) - b(bf - ce) + c(be - cd)
     const T det = a * (d * f - e * e) - b * (b * f - c * e) + c * (b * e - c * d);
-    if (crd::math::abs(det) < det_epsilon) { return std::nullopt; }
+    if (crd::math::abs(det) < det_epsilon)
+    {
+        return std::nullopt;
+    }
 
     const T rx = -q.data[3]; // -m03
     const T ry = -q.data[6]; // -m13

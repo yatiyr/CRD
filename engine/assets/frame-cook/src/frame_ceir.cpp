@@ -21,23 +21,71 @@ namespace
 // NAME; ExecutorTypeId is re-derived by fnv1a at the boundary (the cook==record gate). A custom pass uses p.executor.
 [[nodiscard]] StringView builtin_executor_name(crd::renderpass::ExecutorTypeId id) noexcept
 {
-    if (id == kExecSceneRaster) { return StringView("scene.raster"); }
-    if (id == kExecFullscreenRaster) { return StringView("fullscreen.raster"); }
-    if (id == kExecComputeDispatch) { return StringView("compute.dispatch"); }
-    if (id == kExecTransferClear) { return StringView("transfer.clear"); }
-    if (id == kExecTransferCopy) { return StringView("transfer.copy"); }
-    if (id == kExecTransferBlit) { return StringView("transfer.blit"); }
-    if (id == kExecTransferResolve) { return StringView("transfer.resolve"); }
-    if (id == kExecRaytraceDispatch) { return StringView("raytrace.dispatch"); }
-    if (id == kExecRaytracePipeline) { return StringView("raytrace.pipeline"); }
-    if (id == kExecTessRaster) { return StringView("tess.raster"); }
-    if (id == kExecMeshRaster) { return StringView("mesh.raster"); }
-    if (id == kExecMeshIndirect) { return StringView("mesh.indirect"); }
-    if (id == kExecPresent) { return StringView("present"); }
+    if (id == kExecSceneRaster)
+    {
+        return StringView("scene.raster");
+    }
+    if (id == kExecFullscreenRaster)
+    {
+        return StringView("fullscreen.raster");
+    }
+    if (id == kExecComputeDispatch)
+    {
+        return StringView("compute.dispatch");
+    }
+    if (id == kExecTransferClear)
+    {
+        return StringView("transfer.clear");
+    }
+    if (id == kExecTransferCopy)
+    {
+        return StringView("transfer.copy");
+    }
+    if (id == kExecTransferBlit)
+    {
+        return StringView("transfer.blit");
+    }
+    if (id == kExecTransferResolve)
+    {
+        return StringView("transfer.resolve");
+    }
+    if (id == kExecRaytraceDispatch)
+    {
+        return StringView("raytrace.dispatch");
+    }
+    if (id == kExecRaytracePipeline)
+    {
+        return StringView("raytrace.pipeline");
+    }
+    if (id == kExecTessRaster)
+    {
+        return StringView("tess.raster");
+    }
+    if (id == kExecMeshRaster)
+    {
+        return StringView("mesh.raster");
+    }
+    if (id == kExecMeshIndirect)
+    {
+        return StringView("mesh.indirect");
+    }
+    if (id == kExecPresent)
+    {
+        return StringView("present");
+    }
     // ⭐ CEIR-20b: the ceir.work device-work mechanics — the executor SYMBOL is the ceir.work op name (build_work_ceir maps it).
-    if (id == kExecWorkProduce) { return StringView("work.produce"); }
-    if (id == kExecWorkConsume) { return StringView("work.consume"); }
-    if (id == kExecWorkCompact) { return StringView("work.compact"); }
+    if (id == kExecWorkProduce)
+    {
+        return StringView("work.produce");
+    }
+    if (id == kExecWorkConsume)
+    {
+        return StringView("work.consume");
+    }
+    if (id == kExecWorkCompact)
+    {
+        return StringView("work.compact");
+    }
     return StringView();
 }
 [[nodiscard]] bool kind_is_external(FrameResourceKind k) noexcept
@@ -54,29 +102,62 @@ namespace
 // The resource.declare `lifetime` attr for a graph-owned kind (transient/persistent/history).
 [[nodiscard]] StringView kind_lifetime(FrameResourceKind k) noexcept
 {
-    if (k == FrameResourceKind::PersistentImage) { return StringView("persistent"); }
-    if (k == FrameResourceKind::PingPongImage) { return StringView("history"); }
+    if (k == FrameResourceKind::PersistentImage)
+    {
+        return StringView("persistent");
+    }
+    if (k == FrameResourceKind::PingPongImage)
+    {
+        return StringView("history");
+    }
     return StringView("transient");
 }
 [[nodiscard]] StringView cull_str(FrameCullMode c) noexcept
 {
-    if (c == FrameCullMode::Frustum) { return StringView("frustum"); }
-    if (c == FrameCullMode::FrustumOcclusion) { return StringView("frustum_occlusion"); }
+    if (c == FrameCullMode::Frustum)
+    {
+        return StringView("frustum");
+    }
+    if (c == FrameCullMode::FrustumOcclusion)
+    {
+        return StringView("frustum_occlusion");
+    }
     return StringView("none");
 }
 [[nodiscard]] StringView sort_str(FrameSortMode s) noexcept
 {
-    if (s == FrameSortMode::FrontToBack) { return StringView("front_to_back"); }
-    if (s == FrameSortMode::BackToFront) { return StringView("back_to_front"); }
-    if (s == FrameSortMode::Material) { return StringView("material"); }
+    if (s == FrameSortMode::FrontToBack)
+    {
+        return StringView("front_to_back");
+    }
+    if (s == FrameSortMode::BackToFront)
+    {
+        return StringView("back_to_front");
+    }
+    if (s == FrameSortMode::Material)
+    {
+        return StringView("material");
+    }
     return StringView("none");
 }
 [[nodiscard]] StringView for_each_str(FrameForEach f) noexcept
 {
-    if (f == FrameForEach::LightCascades) { return StringView("light.cascades"); }
-    if (f == FrameForEach::StereoViews) { return StringView("views.stereo"); }
-    if (f == FrameForEach::CubeFaces) { return StringView("cube.faces"); }
-    if (f == FrameForEach::ShadowCastingLights) { return StringView("lights.shadow_casting"); }
+    if (f == FrameForEach::LightCascades)
+    {
+        return StringView("light.cascades");
+    }
+    if (f == FrameForEach::StereoViews)
+    {
+        return StringView("views.stereo");
+    }
+    if (f == FrameForEach::CubeFaces)
+    {
+        return StringView("cube.faces");
+    }
+    if (f == FrameForEach::ShadowCastingLights)
+    {
+        return StringView("lights.shadow_casting");
+    }
     return StringView("none");
 }
 
@@ -89,7 +170,10 @@ namespace
 using ValidFn = bool (*)(crd::u32);
 [[nodiscard]] bool blend_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::BlendMode>(v))
     {
     case crd::gpu::BlendMode::Opaque:
@@ -104,7 +188,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool compare_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::DepthCompare>(v))
     {
     case crd::gpu::DepthCompare::Never:
@@ -120,7 +207,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool material_pass_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<FrameMaterialPass>(v))
     {
     case FrameMaterialPass::None:
@@ -133,7 +223,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool filter_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::SamplerFilter>(v))
     {
     case crd::gpu::SamplerFilter::Nearest:
@@ -143,7 +236,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool address_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::SamplerAddress>(v))
     {
     case crd::gpu::SamplerAddress::Repeat:
@@ -155,7 +251,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool face_cull_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::FaceCull>(v))
     {
     case crd::gpu::FaceCull::None:
@@ -166,7 +265,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool front_face_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::FrontFace>(v))
     {
     case crd::gpu::FrontFace::CounterClockwise:
@@ -176,7 +278,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool stencil_op_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::StencilOp>(v))
     {
     case crd::gpu::StencilOp::Keep:
@@ -192,7 +297,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool shading_rate_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::ShadingRate>(v))
     {
     case crd::gpu::ShadingRate::Rate1x1:
@@ -207,7 +315,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool rate_combiner_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::ShadingRateCombiner>(v))
     {
     case crd::gpu::ShadingRateCombiner::Keep:
@@ -220,7 +331,10 @@ using ValidFn = bool (*)(crd::u32);
 }
 [[nodiscard]] bool conservative_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::ConservativeMode>(v))
     {
     case crd::gpu::ConservativeMode::Off:
@@ -266,7 +380,10 @@ using ValidFn = bool (*)(crd::u32);
     for (const Check& c : kChecks)
     {
         const StringView nm(c.name);
-        if (pass_has(p, nm) && !c.valid(pass_u32(p, nm, 0U))) { return c.err; }
+        if (pass_has(p, nm) && !c.valid(pass_u32(p, nm, 0U)))
+        {
+            return c.err;
+        }
     }
     return FrameCookError::Ok;
 }
@@ -276,9 +393,15 @@ void join_components(char* buf, crd::u32& len, crd::u32 cap, const crd::containe
     len = 0U;
     for (crd::u32 i = 0; i < static_cast<crd::u32>(items.size()); ++i)
     {
-        if (i > 0U && len < cap) { buf[len++] = ','; }
+        if (i > 0U && len < cap)
+        {
+            buf[len++] = ',';
+        }
         const crd::containers::String& s = items[i];
-        for (crd::u32 j = 0; j < static_cast<crd::u32>(s.size()) && len < cap; ++j) { buf[len++] = s.data()[j]; }
+        for (crd::u32 j = 0; j < static_cast<crd::u32>(s.size()) && len < cap; ++j)
+        {
+            buf[len++] = s.data()[j];
+        }
     }
 }
 // CEIR-15c-1c-2 (Fork C-2): build the ceir.frame attr name for a param — "<pfx><param_name>" (+ ":<idx>" for a Vec4
@@ -286,8 +409,14 @@ void join_components(char* buf, crd::u32& len, crd::u32 cap, const crd::containe
 [[nodiscard]] StringView param_attr_name(char* buf, crd::u32 cap, StringView pfx, StringView name, crd::i32 idx)
 {
     crd::u32 n = 0U;
-    for (crd::u32 j = 0; j < static_cast<crd::u32>(pfx.size()) && n < cap; ++j) { buf[n++] = pfx[j]; }
-    for (crd::u32 j = 0; j < static_cast<crd::u32>(name.size()) && n < cap; ++j) { buf[n++] = name[j]; }
+    for (crd::u32 j = 0; j < static_cast<crd::u32>(pfx.size()) && n < cap; ++j)
+    {
+        buf[n++] = pfx[j];
+    }
+    for (crd::u32 j = 0; j < static_cast<crd::u32>(name.size()) && n < cap; ++j)
+    {
+        buf[n++] = name[j];
+    }
     if (idx >= 0 && n + 2U <= cap)
     {
         buf[n++] = ':';
@@ -322,7 +451,10 @@ struct NameMap
     {
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if (names[i] == nm) { return vals[i]; }
+            if (names[i] == nm)
+            {
+                return vals[i];
+            }
         }
         return nullptr;
     }
@@ -337,7 +469,10 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
     // need composition special-cases. PIPELINE: `parse → flatten_frame_graph → to_ceir_frame`; a desc still carrying
     // composition was NOT flattened first (a caller error) → reject. (Unlike `for_each`, which round-trips because its
     // expansion needs RUNTIME counts: frontend-resolvable ≠ runtime-deferred.)
-    if (desc.includes.size() > 0U || desc.anchors.size() > 0U || desc.injects.size() > 0U) { return nullptr; }
+    if (desc.includes.size() > 0U || desc.anchors.size() > 0U || desc.injects.size() > 0U)
+    {
+        return nullptr;
+    }
     (void)ce::arith::register_arith_ops(ctx);
     (void)ce::func::register_dialect(ctx);
     (void)ce::resource::register_resource_ops(ctx);
@@ -364,7 +499,10 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
 
     // the frame.graph container.
     ce::Operation* const g = ctx.create_operation(graph_id, {}, 0U, {}, 1U);
-    if (desc.name.size() > 0U) { ctx.set_attr(g, "name", ctx.attr_symbol(StringView(desc.name.data(), desc.name.size()))); }
+    if (desc.name.size() > 0U)
+    {
+        ctx.set_attr(g, "name", ctx.attr_symbol(StringView(desc.name.data(), desc.name.size())));
+    }
     ctx.set_attr(g, "schema", ctx.attr_int(static_cast<crd::i64>(desc.schema)));
     // CEIR-15c 2d: the GRAPH-LEVEL fields (capability tier / fallback graph / transient-memory ceiling) — emitted only when set.
     if (desc.requires_caps.size() > 0U)
@@ -401,7 +539,10 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         if (!kind_is_external(r.kind))
         {
             ctx.set_attr(d, "lifetime", ctx.attr_string(kind_lifetime(r.kind))); // the CEIR-12b/c/d planner axis
-            if (r.kind == FrameResourceKind::PingPongImage) { ctx.set_attr(d, "history_length", ctx.attr_int(1)); }
+            if (r.kind == FrameResourceKind::PingPongImage)
+            {
+                ctx.set_attr(d, "history_length", ctx.attr_int(1));
+            }
         }
         // CEIR-15a-3b: the FULL FrameResourceDesc shape as open attrs, so the backward converter recovers the EXACT kind +
         // sizing (lifetime alone is lossy: transient covers image/buffer/indirect-args/structured/counter). Enum-valued
@@ -409,12 +550,30 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         // reads the reconstructed enum. Only non-default fields are set, so the round-trip stays byte-clean.
         ctx.set_attr(d, "frame_kind", ctx.attr_int(static_cast<crd::i64>(r.kind)));
         ctx.set_attr(d, "format", ctx.attr_int(static_cast<crd::i64>(r.format)));
-        if (r.width != 0U) { ctx.set_attr(d, "width", ctx.attr_int(static_cast<crd::i64>(r.width))); }
-        if (r.height != 0U) { ctx.set_attr(d, "height", ctx.attr_int(static_cast<crd::i64>(r.height))); }
-        if (r.scale > 0.0F) { ctx.set_attr(d, "scale", ctx.attr_float(static_cast<double>(r.scale))); }
-        if (r.layers != 1U) { ctx.set_attr(d, "layers", ctx.attr_int(static_cast<crd::i64>(r.layers))); }
-        if (r.samples != 1U) { ctx.set_attr(d, "samples", ctx.attr_int(static_cast<crd::i64>(r.samples))); }
-        if (r.mips != 1U) { ctx.set_attr(d, "mips", ctx.attr_int(static_cast<crd::i64>(r.mips))); }
+        if (r.width != 0U)
+        {
+            ctx.set_attr(d, "width", ctx.attr_int(static_cast<crd::i64>(r.width)));
+        }
+        if (r.height != 0U)
+        {
+            ctx.set_attr(d, "height", ctx.attr_int(static_cast<crd::i64>(r.height)));
+        }
+        if (r.scale > 0.0F)
+        {
+            ctx.set_attr(d, "scale", ctx.attr_float(static_cast<double>(r.scale)));
+        }
+        if (r.layers != 1U)
+        {
+            ctx.set_attr(d, "layers", ctx.attr_int(static_cast<crd::i64>(r.layers)));
+        }
+        if (r.samples != 1U)
+        {
+            ctx.set_attr(d, "samples", ctx.attr_int(static_cast<crd::i64>(r.samples)));
+        }
+        if (r.mips != 1U)
+        {
+            ctx.set_attr(d, "mips", ctx.attr_int(static_cast<crd::i64>(r.mips)));
+        }
         // CEIR-15c-1c-2a: the REN-38-B2 SHAPE — dimension (kind_2d: 2d/3d/cube/cube_array) + the 3-D slice `depth`. Carried
         // as the INT enum value / count (the frame_kind/format precedent), non-default only so a 2-D transient omits them
         // (round-trip byte-clean). ⛔ Before this, to_ceir_frame hardcoded Dim2D and dropped both — the round-trip-identity
@@ -424,15 +583,42 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         {
             ctx.set_attr(d, "dimension", ctx.attr_int(static_cast<crd::i64>(r.kind_2d)));
         }
-        if (r.depth != 1U) { ctx.set_attr(d, "depth", ctx.attr_int(static_cast<crd::i64>(r.depth))); }
-        if (r.sampled) { ctx.set_attr(d, "sampled", ctx.attr_bool(true)); }
-        if (r.storage) { ctx.set_attr(d, "storage", ctx.attr_bool(true)); }
-        if (r.depth_buffer) { ctx.set_attr(d, "depth_buffer", ctx.attr_bool(true)); }
-        if (r.no_alias) { ctx.set_attr(d, "no_alias", ctx.attr_bool(true)); }
-        if (r.resizable) { ctx.set_attr(d, "resizable", ctx.attr_bool(true)); }
-        if (r.stride != 0U) { ctx.set_attr(d, "stride", ctx.attr_int(static_cast<crd::i64>(r.stride))); }
-        if (r.count != 0U) { ctx.set_attr(d, "count", ctx.attr_int(static_cast<crd::i64>(r.count))); }
-        if (r.size_bytes != 0U) { ctx.set_attr(d, "size_bytes", ctx.attr_int(static_cast<crd::i64>(r.size_bytes))); }
+        if (r.depth != 1U)
+        {
+            ctx.set_attr(d, "depth", ctx.attr_int(static_cast<crd::i64>(r.depth)));
+        }
+        if (r.sampled)
+        {
+            ctx.set_attr(d, "sampled", ctx.attr_bool(true));
+        }
+        if (r.storage)
+        {
+            ctx.set_attr(d, "storage", ctx.attr_bool(true));
+        }
+        if (r.depth_buffer)
+        {
+            ctx.set_attr(d, "depth_buffer", ctx.attr_bool(true));
+        }
+        if (r.no_alias)
+        {
+            ctx.set_attr(d, "no_alias", ctx.attr_bool(true));
+        }
+        if (r.resizable)
+        {
+            ctx.set_attr(d, "resizable", ctx.attr_bool(true));
+        }
+        if (r.stride != 0U)
+        {
+            ctx.set_attr(d, "stride", ctx.attr_int(static_cast<crd::i64>(r.stride)));
+        }
+        if (r.count != 0U)
+        {
+            ctx.set_attr(d, "count", ctx.attr_int(static_cast<crd::i64>(r.count)));
+        }
+        if (r.size_bytes != 0U)
+        {
+            ctx.set_attr(d, "size_bytes", ctx.attr_int(static_cast<crd::i64>(r.size_bytes)));
+        }
         rb->append(d);
         nm.add(res_name, d->result(0U));
     }
@@ -445,14 +631,26 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         ctx.set_attr(op, "name", ctx.attr_symbol(StringView(dl.name.data(), dl.name.size()))); // round-trip name recovery
         crd::u32                 len = 0U;
         join_components(buf, len, sizeof(buf), dl.all);
-        if (len > 0U) { ctx.set_attr(op, "all", ctx.attr_string(StringView(buf, len))); }
+        if (len > 0U)
+        {
+            ctx.set_attr(op, "all", ctx.attr_string(StringView(buf, len)));
+        }
         join_components(buf, len, sizeof(buf), dl.any);
-        if (len > 0U) { ctx.set_attr(op, "any", ctx.attr_string(StringView(buf, len))); }
+        if (len > 0U)
+        {
+            ctx.set_attr(op, "any", ctx.attr_string(StringView(buf, len)));
+        }
         join_components(buf, len, sizeof(buf), dl.none);
-        if (len > 0U) { ctx.set_attr(op, "none", ctx.attr_string(StringView(buf, len))); }
+        if (len > 0U)
+        {
+            ctx.set_attr(op, "none", ctx.attr_string(StringView(buf, len)));
+        }
         ctx.set_attr(op, "cull", ctx.attr_string(cull_str(dl.cull)));
         ctx.set_attr(op, "sort", ctx.attr_string(sort_str(dl.sort)));
-        if (dl.limit > 0U) { ctx.set_attr(op, "limit", ctx.attr_int(static_cast<crd::i64>(dl.limit))); }
+        if (dl.limit > 0U)
+        {
+            ctx.set_attr(op, "limit", ctx.attr_int(static_cast<crd::i64>(dl.limit)));
+        }
         rb->append(op);
         nm.add(StringView(dl.name.data(), dl.name.size()), op->result(0U));
     }
@@ -505,12 +703,21 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         char                 indexed_marks[128]; // CEIR-15c 2b: parallel to operands — '1' if the ref is the [$index] slice
         bool                 any_indexed = false;
         const auto           push = [&](ce::Value* v, char tok, bool idx) {
-            if (v == nullptr || no >= 128U) { return false; }
+            if (v == nullptr || no >= 128U)
+            {
+                return false;
+            }
             indexed_marks[no] = idx ? '1' : '0';
             operands[no++]    = v;
-            if (na > 0U) { access[na++] = ','; }
+            if (na > 0U)
+            {
+                access[na++] = ',';
+            }
             access[na++] = tok;
-            if (idx) { any_indexed = true; }
+            if (idx)
+            {
+                any_indexed = true;
+            }
             return true;
         };
         bool ok = true;
@@ -536,8 +743,14 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
             ok = ok && push(v, 'r', ridx);
         }
         const StringView dln = pass_str(p, StringView(pp::kDrawList));
-        if (dln.size() > 0U) { ok = ok && push(nm.find(dln), 'r', false); } // a draw-list operand is never [$index]
-        if (!ok) { return nullptr; } // a pass referenced an undeclared resource/draw-list
+        if (dln.size() > 0U) // a draw-list operand is never [$index]
+        {
+            ok = ok && push(nm.find(dln), 'r', false);
+        }
+        if (!ok) // a pass referenced an undeclared resource/draw-list
+        {
+            return nullptr;
+        }
 
         ce::Operation* const op = ctx.create_operation(pass_id, crd::containers::ConstSpan<ce::Value*>(operands, no), 0U);
         const StringView     ex = pass_is_custom(p) ? StringView(p.executor.data(), p.executor.size())
@@ -545,20 +758,38 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         ctx.set_attr(op, "executor", ctx.attr_symbol(ex));
         ctx.set_attr(op, "name", ctx.attr_symbol(StringView(p.name.data(), p.name.size()))); // round-trip name recovery
         ctx.set_attr(op, "access", ctx.attr_string(StringView(access, na)));
-        if (any_indexed) { ctx.set_attr(op, "indexed", ctx.attr_string(StringView(indexed_marks, no))); } // 2b: per-operand [$index]
+        if (any_indexed) // 2b: per-operand [$index]
+        {
+            ctx.set_attr(op, "indexed", ctx.attr_string(StringView(indexed_marks, no)));
+        }
         if (p.for_each != FrameForEach::None)
         {
             ctx.set_attr(op, "for_each", ctx.attr_string(for_each_str(p.for_each)));
-            if (p.for_each_arg != 0U) { ctx.set_attr(op, "for_each_arg", ctx.attr_int(static_cast<crd::i64>(p.for_each_arg))); }
+            if (p.for_each_arg != 0U)
+            {
+                ctx.set_attr(op, "for_each_arg", ctx.attr_int(static_cast<crd::i64>(p.for_each_arg)));
+            }
         }
-        if (p.queue == FrameQueue::Async) { ctx.set_attr(op, "queue", ctx.attr_string(StringView("async"))); }
+        if (p.queue == FrameQueue::Async)
+        {
+            ctx.set_attr(op, "queue", ctx.attr_string(StringView("async")));
+        }
         // the well-known reference params -> SYMBOL attrs (the CDEP dependency extraction generalizes at 15c).
         const StringView sh = pass_str(p, StringView(pp::kShader));
-        if (sh.size() > 0U) { ctx.set_attr(op, "shader", ctx.attr_symbol(sh)); }
+        if (sh.size() > 0U)
+        {
+            ctx.set_attr(op, "shader", ctx.attr_symbol(sh));
+        }
         const StringView kn = pass_str(p, StringView(pp::kKernel));
-        if (kn.size() > 0U) { ctx.set_attr(op, "kernel", ctx.attr_symbol(kn)); }
+        if (kn.size() > 0U)
+        {
+            ctx.set_attr(op, "kernel", ctx.attr_symbol(kn));
+        }
         const StringView tc = pass_str(p, StringView(pp::kTechnique));
-        if (tc.size() > 0U) { ctx.set_attr(op, "technique", ctx.attr_symbol(tc)); }
+        if (tc.size() > 0U)
+        {
+            ctx.set_attr(op, "technique", ctx.attr_symbol(tc));
+        }
         // CEIR-15c-1c-2 (Fork C-2): the FULL RAF-12.3 param bag. Each param -> p:<name> (value, the natural attr KIND) +
         // pt:<name> (the exact FrameParamType byte, for blob fidelity — accessors are type-blind but cook stores the byte).
         // ⛔ SKIP the four carried specially (shader/kernel/technique top-level + draw_list operand) or the round-trip
@@ -569,7 +800,10 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         {
             const FrameParam& prm = p.params[pp2];
             const StringView  pn(prm.name.data(), prm.name.size());
-            if (is_special_pass_param(pn)) { continue; }
+            if (is_special_pass_param(pn))
+            {
+                continue;
+            }
             ctx.set_attr(op, param_attr_name(pbuf, sizeof(pbuf), StringView("pt:"), pn, -1),
                          ctx.attr_int(static_cast<crd::i64>(prm.type)));
             if (prm.type == FrameParamType::String)
@@ -604,15 +838,24 @@ namespace
 // The FIRST frame.graph op anywhere in the module (walk regions).
 [[nodiscard]] const ce::Operation* find_graph(const ce::Context& ctx, const ce::Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (const ce::Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const ce::Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_name(op->kind()) == StringView("frame.graph")) { return op; }
+            if (ctx.op_name(op->kind()) == StringView("frame.graph"))
+            {
+                return op;
+            }
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (const ce::Operation* g = find_graph(ctx, op->region(i))) { return g; }
+                if (const ce::Operation* g = find_graph(ctx, op->region(i)))
+                {
+                    return g;
+                }
             }
         }
     }
@@ -624,30 +867,45 @@ namespace
 [[nodiscard]] StringView attr_sv(const ce::Context& ctx, const ce::Operation* op, StringView name)
 {
     const ce::AttrId a = op->attr(name);
-    if (!a.valid()) { return StringView(); }
+    if (!a.valid())
+    {
+        return StringView();
+    }
     const ce::AttrValue v = ctx.attr_value(a);
     return (v.kind == ce::AttrKind::SymbolRef || v.kind == ce::AttrKind::String) ? v.s : StringView();
 }
 [[nodiscard]] crd::i64 attr_i(const ce::Context& ctx, const ce::Operation* op, StringView name, crd::i64 def)
 {
     const ce::AttrId a = op->attr(name);
-    if (!a.valid()) { return def; }
+    if (!a.valid())
+    {
+        return def;
+    }
     const ce::AttrValue v = ctx.attr_value(a);
     return v.kind == ce::AttrKind::Int ? v.i : def;
 }
 [[nodiscard]] bool attr_b(const ce::Context& ctx, const ce::Operation* op, StringView name)
 {
     const ce::AttrId a = op->attr(name);
-    if (!a.valid()) { return false; }
+    if (!a.valid())
+    {
+        return false;
+    }
     const ce::AttrValue v = ctx.attr_value(a);
     return v.kind == ce::AttrKind::Bool && v.b;
 }
 [[nodiscard]] float attr_f(const ce::Context& ctx, const ce::Operation* op, StringView name, float def)
 {
     const ce::AttrId a = op->attr(name);
-    if (!a.valid()) { return def; }
+    if (!a.valid())
+    {
+        return def;
+    }
     const ce::AttrValue v = ctx.attr_value(a);
-    if (v.kind != ce::AttrKind::Float) { return def; }
+    if (v.kind != ce::AttrKind::Float)
+    {
+        return def;
+    }
     double d = 0.0;
     std::memcpy(&d, &v.f, sizeof(d)); // AttrValue.f is the f64 BIT PATTERN, not a double
     return static_cast<float>(d);
@@ -657,9 +915,15 @@ namespace
 [[nodiscard]] double attr_f64(const ce::Context& ctx, const ce::Operation* op, StringView name, double def)
 {
     const ce::AttrId a = op->attr(name);
-    if (!a.valid()) { return def; }
+    if (!a.valid())
+    {
+        return def;
+    }
     const ce::AttrValue v = ctx.attr_value(a);
-    if (v.kind != ce::AttrKind::Float) { return def; }
+    if (v.kind != ce::AttrKind::Float)
+    {
+        return def;
+    }
     double d = 0.0;
     std::memcpy(&d, &v.f, sizeof(d));
     return d;
@@ -667,23 +931,50 @@ namespace
 void set_str(crd::containers::String& s, StringView v) { s.append(v.data(), v.size()); }
 [[nodiscard]] FrameCullMode cull_from(StringView s)
 {
-    if (s == StringView("frustum_occlusion")) { return FrameCullMode::FrustumOcclusion; }
-    if (s == StringView("none")) { return FrameCullMode::None; }
+    if (s == StringView("frustum_occlusion"))
+    {
+        return FrameCullMode::FrustumOcclusion;
+    }
+    if (s == StringView("none"))
+    {
+        return FrameCullMode::None;
+    }
     return FrameCullMode::Frustum; // absent/frustum
 }
 [[nodiscard]] FrameSortMode sort_from(StringView s)
 {
-    if (s == StringView("front_to_back")) { return FrameSortMode::FrontToBack; }
-    if (s == StringView("back_to_front")) { return FrameSortMode::BackToFront; }
-    if (s == StringView("material")) { return FrameSortMode::Material; }
+    if (s == StringView("front_to_back"))
+    {
+        return FrameSortMode::FrontToBack;
+    }
+    if (s == StringView("back_to_front"))
+    {
+        return FrameSortMode::BackToFront;
+    }
+    if (s == StringView("material"))
+    {
+        return FrameSortMode::Material;
+    }
     return FrameSortMode::None;
 }
 [[nodiscard]] FrameForEach for_each_from(StringView s)
 {
-    if (s == StringView("light.cascades")) { return FrameForEach::LightCascades; }
-    if (s == StringView("views.stereo")) { return FrameForEach::StereoViews; }
-    if (s == StringView("cube.faces")) { return FrameForEach::CubeFaces; }
-    if (s == StringView("lights.shadow_casting")) { return FrameForEach::ShadowCastingLights; }
+    if (s == StringView("light.cascades"))
+    {
+        return FrameForEach::LightCascades;
+    }
+    if (s == StringView("views.stereo"))
+    {
+        return FrameForEach::StereoViews;
+    }
+    if (s == StringView("cube.faces"))
+    {
+        return FrameForEach::CubeFaces;
+    }
+    if (s == StringView("lights.shadow_casting"))
+    {
+        return FrameForEach::ShadowCastingLights;
+    }
     return FrameForEach::None;
 }
 // ── CEIR-15c-1d-6b: the STRING-carried + format vocab checks. Unlike the 6a int params (desc-based, copied faithfully), these
@@ -698,7 +989,10 @@ void set_str(crd::containers::String& s, StringView v) { s.append(v.data(), v.si
 [[nodiscard]] bool queue_str_valid(StringView s) noexcept { return s.size() == 0U || s == StringView("async"); } // Graphics is absent
 [[nodiscard]] bool format_valid(crd::u32 v) noexcept
 {
-    if (v > 0xFFU) { return false; }
+    if (v > 0xFFU)
+    {
+        return false;
+    }
     switch (static_cast<crd::gpu::FgImageFormat>(v))
     {
     case crd::gpu::FgImageFormat::RGBA8Unorm:
@@ -743,7 +1037,10 @@ void split_components(StringView s, crd::containers::Array<crd::containers::Stri
 bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::IAllocator* alloc, FrameGraphDesc& out)
 {
     const ce::Operation* const g = find_graph(ctx, m.body());
-    if (g == nullptr) { return false; }
+    if (g == nullptr)
+    {
+        return false;
+    }
     out.resources.clear();
     out.draw_lists.clear();
     out.passes.clear();
@@ -764,7 +1061,10 @@ bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::I
             {
                 // an IMPLICIT external (a resource.import with no frame_kind attr) is the @output endpoint — never a
                 // [[resource]] in the desc (emit_frame_toml does not emit it); skip it on the way back.
-                if (nm == StringView("resource.import") && !op->attr(StringView("frame_kind")).valid()) { continue; }
+                if (nm == StringView("resource.import") && !op->attr(StringView("frame_kind")).valid())
+                {
+                    continue;
+                }
                 FrameResourceDesc r(alloc);
                 set_str(r.name, attr_sv(ctx, op, StringView("name")));
                 r.kind        = static_cast<FrameResourceKind>(attr_i(ctx, op, StringView("frame_kind"), 0));
@@ -806,7 +1106,10 @@ bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::I
                 set_str(p.name, attr_sv(ctx, op, StringView("name")));
                 const StringView ex = attr_sv(ctx, op, StringView("executor"));
                 p.executor_id       = crd::renderpass::executor_type_id(ex);
-                if (!is_builtin_executor(p.executor_id)) { set_str(p.executor, ex); } // custom keeps the string
+                if (!is_builtin_executor(p.executor_id)) // custom keeps the string
+                {
+                    set_str(p.executor, ex);
+                }
                 // access tokens ∈ {r,w,rw}, one per operand. ⛔ NOT last-char-wins: `rw` has BOTH components, so decode
                 // structurally — first char 'r' ⟺ a READ, last char 'w' ⟺ a WRITE. The FORWARD never EMITS `rw` (a desc
                 // read-modify-write rides two operands, w+r), but the dialect ACCEPTS a hand-authored single `rw` operand;
@@ -822,7 +1125,10 @@ bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::I
                     crd::usize start = 0U;
                     for (crd::usize i = 0; i <= ac.size() && nt < 128U; ++i)
                     {
-                        if (i != ac.size() && ac[i] != ',') { continue; }
+                        if (i != ac.size() && ac[i] != ',')
+                        {
+                            continue;
+                        }
                         const StringView tok(ac.data() + start, i - start);
                         start = i + 1U;
                         if (tok.size() > 0U)
@@ -872,13 +1178,25 @@ bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::I
                     p.for_each     = for_each_from(fe);
                     p.for_each_arg = static_cast<crd::u32>(attr_i(ctx, op, StringView("for_each_arg"), 0));
                 }
-                if (attr_sv(ctx, op, StringView("queue")) == StringView("async")) { p.queue = FrameQueue::Async; }
+                if (attr_sv(ctx, op, StringView("queue")) == StringView("async"))
+                {
+                    p.queue = FrameQueue::Async;
+                }
                 const StringView sh = attr_sv(ctx, op, StringView("shader"));
-                if (sh.size() > 0U) { set_pass_str(p, StringView(pp::kShader), sh); }
+                if (sh.size() > 0U)
+                {
+                    set_pass_str(p, StringView(pp::kShader), sh);
+                }
                 const StringView kn = attr_sv(ctx, op, StringView("kernel"));
-                if (kn.size() > 0U) { set_pass_str(p, StringView(pp::kKernel), kn); }
+                if (kn.size() > 0U)
+                {
+                    set_pass_str(p, StringView(pp::kKernel), kn);
+                }
                 const StringView tc = attr_sv(ctx, op, StringView("technique"));
-                if (tc.size() > 0U) { set_pass_str(p, StringView(pp::kTechnique), tc); }
+                if (tc.size() > 0U)
+                {
+                    set_pass_str(p, StringView(pp::kTechnique), tc);
+                }
                 // CEIR-15c-1c-2 (Fork C-2): reconstruct the full param bag. Enumerate the op's attrs; each pt:<name> (the
                 // type byte) rebuilds a param from p:<name> (value). ⛔ Iterate-WHAT-EXISTS, pushing a FrameParam DIRECTLY —
                 // no set_pass_* conditionality (set_pass_flag adds only-if-true; set_pass_str no-ops on empty) and no != 0
@@ -886,7 +1204,10 @@ bool from_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::I
                 for (crd::u32 ai = 0; ai < op->num_attrs(); ++ai)
                 {
                     const StringView an = op->attr_name(ai);
-                    if (an.size() < 3U || an[0] != 'p' || an[1] != 't' || an[2] != ':') { continue; }
+                    if (an.size() < 3U || an[0] != 'p' || an[1] != 't' || an[2] != ':')
+                    {
+                        continue;
+                    }
                     const StringView pname(an.data() + 3, static_cast<crd::usize>(an.size() - 3U));
                     const auto       ptype = static_cast<FrameParamType>(attr_i(ctx, op, an, 0));
                     char             vbuf[192];
@@ -961,9 +1282,15 @@ struct NameSet
     {
         for (crd::u32 i = 0; i < n; ++i)
         {
-            if (names[i] == s) { return false; }
+            if (names[i] == s)
+            {
+                return false;
+            }
         }
-        if (n < kMax) { names[n++] = s; }
+        if (n < kMax)
+        {
+            names[n++] = s;
+        }
         return true;
     }
 };
@@ -988,7 +1315,10 @@ struct ResUsage
     {
         // LayersOutOfRange first (the desc order), then the REN-38-B2 SHAPE (Cube → Volume → BadMip).
         const crd::u32 layers = static_cast<crd::u32>(attr_i(ctx, d, StringView("layers"), 1));
-        if (layers == 0U || layers > crd::gpu::kFgMaxImageLayers) { return FrameSemanticKind::LayersOutOfRange; }
+        if (layers == 0U || layers > crd::gpu::kFgMaxImageLayers)
+        {
+            return FrameSemanticKind::LayersOutOfRange;
+        }
         const crd::i64 dim = attr_i(ctx, d, StringView("dimension"), static_cast<crd::i64>(crd::gpu::FgImageKind::Tex2D));
         const crd::u32 w   = static_cast<crd::u32>(attr_i(ctx, d, StringView("width"), 0));
         const crd::u32 h   = static_cast<crd::u32>(attr_i(ctx, d, StringView("height"), 0));
@@ -1004,13 +1334,22 @@ struct ResUsage
         {
             return FrameSemanticKind::VolumeNeedsDepth;
         }
-        if (mip == 0U) { return FrameSemanticKind::BadMipCount; } // 0 is NOT "full chain" — a guessed length mismatches
+        if (mip == 0U) // 0 is NOT "full chain" — a guessed length mismatches
+        {
+            return FrameSemanticKind::BadMipCount;
+        }
         crd::u32 ext = w > h ? w : h;
         if (ext != 0U) // a chain cannot outlive its extent (levels halve to 1x1); scale-relative extents check at runtime
         {
             crd::u32 max_mips = 1U;
-            while ((ext >> max_mips) != 0U) { ++max_mips; }
-            if (mip > max_mips) { return FrameSemanticKind::BadMipCount; }
+            while ((ext >> max_mips) != 0U)
+            {
+                ++max_mips;
+            }
+            if (mip > max_mips)
+            {
+                return FrameSemanticKind::BadMipCount;
+            }
         }
         return FrameSemanticKind::None;
     }
@@ -1018,8 +1357,14 @@ struct ResUsage
         || fk == static_cast<crd::i64>(FrameResourceKind::CounterBuffer))
     {
         const crd::u32 stride = static_cast<crd::u32>(attr_i(ctx, d, StringView("stride"), 0));
-        if (stride == 0U) { return FrameSemanticKind::StructuredNeedsStride; } // elements with no size
-        if ((stride % 4U) != 0U) { return FrameSemanticKind::StrideNotAligned; } // both APIs require a 4-byte-aligned stride
+        if (stride == 0U) // elements with no size
+        {
+            return FrameSemanticKind::StructuredNeedsStride;
+        }
+        if ((stride % 4U) != 0U) // both APIs require a 4-byte-aligned stride
+        {
+            return FrameSemanticKind::StrideNotAligned;
+        }
         return FrameSemanticKind::None;
     }
     return FrameSemanticKind::None; // persistent/history (caller) / imports / plain buffers say nothing shape-checkable here
@@ -1031,7 +1376,10 @@ StringView frame_semantic_kind_name(FrameSemanticKind k) noexcept { return seman
 FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& m, crd::memory::IAllocator* alloc)
 {
     const ce::Operation* const g = find_graph(ctx, m.body());
-    if (g == nullptr) { return {}; } // not a frame module — structure is find_frame_misuse's job, nothing semantic to check
+    if (g == nullptr) // not a frame module — structure is find_frame_misuse's job, nothing semantic to check
+    {
+        return {};
+    }
     const ce::Region* const rg = g->region(0);
 
     NameSet resources; // resource.declare + import share ONE category (frame_asset's DuplicateName is per-category)
@@ -1044,7 +1392,10 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
     const auto                find_usage = [&](const ce::Operation* d) -> ResUsage* {
         for (crd::u32 i = 0; i < nres; ++i)
         {
-            if (usage[i].decl == d) { return &usage[i]; }
+            if (usage[i].decl == d)
+            {
+                return &usage[i];
+            }
         }
         return nullptr;
     };
@@ -1061,29 +1412,47 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
             const StringView nm = ctx.op_name(op->kind());
             if (nm == StringView("resource.declare"))
             {
-                if (!resources.add(attr_sv(ctx, op, StringView("name")))) { return {op, FrameSemanticKind::DuplicateName}; }
+                if (!resources.add(attr_sv(ctx, op, StringView("name"))))
+                {
+                    return {op, FrameSemanticKind::DuplicateName};
+                }
                 if (!format_valid(static_cast<crd::u32>(attr_i(ctx, op, StringView("format"), 0)))) // 6b: closed-vocab format
                 {
                     return {op, FrameSemanticKind::UnknownEnumParam, FrameCookError::UnknownFormat};
                 }
-                if (nres < kMaxRes) { usage[nres++] = {op, attr_sv(ctx, op, StringView("lifetime")), false, false}; }
+                if (nres < kMaxRes)
+                {
+                    usage[nres++] = {op, attr_sv(ctx, op, StringView("lifetime")), false, false};
+                }
             }
             else if (nm == StringView("resource.import"))
             {
                 // the implicit @output import (no frame_kind) is the endpoint sentinel, never a desc resource — skip it.
-                if (!op->attr(StringView("frame_kind")).valid()) { continue; }
+                if (!op->attr(StringView("frame_kind")).valid())
+                {
+                    continue;
+                }
                 // an external import (texture/buffer/AS) IS a resource for DuplicateName, but is EXEMPT from producer rules
                 // (the host owns it) — so it is not tracked in `usage`. It IS tracked in `imports` (for AccelIsExternal).
-                if (!resources.add(attr_sv(ctx, op, StringView("name")))) { return {op, FrameSemanticKind::DuplicateName}; }
+                if (!resources.add(attr_sv(ctx, op, StringView("name"))))
+                {
+                    return {op, FrameSemanticKind::DuplicateName};
+                }
                 if (!format_valid(static_cast<crd::u32>(attr_i(ctx, op, StringView("format"), 0)))) // 6b: an external texture's format
                 {
                     return {op, FrameSemanticKind::UnknownEnumParam, FrameCookError::UnknownFormat};
                 }
-                if (nimp < kMaxRes) { imports[nimp++] = op; }
+                if (nimp < kMaxRes)
+                {
+                    imports[nimp++] = op;
+                }
             }
             else if (nm == StringView("frame.draw_list"))
             {
-                if (!draw_lists.add(attr_sv(ctx, op, StringView("name")))) { return {op, FrameSemanticKind::DuplicateName}; }
+                if (!draw_lists.add(attr_sv(ctx, op, StringView("name"))))
+                {
+                    return {op, FrameSemanticKind::DuplicateName};
+                }
                 // 6b: the draw-list closed vocabs — string-carried, checked on the op attr (from_ceir_frame normalizes garbage).
                 if (!cull_str_valid(attr_sv(ctx, op, StringView("cull"))))
                 {
@@ -1096,8 +1465,14 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
             }
             else if (nm == StringView("frame.pass"))
             {
-                if (!passes.add(attr_sv(ctx, op, StringView("name")))) { return {op, FrameSemanticKind::DuplicateName}; }
-                if (npass < kMaxRes) { pass_ops[npass++] = op; } // graph order — paired with from_ceir_frame's desc.passes below
+                if (!passes.add(attr_sv(ctx, op, StringView("name"))))
+                {
+                    return {op, FrameSemanticKind::DuplicateName};
+                }
+                if (npass < kMaxRes) // graph order — paired with from_ceir_frame's desc.passes below
+                {
+                    pass_ops[npass++] = op;
+                }
                 // 6b: the pass-level string vocabs (for_each generator, queue preference) — checked on the op attr.
                 if (!for_each_str_valid(attr_sv(ctx, op, StringView("for_each"))))
                 {
@@ -1116,7 +1491,10 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
                     crd::usize start = 0U;
                     for (crd::usize i = 0; i <= ac.size(); ++i)
                     {
-                        if (i != ac.size() && ac[i] != ',') { continue; }
+                        if (i != ac.size() && ac[i] != ',')
+                        {
+                            continue;
+                        }
                         const StringView tok(ac.data() + start, i - start);
                         start                = i + 1U;
                         const bool has_read  = tok.size() > 0U && tok[0] == 'r';
@@ -1130,7 +1508,10 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
                                 // a frame.history operand is a PREVIOUS-frame READ of the wrapped declare (15c-0 routing).
                                 const ce::Operation* const under =
                                     def->num_operands() > 0U ? def->operand(0)->defining_op() : nullptr;
-                                if (ResUsage* const u = under != nullptr ? find_usage(under) : nullptr) { u->read = true; }
+                                if (ResUsage* const u = under != nullptr ? find_usage(under) : nullptr)
+                                {
+                                    u->read = true;
+                                }
                             }
                             else if (dn == StringView("resource.import") && has_write
                                      && attr_sv(ctx, def, StringView("name")) == StringView("@output"))
@@ -1139,8 +1520,14 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
                             }
                             else if (ResUsage* const u = def != nullptr ? find_usage(def) : nullptr)
                             {
-                                if (has_write) { u->wrote = true; }
-                                if (has_read) { u->read = true; }
+                                if (has_write)
+                                {
+                                    u->wrote = true;
+                                }
+                                if (has_read)
+                                {
+                                    u->read = true;
+                                }
                             }
                         }
                         ++opi;
@@ -1200,13 +1587,19 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
         if (usage[i].lifetime == StringView("history"))
         {
             // a ping-pong that is only read OR only written never rotates — every frame reads the same stale image.
-            if (!(usage[i].read && usage[i].wrote)) { return {d, FrameSemanticKind::PingPongNeedsBothWays}; }
+            if (!(usage[i].read && usage[i].wrote))
+            {
+                return {d, FrameSemanticKind::PingPongNeedsBothWays};
+            }
         }
         else
         {
             // the per-resource "may say" checks (Layers/Structured/Cube/Volume/BadMip) — dispatched by frame_kind.
             const FrameSemanticKind rd = declare_resource_diag(ctx, d);
-            if (rd != FrameSemanticKind::None) { return {d, rd}; }
+            if (rd != FrameSemanticKind::None)
+            {
+                return {d, rd};
+            }
         }
     }
     // AccelIsExternal (the desc's separate import loop): an AccelerationStructure given a size/format means the author
@@ -1245,7 +1638,10 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
                 // as SATISFYING a contract (a garbage blend0 truncates to a non-Opaque value that would "satisfy"
                 // CompositeNeedsBlend). NEW-IN-CEIR (no oracle): the desc-side parse can't produce a bad enum int.
                 const FrameCookError ve = enum_vocab_diag(desc.passes[i]);
-                if (ve != FrameCookError::Ok) { return {pass_ops[i], FrameSemanticKind::UnknownEnumParam, ve}; }
+                if (ve != FrameCookError::Ok)
+                {
+                    return {pass_ops[i], FrameSemanticKind::UnknownEnumParam, ve};
+                }
                 const FrameCookError e = pass_contract_diag(
                     desc.passes[i],
                     crd::containers::ConstSpan<FrameResourceDesc>(desc.resources.data(), desc.resources.size()), nullptr);
@@ -1259,7 +1655,10 @@ FrameSemanticDiag validate_ceir_frame(const ce::Context& ctx, const ce::Module& 
             }
         }
     }
-    if (!wrote_output) { return {nullptr, FrameSemanticKind::NoOutputPass}; } // a frame must produce its output endpoint
+    if (!wrote_output) // a frame must produce its output endpoint
+    {
+        return {nullptr, FrameSemanticKind::NoOutputPass};
+    }
     for (crd::u32 i = 0; i < nres; ++i)
     {
         // a graph-owned TRANSIENT must have a producer; persistent + history (+ external imports, untracked) are exempt.

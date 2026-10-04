@@ -18,7 +18,10 @@ bool sv_starts_with(crd::containers::StringView s, crd::containers::StringView p
 crd::containers::StringView trim_left(crd::containers::StringView s) noexcept
 {
     crd::usize i = 0;
-    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) { ++i; }
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+    {
+        ++i;
+    }
     return s.substr(i);
 }
 
@@ -31,10 +34,16 @@ crd::f32 parse_float_literal(crd::containers::StringView s) noexcept
     // buffer to avoid pulling crd-memory just for parsing.
     char buf[64] = {};
     const crd::usize n = (s.size() < sizeof(buf) - 1) ? s.size() : (sizeof(buf) - 1);
-    for (crd::usize i = 0; i < n; ++i) { buf[i] = s[i]; }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        buf[i] = s[i];
+    }
     char* end = nullptr;
     const float v = std::strtof(buf, &end); // NOLINT(cert-err34-c)
-    if (end == buf) { return -1.0F; }
+    if (end == buf)
+    {
+        return -1.0F;
+    }
     return v;
 }
 
@@ -52,17 +61,29 @@ MeshCookOptions parse_mesh_cook_options(crd::containers::StringView meta_text) n
     {
         // Find end of this line.
         crd::usize end = i;
-        while (end < meta_text.size() && meta_text[end] != '\n' && meta_text[end] != '\r') { ++end; }
+        while (end < meta_text.size() && meta_text[end] != '\n' && meta_text[end] != '\r')
+        {
+            ++end;
+        }
         crd::containers::StringView line = trim_left(meta_text.substr(i, end - i));
 
         // Advance past the line terminator (handles \n, \r\n, \r).
         i = end;
-        if (i < meta_text.size() && meta_text[i] == '\r') { ++i; }
-        if (i < meta_text.size() && meta_text[i] == '\n') { ++i; }
+        if (i < meta_text.size() && meta_text[i] == '\r')
+        {
+            ++i;
+        }
+        if (i < meta_text.size() && meta_text[i] == '\n')
+        {
+            ++i;
+        }
 
         // Strip inline '#' comments.
         crd::usize hash = 0;
-        while (hash < line.size() && line[hash] != '#') { ++hash; }
+        while (hash < line.size() && line[hash] != '#')
+        {
+            ++hash;
+        }
         line = line.substr(0, hash);
 
         // Trim trailing whitespace.
@@ -70,7 +91,10 @@ MeshCookOptions parse_mesh_cook_options(crd::containers::StringView meta_text) n
         {
             line = line.substr(0, line.size() - 1);
         }
-        if (line.empty()) { continue; }
+        if (line.empty())
+        {
+            continue;
+        }
 
         if (line.front() == '[' && line.back() == ']')
         {
@@ -79,14 +103,20 @@ MeshCookOptions parse_mesh_cook_options(crd::containers::StringView meta_text) n
             continue;
         }
 
-        if (!in_cook_section) { continue; }
+        if (!in_cook_section)
+        {
+            continue;
+        }
 
         // key = value
         if (sv_starts_with(line, crd::containers::StringView("position_scale")))
         {
             crd::containers::StringView rhs = line.substr(crd::containers::StringView("position_scale").size());
             rhs = trim_left(rhs);
-            if (rhs.empty() || rhs.front() != '=') { continue; }
+            if (rhs.empty() || rhs.front() != '=')
+            {
+                continue;
+            }
             rhs = trim_left(rhs.substr(1));
             const crd::f32 v = parse_float_literal(rhs);
             if (v > 0.0F && std::isfinite(v))
@@ -104,7 +134,10 @@ MeshCookOptions parse_mesh_cook_options(crd::containers::StringView meta_text) n
         {
             crd::containers::StringView rhs = line.substr(crd::containers::StringView("smooth_angle_deg").size());
             rhs = trim_left(rhs);
-            if (rhs.empty() || rhs.front() != '=') { continue; }
+            if (rhs.empty() || rhs.front() != '=')
+            {
+                continue;
+            }
             rhs = trim_left(rhs.substr(1));
             const crd::f32 v = parse_float_literal(rhs);
             if (v >= 0.0F && v <= 180.0F && std::isfinite(v))

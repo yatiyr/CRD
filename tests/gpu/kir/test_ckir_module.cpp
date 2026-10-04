@@ -139,7 +139,10 @@ TEST_CASE("generics/modules: a real MLP layer gelu(linear(x,W,b)) authored from 
         for (int j = 0; j < 2; ++j)
         {
             double acc = bv[j];
-            for (int k = 0; k < 3; ++k) { acc += xv[i * 3 + k] * wv[k * 2 + j]; } // x·W + b
+            for (int k = 0; k < 3; ++k) // x·W + b
+            {
+                acc += xv[i * 3 + k] * wv[k * 2 + j];
+            }
             const double x3    = acc * (acc * acc);                                  // match fn_gelu's op order
             const double inner = acc + 0.044715 * x3;
             const double g3    = 0.7978845608028654 * inner;
@@ -196,7 +199,13 @@ TEST_CASE("generics/modules: GM-3 first-class call-node builds KOp::Call, lowers
     CHECK(g.node(y).shape == kir::make_shape({2, 2})); // gelu has no shape rule ⇒ shape-preserving (arg[0] = the linear Call)
 
     int n_calls = 0;
-    for (int i = 0; i < g.size(); ++i) { if (g.node(i).op == kir::KOp::Call) { ++n_calls; } }
+    for (int i = 0; i < g.size(); ++i)
+    {
+        if (g.node(i).op == kir::KOp::Call)
+        {
+            ++n_calls;
+        }
+    }
     CHECK(n_calls == 2); // two real Call nodes live in the graph before lowering — the serializable named-call seam
 
     // LOWER: inline every Call into its body, then optimize. A mis-call would have returned -1 at call_node; here both lower.
@@ -207,7 +216,10 @@ TEST_CASE("generics/modules: GM-3 first-class call-node builds KOp::Call, lowers
     g.superoptimize(roots, 1);
     for (int i = 0; i < g.size(); ++i)
     {
-        if (i == roots[0]) { continue; }
+        if (i == roots[0])
+        {
+            continue;
+        }
         // no Call node is reachable from the root after lowering+DCE (emitters/oracle never see a Call)
     }
 
@@ -219,7 +231,10 @@ TEST_CASE("generics/modules: GM-3 first-class call-node builds KOp::Call, lowers
         for (int j = 0; j < 2; ++j)
         {
             double acc = bv[j];
-            for (int k = 0; k < 3; ++k) { acc += xv[i * 3 + k] * wv[k * 2 + j]; }
+            for (int k = 0; k < 3; ++k)
+            {
+                acc += xv[i * 3 + k] * wv[k * 2 + j];
+            }
             const double x3    = acc * (acc * acc);
             const double inner = acc + 0.044715 * x3;
             const double gelu  = 0.5 * acc * (1.0 + std::tanh(0.7978845608028654 * inner));
@@ -389,14 +404,26 @@ TEST_CASE("generics/modules: GM-5 separate compilation -- a composite fn LINKS o
         CHECK(g.node(cn).op == kir::KOp::Call);
         CHECK(g.node(cn).shape == kir::make_shape({2, 2}));
         int n_calls = 0;
-        for (int i = 0; i < g.size(); ++i) { if (g.node(i).op == kir::KOp::Call) { ++n_calls; } }
+        for (int i = 0; i < g.size(); ++i)
+        {
+            if (g.node(i).op == kir::KOp::Call)
+            {
+                ++n_calls;
+            }
+        }
         CHECK(n_calls == 1); // ONE named call stands in for the whole gelu∘linear composite — the serialization seam
 
         int roots[1] = {cn};
         CHECK(mod.lower_calls(g, roots, 1) == 1); // lowering the ONE ffn Call expands its body (which itself links linear+gelu inline)
         g.superoptimize(roots, 1);
         int n_calls_after = 0;
-        for (int i = 0; i < g.size(); ++i) { if (g.node(i).op == kir::KOp::Call) { ++n_calls_after; } }
+        for (int i = 0; i < g.size(); ++i)
+        {
+            if (g.node(i).op == kir::KOp::Call)
+            {
+                ++n_calls_after;
+            }
+        }
         CHECK(n_calls_after == 0); // ffn's body used inline `call` for linear/gelu ⇒ the linkage fully expands, no Calls survive
         crd::f64 out[4];
         kir::eval_cpu(g, inputs, &alloc, roots[0], out);
@@ -437,10 +464,17 @@ TEST_CASE("generics/modules: GM-6 production neural blocks -- layernorm, softmax
         for (int i = 0; i < 2; ++i)
         {
             double mean = 0.0;
-            for (int j = 0; j < 3; ++j) { mean += xv[i * 3 + j]; }
+            for (int j = 0; j < 3; ++j)
+            {
+                mean += xv[i * 3 + j];
+            }
             mean /= 3.0;
             double var = 0.0;
-            for (int j = 0; j < 3; ++j) { const double d = xv[i * 3 + j] - mean; var += d * d; }
+            for (int j = 0; j < 3; ++j)
+            {
+                const double d = xv[i * 3 + j] - mean;
+                var += d * d;
+            }
             var /= 3.0;
             const double inv = 1.0 / std::sqrt(var + 1e-5);
             for (int j = 0; j < 3; ++j)
@@ -464,12 +498,23 @@ TEST_CASE("generics/modules: GM-6 production neural blocks -- layernorm, softmax
         for (int i = 0; i < 2; ++i)
         {
             double mx = xv[i * 3];
-            for (int j = 1; j < 3; ++j) { mx = xv[i * 3 + j] > mx ? xv[i * 3 + j] : mx; }
+            for (int j = 1; j < 3; ++j)
+            {
+                mx = xv[i * 3 + j] > mx ? xv[i * 3 + j] : mx;
+            }
             double s = 0.0;
             double e[3];
-            for (int j = 0; j < 3; ++j) { e[j] = std::exp(xv[i * 3 + j] - mx); s += e[j]; }
+            for (int j = 0; j < 3; ++j)
+            {
+                e[j] = std::exp(xv[i * 3 + j] - mx);
+                s += e[j];
+            }
             double rowsum = 0.0;
-            for (int j = 0; j < 3; ++j) { CHECK(std::abs(out[i * 3 + j] - e[j] / s) < 1e-9); rowsum += out[i * 3 + j]; }
+            for (int j = 0; j < 3; ++j)
+            {
+                CHECK(std::abs(out[i * 3 + j] - e[j] / s) < 1e-9);
+                rowsum += out[i * 3 + j];
+            }
             CHECK(std::abs(rowsum - 1.0) < 1e-12); // a probability distribution
         }
     }
@@ -494,7 +539,10 @@ TEST_CASE("generics/modules: GM-6 production neural blocks -- layernorm, softmax
         for (int i = 0; i < 2; ++i)
         {
             double sc[2];
-            for (int j = 0; j < 2; ++j) { sc[j] = (qv[i * 2] * kv[j * 2] + qv[i * 2 + 1] * kv[j * 2 + 1]) * scale; } // q_i·k_j /√2
+            for (int j = 0; j < 2; ++j) // q_i·k_j /√2
+            {
+                sc[j] = (qv[i * 2] * kv[j * 2] + qv[i * 2 + 1] * kv[j * 2 + 1]) * scale;
+            }
             const double mx = sc[0] > sc[1] ? sc[0] : sc[1];
             const double e0 = std::exp(sc[0] - mx);
             const double e1 = std::exp(sc[1] - mx);
@@ -572,7 +620,13 @@ TEST_CASE("generics/modules: GM-6 production neural blocks -- layernorm, softmax
         CHECK(kir::bit_equal(comp, manual, 6)); // the composite block == the hand-composed sequence, bit-for-bit
         // sanity: the block is a genuine transform (not identity / not all-zero)
         bool changed = false;
-        for (int i = 0; i < 6; ++i) { if (std::abs(comp[i] - xv[i]) > 1e-9) { changed = true; } }
+        for (int i = 0; i < 6; ++i)
+        {
+            if (std::abs(comp[i] - xv[i]) > 1e-9)
+            {
+                changed = true;
+            }
+        }
         CHECK(changed);
     }
 
@@ -618,6 +672,9 @@ TEST_CASE("AS-4: the KOp::Attention fused intrinsic oracle == the naive expanded
     crd::f64 intrinsic[4];
     kir::eval_cpu(g, in, &alloc, y, intrinsic);
 
-    for (int i = 0; i < 4; ++i) { CHECK(std::abs(intrinsic[i] - expanded[i]) < 1e-12); } // both naive f64 attention ⇒ agree
+    for (int i = 0; i < 4; ++i) // both naive f64 attention ⇒ agree
+    {
+        CHECK(std::abs(intrinsic[i] - expanded[i]) < 1e-12);
+    }
     std::printf("[module] AS-4 KOp::Attention intrinsic: oracle == expanded/module attention (naive reference) to 1e-12; the CUDA backend fuses this node to a flash kernel\n");
 }

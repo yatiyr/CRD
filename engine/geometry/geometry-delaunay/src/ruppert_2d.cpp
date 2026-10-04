@@ -138,8 +138,14 @@ T triangle_min_angle_rad(const crd::math::Vec2<T>& a,
     const T len_bc = crd::math::sqrt(len2_bc);
     // Cos of each angle via dot product. Angle at A = between AB and AC.
     auto safe_acos = [](T x) -> T {
-        if (x > static_cast<T>(1))  { x = static_cast<T>(1); }
-        if (x < static_cast<T>(-1)) { x = static_cast<T>(-1); }
+        if (x > static_cast<T>(1))
+        {
+            x = static_cast<T>(1);
+        }
+        if (x < static_cast<T>(-1))
+        {
+            x = static_cast<T>(-1);
+        }
         return crd::math::acos(x);
     };
     const T cos_a = (abx * acx + aby * acy) / (len_ab * len_ac);
@@ -149,8 +155,14 @@ T triangle_min_angle_rad(const crd::math::Vec2<T>& a,
     const T ang_b = safe_acos(cos_b);
     const T ang_c = safe_acos(cos_c);
     T m = ang_a;
-    if (ang_b < m) { m = ang_b; }
-    if (ang_c < m) { m = ang_c; }
+    if (ang_b < m)
+    {
+        m = ang_b;
+    }
+    if (ang_c < m)
+    {
+        m = ang_c;
+    }
     return m;
 }
 
@@ -177,7 +189,10 @@ run_cdt(const crd::containers::Array<crd::math::Vec2<T>>& vertices,
         crd::containers::ConstSpan<crd::math::Vec2<T>>{vertices.data(), vertices.size()},
         crd::containers::ConstSpan<crd::geometry::polygon::CdtEdge>{cdt_edges.data(), cdt_edges.size()},
         alloc);
-    if (!cdt_res.ok()) { return cdt_res.status; }
+    if (!cdt_res.ok())
+    {
+        return cdt_res.status;
+    }
     out_tri_indices = std::move(cdt_res.triangle_indices);
     out_tri_count   = cdt_res.triangle_count;
     return crd::geometry::polygon::CdtStatus::Ok;
@@ -196,10 +211,18 @@ ruppert_refine_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     const crd::u32 n_in = static_cast<crd::u32>(points.size());
 
     // Validate.
-    if (n_in < 3U) { result.status = RuppertStatus::TooFewPoints; return result; }
+    if (n_in < 3U)
+    {
+        result.status = RuppertStatus::TooFewPoints;
+        return result;
+    }
     for (crd::u32 i = 0; i < n_in; ++i)
     {
-        if (!is_finite_vec2(points[i])) { result.status = RuppertStatus::NonFiniteInput; return result; }
+        if (!is_finite_vec2(points[i]))
+        {
+            result.status = RuppertStatus::NonFiniteInput;
+            return result;
+        }
     }
     for (const auto& s : segments)
     {
@@ -219,10 +242,16 @@ ruppert_refine_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // Initialise working vertex + segment arrays from input.
     crd::containers::Array<crd::math::Vec2<T>> vertices(alloc);
     vertices.reserve(n_in);
-    for (crd::u32 i = 0; i < n_in; ++i) { vertices.push_back(points[i]); }
+    for (crd::u32 i = 0; i < n_in; ++i)
+    {
+        vertices.push_back(points[i]);
+    }
     crd::containers::Array<RuppertSegment> segs(alloc);
     segs.reserve(segments.size());
-    for (const auto& s : segments) { segs.push_back(s); }
+    for (const auto& s : segments)
+    {
+        segs.push_back(s);
+    }
 
     // Initial CDT.
     crd::containers::Array<crd::u32> tri_indices(alloc);
@@ -251,14 +280,20 @@ ruppert_refine_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
             const auto& pb = vertices[seg.b];
             for (crd::u32 vi = 0; vi < vertices.size(); ++vi)
             {
-                if (vi == seg.a || vi == seg.b) { continue; }
+                if (vi == seg.a || vi == seg.b)
+                {
+                    continue;
+                }
                 if (encroaches<T>(pa, pb, vertices[vi]))
                 {
                     encroached_idx = si;
                     break;
                 }
             }
-            if (encroached_idx != std::numeric_limits<crd::u32>::max()) { break; }
+            if (encroached_idx != std::numeric_limits<crd::u32>::max())
+            {
+                break;
+            }
         }
 
         if (encroached_idx != std::numeric_limits<crd::u32>::max())
@@ -365,7 +400,10 @@ ruppert_refine_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
             const crd::u32 mid_idx = static_cast<crd::u32>(vertices.size());
             vertices.push_back(midpoint);
             ++result.steiner_count;
-            if (result.steiner_count > opts.max_steiner) { break; }
+            if (result.steiner_count > opts.max_steiner)
+            {
+                break;
+            }
             segs[encroach_by_cc] = RuppertSegment{seg.a, mid_idx};
             segs.push_back(RuppertSegment{mid_idx, seg.b});
             const auto s = run_cdt<T>(vertices, segs, alloc, tri_indices, tri_count);
@@ -390,7 +428,10 @@ ruppert_refine_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
         }
         vertices.push_back(cc);
         ++result.steiner_count;
-        if (result.steiner_count > opts.max_steiner) { break; }
+        if (result.steiner_count > opts.max_steiner)
+        {
+            break;
+        }
         const auto s = run_cdt<T>(vertices, segs, alloc, tri_indices, tri_count);
         if (s != crd::geometry::polygon::CdtStatus::Ok)
         {

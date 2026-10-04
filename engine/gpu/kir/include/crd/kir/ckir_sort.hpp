@@ -47,7 +47,13 @@ struct SortConfig
         return words * 4U <= shared_bytes;
     };
     SortConfig c;
-    if (lanes >= 16U && fits(8, 256)) { c.radix_bits = 8; c.threads = 256; c.passes = 4; return c; }
+    if (lanes >= 16U && fits(8, 256))
+    {
+        c.radix_bits = 8;
+        c.threads = 256;
+        c.passes = 4;
+        return c;
+    }
     c.radix_bits = 4; // 16-thread blocks, 8 passes — slower, and CORRECT on any conformant device
     c.threads    = 16;
     c.passes     = 8;
@@ -79,7 +85,10 @@ struct SortConfig
 
     const int mark = g.kernel_stmt_mark();
 
-    for (int j = 0; j < ksub * nb; ++j) { g.stmt_shared_store(s_hist, add(tid, ku(static_cast<crd::u32>(j * threads))), ku(0)); }
+    for (int j = 0; j < ksub * nb; ++j)
+    {
+        g.stmt_shared_store(s_hist, add(tid, ku(static_cast<crd::u32>(j * threads))), ku(0));
+    }
     g.stmt_barrier();
 
     for (int k = 0; k < pt; ++k)
@@ -95,7 +104,10 @@ struct SortConfig
     {
         const int bin = add(tid, ku(static_cast<crd::u32>(b * threads)));
         int       sum = g.shared_load(s_hist, bin);
-        for (int k = 1; k < ksub; ++k) { sum = add(sum, g.shared_load(s_hist, add(ku(static_cast<crd::u32>(k * nbins)), bin))); }
+        for (int k = 1; k < ksub; ++k)
+        {
+            sum = add(sum, g.shared_load(s_hist, add(ku(static_cast<crd::u32>(k * nbins)), bin)));
+        }
         g.stmt_buffer_store(out_buf, add(mul(bin, ku(static_cast<crd::u32>(nblocks))), wid), sum);
     }
 
@@ -144,9 +156,17 @@ struct SortConfig
 
     // blocked exclusive scan of s_col[nblocks]: freeze chunk, local exclusive (run), Hillis-Steele the thread totals, add base.
     int rr[64];
-    for (int k = 0; k < cpt; ++k) { rr[k] = g.shared_load(s_col, add(c0, ku(static_cast<crd::u32>(k)))); g.stmt_materialize(rr[k]); }
+    for (int k = 0; k < cpt; ++k)
+    {
+        rr[k] = g.shared_load(s_col, add(c0, ku(static_cast<crd::u32>(k))));
+        g.stmt_materialize(rr[k]);
+    }
     int run = u0;
-    for (int k = 0; k < cpt; ++k) { g.stmt_shared_store(s_col, add(c0, ku(static_cast<crd::u32>(k))), run); run = add(run, rr[k]); }
+    for (int k = 0; k < cpt; ++k)
+    {
+        g.stmt_shared_store(s_col, add(c0, ku(static_cast<crd::u32>(k))), run);
+        run = add(run, rr[k]);
+    }
     g.stmt_shared_store(s_tsum, tid, run);
     g.stmt_barrier();
     for (int stride = 1; stride < scan_threads; stride *= 2)
@@ -289,13 +309,20 @@ struct SortConfig
         const int idx = add(base, add(tid, ku(static_cast<crd::u32>(r * threads))));
         keyr[r] = g.buffer_load(in_buf, idx);
         g.stmt_materialize(keyr[r]);
-        if (carry_val) { valr[r] = g.buffer_load(val_in, idx); g.stmt_materialize(valr[r]); }
+        if (carry_val)
+        {
+            valr[r] = g.buffer_load(val_in, idx);
+            g.stmt_materialize(valr[r]);
+        }
     }
     g.stmt_barrier();
 
     for (int r = 0; r < pt; ++r)
     {
-        for (int j = 0; j < seginit; ++j) { g.stmt_shared_store(seg, add(tid, ku(static_cast<crd::u32>(j * threads))), u0); }
+        for (int j = 0; j < seginit; ++j)
+        {
+            g.stmt_shared_store(seg, add(tid, ku(static_cast<crd::u32>(j * threads))), u0);
+        }
         g.stmt_barrier();
 
         const int key = keyr[r];
@@ -372,7 +399,10 @@ struct SortConfig
         const int loc = add(g.shared_load(seg, digr[r]), rnkr[r]);
         g.stmt_materialize(loc);
         g.stmt_shared_store(s_keys, loc, keyr[r]);
-        if (carry_val) { g.stmt_shared_store(s_vals, loc, valr[r]); } // the value rides the same local slot as its key
+        if (carry_val) // the value rides the same local slot as its key
+        {
+            g.stmt_shared_store(s_vals, loc, valr[r]);
+        }
     }
     g.stmt_barrier();
 
@@ -387,7 +417,10 @@ struct SortConfig
         const int dest = add(add(g.buffer_load(gb_buf, d2), offv), g.binary(KOp::Sub, p2, g.shared_load(seg, d2)));
         g.stmt_materialize(dest);
         g.stmt_buffer_store(out_buf, dest, key2);
-        if (carry_val) { g.stmt_buffer_store(val_out, dest, g.shared_load(s_vals, p2)); } // value follows its key
+        if (carry_val) // value follows its key
+        {
+            g.stmt_buffer_store(val_out, dest, g.shared_load(s_vals, p2));
+        }
     }
 
     KEntry e;
@@ -427,7 +460,10 @@ struct SortConfig
     const int uone    = g.constant(1.0, sh1, DType::U32);
     const int mark    = g.kernel_stmt_mark();
 
-    for (int j = 0; j < 4 * nbins / threads; ++j) { g.stmt_shared_store(s_h, add(tid, ku(static_cast<crd::u32>(j * threads))), ku(0)); }
+    for (int j = 0; j < 4 * nbins / threads; ++j)
+    {
+        g.stmt_shared_store(s_h, add(tid, ku(static_cast<crd::u32>(j * threads))), ku(0));
+    }
     g.stmt_barrier();
     for (int k = 0; k < pt; ++k)
     {
@@ -533,7 +569,10 @@ struct SortConfig
     const int lane = g.binary(KOp::BitAnd, tid, ku(31));
     g.stmt_materialize(lane);
     const int gwb = add(base, mul(sg, ku(static_cast<crd::u32>(cpw)))); // this warp's chunk base in global memory
-    for (int j = 0; j < seginit; ++j) { g.stmt_shared_store(seg, add(tid, ku(static_cast<crd::u32>(j * threads))), u0); } // zero counters ONCE (GPU shared is uninitialized)
+    for (int j = 0; j < seginit; ++j) // zero counters ONCE (GPU shared is uninitialized)
+    {
+        g.stmt_shared_store(seg, add(tid, ku(static_cast<crd::u32>(j * threads))), u0);
+    }
 
     int keyr[64];
     int rnkw[64]; // within-warp running rank (prev + wsr) -- deferred exprs over materialized nodes (safe)
@@ -550,7 +589,10 @@ struct SortConfig
         const int d = g.binary(KOp::BitAnd, g.binary(KOp::Shr, key, ku(static_cast<crd::u32>(shift))), ku(static_cast<crd::u32>(nbins - 1)));
         g.stmt_materialize(d);
         int mask;
-        if (hw_match) { mask = g.subgroup_match(d); } // CUDA __match_any_sync: 1 hardware op (bit-exact: same mask)
+        if (hw_match) // CUDA __match_any_sync: 1 hardware op (bit-exact: same mask)
+        {
+            mask = g.subgroup_match(d);
+        }
         else
         {
             // REN-38: active-lane mask, not ~0 — same phantom-lane ghost-count bug as the scatter (see above)

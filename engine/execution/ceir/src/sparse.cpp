@@ -34,9 +34,15 @@ using containers::StringView;
 [[nodiscard]] bool dim0_static(const Context& ctx, TypeId shape, crd::u32& out) noexcept
 {
     const Type sh = ctx.type_of(shape);
-    if (sh.members.size() < 1U) { return false; }
+    if (sh.members.size() < 1U)
+    {
+        return false;
+    }
     const Type d = ctx.type_of(sh.members[0]);
-    if (static_cast<DimKind>(d.cols) != DimKind::Static) { return false; }
+    if (static_cast<DimKind>(d.cols) != DimKind::Static)
+    {
+        return false;
+    }
     out = d.count;
     return true;
 }
@@ -45,7 +51,10 @@ using containers::StringView;
 // operand/result access arity-guarded). ⛔ const Context& — reads types, interns nothing.
 SparseMisuse scan_sparse_region(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -55,7 +64,10 @@ SparseMisuse scan_sparse_region(const Context& ctx, const Region* r) // NOLINT(m
                 // (1) operands (row_ptr,col_idx,values,x) + result (y) Tensor-kinded (KIND — the generated verify owns arity).
                 for (u32 i = 0; i < op->num_operands(); ++i)
                 {
-                    if (!is_tensor(ctx, op->operand(i))) { return {op->operand(i), op, SparseMisuseKind::OperandNotTensor}; }
+                    if (!is_tensor(ctx, op->operand(i)))
+                    {
+                        return {op->operand(i), op, SparseMisuseKind::OperandNotTensor};
+                    }
                 }
                 if (op->num_results() >= 1U && ctx.type_of(op->result(0U)->type()).kind != TypeKind::Tensor)
                 {
@@ -63,7 +75,10 @@ SparseMisuse scan_sparse_region(const Context& ctx, const Region* r) // NOLINT(m
                 }
                 // ⛔ min-arity guard BEFORE any operand(1..3)/result read: an under-arity op FOLDS to the generated verify's
                 //    arity check (4 operands + 1 result), never trips an in-walk out-of-range access.
-                if (op->num_operands() < 4U || op->num_results() == 0U) { continue; }
+                if (op->num_operands() < 4U || op->num_results() == 0U)
+                {
+                    continue;
+                }
                 const TypeId rp = op->operand(0U)->type(); // row_ptr
                 const TypeId ci = op->operand(1U)->type(); // col_idx
                 const TypeId vl = op->operand(2U)->type(); // values
@@ -71,21 +86,51 @@ SparseMisuse scan_sparse_region(const Context& ctx, const Region* r) // NOLINT(m
                 const TypeId yt = op->result(0U)->type();  // y
 
                 // (2) all five RANK-1 (row_ptr [M+1], col_idx/values [nnz], x [N], y [M]).
-                if (shape_rank(ctx, shape_of(ctx, rp)) != 1U) { return {op->operand(0U), op, SparseMisuseKind::RankInvalid}; }
-                if (shape_rank(ctx, shape_of(ctx, ci)) != 1U) { return {op->operand(1U), op, SparseMisuseKind::RankInvalid}; }
-                if (shape_rank(ctx, shape_of(ctx, vl)) != 1U) { return {op->operand(2U), op, SparseMisuseKind::RankInvalid}; }
-                if (shape_rank(ctx, shape_of(ctx, xt)) != 1U) { return {op->operand(3U), op, SparseMisuseKind::RankInvalid}; }
-                if (shape_rank(ctx, shape_of(ctx, yt)) != 1U) { return {op->result(0U), op, SparseMisuseKind::RankInvalid}; }
+                if (shape_rank(ctx, shape_of(ctx, rp)) != 1U)
+                {
+                    return {op->operand(0U), op, SparseMisuseKind::RankInvalid};
+                }
+                if (shape_rank(ctx, shape_of(ctx, ci)) != 1U)
+                {
+                    return {op->operand(1U), op, SparseMisuseKind::RankInvalid};
+                }
+                if (shape_rank(ctx, shape_of(ctx, vl)) != 1U)
+                {
+                    return {op->operand(2U), op, SparseMisuseKind::RankInvalid};
+                }
+                if (shape_rank(ctx, shape_of(ctx, xt)) != 1U)
+                {
+                    return {op->operand(3U), op, SparseMisuseKind::RankInvalid};
+                }
+                if (shape_rank(ctx, shape_of(ctx, yt)) != 1U)
+                {
+                    return {op->result(0U), op, SparseMisuseKind::RankInvalid};
+                }
 
                 // (3) row_ptr + col_idx Int-kinded (the CSR index arrays).
-                if (!is_int_elem(ctx, rp)) { return {op->operand(0U), op, SparseMisuseKind::IndexElementNotInt}; }
-                if (!is_int_elem(ctx, ci)) { return {op->operand(1U), op, SparseMisuseKind::IndexElementNotInt}; }
+                if (!is_int_elem(ctx, rp))
+                {
+                    return {op->operand(0U), op, SparseMisuseKind::IndexElementNotInt};
+                }
+                if (!is_int_elem(ctx, ci))
+                {
+                    return {op->operand(1U), op, SparseMisuseKind::IndexElementNotInt};
+                }
 
                 // (4) the VALUE side — values/x/y are Float-kinded AND EQUAL element (one value type; the scale-element precedent).
-                if (!is_float_elem(ctx, vl)) { return {op->operand(2U), op, SparseMisuseKind::ValueElementMismatch}; }
+                if (!is_float_elem(ctx, vl))
+                {
+                    return {op->operand(2U), op, SparseMisuseKind::ValueElementMismatch};
+                }
                 const TypeId ve = elem_of(ctx, vl);
-                if (elem_of(ctx, xt) != ve) { return {op->operand(3U), op, SparseMisuseKind::ValueElementMismatch}; }
-                if (elem_of(ctx, yt) != ve) { return {op->result(0U), op, SparseMisuseKind::ValueElementMismatch}; }
+                if (elem_of(ctx, xt) != ve)
+                {
+                    return {op->operand(3U), op, SparseMisuseKind::ValueElementMismatch};
+                }
+                if (elem_of(ctx, yt) != ve)
+                {
+                    return {op->result(0U), op, SparseMisuseKind::ValueElementMismatch};
+                }
 
                 // (5) col_idx.dim0 == values.dim0 (both name the same nnz nonzeros; both-static guard).
                 crd::u32 nnz_ci = 0;
@@ -105,7 +150,10 @@ SparseMisuse scan_sparse_region(const Context& ctx, const Region* r) // NOLINT(m
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const SparseMisuse e = scan_sparse_region(ctx, op->region(i));
-                if (e.kind != SparseMisuseKind::None) { return e; }
+                if (e.kind != SparseMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

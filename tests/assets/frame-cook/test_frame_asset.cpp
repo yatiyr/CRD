@@ -276,7 +276,10 @@ TEST_CASE("REN-36.1: a truncated or corrupt blob is REJECTED, never partially re
     CHECK_FALSE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(blob.data(), blob.size() / 2U), t));
 
     crd::containers::Array<crd::u8> bad(&alloc);
-    for (crd::usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    for (crd::usize i = 0; i < blob.size(); ++i)
+    {
+        bad.push_back(blob[i]);
+    }
     bad[0] = static_cast<crd::u8>(bad[0] + 1U); // corrupt the FourCC
     fc::FrameGraphDesc t2(&alloc);
     CHECK_FALSE(fc::read_frame_graph(crd::containers::ConstSpan<crd::u8>(bad.data(), bad.size()), t2));
@@ -771,7 +774,10 @@ const fc::FrameGraphDesc* resolve_blur(crd::containers::StringView name, void* /
 {
     const char* want = "crd://technique/blur";
     crd::usize  i    = 0;
-    while (want[i] != '\0' && i < name.size() && name[i] == want[i]) { ++i; }
+    while (want[i] != '\0' && i < name.size() && name[i] == want[i])
+    {
+        ++i;
+    }
     return (want[i] == '\0' && i == name.size()) ? g_blur : nullptr;
 }
 
@@ -780,8 +786,14 @@ const fc::FrameGraphDesc* resolve_blur(crd::containers::StringView name, void* /
     for (crd::usize i = 0; i < v.size(); ++i)
     {
         crd::usize k = 0;
-        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
-        if (n[k] == '\0' && k == v[i].name.size()) { return true; }
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k])
+        {
+            ++k;
+        }
+        if (n[k] == '\0' && k == v[i].name.size())
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -790,8 +802,14 @@ const fc::FrameGraphDesc* resolve_blur(crd::containers::StringView name, void* /
     for (crd::usize i = 0; i < v.size(); ++i)
     {
         crd::usize k = 0;
-        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
-        if (n[k] == '\0' && k == v[i].name.size()) { return static_cast<crd::i64>(i); }
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k])
+        {
+            ++k;
+        }
+        if (n[k] == '\0' && k == v[i].name.size())
+        {
+            return static_cast<crd::i64>(i);
+        }
     }
     return -1;
 }
@@ -800,8 +818,14 @@ const fc::FrameGraphDesc* resolve_blur(crd::containers::StringView name, void* /
     for (crd::usize i = 0; i < v.size(); ++i)
     {
         crd::usize k = 0;
-        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k]) { ++k; }
-        if (n[k] == '\0' && k == v[i].name.size()) { return true; }
+        while (n[k] != '\0' && k < v[i].name.size() && v[i].name.c_str()[k] == n[k])
+        {
+            ++k;
+        }
+        if (n[k] == '\0' && k == v[i].name.size())
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -960,7 +984,11 @@ TEST_CASE("REN-37.6: a composed graph ROUND-TRIPS through emit and cook", "[fram
     bool same = true;
     for (crd::usize i = 0; i < blob.size(); ++i)
     {
-        if (blob[i] != blob2[i]) { same = false; break; }
+        if (blob[i] != blob2[i])
+        {
+            same = false;
+            break;
+        }
     }
     CHECK(same);
 }
@@ -1047,7 +1075,11 @@ stencil_pass = "replace"
     bool same = true;
     for (crd::usize i = 0; i < direct.size(); ++i)
     {
-        if (direct[i] != from_emit[i]) { same = false; break; }
+        if (direct[i] != from_emit[i])
+        {
+            same = false;
+            break;
+        }
     }
     CHECK(same);
 
@@ -1256,7 +1288,10 @@ filter = "nearest"
             CHECK(std::strcmp(a.params[k].name.c_str(), b.params[k].name.c_str()) == 0);
             CHECK(a.params[k].type == b.params[k].type);
             CHECK(std::strcmp(a.params[k].str.c_str(), b.params[k].str.c_str()) == 0);
-            for (crd::u32 c = 0; c < 4U; ++c) { CHECK(a.params[k].v[c] == b.params[k].v[c]); }
+            for (crd::u32 c = 0; c < 4U; ++c)
+            {
+                CHECK(a.params[k].v[c] == b.params[k].v[c]);
+            }
         }
     }
 }

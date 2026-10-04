@@ -73,7 +73,10 @@ CRD_FORCEINLINE Quatf operator*(f32 s, Quatf a)   noexcept { return Quatf(s * a.
 [[nodiscard]] CRD_FORCEINLINE Quatf normalize(Quatf q) noexcept
 {
     const f32 len = length(q);
-    if (len == 0.0F) return Quatf::identity();
+    if (len == 0.0F)
+    {
+        return Quatf::identity();
+    }
     return Quatf(q.xyzw * (1.0F / len));
 }
 

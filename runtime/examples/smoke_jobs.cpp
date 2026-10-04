@@ -56,7 +56,9 @@ int main()
             {
                 crd::u64 local = 0U;
                 for (crd::u32 i = begin; i < end; ++i)
+                {
                     local += i;
+                }
                 total.fetch_add(local, std::memory_order_relaxed);
             });
         crd::jobs::wait(c);
@@ -81,17 +83,23 @@ int main()
 
         crd::jobs::JobDecl jobs[high + normal + low];
         for (int i = 0; i < high; ++i)
+        {
             jobs[i] = crd::jobs::make_job(
                 [&high_ran]() { high_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::High);
+        }
         for (int i = 0; i < normal; ++i)
+        {
             jobs[high + i] = crd::jobs::make_job(
                 [&normal_ran]() { normal_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::Normal);
+        }
         for (int i = 0; i < low; ++i)
+        {
             jobs[high + normal + i] = crd::jobs::make_job(
                 [&low_ran]() { low_ran.fetch_add(1, std::memory_order_relaxed); },
                 crd::jobs::StackSize::Small, crd::jobs::Priority::Low);
+        }
 
         crd::jobs::Counter* c = crd::jobs::run(
             std::span(jobs, static_cast<crd::usize>(high + normal + low)));

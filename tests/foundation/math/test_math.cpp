@@ -743,9 +743,13 @@ TEST_CASE("Easings: Back/Elastic overshoot, Bounce stays in [0,1]", "[math][easi
     {
         const float t = static_cast<float>(i) / 32.0F;
         if (ease_in_back(t) < 0.0F)
+        {
             back_in_undershot = true;
+        }
         if (ease_out_back(t) > 1.0F)
+        {
             back_out_overshot = true;
+        }
     }
     REQUIRE(back_in_undershot);
     REQUIRE(back_out_overshot);
@@ -757,9 +761,13 @@ TEST_CASE("Easings: Back/Elastic overshoot, Bounce stays in [0,1]", "[math][easi
     {
         const float t = static_cast<float>(i) / 32.0F;
         if (ease_out_elastic(t) > 1.0F)
+        {
             elastic_out_overshot = true;
+        }
         if (ease_in_elastic(t) < 0.0F)
+        {
             elastic_in_undershot = true;
+        }
     }
     REQUIRE(elastic_out_overshot);
     REQUIRE(elastic_in_undershot);

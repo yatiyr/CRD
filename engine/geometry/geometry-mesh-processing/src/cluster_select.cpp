@@ -89,7 +89,9 @@ crd::u32 select_clusters_flat(const crd::u32* packed_clusters, crd::u32 cluster_
         const crd::f32 st       = tp * dist;
 
         if (parent_e > st && error <= st)
+        {
             out_selected[count++] = ci;
+        }
     }
     return count;
 }
@@ -100,7 +102,10 @@ crd::u32 select_clusters_bvh(const crd::u32* packed_clusters, crd::u32 cluster_c
                               crd::u32* out_selected, crd::u32 max_selected,
                               crd::memory::IAllocator* /*scratch*/)
 {
-    if (cluster_count == 0U || bvh_node_count == 0U) return 0U;
+    if (cluster_count == 0U || bvh_node_count == 0U)
+    {
+        return 0U;
+    }
 
     const crd::f32 tp = params.error_threshold * params.proj_factor;
     crd::u32 count = 0U;
@@ -126,7 +131,9 @@ crd::u32 select_clusters_bvh(const crd::u32* packed_clusters, crd::u32 cluster_c
             const crd::f32 st   = tp * dist;
 
             if (pe > st && err <= st)
+            {
                 out_selected[count++] = ci;
+            }
             continue;
         }
 

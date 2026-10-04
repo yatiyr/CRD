@@ -68,7 +68,9 @@ struct MemoryStats
         // (then proceed; a sentinel never changes behaviour). Independent of stats tracking; zero-cost in
         // shipping builds. This is the shared allocation seam -- every concrete allocator calls on_allocate.
         if (crd::in_rt_scope())
+        {
             crd::report_rt_violation(crd::RtViolationKind::Allocation, static_cast<crd::usize>(bytes));
+        }
 #endif
 #if CRD_MEMORY_STATS_TRACKING
         alloc_count.fetch_add(1, std::memory_order_relaxed);

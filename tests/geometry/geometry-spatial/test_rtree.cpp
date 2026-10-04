@@ -58,8 +58,16 @@ f32 point_aabb_d2(const Vec3f& p, const AABB3<f32>& a) noexcept
         const f32 v = p[static_cast<usize>(i)];
         const f32 lo = a.min[static_cast<usize>(i)];
         const f32 hi = a.max[static_cast<usize>(i)];
-        if (v < lo)      { const f32 d = lo - v; d2 += d * d; }
-        else if (v > hi) { const f32 d = v - hi; d2 += d * d; }
+        if (v < lo)
+        {
+            const f32 d = lo - v;
+            d2 += d * d;
+        }
+        else if (v > hi)
+        {
+            const f32 d = v - hi;
+            d2 += d * d;
+        }
     }
     return d2;
 }
@@ -71,7 +79,10 @@ crd::containers::Array<u32> brute_overlap(crd::containers::ConstSpan<AABB3<f32>>
     crd::containers::Array<u32> out(a);
     for (u32 i = 0; i < objs.size(); ++i)
     {
-        if (aabb_overlap(objs[i], q)) { out.push_back(i); }
+        if (aabb_overlap(objs[i], q))
+        {
+            out.push_back(i);
+        }
     }
     std::sort(out.data(), out.data() + out.size());
     return out;
@@ -186,7 +197,10 @@ TEST_CASE("RTree overlap matches brute force on random AABB cloud",
         auto expected = brute_overlap(crd::containers::ConstSpan<AABB3<f32>>{objs.data(), objs.size()},
                                         q, &f.alloc);
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 
@@ -239,12 +253,21 @@ TEST_CASE("RTree k-NN matches brute-force", "[geometry-spatial][rtree][knn]")
             all.push_back(typename RTree<f32>::Neighbor{i, point_aabb_d2(q, objs[i])});
         }
         std::sort(all.data(), all.data() + all.size(), [](auto a, auto b) {
-            if (a.distance_squared < b.distance_squared) return true;
-            if (a.distance_squared > b.distance_squared) return false;
+            if (a.distance_squared < b.distance_squared)
+            {
+                return true;
+            }
+            if (a.distance_squared > b.distance_squared)
+            {
+                return false;
+            }
             return a.payload < b.payload;
         });
         crd::containers::Array<typename RTree<f32>::Neighbor> top(&f.alloc);
-        for (u32 i = 0; i < k && i < all.size(); ++i) { top.push_back(all[i]); }
+        for (u32 i = 0; i < k && i < all.size(); ++i)
+        {
+            top.push_back(all[i]);
+        }
         return top;
     };
 
@@ -279,7 +302,10 @@ TEST_CASE("RTree insert/remove cycle keeps surviving handles valid",
     tree.validate();
 
     // Remove every other handle (evens).
-    for (u32 i = 0; i < 50U; i += 2U) { tree.remove(handles[i]); }
+    for (u32 i = 0; i < 50U; i += 2U)
+    {
+        tree.remove(handles[i]);
+    }
     REQUIRE(tree.leaf_count() == 25U);
     tree.validate();
 
@@ -337,11 +363,17 @@ TEST_CASE("RTree STR bulk-load produces queryable tree", "[geometry-spatial][rtr
         crd::containers::Array<u32> expected(&f.alloc);
         for (u32 i = 0; i < aabbs.size(); ++i)
         {
-            if (aabb_overlap(aabbs[i], q)) { expected.push_back(payloads[i]); }
+            if (aabb_overlap(aabbs[i], q))
+            {
+                expected.push_back(payloads[i]);
+            }
         }
         std::sort(expected.data(), expected.data() + expected.size());
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 
@@ -362,7 +394,10 @@ TEST_CASE("RTree STR bulk-load produces shallower tree than sequential insert",
         payloads.push_back(i);
     }
 
-    for (u32 i = 0; i < aabbs.size(); ++i) { (void)seq.insert(aabbs[i], payloads[i]); }
+    for (u32 i = 0; i < aabbs.size(); ++i)
+    {
+        (void)seq.insert(aabbs[i], payloads[i]);
+    }
     crd::containers::Array<RTreeLeafId> handles(&f.alloc);
     str.bulk_load(crd::containers::ConstSpan<AABB3<f32>>{aabbs.data(), aabbs.size()},
                    crd::containers::ConstSpan<u32>{payloads.data(), payloads.size()},
@@ -388,7 +423,10 @@ TEST_CASE("RTree permutation determinism: order changes tree, but result SET mat
 
     auto build_overlap = [&](crd::containers::ConstSpan<u32> order, const AABB3<f32>& q) {
         RTree<f32> t{&f.alloc};
-        for (usize i = 0; i < order.size(); ++i) { (void)t.insert(base[order[i]], order[i]); }
+        for (usize i = 0; i < order.size(); ++i)
+        {
+            (void)t.insert(base[order[i]], order[i]);
+        }
         crd::containers::Array<u32> hits(&f.alloc);
         t.overlap(q, hits);
         std::sort(hits.data(), hits.data() + hits.size());
@@ -396,15 +434,24 @@ TEST_CASE("RTree permutation determinism: order changes tree, but result SET mat
     };
 
     crd::containers::Array<u32> order_a(&f.alloc);
-    for (u32 i = 0; i < 100U; ++i) { order_a.push_back(i); }
+    for (u32 i = 0; i < 100U; ++i)
+    {
+        order_a.push_back(i);
+    }
     crd::containers::Array<u32> order_b(&f.alloc);
-    for (u32 i = 0; i < 100U; ++i) { order_b.push_back(99U - i); }
+    for (u32 i = 0; i < 100U; ++i)
+    {
+        order_b.push_back(99U - i);
+    }
 
     const AABB3<f32> q = aabb_around(Vec3f{0, 0, 0}, 20.0F);
     auto ha = build_overlap(crd::containers::ConstSpan<u32>{order_a.data(), order_a.size()}, q);
     auto hb = build_overlap(crd::containers::ConstSpan<u32>{order_b.data(), order_b.size()}, q);
     REQUIRE(ha.size() == hb.size());
-    for (usize i = 0; i < ha.size(); ++i) { REQUIRE(ha[i] == hb[i]); }
+    for (usize i = 0; i < ha.size(); ++i)
+    {
+        REQUIRE(ha[i] == hb[i]);
+    }
 }
 
 TEST_CASE("RTree tolerates non-finite query inputs", "[geometry-spatial][rtree][nan]")
@@ -508,10 +555,17 @@ TEST_CASE("RTree concurrent overlap queries via crd-jobs (proves naturally-const
                 {
                     for (usize i = 0; i < got.size(); ++i)
                     {
-                        if (got[i] != corpus_ptr->ref[q][i]) { ok = false; break; }
+                        if (got[i] != corpus_ptr->ref[q][i])
+                        {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);

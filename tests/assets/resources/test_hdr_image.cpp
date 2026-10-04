@@ -31,7 +31,10 @@ void fill_test_image(HdrImage& img, crd::u32 w, crd::u32 h, crd::u32 ch)
             }
         }
     }
-    if (w > 5U && h > 2U) { img.at(5U, 2U, 0) = 812.5F; } // a firefly
+    if (w > 5U && h > 2U) // a firefly
+    {
+        img.at(5U, 2U, 0) = 812.5F;
+    }
 }
 } // namespace
 
@@ -66,7 +69,13 @@ TEST_CASE("B-hdr-b: PFM is a LOSSLESS bit-exact round-trip (RGB + gray, LE + BE)
             REQUIRE(dst.height == src.height);
             REQUIRE(dst.channels == src.channels);
             int bad = 0;
-            for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+            for (crd::usize i = 0; i < src.pixels.size(); ++i)
+            {
+                if (dst.pixels[i] != src.pixels[i])
+                {
+                    ++bad;
+                }
+            }
             CHECK(bad == 0);
         }
     }
@@ -77,9 +86,15 @@ TEST_CASE("B-hdr-a: Radiance decode of a hand-built flat bitstream (exact power-
     // header + two flat RGBE pixels: (128,64,32,129) and (200,100,50,128).
     Array<crd::u8> buf(&s_hdr);
     const char* hdr = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n";
-    for (const char* p = hdr; *p != '\0'; ++p) { buf.push_back(static_cast<crd::u8>(*p)); }
+    for (const char* p = hdr; *p != '\0'; ++p)
+    {
+        buf.push_back(static_cast<crd::u8>(*p));
+    }
     const crd::u8 px[8] = {128U, 64U, 32U, 129U, 200U, 100U, 50U, 128U};
-    for (crd::u8 b : px) { buf.push_back(b); }
+    for (crd::u8 b : px)
+    {
+        buf.push_back(b);
+    }
 
     HdrImage img(&s_hdr);
     REQUIRE(hdr_decode_radiance({buf.data(), buf.size()}, img, &s_hdr) == HdrError::Ok);
@@ -113,14 +128,26 @@ TEST_CASE("B-hdr-a: Radiance RLE encode->decode round-trip is STABLE (bytes + pi
     Array<crd::u8> b2 = hdr_encode_radiance(f1, &s_hdr);
     REQUIRE(b2.size() == b1.size());
     int byte_bad = 0;
-    for (crd::usize i = 0; i < b1.size(); ++i) { if (b1[i] != b2[i]) { ++byte_bad; } }
+    for (crd::usize i = 0; i < b1.size(); ++i)
+    {
+        if (b1[i] != b2[i])
+        {
+            ++byte_bad;
+        }
+    }
     CHECK(byte_bad == 0);
 
     // Decode b2: pixels bit-identical to f1.
     HdrImage f2(&s_hdr);
     REQUIRE(hdr_decode_radiance({b2.data(), b2.size()}, f2, &s_hdr) == HdrError::Ok);
     int px_bad = 0;
-    for (crd::usize i = 0; i < f1.pixels.size(); ++i) { if (f1.pixels[i] != f2.pixels[i]) { ++px_bad; } }
+    for (crd::usize i = 0; i < f1.pixels.size(); ++i)
+    {
+        if (f1.pixels[i] != f2.pixels[i])
+        {
+            ++px_bad;
+        }
+    }
     CHECK(px_bad == 0);
 }
 
@@ -128,7 +155,15 @@ TEST_CASE("B-hdr-a: Radiance RLE compresses a constant-run scanline", "[resource
 {
     HdrImage src(&s_hdr);
     src.resize(64U, 4U, 3U);
-    for (crd::u32 y = 0; y < 4U; ++y) { for (crd::u32 x = 0; x < 64U; ++x) { src.at(x, y, 0) = 2.0F; src.at(x, y, 1) = 1.0F; src.at(x, y, 2) = 0.5F; } }
+    for (crd::u32 y = 0; y < 4U; ++y)
+    {
+        for (crd::u32 x = 0; x < 64U; ++x)
+        {
+            src.at(x, y, 0) = 2.0F;
+            src.at(x, y, 1) = 1.0F;
+            src.at(x, y, 2) = 0.5F;
+        }
+    }
     Array<crd::u8> enc = hdr_encode_radiance(src, &s_hdr);
     // 64-wide constant rows must RLE far below the flat 64·4·4 = 1024 pixel bytes.
     CHECK(enc.size() < 400U);
@@ -168,7 +203,13 @@ TEST_CASE("B-hdr-c: EXR FLOAT is a LOSSLESS round-trip (NONE + RLE, RGB + gray)"
             REQUIRE(dst.height == src.height);
             REQUIRE(dst.channels == src.channels);
             int bad = 0;
-            for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+            for (crd::usize i = 0; i < src.pixels.size(); ++i)
+            {
+                if (dst.pixels[i] != src.pixels[i])
+                {
+                    ++bad;
+                }
+            }
             CHECK(bad == 0);
         }
     }
@@ -188,7 +229,13 @@ TEST_CASE("B-hdr-c: EXR ZIP (our own DEFLATE) FLOAT lossless round-trip across m
         REQUIRE(dst.height == src.height);
         REQUIRE(dst.channels == src.channels);
         int bad = 0;
-        for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+        for (crd::usize i = 0; i < src.pixels.size(); ++i)
+        {
+            if (dst.pixels[i] != src.pixels[i])
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -197,14 +244,29 @@ TEST_CASE("B-hdr-c: EXR ZIP compresses a smooth FLOAT image (where RLE couldn't)
 {
     HdrImage src(&s_hdr);
     src.resize(64U, 32U, 3U);
-    for (crd::u32 y = 0; y < 32U; ++y) { for (crd::u32 x = 0; x < 64U; ++x) { const crd::f32 g = 0.1F + 0.01F * static_cast<crd::f32>(x); src.at(x, y, 0) = g; src.at(x, y, 1) = g * 0.5F; src.at(x, y, 2) = g * 0.25F; } }
+    for (crd::u32 y = 0; y < 32U; ++y)
+    {
+        for (crd::u32 x = 0; x < 64U; ++x)
+        {
+            const crd::f32 g = 0.1F + 0.01F * static_cast<crd::f32>(x);
+            src.at(x, y, 0) = g;
+            src.at(x, y, 1) = g * 0.5F;
+            src.at(x, y, 2) = g * 0.25F;
+        }
+    }
     Array<crd::u8> none = hdr_encode_exr(src, ExrPixelType::Float, ExrCompression::None, &s_hdr);
     Array<crd::u8> zip  = hdr_encode_exr(src, ExrPixelType::Float, ExrCompression::Zip, &s_hdr);
     CHECK(zip.size() < none.size());
     HdrImage dst(&s_hdr);
     REQUIRE(hdr_decode_exr({zip.data(), zip.size()}, dst, &s_hdr) == HdrError::Ok);
     int bad = 0;
-    for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+    for (crd::usize i = 0; i < src.pixels.size(); ++i)
+    {
+        if (dst.pixels[i] != src.pixels[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -221,7 +283,13 @@ TEST_CASE("B-hdr-c: EXR PIZ (our own wavelet+Huffman) round-trip -- FLOAT lossle
         REQUIRE(hdr_decode_exr({enc.data(), enc.size()}, dst, &s_hdr) == HdrError::Ok);
         REQUIRE(dst.width == src.width); REQUIRE(dst.height == src.height); REQUIRE(dst.channels == src.channels);
         int bad = 0;
-        for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+        for (crd::usize i = 0; i < src.pixels.size(); ++i)
+        {
+            if (dst.pixels[i] != src.pixels[i])
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
     // HALF idempotent (encode f1 → decode f2 identical)
@@ -231,7 +299,14 @@ TEST_CASE("B-hdr-c: EXR PIZ (our own wavelet+Huffman) round-trip -- FLOAT lossle
         HdrImage f1(&s_hdr); REQUIRE(hdr_decode_exr({e1.data(), e1.size()}, f1, &s_hdr) == HdrError::Ok);
         Array<crd::u8> e2 = hdr_encode_exr(f1, ExrPixelType::Half, ExrCompression::Piz, &s_hdr);
         HdrImage f2(&s_hdr); REQUIRE(hdr_decode_exr({e2.data(), e2.size()}, f2, &s_hdr) == HdrError::Ok);
-        int bad = 0; for (crd::usize i = 0; i < f1.pixels.size(); ++i) { if (f1.pixels[i] != f2.pixels[i]) { ++bad; } }
+        int bad = 0;
+        for (crd::usize i = 0; i < f1.pixels.size(); ++i)
+        {
+            if (f1.pixels[i] != f2.pixels[i])
+            {
+                ++bad;
+            }
+        }
         CHECK(bad == 0);
     }
 }
@@ -288,7 +363,13 @@ TEST_CASE("B-hdr-c: decode a REAL OpenEXR PIZ file (foreign wavelet+Huffman -> o
     REQUIRE(hdr_decode({kExr, sizeof(kExr)}, img, &s_hdr) == HdrError::Ok);
     REQUIRE(img.width == 7U); REQUIRE(img.height == 5U); REQUIRE(img.channels == 3U); REQUIRE(img.pixels.size() == 105U);
     int bad = 0;
-    for (crd::usize i = 0; i < 105U; ++i) { if (img.pixels[i] != kPix[i]) { ++bad; } }
+    for (crd::usize i = 0; i < 105U; ++i)
+    {
+        if (img.pixels[i] != kPix[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -305,10 +386,22 @@ TEST_CASE("B-hdr-c: EXR HALF round-trip is idempotent after the first quantizati
         HdrImage f2(&s_hdr);
         REQUIRE(hdr_decode_exr({e2.data(), e2.size()}, f2, &s_hdr) == HdrError::Ok);
         int px_bad = 0;
-        for (crd::usize i = 0; i < f1.pixels.size(); ++i) { if (f1.pixels[i] != f2.pixels[i]) { ++px_bad; } }
+        for (crd::usize i = 0; i < f1.pixels.size(); ++i)
+        {
+            if (f1.pixels[i] != f2.pixels[i])
+            {
+                ++px_bad;
+            }
+        }
         CHECK(px_bad == 0);
         int byte_bad = e1.size() == e2.size() ? 0 : 1; // half quantization is a fixed point ⇒ byte-identical re-encode
-        for (crd::usize i = 0; i < e1.size() && i < e2.size(); ++i) { if (e1[i] != e2[i]) { ++byte_bad; } }
+        for (crd::usize i = 0; i < e1.size() && i < e2.size(); ++i)
+        {
+            if (e1[i] != e2[i])
+            {
+                ++byte_bad;
+            }
+        }
         CHECK(byte_bad == 0);
     }
 }
@@ -319,7 +412,15 @@ TEST_CASE("B-hdr-c: EXR RLE compresses a constant HALF image below its NONE size
     // reason ZIP/PIZ exist). Constants are half-exact so the value checks are bit-exact.
     HdrImage src(&s_hdr);
     src.resize(96U, 8U, 3U);
-    for (crd::u32 y = 0; y < 8U; ++y) { for (crd::u32 x = 0; x < 96U; ++x) { src.at(x, y, 0) = 1.5F; src.at(x, y, 1) = 0.5F; src.at(x, y, 2) = 0.25F; } }
+    for (crd::u32 y = 0; y < 8U; ++y)
+    {
+        for (crd::u32 x = 0; x < 96U; ++x)
+        {
+            src.at(x, y, 0) = 1.5F;
+            src.at(x, y, 1) = 0.5F;
+            src.at(x, y, 2) = 0.25F;
+        }
+    }
     Array<crd::u8> none = hdr_encode_exr(src, ExrPixelType::Half, ExrCompression::None, &s_hdr);
     Array<crd::u8> rle  = hdr_encode_exr(src, ExrPixelType::Half, ExrCompression::Rle, &s_hdr);
     CHECK(rle.size() < none.size());
@@ -385,7 +486,13 @@ TEST_CASE("B-hdr-c: decode a REAL OpenEXR ZIP file (foreign encoder -> our whole
     REQUIRE(img.channels == 3U);
     REQUIRE(img.pixels.size() == 105U);
     int bad = 0;
-    for (crd::usize i = 0; i < 105U; ++i) { if (img.pixels[i] != kPix[i]) { ++bad; } }
+    for (crd::usize i = 0; i < 105U; ++i)
+    {
+        if (img.pixels[i] != kPix[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -397,7 +504,13 @@ TEST_CASE("B-hdr-c: hdr_decode auto-detects EXR", "[resources][hdr][exr]")
     HdrImage dst(&s_hdr);
     REQUIRE(hdr_decode({exr.data(), exr.size()}, dst, &s_hdr) == HdrError::Ok);
     int bad = 0;
-    for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+    for (crd::usize i = 0; i < src.pixels.size(); ++i)
+    {
+        if (dst.pixels[i] != src.pixels[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -414,6 +527,12 @@ TEST_CASE("B-hdr: HdrImage <-> CRDR is a LOSSLESS round-trip", "[resources][hdr]
     REQUIRE(dst.height == src.height);
     REQUIRE(dst.channels == src.channels);
     int bad = 0;
-    for (crd::usize i = 0; i < src.pixels.size(); ++i) { if (dst.pixels[i] != src.pixels[i]) { ++bad; } }
+    for (crd::usize i = 0; i < src.pixels.size(); ++i)
+    {
+        if (dst.pixels[i] != src.pixels[i])
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }

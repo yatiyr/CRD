@@ -43,10 +43,22 @@ public:
     // per-thread buffers in deterministic order at end-of-fan-out. O(N).
     void append(const RenderBuffer& other)
     {
-        for (const auto& p : other.m_points)    { m_points.push_back(p); }
-        for (const auto& l : other.m_lines)     { m_lines.push_back(l); }
-        for (const auto& t : other.m_triangles) { m_triangles.push_back(t); }
-        for (const auto& t : other.m_texts)     { m_texts.push_back(t); }
+        for (const auto& p : other.m_points)
+        {
+            m_points.push_back(p);
+        }
+        for (const auto& l : other.m_lines)
+        {
+            m_lines.push_back(l);
+        }
+        for (const auto& t : other.m_triangles)
+        {
+            m_triangles.push_back(t);
+        }
+        for (const auto& t : other.m_texts)
+        {
+            m_texts.push_back(t);
+        }
     }
 
     // Translate every primitive by `delta`. For floating-origin worlds:
@@ -54,10 +66,25 @@ public:
     // to keep debug primitives co-located with the scene. O(N).
     void shift(crd::math::Vec3f delta) noexcept
     {
-        for (auto& p : m_points)    { p.pos = p.pos + delta; }
-        for (auto& l : m_lines)     { l.a   = l.a + delta;   l.b = l.b + delta; }
-        for (auto& t : m_triangles) { t.a   = t.a + delta;   t.b = t.b + delta; t.c = t.c + delta; }
-        for (auto& t : m_texts)     { t.pos = t.pos + delta; }
+        for (auto& p : m_points)
+        {
+            p.pos = p.pos + delta;
+        }
+        for (auto& l : m_lines)
+        {
+            l.a   = l.a + delta;
+            l.b = l.b + delta;
+        }
+        for (auto& t : m_triangles)
+        {
+            t.a   = t.a + delta;
+            t.b = t.b + delta;
+            t.c = t.c + delta;
+        }
+        for (auto& t : m_texts)
+        {
+            t.pos = t.pos + delta;
+        }
     }
 
     // ---- Accessors (consumed by the renderer + serialiser) -----------------

@@ -68,7 +68,10 @@ AABB3<T> RTree<T>::aabb_union_of_entries(const RTreeEntry<T>* e, u32 n) noexcept
 {
     CRD_ASSERT(n > 0);
     AABB3<T> r = e[0].aabb;
-    for (u32 i = 1; i < n; ++i) { r = aabb_union(r, e[i].aabb); }
+    for (u32 i = 1; i < n; ++i)
+    {
+        r = aabb_union(r, e[i].aabb);
+    }
     return r;
 }
 
@@ -79,7 +82,10 @@ T RTree<T>::aabb_area(const AABB3<T>& a) noexcept
     const T dy = a.max.y - a.min.y;
     const T dz = a.max.z - a.min.z;
     // Negative-extent (empty / degenerate) → 0.
-    if (dx <= T{0} || dy <= T{0} || dz <= T{0}) { return T{0}; }
+    if (dx <= T{0} || dy <= T{0} || dz <= T{0})
+    {
+        return T{0};
+    }
     return T{2} * (dx * dy + dy * dz + dz * dx);
 }
 
@@ -98,7 +104,10 @@ T RTree<T>::aabb_overlap_area(const AABB3<T>& a, const AABB3<T>& b) noexcept
     const T dx = std::min(a.max.x, b.max.x) - std::max(a.min.x, b.min.x);
     const T dy = std::min(a.max.y, b.max.y) - std::max(a.min.y, b.min.y);
     const T dz = std::min(a.max.z, b.max.z) - std::max(a.min.z, b.min.z);
-    if (dx <= T{0} || dy <= T{0} || dz <= T{0}) { return T{0}; }
+    if (dx <= T{0} || dy <= T{0} || dz <= T{0})
+    {
+        return T{0};
+    }
     return T{2} * (dx * dy + dy * dz + dz * dx);
 }
 
@@ -119,8 +128,16 @@ T RTree<T>::point_to_aabb_dist_sq(const Vec3<T>& p, const AABB3<T>& a) noexcept
         const T v = p[static_cast<usize>(i)];
         const T lo = a.min[static_cast<usize>(i)];
         const T hi = a.max[static_cast<usize>(i)];
-        if (v < lo)      { const T d = lo - v; d2 += d * d; }
-        else if (v > hi) { const T d = v - hi; d2 += d * d; }
+        if (v < lo)
+        {
+            const T d = lo - v;
+            d2 += d * d;
+        }
+        else if (v > hi)
+        {
+            const T d = v - hi;
+            d2 += d * d;
+        }
     }
     return d2;
 }
@@ -220,7 +237,10 @@ u32 RTree<T>::choose_subtree(const AABB3<T>& target_aabb, u8 target_level) const
     while (true)
     {
         const RTreeNode<T>& node = m_nodes[cur];
-        if (node.level == target_level) { return cur; }
+        if (node.level == target_level)
+        {
+            return cur;
+        }
         CRD_ASSERT(!node.is_leaf()); // we can only descend into interior nodes
 
         // For child entries that point to LEAF nodes: minimise overlap
@@ -250,7 +270,10 @@ u32 RTree<T>::choose_subtree(const AABB3<T>& target_aabb, u8 target_level) const
                 T overlap_before = T{0};
                 for (u32 j = 0; j < node.entry_count; ++j)
                 {
-                    if (j == i) { continue; }
+                    if (j == i)
+                    {
+                        continue;
+                    }
                     overlap_after  += aabb_overlap_area(enlarged, node.entries[j].aabb);
                     overlap_before += aabb_overlap_area(e.aabb,   node.entries[j].aabb);
                 }
@@ -306,7 +329,10 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 
     // Stage M+1 entries.
     RTreeEntry<T> staged[M + 1];
-    for (u32 i = 0; i < M; ++i) { staged[i] = node.entries[i]; }
+    for (u32 i = 0; i < M; ++i)
+    {
+        staged[i] = node.entries[i];
+    }
     staged[M] = overflow_entry;
     // N = M + 1 staged-entry count per Beckmann 1990 �4.2.
     constexpr u32 N = M + 1; // NOLINT(readability-identifier-naming)
@@ -332,7 +358,10 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 
         for (u8 sort_kind = 0; sort_kind < 2; ++sort_kind)
         {
-            for (u32 i = 0; i < N; ++i) { order[i] = i; }
+            for (u32 i = 0; i < N; ++i)
+            {
+                order[i] = i;
+            }
             // Lex-tuple comparator: (axis_key, then payload for tiebreak).
             auto cmp = [&](u32 lhs, u32 rhs) -> bool {
                 const T lv = (sort_kind == 0)
@@ -341,8 +370,14 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
                 const T rv = (sort_kind == 0)
                     ? staged[rhs].aabb.min[static_cast<usize>(axis)]
                     : staged[rhs].aabb.max[static_cast<usize>(axis)];
-                if (lv < rv) { return true; }
-                if (lv > rv) { return false; }
+                if (lv < rv)
+                {
+                    return true;
+                }
+                if (lv > rv)
+                {
+                    return false;
+                }
                 // Lex tiebreak: secondary = the OTHER bound on the same axis.
                 const T lv2 = (sort_kind == 0)
                     ? staged[lhs].aabb.max[static_cast<usize>(axis)]
@@ -350,8 +385,14 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
                 const T rv2 = (sort_kind == 0)
                     ? staged[rhs].aabb.max[static_cast<usize>(axis)]
                     : staged[rhs].aabb.min[static_cast<usize>(axis)];
-                if (lv2 < rv2) { return true; }
-                if (lv2 > rv2) { return false; }
+                if (lv2 < rv2)
+                {
+                    return true;
+                }
+                if (lv2 > rv2)
+                {
+                    return false;
+                }
                 // Final: stable on payload.
                 return staged[lhs].payload < staged[rhs].payload;
             };
@@ -382,14 +423,23 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
     }
 
     // Pick axis with minimum perimeter sum (lex tiebreak: x<y<z).
-    if (best_perimeter_sum_per_axis[1] < best_perimeter_sum_per_axis[best_axis]) { best_axis = 1; }
-    if (best_perimeter_sum_per_axis[2] < best_perimeter_sum_per_axis[best_axis]) { best_axis = 2; }
+    if (best_perimeter_sum_per_axis[1] < best_perimeter_sum_per_axis[best_axis])
+    {
+        best_axis = 1;
+    }
+    if (best_perimeter_sum_per_axis[2] < best_perimeter_sum_per_axis[best_axis])
+    {
+        best_axis = 2;
+    }
 
     // Now within best_axis, pick the distribution with min overlap (lex
     // tiebreak: min area). Re-do both sorts on the chosen axis.
     for (u8 sort_kind = 0; sort_kind < 2; ++sort_kind)
     {
-        for (u32 i = 0; i < N; ++i) { order[i] = i; }
+        for (u32 i = 0; i < N; ++i)
+        {
+            order[i] = i;
+        }
         const u8 axis = best_axis;
         auto cmp = [&](u32 lhs, u32 rhs) -> bool {
             const T lv = (sort_kind == 0)
@@ -398,16 +448,28 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
             const T rv = (sort_kind == 0)
                 ? staged[rhs].aabb.min[static_cast<usize>(axis)]
                 : staged[rhs].aabb.max[static_cast<usize>(axis)];
-            if (lv < rv) { return true; }
-            if (lv > rv) { return false; }
+            if (lv < rv)
+            {
+                return true;
+            }
+            if (lv > rv)
+            {
+                return false;
+            }
             const T lv2 = (sort_kind == 0)
                 ? staged[lhs].aabb.max[static_cast<usize>(axis)]
                 : staged[lhs].aabb.min[static_cast<usize>(axis)];
             const T rv2 = (sort_kind == 0)
                 ? staged[rhs].aabb.max[static_cast<usize>(axis)]
                 : staged[rhs].aabb.min[static_cast<usize>(axis)];
-            if (lv2 < rv2) { return true; }
-            if (lv2 > rv2) { return false; }
+            if (lv2 < rv2)
+            {
+                return true;
+            }
+            if (lv2 > rv2)
+            {
+                return false;
+            }
             return staged[lhs].payload < staged[rhs].payload;
         };
         crd::containers::sort(order, order + N, cmp);
@@ -439,7 +501,10 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
 
     // Materialise the chosen split — re-sort on best_axis + best_sort, take
     // [0..best_k) into original node, [best_k..N) into new sibling.
-    for (u32 i = 0; i < N; ++i) { order[i] = i; }
+    for (u32 i = 0; i < N; ++i)
+    {
+        order[i] = i;
+    }
     {
         const u8 axis = best_axis;
         const u8 sort_kind = best_sort;
@@ -450,16 +515,28 @@ u32 RTree<T>::split_node(u32 node_idx, RTreeEntry<T> overflow_entry)
             const T rv = (sort_kind == 0)
                 ? staged[rhs].aabb.min[static_cast<usize>(axis)]
                 : staged[rhs].aabb.max[static_cast<usize>(axis)];
-            if (lv < rv) { return true; }
-            if (lv > rv) { return false; }
+            if (lv < rv)
+            {
+                return true;
+            }
+            if (lv > rv)
+            {
+                return false;
+            }
             const T lv2 = (sort_kind == 0)
                 ? staged[lhs].aabb.max[static_cast<usize>(axis)]
                 : staged[lhs].aabb.min[static_cast<usize>(axis)];
             const T rv2 = (sort_kind == 0)
                 ? staged[rhs].aabb.max[static_cast<usize>(axis)]
                 : staged[rhs].aabb.min[static_cast<usize>(axis)];
-            if (lv2 < rv2) { return true; }
-            if (lv2 > rv2) { return false; }
+            if (lv2 < rv2)
+            {
+                return true;
+            }
+            if (lv2 > rv2)
+            {
+                return false;
+            }
             return staged[lhs].payload < staged[rhs].payload;
         };
         crd::containers::sort(order, order + N, cmp);
@@ -535,7 +612,10 @@ void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
 
     // Stage M+1 entries.
     RTreeEntry<T> staged[M + 1];
-    for (u32 i = 0; i < M; ++i) { staged[i] = node.entries[i]; }
+    for (u32 i = 0; i < M; ++i)
+    {
+        staged[i] = node.entries[i];
+    }
     staged[M] = overflow_entry;
     // N = M + 1 staged-entry count per Beckmann 1990 �4.3.
     constexpr u32 N = M + 1; // NOLINT(readability-identifier-naming)
@@ -547,7 +627,10 @@ void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
     // Sort indices by distance from entry center to node center (DESCENDING).
     // Lex tiebreak: payload (so equal-distance behaviour is reproducible).
     u32 order[N];
-    for (u32 i = 0; i < N; ++i) { order[i] = i; }
+    for (u32 i = 0; i < N; ++i)
+    {
+        order[i] = i;
+    }
     auto desc_dist = [&](u32 lhs, u32 rhs) -> bool {
         const Vec3<T> lc = aabb_center(staged[lhs].aabb);
         const Vec3<T> rc = aabb_center(staged[rhs].aabb);
@@ -555,8 +638,14 @@ void RTree<T>::reinsert(u32 node_idx, RTreeEntry<T> overflow_entry)
         const Vec3<T> rd = Vec3<T>{rc.x - node_center.x, rc.y - node_center.y, rc.z - node_center.z};
         const T ld2 = ld.x * ld.x + ld.y * ld.y + ld.z * ld.z;
         const T rd2 = rd.x * rd.x + rd.y * rd.y + rd.z * rd.z;
-        if (ld2 > rd2) { return true; }
-        if (ld2 < rd2) { return false; }
+        if (ld2 > rd2)
+        {
+            return true;
+        }
+        if (ld2 < rd2)
+        {
+            return false;
+        }
         return staged[lhs].payload < staged[rhs].payload;
     };
     crd::containers::sort(order, order + N, desc_dist);
@@ -898,24 +987,48 @@ u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entrie
         // S = ceil(sqrt(L))
         const f64 sf = crd::math::sqrt(static_cast<f64>(L));
         S = static_cast<usize>(sf);
-        if (S * S < L) { ++S; }
-        if (S == 0) { S = 1; }
+        if (S * S < L)
+        {
+            ++S;
+        }
+        if (S == 0)
+        {
+            S = 1;
+        }
     }
 
     // Sort by x-midpoint (lex tiebreak: y-midpoint, then z-midpoint, then payload).
     auto x_cmp = [](const RTreeEntry<T>& a, const RTreeEntry<T>& b) -> bool {
         const T ax = (a.aabb.min.x + a.aabb.max.x) * T{0.5};
         const T bx = (b.aabb.min.x + b.aabb.max.x) * T{0.5};
-        if (ax < bx) { return true; }
-        if (ax > bx) { return false; }
+        if (ax < bx)
+        {
+            return true;
+        }
+        if (ax > bx)
+        {
+            return false;
+        }
         const T ay = (a.aabb.min.y + a.aabb.max.y) * T{0.5};
         const T by = (b.aabb.min.y + b.aabb.max.y) * T{0.5};
-        if (ay < by) { return true; }
-        if (ay > by) { return false; }
+        if (ay < by)
+        {
+            return true;
+        }
+        if (ay > by)
+        {
+            return false;
+        }
         const T az = (a.aabb.min.z + a.aabb.max.z) * T{0.5};
         const T bz = (b.aabb.min.z + b.aabb.max.z) * T{0.5};
-        if (az < bz) { return true; }
-        if (az > bz) { return false; }
+        if (az < bz)
+        {
+            return true;
+        }
+        if (az > bz)
+        {
+            return false;
+        }
         return a.payload < b.payload;
     };
     crd::containers::sort(level_entries.data(), level_entries.data() + N, x_cmp);
@@ -931,19 +1044,34 @@ u32 RTree<T>::str_pack_level(crd::containers::Array<RTreeEntry<T>>& level_entrie
     for (usize si = 0; si < S; ++si)
     {
         const usize slab_begin = si * slab_size;
-        if (slab_begin >= N) { break; }
+        if (slab_begin >= N)
+        {
+            break;
+        }
         const usize slab_end = std::min(slab_begin + slab_size, N);
 
         // Sort this slab by y-midpoint (lex tiebreak: z-midpoint, payload).
         auto y_cmp = [](const RTreeEntry<T>& a, const RTreeEntry<T>& b) -> bool {
             const T ay = (a.aabb.min.y + a.aabb.max.y) * T{0.5};
             const T by = (b.aabb.min.y + b.aabb.max.y) * T{0.5};
-            if (ay < by) { return true; }
-            if (ay > by) { return false; }
+            if (ay < by)
+            {
+                return true;
+            }
+            if (ay > by)
+            {
+                return false;
+            }
             const T az = (a.aabb.min.z + a.aabb.max.z) * T{0.5};
             const T bz = (b.aabb.min.z + b.aabb.max.z) * T{0.5};
-            if (az < bz) { return true; }
-            if (az > bz) { return false; }
+            if (az < bz)
+            {
+                return true;
+            }
+            if (az > bz)
+            {
+                return false;
+            }
             return a.payload < b.payload;
         };
         crd::containers::sort(level_entries.data() + slab_begin,
@@ -1074,7 +1202,10 @@ u32 RTree<T>::entry_payload(RTreeLeafId id) const noexcept
 template <MathScalar T>
 u32 RTree<T>::depth() const noexcept
 {
-    if (m_root == k_null) { return 0; }
+    if (m_root == k_null)
+    {
+        return 0;
+    }
     return static_cast<u32>(m_nodes[m_root].level) + 1U;
 }
 
@@ -1108,8 +1239,14 @@ template <MathScalar T>
 std::optional<crd::geometry::RayHit<u32>>
 RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
 {
-    if (m_root == k_null) { return std::nullopt; }
-    if (tmax <= T{0}) { return std::nullopt; }
+    if (m_root == k_null)
+    {
+        return std::nullopt;
+    }
+    if (tmax <= T{0})
+    {
+        return std::nullopt;
+    }
     if (!crd::geometry::primitives::is_finite(ray.origin)
         || !crd::geometry::primitives::is_finite(ray.direction))
     {
@@ -1145,20 +1282,42 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                         const T hi = node.entries[i].aabb.max[static_cast<usize>(ax)];
                         if (std::abs(d) < std::numeric_limits<T>::epsilon())
                         {
-                            if (o < lo || o > hi) { ok = false; break; }
+                            if (o < lo || o > hi)
+                            {
+                                ok = false;
+                                break;
+                            }
                         }
                         else
                         {
                             const T inv = T{1} / d;
                             T t1 = (lo - o) * inv;
                             T t2 = (hi - o) * inv;
-                            if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                            if (t1 > t_min) { t_min = t1; }
-                            if (t2 < t_max) { t_max = t2; }
-                            if (t_min > t_max) { ok = false; break; }
+                            if (t1 > t2)
+                            {
+                                const T tmp = t1;
+                                t1 = t2;
+                                t2 = tmp;
+                            }
+                            if (t1 > t_min)
+                            {
+                                t_min = t1;
+                            }
+                            if (t2 < t_max)
+                            {
+                                t_max = t2;
+                            }
+                            if (t_min > t_max)
+                            {
+                                ok = false;
+                                break;
+                            }
                         }
                     }
-                    if (!ok || t_min < T{0}) { continue; }
+                    if (!ok || t_min < T{0})
+                    {
+                        continue;
+                    }
                     const u32 user_pay = node.entries[i].payload;
                     if (t_min < best_t)
                     {
@@ -1189,26 +1348,51 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                         const T hi = node.entries[i].aabb.max[static_cast<usize>(ax)];
                         if (std::abs(d) < std::numeric_limits<T>::epsilon())
                         {
-                            if (o < lo || o > hi) { ok = false; break; }
+                            if (o < lo || o > hi)
+                            {
+                                ok = false;
+                                break;
+                            }
                         }
                         else
                         {
                             const T inv = T{1} / d;
                             T t1 = (lo - o) * inv;
                             T t2 = (hi - o) * inv;
-                            if (t1 > t2) { const T tmp = t1; t1 = t2; t2 = tmp; }
-                            if (t1 > t_min) { t_min = t1; }
-                            if (t2 < t_max) { t_max = t2; }
-                            if (t_min > t_max) { ok = false; break; }
+                            if (t1 > t2)
+                            {
+                                const T tmp = t1;
+                                t1 = t2;
+                                t2 = tmp;
+                            }
+                            if (t1 > t_min)
+                            {
+                                t_min = t1;
+                            }
+                            if (t2 < t_max)
+                            {
+                                t_max = t2;
+                            }
+                            if (t_min > t_max)
+                            {
+                                ok = false;
+                                break;
+                            }
                         }
                     }
-                    if (!ok) { continue; }
+                    if (!ok)
+                    {
+                        continue;
+                    }
                     CRD_ASSERT(sp < kRtreeMaxStack);
                     stack[sp++] = node.entries[i].payload;
                 }
             }
         }
-        if (!any) { return std::nullopt; }
+        if (!any)
+        {
+            return std::nullopt;
+        }
         return crd::geometry::RayHit<u32>{static_cast<f32>(best_t), best_payload};
     }
     else
@@ -1235,7 +1419,10 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
         while (sp > 0)
         {
             const Frame f = stack[--sp];
-            if (f.t_near >= best_t) { continue; }
+            if (f.t_near >= best_t)
+            {
+                continue;
+            }
             const RTreeNode<T>& node = m_nodes[f.node];
             if (node.is_leaf())
             {
@@ -1295,7 +1482,10 @@ RTree<T>::raycast(const Ray3<T>& ray, T tmax) const noexcept
                 }
             }
         }
-        if (!any) { return std::nullopt; }
+        if (!any)
+        {
+            return std::nullopt;
+        }
         return crd::geometry::RayHit<u32>{best_t, best_payload};
     }
 }
@@ -1319,8 +1509,14 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
                           crd::containers::Array<Neighbor>&        out) const noexcept
 {
     out.clear();
-    if (m_root == k_null || k == 0) { return; }
-    if (!crd::geometry::primitives::is_finite(query)) { return; }
+    if (m_root == k_null || k == 0)
+    {
+        return;
+    }
+    if (!crd::geometry::primitives::is_finite(query))
+    {
+        return;
+    }
     out.reserve(k);
 
     // Heap entry: kind + key + (node_idx OR user payload).
@@ -1337,15 +1533,33 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
         // We want top of heap = smallest key. Heap puts max-under-cmp at top
         // (Cerid `push_heap` follows std semantics). So return true when a > b
         // (so b stays on top when equal, etc.).
-        if (a.key > b.key) { return true; }
-        if (a.key < b.key) { return false; }
-        if (a.tiebreak > b.tiebreak) { return true; }
-        if (a.tiebreak < b.tiebreak) { return false; }
+        if (a.key > b.key)
+        {
+            return true;
+        }
+        if (a.key < b.key)
+        {
+            return false;
+        }
+        if (a.tiebreak > b.tiebreak)
+        {
+            return true;
+        }
+        if (a.tiebreak < b.tiebreak)
+        {
+            return false;
+        }
         // Same key + tiebreak: arbitrary but deterministic — prefer node over
         // leaf? Actually doesn't matter once both keys+tiebreaks match. Use
         // (kind, idx) for stability.
-        if (a.kind > b.kind) { return true; }
-        if (a.kind < b.kind) { return false; }
+        if (a.kind > b.kind)
+        {
+            return true;
+        }
+        if (a.kind < b.kind)
+        {
+            return false;
+        }
         return a.idx > b.idx;
     };
 
@@ -1392,8 +1606,14 @@ void RTree<T>::nearest_n(const Vec3<T>&                          query,
 
     // Final ascending sort by (dist², payload).
     auto asc = [](const Neighbor& a, const Neighbor& b) -> bool {
-        if (a.distance_squared < b.distance_squared) { return true; }
-        if (a.distance_squared > b.distance_squared) { return false; }
+        if (a.distance_squared < b.distance_squared)
+        {
+            return true;
+        }
+        if (a.distance_squared > b.distance_squared)
+        {
+            return false;
+        }
         return a.payload < b.payload;
     };
     crd::containers::sort(out.data(), out.data() + out.size(), asc);

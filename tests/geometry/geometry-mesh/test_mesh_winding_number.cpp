@@ -48,7 +48,10 @@ CubeMesh make_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
         1, 3, 5,  3, 7, 5   // +X
     };
     m.indices.reserve(36);
-    for (crd::u32 j = 0U; j < 36U; ++j) { m.indices.push_back(idx[j]); }
+    for (crd::u32 j = 0U; j < 36U; ++j)
+    {
+        m.indices.push_back(idx[j]);
+    }
     return m;
 }
 
@@ -74,7 +77,10 @@ CubeMesh make_open_cube(crd::memory::IAllocator* a, crd::f32 half = 0.5F)
         // +X removed
     };
     m.indices.reserve(30);
-    for (crd::u32 j = 0U; j < 30U; ++j) { m.indices.push_back(idx[j]); }
+    for (crd::u32 j = 0U; j < 30U; ++j)
+    {
+        m.indices.push_back(idx[j]);
+    }
     return m;
 }
 } // namespace
@@ -116,16 +122,20 @@ TEST_CASE("v4c cube: multiple interior queries all return w=1",
 
     // Spray of interior points in [-0.4, 0.4]^3 (well inside the unit cube).
     for (int i = 0; i < 5; ++i)
-    for (int j = 0; j < 5; ++j)
-    for (int k = 0; k < 5; ++k)
     {
-        const crd::f32 x = -0.4F + 0.2F * static_cast<crd::f32>(i);
-        const crd::f32 y = -0.4F + 0.2F * static_cast<crd::f32>(j);
-        const crd::f32 z = -0.4F + 0.2F * static_cast<crd::f32>(k);
-        const Vec3f q{x, y, z};
-        const crd::f32 w = mesh_winding_number(view, q);
-        REQUIRE(w == Catch::Approx(1.0F).margin(1e-2F));
-        REQUIRE(mesh_is_inside(view, q));
+        for (int j = 0; j < 5; ++j)
+        {
+            for (int k = 0; k < 5; ++k)
+            {
+                const crd::f32 x = -0.4F + 0.2F * static_cast<crd::f32>(i);
+                const crd::f32 y = -0.4F + 0.2F * static_cast<crd::f32>(j);
+                const crd::f32 z = -0.4F + 0.2F * static_cast<crd::f32>(k);
+                const Vec3f q{x, y, z};
+                const crd::f32 w = mesh_winding_number(view, q);
+                REQUIRE(w == Catch::Approx(1.0F).margin(1e-2F));
+                REQUIRE(mesh_is_inside(view, q));
+            }
+        }
     }
 }
 

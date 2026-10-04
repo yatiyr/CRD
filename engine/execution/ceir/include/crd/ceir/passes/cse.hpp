@@ -67,12 +67,27 @@ namespace crd::ceir
 // claim (see the header). A candidate may be eliminated in favour of an earlier structurally-equal candidate in its block.
 [[nodiscard]] inline bool cse_is_candidate(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_regions() != 0U) { return false; }                    // leaf only (region CSE needs structural region equality)
-    if (op.num_results() == 0U) { return false; }                    // nothing to RAUW (a resultless Pure op is DCE's job)
-    if (ctx.op_info(op.kind()) == nullptr) { return false; }         // unregistered ⇒ maximally effectful (EMPTY≠UNKNOWN)
-    if (!ctx.op_has_trait(op, OpTrait::Pure)) { return false; }      // effectful ⇒ not interchangeable (buffer-writing dispatch)
+    if (op.num_regions() != 0U) // leaf only (region CSE needs structural region equality)
+    {
+        return false;
+    }
+    if (op.num_results() == 0U) // nothing to RAUW (a resultless Pure op is DCE's job)
+    {
+        return false;
+    }
+    if (ctx.op_info(op.kind()) == nullptr) // unregistered ⇒ maximally effectful (EMPTY≠UNKNOWN)
+    {
+        return false;
+    }
+    if (!ctx.op_has_trait(op, OpTrait::Pure)) // effectful ⇒ not interchangeable (buffer-writing dispatch)
+    {
+        return false;
+    }
     const DeterminismClass d = ctx.op_determinism(op.kind());        // §27: a POSITIVE nondeterminism claim breaks bit-exactness
-    if (d == DeterminismClass::Nondeterministic || d == DeterminismClass::ExternalNondeterminism) { return false; }
+    if (d == DeterminismClass::Nondeterministic || d == DeterminismClass::ExternalNondeterminism)
+    {
+        return false;
+    }
     return true; // registered, pure, leaf, has results, not positively-nondeterministic ⇒ CSE candidate
 }
 
@@ -81,21 +96,42 @@ namespace crd::ceir
 // same block with `b` earlier (dominating) than `a`.
 [[nodiscard]] inline bool cse_structurally_equal(const Operation& a, const Operation& b) noexcept
 {
-    if (a.kind() != b.kind()) { return false; }
-    if (a.num_operands() != b.num_operands()) { return false; }
+    if (a.kind() != b.kind())
+    {
+        return false;
+    }
+    if (a.num_operands() != b.num_operands())
+    {
+        return false;
+    }
     for (u32 i = 0; i < a.num_operands(); ++i)
     {
-        if (a.operand(i) != b.operand(i)) { return false; } // Value* POINTER equality — SSA values are unique
+        if (a.operand(i) != b.operand(i)) // Value* POINTER equality — SSA values are unique
+        {
+            return false;
+        }
     }
-    if (a.num_results() != b.num_results()) { return false; }
+    if (a.num_results() != b.num_results())
+    {
+        return false;
+    }
     for (u32 i = 0; i < a.num_results(); ++i)
     {
-        if (a.result(i)->type() != b.result(i)->type()) { return false; } // TypeId equality
+        if (a.result(i)->type() != b.result(i)->type()) // TypeId equality
+        {
+            return false;
+        }
     }
-    if (a.num_attrs() != b.num_attrs()) { return false; }
+    if (a.num_attrs() != b.num_attrs())
+    {
+        return false;
+    }
     for (u32 i = 0; i < a.num_attrs(); ++i)
     {
-        if (b.attr(a.attr_name(i)) != a.attr_id_at(i)) { return false; } // interned AttrId equality; absent-in-b ⇒ invalid ≠ valid
+        if (b.attr(a.attr_name(i)) != a.attr_id_at(i)) // interned AttrId equality; absent-in-b ⇒ invalid ≠ valid
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -110,16 +146,29 @@ inline void cse_region(const Context& ctx, Region* region, containers::Array<Ope
         containers::Array<Operation*> seen(ctx.allocator()); // per-block dominance scope (an earlier op dominates a later one)
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            for (u32 i = 0; i < op->num_regions(); ++i) { cse_region(ctx, op->region(i), dead); } // nested blocks first
-            if (!cse_is_candidate(ctx, *op)) { continue; }
+            for (u32 i = 0; i < op->num_regions(); ++i) // nested blocks first
+            {
+                cse_region(ctx, op->region(i), dead);
+            }
+            if (!cse_is_candidate(ctx, *op))
+            {
+                continue;
+            }
             Operation* match = nullptr;
             for (usize s = 0; s < seen.size(); ++s)
             {
-                if (cse_structurally_equal(*op, *seen[s])) { match = seen[s]; break; } // first (earliest) equal survivor
+                if (cse_structurally_equal(*op, *seen[s])) // first (earliest) equal survivor
+                {
+                    match = seen[s];
+                    break;
+                }
             }
             if (match != nullptr)
             {
-                for (u32 i = 0; i < op->num_results(); ++i) { op->result(i)->replace_all_uses_with(match->result(i)); }
+                for (u32 i = 0; i < op->num_results(); ++i)
+                {
+                    op->result(i)->replace_all_uses_with(match->result(i));
+                }
                 dead.push_back(op); // ⛔ do NOT add to `seen`: a third dup must find `match`, not this tombstone
             }
             else
@@ -140,8 +189,14 @@ inline void cse_region(const Context& ctx, Region* region, containers::Array<Ope
     {
         dead.clear();
         cse_region(ctx, m.body(), dead);
-        if (dead.size() == 0U) { break; }
-        for (usize i = 0; i < dead.size(); ++i) { dead[i]->erase(); }
+        if (dead.size() == 0U)
+        {
+            break;
+        }
+        for (usize i = 0; i < dead.size(); ++i)
+        {
+            dead[i]->erase();
+        }
         any = true;
     }
     return any;

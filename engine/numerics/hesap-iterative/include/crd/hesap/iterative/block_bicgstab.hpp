@@ -112,7 +112,11 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
     for (crd::u32 l = 0; l < s; ++l)
     {
         R acc = R(0);
-        for (crd::usize k = 0; k < n; ++k) { const R mg = detail::krylov_mag<T>(b[k * s + l]); acc += mg * mg; }
+        for (crd::usize k = 0; k < n; ++k)
+        {
+            const R mg = detail::krylov_mag<T>(b[k * s + l]);
+            acc += mg * mg;
+        }
         bnorm[l] = std::sqrt(acc) + smlnum;
     }
     auto worst_rel = [&](const T* r) -> R {
@@ -120,18 +124,28 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
         for (crd::u32 l = 0; l < s; ++l)
         {
             R acc = R(0);
-            for (crd::usize k = 0; k < n; ++k) { const R mg = detail::krylov_mag<T>(r[k * s + l]); acc += mg * mg; }
+            for (crd::usize k = 0; k < n; ++k)
+            {
+                const R mg = detail::krylov_mag<T>(r[k * s + l]);
+                acc += mg * mg;
+            }
             worst = std::max(worst, std::sqrt(acc) / bnorm[l]);
         }
         return worst;
     };
     auto solve_M = [&](const T* m, T* rhs) { // rhs ← M⁻¹ rhs (M preserved via working copy)
-        for (crd::usize i = 0; i < ss; ++i) { ws.mwrk[i] = m[i]; }
+        for (crd::usize i = 0; i < ss; ++i)
+        {
+            ws.mwrk[i] = m[i];
+        }
         detail::block_lu_solve<T>(ws.mwrk.data(), s, rhs, s);
     };
 
     R res = worst_rel(Rb);
-    if (opts.record_residuals) { result.residual_history.push_back(res); }
+    if (opts.record_residuals)
+    {
+        result.residual_history.push_back(res);
+    }
     if (res <= opts.rel_tol || n == 0)
     {
         result.converged           = true;
@@ -143,8 +157,17 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
     for (crd::usize k = 1; k <= opts.max_iter; ++k)
     {
         // P̂ = M⁻¹ P ; AP = A P̂.
-        if (m_inv != nullptr) { (void)m_inv->apply_block(crd::containers::ConstSpan<T>{P, ns}, s, crd::containers::Span<T>{Phat, ns}, s, s); }
-        else { for (crd::usize i = 0; i < ns; ++i) { Phat[i] = P[i]; } }
+        if (m_inv != nullptr)
+        {
+            (void)m_inv->apply_block(crd::containers::ConstSpan<T>{P, ns}, s, crd::containers::Span<T>{Phat, ns}, s, s);
+        }
+        else
+        {
+            for (crd::usize i = 0; i < ns; ++i)
+            {
+                Phat[i] = P[i];
+            }
+        }
         (void)a.apply_block(crd::containers::ConstSpan<T>{Phat, ns}, s, crd::containers::Span<T>{AP, ns}, s, s);
 
         // M = R̃₀ᴴ AP ; α = M⁻¹ (R̃₀ᴴ R).
@@ -153,7 +176,10 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
         solve_M(ws.mmat.data(), ws.alpha.data());
 
         // S = R − AP·α.
-        for (crd::usize i = 0; i < ns; ++i) { S[i] = Rb[i]; }
+        for (crd::usize i = 0; i < ns; ++i)
+        {
+            S[i] = Rb[i];
+        }
         detail::block_gemm_update<T>(AP, ws.alpha.data(), n, s, S, -1);
 
         // Lucky breakdown: S already converged ⇒ X += P̂·α.
@@ -168,8 +194,17 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
         }
 
         // Ŝ = M⁻¹ S ; AS = A Ŝ.
-        if (m_inv != nullptr) { (void)m_inv->apply_block(crd::containers::ConstSpan<T>{S, ns}, s, crd::containers::Span<T>{Shat, ns}, s, s); }
-        else { for (crd::usize i = 0; i < ns; ++i) { Shat[i] = S[i]; } }
+        if (m_inv != nullptr)
+        {
+            (void)m_inv->apply_block(crd::containers::ConstSpan<T>{S, ns}, s, crd::containers::Span<T>{Shat, ns}, s, s);
+        }
+        else
+        {
+            for (crd::usize i = 0; i < ns; ++i)
+            {
+                Shat[i] = S[i];
+            }
+        }
         (void)a.apply_block(crd::containers::ConstSpan<T>{Shat, ns}, s, crd::containers::Span<T>{AS, ns}, s, s);
 
         // ω = ⟨AS, S⟩_F / ⟨AS, AS⟩_F  (scalar Frobenius dots).
@@ -185,12 +220,18 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
         // X += P̂·α + ω·Ŝ ; R_new = S − ω·AS.
         detail::block_gemm_update<T>(Phat, ws.alpha.data(), n, s, x.data(), +1);
         dense::axpy<T>(omega, crd::containers::ConstSpan<T>{Shat, ns}, crd::containers::Span<T>{x.data(), ns});
-        for (crd::usize i = 0; i < ns; ++i) { Rb[i] = S[i]; }
+        for (crd::usize i = 0; i < ns; ++i)
+        {
+            Rb[i] = S[i];
+        }
         dense::axpy<T>(-omega, crd::containers::ConstSpan<T>{AS, ns}, crd::containers::Span<T>{Rb, ns});
 
         res               = worst_rel(Rb);
         result.iterations = k;
-        if (opts.record_residuals) { result.residual_history.push_back(res); }
+        if (opts.record_residuals)
+        {
+            result.residual_history.push_back(res);
+        }
         if (res <= opts.rel_tol)
         {
             result.converged           = true;
@@ -218,10 +259,19 @@ IterativeResult<crd::hesap::dense::RealType<T>> block_bicgstab_impl(
         detail::block_gram<T>(R0, Rb, n, s, ws.beta.data()); // R̃₀ᴴ R_new
         solve_M(ws.mmat.data(), ws.beta.data());             // M⁻¹ (R̃₀ᴴ R_new)
         const T inv_omega = T(1) / omega;
-        for (crd::usize i = 0; i < ss; ++i) { ws.beta[i] = ws.beta[i] * inv_omega; }
-        for (crd::usize i = 0; i < ns; ++i) { Pt[i] = P[i]; }
+        for (crd::usize i = 0; i < ss; ++i)
+        {
+            ws.beta[i] = ws.beta[i] * inv_omega;
+        }
+        for (crd::usize i = 0; i < ns; ++i)
+        {
+            Pt[i] = P[i];
+        }
         dense::axpy<T>(-omega, crd::containers::ConstSpan<T>{AP, ns}, crd::containers::Span<T>{Pt, ns}); // Pt = P − ω·AP
-        for (crd::usize i = 0; i < ns; ++i) { P[i] = Rb[i]; }                                            // P_new = R_new ...
+        for (crd::usize i = 0; i < ns; ++i) // P_new = R_new ...
+        {
+            P[i] = Rb[i];
+        }
         detail::block_gemm_update<T>(Pt, ws.beta.data(), n, s, P, +1);                                   // ... + (P−ω·AP)·β
     }
 

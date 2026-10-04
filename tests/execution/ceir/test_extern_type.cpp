@@ -288,7 +288,10 @@ TEST_CASE("ceir 8a: single-byte corruption of a custom-type blob never crashes a
     for (usize i = 0; i < blob.size(); ++i)
     {
         ByteArray b(&root);
-        for (usize j = 0; j < blob.size(); ++j) { b.push_back(blob[j]); }
+        for (usize j = 0; j < blob.size(); ++j)
+        {
+            b.push_back(blob[j]);
+        }
         b[i] = static_cast<u8>(b[i] ^ 0xFFU);
         {
             Context           c(&root);

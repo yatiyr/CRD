@@ -238,17 +238,26 @@ namespace
 [[nodiscard]] bool log_status_is(const fs::Path& tmp, const char* rel, const char* expected)
 {
     crd::containers::String log_text(&g_alloc);
-    if (!fs::read_file_text(tmp / "cook.log.toml", log_text)) { return false; }
+    if (!fs::read_file_text(tmp / "cook.log.toml", log_text))
+    {
+        return false;
+    }
     const std::string_view sv(log_text.data(), log_text.size());
     crd::containers::String needle(&g_alloc);
     needle.append("path = \"");
     needle.append(rel);
     needle.push_back('"');
     const auto p = sv.find(std::string_view(needle.data(), needle.size()));
-    if (p == std::string_view::npos) { return false; }
+    if (p == std::string_view::npos)
+    {
+        return false;
+    }
     const std::string_view key = "status = \"";
     const auto             s   = sv.find(key, p);
-    if (s == std::string_view::npos) { return false; }
+    if (s == std::string_view::npos)
+    {
+        return false;
+    }
     const auto b = s + key.size();
     const auto e = sv.find('"', b);
     return sv.substr(b, e - b) == std::string_view(expected);
@@ -456,8 +465,14 @@ TEST_CASE("GEO-6: the dependency graph is QUERYABLE -- forward and reverse edges
     for (crd::usize i = 0; i < job->inputs.size(); ++i)
     {
         const std::string_view p(job->inputs[i].path.data(), job->inputs[i].path.size());
-        if (p == "geo.bin") { saw_bin = job->inputs[i].existed; }
-        if (p == "tri.gltf") { saw_src = job->inputs[i].existed; }
+        if (p == "geo.bin")
+        {
+            saw_bin = job->inputs[i].existed;
+        }
+        if (p == "tri.gltf")
+        {
+            saw_src = job->inputs[i].existed;
+        }
     }
     CHECK(saw_bin);
     CHECK(saw_src);

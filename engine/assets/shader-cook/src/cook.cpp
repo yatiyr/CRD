@@ -52,7 +52,10 @@ static_assert(std::is_trivially_copyable_v<crd::kir::ShaderReflection>, "reflect
 [[nodiscard]] bool compile_cuda_to_ptx(const char* src, crd::containers::Array<crd::u8>& out_ptx, crd::containers::String& err)
 {
     nvrtcProgram prog = nullptr;
-    if (nvrtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS) { return false; }
+    if (nvrtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS)
+    {
+        return false;
+    }
     const char* const opts[] = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true", "--gpu-architecture=compute_75"};
     if (nvrtcCompileProgram(prog, 4, opts) != NVRTC_SUCCESS)
     {
@@ -70,7 +73,11 @@ static_assert(std::is_trivially_copyable_v<crd::kir::ShaderReflection>, "reflect
         return false;
     }
     crd::usize sz = 0;
-    if (nvrtcGetPTXSize(prog, &sz) != NVRTC_SUCCESS || sz == 0U) { nvrtcDestroyProgram(&prog); return false; }
+    if (nvrtcGetPTXSize(prog, &sz) != NVRTC_SUCCESS || sz == 0U)
+    {
+        nvrtcDestroyProgram(&prog);
+        return false;
+    }
     out_ptx.resize(sz);
     const nvrtcResult gr = nvrtcGetPTX(prog, reinterpret_cast<char*>(out_ptx.data()));
     nvrtcDestroyProgram(&prog);
@@ -135,13 +142,25 @@ CookResult cook_compute_shader(
     w.add_chunk(kReflChunk, crd::containers::ConstSpan<crd::u8>{reinterpret_cast<const crd::u8*>(&refl), sizeof(refl)});
 
     const auto add_blob = [&](crd::u32 fourcc, crd::containers::ConstSpan<crd::u8> p) {
-        if (opts.compress) { w.add_chunk_compressed(fourcc, p); }
-        else { w.add_chunk(fourcc, p); }
+        if (opts.compress)
+        {
+            w.add_chunk_compressed(fourcc, p);
+        }
+        else
+        {
+            w.add_chunk(fourcc, p);
+        }
     };
     const auto add_source = [&](CookBackend b, auto emit_fn) -> crd::u32 {
-        if (!has_backend(opts.backends, b)) { return 0U; }
+        if (!has_backend(opts.backends, b))
+        {
+            return 0U;
+        }
         crd::kir::GlslKernel k(a);
-        if (!emit_fn(g, e, a, k)) { return 0U; }
+        if (!emit_fn(g, e, a, k))
+        {
+            return 0U;
+        }
         add_blob(backend_fourcc(b), bytes_of(k.source));
         return static_cast<crd::u32>(k.source.size());
     };
@@ -150,7 +169,10 @@ CookResult cook_compute_shader(
     // Both flow through this one cook — so a material variant goes through the SAME cook_variant_matrix as a compute kernel.
     const bool            is_kernel = e.is_kernel();
     crd::gpu::ShaderStage stage     = crd::gpu::ShaderStage::Compute;
-    if (!is_kernel) { stage = (e.stage == crd::kir::KStage::Vertex) ? crd::gpu::ShaderStage::Vertex : crd::gpu::ShaderStage::Fragment; }
+    if (!is_kernel)
+    {
+        stage = (e.stage == crd::kir::KStage::Vertex) ? crd::gpu::ShaderStage::Vertex : crd::gpu::ShaderStage::Fragment;
+    }
 
     // 4a. SPIR-V — GLSL → shaderc. Real bytecode; the runtime loads it into a shader module (that IS the validation).
     if (has_backend(opts.backends, CookBackend::SpirV))
@@ -160,8 +182,16 @@ CookResult cook_compute_shader(
         if (ok)
         {
             crd::gpu::ShaderCompileResult r = crd::gpu::compile_glsl_to_spirv(stage, crd::containers::StringView(k.source.c_str(), k.source.size()), name, a);
-            if (r.ok && !r.spirv.empty()) { add_blob(kSpirvChunk, crd::containers::as_const_span(r.spirv)); out.spirv_bytes = static_cast<crd::u32>(r.spirv.size()); }
-            else { out.error.append("spirv: "); out.error.append(r.error_message.c_str()); }
+            if (r.ok && !r.spirv.empty())
+            {
+                add_blob(kSpirvChunk, crd::containers::as_const_span(r.spirv));
+                out.spirv_bytes = static_cast<crd::u32>(r.spirv.size());
+            }
+            else
+            {
+                out.error.append("spirv: ");
+                out.error.append(r.error_message.c_str());
+            }
         }
     }
 
@@ -174,8 +204,16 @@ CookResult cook_compute_shader(
         if (ok)
         {
             crd::gpu::DxilCompileResult r = crd::gpu::compile_hlsl_to_dxil(stage, crd::containers::StringView(k.source.c_str(), k.source.size()), name, a);
-            if (r.ok && !r.dxil.empty()) { add_blob(kDxilChunk, crd::containers::as_const_span(r.dxil)); out.dxil_bytes = static_cast<crd::u32>(r.dxil.size()); }
-            else if (!r.ok) { out.error.append("dxil: "); out.error.append(r.error_message.c_str()); }
+            if (r.ok && !r.dxil.empty())
+            {
+                add_blob(kDxilChunk, crd::containers::as_const_span(r.dxil));
+                out.dxil_bytes = static_cast<crd::u32>(r.dxil.size());
+            }
+            else if (!r.ok)
+            {
+                out.error.append("dxil: ");
+                out.error.append(r.error_message.c_str());
+            }
         }
     }
 #endif
@@ -225,8 +263,14 @@ CookResult cook_raster_shader(
     crd::containers::Array<crd::u8> vs_ir = crd::kir::serialize_graph(g, vs, a);
     crd::containers::Array<crd::u8> fs_ir = crd::kir::serialize_graph(g, fs, a);
     crd::containers::Array<crd::u8> both(a);
-    for (crd::usize i = 0; i < vs_ir.size(); ++i) { both.push_back(vs_ir[i]); }
-    for (crd::usize i = 0; i < fs_ir.size(); ++i) { both.push_back(fs_ir[i]); }
+    for (crd::usize i = 0; i < vs_ir.size(); ++i)
+    {
+        both.push_back(vs_ir[i]);
+    }
+    for (crd::usize i = 0; i < fs_ir.size(); ++i)
+    {
+        both.push_back(fs_ir[i]);
+    }
     const crd::resources::ResourceId id = crd::resources::ResourceId::from_content(crd::containers::as_const_span(both));
 
     // 2. Content-hash cache (raster suffix so it never collides with a compute bundle of the same graph).
@@ -260,14 +304,27 @@ CookResult cook_raster_shader(
     w.add_chunk(kRefvChunk, crd::containers::ConstSpan<crd::u8>{reinterpret_cast<const crd::u8*>(&vrefl), sizeof(vrefl)});
 
     const auto add_blob = [&](crd::u32 fourcc, crd::containers::ConstSpan<crd::u8> p) {
-        if (opts.compress) { w.add_chunk_compressed(fourcc, p); }
-        else { w.add_chunk(fourcc, p); }
+        if (opts.compress)
+        {
+            w.add_chunk_compressed(fourcc, p);
+        }
+        else
+        {
+            w.add_chunk(fourcc, p);
+        }
     };
     const auto stage_spv = [&](const crd::kir::KEntry& se, crd::gpu::ShaderStage st, crd::u32 fourcc) -> crd::u32 {
         crd::kir::GlslKernel k(a);
-        if (!crd::kir::emit_stage_glsl(g, se, a, k)) { return 0U; }
+        if (!crd::kir::emit_stage_glsl(g, se, a, k))
+        {
+            return 0U;
+        }
         crd::gpu::ShaderCompileResult r = crd::gpu::compile_glsl_to_spirv(st, crd::containers::StringView(k.source.c_str(), k.source.size()), name, a);
-        if (r.ok && !r.spirv.empty()) { add_blob(fourcc, crd::containers::as_const_span(r.spirv)); return static_cast<crd::u32>(r.spirv.size()); }
+        if (r.ok && !r.spirv.empty())
+        {
+            add_blob(fourcc, crd::containers::as_const_span(r.spirv));
+            return static_cast<crd::u32>(r.spirv.size());
+        }
         out.error.append("spv: ");
         out.error.append(r.error_message.c_str());
         return 0U;
@@ -280,9 +337,16 @@ CookResult cook_raster_shader(
 #ifdef CRD_SHADERCOOK_HAS_DX12
     const auto stage_dxil = [&](const crd::kir::KEntry& se, crd::gpu::ShaderStage st, crd::u32 fourcc) -> crd::u32 {
         crd::kir::GlslKernel k(a);
-        if (!crd::kir::emit_stage_hlsl(g, se, a, k)) { return 0U; }
+        if (!crd::kir::emit_stage_hlsl(g, se, a, k))
+        {
+            return 0U;
+        }
         crd::gpu::DxilCompileResult r = crd::gpu::compile_hlsl_to_dxil(st, crd::containers::StringView(k.source.c_str(), k.source.size()), name, a);
-        if (r.ok && !r.dxil.empty()) { add_blob(fourcc, crd::containers::as_const_span(r.dxil)); return static_cast<crd::u32>(r.dxil.size()); }
+        if (r.ok && !r.dxil.empty())
+        {
+            add_blob(fourcc, crd::containers::as_const_span(r.dxil));
+            return static_cast<crd::u32>(r.dxil.size());
+        }
         return 0U;
     };
     if (has_backend(opts.backends, CookBackend::Dxil))
@@ -304,7 +368,10 @@ CookResult cook_raster_shader(
 crd::containers::ConstSpan<crd::u8> ShaderBundle::bytecode(CookBackend b) const noexcept
 {
     const crd::u32 fourcc = backend_fourcc(b);
-    if (fourcc == 0U) { return {}; }
+    if (fourcc == 0U)
+    {
+        return {};
+    }
     const crd::resources::CrdrChunk* c = crd::resources::crdr_find_chunk(file, fourcc);
     return c != nullptr ? c->payload : crd::containers::ConstSpan<crd::u8>{};
 }

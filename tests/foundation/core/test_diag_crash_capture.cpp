@@ -117,10 +117,12 @@ fs::path first_crash_dump(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with("crash_"))
         {
             return it->path();
         }
+    }
     return {};
 }
 
@@ -130,7 +132,9 @@ int read_marker(const fs::path& dir)
     const fs::path  marker = dir / "report.marker";
     std::error_code ec;
     if (!fs::exists(marker, ec))
+    {
         return -1;
+    }
     std::ifstream f{marker};
     int           v = -1;
     f >> v;
@@ -473,11 +477,13 @@ std::size_t count_crash_records(const fs::path& dir)
     std::size_t     n = 0;
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".log" && it->path().filename().string().starts_with("crash_"))
         {
             ++n;
             CHECK(fs::file_size(it->path()) > 0U); // a written record is a real, non-empty file
         }
+    }
     return n;
 }
 
@@ -486,10 +492,12 @@ fs::path first_crash_record(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
         if (it->path().extension() == ".log" && it->path().filename().string().starts_with("crash_"))
         {
             return it->path();
         }
+    }
     return {};
 }
 
@@ -594,7 +602,9 @@ TEST_CASE("crash capture (linux): a wild write terminates with SIGSEGV and write
         CHECK(fs::path{rf.exe.c_str()}.filename() == fs::path{specimen_path().c_str()}.filename());
         CHECK(rf.has_regs);
         if (rf.arch == "x86_64")
+        {
             CHECK(rf.has_cr2);        // the final register line was reached: the record is not truncated (cr2 == si_addr)
+        }
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

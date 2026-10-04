@@ -38,7 +38,10 @@ using crd::containers::StringView;
 {
     for (crd::usize i = 0; i < s.size(); ++i)
     {
-        if (s[i] == '.') { return true; }
+        if (s[i] == '.')
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -46,12 +49,18 @@ using crd::containers::StringView;
 // ── printer ──
 void put(Array<char>& o, StringView s)
 {
-    for (crd::usize i = 0; i < s.size(); ++i) { o.push_back(s[i]); }
+    for (crd::usize i = 0; i < s.size(); ++i)
+    {
+        o.push_back(s[i]);
+    }
 }
 void put(Array<char>& o, char c) { o.push_back(c); }
 void put_indent(Array<char>& o, crd::u32 depth)
 {
-    for (crd::u32 i = 0; i < depth * 2U; ++i) { o.push_back(' '); }
+    for (crd::u32 i = 0; i < depth * 2U; ++i)
+    {
+        o.push_back(' ');
+    }
 }
 
 class ChirPrinter
@@ -74,7 +83,10 @@ public:
             put(m_out, StringView(" ["));
             for (crd::u32 i = 0; i < n.attrs.size(); ++i)
             {
-                if (i != 0U) { put(m_out, StringView(", ")); }
+                if (i != 0U)
+                {
+                    put(m_out, StringView(", "));
+                }
                 put(m_out, m_m.str(n.attrs[i].key));
                 put(m_out, '=');
                 put(m_out, m_m.str(n.attrs[i].val));
@@ -86,7 +98,10 @@ public:
             put(m_out, StringView(" ("));
             for (crd::u32 i = 0; i < n.pins.size(); ++i)
             {
-                if (i != 0U) { put(m_out, StringView(", ")); }
+                if (i != 0U)
+                {
+                    put(m_out, StringView(", "));
+                }
                 emit_pin(idx, n.pins[i], i);
             }
             put(m_out, ')');
@@ -94,7 +109,10 @@ public:
         if (n.children.size() != 0U)
         {
             put(m_out, StringView(" {\n"));
-            for (const crd::u32 c : n.children) { emit(c, depth + 1U); }
+            for (const crd::u32 c : n.children)
+            {
+                emit(c, depth + 1U);
+            }
             put_indent(m_out, depth);
             put(m_out, StringView("}\n"));
         }
@@ -112,7 +130,10 @@ private:
         put(m_out, m_m.str(p.name));
         put(m_out, StringView(": "));
         put(m_out, m_m.str(p.type));
-        if (p.dir != PinDir::In) { return; }
+        if (p.dir != PinDir::In)
+        {
+            return;
+        }
         // an incoming edge binds this in-pin: emit ` = <src-node-name>.<src-pin-name>` (single-writer => at most one).
         for (const Edge& e : m_m.edges())
         {
@@ -147,14 +168,23 @@ public:
         if (m_ok)
         {
             skip_ws();
-            if (m_cur != m_end) { fail("trailing characters after the program"); }
+            if (m_cur != m_end)
+            {
+                fail("trailing characters after the program");
+            }
         }
         if (m_ok && (root == kInvalidNode || m_model.node(root).kind != NodeKind::Program))
         {
             fail_at(0U, "the root node must be a program");
         }
-        if (m_ok) { resolve_edges(); }
-        if (m_ok) { m_model.derive_ids(); }
+        if (m_ok)
+        {
+            resolve_edges();
+        }
+        if (m_ok)
+        {
+            m_model.derive_ids();
+        }
         return make_result();
     }
 
@@ -163,7 +193,10 @@ private:
     [[nodiscard]] crd::u32 offset() const noexcept { return static_cast<crd::u32>(m_cur - m_begin); }
     void                   skip_ws() noexcept
     {
-        while (m_cur < m_end && is_ws(*m_cur)) { ++m_cur; }
+        while (m_cur < m_end && is_ws(*m_cur))
+        {
+            ++m_cur;
+        }
     }
     [[nodiscard]] char la() noexcept
     {
@@ -181,7 +214,10 @@ private:
     }
     void expect(char c, const char* msg) noexcept
     {
-        if (!accept(c)) { fail(msg); }
+        if (!accept(c))
+        {
+            fail(msg);
+        }
     }
     void fail(const char* msg) noexcept { fail_at(offset(), msg); }
     void fail_at(crd::u32 off, const char* msg) noexcept
@@ -203,7 +239,10 @@ private:
             return {};
         }
         const char* s = m_cur;
-        while (m_cur < m_end && is_ident_char(*m_cur)) { ++m_cur; }
+        while (m_cur < m_end && is_ident_char(*m_cur))
+        {
+            ++m_cur;
+        }
         return StringView(s, static_cast<crd::usize>(m_cur - s));
     }
 
@@ -218,7 +257,10 @@ private:
                 ++line;
                 col = 1;
             }
-            else { ++col; }
+            else
+            {
+                ++col;
+            }
         }
         return SourceLoc{m_file, line, col};
     }
@@ -228,7 +270,10 @@ private:
         skip_ws();
         const crd::u32   koff = offset();
         const StringView kw   = parse_ident("expected a node kind");
-        if (!m_ok) { return kInvalidNode; }
+        if (!m_ok)
+        {
+            return kInvalidNode;
+        }
         NodeKind kind{};
         if (!node_kind_from_name(kw, kind))
         {
@@ -245,18 +290,33 @@ private:
             const crd::u32    noff = offset();
             const StringView  cand = parse_ident("expected a node name");
             NodeKind          sib{};
-            if (node_kind_from_name(cand, sib)) { m_cur = save; } // it is a sibling's kind -> this node is anonymous
+            if (node_kind_from_name(cand, sib)) // it is a sibling's kind -> this node is anonymous
+            {
+                m_cur = save;
+            }
             else if (has_dot(cand))
             {
                 fail_at(noff, "a node name must not contain '.'");
                 return kInvalidNode;
             }
-            else { name = cand; }
+            else
+            {
+                name = cand;
+            }
         }
         const crd::u32 idx = m_model.add_node(kind, name, parent, loc_at(koff));
-        if (la() == '[') { parse_attrs(idx); }
-        if (m_ok && la() == '(') { parse_pins(idx); }
-        if (m_ok && la() == '{') { parse_block(idx); }
+        if (la() == '[')
+        {
+            parse_attrs(idx);
+        }
+        if (m_ok && la() == '(')
+        {
+            parse_pins(idx);
+        }
+        if (m_ok && la() == '{')
+        {
+            parse_block(idx);
+        }
         return idx;
     }
 
@@ -272,7 +332,10 @@ private:
             const StringView k = parse_ident("expected an attribute name");
             expect('=', "expected '=' in an attribute");
             const StringView v = parse_ident("expected an attribute value");
-            if (!m_ok) { return; }
+            if (!m_ok)
+            {
+                return;
+            }
             m_model.add_attr(idx, k, v);
         } while (accept(','));
         expect(']', "expected ']'");
@@ -288,10 +351,19 @@ private:
         }
         do {
             const StringView dirs = parse_ident("expected 'in' or 'out'");
-            if (!m_ok) { return; }
+            if (!m_ok)
+            {
+                return;
+            }
             PinDir dir{};
-            if (dirs == StringView("in")) { dir = PinDir::In; }
-            else if (dirs == StringView("out")) { dir = PinDir::Out; }
+            if (dirs == StringView("in"))
+            {
+                dir = PinDir::In;
+            }
+            else if (dirs == StringView("out"))
+            {
+                dir = PinDir::Out;
+            }
             else
             {
                 fail("a pin direction must be 'in' or 'out'");
@@ -300,7 +372,10 @@ private:
             const StringView pname = parse_ident("expected a pin name");
             expect(':', "expected ':' in a pin");
             const StringView ptype = parse_ident("expected a pin type");
-            if (!m_ok) { return; }
+            if (!m_ok)
+            {
+                return;
+            }
             m_model.add_pin(idx, dir, pname, ptype);
             const crd::u32 pin_idx = static_cast<crd::u32>(m_model.node(idx).pins.size()) - 1U;
             if (la() == '=')
@@ -308,7 +383,10 @@ private:
                 const crd::u32 roff = offset();
                 accept('=');
                 const StringView ref = parse_ident("expected a pin reference node.pin");
-                if (!m_ok) { return; }
+                if (!m_ok)
+                {
+                    return;
+                }
                 if (dir != PinDir::In)
                 {
                     fail_at(roff, "only an 'in' pin can bind a source");
@@ -317,7 +395,10 @@ private:
                 crd::usize dot = ref.size();
                 for (crd::usize i = 0; i < ref.size(); ++i)
                 {
-                    if (ref[i] == '.') { dot = i; }
+                    if (ref[i] == '.')
+                    {
+                        dot = i;
+                    }
                 }
                 if (dot == ref.size())
                 {
@@ -335,7 +416,10 @@ private:
     void parse_block(crd::u32 idx) noexcept
     {
         expect('{', "expected '{'");
-        while (m_ok && la() != '}' && la() != '\0') { parse_node(idx); }
+        while (m_ok && la() != '}' && la() != '\0')
+        {
+            parse_node(idx);
+        }
         expect('}', "expected '}'");
     }
 
@@ -428,7 +512,10 @@ private:
 void print_chir(const SourceModel& m, Array<char>& out)
 {
     const crd::u32 root = m.root();
-    if (root == kInvalidNode) { return; } // no program => print nothing (a graceful empty projection)
+    if (root == kInvalidNode) // no program => print nothing (a graceful empty projection)
+    {
+        return;
+    }
     ChirPrinter(m, out).emit(root, 0U);
 }
 

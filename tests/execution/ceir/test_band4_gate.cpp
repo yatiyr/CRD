@@ -230,5 +230,8 @@ TEST_CASE("ceir gate4: the hazard classification survives serialize + deserializ
     Array<Hazard> after(&root);
     ctx2.collect_block_hazards(*rb, after);
     REQUIRE(after.size() == before.size()); // same edge count post-round-trip
-    for (crd::usize i = 0; i < after.size(); ++i) { CHECK(after[i].kind == before[i].kind); }
+    for (crd::usize i = 0; i < after.size(); ++i)
+    {
+        CHECK(after[i].kind == before[i].kind);
+    }
 }

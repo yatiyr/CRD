@@ -63,16 +63,22 @@ constexpr crd::u32 kProfileHandlerVersion = 1U;
 
     crd::containers::Array<crd::u8> bytes(ctx.allocator);
     if (!ctx.io->read_input(crd::containers::StringView(meta_rel.data(), meta_rel.size()), bytes))
+    {
         return {};
+    }
     const std::string_view sv(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     const std::string_view key = "uuid = \"";
     const auto pos = sv.find(key);
     if (pos == std::string_view::npos)
+    {
         return {};
+    }
     const auto start = pos + key.size();
     const auto end   = sv.find('"', start);
     if (end == std::string_view::npos)
+    {
         return {};
+    }
     return crd::resources::ResourceId::parse(sv.substr(start, end - start));
 }
 
@@ -82,22 +88,62 @@ constexpr crd::u32 kProfileHandlerVersion = 1U;
                                          crd::profile::PredicateField& out)
 {
     using F = crd::profile::PredicateField;
-    if (name == "Os")        { out = F::Os;        return true; }
-    if (name == "GpuTier")   { out = F::GpuTier;   return true; }
-    if (name == "Domain")    { out = F::Domain;    return true; }
-    if (name == "Mode")      { out = F::Mode;      return true; }
-    if (name == "TargetFps") { out = F::TargetFps; return true; }
-    if (name == "CpuCores")  { out = F::CpuCores;  return true; }
+    if (name == "Os")
+    {
+        out = F::Os;
+        return true;
+    }
+    if (name == "GpuTier")
+    {
+        out = F::GpuTier;
+        return true;
+    }
+    if (name == "Domain")
+    {
+        out = F::Domain;
+        return true;
+    }
+    if (name == "Mode")
+    {
+        out = F::Mode;
+        return true;
+    }
+    if (name == "TargetFps")
+    {
+        out = F::TargetFps;
+        return true;
+    }
+    if (name == "CpuCores")
+    {
+        out = F::CpuCores;
+        return true;
+    }
     return false;
 }
 
 [[nodiscard]] bool parse_predicate_op(std::string_view name, crd::profile::PredicateOp& out)
 {
     using O = crd::profile::PredicateOp;
-    if (name == "Equal")     { out = O::Equal;     return true; }
-    if (name == "GreaterEq") { out = O::GreaterEq; return true; }
-    if (name == "LessEq")    { out = O::LessEq;    return true; }
-    if (name == "InMask")    { out = O::InMask;    return true; }
+    if (name == "Equal")
+    {
+        out = O::Equal;
+        return true;
+    }
+    if (name == "GreaterEq")
+    {
+        out = O::GreaterEq;
+        return true;
+    }
+    if (name == "LessEq")
+    {
+        out = O::LessEq;
+        return true;
+    }
+    if (name == "InMask")
+    {
+        out = O::InMask;
+        return true;
+    }
     return false;
 }
 
@@ -107,7 +153,9 @@ CookResult profile_handler(const CookContext& ctx)
 
     crd::containers::Array<crd::u8> src_bytes(ctx.allocator);
     if (!ctx.io->read_source(src_bytes))
+    {
         return result;
+    }
     crd::containers::String text(ctx.allocator);
     text.append(reinterpret_cast<const char*>(src_bytes.data()), src_bytes.size());
 
@@ -145,7 +193,9 @@ CookResult profile_handler(const CookContext& ctx)
         if (const crd::toml::node* p = profile->get("priority"); p != nullptr)
         {
             if (auto v = p->value<int64_t>(); v.has_value() && *v >= 0)
+            {
                 priority = static_cast<crd::u32>(*v);
+            }
         }
 
         // predicates — array of inline tables; v1o3 ships the parser even
@@ -157,7 +207,10 @@ CookResult profile_handler(const CookContext& ctx)
             for (const auto& pn : *preds->as_array())
             {
                 const crd::toml::node* pt = pn.as_table();
-                if (pt == nullptr) continue;
+                if (pt == nullptr)
+                {
+                    continue;
+                }
                 crd::profile::PredicateRecord rec{};
                 if (auto fnode = pt->get("field"); fnode != nullptr)
                 {
@@ -188,7 +241,9 @@ CookResult profile_handler(const CookContext& ctx)
                 if (auto vnode = pt->get("value_int"); vnode != nullptr)
                 {
                     if (auto v = vnode->value<int64_t>(); v.has_value())
+                    {
                         rec.value = static_cast<crd::u32>(*v);
+                    }
                 }
                 predicates.push_back(rec);
             }
@@ -228,7 +283,9 @@ CookResult profile_handler(const CookContext& ctx)
 
     auto bytes = b.build();
     if (bytes.empty())
+    {
         return result;
+    }
 
     result.type_fourcc     = crd::profile::kFourCC_PROF;
     result.cooked_bytes    = std::move(bytes);

@@ -43,7 +43,10 @@ bool ignored_contains(const char* file, int line) noexcept
 {
     for (crd::usize i = 0U; i < g_ignored_filled; ++i)
     {
-        if (g_ignored_sites[i].first == file && g_ignored_sites[i].second == line) { return true; }
+        if (g_ignored_sites[i].first == file && g_ignored_sites[i].second == line)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -149,7 +152,9 @@ int report_assert_failure(const char* expression, const char* file, int line, co
     {
         std::lock_guard<std::mutex> lock(g_ignore_mutex);
         if (ignored_contains(file, line))
+        {
             return 0;
+        }
     }
 
     char buffer[1024];

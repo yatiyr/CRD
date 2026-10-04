@@ -19,7 +19,10 @@ namespace
 void push_bytes(crd::containers::Array<crd::u8>& b, const void* src, crd::usize n)
 {
     const crd::u8* s = static_cast<const crd::u8*>(src);
-    for (crd::usize i = 0; i < n; ++i) { b.push_back(s[i]); }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        b.push_back(s[i]);
+    }
 }
 void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v) { push_bytes(b, &v, 4); }
 void push_u32(crd::containers::Array<crd::u8>& b, crd::u32 v) { push_bytes(b, &v, 4); }
@@ -40,13 +43,22 @@ void build_glb(crd::containers::Array<crd::u8>& out, const char* json, const crd
     push_u32(out, jlen + jpad);
     push_u32(out, 0x4E4F534AU); // 'JSON'
     push_bytes(out, json, jlen);
-    for (crd::u32 i = 0; i < jpad; ++i) { out.push_back(' '); }
+    for (crd::u32 i = 0; i < jpad; ++i)
+    {
+        out.push_back(' ');
+    }
     if (has_b)
     {
         push_u32(out, blen + bpad);
         push_u32(out, 0x004E4942U); // 'BIN'
-        for (crd::usize i = 0; i < bin.size(); ++i) { out.push_back(bin[i]); }
-        for (crd::u32 i = 0; i < bpad; ++i) { out.push_back(0); }
+        for (crd::usize i = 0; i < bin.size(); ++i)
+        {
+            out.push_back(bin[i]);
+        }
+        for (crd::u32 i = 0; i < bpad; ++i)
+        {
+            out.push_back(0);
+        }
     }
 }
 
@@ -68,7 +80,10 @@ TEST_CASE("assetio: GLB triangle -- positions + u16 indices + PBR/KHR material p
     crd::containers::Array<crd::u8> bin(&alloc);
     // 3 × vec3 positions (36 B) then 3 × u16 indices (6 B)
     const crd::f32 pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
-    for (crd::f32 v : pos) { push_f32(bin, v); }
+    for (crd::f32 v : pos)
+    {
+        push_f32(bin, v);
+    }
     push_u16(bin, 0);
     push_u16(bin, 1);
     push_u16(bin, 2);
@@ -132,13 +147,25 @@ TEST_CASE("assetio: glTF INTERLEAVED accessors + normalized u8 UVs + authored TA
     crd::containers::Array<crd::u8> bin(&alloc);
     // 3 vertices interleaved: pos vec3 (12) + normal vec3 (12) → stride 24; then normalized u8 UV pairs; then u32 tangent-less
     const crd::f32 vtx[18] = {0, 0, 0, /*n*/ 0, 0, 1, 1, 0, 0, /*n*/ 0, 0, 1, 0, 1, 0, /*n*/ 0, 0, 1};
-    for (crd::f32 v : vtx) { push_f32(bin, v); }
+    for (crd::f32 v : vtx)
+    {
+        push_f32(bin, v);
+    }
     const crd::u8 uvs[6] = {0, 0, 255, 0, 0, 255}; // normalized: 0 / 1 / …
-    for (crd::u8 v : uvs) { bin.push_back(v); }
-    while ((bin.size() % 4U) != 0U) { bin.push_back(0); } // align the next view
+    for (crd::u8 v : uvs)
+    {
+        bin.push_back(v);
+    }
+    while ((bin.size() % 4U) != 0U) // align the next view
+    {
+        bin.push_back(0);
+    }
     const crd::usize tan_off = bin.size();
     const crd::f32   tan[12] = {1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1}; // authored, mixed handedness on purpose
-    for (crd::f32 v : tan) { push_f32(bin, v); }
+    for (crd::f32 v : tan)
+    {
+        push_f32(bin, v);
+    }
 
     crd::containers::String json(&alloc);
     json.append(R"({
@@ -194,11 +221,17 @@ TEST_CASE("assetio: glTF SPARSE accessor substitution", "[assetio][gltf]")
 
     crd::containers::Array<crd::u8> bin(&alloc);
     const crd::f32 base[9] = {0, 0, 0, 1, 0, 0, 2, 0, 0}; // 3 base positions on the x-axis
-    for (crd::f32 v : base) { push_f32(bin, v); }
+    for (crd::f32 v : base)
+    {
+        push_f32(bin, v);
+    }
     push_u16(bin, 2);                 // sparse index: replace record 2
     push_u16(bin, 0);                 // (pad to keep the values view 4-aligned)
     const crd::f32 subst[3] = {9, 9, 9};
-    for (crd::f32 v : subst) { push_f32(bin, v); }
+    for (crd::f32 v : subst)
+    {
+        push_f32(bin, v);
+    }
 
     const char* json = R"({
       "asset": {"version": "2.0"},
@@ -256,9 +289,15 @@ TEST_CASE("assetio: glTF images + material texture SLOTS (embedded / data-URI / 
 
     crd::containers::Array<crd::u8> bin(&alloc);
     const crd::f32 pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
-    for (crd::f32 v : pos) { push_f32(bin, v); }
+    for (crd::f32 v : pos)
+    {
+        push_f32(bin, v);
+    }
     const crd::u8 img_bytes[8] = {0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4}; // opaque to the parser — the COOK decodes
-    for (crd::u8 v : img_bytes) { bin.push_back(v); }
+    for (crd::u8 v : img_bytes)
+    {
+        bin.push_back(v);
+    }
 
     // images: [0] embedded bufferView · [1] base64 data-URI ("ABCD" → 3 bytes) · [2] external percent-encoded uri
     // textures: [0]→img0 · [1]→img1 · [2]→img2 · [3] has NO core source (extension-only) → slot empty + warning

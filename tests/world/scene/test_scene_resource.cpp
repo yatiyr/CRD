@@ -399,8 +399,14 @@ TEST_CASE("Built-in relations round-trip: Owns + AttachedTo", "[scene][resource]
     crd::u32 attached_count = 0;
     for (EntityId e : inst.entities)
     {
-        if (target.has_relation<Owns>(e)) ++owns_count;
-        if (target.has_relation<AttachedTo>(e)) ++attached_count;
+        if (target.has_relation<Owns>(e))
+        {
+            ++owns_count;
+        }
+        if (target.has_relation<AttachedTo>(e))
+        {
+            ++attached_count;
+        }
     }
     CHECK(owns_count == 1U);
     CHECK(attached_count == 1U);
@@ -535,7 +541,10 @@ TEST_CASE("Round-trip + step: hierarchy world matrices match source",
     EntityId target_leaf = EntityId::null();
     for (EntityId e : inst.entities)
     {
-        if (!target.has_relation<ChildOf>(e)) continue;
+        if (!target.has_relation<ChildOf>(e))
+        {
+            continue;
+        }
         EntityId parent_e = target.get_relation_target<ChildOf>(e);
         if (target.has_relation<ChildOf>(parent_e))
         {

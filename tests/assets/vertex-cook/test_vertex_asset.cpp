@@ -108,7 +108,10 @@ source   = ["uv"]
     for (int i = 0; i < g.size(); ++i)
     {
         const kir::KNode& n = g.node(i);
-        if (n.op == kir::KOp::Const && n.cval == want) { return true; }
+        if (n.op == kir::KOp::Const && n.cval == want)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -121,7 +124,10 @@ source   = ["uv"]
     for (int i = 0; i < g.size(); ++i)
     {
         const kir::KNode& n = g.node(i);
-        if (n.op == kir::KOp::Builtin && static_cast<kir::KBuiltin>(n.iidx) == b) { return true; }
+        if (n.op == kir::KOp::Builtin && static_cast<kir::KBuiltin>(n.iidx) == b)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -129,7 +135,10 @@ source   = ["uv"]
 {
     for (int i = 0; i < g.size(); ++i)
     {
-        if (g.node(i).op == op) { return true; }
+        if (g.node(i).op == op)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -1025,7 +1034,10 @@ TEST_CASE("REN-38-F5 GATE: a MESH-SHADER pipeline AND a RAY-TRACED pass, assets 
     const auto one = [&](const char* stage_key, const char* section, bool pulls, Cooked& out) {
         containers::String t(&alloc);
         t.append(stage_key);
-        if (pulls) { t.append(kScene); }
+        if (pulls)
+        {
+            t.append(kScene);
+        }
         t.append(section);
         cook_text(&alloc, t.c_str(), out);
     };
@@ -1122,7 +1134,10 @@ TEST_CASE("REN-38 audit: the LIVE varying contract -- a cooked FS read set verif
     tr.append(kScene);
     REQUIRE(vc::parse_vertex_toml(containers::StringView(tr.c_str(), tr.size()), trimmed, &w)
             == vc::VertexCookError::Ok);
-    while (trimmed.varyings.size() > 2U) { trimmed.varyings.pop_back(); }
+    while (trimmed.varyings.size() > 2U)
+    {
+        trimmed.varyings.pop_back();
+    }
     CHECK(vc::verify_varying_contract(trimmed, static_cast<const vc::VaryingRequirement*>(reqs), n_reqs, &w)
           == vc::VertexCookError::ContractMismatch);
 
@@ -1172,7 +1187,11 @@ TEST_CASE("REN-38 audit: the ANY-HIT stage cooks from the declaration and its cu
     {
         for (crd::usize i = 0; i < b1.size(); ++i)
         {
-            if (b1[i] != b2[i]) { same = false; break; }
+            if (b1[i] != b2[i])
+            {
+                same = false;
+                break;
+            }
         }
     }
     CHECK_FALSE(same);
@@ -1742,7 +1761,10 @@ TEST_CASE("REN-40-C4 GATE: dither_band=0 parity and dither spread", "[vertex-coo
         kir::KEntry ve{};
         REQUIRE(vc::cook_vertex_program(desc, g, ve));
         CHECK(ve.n_out == 4);
-        for (int i = 0; i < ve.n_out; ++i) { CHECK(ve.out[i].location != 4); }
+        for (int i = 0; i < ve.n_out; ++i)
+        {
+            CHECK(ve.out[i].location != 4);
+        }
         CHECK_FALSE(has_op(g, kir::KOp::BitAnd));
     }
     SECTION("dither_band=0.25: the VS masks the entry, emits fade at loc 4 Flat")
@@ -1775,6 +1797,9 @@ TEST_CASE("REN-40-C4 GATE: dither_band=0 parity and dither spread", "[vertex-coo
         kir::KEntry ve{};
         REQUIRE(vc::cook_vertex_program(desc, g, ve));
         CHECK(ve.n_out == 4);
-        for (int i = 0; i < ve.n_out; ++i) { CHECK(ve.out[i].location != 4); }
+        for (int i = 0; i < ve.n_out; ++i)
+        {
+            CHECK(ve.out[i].location != 4);
+        }
     }
 }

@@ -195,7 +195,11 @@ TEST_CASE("60-bit Morton determinism: identical input yields identical output",
     bool all_match = true;
     for (crd::usize i = 0; i < count; ++i)
     {
-        if (a[i] != b[i]) { all_match = false; break; }
+        if (a[i] != b[i])
+        {
+            all_match = false;
+            break;
+        }
     }
     CHECK(all_match);
 }

@@ -41,7 +41,10 @@ void build_uv_sphere(crd::resources::MeshResource& mesh, crd::u32 rings, crd::u3
             const crd::f32 y     = std::cos(phi);
             const crd::f32 z     = std::sin(phi) * std::sin(theta);
             const crd::f32 rec[12]{x, y, z, x, y, z, u, v, 1.0F, 0.0F, 0.0F, 1.0F};
-            for (const crd::f32 f : rec) { verts.push_back(f); }
+            for (const crd::f32 f : rec)
+            {
+                verts.push_back(f);
+            }
         }
     }
     for (crd::u32 r = 0; r < rings; ++r)
@@ -135,7 +138,10 @@ TEST_CASE("REN-40-C1 GATE: each level is strictly cheaper and every index is in 
     // different fixes. So the gate accepts exactly two outcomes and demands the numbers for the second.
     INFO("levels " << rep.levels_built << " refused_shape " << rep.levels_refused_shape << " area_ratio "
                    << rep.refused_area_ratio << " extent_ratio " << rep.refused_extent_ratio);
-    if (rep.levels_built == 4U) { CHECK(rep.levels_refused_shape == 0U); }
+    if (rep.levels_built == 4U)
+    {
+        CHECK(rep.levels_refused_shape == 0U);
+    }
     else
     {
         CHECK(rep.levels_refused_shape > 0U);
@@ -222,10 +228,19 @@ TEST_CASE("REN-40-C1 GATE: coarse levels carry normals derived from their OWN su
             std::memcpy(static_cast<void*>(p), static_cast<const void*>(rec + 0U), sizeof(p));
             std::memcpy(static_cast<void*>(nn), static_cast<const void*>(rec + 12U), sizeof(nn));
             const crd::f32 plen = std::sqrt((p[0] * p[0]) + (p[1] * p[1]) + (p[2] * p[2]));
-            if (plen <= 0.5F) { continue; }
+            if (plen <= 0.5F)
+            {
+                continue;
+            }
             const crd::f32 dot = ((nn[0] * p[0]) + (nn[1] * p[1]) + (nn[2] * p[2])) / plen;
-            if ((1.0F - dot) > worst_l) { worst_l = 1.0F - dot; }
-            if (dot < 0.0F) { ++inv_l; }
+            if ((1.0F - dot) > worst_l)
+            {
+                worst_l = 1.0F - dot;
+            }
+            if (dot < 0.0F)
+            {
+                ++inv_l;
+            }
             sum_l += dot;
             ++n_l;
         }

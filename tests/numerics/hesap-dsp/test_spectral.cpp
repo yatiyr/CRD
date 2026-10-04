@@ -39,13 +39,19 @@ TEST_CASE("dsp spectral: Welch PSD matches scipy + bit-identical across {1,2,4,8
                     CHECK_THAT(psd[k], WithinRel(ref_welch_pxx[k], 1e-11));
                 }
                 ref1.resize(nfreq);
-                for (usize k = 0; k < nfreq; ++k) { ref1[k] = psd[k]; }
+                for (usize k = 0; k < nfreq; ++k)
+                {
+                    ref1[k] = psd[k];
+                }
                 have_ref = true;
             }
             else
             {
                 bool ident = true;
-                for (usize k = 0; k < nfreq && ident; ++k) { ident = (psd[k] == ref1[k]); }
+                for (usize k = 0; k < nfreq && ident; ++k)
+                {
+                    ident = (psd[k] == ref1[k]);
+                }
                 INFO("thread count " << nw);
                 CHECK(ident); // BIT-IDENTICAL across thread counts — the multi-threaded-FFT determinism moat
             }
@@ -80,13 +86,19 @@ TEST_CASE("dsp spectral: spectrogram matches scipy + bit-identical across thread
                     CHECK_THAT(s[i], WithinRel(ref_spec[i], 1e-9) || WithinAbs(ref_spec[i], 1e-11));
                 }
                 ref1.resize(nseg * nfreq);
-                for (usize i = 0; i < nseg * nfreq; ++i) { ref1[i] = s[i]; }
+                for (usize i = 0; i < nseg * nfreq; ++i)
+                {
+                    ref1[i] = s[i];
+                }
                 have_ref = true;
             }
             else
             {
                 bool ident = true;
-                for (usize i = 0; i < nseg * nfreq && ident; ++i) { ident = (s[i] == ref1[i]); }
+                for (usize i = 0; i < nseg * nfreq && ident; ++i)
+                {
+                    ident = (s[i] == ref1[i]);
+                }
                 INFO("threads " << nw);
                 CHECK(ident); // spectrogram bit-identical across thread counts
             }
@@ -125,13 +137,19 @@ TEST_CASE("dsp spectral: STFT/ISTFT perfect reconstruction + {1..16} bit-identit
                     CHECK_THAT(xr[i], WithinAbs(ref_welch_x[i], 1e-11));
                 }
                 ref1.resize(z.size());
-                for (usize i = 0; i < z.size(); ++i) { ref1[i] = z[i]; }
+                for (usize i = 0; i < z.size(); ++i)
+                {
+                    ref1[i] = z[i];
+                }
                 have_ref = true;
             }
             else
             {
                 bool ident = true;
-                for (usize i = 0; i < z.size() && ident; ++i) { ident = (z[i].re == ref1[i].re) && (z[i].im == ref1[i].im); }
+                for (usize i = 0; i < z.size() && ident; ++i)
+                {
+                    ident = (z[i].re == ref1[i].re) && (z[i].im == ref1[i].im);
+                }
                 INFO("threads " << nw);
                 CHECK(ident); // STFT complex spectra bit-identical across thread counts (the FFT moat)
             }

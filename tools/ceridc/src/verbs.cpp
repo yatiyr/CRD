@@ -45,12 +45,21 @@ namespace
     {
         const crd::usize n = std::strlen(path);
         const crd::usize m = std::strlen(suffix);
-        if (n < m) { return false; }
+        if (n < m)
+        {
+            return false;
+        }
         for (crd::usize i = 0; i < m; ++i)
         {
             char c = path[n - m + i];
-            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c - 'A' + 'a'); }
-            if (c != suffix[i]) { return false; }
+            if (c >= 'A' && c <= 'Z')
+            {
+                c = static_cast<char>(c - 'A' + 'a');
+            }
+            if (c != suffix[i])
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -87,7 +96,10 @@ namespace
                                          crd::containers::Array<PackEntry>& out)
     {
         crd::containers::Array<crd::u8> bytes(alloc);
-        if (!read_file(pack_path, bytes)) { return false; }
+        if (!read_file(pack_path, bytes))
+        {
+            return false;
+        }
         crd::resources::CrdrFile file(alloc);
         if (crd::resources::crdr_read(crd::containers::as_const_span(bytes), file, alloc) !=
                 crd::resources::CrdrError::Ok ||
@@ -96,10 +108,16 @@ namespace
             return false;
         }
         const crd::resources::CrdrChunk* mfst = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_MFST);
-        if (mfst == nullptr) { return false; }
+        if (mfst == nullptr)
+        {
+            return false;
+        }
         const crd::resources::CrdrChunk* strp = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_STRP);
         crd::containers::Array<crd::resources::ManifestEntry> entries(alloc);
-        if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc)) { return false; }
+        if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc))
+        {
+            return false;
+        }
         for (const crd::resources::ManifestEntry& e : entries)
         {
             PackEntry pe(alloc);
@@ -110,7 +128,10 @@ namespace
                 const char* begin = reinterpret_cast<const char*>(strp->payload.data() + e.name_strp_idx);
                 const char* limit = reinterpret_cast<const char*>(strp->payload.data() + strp->payload.size());
                 const char* end   = begin;
-                while (end < limit && *end != '\0') { ++end; }
+                while (end < limit && *end != '\0')
+                {
+                    ++end;
+                }
                 pe.name.append(begin, static_cast<crd::usize>(end - begin));
             }
             out.push_back(static_cast<PackEntry&&>(pe));
@@ -158,7 +179,10 @@ namespace
 crd::containers::String verb_import(const char* path, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (path == nullptr || !read_file(path, bytes)) { return fail(alloc, "import", "cannot read file"); }
+    if (path == nullptr || !read_file(path, bytes))
+    {
+        return fail(alloc, "import", "cannot read file");
+    }
 
     JsonWriter w(alloc);
     w.begin_object();
@@ -171,11 +195,26 @@ crd::containers::String verb_import(const char* path, crd::memory::IAllocator* a
         crd::assetio::ImportedAsset asset(alloc);
         crd::assetio::ImportStatus  st   = crd::assetio::ImportStatus::Unsupported;
         const auto                  span = crd::containers::as_const_span(bytes);
-        if (ends_with(path, ".glb")) { st = crd::assetio::parse_glb(span, alloc, asset); }
-        else if (ends_with(path, ".gltf")) { st = crd::assetio::parse_gltf(span, {}, alloc, asset); }
-        else if (ends_with(path, ".stl")) { st = crd::assetio::parse_stl(span, alloc, asset); }
-        else if (ends_with(path, ".obj")) { st = crd::assetio::parse_obj(span, alloc, asset); }
-        else if (ends_with(path, ".ply")) { st = crd::assetio::parse_ply(span, alloc, asset); }
+        if (ends_with(path, ".glb"))
+        {
+            st = crd::assetio::parse_glb(span, alloc, asset);
+        }
+        else if (ends_with(path, ".gltf"))
+        {
+            st = crd::assetio::parse_gltf(span, {}, alloc, asset);
+        }
+        else if (ends_with(path, ".stl"))
+        {
+            st = crd::assetio::parse_stl(span, alloc, asset);
+        }
+        else if (ends_with(path, ".obj"))
+        {
+            st = crd::assetio::parse_obj(span, alloc, asset);
+        }
+        else if (ends_with(path, ".ply"))
+        {
+            st = crd::assetio::parse_ply(span, alloc, asset);
+        }
         else // .3mf: the OPC archive → 3D/3dmodel.model → the XML model parse (the cook's own route)
         {
             crd::resources::ZipReader zip(alloc);
@@ -204,7 +243,10 @@ crd::containers::String verb_import(const char* path, crd::memory::IAllocator* a
         w.kv("animations", static_cast<crd::u64>(asset.animations.size()));
         w.key("mesh_names");
         w.begin_array();
-        for (const auto& m : asset.meshes) { w.value_string(m.name.c_str()); }
+        for (const auto& m : asset.meshes)
+        {
+            w.value_string(m.name.c_str());
+        }
         w.end_array();
     }
     else if (ends_with(path, ".otio"))
@@ -242,7 +284,10 @@ crd::containers::String verb_import(const char* path, crd::memory::IAllocator* a
             ok = crd::audio::aiff_decode(crd::containers::as_const_span(bytes), pcm) ==
                  crd::audio::AiffError::Ok;
         }
-        if (!ok) { return fail(alloc, "import", "audio decode failed"); }
+        if (!ok)
+        {
+            return fail(alloc, "import", "audio decode failed");
+        }
         w.kv("ok", true);
         w.kv("format", "audio");
         w.kv("sample_rate", pcm.sample_rate);
@@ -271,7 +316,10 @@ crd::containers::String verb_import(const char* path, crd::memory::IAllocator* a
 
 crd::containers::String verb_cook(const char* root, const char* out_pack, crd::memory::IAllocator* alloc)
 {
-    if (root == nullptr || out_pack == nullptr) { return fail(alloc, "cook", "root and out are required"); }
+    if (root == nullptr || out_pack == nullptr)
+    {
+        return fail(alloc, "cook", "root and out are required");
+    }
     if (!fs::is_directory(fs::Path(crd::containers::StringView(root))))
     {
         return fail(alloc, "cook", "root is not a directory");
@@ -329,10 +377,16 @@ crd::containers::String verb_instantiate(const char* pack_path, const char* asse
     }
     for (int i = 0; i < 3; ++i)
     {
-        if (!std::isfinite(translate[i])) { return fail(alloc, "instantiate", "non-finite transform"); }
+        if (!std::isfinite(translate[i]))
+        {
+            return fail(alloc, "instantiate", "non-finite transform");
+        }
     }
     crd::containers::Array<PackEntry> entries(alloc);
-    if (!read_pack_entries(pack_path, alloc, entries)) { return fail(alloc, "instantiate", "not a readable PACK"); }
+    if (!read_pack_entries(pack_path, alloc, entries))
+    {
+        return fail(alloc, "instantiate", "not a readable PACK");
+    }
     const PackEntry* found = nullptr;
     for (const PackEntry& e : entries)
     {
@@ -455,7 +509,10 @@ crd::containers::String verb_sequence(const char* name, const char* clip_a, crd:
 
     const crd::containers::Array<crd::u8> timl =
         crd::timeline::timeline_build(tl, crd::resources::ResourceId::mint_random(), alloc);
-    if (timl.size() == 0) { return fail(alloc, "sequence", "timeline failed validation"); }
+    if (timl.size() == 0)
+    {
+        return fail(alloc, "sequence", "timeline failed validation");
+    }
 
     // the `.otio` twin through the SAME translation the cook uses (resource → imported → export)
     crd::assetio::ImportedTimeline imported(alloc);
@@ -560,9 +617,15 @@ namespace
 crd::containers::String verb_render(const char* otio_path, const char* out_dir, crd::i64 max_frames,
                                     crd::memory::IAllocator* alloc)
 {
-    if (otio_path == nullptr || out_dir == nullptr) { return fail(alloc, "render", "missing arguments"); }
+    if (otio_path == nullptr || out_dir == nullptr)
+    {
+        return fail(alloc, "render", "missing arguments");
+    }
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (!read_file(otio_path, bytes)) { return fail(alloc, "render", "cannot read timeline"); }
+    if (!read_file(otio_path, bytes))
+    {
+        return fail(alloc, "render", "cannot read timeline");
+    }
     crd::assetio::ImportedTimeline imported(alloc);
     crd::assetio::OtioDiag         diag;
     if (crd::assetio::otio_parse(crd::containers::as_const_span(bytes), imported, &diag) !=
@@ -593,8 +656,14 @@ crd::containers::String verb_render(const char* otio_path, const char* out_dir, 
             const crd::assetio::ImportedTimelineItem& src = imported.items[track.first_item + i];
             crd::timeline::ItemRec                    rec;
             crd::timeline::ItemType                   it = crd::timeline::ItemType::Transition;
-            if (src.type == crd::assetio::OtioItemType::Clip) { it = crd::timeline::ItemType::Clip; }
-            else if (src.type == crd::assetio::OtioItemType::Gap) { it = crd::timeline::ItemType::Gap; }
+            if (src.type == crd::assetio::OtioItemType::Clip)
+            {
+                it = crd::timeline::ItemType::Clip;
+            }
+            else if (src.type == crd::assetio::OtioItemType::Gap)
+            {
+                it = crd::timeline::ItemType::Gap;
+            }
             rec.type                = static_cast<crd::u8>(it);
             rec.name_off            = tl.intern(src.name.c_str());
             rec.has_source_range    = src.has_source_range ? 1 : 0;
@@ -612,8 +681,14 @@ crd::containers::String verb_render(const char* otio_path, const char* out_dir, 
     const crd::time::RationalTime len24 =
         crd::time::rescaled_to(dur, crd::time::kRate24, crd::time::RescaleRounding::Round);
     crd::i64 frames = len24.value;
-    if (max_frames > 0 && frames > max_frames) { frames = max_frames; }
-    if (frames <= 0) { return fail(alloc, "render", "the timeline is empty"); }
+    if (max_frames > 0 && frames > max_frames)
+    {
+        frames = max_frames;
+    }
+    if (frames <= 0)
+    {
+        return fail(alloc, "render", "the timeline is empty");
+    }
 
     if (!fs::is_directory(fs::Path(crd::containers::StringView(out_dir))) &&
         !fs::create_directories(fs::Path(crd::containers::StringView(out_dir))))
@@ -652,13 +727,19 @@ crd::containers::String verb_export_timeline(const char* timl_path, const char* 
         return fail(alloc, "export", "missing arguments");
     }
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (!read_file(timl_path, bytes)) { return fail(alloc, "export", "cannot read TIML"); }
+    if (!read_file(timl_path, bytes))
+    {
+        return fail(alloc, "export", "cannot read TIML");
+    }
     crd::timeline::TimelineLoader loader(alloc);
     crd::resources::LoadContext   ctx;
     ctx.bytes     = crd::containers::as_const_span(bytes);
     ctx.allocator = alloc;
     auto* tl      = static_cast<crd::timeline::TimelineResource*>(loader.load(ctx));
-    if (tl == nullptr) { return fail(alloc, "export", "not a valid TIML artifact"); }
+    if (tl == nullptr)
+    {
+        return fail(alloc, "export", "not a valid TIML artifact");
+    }
 
     crd::assetio::ImportedTimeline imported(alloc);
     imported.name = tl->name();

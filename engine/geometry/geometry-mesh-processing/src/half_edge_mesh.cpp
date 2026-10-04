@@ -231,9 +231,18 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
         // Vertex outgoing pointers — keep the FIRST assignment (deterministic
         // since triangles are processed in input order, and within a triangle
         // half-edges are processed h0/h1/h2).
-        if (m_vertices[i0].outgoing == k_null_he) { m_vertices[i0].outgoing = h0; }
-        if (m_vertices[i1].outgoing == k_null_he) { m_vertices[i1].outgoing = h1; }
-        if (m_vertices[i2].outgoing == k_null_he) { m_vertices[i2].outgoing = h2; }
+        if (m_vertices[i0].outgoing == k_null_he)
+        {
+            m_vertices[i0].outgoing = h0;
+        }
+        if (m_vertices[i1].outgoing == k_null_he)
+        {
+            m_vertices[i1].outgoing = h1;
+        }
+        if (m_vertices[i2].outgoing == k_null_he)
+        {
+            m_vertices[i2].outgoing = h2;
+        }
     }
 
     // Step 3: pair twin half-edges via lex-tuple (min,max,he-id) sort.
@@ -254,15 +263,31 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
         const crd::u32 a = m_half_edges[h].origin;
         const crd::u32 b = m_half_edges[m_half_edges[h].next].origin;
         EdgeKey        k{};
-        if (a < b) { k.lo = a; k.hi = b; k.he_origin_first = 1U; }
-        else        { k.lo = b; k.hi = a; k.he_origin_first = 0U; }
+        if (a < b)
+        {
+            k.lo = a;
+            k.hi = b;
+            k.he_origin_first = 1U;
+        }
+        else
+        {
+            k.lo = b;
+            k.hi = a;
+            k.he_origin_first = 0U;
+        }
         k.he = h;
         keys.push_back(k);
     }
     crd::containers::sort(keys.data(), keys.data() + keys.size(),
                           [](const EdgeKey& l, const EdgeKey& r) noexcept {
-                              if (l.lo != r.lo) { return l.lo < r.lo; }
-                              if (l.hi != r.hi) { return l.hi < r.hi; }
+                              if (l.lo != r.lo)
+                              {
+                                  return l.lo < r.lo;
+                              }
+                              if (l.hi != r.hi)
+                              {
+                                  return l.hi < r.hi;
+                              }
                               return l.he < r.he;
                           });
 
@@ -275,7 +300,10 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
     while (i < keys.size())
     {
         crd::u32 j = i + 1U;
-        while (j < keys.size() && keys[j].lo == keys[i].lo && keys[j].hi == keys[i].hi) { ++j; }
+        while (j < keys.size() && keys[j].lo == keys[i].lo && keys[j].hi == keys[i].hi)
+        {
+            ++j;
+        }
         const crd::u32 group_size = j - i;
         if (group_size == 2U)
         {
@@ -294,7 +322,10 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
             // boundary (twin = k_null_he, downstream calls is_manifold()
             // and gets false). Caller can run v7f repair.
             result = BuildStatus::NonManifoldEdge;
-            for (crd::u32 k = i; k < j; ++k) { m_half_edges[keys[k].he].twin = k_null_he; }
+            for (crd::u32 k = i; k < j; ++k)
+            {
+                m_half_edges[keys[k].he].twin = k_null_he;
+            }
         }
         i = j;
     }
@@ -308,7 +339,10 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
         const crd::u32 interior_count = static_cast<crd::u32>(m_half_edges.size());
         for (crd::u32 h = 0; h < interior_count; ++h)
         {
-            if (m_half_edges[h].twin != k_null_he) { continue; }
+            if (m_half_edges[h].twin != k_null_he)
+            {
+                continue;
+            }
             // Create a boundary HE going opposite.
             const crd::u32 b      = alloc_he();
             const crd::u32 dest_v = m_half_edges[m_half_edges[h].next].origin;
@@ -339,7 +373,10 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
         // Initialise vertex → outgoing-boundary-HE map.
         crd::containers::Array<crd::u32> v_to_bnd_out(m_vertices.allocator());
         v_to_bnd_out.resize(m_vertices.size());
-        for (crd::usize k = 0; k < v_to_bnd_out.size(); ++k) { v_to_bnd_out[k] = k_null_he; }
+        for (crd::usize k = 0; k < v_to_bnd_out.size(); ++k)
+        {
+            v_to_bnd_out[k] = k_null_he;
+        }
         for (crd::u32 idx = 0; idx < boundary_seeds.size(); ++idx)
         {
             const crd::u32 b = boundary_seeds[idx];
@@ -347,7 +384,10 @@ BuildStatus HalfEdgeMesh<T>::build_from(crd::containers::ConstSpan<crd::math::Ve
             // First-write-wins is deterministic + arbitrary; each boundary
             // vertex has exactly one outgoing boundary HE in a valid input,
             // so no real conflict.
-            if (v_to_bnd_out[v] == k_null_he) { v_to_bnd_out[v] = b; }
+            if (v_to_bnd_out[v] == k_null_he)
+            {
+                v_to_bnd_out[v] = b;
+            }
         }
         // Wire b.next.
         for (crd::u32 idx = 0; idx < boundary_seeds.size(); ++idx)
@@ -385,7 +425,10 @@ void HalfEdgeMesh<T>::to_indexed(crd::containers::Array<crd::math::Vec3<T>>& out
 {
     out_positions.clear();
     out_indices.clear();
-    if (out_old_to_new_vertex != nullptr) { out_old_to_new_vertex->clear(); }
+    if (out_old_to_new_vertex != nullptr)
+    {
+        out_old_to_new_vertex->clear();
+    }
     // Build old→new vertex remap by walking alive vertices in slot order.
     crd::containers::Array<crd::u32> remap(m_vertices.allocator());
     remap.resize(m_vertices.size());
@@ -399,13 +442,22 @@ void HalfEdgeMesh<T>::to_indexed(crd::containers::Array<crd::math::Vec3<T>>& out
         remap[v] = static_cast<crd::u32>(out_positions.size());
         out_positions.push_back(m_vertices[v].position);
     }
-    if (out_old_to_new_vertex != nullptr) { *out_old_to_new_vertex = remap; }
+    if (out_old_to_new_vertex != nullptr)
+    {
+        *out_old_to_new_vertex = remap;
+    }
     // Walk alive faces in slot order, emit triangle indices.
     for (crd::u32 f = 0; f < m_faces.size(); ++f)
     {
-        if (!face_alive(f)) { continue; }
+        if (!face_alive(f))
+        {
+            continue;
+        }
         const crd::u32 h0 = m_faces[f].first_he;
-        if (h0 == k_null_he) { continue; }
+        if (h0 == k_null_he)
+        {
+            continue;
+        }
         const crd::u32 h1 = m_half_edges[h0].next;
         const crd::u32 h2 = m_half_edges[h1].next;
         out_indices.push_back(remap[m_half_edges[h0].origin]);
@@ -424,7 +476,10 @@ crd::u32 HalfEdgeMesh<T>::vertex_count() const noexcept
     crd::u32 n = 0;
     for (crd::u32 v = 0; v < m_vertices.size(); ++v)
     {
-        if ((m_vertices[v].flags & k_alive_bit) != 0U) { ++n; }
+        if ((m_vertices[v].flags & k_alive_bit) != 0U)
+        {
+            ++n;
+        }
     }
     return n;
 }
@@ -435,7 +490,10 @@ crd::u32 HalfEdgeMesh<T>::face_count() const noexcept
     crd::u32 n = 0;
     for (crd::u32 f = 0; f < m_faces.size(); ++f)
     {
-        if ((m_faces[f].flags & k_alive_bit) != 0U) { ++n; }
+        if ((m_faces[f].flags & k_alive_bit) != 0U)
+        {
+            ++n;
+        }
     }
     return n;
 }
@@ -448,10 +506,20 @@ crd::u32 HalfEdgeMesh<T>::edge_count() const noexcept
     crd::u32 n = 0;
     for (crd::u32 h = 0; h < m_half_edges.size(); ++h)
     {
-        if (!he_alive(h)) { continue; }
+        if (!he_alive(h))
+        {
+            continue;
+        }
         const crd::u32 t = m_half_edges[h].twin;
-        if (t == k_null_he) { ++n; continue; } // unpaired (shouldn't happen post-build)
-        if (h < t) { ++n; }
+        if (t == k_null_he) // unpaired (shouldn't happen post-build)
+        {
+            ++n;
+            continue;
+        }
+        if (h < t)
+        {
+            ++n;
+        }
     }
     return n;
 }
@@ -465,9 +533,18 @@ crd::u32 HalfEdgeMesh<T>::boundary_loop_count() const
     crd::u32 loops = 0;
     for (crd::u32 h = 0; h < m_half_edges.size(); ++h)
     {
-        if (!he_alive(h)) { continue; }
-        if (m_half_edges[h].face != k_null_face) { continue; }
-        if (visited[h] != 0U) { continue; }
+        if (!he_alive(h))
+        {
+            continue;
+        }
+        if (m_half_edges[h].face != k_null_face)
+        {
+            continue;
+        }
+        if (visited[h] != 0U)
+        {
+            continue;
+        }
         ++loops;
         crd::u32 cur = h;
         const crd::u32 cap = static_cast<crd::u32>(m_half_edges.size()) + 4U;
@@ -475,7 +552,10 @@ crd::u32 HalfEdgeMesh<T>::boundary_loop_count() const
         {
             visited[cur] = 1U;
             const crd::u32 n = m_half_edges[cur].next;
-            if (n == k_null_he || n == h) { break; }
+            if (n == k_null_he || n == h)
+            {
+                break;
+            }
             cur = n;
         }
     }
@@ -492,16 +572,25 @@ bool HalfEdgeMesh<T>::is_manifold() const noexcept
     // outgoing HEs in slot order, it's a single fan).
     for (crd::u32 v = 0; v < m_vertices.size(); ++v)
     {
-        if (!vertex_alive(v)) { continue; }
+        if (!vertex_alive(v))
+        {
+            continue;
+        }
         crd::u32 walk_count = 0;
         for_each_outgoing_he(v, [&](crd::u32) { ++walk_count; });
         // Count outgoing HEs by slot scan.
         crd::u32 slot_count = 0;
         for (crd::u32 h = 0; h < m_half_edges.size(); ++h)
         {
-            if (he_alive(h) && m_half_edges[h].origin == v) { ++slot_count; }
+            if (he_alive(h) && m_half_edges[h].origin == v)
+            {
+                ++slot_count;
+            }
         }
-        if (walk_count != slot_count) { return false; }
+        if (walk_count != slot_count)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -511,8 +600,14 @@ bool HalfEdgeMesh<T>::is_closed() const noexcept
 {
     for (crd::u32 h = 0; h < m_half_edges.size(); ++h)
     {
-        if (!he_alive(h)) { continue; }
-        if (m_half_edges[h].face == k_null_face) { return false; }
+        if (!he_alive(h))
+        {
+            continue;
+        }
+        if (m_half_edges[h].face == k_null_face)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -551,15 +646,24 @@ static bool link_condition_ok(const HalfEdgeMesh<T>& m, crd::u32 h)
     bool     unexpected_share = false;
     m.for_each_outgoing_he(b, [&](crd::u32 hb) {
         const crd::u32 vb = m.he_dest(hb);
-        if (vb == k_null_vertex || vb == a) { return; }
+        if (vb == k_null_vertex || vb == a)
+        {
+            return;
+        }
         bool in_a_ring = false;
         m.for_each_outgoing_he(a, [&](crd::u32 ha) {
-            if (m.he_dest(ha) == vb) { in_a_ring = true; }
+            if (m.he_dest(ha) == vb)
+            {
+                in_a_ring = true;
+            }
         });
         if (in_a_ring)
         {
             ++shared;
-            if (vb != ap1 && vb != ap2) { unexpected_share = true; }
+            if (vb != ap1 && vb != ap2)
+            {
+                unexpected_share = true;
+            }
         }
     });
     const crd::u32 expected_shared = (t == k_null_he) ? 1U : 2U;
@@ -569,19 +673,34 @@ static bool link_condition_ok(const HalfEdgeMesh<T>& m, crd::u32 h)
 template <crd::math::MathScalar T>
 bool HalfEdgeMesh<T>::collapse_edge(crd::u32 h, const crd::math::Vec3<T>& new_pos)
 {
-    if (!he_alive(h)) { return false; }
-    if (!crd::geometry::primitives::is_finite(new_pos)) { return false; }
-    if (!link_condition_ok<T>(*this, h)) { return false; }
+    if (!he_alive(h))
+    {
+        return false;
+    }
+    if (!crd::geometry::primitives::is_finite(new_pos))
+    {
+        return false;
+    }
+    if (!link_condition_ok<T>(*this, h))
+    {
+        return false;
+    }
 
     const crd::u32 t = m_half_edges[h].twin;
-    if (t == k_null_he) { return false; } // boundary collapse path is more delicate; reject for v7a
+    if (t == k_null_he) // boundary collapse path is more delicate; reject for v7a
+    {
+        return false;
+    }
 
     // Capture topology around the edge BEFORE we start mutating.
     //   Triangle 1 (face f1): h → h_next → h_prev → h, with apex1 = h_prev.origin.
     //   Triangle 2 (face f2): t → t_next → t_prev → t, with apex2 = t_prev.origin.
     const crd::u32 f1      = m_half_edges[h].face;
     const crd::u32 f2      = m_half_edges[t].face;
-    if (f1 == k_null_face || f2 == k_null_face) { return false; } // one side boundary — reject
+    if (f1 == k_null_face || f2 == k_null_face) // one side boundary — reject
+    {
+        return false;
+    }
     const crd::u32 h_next  = m_half_edges[h].next;
     const crd::u32 h_prev  = he_prev(h);
     const crd::u32 t_next  = m_half_edges[t].next;
@@ -601,7 +720,10 @@ bool HalfEdgeMesh<T>::collapse_edge(crd::u32 h, const crd::math::Vec3<T>& new_po
     for (crd::u32 i = 0; i < b_outgoing.size(); ++i)
     {
         const crd::u32 hb = b_outgoing[i];
-        if (hb == h || hb == t_next) { continue; } // these are being deleted
+        if (hb == h || hb == t_next) // these are being deleted
+        {
+            continue;
+        }
         m_half_edges[hb].origin = a;
     }
 
@@ -642,8 +764,14 @@ bool HalfEdgeMesh<T>::collapse_edge(crd::u32 h, const crd::math::Vec3<T>& new_po
     // originates from d, survives.
     const crd::u32 apex1 = m_half_edges[h_prev].origin; // c
     const crd::u32 apex2 = m_half_edges[t_prev].origin; // d
-    if (m_vertices[apex1].outgoing == h_prev) { m_vertices[apex1].outgoing = hn_twin; }
-    if (m_vertices[apex2].outgoing == t_prev) { m_vertices[apex2].outgoing = tn_twin; }
+    if (m_vertices[apex1].outgoing == h_prev)
+    {
+        m_vertices[apex1].outgoing = hn_twin;
+    }
+    if (m_vertices[apex2].outgoing == t_prev)
+    {
+        m_vertices[apex2].outgoing = tn_twin;
+    }
 
     // Update a's outgoing pointer if it referenced any of the deleted HEs
     // that originate from a (= h and t_next; the other 4 deleted HEs
@@ -667,7 +795,10 @@ bool HalfEdgeMesh<T>::collapse_edge(crd::u32 h, const crd::math::Vec3<T>& new_po
             for (crd::u32 i = 0; i < b_outgoing.size(); ++i)
             {
                 const crd::u32 hb = b_outgoing[i];
-                if (hb == h_next || hb == t) { continue; } // deleted
+                if (hb == h_next || hb == t) // deleted
+                {
+                    continue;
+                }
                 if (m_half_edges[hb].origin == a)
                 {
                     m_vertices[a].outgoing = hb;
@@ -696,17 +827,29 @@ bool HalfEdgeMesh<T>::collapse_edge(crd::u32 h, const crd::math::Vec3<T>& new_po
 template <crd::math::MathScalar T>
 crd::u32 HalfEdgeMesh<T>::split_edge(crd::u32 h, const crd::math::Vec3<T>& new_pos)
 {
-    if (!he_alive(h)) { return k_null_vertex; }
-    if (!crd::geometry::primitives::is_finite(new_pos)) { return k_null_vertex; }
+    if (!he_alive(h))
+    {
+        return k_null_vertex;
+    }
+    if (!crd::geometry::primitives::is_finite(new_pos))
+    {
+        return k_null_vertex;
+    }
     const crd::u32 t = m_half_edges[h].twin;
-    if (t == k_null_he) { return k_null_vertex; } // boundary split deferred
+    if (t == k_null_he) // boundary split deferred
+    {
+        return k_null_vertex;
+    }
 
     // Topology before.
     //   Triangle 1 (f1): h(a→b) + h_next(b→c) + h_prev(c→a), apex1 = c.
     //   Triangle 2 (f2): t(b→a) + t_next(a→d) + t_prev(d→b), apex2 = d.
     const crd::u32 f1    = m_half_edges[h].face;
     const crd::u32 f2    = m_half_edges[t].face;
-    if (f1 == k_null_face || f2 == k_null_face) { return k_null_vertex; }
+    if (f1 == k_null_face || f2 == k_null_face)
+    {
+        return k_null_vertex;
+    }
     const crd::u32 h_next = m_half_edges[h].next;
     const crd::u32 h_prev = he_prev(h);
     const crd::u32 t_next = m_half_edges[t].next;
@@ -831,8 +974,14 @@ crd::u32 HalfEdgeMesh<T>::split_edge(crd::u32 h, const crd::math::Vec3<T>& new_p
 
     // ----- Vertex outgoing pointers
     m_vertices[m_v].outgoing = he_mb;
-    if (m_vertices[a].outgoing == k_null_he) { m_vertices[a].outgoing = h; }
-    if (m_vertices[b].outgoing == k_null_he) { m_vertices[b].outgoing = he_bm; }
+    if (m_vertices[a].outgoing == k_null_he)
+    {
+        m_vertices[a].outgoing = h;
+    }
+    if (m_vertices[b].outgoing == k_null_he)
+    {
+        m_vertices[b].outgoing = he_bm;
+    }
     // c and d outgoings unchanged.
     return m_v;
 }
@@ -840,12 +989,21 @@ crd::u32 HalfEdgeMesh<T>::split_edge(crd::u32 h, const crd::math::Vec3<T>& new_p
 template <crd::math::MathScalar T>
 bool HalfEdgeMesh<T>::flip_edge(crd::u32 h)
 {
-    if (!he_alive(h)) { return false; }
+    if (!he_alive(h))
+    {
+        return false;
+    }
     const crd::u32 t = m_half_edges[h].twin;
-    if (t == k_null_he) { return false; } // boundary
+    if (t == k_null_he) // boundary
+    {
+        return false;
+    }
     const crd::u32 f1 = m_half_edges[h].face;
     const crd::u32 f2 = m_half_edges[t].face;
-    if (f1 == k_null_face || f2 == k_null_face) { return false; }
+    if (f1 == k_null_face || f2 == k_null_face)
+    {
+        return false;
+    }
 
     // Triangle 1 (f1): h(a→b) → h_next(b→c) → h_prev(c→a), apex c.
     // Triangle 2 (f2): t(b→a) → t_next(a→d) → t_prev(d→b), apex d.
@@ -857,8 +1015,14 @@ bool HalfEdgeMesh<T>::flip_edge(crd::u32 h)
     const crd::u32 b = m_half_edges[t].origin;
     const crd::u32 c = m_half_edges[h_prev].origin;
     const crd::u32 d = m_half_edges[t_prev].origin;
-    if (a == d || b == c) { return false; } // would create duplicate edge
-    if (c == d) { return false; }
+    if (a == d || b == c) // would create duplicate edge
+    {
+        return false;
+    }
+    if (c == d)
+    {
+        return false;
+    }
 
     // After flip: edge (a,b) becomes edge (c,d).
     //   f1' = (a, d, c) — h(a→d) → t_next(d→c... wait t_next is a→d). Hmm.
@@ -911,8 +1075,14 @@ bool HalfEdgeMesh<T>::flip_edge(crd::u32 h)
     {
         m_vertices[b].outgoing = h_next;
     }
-    if (m_vertices[c].outgoing == k_null_he) { m_vertices[c].outgoing = t; }
-    if (m_vertices[d].outgoing == k_null_he) { m_vertices[d].outgoing = h; }
+    if (m_vertices[c].outgoing == k_null_he)
+    {
+        m_vertices[c].outgoing = t;
+    }
+    if (m_vertices[d].outgoing == k_null_he)
+    {
+        m_vertices[d].outgoing = h;
+    }
     return true;
 }
 

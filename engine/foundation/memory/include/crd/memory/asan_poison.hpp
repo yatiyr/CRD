@@ -39,7 +39,9 @@ inline void asan_poison(const void* p, usize n) noexcept
 {
 #if CRD_MEM_ASAN
     if (n != 0U)
+    {
         __asan_poison_memory_region(p, n);
+    }
 #else
     (void)p;
     (void)n;
@@ -51,7 +53,9 @@ inline void asan_unpoison(const void* p, usize n) noexcept
 {
 #if CRD_MEM_ASAN
     if (n != 0U)
+    {
         __asan_unpoison_memory_region(p, n);
+    }
 #else
     (void)p;
     (void)n;

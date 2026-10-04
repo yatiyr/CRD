@@ -63,7 +63,9 @@ inline bool read_exception_stream(const wchar_t* dump_path, MINIDUMP_EXCEPTION_S
     constexpr std::uint32_t exception_stream = 6U; // MINIDUMP_STREAM_TYPE::ExceptionStream
     const std::size_t       sz               = crd::crash::read_dump_stream(dump_path, exception_stream, nullptr, 0);
     if (sz < sizeof(MINIDUMP_EXCEPTION_STREAM))
+    {
         return false;
+    }
     Bytes buf;
     buf.resize(sz);
     if (crd::crash::read_dump_stream(dump_path, exception_stream, buf.data(), buf.size()) != sz)
@@ -79,7 +81,9 @@ inline std::uint32_t exception_code(const wchar_t* dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
+    {
         return 0;
+    }
     return static_cast<std::uint32_t>(es.ExceptionRecord.ExceptionCode);
 }
 
@@ -88,7 +92,9 @@ inline std::uint32_t exception_thread_id(const wchar_t* dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
+    {
         return 0;
+    }
     return static_cast<std::uint32_t>(es.ThreadId);
 }
 
@@ -130,12 +136,16 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
     DumpModule  result;
     const Bytes file = read_file_bytes(dump_path);
     if (file.size() < sizeof(std::uint32_t))
+    {
         return result;
+    }
 
     constexpr std::uint32_t module_list_stream = 4U; // MINIDUMP_STREAM_TYPE::ModuleListStream
     const std::size_t       list_size = crd::crash::read_dump_stream(dump_path, module_list_stream, nullptr, 0);
     if (list_size < sizeof(std::uint32_t))
+    {
         return result;
+    }
     Bytes list;
     list.resize(list_size);
     if (crd::crash::read_dump_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
@@ -149,7 +159,9 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
     {
         const std::size_t off = sizeof(std::uint32_t) + static_cast<std::size_t>(i) * sizeof(MINIDUMP_MODULE);
         if (off + sizeof(MINIDUMP_MODULE) > list.size())
+        {
             break;
+        }
         MINIDUMP_MODULE mod{};
         std::memcpy(&mod, list.data() + off, sizeof(mod));
 
@@ -158,13 +170,17 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
         // characters are copied out before they are compared.
         const std::size_t nrva = static_cast<std::size_t>(mod.ModuleNameRva);
         if (nrva + sizeof(std::uint32_t) > file.size())
+        {
             continue;
+        }
         std::uint32_t nlen_bytes = 0;
         std::memcpy(&nlen_bytes, file.data() + nrva, sizeof(nlen_bytes));
         const std::size_t chars = nlen_bytes / sizeof(wchar_t);
         const std::size_t soff  = nrva + sizeof(std::uint32_t);
         if (soff + static_cast<std::size_t>(chars) * sizeof(wchar_t) > file.size())
+        {
             continue;
+        }
         crd::containers::Array<wchar_t> name;
         name.resize(chars);
         std::memcpy(name.data(), file.data() + soff, chars * sizeof(wchar_t));

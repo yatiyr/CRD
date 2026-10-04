@@ -72,7 +72,10 @@ struct Notebook
     }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
-        if (op.kind() == cst) { return ctx.attr_value(op.attr("value")).i; }
+        if (op.kind() == cst)
+        {
+            return ctx.attr_value(op.attr("value")).i;
+        }
         const i64 a = value[op.operand(0)->defining_op()->stable_id().value - 1U];
         const i64 b = value[op.operand(1)->defining_op()->stable_id().value - 1U];
         return op.kind() == addi ? a + b : a * b;
@@ -111,15 +114,24 @@ struct Notebook
             for (u32 k = 0; k < cell[i]->num_operands(); ++k)
             {
                 const Operation* const d = cell[i]->operand(k)->defining_op();
-                if (d == nullptr) { continue; }
+                if (d == nullptr)
+                {
+                    continue;
+                }
                 const u64 did = d->stable_id().value;
                 dag.add_edge(id, did);
                 bool seen = false;
                 for (usize j = 0; j < dependents[did - 1U].size(); ++j)
                 {
-                    if (dependents[did - 1U][j] == id) { seen = true; }
+                    if (dependents[did - 1U][j] == id)
+                    {
+                        seen = true;
+                    }
                 }
-                if (!seen) { dependents[did - 1U].push_back(id); }
+                if (!seen)
+                {
+                    dependents[did - 1U].push_back(id);
+                }
             }
         }
     }
@@ -151,7 +163,10 @@ struct Notebook
             seeded.push_back(0U);
             depdirty.push_back(0U);
         }
-        for (usize i = 0; i < seed.size(); ++i) { seeded[seed[i].value - 1U] = 1U; }
+        for (usize i = 0; i < seed.size(); ++i)
+        {
+            seeded[seed[i].value - 1U] = 1U;
+        }
         Array<u64> order(alloc);
         REQUIRE(dag.topo_order(order));
         for (usize i = 0; i < order.size(); ++i)
@@ -160,9 +175,18 @@ struct Notebook
             const Operation& op          = *cell[id - 1U];
             const u64        new_content = content_hash(op, ctx);
             bool             must        = false;
-            if (seeded[id - 1U] != 0U && new_content != dag.content_of(id)) { must = true; } // formula changed (not a no-op)
-            if (depdirty[id - 1U] != 0U) { must = true; }                                    // a dependency's value changed
-            if (!must) { continue; }                                                         // memo / no-op hit
+            if (seeded[id - 1U] != 0U && new_content != dag.content_of(id)) // formula changed (not a no-op)
+            {
+                must = true;
+            }
+            if (depdirty[id - 1U] != 0U) // a dependency's value changed
+            {
+                must = true;
+            }
+            if (!must) // memo / no-op hit
+            {
+                continue;
+            }
             const u64 old_interface = dag.interface_of(id);
             const i64 v             = eval(op);
             value[id - 1U]          = v;
@@ -171,7 +195,10 @@ struct Notebook
             dag.set_revision(id, new_content, new_interface);
             if (new_interface != old_interface) // §107: propagate ONLY on a value change (early-cutoff otherwise)
             {
-                for (usize k = 0; k < dependents[id - 1U].size(); ++k) { depdirty[dependents[id - 1U][k] - 1U] = 1U; }
+                for (usize k = 0; k < dependents[id - 1U].size(); ++k)
+                {
+                    depdirty[dependents[id - 1U][k] - 1U] = 1U;
+                }
             }
         }
     }
@@ -183,7 +210,10 @@ struct Notebook
         REQUIRE(tx.set_attr(c, "value", ctx.attr_int(newval)));
         REQUIRE(tx.commit());
         Array<StableId> t(alloc);
-        for (usize i = 0; i < tx.touched().size(); ++i) { t.push_back(tx.touched()[i]); }
+        for (usize i = 0; i < tx.touched().size(); ++i)
+        {
+            t.push_back(tx.touched()[i]);
+        }
         return t;
     }
     // A value-PRESERVING formula edit: swap a commutative binary op's operands (content changes, value does not).
@@ -197,7 +227,10 @@ struct Notebook
         REQUIRE(tx.set_operand(c, 1U, op0));
         REQUIRE(tx.commit());
         Array<StableId> t(alloc);
-        for (usize i = 0; i < tx.touched().size(); ++i) { t.push_back(tx.touched()[i]); }
+        for (usize i = 0; i < tx.touched().size(); ++i)
+        {
+            t.push_back(tx.touched()[i]);
+        }
         return t;
     }
 };
@@ -211,7 +244,10 @@ TEST_CASE("ceir 9a: initial evaluation computes every cell exactly once", "[ceir
     Array<Operation*>            c(&root);
     nb.build(c);
     nb.full_eval();
-    for (u32 i = 0; i < 7U; ++i) { CHECK(nb.recomputes[i] == 1U); }
+    for (u32 i = 0; i < 7U; ++i)
+    {
+        CHECK(nb.recomputes[i] == 1U);
+    }
     // the fixture values: A=2 B=3 Z=0 C=5 C2=0 E=7 F=3.
     CHECK(nb.value[3] == 5); // C = A+B
     CHECK(nb.value[4] == 0); // C2 = A*Z
@@ -266,7 +302,10 @@ TEST_CASE("ceir 9a: the engine dependent-set is a conservative superset; the eva
     bool engine_has_f = false;
     for (usize i = 0; i < aff.size(); ++i)
     {
-        if (aff[i] == f->stable_id().value) { engine_has_f = true; }
+        if (aff[i] == f->stable_id().value)
+        {
+            engine_has_f = true;
+        }
     }
     CHECK(engine_has_f); // F is in the engine's structural dependents...
 
@@ -301,7 +340,10 @@ TEST_CASE("ceir 9a: editing a different input recomputes a precise partial set",
     Array<u64> aff(&root);
     REQUIRE(nb.dag.affected_by(b->stable_id().value, aff));
     CHECK(aff.size() == 3U); // {C, E, F}
-    for (usize i = 0; i < aff.size(); ++i) { CHECK(nb.recomputes[aff[i] - 1U] == 2U); }
+    for (usize i = 0; i < aff.size(); ++i)
+    {
+        CHECK(nb.recomputes[aff[i] - 1U] == 2U);
+    }
 }
 
 TEST_CASE("ceir 9a: a value-preserving formula edit hot-swaps its dependents (the section-107 cutoff)", "[ceir][notebook]")
@@ -329,7 +371,10 @@ TEST_CASE("ceir 9a: a value-preserving formula edit hot-swaps its dependents (th
     CHECK(nb.recomputes[5] == 1U); // E CACHE-HIT — C's value was unchanged, so its dependent hot-swaps (section 107)
     for (u32 i = 0; i < 7U; ++i)
     {
-        if (i != 3U) { CHECK(nb.recomputes[i] == 1U); } // nothing but C recomputed
+        if (i != 3U) // nothing but C recomputed
+        {
+            CHECK(nb.recomputes[i] == 1U);
+        }
     }
 }
 
@@ -350,7 +395,10 @@ TEST_CASE("ceir 9a: a no-op edit recomputes nothing (content-addressed memo thro
     REQUIRE(touched.size() == 1U);
     CHECK(touched[0] == a->stable_id()); // the tx DID report the edit
     nb.incremental_eval(ConstSpan<StableId>(touched.data(), touched.size()));
-    for (u32 i = 0; i < 7U; ++i) { CHECK(nb.recomputes[i] == 1U); } // ...but zero recomputes
+    for (u32 i = 0; i < 7U; ++i) // ...but zero recomputes
+    {
+        CHECK(nb.recomputes[i] == 1U);
+    }
 }
 
 TEST_CASE("ceir 9a: identical formulas hash equal regardless of cell identity or position", "[ceir][notebook]")

@@ -60,6 +60,9 @@ provenance_spec.loader.exec_module(provenance)
 license_spec = importlib.util.spec_from_file_location('gen_license_manifest', ROOT / 'scripts/gen_license_manifest.py')
 license_manifest = importlib.util.module_from_spec(license_spec)
 license_spec.loader.exec_module(license_manifest)
+allman_spec = importlib.util.spec_from_file_location('check_allman_braces', ROOT / 'scripts/check-allman-braces.py')
+allman = importlib.util.module_from_spec(allman_spec)
+allman_spec.loader.exec_module(allman)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -1383,6 +1386,50 @@ class Provenance(unittest.TestCase):
         self.assertIn('| Catch2 | 3.7.1 | MIT |', license_manifest.render(changed))
         for entry in changed['tools'].values():
             self.assertTrue(entry.get('license'), entry)
+
+
+class AllmanBraces(unittest.TestCase):
+    @staticmethod
+    def kinds(source):
+        model = allman.FileModel(source.split('\n'))
+        return [kind for kind, _, _, _ in allman.analyse(model)]
+
+    @staticmethod
+    def fixed(source):
+        lines, _, _ = allman.fix_lines(source.split('\n'))
+        return '\n'.join(lines)
+
+    def test_the_tree_is_clean(self):
+        files = allman.tracked_sources()
+        self.assertGreater(len(files), 1000)
+        self.assertNotIn('bench/reference/shewchuk-predicates.c', files)  # vendored
+        self.assertNotIn('engine/execution/ceir/generated/crd/ceir/gen/arith_ops.cpp', files)  # generated
+
+    def test_each_violation_kind_is_found(self):
+        self.assertEqual(self.kinds('void f()\n{\n    if (x) { y(); }\n}'), ['ONE_LINE'])
+        self.assertEqual(self.kinds('void f()\n{\n    if (x)\n        y();\n}'), ['NO_BRACE'])
+        self.assertEqual(self.kinds('void f()\n{\n    for (;;) y();\n}'), ['NO_BRACE'])
+        self.assertEqual(self.kinds('void f()\n{\n    while (x) {\n        y();\n    }\n}'), ['KR_OPEN'])
+        self.assertEqual(self.kinds('void f()\n{\n    if (x)\n    {\n    } else\n    {\n    }\n}'), ['CUDDLED'])
+        self.assertEqual(self.kinds('void f()\n{\n    a(); if (x)\n    {\n        y();\n    }\n}'), ['MIDLINE'])
+
+    def test_literals_macros_and_do_while_are_not_statements(self):
+        clean = ('#define CHECKED(x) if (x) { return; }\n'
+                 'const char* s = "if (x) { y; }";\n'
+                 'const char* r = R"(\n    if (x) { y; }\n)";\n'
+                 'void f()\n{\n    // if (x) { y; }\n    do\n    {\n        g();\n    } while (x);\n'
+                 '    if (x)\n    {\n    }\n}')
+        self.assertEqual(self.kinds(clean), [])
+
+    def test_fix_produces_allman_blocks(self):
+        self.assertEqual(self.fixed('    if (x) { a(); b(); } // why'),
+                         '    if (x) // why\n    {\n        a();\n        b();\n    }')
+        self.assertEqual(self.fixed('    if (x) return;\n    else y();'),
+                         '    if (x)\n    {\n        return;\n    }\n    else\n    {\n        y();\n    }')
+        self.assertEqual(self.fixed('    switch (n) { case 1: return a; default: break; }'),
+                         '    switch (n)\n    {\n        case 1:\n            return a;\n        default:\n'
+                         '            break;\n    }')
+        self.assertEqual(self.kinds(self.fixed('    for (;;) if (x) { y(); } else z();')), [])
 
 
 if __name__ == '__main__':

@@ -29,7 +29,11 @@ struct MockIfaces
     {
         for (usize i = 0; i < ids.size(); ++i)
         {
-            if (ids[i] == a.value) { ifaces[i] = iface; return; }
+            if (ids[i] == a.value)
+            {
+                ifaces[i] = iface;
+                return;
+            }
         }
         ids.push_back(a.value);
         ifaces.push_back(iface);
@@ -39,7 +43,10 @@ struct MockIfaces
     {
         for (usize i = 0; i < ids.size(); ++i)
         {
-            if (ids[i] == a.value) { return ifaces[i]; }
+            if (ids[i] == a.value)
+            {
+                return ifaces[i];
+            }
         }
         return 0U;
     }

@@ -48,7 +48,10 @@ TEST_CASE("TaylorJet coefficients == analytic series", "[autodiff][taylor]")
     }
     // 1/(1−t) at 0: a[k] = 1 (geometric)
     const auto g = TJ(1.0) / (TJ(1.0) - TJ::var(0.0));
-    for (int k = 0; k <= order; ++k) { CHECK_THAT(g.a[k], WithinRel(1.0, 1e-12)); }
+    for (int k = 0; k <= order; ++k)
+    {
+        CHECK_THAT(g.a[k], WithinRel(1.0, 1e-12));
+    }
     // sin(t) at 0: a = 0, 1, 0, −1/6, 0, 1/120, …
     const auto s = ad::sin(TJ::var(0.0));
     CHECK_THAT(s.a[0], WithinAbs(0.0, 1e-14));

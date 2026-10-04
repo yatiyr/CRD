@@ -61,7 +61,11 @@ TypeId tf(Context& ctx, TypeId shape) { return ctx.type_tensor(ctx.type_f32(), s
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -77,7 +81,10 @@ Operation* mlp(Context& ctx, const Kit& k, Block* b, Value* input, ConstSpan<Val
 {
     Value* ops[8] = {};
     ops[0] = input;
-    for (u32 i = 0; i < weights.size(); ++i) { ops[1U + i] = weights[i]; }
+    for (u32 i = 0; i < weights.size(); ++i)
+    {
+        ops[1U + i] = weights[i];
+    }
     Operation* const op = ctx.create_operation(k.mlp, ConstSpan<Value*>(ops, 1U + weights.size()), 1U, result, 0U);
     ctx.set_attr(op, "activation", ctx.attr_string(StringView("relu")));
     b->append(op);
@@ -151,8 +158,14 @@ TEST_CASE("ceir 24b-3: expand_ml_ops rewrites ml.attention into transpose/gemm/s
     for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
     {
         const containers::StringView nm = ctx.op_name(op->kind());
-        if (nm == containers::StringView("tensor.transpose")) { ++n_transpose; }
-        else if (nm == containers::StringView("compute.dispatch")) { ++n_dispatch; }
+        if (nm == containers::StringView("tensor.transpose"))
+        {
+            ++n_transpose;
+        }
+        else if (nm == containers::StringView("compute.dispatch"))
+        {
+            ++n_dispatch;
+        }
     }
     CHECK(n_transpose == 1U); // the Kᵀ synth transpose (retired from the baked @transpose dispatch)
     CHECK(n_dispatch == 1U);  // softmax only (the two gemms are linalg.gemm; transpose is no longer a dispatch)
@@ -239,7 +252,10 @@ Operation* mlp_widths(Context& ctx, const Kit& k, Block* b, ConstSpan<u32> width
     Value* const x      = decl(ctx, k, b, tf(ctx, sh2(ctx, m_rows, widths[0])));
     Value*       ws[6]  = {};
     const u32    nw     = static_cast<u32>(widths.size()) - 1U;
-    for (u32 i = 0; i < nw; ++i) { ws[i] = decl(ctx, k, b, tf(ctx, sh2(ctx, widths[i], widths[i + 1U]))); }
+    for (u32 i = 0; i < nw; ++i)
+    {
+        ws[i] = decl(ctx, k, b, tf(ctx, sh2(ctx, widths[i], widths[i + 1U])));
+    }
     return mlp(ctx, k, b, x, ConstSpan<Value*>(ws, nw), tf(ctx, sh2(ctx, m_rows, widths[nw])));
 }
 // A coopvec provider descriptor (the CLAIM predicate) with a caller-set availability.
@@ -412,11 +428,17 @@ TEST_CASE("ceir 24c-2a: the coopvec CLAIM conversion (config + TRANSPOSED fp16 w
     float w2[d1 * d2];
     for (u32 i = 0; i < d0; ++i)
     {
-        for (u32 j = 0; j < d1; ++j) { w1[i * d1 + j] = 0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U); }
+        for (u32 j = 0; j < d1; ++j)
+        {
+            w1[i * d1 + j] = 0.05F * static_cast<float>(i + 1U) - 0.031F * static_cast<float>(j + 1U);
+        }
     }
     for (u32 i = 0; i < d1; ++i)
     {
-        for (u32 j = 0; j < d2; ++j) { w2[i * d2 + j] = 0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U); }
+        for (u32 j = 0; j < d2; ++j)
+        {
+            w2[i * d2 + j] = 0.1F * static_cast<float>((i % 3U) + 1U) - 0.043F * static_cast<float>(j + 1U);
+        }
     }
     const float* wptrs[2] = {&w1[0], &w2[0]};
 
@@ -424,7 +446,10 @@ TEST_CASE("ceir 24c-2a: the coopvec CLAIM conversion (config + TRANSPOSED fp16 w
     crd::u16 wf16[8 * 8 + 2 * 8];
     REQUIRE(gpu::coopvec_weights_from_mlp(cfg, wptrs, wf16));
     crd::u16 bf16[8 * 1 + 2] = {}; // hidden*hidden_layers + out_dim, all zero
-    for (int i = 0; i < cfg.bias_count(); ++i) { bf16[i] = crd::math::f32_to_f16_bits(0.0F); }
+    for (int i = 0; i < cfg.bias_count(); ++i)
+    {
+        bf16[i] = crd::math::f32_to_f16_bits(0.0F);
+    }
 
     // inputs: 4 samples of 8 (some negatives so relu bites) -> fp16.
     float    x_f32[mm * d0];
@@ -450,14 +475,20 @@ TEST_CASE("ceir 24c-2a: the coopvec CLAIM conversion (config + TRANSPOSED fp16 w
         for (u32 n = 0; n < d1; ++n)
         {
             float acc = 0.0F;
-            for (u32 c = 0; c < d0; ++c) { acc += r16(x_f32[s * d0 + c]) * r16(w1[c * d1 + n]); }
+            for (u32 c = 0; c < d0; ++c)
+            {
+                acc += r16(x_f32[s * d0 + c]) * r16(w1[c * d1 + n]);
+            }
             float v = r16(acc);
             h1[n]   = v < 0.0F ? 0.0F : v; // fp16 store THEN relu (hidden), matching eval_coopvec_mlp_cpu
         }
         for (u32 o = 0; o < d2; ++o)
         {
             float acc = 0.0F;
-            for (u32 n = 0; n < d1; ++n) { acc += h1[n] * r16(w2[n * d2 + o]); }
+            for (u32 n = 0; n < d1; ++n)
+            {
+                acc += h1[n] * r16(w2[n * d2 + o]);
+            }
             const float ref = r16(acc); // linear output
             const float got = crd::math::f16_bits_to_f32(out_f16[s * d2 + o]);
             CHECK(crd::math::abs(got - ref) <= 5e-3F * (1.0F + crd::math::abs(ref))); // TRANSPOSE + fp16 conversion correct

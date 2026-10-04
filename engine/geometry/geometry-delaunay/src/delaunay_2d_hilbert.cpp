@@ -83,11 +83,23 @@ inline crd::u32 hilbert_index_for(T px, T py, T xmin, T ymin, T inv_extent) noex
     // Map [xmin, xmin + extent] → [0, kHilbertN - 1].
     T fx = (px - xmin) * inv_extent;
     T fy = (py - ymin) * inv_extent;
-    if (fx < static_cast<T>(0)) { fx = static_cast<T>(0); }
-    if (fy < static_cast<T>(0)) { fy = static_cast<T>(0); }
+    if (fx < static_cast<T>(0))
+    {
+        fx = static_cast<T>(0);
+    }
+    if (fy < static_cast<T>(0))
+    {
+        fy = static_cast<T>(0);
+    }
     const T n_minus_1 = static_cast<T>(kHilbertN - 1U);
-    if (fx > static_cast<T>(1)) { fx = static_cast<T>(1); }
-    if (fy > static_cast<T>(1)) { fy = static_cast<T>(1); }
+    if (fx > static_cast<T>(1))
+    {
+        fx = static_cast<T>(1);
+    }
+    if (fy > static_cast<T>(1))
+    {
+        fy = static_cast<T>(1);
+    }
     const crd::u32 ix = static_cast<crd::u32>(fx * n_minus_1);
     const crd::u32 iy = static_cast<crd::u32>(fy * n_minus_1);
     return hilbert_xy2d(kHilbertN, ix, iy);
@@ -129,15 +141,30 @@ delaunay_2d_hilbert(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     T ymax = points[0].y;
     for (crd::u32 i = 1; i < N; ++i)
     {
-        if (points[i].x < xmin) { xmin = points[i].x; }
-        if (points[i].x > xmax) { xmax = points[i].x; }
-        if (points[i].y < ymin) { ymin = points[i].y; }
-        if (points[i].y > ymax) { ymax = points[i].y; }
+        if (points[i].x < xmin)
+        {
+            xmin = points[i].x;
+        }
+        if (points[i].x > xmax)
+        {
+            xmax = points[i].x;
+        }
+        if (points[i].y < ymin)
+        {
+            ymin = points[i].y;
+        }
+        if (points[i].y > ymax)
+        {
+            ymax = points[i].y;
+        }
     }
     const T dx = xmax - xmin;
     const T dy = ymax - ymin;
     T       extent = dx > dy ? dx : dy;
-    if (extent <= static_cast<T>(0)) { extent = static_cast<T>(1); }
+    if (extent <= static_cast<T>(0))
+    {
+        extent = static_cast<T>(1);
+    }
     const T inv_extent = static_cast<T>(1) / extent;
 
     // Compute Hilbert indices, then sort `(hilbert, original_index)`.
@@ -155,7 +182,10 @@ delaunay_2d_hilbert(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     }
     crd::containers::sort(keys.data(), keys.data() + keys.size(),
                           [](const HilbertKey& a, const HilbertKey& b) noexcept {
-                              if (a.hilbert != b.hilbert) { return a.hilbert < b.hilbert; }
+                              if (a.hilbert != b.hilbert)
+                              {
+                                  return a.hilbert < b.hilbert;
+                              }
                               return a.orig_idx < b.orig_idx;
                           });
 
@@ -165,13 +195,22 @@ delaunay_2d_hilbert(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // pass — O(N log N) by lex-sort of indices, then adjacent compare.
     crd::containers::Array<crd::u32> dup_check(alloc);
     dup_check.resize(N, crd::u32{0});
-    for (crd::u32 i = 0; i < N; ++i) { dup_check[i] = i; }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        dup_check[i] = i;
+    }
     crd::containers::sort(dup_check.data(), dup_check.data() + dup_check.size(),
                           [&](crd::u32 a, crd::u32 b) noexcept {
                               const auto& pa = points[a];
                               const auto& pb = points[b];
-                              if (pa.x != pb.x) { return pa.x < pb.x; }
-                              if (pa.y != pb.y) { return pa.y < pb.y; }
+                              if (pa.x != pb.x)
+                              {
+                                  return pa.x < pb.x;
+                              }
+                              if (pa.y != pb.y)
+                              {
+                                  return pa.y < pb.y;
+                              }
                               return a < b;
                           });
     for (crd::u32 i = 1; i < N; ++i)
@@ -188,7 +227,10 @@ delaunay_2d_hilbert(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // Augmented points = input ++ 3 super-tri vertices.
     crd::containers::Array<crd::math::Vec2<T>> aug_pts(alloc);
     aug_pts.reserve(static_cast<crd::usize>(N) + 3U);
-    for (crd::u32 i = 0; i < N; ++i) { aug_pts.push_back(points[i]); }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        aug_pts.push_back(points[i]);
+    }
     crd::math::Vec2<T> s0{};
     crd::math::Vec2<T> s1{};
     crd::math::Vec2<T> s2{};
@@ -237,9 +279,15 @@ delaunay_2d_hilbert(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // Strip super-triangle vertices.
     for (crd::u32 ti = 0; ti < pool.pool_size(); ++ti)
     {
-        if (!pool.alive(ti)) { continue; }
+        if (!pool.alive(ti))
+        {
+            continue;
+        }
         const Tri& t = pool[ti];
-        if (t.v[0] >= N || t.v[1] >= N || t.v[2] >= N) { continue; }
+        if (t.v[0] >= N || t.v[1] >= N || t.v[2] >= N)
+        {
+            continue;
+        }
         result.triangle_indices.push_back(t.v[0]);
         result.triangle_indices.push_back(t.v[1]);
         result.triangle_indices.push_back(t.v[2]);

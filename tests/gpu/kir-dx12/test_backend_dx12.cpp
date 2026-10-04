@@ -18,14 +18,24 @@ namespace kir = crd::kir;
 namespace
 {
 constexpr int kN = 1024;
-void fill(float* v, int n, float base) { for (int i = 0; i < n; ++i) { v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7); } }
+void fill(float* v, int n, float base)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        v[i] = base + 0.013F * static_cast<float>(i) - 0.5F * static_cast<float>(i % 7);
+    }
+}
 } // namespace
 
 TEST_CASE("v17-d: DX12 elementwise (arith) bit-matches the CPU oracle + deterministic", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     kir::KGraph      g(&alloc);
@@ -58,7 +68,11 @@ TEST_CASE("v17-g: DX12 FUSES GEMM+bias+SiLU into one kernel, correct vs the orac
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 128;
@@ -99,7 +113,10 @@ TEST_CASE("v17-g: DX12 FUSES GEMM+bias+SiLU into one kernel, correct vs the orac
     {
         const float d  = (gpu[i] - cpuo[i]) / (1.0F + (cpuo[i] < 0.0F ? -cpuo[i] : cpuo[i]));
         const float ad = d < 0.0F ? -d : d;
-        if (ad > maxrel) { maxrel = ad; }
+        if (ad > maxrel)
+        {
+            maxrel = ad;
+        }
     }
     CHECK(maxrel < 2e-3F);
 }
@@ -108,7 +125,11 @@ TEST_CASE("v17-h: DX12 T2 FAST tiled GEMM (FMA, transposed-A) matches the oracle
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int mm = 128; // 64x64x8-tileable => routes to emit_contract_fast_hlsl (the ported crush kernel)
@@ -128,18 +149,38 @@ TEST_CASE("v17-h: DX12 T2 FAST tiled GEMM (FMA, transposed-A) matches the oracle
     REQUIRE(dx.run(g, c, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
     float maxrel = 0.0F; // FMA tier ⇒ relative-tolerance, not bit-exact
-    for (int i = 0; i < mm * nn; ++i) { float df = gpu_out[i] - cpu_out[i]; if (df < 0.0F) { df = -df; } float cv = cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i]; float rd = df / (cv + 1e-3F); if (rd > maxrel) { maxrel = rd; } }
+    for (int i = 0; i < mm * nn; ++i)
+    {
+        float df = gpu_out[i] - cpu_out[i];
+        if (df < 0.0F)
+        {
+            df = -df;
+        }
+        float cv = cpu_out[i] < 0.0F ? -cpu_out[i] : cpu_out[i];
+        float rd = df / (cv + 1e-3F);
+        if (rd > maxrel)
+        {
+            maxrel = rd;
+        }
+    }
     CHECK(maxrel < 1e-4F);
     float d2[mm * nn]; // T2 determinism: run-to-run bit-identical
     REQUIRE(dx.run(g, c, inputs, 2, d2));
-    for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == d2[i]); }
+    for (int i = 0; i < mm * nn; ++i)
+    {
+        CHECK(gpu_out[i] == d2[i]);
+    }
 }
 
 TEST_CASE("v17-d: DX12 matmul + reduce bit-match the CPU oracle", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     SECTION("matmul 32x48 @ 48x24")
@@ -160,7 +201,10 @@ TEST_CASE("v17-d: DX12 matmul + reduce bit-match the CPU oracle", "[kir][dx12][g
         float        cpu_out[mm * nn];
         REQUIRE(dx.run(g, c, inputs, 2, gpu_out));
         REQUIRE(cpu.run(g, c, inputs, 2, cpu_out));
-        for (int i = 0; i < mm * nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < mm * nn; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
     SECTION("reduce-sum over rows")
     {
@@ -176,7 +220,10 @@ TEST_CASE("v17-d: DX12 matmul + reduce bit-match the CPU oracle", "[kir][dx12][g
         float        cpu_out[rows];
         REQUIRE(dx.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+        for (int i = 0; i < rows; ++i)
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
     SECTION("reduce-min + reduce-prod over rows (bit-exact vs oracle)")
     {
@@ -189,13 +236,19 @@ TEST_CASE("v17-d: DX12 matmul + reduce bit-match the CPU oracle", "[kir][dx12][g
             const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
             const int   red = g.reduce(ops[oi], a, 0x2U);
             float       xv[rows * cols];
-            for (int i = 0; i < rows * cols; ++i) { xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51); }
+            for (int i = 0; i < rows * cols; ++i)
+            {
+                xv[i] = 0.98F + 0.0004F * static_cast<float>(i % 51);
+            }
             const float* inputs[] = {xv};
             float        gpu_out[rows];
             float        cpu_out[rows];
             REQUIRE(dx.run(g, red, inputs, 1, gpu_out));
             REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-            for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); }
+            for (int i = 0; i < rows; ++i)
+            {
+                CHECK(gpu_out[i] == cpu_out[i]);
+            }
         }
     }
 }
@@ -204,7 +257,11 @@ TEST_CASE("v17-breadth: DX12 floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    nn = 1024;
@@ -232,14 +289,21 @@ TEST_CASE("v17-breadth: DX12 floor/ceil/sign/cmpeq/cmple bit-match the CPU oracl
     float        cpu_out[nn];
     REQUIRE(be.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // floor/ceil/sign/cmp all exact => BIT-EXACT
+    for (int i = 0; i < nn; ++i) // floor/ceil/sign/cmp all exact => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: DX12 gather row index-select bit-matches the CPU oracle", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 50; // data rows
@@ -250,22 +314,35 @@ TEST_CASE("v17-breadth: DX12 gather row index-select bit-matches the CPU oracle"
     const int     idx  = g.input(kir::make_shape({mm}), kir::DType::F32);
     const int     out  = g.gather(data, idx);
     float dv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { dv[i] = 0.1F * static_cast<float>(i) - 3.0F; }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        dv[i] = 0.1F * static_cast<float>(i) - 3.0F;
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 7 + 3) % rr); }
+    for (int i = 0; i < mm; ++i)
+    {
+        iv[i] = static_cast<float>((i * 7 + 3) % rr);
+    }
     const float* inputs[] = {dv, iv};
     float        gpu_out[mm * cc];
     float        cpu_out[mm * cc];
     REQUIRE(be.run(g, out, inputs, 2, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 2, cpu_out));
-    for (int i = 0; i < mm * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // gather = pure copy => BIT-EXACT
+    for (int i = 0; i < mm * cc; ++i) // gather = pure copy => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: DX12 argmax/argmin index bit-matches the CPU oracle", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 40;
@@ -277,13 +354,19 @@ TEST_CASE("v17-breadth: DX12 argmax/argmin index bit-matches the CPU oracle", "[
         const int   a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   red = g.reduce(ops[oi], a, 0x2U);
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i * 37) % 91) * 0.1F; } // varied; first-match ties
+        for (int i = 0; i < rows * cols; ++i) // varied; first-match ties
+        {
+            xv[i] = static_cast<float>((i * 37) % 91) * 0.1F;
+        }
         const float* inputs[] = {xv};
         float        gpu_out[rows];
         float        cpu_out[rows];
         REQUIRE(be.run(g, red, inputs, 1, gpu_out));
         REQUIRE(cpu.run(g, red, inputs, 1, cpu_out));
-        for (int i = 0; i < rows; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // the extremum INDEX, exact => BIT-EXACT
+        for (int i = 0; i < rows; ++i) // the extremum INDEX, exact => BIT-EXACT
+        {
+            CHECK(gpu_out[i] == cpu_out[i]);
+        }
     }
 }
 
@@ -291,7 +374,11 @@ TEST_CASE("v17-breadth: DX12 round ties-to-even bit-matches the CPU oracle", "[k
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int    nn = 256;
@@ -300,20 +387,30 @@ TEST_CASE("v17-breadth: DX12 round ties-to-even bit-matches the CPU oracle", "[k
     const int        x   = g.input(sh, kir::DType::F32);
     const int        out = g.unary(kir::KOp::Round, x);
     float            xv[nn];
-    for (int i = 0; i < nn; ++i) { xv[i] = -8.0F + 0.5F * static_cast<float>(i); } // every value is .0 or .5 => exercises ties-to-even
+    for (int i = 0; i < nn; ++i) // every value is .0 or .5 => exercises ties-to-even
+    {
+        xv[i] = -8.0F + 0.5F * static_cast<float>(i);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[nn];
     float        cpu_out[nn];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < nn; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // ties-even == nearbyint => BIT-EXACT
+    for (int i = 0; i < nn; ++i) // ties-even == nearbyint => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: DX12 scatter last-wins bit-matches the CPU oracle", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rr = 30; // base rows
@@ -325,24 +422,40 @@ TEST_CASE("v17-breadth: DX12 scatter last-wins bit-matches the CPU oracle", "[ki
     const int     upd  = g.input(kir::make_shape({mm, cc}), kir::DType::F32);
     const int     out  = g.scatter(base, idx, upd);
     float bv[rr * cc];
-    for (int i = 0; i < rr * cc; ++i) { bv[i] = -1.0F - 0.1F * static_cast<float>(i); }
+    for (int i = 0; i < rr * cc; ++i)
+    {
+        bv[i] = -1.0F - 0.1F * static_cast<float>(i);
+    }
     float iv[mm];
-    for (int i = 0; i < mm; ++i) { iv[i] = static_cast<float>((i * 3) % rr); } // i=0 and i=10 both hit row 0
+    for (int i = 0; i < mm; ++i) // i=0 and i=10 both hit row 0
+    {
+        iv[i] = static_cast<float>((i * 3) % rr);
+    }
     float uv[mm * cc];
-    for (int i = 0; i < mm * cc; ++i) { uv[i] = 5.0F + 0.25F * static_cast<float>(i); }
+    for (int i = 0; i < mm * cc; ++i)
+    {
+        uv[i] = 5.0F + 0.25F * static_cast<float>(i);
+    }
     const float* inputs[] = {bv, iv, uv};
     float        gpu_out[rr * cc];
     float        cpu_out[rr * cc];
     REQUIRE(be.run(g, out, inputs, 3, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 3, cpu_out));
-    for (int i = 0; i < rr * cc; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // last-wins, fixed order => BIT-EXACT
+    for (int i = 0; i < rr * cc; ++i) // last-wins, fixed order => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-breadth: DX12 scan prefix-sum bit-matches the CPU oracle", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 32;
@@ -351,20 +464,30 @@ TEST_CASE("v17-breadth: DX12 scan prefix-sum bit-matches the CPU oracle", "[kir]
     const int     a   = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
     const int     out = g.scan(a); // inclusive prefix-sum along cols
     float         xv[rows * cols];
-    for (int i = 0; i < rows * cols; ++i) { xv[i] = static_cast<float>((i % 7) + 1); } // small ints => exact cumulative sums everywhere
+    for (int i = 0; i < rows * cols; ++i) // small ints => exact cumulative sums everywhere
+    {
+        xv[i] = static_cast<float>((i % 7) + 1);
+    }
     const float* inputs[] = {xv};
     float        gpu_out[rows * cols];
     float        cpu_out[rows * cols];
     REQUIRE(be.run(g, out, inputs, 1, gpu_out));
     REQUIRE(cpu.run(g, out, inputs, 1, cpu_out));
-    for (int i = 0; i < rows * cols; ++i) { CHECK(gpu_out[i] == cpu_out[i]); } // exact integer prefix sums => BIT-EXACT
+    for (int i = 0; i < rows * cols; ++i) // exact integer prefix sums => BIT-EXACT
+    {
+        CHECK(gpu_out[i] == cpu_out[i]);
+    }
 }
 
 TEST_CASE("v17-perf: DX12 T2 fast reduce sum/prod/max/min matches T1 oracle + deterministic", "[kir][dx12][gpu]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int  rows   = 16;
@@ -376,7 +499,10 @@ TEST_CASE("v17-perf: DX12 T2 fast reduce sum/prod/max/min matches T1 oracle + de
         const int   a  = g.input(kir::make_shape({rows, cols}), kir::DType::F32);
         const int   r2 = g.reduce(ops[oi], a, 0x2U, kir::DetTier::Fast); // T2 parallel tree-reduce
         float       xv[rows * cols];
-        for (int i = 0; i < rows * cols; ++i) { xv[i] = (i % 3 == 0) ? 2.0F : 1.0F; } // {1,2}: sum/prod/max/min all reassociation-exact
+        for (int i = 0; i < rows * cols; ++i) // {1,2}: sum/prod/max/min all reassociation-exact
+        {
+            xv[i] = (i % 3 == 0) ? 2.0F : 1.0F;
+        }
         const float* inputs[] = {xv};
         float        g1[rows];
         float        g2[rows];
@@ -384,7 +510,11 @@ TEST_CASE("v17-perf: DX12 T2 fast reduce sum/prod/max/min matches T1 oracle + de
         REQUIRE(be.run(g, r2, inputs, 1, g1));
         REQUIRE(cpu.run(g, r2, inputs, 1, co)); // T1 fixed-order oracle == exact for these inputs
         REQUIRE(be.run(g, r2, inputs, 1, g2));
-        for (int i = 0; i < rows; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+        for (int i = 0; i < rows; ++i) // T2 correct + run-to-run deterministic
+        {
+            CHECK(g1[i] == co[i]);
+            CHECK(g1[i] == g2[i]);
+        }
     }
 }
 
@@ -392,7 +522,11 @@ TEST_CASE("v17-perf: DX12 T2 fast parallel scan matches T1 oracle + deterministi
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     kir::KirBackendDx12        be(&alloc);
-    if (!be.valid()) { WARN("no DX12 device available; skipping"); return; }
+    if (!be.valid())
+    {
+        WARN("no DX12 device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int rows = 4;
@@ -402,7 +536,10 @@ TEST_CASE("v17-perf: DX12 T2 fast parallel scan matches T1 oracle + deterministi
     const int     s2 = g.scan(a, kir::DetTier::Fast); // T2 parallel prefix-sum
     crd::containers::Array<float> xv(&alloc);
     xv.resize(static_cast<crd::usize>(rows) * nlen);
-    for (int i = 0; i < rows * nlen; ++i) { xv[i] = static_cast<float>((i % 4) + 1); } // small ints => order-invariant exact prefix sums
+    for (int i = 0; i < rows * nlen; ++i) // small ints => order-invariant exact prefix sums
+    {
+        xv[i] = static_cast<float>((i % 4) + 1);
+    }
     const float* inputs[] = {xv.data()};
     crd::containers::Array<float> g1(&alloc);
     crd::containers::Array<float> g2(&alloc);
@@ -413,7 +550,11 @@ TEST_CASE("v17-perf: DX12 T2 fast parallel scan matches T1 oracle + deterministi
     REQUIRE(be.run(g, s2, inputs, 1, g1.data()));
     REQUIRE(cpu.run(g, s2, inputs, 1, co.data())); // T1 fixed-order oracle == exact for integer inputs
     REQUIRE(be.run(g, s2, inputs, 1, g2.data()));
-    for (int i = 0; i < rows * nlen; ++i) { CHECK(g1[i] == co[i]); CHECK(g1[i] == g2[i]); } // T2 correct + run-to-run deterministic
+    for (int i = 0; i < rows * nlen; ++i) // T2 correct + run-to-run deterministic
+    {
+        CHECK(g1[i] == co[i]);
+        CHECK(g1[i] == g2[i]);
+    }
 }
 
 // ── v17-i: MORTON authored in CKIR, running on DX12 (same graph as the Vulkan proof; the HLSL emitter is now dtype-aware)
@@ -467,7 +608,11 @@ TEST_CASE("v17-i: Morton authored in CKIR runs on DX12, bit-exact vs the referen
     namespace m = morton_ckir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph      g(&alloc);
     const kir::Shape sh     = kir::make_shape({m::kN});
@@ -497,7 +642,10 @@ TEST_CASE("v17-i: Morton authored in CKIR runs on DX12, bit-exact vs the referen
     {
         crd::u32 code = 0;
         std::memcpy(&code, &gpu_out[i], 4);
-        if (code != m::ref(qx[i], qy[i], qz[i])) { ++mism; }
+        if (code != m::ref(qx[i], qy[i], qz[i]))
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -509,7 +657,11 @@ TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/inverse) + non-square 2x3 oute
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int    mn = 96;
     const kir::Shape sh = kir::make_shape({mn});
@@ -544,8 +696,14 @@ TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/inverse) + non-square 2x3 oute
         for (int r = 0; r < 2; ++r)
         {
             const float ref = c0d[i * 2 + r] * vd[i * 2] + c1d[i * 2 + r] * vd[i * 2 + 1];
-            if (std::fabs(gmv[i * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
-            if (std::fabs(gpv[i * 2 + r] - vd[i * 2 + r]) > 1e-3F * std::fabs(vd[i * 2 + r]) + 1e-3F) { ++bad; }
+            if (std::fabs(gmv[i * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F)
+            {
+                ++bad;
+            }
+            if (std::fabs(gpv[i * 2 + r] - vd[i * 2 + r]) > 1e-3F * std::fabs(vd[i * 2 + r]) + 1e-3F)
+            {
+                ++bad;
+            }
         }
     }
     CHECK(bad == 0);
@@ -575,7 +733,10 @@ TEST_CASE("v17 B0-2: CKIR mat2 (construct/mat*vec/inverse) + non-square 2x3 oute
             for (int r = 0; r < 2; ++r)
             {
                 const float ref = ad[i * 2 + r] * bd[i * 3 + col];
-                if (std::fabs(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++badop; }
+                if (std::fabs(gop[i * 6 + col * 2 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F)
+                {
+                    ++badop;
+                }
             }
         }
     }
@@ -588,7 +749,11 @@ TEST_CASE("v17 B0-3: CKIR bool3 (compare + any/all) and int3 (via cast) run on D
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int    bn = 128;
     const kir::Shape sh = kir::make_shape({bn});
@@ -619,8 +784,14 @@ TEST_CASE("v17 B0-3: CKIR bool3 (compare + any/all) and int3 (via cast) run on D
     {
         const bool eany = (avd[i * 3] < bvd[i * 3]) || (avd[i * 3 + 1] < bvd[i * 3 + 1]) || (avd[i * 3 + 2] < bvd[i * 3 + 2]);
         const bool eall = (avd[i * 3] < bvd[i * 3]) && (avd[i * 3 + 1] < bvd[i * 3 + 1]) && (avd[i * 3 + 2] < bvd[i * 3 + 2]);
-        if (gan[i] != (eany ? 1.0F : 0.0F)) { ++bad; }
-        if (gal[i] != (eall ? 1.0F : 0.0F)) { ++bad; }
+        if (gan[i] != (eany ? 1.0F : 0.0F))
+        {
+            ++bad;
+        }
+        if (gal[i] != (eall ? 1.0F : 0.0F))
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
 
@@ -643,7 +814,14 @@ TEST_CASE("v17 B0-3: CKIR bool3 (compare + any/all) and int3 (via cast) run on D
     int badi = 0;
     for (int i = 0; i < bn; ++i)
     {
-        for (int k = 0; k < 3; ++k) { const float ref = static_cast<float>(2 * static_cast<int>(fvd[i * 3 + k])); if (giv[i * 3 + k] != ref) { ++badi; } }
+        for (int k = 0; k < 3; ++k)
+        {
+            const float ref = static_cast<float>(2 * static_cast<int>(fvd[i * 3 + k]));
+            if (giv[i * 3 + k] != ref)
+            {
+                ++badi;
+            }
+        }
     }
     CHECK(badi == 0);
 }
@@ -653,7 +831,11 @@ TEST_CASE("v17 B0-4: a Light struct + a vec3 array round-trip through the SROA l
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int    an = 96;
     const kir::Shape sh = kir::make_shape({an});
@@ -694,7 +876,10 @@ TEST_CASE("v17 B0-4: a Light struct + a vec3 array round-trip through the SROA l
         for (int k = 0; k < 3; ++k)
         {
             const float ref = cold[i * 3 + k] * radd[i] + posd[i * 3 + k];
-            if (std::fabs(gout[i * 3 + k] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
+            if (std::fabs(gout[i * 3 + k] - ref) > 1e-4F * std::fabs(ref) + 1e-4F)
+            {
+                ++bad;
+            }
         }
     }
     CHECK(bad == 0);
@@ -712,7 +897,13 @@ TEST_CASE("v17 B0-4: a Light struct + a vec3 array round-trip through the SROA l
     REQUIRE(dx.run(g2, got, inp2, 2, garr));
 
     int bada = 0;
-    for (int i = 0; i < an * 3; ++i) { if (garr[i] != cold[i]) { ++bada; } }
+    for (int i = 0; i < an * 3; ++i)
+    {
+        if (garr[i] != cold[i])
+        {
+            ++bada;
+        }
+    }
     CHECK(bada == 0);
 }
 
@@ -721,7 +912,11 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int    vn = 128;
     const kir::Shape sh = kir::make_shape({vn});
@@ -737,7 +932,16 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via
     const int        o  = g.normalize(g.binary(kir::KOp::Add, g.cross(a, b), a));
 
     float fin[6][vn];
-    for (int i = 0; i < vn; ++i) { const float fi = static_cast<float>(i); fin[0][i] = 0.5F + 0.03F * fi; fin[1][i] = 1.0F - 0.02F * fi; fin[2][i] = 0.2F + 0.01F * fi; fin[3][i] = -0.4F + 0.02F * fi; fin[4][i] = 0.7F + 0.015F * fi; fin[5][i] = 0.9F - 0.01F * fi; }
+    for (int i = 0; i < vn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        fin[0][i] = 0.5F + 0.03F * fi;
+        fin[1][i] = 1.0F - 0.02F * fi;
+        fin[2][i] = 0.2F + 0.01F * fi;
+        fin[3][i] = -0.4F + 0.02F * fi;
+        fin[4][i] = 0.7F + 0.015F * fi;
+        fin[5][i] = 0.9F - 0.01F * fi;
+    }
     const float* inp[] = {fin[0], fin[1], fin[2], fin[3], fin[4], fin[5]};
     float        gpu[vn * 3];
     REQUIRE(dx.run(g, o, inp, 6, gpu));
@@ -750,9 +954,18 @@ TEST_CASE("v17 A3: CKIR vec3 ops (construct/cross/add/normalize) run on DX12 via
         const float cx = avy * bvz - avz * bvy; const float cy = avz * bvx - avx * bvz; const float cz = avx * bvy - avy * bvx;
         const float sx = cx + avx; const float sy = cy + avy; const float sz = cz + avz;
         const float len = std::sqrt(sx * sx + sy * sy + sz * sz);
-        if (std::fabs(gpu[i * 3] - sx / len) > 1e-4F * std::fabs(sx / len) + 1e-5F) { ++bad; }
-        if (std::fabs(gpu[i * 3 + 1] - sy / len) > 1e-4F * std::fabs(sy / len) + 1e-5F) { ++bad; }
-        if (std::fabs(gpu[i * 3 + 2] - sz / len) > 1e-4F * std::fabs(sz / len) + 1e-5F) { ++bad; }
+        if (std::fabs(gpu[i * 3] - sx / len) > 1e-4F * std::fabs(sx / len) + 1e-5F)
+        {
+            ++bad;
+        }
+        if (std::fabs(gpu[i * 3 + 1] - sy / len) > 1e-4F * std::fabs(sy / len) + 1e-5F)
+        {
+            ++bad;
+        }
+        if (std::fabs(gpu[i * 3 + 2] - sz / len) > 1e-4F * std::fabs(sz / len) + 1e-5F)
+        {
+            ++bad;
+        }
     }
     CHECK(bad == 0);
 }
@@ -761,7 +974,11 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) runs on DX12 (bit-exact, f
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     constexpr int    cn = 256;
     const kir::Shape sh = kir::make_shape({cn});
     kir::KGraph      g(&alloc);
@@ -771,13 +988,29 @@ TEST_CASE("v17 A4: CKIR unroll_for (fixed-count loop) runs on DX12 (bit-exact, f
 
     float xv[cn];
     float yv[cn];
-    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); }
+    for (int i = 0; i < cn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        xv[i] = (0.05F * fi) - 3.0F;
+        yv[i] = 0.1F + (0.003F * fi);
+    }
     const float* inp[] = {xv, yv};
     float        gpu[cn];
     REQUIRE(dx.run(g, r, inp, 2, gpu));
 
     int mism = 0;
-    for (int i = 0; i < cn; ++i) { float acc = xv[i]; for (int it = 0; it < 8; ++it) { acc = acc + (static_cast<float>(it) * yv[i]); } if (gpu[i] != acc) { ++mism; } }
+    for (int i = 0; i < cn; ++i)
+    {
+        float acc = xv[i];
+        for (int it = 0; it < 8; ++it)
+        {
+            acc = acc + (static_cast<float>(it) * yv[i]);
+        }
+        if (gpu[i] != acc)
+        {
+            ++mism;
+        }
+    }
     CHECK(mism == 0);
 }
 
@@ -785,7 +1018,11 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (native GPU loop, index + diverg
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
     constexpr int    cn  = 128;
     const kir::Shape sh  = kir::make_shape({cn});
     kir::KGraph      g(&alloc);
@@ -797,7 +1034,13 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (native GPU loop, index + diverg
     float xv[cn];
     float yv[cn];
     float cv[cn];
-    for (int i = 0; i < cn; ++i) { const float fi = static_cast<float>(i); xv[i] = (0.05F * fi) - 3.0F; yv[i] = 0.1F + (0.003F * fi); cv[i] = static_cast<float>(i % 8); }
+    for (int i = 0; i < cn; ++i)
+    {
+        const float fi = static_cast<float>(i);
+        xv[i] = (0.05F * fi) - 3.0F;
+        yv[i] = 0.1F + (0.003F * fi);
+        cv[i] = static_cast<float>(i % 8);
+    }
     const float* inp[] = {xv, yv, cv};
     float        gpu[cn];
     REQUIRE(dx.run(g, r, inp, 3, gpu));
@@ -807,8 +1050,14 @@ TEST_CASE("v17 A4 tier-2: CKIR dynamic for_loop (native GPU loop, index + diverg
     {
         float     acc = xv[i];
         const int c   = static_cast<int>(cv[i]);
-        for (int it = 0; it < c; ++it) { acc = acc + (static_cast<float>(it) * yv[i]); }
-        if (gpu[i] != acc) { ++mism; }
+        for (int it = 0; it < c; ++it)
+        {
+            acc = acc + (static_cast<float>(it) * yv[i]);
+        }
+        if (gpu[i] != acc)
+        {
+            ++mism;
+        }
     }
     CHECK(mism == 0);
 }
@@ -817,7 +1066,11 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on DX12 (HLS
 {
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     constexpr int    mn = 96;
     const kir::Shape sh = kir::make_shape({mn});
@@ -854,8 +1107,14 @@ TEST_CASE("v17 A3: CKIR mat3 (MatFromCols + mat*vec + inverse) runs on DX12 (HLS
         for (int r = 0; r < 3; ++r)
         {
             const float ref = c0d[i * 3 + r] * vd[i * 3] + c1d[i * 3 + r] * vd[i * 3 + 1] + c2d[i * 3 + r] * vd[i * 3 + 2]; // column-major M·v
-            if (std::fabs(gmv[i * 3 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F) { ++bad; }
-            if (std::fabs(gpv[i * 3 + r] - vd[i * 3 + r]) > 1e-3F * std::fabs(vd[i * 3 + r]) + 1e-3F) { ++bad; }
+            if (std::fabs(gmv[i * 3 + r] - ref) > 1e-4F * std::fabs(ref) + 1e-4F)
+            {
+                ++bad;
+            }
+            if (std::fabs(gpv[i * 3 + r] - vd[i * 3 + r]) > 1e-3F * std::fabs(vd[i * 3 + r]) + 1e-3F)
+            {
+                ++bad;
+            }
         }
     }
     CHECK(bad == 0);
@@ -875,7 +1134,11 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on DX12 (integer atomics, dete
     namespace h = histo_ckir;
     crd::memory::TlsfAllocator alloc(16U << 20U);
     kir::KirBackendDx12        dx(&alloc);
-    if (!dx.valid()) { WARN("no D3D12 device available; skipping"); return; }
+    if (!dx.valid())
+    {
+        WARN("no D3D12 device available; skipping");
+        return;
+    }
 
     kir::KGraph      g(&alloc);
     const kir::Shape shn  = kir::make_shape({h::kHistoN});
@@ -887,7 +1150,10 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on DX12 (integer atomics, dete
     float    idxv[h::kHistoN];
     float    updv[h::kHistoN];
     crd::u32 ref[h::kHistoBins];
-    for (int i = 0; i < h::kHistoBins; ++i) { ref[i] = 0; }
+    for (int i = 0; i < h::kHistoBins; ++i)
+    {
+        ref[i] = 0;
+    }
     for (int i = 0; i < h::kHistoN; ++i)
     {
         const crd::i32 d = static_cast<crd::i32>((i * 7 + 13) % h::kHistoBins);
@@ -900,6 +1166,12 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on DX12 (integer atomics, dete
     REQUIRE(dx.run(g, hist, inputs, 2, out));
 
     int mism = 0;
-    for (int i = 0; i < h::kHistoBins; ++i) { if (h::asu(out[i]) != ref[i]) { ++mism; } }
+    for (int i = 0; i < h::kHistoBins; ++i)
+    {
+        if (h::asu(out[i]) != ref[i])
+        {
+            ++mism;
+        }
+    }
     CHECK(mism == 0);
 }

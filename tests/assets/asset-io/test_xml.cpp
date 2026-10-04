@@ -65,7 +65,10 @@ TEST_CASE("xml: a 3MF-shaped document parses -- elements, attributes, text, enti
     while (v != crd::assetio::kXmlInvalid)
     {
         ++count;
-        if (count == 2) { CHECK(std::strcmp(doc.attr(v, "x"), "10.5") == 0); }
+        if (count == 2)
+        {
+            CHECK(std::strcmp(doc.attr(v, "x"), "10.5") == 0);
+        }
         v = doc.sibling(v, "vertex");
     }
     CHECK(count == 3);
@@ -106,7 +109,10 @@ TEST_CASE("xml: failure classes -- no partial DOM survives", "[assetio][xml]")
 
     // the depth bomb fails cleanly at the cap
     crd::containers::String bomb(&alloc);
-    for (int i = 0; i < 100; ++i) { bomb.append("<a>"); }
+    for (int i = 0; i < 100; ++i)
+    {
+        bomb.append("<a>");
+    }
     CHECK(doc.parse(sv(bomb.c_str())) == XmlError::TooDeep);
 
     // and a valid parse AFTER failures works (no poisoned state)

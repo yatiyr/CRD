@@ -153,7 +153,10 @@ TEST_CASE("ceir binary: an unknown chunk is forward-skipped", "[ceir][binary]")
     // Splice a synthetic 'XXXX' chunk right after the 12-byte header and bump chunk_count. A conformant reader skips
     // it by its length and loads the rest unchanged.
     ByteArray spliced(&root);
-    for (usize i = 0; i < 12U; ++i) { spliced.push_back(blob[i]); }
+    for (usize i = 0; i < 12U; ++i)
+    {
+        spliced.push_back(blob[i]);
+    }
     u32 cc = static_cast<u32>(spliced[8]) | (static_cast<u32>(spliced[9]) << 8U) |
              (static_cast<u32>(spliced[10]) << 16U) | (static_cast<u32>(spliced[11]) << 24U);
     cc += 1U;
@@ -172,7 +175,10 @@ TEST_CASE("ceir binary: an unknown chunk is forward-skipped", "[ceir][binary]")
     spliced.push_back(static_cast<u8>(0xAAU)); // 3 payload bytes
     spliced.push_back(static_cast<u8>(0xBBU));
     spliced.push_back(static_cast<u8>(0xCCU));
-    for (usize i = 12U; i < blob.size(); ++i) { spliced.push_back(blob[i]); }
+    for (usize i = 12U; i < blob.size(); ++i)
+    {
+        spliced.push_back(blob[i]);
+    }
 
     Context           ctx2(&root);
     const ParseResult pr = deserialize(ctx2, span(spliced));
@@ -189,7 +195,10 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
     // version mismatch -> rejected at offset 4 (the version word)
     {
         ByteArray bad(&root);
-        for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+        for (usize i = 0; i < blob.size(); ++i)
+        {
+            bad.push_back(blob[i]);
+        }
         bad[4] = static_cast<u8>(bad[4] + 99U); // corrupt the version
         Context           c2(&root);
         const ParseResult pr = deserialize(c2, span(bad));
@@ -200,7 +209,10 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
     // wrong magic -> rejected at offset 0
     {
         ByteArray bad(&root);
-        for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+        for (usize i = 0; i < blob.size(); ++i)
+        {
+            bad.push_back(blob[i]);
+        }
         bad[0] = static_cast<u8>(bad[0] + 1U);
         Context           c2(&root);
         const ParseResult pr = deserialize(c2, span(bad));
@@ -210,7 +222,10 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
     // truncated (only the first 6 bytes) -> rejected, never a crash
     {
         ByteArray tiny(&root);
-        for (usize i = 0; i < 6U && i < blob.size(); ++i) { tiny.push_back(blob[i]); }
+        for (usize i = 0; i < 6U && i < blob.size(); ++i)
+        {
+            tiny.push_back(blob[i]);
+        }
         Context           c2(&root);
         const ParseResult pr = deserialize(c2, span(tiny));
         CHECK_FALSE(pr.ok);
@@ -218,7 +233,10 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
     // truncated mid-body (header + a fraction of the chunks) -> rejected, never a crash
     {
         ByteArray half(&root);
-        for (usize i = 0; i < blob.size() / 2U; ++i) { half.push_back(blob[i]); }
+        for (usize i = 0; i < blob.size() / 2U; ++i)
+        {
+            half.push_back(blob[i]);
+        }
         Context           c2(&root);
         const ParseResult pr = deserialize(c2, span(half));
         CHECK_FALSE(pr.ok);
@@ -234,7 +252,10 @@ TEST_CASE("ceir binary: malformed blobs are rejected with a byte offset", "[ceir
     // trailing junk after the last declared chunk -> rejected (every byte must belong to a chunk)
     {
         ByteArray trailing(&root);
-        for (usize i = 0; i < blob.size(); ++i) { trailing.push_back(blob[i]); }
+        for (usize i = 0; i < blob.size(); ++i)
+        {
+            trailing.push_back(blob[i]);
+        }
         trailing.push_back(static_cast<u8>(0x7FU)); // one extra byte the chunk_count does not account for
         Context           c2(&root);
         const ParseResult pr = deserialize(c2, span(trailing));
@@ -277,7 +298,10 @@ TEST_CASE("ceir binary: a structurally-invalid TYPE record is rejected", "[ceir]
     // at +[kind(1)+is_signed(1)+fkind(1)+count(4)+cols(4)] = +11. Inflate it -> the decoder must reject (overruns), not
     // drive an out-of-bounds members[] in a consumer.
     ByteArray bad(&root);
-    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    for (usize i = 0; i < blob.size(); ++i)
+    {
+        bad.push_back(blob[i]);
+    }
     const usize nch_off = type_payload + 4U + 11U;
     REQUIRE(nch_off + 4U <= bad.size());
     bad[nch_off]      = 0xFFU;
@@ -324,7 +348,10 @@ TEST_CASE("ceir binary: a keyword-mapped scalar out of range (image dim) is reje
     // record 0 (f32) is 23 bytes; record 1 (image) `count`=dim is at +[kind+is_signed+fkind = 3] within it.
     const usize dim_off = type_payload + 4U + 23U + 3U;
     ByteArray   bad(&root);
-    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    for (usize i = 0; i < blob.size(); ++i)
+    {
+        bad.push_back(blob[i]);
+    }
     REQUIRE(dim_off + 4U <= bad.size());
     REQUIRE(bad[dim_off] == 0x01U); // sanity: the record's dim byte is Dim2D (=1) — a layout shift would patch the wrong byte
     bad[dim_off] = 0x63U;           // 99 -> past ImageDim::Cube
@@ -369,7 +396,10 @@ TEST_CASE("ceir binary: an out-of-range ownership qualifier is rejected", "[ceir
     // record 0 (f32) is 23 bytes; record 1 (qualified) `count`=ownership is at +[kind+is_signed+fkind = 3] within it.
     const usize own_off = type_payload + 4U + 23U + 3U;
     ByteArray   bad(&root);
-    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    for (usize i = 0; i < blob.size(); ++i)
+    {
+        bad.push_back(blob[i]);
+    }
     REQUIRE(own_off + 4U <= bad.size());
     REQUIRE(bad[own_off] == 0x02U); // sanity: the record's ownership byte is BorrowedView (=2) — a layout shift patches wrong
     bad[own_off] = 0x63U;           // 99 -> past OwnershipKind::TransientArena (=8)
@@ -414,7 +444,10 @@ TEST_CASE("ceir binary: a NON-CANONICAL TYPE record (a name on an Int) is reject
     // record 0 (i32) name_strp is at +[4 record-count][kind+is_signed+fkind+count+cols+nch = 15] = +19; it holds 1 ("").
     const usize name_off = type_payload + 4U + 15U;
     ByteArray   bad(&root);
-    for (usize i = 0; i < blob.size(); ++i) { bad.push_back(blob[i]); }
+    for (usize i = 0; i < blob.size(); ++i)
+    {
+        bad.push_back(blob[i]);
+    }
     REQUIRE(name_off + 4U <= bad.size());
     REQUIRE(read_u32(bad, name_off) == 1U); // sanity: the canonical Int points at the empty string
     bad[name_off] = 0x00U;                   // repoint to STRP[0] = "t.x" (non-empty)

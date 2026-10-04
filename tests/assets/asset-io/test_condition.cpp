@@ -45,7 +45,10 @@ void build_quad(aio::ImportedMesh& m)
     push_v(m, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F);
     push_v(m, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 1.0F);
     const crd::u32 idx[6] = {0, 1, 2, 0, 2, 3};
-    for (crd::u32 i : idx) { m.indices.push_back(i); }
+    for (crd::u32 i : idx)
+    {
+        m.indices.push_back(i);
+    }
 }
 
 // ── the mikktspace.c oracle bridge (face-varying getters over our indexed mesh) ────────────────────────────────────────
@@ -150,7 +153,10 @@ TEST_CASE("assetio: weld_exact -- soup collapses, hard edges stay split, derived
         m.positions.push_back(shared_a); m.normals.push_back(n1);
         m.positions.push_back(shared_b); m.normals.push_back(n1);
         m.positions.push_back(V3{0.0F, 0.0F, -1.0F}); m.normals.push_back(n1);
-        for (crd::u32 i = 0; i < 6U; ++i) { m.indices.push_back(i); }
+        for (crd::u32 i = 0; i < 6U; ++i)
+        {
+            m.indices.push_back(i);
+        }
         const crd::u32 removed = aio::weld_exact(m, &alloc);
         CHECK(removed == 0U); // every tuple differs (normal differs at the fold) — hard edge preserved
         CHECK(m.positions.size() == 6U);
@@ -187,7 +193,10 @@ TEST_CASE("assetio: generate_normals -- crease angle drives faceted vs smoothed 
         crd::u32 corner_verts = 0;
         for (crd::usize v = 0; v < m.positions.size(); ++v)
         {
-            if (m.positions[v].x == 0.0F && m.positions[v].y == 0.0F && m.positions[v].z == 0.0F) { ++corner_verts; }
+            if (m.positions[v].x == 0.0F && m.positions[v].y == 0.0F && m.positions[v].z == 0.0F)
+            {
+                ++corner_verts;
+            }
         }
         CHECK(corner_verts == 3U);
     }
@@ -242,7 +251,10 @@ TEST_CASE("assetio: generate_tangents -- a MIRRORED chart splits the seam and fl
     push_v(m, 2.0F, 0.0F, 0.0F, 0, 0, 1, 0.0F, 0.0F); // right quad: u = 2 - x (mirrored)
     push_v(m, 2.0F, 1.0F, 0.0F, 0, 0, 1, 0.0F, 1.0F);
     const crd::u32 idx[12] = {0, 1, 2, 0, 2, 3, /* right: */ 1, 4, 5, 1, 5, 2};
-    for (crd::u32 i : idx) { m.indices.push_back(i); }
+    for (crd::u32 i : idx)
+    {
+        m.indices.push_back(i);
+    }
 
     const crd::usize before = m.positions.size(); // 6
     REQUIRE(aio::generate_tangents(m, &alloc));
@@ -295,7 +307,10 @@ TEST_CASE("assetio: conditioning is BIT-STABLE under face reordering (the determ
         const int* order        = permute ? order_perm : order_fwd;
         for (int i = 0; i < 8; ++i)
         {
-            for (int c = 0; c < 3; ++c) { m.indices.push_back(tris[order[i]][c]); }
+            for (int c = 0; c < 3; ++c)
+            {
+                m.indices.push_back(tris[order[i]][c]);
+            }
         }
     };
 
@@ -316,7 +331,10 @@ TEST_CASE("assetio: conditioning is BIT-STABLE under face reordering (the determ
         bool matched = false;
         for (crd::usize vb = 0; vb < b.positions.size(); ++vb)
         {
-            if (std::memcmp(&a.positions[va], &b.positions[vb], 12) != 0) { continue; }
+            if (std::memcmp(&a.positions[va], &b.positions[vb], 12) != 0)
+            {
+                continue;
+            }
             matched = true;
             CHECK(std::memcmp(&a.normals[va], &b.normals[vb], 12) == 0);   // BIT-identical
             CHECK(std::memcmp(&a.tangent[va], &b.tangent[vb], 16) == 0);   // BIT-identical
@@ -351,7 +369,10 @@ TEST_CASE("assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "[asseti
             const crd::u32 c = a + 3U;
             const crd::u32 d = a + 4U;
             const crd::u32 idx[6] = {a, b, d, a, d, c};
-            for (crd::u32 i : idx) { m.indices.push_back(i); }
+            for (crd::u32 i : idx)
+            {
+                m.indices.push_back(i);
+            }
         }
     }
     // the mirrored strip: two extra columns at x=3..4 whose u DECREASES with x (opposite handedness), NOT edge-sharing
@@ -368,7 +389,10 @@ TEST_CASE("assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "[asseti
     }
     {
         const crd::u32 idx[6] = {base + 0U, base + 1U, base + 3U, base + 0U, base + 3U, base + 2U};
-        for (crd::u32 i : idx) { m.indices.push_back(i); }
+        for (crd::u32 i : idx)
+        {
+            m.indices.push_back(i);
+        }
     }
 
     // normalize the shading normals through OUR pipeline first (both sides must see the same normals)
@@ -539,7 +563,10 @@ TEST_CASE("assetio: generated normals point OUTWARD on a genus-1 torus, BOTH win
             const float oz = p.z;
             const float d  = nr.x * ox + nr.y * oy + nr.z * oz;
             ++total;
-            if (d > 0.0F) { ++outward_ok; }
+            if (d > 0.0F)
+            {
+                ++outward_ok;
+            }
         }
         INFO((cw != 0 ? "CW" : "CCW") << " torus: " << outward_ok << "/" << total << " normals outward");
         // ⛔ ALL of them, not most: one inward vertex is one permanently-black patch in the frame
@@ -582,7 +609,10 @@ TEST_CASE("assetio: generate_normals_smooth_inplace -- skinned-safe, seam-shared
         for (crd::u32 f = 0; f < 8U; ++f)
         {
             const crd::u32 fi = permuted ? 7U - f : f; // reversed face order — same mesh
-            for (crd::u32 k = 0; k < 3U; ++k) { m.indices.push_back(faces[fi][k]); }
+            for (crd::u32 k = 0; k < 3U; ++k)
+            {
+                m.indices.push_back(faces[fi][k]);
+            }
         }
         return m;
     };
@@ -596,10 +626,22 @@ TEST_CASE("assetio: generate_normals_smooth_inplace -- skinned-safe, seam-shared
     crd::containers::Array<V2>       uv_before(&alloc);
     crd::containers::Array<crd::u16> joints_before(&alloc);
     crd::containers::Array<crd::f32> weights_before(&alloc);
-    for (const V3& p : m.positions) { pos_before.push_back(p); }
-    for (const V2& t : m.uv0) { uv_before.push_back(t); }
-    for (crd::u16 j : m.joints0) { joints_before.push_back(j); }
-    for (crd::f32 w : m.weights0) { weights_before.push_back(w); }
+    for (const V3& p : m.positions)
+    {
+        pos_before.push_back(p);
+    }
+    for (const V2& t : m.uv0)
+    {
+        uv_before.push_back(t);
+    }
+    for (crd::u16 j : m.joints0)
+    {
+        joints_before.push_back(j);
+    }
+    for (crd::f32 w : m.weights0)
+    {
+        weights_before.push_back(w);
+    }
 
     aio::generate_normals_smooth_inplace(m, &alloc);
 

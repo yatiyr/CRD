@@ -97,11 +97,17 @@ void hair_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma_a_
         {
             const double fv = o[static_cast<crd::usize>(i) * 3U + static_cast<crd::usize>(c)];
             acc[c] += fv * w;
-            if (fv < min_f) { min_f = fv; }
+            if (fv < min_f)
+            {
+                min_f = fv;
+            }
         }
     }
     const double scale = dtheta * dphi / static_cast<double>(k_nh);
-    for (int c = 0; c < 3; ++c) { out_a[c] = acc[c] * scale; }
+    for (int c = 0; c < 3; ++c)
+    {
+        out_a[c] = acc[c] * scale;
+    }
 }
 // ── B18-b Huang R lobe: an INDEPENDENT host reference. Builds the same Huang-frame geometry in plain C++ and integrates the GGX
 // NDF over the visible azimuthal arc with a 20k-sample midpoint rule — no shared code with the CKIR closed form, so a sign flip,
@@ -110,7 +116,10 @@ double fresnel_dielectric_ref(double ci, double eta)
 {
     ci                 = crd::math::clamp(ci, 0.0, 1.0);
     const double sin2t = (1.0 - ci * ci) / (eta * eta);
-    if (sin2t >= 1.0) { return 1.0; }
+    if (sin2t >= 1.0)
+    {
+        return 1.0;
+    }
     const double ct   = crd::math::sqrt(1.0 - sin2t);
     const double rpar = (eta * ci - ct) / (eta * ci + ct);
     const double rper = (ci - eta * ct) / (ci + eta * ct);
@@ -173,7 +182,10 @@ double huang_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma
     {
         const double f = out[static_cast<crd::usize>(i)];
         acc += f * wt[static_cast<crd::usize>(i)];
-        if (f < min_f) { min_f = f; }
+        if (f < min_f)
+        {
+            min_f = f;
+        }
     }
     return acc * dth * dph;
 }
@@ -181,8 +193,14 @@ double huang_albedo(crd::memory::IAllocator& alloc, double theta_o, double sigma
 double huang_r_reference(double theta_o, double phi_o, double theta_i, double phi_i, double eta, double beta)
 {
     double dphi = phi_i - phi_o; // wrap into (-pi, pi]
-    if (dphi > kPi) { dphi -= 2.0 * kPi; }
-    if (dphi < -kPi) { dphi += 2.0 * kPi; }
+    if (dphi > kPi)
+    {
+        dphi -= 2.0 * kPi;
+    }
+    if (dphi < -kPi)
+    {
+        dphi += 2.0 * kPi;
+    }
     const double cto = crd::math::cos(theta_o);
     const double sto = crd::math::sin(theta_o);
     const double cti = crd::math::cos(theta_i);
@@ -198,7 +216,10 @@ double huang_r_reference(double theta_o, double phi_o, double theta_i, double ph
     double       hy = iy + oy;
     double       hz = iz + oz;
     double       hlen = crd::math::sqrt(hx * hx + hy * hy + hz * hz);
-    if (hlen < 1.0e-6) { hlen = 1.0e-6; }
+    if (hlen < 1.0e-6)
+    {
+        hlen = 1.0e-6;
+    }
     const double cos_ho = (hx * ox + hy * oy + hz * oz) / hlen;
     hx /= hlen;
     hy /= hlen;
@@ -358,7 +379,10 @@ TEST_CASE("B18-b: Huang analytic R lobe == numerical NDF quadrature", "[kir][hai
             sum_a += a;
             sum_r += r;
             const double rel = crd::math::abs(a - r) / (crd::math::abs(r) + 1.0e-6);
-            if (rel > maxrel) { maxrel = rel; }
+            if (rel > maxrel)
+            {
+                maxrel = rel;
+            }
             CHECK(a >= 0.0); // the R lobe is a non-negative reflectance
         }
         INFO("beta=" << beta << " maxrel(analytic vs 20k-sample quadrature)=" << maxrel

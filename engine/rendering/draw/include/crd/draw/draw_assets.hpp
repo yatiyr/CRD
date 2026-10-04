@@ -1576,12 +1576,36 @@ opacity    = "alpha"
     const crd::containers::StringView n(name);
     out.clear();
     const auto is = [&](const char* k) { return n == crd::containers::StringView(k); };
-    if (is("vertex/draw_line.crdv")) { out.append(kDrawLineVs); return true; }
-    if (is("vertex/draw_tri.crdv")) { out.append(kDrawTriVs); return true; }
-    if (is("vertex/draw_grid.crdv")) { out.append(kDrawGridVs); return true; }
-    if (is("material/draw_line.crdm")) { out.append(kDrawLineMat); return true; }
-    if (is("material/draw_tri.crdm")) { out.append(kDrawTriMat); return true; }
-    if (is("material/draw_grid.crdm")) { out.append(kDrawGridMat); return true; }
+    if (is("vertex/draw_line.crdv"))
+    {
+        out.append(kDrawLineVs);
+        return true;
+    }
+    if (is("vertex/draw_tri.crdv"))
+    {
+        out.append(kDrawTriVs);
+        return true;
+    }
+    if (is("vertex/draw_grid.crdv"))
+    {
+        out.append(kDrawGridVs);
+        return true;
+    }
+    if (is("material/draw_line.crdm"))
+    {
+        out.append(kDrawLineMat);
+        return true;
+    }
+    if (is("material/draw_tri.crdm"))
+    {
+        out.append(kDrawTriMat);
+        return true;
+    }
+    if (is("material/draw_grid.crdm"))
+    {
+        out.append(kDrawGridMat);
+        return true;
+    }
     return false;
 }
 

@@ -66,7 +66,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,    // left
         1, 2, 6,  1, 6, 5,    // right
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 // Cube with one triangle removed (3-vertex hole).
@@ -87,7 +90,10 @@ void make_cube_minus_face(crd::containers::Array<Vec3<f32>>& pos,
     make_cube(pos, idx);
     // Remove the last two triangles (top face = entries [12, 18)).
     // Drop the last 6 indices.
-    for (int i = 0; i < 6; ++i) { idx.pop_back(); }
+    for (int i = 0; i < 6; ++i)
+    {
+        idx.pop_back();
+    }
 }
 
 // Cube with TWO opposite faces removed (bottom + top → 2 holes).
@@ -109,7 +115,10 @@ void make_cube_minus_two_opposite_faces(crd::containers::Array<Vec3<f32>>& pos,
         0, 4, 7,  0, 7, 3,    // left
         1, 2, 6,  1, 6, 5,    // right
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
 }
 
 // Signed volume of a closed triangle mesh via divergence theorem
@@ -120,7 +129,10 @@ T signed_volume(const HalfEdgeMesh<T>& m)
     T vol = T{0};
     for (u32 f = 0; f < m.face_pool_size(); ++f)
     {
-        if (!m.face_alive(f)) { continue; }
+        if (!m.face_alive(f))
+        {
+            continue;
+        }
         const u32 h0 = m.face(f).first_he;
         const u32 h1 = m.he(h0).next;
         const u32 h2 = m.he(h1).next;
@@ -297,7 +309,10 @@ TEST_CASE("fill_holes: refine triggers Steiner points when hole > local scale",
         for (int i = 0; i < 3; ++i)
         {
             // Skip the center quad to make a hole.
-            if (i == 1 && j == 1) { continue; }
+            if (i == 1 && j == 1)
+            {
+                continue;
+            }
             idx.push_back(vi(i, j));
             idx.push_back(vi(i + 1, j));
             idx.push_back(vi(i + 1, j + 1));
@@ -348,7 +363,10 @@ TEST_CASE("fill_holes: fairing converges on Steiner-refined patch",
     {
         for (int i = 0; i < 3; ++i)
         {
-            if (i == 1 && j == 1) { continue; }
+            if (i == 1 && j == 1)
+            {
+                continue;
+            }
             idx.push_back(vi(i, j));
             idx.push_back(vi(i + 1, j));
             idx.push_back(vi(i + 1, j + 1));
@@ -477,7 +495,10 @@ TEST_CASE("fill_holes: f64 precision tier fills a cube face hole",
         0, 4, 7,  0, 7, 3,
         // omit "right" face → 4-vertex hole
     };
-    for (u32 i : tris) { idx.push_back(i); }
+    for (u32 i : tris)
+    {
+        idx.push_back(i);
+    }
     HalfEdgeMesh<f64> m{&f.alloc};
     REQUIRE(m.build_from(crd::containers::ConstSpan<Vec3<f64>>{pos.data(), pos.size()},
                           crd::containers::ConstSpan<u32>{idx.data(), idx.size()})

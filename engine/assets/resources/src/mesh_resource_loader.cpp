@@ -29,25 +29,46 @@ void* MeshResourceLoader::load(const LoadContext& ctx)
 {
     // parse SCRATCH on the owned heap; only the RESIDENT payload charges m_payload (the streaming-category rule)
     CrdrFile file(&m_owned);
-    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok) { return nullptr; }
+    if (crdr_read(ctx.bytes, file, &m_owned) != CrdrError::Ok)
+    {
+        return nullptr;
+    }
 
     const CrdrChunk* vert_chunk = crdr_find_chunk(file, kFourCC_VERT);
-    if (vert_chunk == nullptr) { return nullptr; }
+    if (vert_chunk == nullptr)
+    {
+        return nullptr;
+    }
     const CrdrChunk* indx_chunk = crdr_find_chunk(file, kFourCC_INDX);
-    if (indx_chunk == nullptr) { return nullptr; }
+    if (indx_chunk == nullptr)
+    {
+        return nullptr;
+    }
     const CrdrChunk* prim_chunk = crdr_find_chunk(file, kFourCC_PRIM);
-    if (prim_chunk == nullptr || prim_chunk->payload.size() < kPrimHeaderSize) { return nullptr; }
+    if (prim_chunk == nullptr || prim_chunk->payload.size() < kPrimHeaderSize)
+    {
+        return nullptr;
+    }
 
     crd::u32 prim_count = 0;
     std::memcpy(&prim_count, prim_chunk->payload.data(), sizeof(crd::u32));
-    if (prim_count == 0U) { return nullptr; }
+    if (prim_count == 0U)
+    {
+        return nullptr;
+    }
     const crd::usize expected_prim_bytes =
         static_cast<crd::usize>(kPrimHeaderSize)
         + static_cast<crd::usize>(prim_count) * static_cast<crd::usize>(kPrimEntrySize);
-    if (prim_chunk->payload.size() < expected_prim_bytes) { return nullptr; }
+    if (prim_chunk->payload.size() < expected_prim_bytes)
+    {
+        return nullptr;
+    }
 
     void* raw = m_payload->try_allocate(sizeof(MeshResource), alignof(MeshResource));
-    if (raw == nullptr) { return nullptr; } // over-budget on a streaming heap — graceful, never fatal
+    if (raw == nullptr) // over-budget on a streaming heap — graceful, never fatal
+    {
+        return nullptr;
+    }
     auto* mesh = new (raw) MeshResource(m_payload);
 
     mesh->vertices.resize(vert_chunk->payload.size());
@@ -117,7 +138,10 @@ void* MeshResourceLoader::load(const LoadContext& ctx)
 
 void MeshResourceLoader::unload(void* payload) noexcept
 {
-    if (payload == nullptr) { return; }
+    if (payload == nullptr)
+    {
+        return;
+    }
     auto* mesh = static_cast<MeshResource*>(payload);
     mesh->~MeshResource();
     m_payload->deallocate(mesh);

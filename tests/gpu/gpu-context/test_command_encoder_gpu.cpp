@@ -417,7 +417,13 @@ void gate_mesh(IGpuContext& gctx, IRasterContext& raster, crd::memory::IAllocato
     crd::u32 drawn = 0U;
     for (crd::u32 y = 0U; y < dim; ++y)
     {
-        for (crd::u32 x = 0U; x < dim; ++x) { if ((target->read_pixel(x, y) & 0xFFU) > 60U) { ++drawn; } }
+        for (crd::u32 x = 0U; x < dim; ++x)
+        {
+            if ((target->read_pixel(x, y) & 0xFFU) > 60U)
+            {
+                ++drawn;
+            }
+        }
     }
     CHECK(drawn > 0U); // the encoder mesh dispatch drew coverage over the blue clear
 }
@@ -487,7 +493,13 @@ void gate_tess(IGpuContext& gctx, IRasterContext& raster, crd::memory::IAllocato
     crd::u32 drawn = 0U;
     for (crd::u32 y = 0U; y < dim; ++y)
     {
-        for (crd::u32 x = 0U; x < dim; ++x) { if ((target->read_pixel(x, y) & 0xFFU) > 60U) { ++drawn; } }
+        for (crd::u32 x = 0U; x < dim; ++x)
+        {
+            if ((target->read_pixel(x, y) & 0xFFU) > 60U)
+            {
+                ++drawn;
+            }
+        }
     }
     WARN("[encoder tessellation dispatch] red-coverage pixels = " << drawn);
 }

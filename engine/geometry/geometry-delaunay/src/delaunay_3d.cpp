@@ -75,14 +75,20 @@ template <crd::math::MathScalar T>
 bool all_points_coplanar(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
                            const crd::containers::Array<crd::u32>&         order)
 {
-    if (points.size() < 4U) { return true; }
+    if (points.size() < 4U)
+    {
+        return true;
+    }
     const auto& p0 = points[order[0]];
     const auto& p1 = points[order[1]];
     const auto& p2 = points[order[2]];
     for (crd::usize i = 3; i < points.size(); ++i)
     {
         const T o = crd::geometry::primitives::orient3d(p0, p1, p2, points[order[i]]);
-        if (o != static_cast<T>(0)) { return false; }
+        if (o != static_cast<T>(0))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -119,14 +125,26 @@ delaunay_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     // Lex-sort `(x, y, z, original_index)`.
     crd::containers::Array<crd::u32> order(alloc);
     order.resize(N, crd::u32{0});
-    for (crd::u32 i = 0; i < N; ++i) { order[i] = i; }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        order[i] = i;
+    }
     crd::containers::sort(order.data(), order.data() + order.size(),
                           [&](crd::u32 a, crd::u32 b) noexcept {
                               const auto& pa = points[a];
                               const auto& pb = points[b];
-                              if (pa.x != pb.x) { return pa.x < pb.x; }
-                              if (pa.y != pb.y) { return pa.y < pb.y; }
-                              if (pa.z != pb.z) { return pa.z < pb.z; }
+                              if (pa.x != pb.x)
+                              {
+                                  return pa.x < pb.x;
+                              }
+                              if (pa.y != pb.y)
+                              {
+                                  return pa.y < pb.y;
+                              }
+                              if (pa.z != pb.z)
+                              {
+                                  return pa.z < pb.z;
+                              }
                               return a < b;
                           });
 
@@ -153,7 +171,10 @@ delaunay_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     // Augmented points array = input points ++ 4 super-tet vertices.
     crd::containers::Array<crd::math::Vec3<T>> aug_pts(alloc);
     aug_pts.reserve(static_cast<crd::usize>(N) + 4U);
-    for (crd::u32 i = 0; i < N; ++i) { aug_pts.push_back(points[i]); }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        aug_pts.push_back(points[i]);
+    }
     crd::math::Vec3<T> s0{};
     crd::math::Vec3<T> s1{};
     crd::math::Vec3<T> s2{};
@@ -222,7 +243,10 @@ delaunay_3d(crd::containers::ConstSpan<crd::math::Vec3<T>> points,
     result.tet_indices.reserve(static_cast<crd::usize>(N) * 28U); // ~7N tets * 4 indices
     for (crd::u32 ti = 0; ti < pool.pool_size(); ++ti)
     {
-        if (!pool.alive(ti)) { continue; }
+        if (!pool.alive(ti))
+        {
+            continue;
+        }
         const Tet& t = pool[ti];
         if (t.v[0] >= N || t.v[1] >= N || t.v[2] >= N || t.v[3] >= N)
         {

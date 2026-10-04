@@ -77,7 +77,10 @@ TEST_CASE("Quadric: addition + accumulation",
     acc += q1;
     acc += q2;
     acc += q3;
-    for (int i = 0; i < 10; ++i) { CHECK(acc.data[i] == sum.data[i]); }
+    for (int i = 0; i < 10; ++i)
+    {
+        CHECK(acc.data[i] == sum.data[i]);
+    }
 }
 
 TEST_CASE("Quadric: scalar multiplication scales evaluate proportionally",

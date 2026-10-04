@@ -44,7 +44,10 @@ namespace
 bool verify_sketch(const Context& ctx, const Operation& op) noexcept
 {
     const AttrId c = op.attr("constraint");
-    if (!c.valid() || ctx.attr_value(c).i == 0) { return true; }
+    if (!c.valid() || ctx.attr_value(c).i == 0)
+    {
+        return true;
+    }
     return ctx.attr_value(op.attr("width")).i == ctx.attr_value(op.attr("height")).i;
 }
 [[nodiscard]] bool blob_eq(const ByteArray& a, const ByteArray& b) noexcept
@@ -102,17 +105,32 @@ struct CadGraph
     [[nodiscard]] Operation* feature(Block* b, OpId k, ConstSpan<Value*> inputs, StringView param, i64 pval)
     {
         Operation* const o = ctx.create_operation(k, inputs, 1U, ctx.type_i64());
-        if (!param.empty()) { ctx.set_attr(o, param, ctx.attr_int(pval)); }
+        if (!param.empty())
+        {
+            ctx.set_attr(o, param, ctx.attr_int(pval));
+        }
         b->append(o);
         return o;
     }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
-        if (op.kind() == sketch) { return ctx.attr_value(op.attr("width")).i * ctx.attr_value(op.attr("height")).i; }
+        if (op.kind() == sketch)
+        {
+            return ctx.attr_value(op.attr("width")).i * ctx.attr_value(op.attr("height")).i;
+        }
         const i64 in0 = value[op.operand(0)->defining_op()->stable_id().value - 1U];
-        if (op.kind() == extrude) { return in0 * ctx.attr_value(op.attr("depth")).i; }
-        if (op.kind() == fillet) { return in0 + ctx.attr_value(op.attr("radius")).i; }
-        if (op.kind() == assembly) { return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U]; }
+        if (op.kind() == extrude)
+        {
+            return in0 * ctx.attr_value(op.attr("depth")).i;
+        }
+        if (op.kind() == fillet)
+        {
+            return in0 + ctx.attr_value(op.attr("radius")).i;
+        }
+        if (op.kind() == assembly)
+        {
+            return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U];
+        }
         return in0; // body
     }
     [[nodiscard]] u32 count(const Operation* op) const { return recomputes[op->stable_id().value - 1U]; }
@@ -153,7 +171,10 @@ struct CadGraph
             for (u32 k = 0; k < cell[i]->num_operands(); ++k)
             {
                 const Operation* const dop = cell[i]->operand(k)->defining_op();
-                if (dop == nullptr) { continue; }
+                if (dop == nullptr)
+                {
+                    continue;
+                }
                 dag.add_edge(id, dop->stable_id().value);
                 deps[i].push_back(dop->stable_id().value);
             }
@@ -194,26 +215,44 @@ struct CadGraph
             tagged[seeds[i].value - 1U]  = 1U;
             Array<u64> aff(alloc);
             REQUIRE(dag.affected_by(seeds[i].value, aff));
-            for (usize j = 0; j < aff.size(); ++j) { tagged[aff[j] - 1U] = 1U; }
+            for (usize j = 0; j < aff.size(); ++j)
+            {
+                tagged[aff[j] - 1U] = 1U;
+            }
         }
         for (u32 id = 1; id <= 7U; ++id)
         {
-            if (tagged[id - 1U] != 0U) { tag.push_back(id); }
+            if (tagged[id - 1U] != 0U)
+            {
+                tag.push_back(id);
+            }
         }
         Array<u64> order(alloc);
         REQUIRE(dag.topo_order(order));
         for (usize i = 0; i < order.size(); ++i)
         {
             const u64 id = order[i];
-            if (tagged[id - 1U] == 0U) { continue; }
+            if (tagged[id - 1U] == 0U)
+            {
+                continue;
+            }
             const u64 new_content = content_hash(*cell[id - 1U], ctx);
             bool      must        = false;
-            if (is_seed[id - 1U] != 0U && new_content != dag.content_of(id)) { must = true; } // EVERY seed checked (no-op skips)
+            if (is_seed[id - 1U] != 0U && new_content != dag.content_of(id)) // EVERY seed checked (no-op skips)
+            {
+                must = true;
+            }
             for (usize k = 0; k < deps[id - 1U].size(); ++k)
             {
-                if (changed[deps[id - 1U][k] - 1U] != 0U) { must = true; }
+                if (changed[deps[id - 1U][k] - 1U] != 0U)
+                {
+                    must = true;
+                }
             }
-            if (!must) { continue; }
+            if (!must)
+            {
+                continue;
+            }
             const u64 old_interface = dag.interface_of(id);
             const i64 v             = eval(*cell[id - 1U]);
             value[id - 1U]          = v;
@@ -221,7 +260,10 @@ struct CadGraph
             const u64 new_interface = value_hash(v);
             dag.set_revision(id, new_content, new_interface);
             evaluated.push_back(id);
-            if (new_interface != old_interface) { changed[id - 1U] = 1U; }
+            if (new_interface != old_interface)
+            {
+                changed[id - 1U] = 1U;
+            }
         }
     }
     // Apply `edits` atomically in ONE transaction and COMMIT; return the touched stable-ids (⛔ order not guaranteed).
@@ -229,10 +271,16 @@ struct CadGraph
     {
         DiagnosticEngine diag(ctx, alloc);
         Transaction      tx(ctx, *m, diag, alloc);
-        for (usize i = 0; i < edits.size(); ++i) { REQUIRE(tx.set_attr(edits[i].op, edits[i].param, ctx.attr_int(edits[i].val))); }
+        for (usize i = 0; i < edits.size(); ++i)
+        {
+            REQUIRE(tx.set_attr(edits[i].op, edits[i].param, ctx.attr_int(edits[i].val)));
+        }
         REQUIRE(tx.commit());
         Array<StableId> t(alloc);
-        for (usize i = 0; i < tx.touched().size(); ++i) { t.push_back(tx.touched()[i]); }
+        for (usize i = 0; i < tx.touched().size(); ++i)
+        {
+            t.push_back(tx.touched()[i]);
+        }
         return t;
     }
 };
@@ -257,7 +305,10 @@ TEST_CASE("ceir 9d: a single dimension edit re-evaluates only its dependent subt
     g.depsgraph_reeval(ConstSpan<StableId>(touched.data(), touched.size()), tag, evaluated);
     CHECK(g.recomputes[5] == 2U); // fillet
     CHECK(g.recomputes[6] == 2U); // body
-    for (u32 i = 0; i < 5U; ++i) { CHECK(g.recomputes[i] == 1U); } // sketch1/extrude1/sketch2/extrude2/assembly cache-hit
+    for (u32 i = 0; i < 5U; ++i) // sketch1/extrude1/sketch2/extrude2/assembly cache-hit
+    {
+        CHECK(g.recomputes[i] == 1U);
+    }
 }
 
 TEST_CASE("ceir 9d: multi-op edits in one transaction seed the eval from the whole touched-set", "[ceir][cad]")
@@ -368,7 +419,10 @@ TEST_CASE("ceir 9d: a constraint-violating commit is rejected and rolls back; a 
         bool verify_failed = false;
         for (usize i = 0; i < diag.count(); ++i)
         {
-            if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed")) { verify_failed = true; }
+            if (diag.at(i).code == make_diagnostic_code("ceir.transaction.verify_failed"))
+            {
+                verify_failed = true;
+            }
         }
         CHECK(verify_failed);
     }

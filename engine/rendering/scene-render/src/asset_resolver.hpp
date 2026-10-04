@@ -174,11 +174,20 @@ public:
     {
         for (crd::usize i = 0; i < m_raster.size(); ++i)
         {
-            if (m_raster[i].id != id) { continue; }
-            if (m_raster[i].kind == Kind::Spec) { return m_raster[i].spec_fn(m_raster[i].user, specs, err); }
+            if (m_raster[i].id != id)
+            {
+                continue;
+            }
+            if (m_raster[i].kind == Kind::Spec)
+            {
+                return m_raster[i].spec_fn(m_raster[i].user, specs, err);
+            }
             if (specs.count > 0U)
             {
-                if (err != nullptr) { *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram; }
+                if (err != nullptr)
+                {
+                    *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram;
+                }
                 return nullptr;
             }
             return m_raster[i].fn(m_raster[i].user);
@@ -190,11 +199,20 @@ public:
     {
         for (crd::usize i = 0; i < m_kernel.size(); ++i)
         {
-            if (m_kernel[i].id != id) { continue; }
-            if (m_kernel[i].kind == Kind::Spec) { return m_kernel[i].spec_fn(m_kernel[i].user, specs, err); }
+            if (m_kernel[i].id != id)
+            {
+                continue;
+            }
+            if (m_kernel[i].kind == Kind::Spec)
+            {
+                return m_kernel[i].spec_fn(m_kernel[i].user, specs, err);
+            }
             if (specs.count > 0U)
             {
-                if (err != nullptr) { *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram; }
+                if (err != nullptr)
+                {
+                    *err = crd::framecook::FrameExecError::SpecOnOpaqueProgram;
+                }
                 return nullptr;
             }
             return m_kernel[i].fn(m_kernel[i].user);

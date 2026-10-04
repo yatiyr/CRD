@@ -39,9 +39,15 @@ struct HRBlobLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (chunk == nullptr) { return nullptr; }
+        if (chunk == nullptr)
+        {
+            return nullptr;
+        }
 
         void* raw = m_alloc.allocate(sizeof(HRBlobResource), alignof(HRBlobResource));
         auto* res = new (raw) HRBlobResource(&m_alloc);
@@ -55,7 +61,10 @@ struct HRBlobLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (payload == nullptr) { return; }
+        if (payload == nullptr)
+        {
+            return;
+        }
         auto* res = static_cast<HRBlobResource*>(payload);
         res->~HRBlobResource();
         m_alloc.deallocate(res);
@@ -89,7 +98,10 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
 
     crd::containers::Array<crd::u8> pool(&s_hr_alloc);
     const char name[] = "hr_blob";
-    for (char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
+    for (char c : name)
+    {
+        pool.push_back(static_cast<crd::u8>(c));
+    }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&s_hr_alloc);
@@ -116,7 +128,10 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
     manifest_write(p2, crd::containers::as_const_span(entries),
                    crd::containers::as_const_span(pool));
     auto pack_bytes = p2.finish();
-    for (crd::u8 b : art_bytes) { pack_bytes.push_back(b); }
+    for (crd::u8 b : art_bytes)
+    {
+        pack_bytes.push_back(b);
+    }
 
     REQUIRE(crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack_bytes)));
 }

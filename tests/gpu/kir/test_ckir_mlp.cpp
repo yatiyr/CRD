@@ -36,7 +36,10 @@ bool src_has(const crd::containers::String& src, const char* needle)
             ++a;
             ++b;
         }
-        if (*b == '\0') { return true; }
+        if (*b == '\0')
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -62,8 +65,14 @@ TEST_CASE("CKIR fused-MLP CPU oracle == hand-computed 2-layer MLP", "[kir][mlp]"
     crd::containers::Array<crd::f32> w(&alloc);
     w.resize(static_cast<crd::usize>(n_w));
     // deterministic small values (kept tiny so ReLU + linear stay exactly representable in the oracle's float math)
-    for (int i = 0; i < n_in; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f32>((i % 7) - 3) * 0.25F; }
-    for (int i = 0; i < n_w; ++i) { w[static_cast<crd::usize>(i)] = static_cast<crd::f32>((i % 5) - 2) * 0.125F; }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = static_cast<crd::f32>((i % 7) - 3) * 0.25F;
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w[static_cast<crd::usize>(i)] = static_cast<crd::f32>((i % 5) - 2) * 0.125F;
+    }
 
     crd::containers::Array<crd::f32> sa(&alloc);
     crd::containers::Array<crd::f32> sb(&alloc);
@@ -125,8 +134,14 @@ TEST_CASE("CKIR fused-MLP FP32 statement-tier graph == CPU oracle (bit-exact)", 
     in_d.resize(static_cast<crd::usize>(n_in));
     crd::containers::Array<crd::f64> w_d(&alloc);
     w_d.resize(static_cast<crd::usize>(n_w));
-    for (int i = 0; i < n_in; ++i) { in_d[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6))); }
-    for (int i = 0; i < n_w; ++i) { w_d[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5))); }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in_d[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.2F * static_cast<float>((i * 7) % 13 - 6)));
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w_d[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(0.1F * static_cast<float>((i * 5) % 11 - 5)));
+    }
 
     crd::containers::Array<crd::f64> out_d(&alloc);
     out_d.resize(static_cast<crd::usize>(n_in));
@@ -141,8 +156,14 @@ TEST_CASE("CKIR fused-MLP FP32 statement-tier graph == CPU oracle (bit-exact)", 
     in_f.resize(static_cast<crd::usize>(n_in));
     crd::containers::Array<crd::f32> w_f(&alloc);
     w_f.resize(static_cast<crd::usize>(n_w));
-    for (int i = 0; i < n_in; ++i) { in_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(in_d[static_cast<crd::usize>(i)]); }
-    for (int i = 0; i < n_w; ++i) { w_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(w_d[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n_in; ++i)
+    {
+        in_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(in_d[static_cast<crd::usize>(i)]);
+    }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(w_d[static_cast<crd::usize>(i)]);
+    }
     crd::containers::Array<crd::f32> ref(&alloc);
     ref.resize(static_cast<crd::usize>(n_in));
     crd::containers::Array<crd::f32> sa(&alloc);
@@ -178,7 +199,10 @@ TEST_CASE("CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW reduction) == CP
     a_all.resize(static_cast<crd::usize>(n_a));
     crd::containers::Array<crd::f32> w_f(&alloc);
     w_f.resize(static_cast<crd::usize>(n_w));
-    for (int i = 0; i < n_w; ++i) { w_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(0.1F * static_cast<float>((i * 5) % 11 - 5)); }
+    for (int i = 0; i < n_w; ++i)
+    {
+        w_f[static_cast<crd::usize>(i)] = static_cast<crd::f32>(0.1F * static_cast<float>((i * 5) % 11 - 5));
+    }
     for (int r = 0; r < batch; ++r)
     {
         for (int c = 0; c < wd; ++c)
@@ -224,7 +248,10 @@ TEST_CASE("CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW reduction) == CP
     // f64 buffers for eval_cpu_kernel
     const auto to64 = [&](const crd::containers::Array<crd::f32>& src, crd::containers::Array<crd::f64>& dst) {
         dst.resize(src.size());
-        for (crd::usize i = 0; i < src.size(); ++i) { dst[i] = static_cast<crd::f64>(src[i]); }
+        for (crd::usize i = 0; i < src.size(); ++i)
+        {
+            dst[i] = static_cast<crd::f64>(src[i]);
+        }
     };
     crd::containers::Array<crd::f64> a64(&alloc);
     crd::containers::Array<crd::f64> w64(&alloc);
@@ -240,7 +267,10 @@ TEST_CASE("CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW reduction) == CP
     dz64.resize(static_cast<crd::usize>(n_dz));
     kir::KernelBuffer buf_a[4] = {{a64.data(), n_a, 0, 0}, {w64.data(), n_w, 0, 1}, {go64.data(), bw, 0, 2}, {dz64.data(), n_dz, 0, 3}};
     kir::eval_cpu_kernel(g_a, e_a, buf_a, 4, e_a.local_size[0], &alloc, static_cast<crd::u32>(batch));
-    for (int i = 0; i < n_dz; ++i) { REQUIRE(static_cast<crd::f32>(dz64[static_cast<crd::usize>(i)]) == ref_dz[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n_dz; ++i)
+    {
+        REQUIRE(static_cast<crd::f32>(dz64[static_cast<crd::usize>(i)]) == ref_dz[static_cast<crd::usize>(i)]);
+    }
 
     // Kernel B: DETERMINISTIC dW reduction (uses kernel A's dz_all)
     kir::KGraph      g_b(&alloc);
@@ -249,7 +279,10 @@ TEST_CASE("CKIR fused-MLP BACKWARD (dz chain + DETERMINISTIC dW reduction) == CP
     dw64.resize(static_cast<crd::usize>(n_dw));
     kir::KernelBuffer buf_b[3] = {{a64.data(), n_a, 0, 0}, {dz64.data(), n_dz, 0, 1}, {dw64.data(), n_dw, 0, 2}};
     kir::eval_cpu_kernel(g_b, e_b, buf_b, 3, e_b.local_size[0], &alloc, static_cast<crd::u32>(nl * wd));
-    for (int i = 0; i < n_dw; ++i) { REQUIRE(static_cast<crd::f32>(dw64[static_cast<crd::usize>(i)]) == ref_dw[static_cast<crd::usize>(i)]); }
+    for (int i = 0; i < n_dw; ++i)
+    {
+        REQUIRE(static_cast<crd::f32>(dw64[static_cast<crd::usize>(i)]) == ref_dw[static_cast<crd::usize>(i)]);
+    }
 }
 
 TEST_CASE("CKIR fused-MLP FP32 forward emits well-formed source for ALL FIVE backends (one builder)", "[kir][mlp]")
@@ -307,7 +340,10 @@ TEST_CASE("CKIR fused-MLP forward emits well-formed CUDA", "[kir][mlp]")
                 ++a;
                 ++b;
             }
-            if (*b == '\0') { return true; }
+            if (*b == '\0')
+            {
+                return true;
+            }
         }
         return false;
     };

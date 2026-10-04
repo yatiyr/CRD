@@ -482,7 +482,9 @@ TEST_CASE("enrich_for_gjk: cube -- each vertex has 3 neighbors (cube edges)",
         for (u32 k = begin; k < end; ++k)
         {
             if (r.vertex_adjacency_indices[k] == v)
+            {
                 return true;
+            }
         }
         return false;
     };

@@ -36,7 +36,9 @@ crd::u32 test_crc32(const crd::u8* p, crd::usize n) noexcept
     {
         c ^= p[i];
         for (int k = 0; k < 8; ++k)
+        {
             c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+        }
     }
     return c ^ 0xFFFFFFFFU;
 }

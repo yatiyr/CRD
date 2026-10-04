@@ -36,7 +36,10 @@ void set_str(crd::containers::String& d, std::string_view v)
 }
 void set_where(crd::containers::String* w, std::string_view v)
 {
-    if (w != nullptr) { set_str(*w, v); }
+    if (w != nullptr)
+    {
+        set_str(*w, v);
+    }
 }
 
 // The pull helper, identical in spirit to the vertex program's. ⛔ A float in the storage buffer is a BIT
@@ -108,9 +111,18 @@ struct Lx
 }
 [[nodiscard]] ShadowMode shadow_mode_of(std::string_view s) noexcept
 {
-    if (s == "csm") { return ShadowMode::Csm; }
-    if (s == "map") { return ShadowMode::Map; }
-    if (s == "cube") { return ShadowMode::Cube; }
+    if (s == "csm")
+    {
+        return ShadowMode::Csm;
+    }
+    if (s == "map")
+    {
+        return ShadowMode::Map;
+    }
+    if (s == "cube")
+    {
+        return ShadowMode::Cube;
+    }
     return ShadowMode::None;
 }
 [[nodiscard]] const char* shadow_filter_name(ShadowFilter f) noexcept
@@ -127,10 +139,22 @@ struct Lx
 }
 [[nodiscard]] ShadowFilter shadow_filter_of(std::string_view s) noexcept
 {
-    if (s == "pcf") { return ShadowFilter::Pcf; }
-    if (s == "pcss") { return ShadowFilter::Pcss; }
-    if (s == "evsm") { return ShadowFilter::Evsm; }
-    if (s == "msm") { return ShadowFilter::Msm; }
+    if (s == "pcf")
+    {
+        return ShadowFilter::Pcf;
+    }
+    if (s == "pcss")
+    {
+        return ShadowFilter::Pcss;
+    }
+    if (s == "evsm")
+    {
+        return ShadowFilter::Evsm;
+    }
+    if (s == "msm")
+    {
+        return ShadowFilter::Msm;
+    }
     return ShadowFilter::Hard;
 }
 } // namespace
@@ -139,20 +163,29 @@ struct Lx
 crd::u32 lighting_total_lights(const LightingDesc& d) noexcept
 {
     crd::u32 n = 0U;
-    for (crd::u32 i = 0; i < kLightTypeCount; ++i) { n += d.set.count[i]; }
+    for (crd::u32 i = 0; i < kLightTypeCount; ++i)
+    {
+        n += d.set.count[i];
+    }
     return n;
 }
 crd::u32 lighting_type_first(const LightingDesc& d, LightType t) noexcept
 {
     crd::u32 n = 0U;
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(t) && i < kLightTypeCount; ++i) { n += d.set.count[i]; }
+    for (crd::u32 i = 0; i < static_cast<crd::u32>(t) && i < kLightTypeCount; ++i)
+    {
+        n += d.set.count[i];
+    }
     return n;
 }
 bool lighting_needs_shadow_atlas(const LightingDesc& d) noexcept
 {
     for (crd::u32 i = 0; i < kLightTypeCount; ++i)
     {
-        if (d.set.count[i] > 0U && d.shadow.mode[i] != ShadowMode::None) { return true; }
+        if (d.set.count[i] > 0U && d.shadow.mode[i] != ShadowMode::None)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -187,7 +220,10 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
     // authored-asset TYPO became a process kill once disk-first loading made user edits reachable.
     // Result-checked also kills the mixed-mode ODR hazard (three cookers threw, three did not).
     crd::toml::parse_result pr = crd::toml::parse(std::string_view(toml_text.data(), toml_text.size()));
-    if (!pr) { return LightingCookError::ParseFailed; }
+    if (!pr)
+    {
+        return LightingCookError::ParseFailed;
+    }
     crd::toml::node root = std::move(pr).table();
     // ⛔ RESET FIRST — the scar the vertex/material cookers both carried: parsing into a reused descriptor
     // APPENDED to it, so a tool with a load button silently merged two declarations.
@@ -201,16 +237,25 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
     out.decal   = DecalDesc{};
 
     const auto sch = root["schema"].value<int64_t>();
-    if (!sch || *sch != static_cast<int64_t>(kLightingSchemaVersion)) { return LightingCookError::BadSchema; }
+    if (!sch || *sch != static_cast<int64_t>(kLightingSchemaVersion))
+    {
+        return LightingCookError::BadSchema;
+    }
     out.schema = kLightingSchemaVersion;
     const auto nm = root["name"].value<std::string_view>();
-    if (!nm || nm->empty()) { return LightingCookError::MissingName; }
+    if (!nm || nm->empty())
+    {
+        return LightingCookError::MissingName;
+    }
     set_str(out.name, *nm);
 
     if (const auto* h = root["header"].as_table())
     {
         const auto w = [&](const char* k, crd::u32& dst) {
-            if (const auto v = (*h)[k].value<int64_t>()) { dst = static_cast<crd::u32>(*v); }
+            if (const auto v = (*h)[k].value<int64_t>())
+            {
+                dst = static_cast<crd::u32>(*v);
+            }
         };
         w("view_proj", out.header.view_proj);
         w("csm_splits", out.header.csm_splits);
@@ -225,7 +270,10 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
     if (const auto* r = root["record"].as_table())
     {
         const auto w = [&](const char* k, crd::u32& dst) {
-            if (const auto v = (*r)[k].value<int64_t>()) { dst = static_cast<crd::u32>(*v); }
+            if (const auto v = (*r)[k].value<int64_t>())
+            {
+                dst = static_cast<crd::u32>(*v);
+            }
         };
         const auto wf = [&](const char* k, crd::u32& dst, bool& has) {
             if (const auto v = (*r)[k].value<int64_t>())
@@ -293,7 +341,10 @@ LightingCookError parse_lighting_toml(crd::containers::StringView toml_text, Lig
             crd::u32 k = 0;
             for (const auto& e : *gr)
             {
-                if (k < 3U) { out.cluster.grid[k++] = static_cast<crd::u32>(e.value_or<int64_t>(1)); }
+                if (k < 3U)
+                {
+                    out.cluster.grid[k++] = static_cast<crd::u32>(e.value_or<int64_t>(1));
+                }
             }
         }
         out.cluster.max_per_cluster = static_cast<crd::u32>((*c)["max_per_cluster"].value_or<int64_t>(8));
@@ -320,7 +371,10 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
         set_where(where, std::string_view(d.name.c_str(), d.name.size()));
         return LightingCookError::NoLights;
     }
-    if (total > kMaxTotalLights) { return LightingCookError::TooManyLights; }
+    if (total > kMaxTotalLights)
+    {
+        return LightingCookError::TooManyLights;
+    }
     for (crd::u32 i = 0; i < kLightTypeCount; ++i)
     {
         if (d.set.count[i] > kMaxPerType)
@@ -334,7 +388,10 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
     // light's words — a spotlight taking its neighbour's cone, in a scene that still renders.
     const auto fits = [&](crd::u32 off, crd::u32 n) { return off + n <= d.record.stride; };
     const auto need = [&](bool cond, crd::u32 off, crd::u32 n, const char* what) {
-        if (!cond) { return LightingCookError::Ok; }
+        if (!cond)
+        {
+            return LightingCookError::Ok;
+        }
         if (!fits(off, n))
         {
             set_where(where, what);
@@ -346,17 +403,35 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
     const bool any_dir      = d.set.count[0] > 0U || d.set.count[2] > 0U;
     const bool any_area     = lighting_needs_ltc(d);
     LightingCookError e = need(total > 0U, d.record.color, 3U, "color");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
     e = need(any_punctual || any_area, d.record.position, 3U, "position");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
     e = need(any_dir, d.record.direction, 3U, "direction");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
     e = need(any_punctual, d.record.falloff, 1U, "falloff");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
     e = need(d.set.count[2] > 0U, d.record.spot_scale, 1U, "spot_scale");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
     e = need(d.set.count[2] > 0U, d.record.spot_offset, 1U, "spot_offset");
-    if (e != LightingCookError::Ok) { return e; }
+    if (e != LightingCookError::Ok)
+    {
+        return e;
+    }
 
     // ⛔ AN AREA LIGHT NEEDS A SHAPE. Without the corner/endpoint fields the LTC solve would integrate over
     // adjacent lights' words — an area light illuminating from a polygon that does not exist.
@@ -384,7 +459,10 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
                 set_where(where, "record.radius");
                 return LightingCookError::MissingField;
             }
-            if (!fits(d.record.radius, 1U)) { return LightingCookError::FieldOutOfRecord; }
+            if (!fits(d.record.radius, 1U))
+            {
+                return LightingCookError::FieldOutOfRecord;
+            }
         }
     }
 
@@ -392,8 +470,14 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
     for (crd::u32 i = 0; i < kLightTypeCount; ++i)
     {
         const ShadowMode m = d.shadow.mode[i];
-        if (m == ShadowMode::None) { continue; }
-        if (d.set.count[i] == 0U) { continue; }
+        if (m == ShadowMode::None)
+        {
+            continue;
+        }
+        if (d.set.count[i] == 0U)
+        {
+            continue;
+        }
         const auto t = static_cast<LightType>(i);
         // ⛔ A SCHEME THAT DOES NOT APPLY. CSM is a DIRECTIONAL construction (it splits the view frustum along
         // the camera's depth); a cube shadow is a POINT one (six faces around a position). Accepting a mismatch
@@ -513,7 +597,10 @@ crd::u64 lighting_variant_id(const LightingDesc& d) noexcept
     hash_u64(h, d.ibl.diffuse ? 1ULL : 0ULL);
     hash_u64(h, d.ibl.specular ? 1ULL : 0ULL);
     hash_u64(h, d.cluster.enabled ? d.cluster.max_per_cluster + 1ULL : 0ULL);
-    for (crd::u32 i = 0; i < 3U; ++i) { hash_u64(h, d.cluster.grid[i]); }
+    for (crd::u32 i = 0; i < 3U; ++i)
+    {
+        hash_u64(h, d.cluster.grid[i]);
+    }
     // ⭐⭐ CEIR-18a-2 Stage 2: the clustered FS BAKES these header words (the list offset + the two viewport-dims words
     // it normalizes FragCoord against) into the emitted code, so a variant reading different words is a different cook.
     // Guarded on `enabled` (the max_per_cluster precedent above): a non-clustered desc never emits them, so its id is
@@ -526,7 +613,10 @@ crd::u64 lighting_variant_id(const LightingDesc& d) noexcept
         // ⭐⭐ CEIR-18b: the z-boundary table offset joins the id ONLY for a 3D grid — the FS bakes it into the Step-sum.
         // ⛔ GUARDED on grid[2] > 1: the 2D tiled config never emits the z-code, so its id (and cook) stays byte-identical
         // (the 18a byte-stability contract) — hashing a defaulted 0 here would churn every existing forward-clustered id.
-        if (d.cluster.grid[2] > 1U) { hash_u64(h, d.header.slice_bounds_off); }
+        if (d.cluster.grid[2] > 1U)
+        {
+            hash_u64(h, d.header.slice_bounds_off);
+        }
     }
     hash_u64(h, d.decal.count);
     hash_u64(h, d.decal.stride);
@@ -538,13 +628,22 @@ crd::u64 lighting_variant_id(const LightingDesc& d) noexcept
                             d.record.p2,           d.record.p3,           d.record.radius,
                             d.record.shadow_index, d.record.shadow_vp,    d.record.shadow_range,
                             d.record.ies_index};
-    for (const crd::u32 v : rec) { hash_u64(h, v); }
+    for (const crd::u32 v : rec)
+    {
+        hash_u64(h, v);
+    }
     const bool flags[] = {d.record.has_points,       d.record.has_radius,    d.record.has_shadow_index,
                           d.record.has_shadow_vp,    d.record.has_shadow_range, d.record.has_ies};
-    for (const bool f : flags) { hash_u64(h, f ? 1ULL : 0ULL); }
+    for (const bool f : flags)
+    {
+        hash_u64(h, f ? 1ULL : 0ULL);
+    }
     const crd::u32 hdr[] = {d.header.view_proj, d.header.csm_splits, d.header.light_off, d.header.decal_off,
                             d.header.cluster_off};
-    for (const crd::u32 v : hdr) { hash_u64(h, v); }
+    for (const crd::u32 v : hdr)
+    {
+        hash_u64(h, v);
+    }
     return h;
 }
 
@@ -597,11 +696,26 @@ crd::containers::String emit_lighting_toml(const LightingDesc& d, crd::memory::I
         kv(o, "p2", d.record.p2);
         kv(o, "p3", d.record.p3);
     }
-    if (d.record.has_radius) { kv(o, "radius", d.record.radius); }
-    if (d.record.has_shadow_index) { kv(o, "shadow_index", d.record.shadow_index); }
-    if (d.record.has_shadow_vp) { kv(o, "shadow_vp", d.record.shadow_vp); }
-    if (d.record.has_shadow_range) { kv(o, "shadow_range", d.record.shadow_range); }
-    if (d.record.has_ies) { kv(o, "ies_index", d.record.ies_index); }
+    if (d.record.has_radius)
+    {
+        kv(o, "radius", d.record.radius);
+    }
+    if (d.record.has_shadow_index)
+    {
+        kv(o, "shadow_index", d.record.shadow_index);
+    }
+    if (d.record.has_shadow_vp)
+    {
+        kv(o, "shadow_vp", d.record.shadow_vp);
+    }
+    if (d.record.has_shadow_range)
+    {
+        kv(o, "shadow_range", d.record.shadow_range);
+    }
+    if (d.record.has_ies)
+    {
+        kv(o, "ies_index", d.record.ies_index);
+    }
 
     app(o, "\n[counts]\n");
     for (crd::u32 i = 0; i < kLightTypeCount; ++i)
@@ -634,7 +748,10 @@ crd::containers::String emit_lighting_toml(const LightingDesc& d, crd::memory::I
     app(o, "grid    = [");
     for (crd::u32 i = 0; i < 3U; ++i)
     {
-        if (i > 0U) { app(o, ", "); }
+        if (i > 0U)
+        {
+            app(o, ", ");
+        }
         app_u32(o, d.cluster.grid[i]);
     }
     app(o, "]\n");
@@ -659,7 +776,10 @@ namespace
     KGraph&   g   = c.g;
     const int tex = b.shadow_atlas;
     const int smp = b.shadow_sampler;
-    if (tex < 0 || smp < 0) { return -1; }
+    if (tex < 0 || smp < 0)
+    {
+        return -1;
+    }
     const int uv3 = g.vec3(g.swizzle(uv, 0), g.swizzle(uv, 1), slice);
 
     if (d.shadow.filter == ShadowFilter::Evsm || d.shadow.filter == ShadowFilter::Msm)
@@ -693,7 +813,10 @@ namespace
         // SAMPLER node, so reading through the comparison sampler emitted `texture(sampler2DArrayShadow, vec3)`
         // — an overload that does not exist. The shader failed to compile with nothing pointing here; the shape
         // checker found it. The declaration REQUIRES the separate plain sampler, and its absence FAILS by name.
-        if (b.shadow_plain_sampler < 0) { return -1; }
+        if (b.shadow_plain_sampler < 0)
+        {
+            return -1;
+        }
         const int z_blocker = g.swizzle(g.tex_sample(tex, b.shadow_plain_sampler, uv3), 0);
         const int pen       = lt::pcss_penumbra(g, ref, z_blocker, c.kf(0.02));
         radius              = c.mul(radius, c.mxf(c.mul(pen, c.kf(16.0)), c.kf(1.0)));
@@ -739,7 +862,10 @@ namespace
     for (crd::u32 ci = d.shadow.cascades; ci-- > 0U;)
     {
         const int vp = b.csm_light_vp[ci];
-        if (vp < 0) { return -1; }
+        if (vp < 0)
+        {
+            return -1;
+        }
         const int lp = g.mat_mul_vec(vp, wp4);
         const int iw = c.dvd(c.kf(1.0), c.mxf(g.swizzle(lp, 3), c.kf(1.0e-6)));
         const int u  = c.add(c.mul(c.mul(g.swizzle(lp, 0), iw), c.kf(0.5)), c.kf(0.5));
@@ -752,7 +878,10 @@ namespace
         in           = c.mul(in, g.binary(KOp::Step, c.kf(0.0), z));
         in           = c.mul(in, g.binary(KOp::Step, z, c.kf(1.0)));
         const int s  = filtered_shadow(c, d, b, g.vec2(u, v), z, c.kf(static_cast<double>(ci)), frag_xy);
-        if (s < 0) { return -1; }
+        if (s < 0)
+        {
+            return -1;
+        }
         // walking from the LAST cascade back means the tightest containing one wins
         result = g.select(g.binary(KOp::CmpGt, in, c.kf(0.5)), s, result);
         taken  = c.mxf(taken, in);
@@ -764,7 +893,10 @@ namespace
 int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, const LightingBindings& b,
                   crd::kir::ShapeIssue* shape_issue)
 {
-    if (validate_lighting(d, nullptr) != LightingCookError::Ok) { return -1; }
+    if (validate_lighting(d, nullptr) != LightingCookError::Ok)
+    {
+        return -1;
+    }
     if (in.base_color < 0 || in.metallic < 0 || in.roughness < 0 || in.normal < 0 || in.view_dir < 0
         || in.world_pos < 0)
     {
@@ -779,7 +911,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
     int base_color = in.base_color;
     if (d.decal.count > 0U)
     {
-        if (b.decal_atlas < 0 || b.decal_sampler < 0) { return -1; }
+        if (b.decal_atlas < 0 || b.decal_sampler < 0)
+        {
+            return -1;
+        }
         const int dbase = c.hdru(d.header.decal_off);
         for (crd::u32 i = 0; i < d.decal.count; ++i)
         {
@@ -875,7 +1010,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
         const crd::u32 first = lighting_type_first(d, type);
         // Under clustering the punctual types walk the per-cluster run instead of the global array.
         const bool clustered = d.cluster.enabled && (type == LightType::Point || type == LightType::Spot);
-        if (clustered) { n = n < d.cluster.max_per_cluster ? n : d.cluster.max_per_cluster; }
+        if (clustered)
+        {
+            n = n < d.cluster.max_per_cluster ? n : d.cluster.max_per_cluster;
+        }
         for (crd::u32 i = 0; i < n; ++i)
         {
             // ⭐⭐ CEIR-18a-2 Stage 2b: under clustering the slot is a 0-based POINT-ARRAY index (the light-cull
@@ -886,7 +1024,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
             // record read — so CLAMP the slot for the ADDRESS (read a valid light) and SELECT-ZERO the contribution.
             int       cluster_mask = -1; // per-i select mask when clustered; -1 = no mask (non-clustered)
             const int rec = [&] {
-                if (!clustered) { return c.add(light_base, c.ku((first + i) * d.record.stride)); }
+                if (!clustered)
+                {
+                    return c.add(light_base, c.ku((first + i) * d.record.stride));
+                }
                 const int slot = c.loadu(c.add(c.add(c.hdru(d.header.cluster_off),
                                                      c.mul(cluster_index, c.ku(d.cluster.max_per_cluster))),
                                                c.ku(i)));
@@ -926,7 +1067,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
             {
                 // ── ⭐ E2 AREA LIGHTS (Heitz LTC). The fitted Minv comes from the LUT, indexed by roughness and
                 // N·V — which is why an area light needs a texture binding a punctual one does not.
-                if (b.ltc_lut < 0 || b.ltc_sampler < 0) { return -1; }
+                if (b.ltc_lut < 0 || b.ltc_sampler < 0)
+                {
+                    return -1;
+                }
                 const int nov  = c.mxf(g.dot(nrm, view), c.kf(1.0e-4));
                 const int uv   = lt::ltc_lut_coord(g, in.roughness, nov);
                 const int t1   = g.tex_sample(b.ltc_lut, b.ltc_sampler, uv);
@@ -954,13 +1098,19 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
                 contrib = nd::detail::bin(g, KOp::Mul, g.splat(contrib, 3), color);
                 l_dir   = g.normalize(g.binary(KOp::Sub, p0, in.world_pos));
             }
-            if (contrib < 0) { return -1; }
+            if (contrib < 0)
+            {
+                return -1;
+            }
 
             // ── ⭐ E2 IES PROFILES. A real luminaire is not a cone: its intensity varies with angle, and the
             // profile is what makes a wall washer look like a wall washer rather than a spotlight.
             if (d.record.has_ies)
             {
-                if (b.ies_atlas < 0 || b.ies_sampler < 0) { return -1; }
+                if (b.ies_atlas < 0 || b.ies_sampler < 0)
+                {
+                    return -1;
+                }
                 const int dir   = type == LightType::Directional ? c.v3_at(rec, d.record.direction)
                                                                  : g.unary(KOp::Neg, l_dir);
                 const int cosa  = nd::clamp(g, g.dot(g.normalize(dir), g.normalize(l_dir)), c.kf(-1.0), c.kf(1.0));
@@ -975,7 +1125,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
             if (mode != ShadowMode::None)
             {
                 int vis = -1;
-                if (mode == ShadowMode::Csm) { vis = csm_shadow(c, d, b, in.world_pos, frag_xy); }
+                if (mode == ShadowMode::Csm)
+                {
+                    vis = csm_shadow(c, d, b, in.world_pos, frag_xy);
+                }
                 else if (mode == ShadowMode::Map)
                 {
                     int clip[4];
@@ -1016,14 +1169,20 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
                                           c.sub(refd, c.kf(0.005)), // constant bias: a radial compare has no slope
                                           c.add(c.f_at(rec, d.record.shadow_index), face), frag_xy);
                 }
-                if (vis < 0) { return -1; }
+                if (vis < 0)
+                {
+                    return -1;
+                }
 
                 // ── ⭐ E6 CONTACT SHADOWS. A shadow map at any practical resolution loses the CONTACT — the
                 // few-pixel darkening where an object meets a surface — and its absence is what makes objects
                 // look like they float. The screen-space march recovers exactly that band.
                 if (d.shadow.contact)
                 {
-                    if (b.depth_tex < 0 || b.depth_sampler < 0) { return -1; }
+                    if (b.depth_tex < 0 || b.depth_sampler < 0)
+                    {
+                        return -1;
+                    }
                     // ⛔⛔ `lt::contact_shadow` IS A 4-TAP WINDOW — it swizzles lanes 0..3 of its ray/scene
                     // depths. This loop used to hand it SCALARS, so the helper read lanes 1..3 of a 1-wide
                     // value — undefined on every backend — and the close gate measured NODE COUNTS, so it
@@ -1087,7 +1246,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
     {
         for (const int s : b.sh)
         {
-            if (s < 0) { return -1; }
+            if (s < 0)
+            {
+                return -1;
+            }
         }
         const int irr     = lt::sh_irradiance(g, nrm, static_cast<const int*>(b.sh));
         const int diffuse = nd::detail::bin(g, KOp::Mul, base_color,
@@ -1096,7 +1258,10 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
     }
     if (d.ibl.specular)
     {
-        if (b.prefiltered < 0 || b.env_sampler < 0) { return -1; }
+        if (b.prefiltered < 0 || b.env_sampler < 0)
+        {
+            return -1;
+        }
         const int nov = c.mxf(g.dot(nrm, view), c.kf(1.0e-4));
         const int r   = g.reflect(g.unary(KOp::Neg, view), nrm);
         const int env = g.tex_sample(b.prefiltered, b.env_sampler, r);
@@ -1108,13 +1273,19 @@ int cook_lighting(const LightingDesc& d, KGraph& g, const LightingInputs& in, co
                                                f0, in.roughness, nov));
     }
 
-    if (in.emissive >= 0) { acc = nd::detail::bin(g, KOp::Add, acc, in.emissive); }
+    if (in.emissive >= 0)
+    {
+        acc = nd::detail::bin(g, KOp::Add, acc, in.emissive);
+    }
     const int lit = nd::clamp01(g, acc);
     // ⛔ THE SHAPE CHECK (REN-38 audit). This very function is where the class was discovered: a vec3 uv into
     // `lighting::pcf_shadow`'s vec2 parameter landed on `detail::bin`'s mismatched-vector arm, the cook
     // returned a valid node id, and the SHADER failed to compile with nothing pointing at the uv width. The
     // callers were fixed then; this refuses the whole class at the cook boundary, for every future scheme.
-    if (lit >= 0 && !crd::kir::graph_shapes_valid(g, lit, d.name.allocator(), shape_issue)) { return -1; }
+    if (lit >= 0 && !crd::kir::graph_shapes_valid(g, lit, d.name.allocator(), shape_issue))
+    {
+        return -1;
+    }
     return lit;
 }
 

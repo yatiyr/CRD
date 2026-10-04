@@ -44,7 +44,10 @@ public:
     {
         D3DKMT_OPENADAPTERFROMLUID request{};
         request.AdapterLuid = luid;
-        if (D3DKMTOpenAdapterFromLuid(&request) >= 0) { m_handle = request.hAdapter; }
+        if (D3DKMTOpenAdapterFromLuid(&request) >= 0)
+        {
+            m_handle = request.hAdapter;
+        }
     }
 
     ~KernelAdapter() noexcept
@@ -62,14 +65,20 @@ public:
 
     [[nodiscard]] bool query_type(bool& software, bool& render) const noexcept
     {
-        if (m_handle == 0U) { return false; }
+        if (m_handle == 0U)
+        {
+            return false;
+        }
         D3DKMT_ADAPTERTYPE type{};
         D3DKMT_QUERYADAPTERINFO request{};
         request.hAdapter = m_handle;
         request.Type = KMTQAITYPE_ADAPTERTYPE;
         request.pPrivateDriverData = &type;
         request.PrivateDriverDataSize = sizeof(type);
-        if (D3DKMTQueryAdapterInfo(&request) < 0) { return false; }
+        if (D3DKMTQueryAdapterInfo(&request) < 0)
+        {
+            return false;
+        }
         software = type.SoftwareDevice != 0U;
         render = type.RenderSupported != 0U;
         return true;
@@ -145,7 +154,10 @@ public:
         : m_stage(stage), m_dxil(alloc), m_wants_conservative(wants_conservative)
     {
         m_dxil.resize(cooked.size());
-        for (crd::usize i = 0U; i < cooked.size(); ++i) { m_dxil[i] = cooked[i]; }
+        for (crd::usize i = 0U; i < cooked.size(); ++i)
+        {
+            m_dxil[i] = cooked[i];
+        }
     }
     ~Dx12GpuProgramImpl() override                             = default;
     Dx12GpuProgramImpl(const Dx12GpuProgramImpl&)              = delete;
@@ -176,7 +188,10 @@ public:
         // DIAG.7a(f-3): request per-mode validation BEFORE device creation; the scope applies + reports it.
         m_validation.request_validation(config.enable_validation, config.enable_sync_validation,
                                         config.enable_gpu_assisted_validation);
-        if (FAILED(m_validation.create(m_device))) { return; }
+        if (FAILED(m_validation.create(m_device)))
+        {
+            return;
+        }
         m_validation_activation = m_validation.activation();
         capture_adapter_name();
         m_ok = true;
@@ -202,7 +217,10 @@ public:
     create_program(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry) override
     {
         ShaderStage stage{};
-        if (!kstage_to_shader_stage(entry.stage, stage)) { return nullptr; } // a stage DX12 can't lower ⇒ refuse loudly
+        if (!kstage_to_shader_stage(entry.stage, stage)) // a stage DX12 can't lower ⇒ refuse loudly
+        {
+            return nullptr;
+        }
 
         // IR on-ramp: crd-kir emits the stage HLSL (refuses a vertex with no clip position), dxc lowers it to DXIL. The
         // HLSL text lives only across this call; the DXIL never surfaces beyond the returned opaque program.
@@ -229,24 +247,36 @@ public:
             // B4: a mesh KEntry → SM6.5 mesh HLSL (SetMeshOutputCounts + out vertices/indices). emit_stage_hlsl refuses
             // non-Vertex/Fragment, so the mesh branch must precede it; the device mesh PSO + DispatchMesh live in the raster
             // context (create_mesh_program/draw_mesh).
-            if (!crd::kir::emit_mesh_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+            if (!crd::kir::emit_mesh_hlsl(graph, entry, m_alloc, kern))
+            {
+                return nullptr;
+            }
         }
         else if (entry.stage == crd::kir::KStage::Task)
         {
             // B4: a task KEntry → SM6.5 amplification HLSL (DispatchMesh + groupshared payload). The task→mesh PSO (AS+MS+PS)
             // lives in the raster context (create_task_mesh_program).
-            if (!crd::kir::emit_task_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+            if (!crd::kir::emit_task_hlsl(graph, entry, m_alloc, kern))
+            {
+                return nullptr;
+            }
         }
         else if (entry.stage == crd::kir::KStage::TessControl)
         {
             // B4-tess: a hull KEntry → HLSL hull shader (patch-constant tess factors + passthrough). The VS+HS+DS+PS graphics
             // PSO + DrawInstanced(PATCH_LIST) live in the raster context (create_tess_program / draw_tess).
-            if (!crd::kir::emit_tesc_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+            if (!crd::kir::emit_tesc_hlsl(graph, entry, m_alloc, kern))
+            {
+                return nullptr;
+            }
         }
         else if (entry.stage == crd::kir::KStage::TessEval)
         {
             // B4-tess: a domain KEntry → HLSL domain shader (bilerp patch_pos + displacement → SV_Position).
-            if (!crd::kir::emit_tese_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+            if (!crd::kir::emit_tese_hlsl(graph, entry, m_alloc, kern))
+            {
+                return nullptr;
+            }
         }
         else if (entry.stage == crd::kir::KStage::RayGen || entry.stage == crd::kir::KStage::ClosestHit
                  || entry.stage == crd::kir::KStage::Miss || entry.stage == crd::kir::KStage::AnyHit
@@ -255,13 +285,19 @@ public:
             // REN-38-A16: a CKIR ray-tracing entry → DXR HLSL (`[shader("raygeneration")]` etc.), compiled as a
             // `lib_6_3` LIBRARY — which is what a DXR state object consumes, and why the profile table already
             // had the case.
-            if (!crd::kir::emit_rt_stage_hlsl(graph, entry, m_alloc, kern, false)) { return nullptr; }
+            if (!crd::kir::emit_rt_stage_hlsl(graph, entry, m_alloc, kern, false))
+            {
+                return nullptr;
+            }
         }
         else if (entry.stage == crd::kir::KStage::Compute && entry.is_kernel())
         {
             // B-cmp: an imperative shared-memory/barrier compute kernel (FFT/reduction/transpose) → the DX12 mirror of the
             // Vulkan kernel path (emit_compute_kernel_hlsl), so create_program(g, e) lowers a kernel on BOTH backends.
-            if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, m_alloc, kern)) { return nullptr; }
+            if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, m_alloc, kern))
+            {
+                return nullptr;
+            }
         }
         else
         {
@@ -272,18 +308,30 @@ public:
             if (wants_conservative)
             {
                 const InnerCoverageRoute route = detail::dx12_inner_coverage_route(m_device.Get());
-                if (route == InnerCoverageRoute::Unsupported) { return nullptr; }
+                if (route == InnerCoverageRoute::Unsupported)
+                {
+                    return nullptr;
+                }
                 if (route == InnerCoverageRoute::Barycentric)
                 {
                     inner   = crd::kir::HlslInnerCoverage::Barycentric;
                     profile = L"ps_6_1"; // SV_Barycentrics
                 }
             }
-            if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern, inner)) { return nullptr; }
+            if (!crd::kir::emit_stage_hlsl(graph, entry, m_alloc, kern, inner))
+            {
+                return nullptr;
+            }
         }
         const auto dxil = compile_stage_dxil(profile, stage, crd::containers::to_view(kern.source), m_alloc);
-        if (!dxil.ok) { return nullptr; }
-        if (dxil.dxil.size() == 0U) { return nullptr; }
+        if (!dxil.ok)
+        {
+            return nullptr;
+        }
+        if (dxil.dxil.size() == 0U)
+        {
+            return nullptr;
+        }
         return std::make_unique<Dx12GpuProgramImpl>(
             stage, crd::containers::ConstSpan<crd::u8>(dxil.dxil.data(), dxil.dxil.size()), m_alloc, wants_conservative);
     }
@@ -293,7 +341,10 @@ private:
     {
         m_adapter[0] = '\0';
         ComPtr<IDXGIFactory4> factory;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) { return; }
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+        {
+            return;
+        }
         ComPtr<IDXGIAdapter1> adapter;
         const LUID            luid = m_device->GetAdapterLuid();
         if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter != nullptr)
@@ -363,16 +414,25 @@ std::atomic<int> s_inner_coverage_override{-1};
 
 [[nodiscard]] bool inner_coverage_route_runnable(ID3D12Device* device, InnerCoverageRoute route) noexcept
 {
-    if (device == nullptr) { return false; }
+    if (device == nullptr)
+    {
+        return false;
+    }
     D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
-    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) { return false; }
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options))))
+    {
+        return false;
+    }
     switch (route)
     {
     case InnerCoverageRoute::Native:
         return options.ConservativeRasterizationTier >= D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;
     case InnerCoverageRoute::Barycentric:
     {
-        if (options.ConservativeRasterizationTier < D3D12_CONSERVATIVE_RASTERIZATION_TIER_1) { return false; }
+        if (options.ConservativeRasterizationTier < D3D12_CONSERVATIVE_RASTERIZATION_TIER_1)
+        {
+            return false;
+        }
         D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
         if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3)))
             || options3.BarycentricsSupported == FALSE)
@@ -396,8 +456,14 @@ bool detail::dx12_inner_coverage_route_runnable(ID3D12Device* device, InnerCover
 InnerCoverageRoute detail::dx12_inner_coverage_route(ID3D12Device* device) noexcept
 {
     const int forced = s_inner_coverage_override.load(std::memory_order_relaxed);
-    if (forced >= 0) { return static_cast<InnerCoverageRoute>(forced); }
-    if (device == nullptr) { return InnerCoverageRoute::Unsupported; }
+    if (forced >= 0)
+    {
+        return static_cast<InnerCoverageRoute>(forced);
+    }
+    if (device == nullptr)
+    {
+        return InnerCoverageRoute::Unsupported;
+    }
     if (inner_coverage_route_runnable(device, InnerCoverageRoute::Native))
     {
         // Only the documented software provider is diverted: its Tier-3 claim is contradicted by the reproduced false
@@ -416,7 +482,10 @@ InnerCoverageRoute dx12_default_inner_coverage_route() noexcept
 {
     detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device> device;
-    if (FAILED(validation.create(device))) { return InnerCoverageRoute::Unsupported; }
+    if (FAILED(validation.create(device)))
+    {
+        return InnerCoverageRoute::Unsupported;
+    }
     return detail::dx12_inner_coverage_route(device.Get());
 }
 
@@ -424,7 +493,10 @@ bool dx12_override_inner_coverage_route(InnerCoverageRoute route) noexcept
 {
     detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device> device;
-    if (FAILED(validation.create(device)) || !inner_coverage_route_runnable(device.Get(), route)) { return false; }
+    if (FAILED(validation.create(device)) || !inner_coverage_route_runnable(device.Get(), route))
+    {
+        return false;
+    }
     s_inner_coverage_override.store(static_cast<int>(route), std::memory_order_relaxed);
     return true;
 }
@@ -504,7 +576,10 @@ static DxilCompileResult compile_dxil_core(crd::containers::StringView source, c
     const auto*      bytes = static_cast<const crd::u8*>(obj->GetBufferPointer());
     const crd::usize size  = static_cast<crd::usize>(obj->GetBufferSize());
     result.dxil.resize(size);
-    for (crd::usize i = 0U; i < size; ++i) { result.dxil[i] = bytes[i]; }
+    for (crd::usize i = 0U; i < size; ++i)
+    {
+        result.dxil[i] = bytes[i];
+    }
     result.ok = true;
     return result;
 }
@@ -536,14 +611,20 @@ DxilCompileResult compile_work_graph_library_to_dxil(crd::containers::StringView
 std::unique_ptr<IGpuProgram> make_dx12_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked_dxil,
                                                crd::memory::IAllocator* alloc)
 {
-    if (cooked_dxil.size() == 0U) { return nullptr; }
+    if (cooked_dxil.size() == 0U)
+    {
+        return nullptr;
+    }
     return std::make_unique<Dx12GpuProgramImpl>(stage, cooked_dxil, alloc);
 }
 
 std::unique_ptr<IGpuContext> create_dx12_gpu_context(crd::memory::IAllocator* alloc, const GpuContextConfig& config)
 {
     auto ctx = std::make_unique<Dx12GpuContext>(alloc, config);
-    if (!ctx->valid()) { return nullptr; }
+    if (!ctx->valid())
+    {
+        return nullptr;
+    }
     return ctx;
 }
 

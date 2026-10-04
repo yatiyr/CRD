@@ -21,13 +21,19 @@ namespace
 f64 rdot(const cf64* u, const cf64* v, int n) // real inner product Re Σ conj(u) v
 {
     f64 s = 0.0;
-    for (int i = 0; i < n; ++i) { s += u[i].real() * v[i].real() + u[i].imag() * v[i].imag(); }
+    for (int i = 0; i < n; ++i)
+    {
+        s += u[i].real() * v[i].real() + u[i].imag() * v[i].imag();
+    }
     return s;
 }
 f64 dot(const f64* u, const f64* v, int n)
 {
     f64 s = 0.0;
-    for (int i = 0; i < n; ++i) { s += u[i] * v[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        s += u[i] * v[i];
+    }
     return s;
 }
 } // namespace
@@ -73,9 +79,20 @@ TEST_CASE("v16-d: DSP filtering VJP (correlation = convolution transpose) == tra
     f64           dh[nh];
     f64           dx[nx];
     f64           gy[ny];
-    for (int i = 0; i < nh; ++i) { h[i] = 0.4 * std::sin(0.5 + i); dh[i] = std::cos(0.3 + i); }
-    for (int i = 0; i < nx; ++i) { x[i] = 0.3 * std::cos(0.2 + i); dx[i] = std::sin(0.6 + i); }
-    for (int i = 0; i < ny; ++i) { gy[i] = 0.2 * std::sin(1.0 + 0.7 * i); }
+    for (int i = 0; i < nh; ++i)
+    {
+        h[i] = 0.4 * std::sin(0.5 + i);
+        dh[i] = std::cos(0.3 + i);
+    }
+    for (int i = 0; i < nx; ++i)
+    {
+        x[i] = 0.3 * std::cos(0.2 + i);
+        dx[i] = std::sin(0.6 + i);
+    }
+    for (int i = 0; i < ny; ++i)
+    {
+        gy[i] = 0.2 * std::sin(1.0 + 0.7 * i);
+    }
     f64 dy[ny];
     f64 scr[ny];
     sf::conv_jvp(h, dh, nh, x, dx, nx, dy, scr);

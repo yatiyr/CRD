@@ -230,7 +230,10 @@ TEST_CASE("ckir gsplat TILED render == brute-force render (the perf structure is
 
     // ── depth sort (host, nearest-first) ──
     int order[ng];
-    for (int i = 0; i < ng; ++i) { order[i] = i; }
+    for (int i = 0; i < ng; ++i)
+    {
+        order[i] = i;
+    }
     for (int i = 0; i < ng; ++i)
     {
         for (int j = i + 1; j < ng; ++j)
@@ -280,20 +283,40 @@ TEST_CASE("ckir gsplat TILED render == brute-force render (the perf structure is
         const double mny = sorted[static_cast<crd::usize>(i) * 12U + 1U];
         const double rad = sorted[static_cast<crd::usize>(i) * 12U + 6U];
         const double valid = sorted[static_cast<crd::usize>(i) * 12U + 11U];
-        if (valid < 0.5) { continue; }
+        if (valid < 0.5)
+        {
+            continue;
+        }
         int tx0 = static_cast<int>(crd::math::floor((mnx - rad) / tile_px));
         int tx1 = static_cast<int>(crd::math::floor((mnx + rad) / tile_px));
         int ty0 = static_cast<int>(crd::math::floor((mny - rad) / tile_px));
         int ty1 = static_cast<int>(crd::math::floor((mny + rad) / tile_px));
-        if (tx0 < 0) { tx0 = 0; }  if (ty0 < 0) { ty0 = 0; }
-        if (tx1 > tiles_x - 1) { tx1 = tiles_x - 1; }  if (ty1 > tiles_x - 1) { ty1 = tiles_x - 1; }
+        if (tx0 < 0)
+        {
+            tx0 = 0;
+        }
+        if (ty0 < 0)
+        {
+            ty0 = 0;
+        }
+        if (tx1 > tiles_x - 1)
+        {
+            tx1 = tiles_x - 1;
+        }
+        if (ty1 > tiles_x - 1)
+        {
+            ty1 = tiles_x - 1;
+        }
         for (int ty = ty0; ty <= ty1; ++ty)
         {
             for (int tx = tx0; tx <= tx1; ++tx)
             {
                 const int t = ty * tiles_x + tx;
                 const int c = static_cast<int>(counts[static_cast<crd::usize>(t)]);
-                if (c >= cap) { continue; }
+                if (c >= cap)
+                {
+                    continue;
+                }
                 for (int k = 0; k < 12; ++k)
                 {
                     buckets[(static_cast<crd::usize>(t) * cap + static_cast<crd::usize>(c)) * 12U + static_cast<crd::usize>(k)] =
@@ -326,7 +349,10 @@ TEST_CASE("ckir gsplat TILED render == brute-force render (the perf structure is
         {
             const double d = crd::math::abs(timg[static_cast<crd::usize>(p) * 4U + static_cast<crd::usize>(c)]
                                             - bimg[static_cast<crd::usize>(p) * 4U + static_cast<crd::usize>(c)]);
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
         }
     }
     INFO("worst |tiled - brute| = " << worst);
@@ -492,7 +518,10 @@ TEST_CASE("ckir gsplat ON-DEVICE depth sort == host sort (the sort half runs on 
     // host reference: stable sort the indices by depth (slot 2), gather
     crd::containers::Array<crd::u32> ho(&alloc);
     ho.resize(n, 0U);
-    for (int i = 0; i < n; ++i) { ho[static_cast<crd::usize>(i)] = static_cast<crd::u32>(i); }
+    for (int i = 0; i < n; ++i)
+    {
+        ho[static_cast<crd::usize>(i)] = static_cast<crd::u32>(i);
+    }
     for (int i = 1; i < n; ++i) // insertion sort (stable), by depth
     {
         const crd::u32 key = ho[static_cast<crd::usize>(i)];
@@ -515,14 +544,23 @@ TEST_CASE("ckir gsplat ON-DEVICE depth sort == host sort (the sort half runs on 
         const crd::usize src = static_cast<crd::usize>(ho[static_cast<crd::usize>(i)]);
         for (int k = 0; k < 12; ++k)
         {
-            if (crd::math::abs(gpu_sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] - proj[src * 12U + static_cast<crd::usize>(k)]) > 1.0e-9) { ++mism; }
+            if (crd::math::abs(gpu_sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] - proj[src * 12U + static_cast<crd::usize>(k)]) > 1.0e-9)
+            {
+                ++mism;
+            }
         }
     }
     INFO("mismatched sorted slots = " << mism << " of " << (n * 12));
     CHECK(mism == 0); // the GPU depth sort == the host depth sort, splat for splat
     // and the sorted depths are ascending (nearest-first).
     int bad = 0;
-    for (int i = 1; i < n; ++i) { if (gpu_sorted[static_cast<crd::usize>(i) * 12U + 2U] < gpu_sorted[static_cast<crd::usize>(i - 1) * 12U + 2U] - 1.0e-9) { ++bad; } }
+    for (int i = 1; i < n; ++i)
+    {
+        if (gpu_sorted[static_cast<crd::usize>(i) * 12U + 2U] < gpu_sorted[static_cast<crd::usize>(i - 1) * 12U + 2U] - 1.0e-9)
+        {
+            ++bad;
+        }
+    }
     CHECK(bad == 0);
 }
 
@@ -576,7 +614,18 @@ TEST_CASE("B19-a4 tilecount: covered-tile count per splat matches the host bbox 
     kir::KernelBuffer tb[2] = {{proj.data(), n * 12, 0, 0}, {tc.data(), n, 0, 1}};
     kir::eval_cpu_kernel(tg, te, tb, 2, te.local_size[0], &alloc, 1U);
 
-    const auto clampi = [](int v, int lo, int hi) { int r = v; if (r < lo) { r = lo; } if (r > hi) { r = hi; } return r; };
+    const auto clampi = [](int v, int lo, int hi)
+    {
+        int r = v;
+        if (r < lo)
+        {
+            r = lo;
+        }
+        if (r > hi)
+        {
+            r = hi;
+        }
+        return r; };
     const float itpx = 1.0F / static_cast<float>(tile_px);
     int         mism = 0;
     int         maxc = 0;
@@ -595,8 +644,14 @@ TEST_CASE("B19-a4 tilecount: covered-tile count per splat matches the host bbox 
         const int cyn = ry1 - ry0 > 0 ? ry1 - ry0 : 0;
         const int exp = val > 0.5F ? cxn * cyn : 0;
         const int got = static_cast<int>(tc[static_cast<crd::usize>(i)]);
-        if (exp != got) { ++mism; }
-        if (exp > maxc) { maxc = exp; }
+        if (exp != got)
+        {
+            ++mism;
+        }
+        if (exp > maxc)
+        {
+            maxc = exp;
+        }
         total += exp;
     }
     INFO("tilecount mismatches = " << mism << ", max cover = " << maxc << ", total instances = " << total);
@@ -682,7 +737,11 @@ TEST_CASE("B19-a4 scatter: tilecount->scan->scatter packs (tile,splat) instances
     crd::containers::Array<double> valsd(&alloc);
     keysd.resize(keys.size(), 0.0);
     valsd.resize(vals.size(), 0.0);
-    for (crd::usize i = 0; i < keys.size(); ++i) { keysd[i] = static_cast<double>(keys[i]); valsd[i] = 0.0; }
+    for (crd::usize i = 0; i < keys.size(); ++i)
+    {
+        keysd[i] = static_cast<double>(keys[i]);
+        valsd[i] = 0.0;
+    }
     kir::KGraph       sg2(&alloc);
     const kir::KEntry se = kir::gsplat::build_gsplat_scatter_instances_kernel(sg2, bcfg);
     kir::KernelBuffer sb2[5] = {{proj.data(), n * 12, 0, 0}, {tc.data(), n, 0, 1}, {off.data(), n, 0, 2},
@@ -690,7 +749,18 @@ TEST_CASE("B19-a4 scatter: tilecount->scan->scatter packs (tile,splat) instances
     kir::eval_cpu_kernel(sg2, se, sb2, 5, se.local_size[0], &alloc, static_cast<crd::u32>(n * max_cover / local));
 
     // host reference: same rect, same row-major slot decode, same packed positions.
-    const auto clampi = [](int v, int lo, int hi) { int r = v; if (r < lo) { r = lo; } if (r > hi) { r = hi; } return r; };
+    const auto clampi = [](int v, int lo, int hi)
+    {
+        int r = v;
+        if (r < lo)
+        {
+            r = lo;
+        }
+        if (r > hi)
+        {
+            r = hi;
+        }
+        return r; };
     const float itpx = 1.0F / static_cast<float>(tile_px);
     crd::containers::Array<int> hoff(&alloc);
     crd::containers::Array<int> htc(&alloc);
@@ -731,15 +801,27 @@ TEST_CASE("B19-a4 scatter: tilecount->scan->scatter packs (tile,splat) instances
             const int lx   = s - ly * cxn;
             const int tile = (ry0 + ly) * tiles_x + (rx0 + lx);
             const int pos  = hoff[static_cast<crd::usize>(i)] + s;
-            if (static_cast<int>(keysd[static_cast<crd::usize>(pos)]) != tile) { ++mismatch; }
-            if (static_cast<int>(valsd[static_cast<crd::usize>(pos)]) != i) { ++mismatch; }
+            if (static_cast<int>(keysd[static_cast<crd::usize>(pos)]) != tile)
+            {
+                ++mismatch;
+            }
+            if (static_cast<int>(valsd[static_cast<crd::usize>(pos)]) != i)
+            {
+                ++mismatch;
+            }
         }
     }
     INFO("scatter mismatches = " << mismatch << " over T=" << total << " instances");
     CHECK(mismatch == 0);
     // every written key is a valid tile id (< nTiles); padding past T stayed at the sentinel.
     int bad_tile = 0;
-    for (int p = 0; p < total; ++p) { if (static_cast<crd::u32>(keysd[static_cast<crd::usize>(p)]) >= static_cast<crd::u32>(tiles_x * tiles_y)) { ++bad_tile; } }
+    for (int p = 0; p < total; ++p)
+    {
+        if (static_cast<crd::u32>(keysd[static_cast<crd::usize>(p)]) >= static_cast<crd::u32>(tiles_x * tiles_y))
+        {
+            ++bad_tile;
+        }
+    }
     CHECK(bad_tile == 0);
     CHECK(static_cast<crd::u32>(keysd[static_cast<crd::usize>(total)]) == 0xFFFFFFFFU); // first padding slot untouched
 }
@@ -806,7 +888,10 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
     // host depth sort → `sorted` (the a3 on-device sort is gated separately; here it just supplies depth-ordered input)
     crd::containers::Array<int> ord(&alloc);
     ord.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { ord[static_cast<crd::usize>(i)] = i; }
+    for (int i = 0; i < n; ++i)
+    {
+        ord[static_cast<crd::usize>(i)] = i;
+    }
     for (int i = 1; i < n; ++i)
     {
         const int   key = ord[static_cast<crd::usize>(i)];
@@ -825,7 +910,10 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
     sorted.resize(static_cast<crd::usize>(n) * 12U, 0.0);
     for (int i = 0; i < n; ++i)
     {
-        for (int k = 0; k < 12; ++k) { sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] = proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 12U + static_cast<crd::usize>(k)]; }
+        for (int k = 0; k < 12; ++k)
+        {
+            sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] = proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 12U + static_cast<crd::usize>(k)];
+        }
     }
 
     kir::gsplat::GsplatBinConfig bcfg;
@@ -920,7 +1008,10 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
         const int rend = static_cast<int>(ranges[static_cast<crd::usize>(t) * 2U + 1U]);
         CHECK(rend >= rs);
         span_sum += (rend - rs);
-        for (int p = rs; p < rend; ++p) { CHECK(static_cast<int>(ck[static_cast<crd::usize>(p)]) == t); } // every instance in the span really has this tile
+        for (int p = rs; p < rend; ++p) // every instance in the span really has this tile
+        {
+            CHECK(static_cast<int>(ck[static_cast<crd::usize>(p)]) == t);
+        }
     }
     CHECK(span_sum == total); // the ranges tile every real instance exactly once
 
@@ -955,7 +1046,10 @@ TEST_CASE("B19-a4 FULL GPU BINNING: tilecount->scan->scatter->sort->ranges->bloc
         for (int c = 0; c < 3; ++c)
         {
             const double d = crd::math::abs(img[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)] - brimg[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)]);
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
         }
     }
     std::printf("[B19-a4] full GPU bin: %d splats, T=%d instances over %d tiles; worst |block - brute| = %.3e\n", n, total, n_tiles, worst);
@@ -974,7 +1068,10 @@ TEST_CASE("B19-d quantise: the K-bit attribute codec round-trips within the quan
     gs.resize(static_cast<crd::usize>(n) * natt, 0.0);
     crd::u32 st = 0xC0DEU;
     const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
-    for (int i = 0; i < n * natt; ++i) { gs[static_cast<crd::usize>(i)] = (rnd() * 2.0 - 1.0) * 3.0; }
+    for (int i = 0; i < n * natt; ++i)
+    {
+        gs[static_cast<crd::usize>(i)] = (rnd() * 2.0 - 1.0) * 3.0;
+    }
 
     // per-attribute observed ranges
     crd::containers::Array<double> rng(&alloc);
@@ -982,7 +1079,18 @@ TEST_CASE("B19-d quantise: the K-bit attribute codec round-trips within the quan
     for (int k = 0; k < natt; ++k)
     {
         double lo = 1.0e30; double hi = -1.0e30;
-        for (int i = 0; i < n; ++i) { const double v = gs[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)]; if (v < lo) { lo = v; } if (v > hi) { hi = v; } }
+        for (int i = 0; i < n; ++i)
+        {
+            const double v = gs[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)];
+            if (v < lo)
+            {
+                lo = v;
+            }
+            if (v > hi)
+            {
+                hi = v;
+            }
+        }
         rng[static_cast<crd::usize>(k) * 2U] = lo; rng[static_cast<crd::usize>(k) * 2U + 1U] = hi;
     }
 
@@ -1009,8 +1117,14 @@ TEST_CASE("B19-d quantise: the K-bit attribute codec round-trips within the quan
         for (int i = 0; i < n; ++i)
         {
             const double err = crd::math::abs(recon[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)] - gs[static_cast<crd::usize>(i) * static_cast<crd::usize>(natt) + static_cast<crd::usize>(k)]);
-            if (err > worst) { worst = err; }
-            if (err > 0.5001 * step + 1.0e-6) { ++bad_code; } // nearest-code error ≤ half a step
+            if (err > worst)
+            {
+                worst = err;
+            }
+            if (err > 0.5001 * step + 1.0e-6) // nearest-code error ≤ half a step
+            {
+                ++bad_code;
+            }
         }
     }
     std::printf("[B19-d quant] %d-bit codec: worst round-trip err %.3e; ratio 32/%d = %.1fx\n", bits, worst, bits, 32.0 / bits);
@@ -1033,7 +1147,12 @@ TEST_CASE("B19-d Morton: sorting by the Z-order key gives spatial locality (adja
     gs.resize(static_cast<crd::usize>(n) * 14U, 0.0);
     crd::u32 st = 0x37EU;
     const auto rnd = [&]() { st = st * 1664525U + 1013904223U; return static_cast<double>(st >> 8U) / 16777216.0; };
-    for (int i = 0; i < n; ++i) { gs[static_cast<crd::usize>(i) * 14U] = rnd(); gs[static_cast<crd::usize>(i) * 14U + 1U] = rnd(); gs[static_cast<crd::usize>(i) * 14U + 2U] = rnd(); }
+    for (int i = 0; i < n; ++i)
+    {
+        gs[static_cast<crd::usize>(i) * 14U] = rnd();
+        gs[static_cast<crd::usize>(i) * 14U + 1U] = rnd();
+        gs[static_cast<crd::usize>(i) * 14U + 2U] = rnd();
+    }
     crd::containers::Array<double> bd(&alloc);
     bd.resize(6U, 0.0); bd[3] = 1.0; bd[4] = 1.0; bd[5] = 1.0;
 
@@ -1110,7 +1229,11 @@ double diff_loss(crd::memory::TlsfAllocator& alloc, const kir::gsplat::GsplatDif
     kir::KernelBuffer fb[2] = {{params.data(), 5, 0, 0}, {img.data(), cfg.width * cfg.height, 0, 1}};
     kir::eval_cpu_kernel(fg, fe, fb, 2, fe.local_size[0], &alloc, static_cast<crd::u32>(cfg.width * cfg.height / cfg.local_size));
     double l = 0.0;
-    for (int i = 0; i < cfg.width * cfg.height; ++i) { const double d = img[static_cast<crd::usize>(i)] - target[static_cast<crd::usize>(i)]; l += d * d; }
+    for (int i = 0; i < cfg.width * cfg.height; ++i)
+    {
+        const double d = img[static_cast<crd::usize>(i)] - target[static_cast<crd::usize>(i)];
+        l += d * d;
+    }
     return l;
 }
 } // namespace
@@ -1159,7 +1282,10 @@ TEST_CASE("B19-f differentiable: analytic gradients match finite differences", "
         const double rel = crd::math::abs(fd - an) / (crd::math::abs(fd) + crd::math::abs(an) + 1.0e-6);
         INFO("param " << k << ": analytic " << an << " vs FD " << fd);
         CHECK(rel < 1.0e-2); // analytic gradient matches finite differences
-        if (rel < 1.0e-2) { ++worst_ok; }
+        if (rel < 1.0e-2)
+        {
+            ++worst_ok;
+        }
     }
     CHECK(worst_ok == 5);
 }
@@ -1249,19 +1375,36 @@ TEST_CASE("B19 perf: shared-memory block render == direct block render (bit-exac
     // host depth sort → sorted; order = identity; ranges: all n instances in tile 0.
     crd::containers::Array<int> ord(&alloc);
     ord.resize(static_cast<crd::usize>(n), 0);
-    for (int i = 0; i < n; ++i) { ord[static_cast<crd::usize>(i)] = i; }
+    for (int i = 0; i < n; ++i)
+    {
+        ord[static_cast<crd::usize>(i)] = i;
+    }
     for (int i = 1; i < n; ++i)
     {
         const int key = ord[static_cast<crd::usize>(i)]; const double kd = proj[static_cast<crd::usize>(key) * 12U + 2U]; int j = i - 1;
-        while (j >= 0 && proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(j)]) * 12U + 2U] > kd) { const int jp1 = j + 1; ord[static_cast<crd::usize>(jp1)] = ord[static_cast<crd::usize>(j)]; --j; }
+        while (j >= 0 && proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(j)]) * 12U + 2U] > kd)
+        {
+            const int jp1 = j + 1;
+            ord[static_cast<crd::usize>(jp1)] = ord[static_cast<crd::usize>(j)];
+            --j;
+        }
         const int jp1 = j + 1; ord[static_cast<crd::usize>(jp1)] = key;
     }
     crd::containers::Array<double> sorted(&alloc);
     sorted.resize(static_cast<crd::usize>(n) * 12U, 0.0);
-    for (int i = 0; i < n; ++i) { for (int k = 0; k < 12; ++k) { sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] = proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 12U + static_cast<crd::usize>(k)]; } }
+    for (int i = 0; i < n; ++i)
+    {
+        for (int k = 0; k < 12; ++k)
+        {
+            sorted[static_cast<crd::usize>(i) * 12U + static_cast<crd::usize>(k)] = proj[static_cast<crd::usize>(ord[static_cast<crd::usize>(i)]) * 12U + static_cast<crd::usize>(k)];
+        }
+    }
     crd::containers::Array<double> order(&alloc);
     order.resize(static_cast<crd::usize>(n), 0.0);
-    for (int i = 0; i < n; ++i) { order[static_cast<crd::usize>(i)] = static_cast<double>(i); } // identity (sorted[] already in depth order)
+    for (int i = 0; i < n; ++i) // identity (sorted[] already in depth order)
+    {
+        order[static_cast<crd::usize>(i)] = static_cast<double>(i);
+    }
     crd::containers::Array<double> ranges(&alloc);
     ranges.resize(static_cast<crd::usize>(n_tiles) * 2U, 0.0);
     ranges[0] = 0.0; ranges[1] = static_cast<double>(n); // tile 0 = [0,n); tiles 1..3 = [0,0)
@@ -1294,7 +1437,10 @@ TEST_CASE("B19 perf: shared-memory block render == direct block render (bit-exac
         for (int c = 0; c < 3; ++c)
         {
             const double d = crd::math::abs(img_s[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)] - img_d[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)]);
-            if (d > worst) { worst = d; }
+            if (d > worst)
+            {
+                worst = d;
+            }
             lum += img_s[static_cast<crd::usize>(q) * 4U + static_cast<crd::usize>(c)];
         }
     }

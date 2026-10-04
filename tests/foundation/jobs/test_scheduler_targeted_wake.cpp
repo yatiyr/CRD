@@ -175,7 +175,10 @@ TEST_CASE("scheduler-tw: wake_all unblocks every parked worker", "[jobs][schedul
 
     sched.wake_all(kThreads);
 
-    for (auto& w : waiters) w.join();
+    for (auto& w : waiters)
+    {
+        w.join();
+    }
     CHECK(woke_count.load() == static_cast<int>(kThreads));
 
     sched.shutdown();
@@ -242,8 +245,14 @@ TEST_CASE("scheduler-tw: concurrent producer/consumer stress", "[jobs][scheduler
     for (int i = 0; i < kTotalJobs; ++i)
     {
         Priority prio = Priority::Low;
-        if (i % 3 == 0)      prio = Priority::High;
-        else if (i % 3 == 1) prio = Priority::Normal;
+        if (i % 3 == 0)
+        {
+            prio = Priority::High;
+        }
+        else if (i % 3 == 1)
+        {
+            prio = Priority::Normal;
+        }
         sched.push(make_count_job(&executed, prio));
     }
 
@@ -260,7 +269,10 @@ TEST_CASE("scheduler-tw: concurrent producer/consumer stress", "[jobs][scheduler
     // Tell workers to exit, then wake them so any parked ones observe `stop`.
     stop.store(true, std::memory_order_release);
     sched.wake_all(kThreads);
-    for (auto& w : workers) w.join();
+    for (auto& w : workers)
+    {
+        w.join();
+    }
 
     sched.shutdown();
 }

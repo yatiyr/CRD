@@ -25,7 +25,10 @@ inline void gemm_nt(const crd::f64* a, const crd::f64* b, crd::f64* c, int m, in
         for (int j = 0; j < n; ++j)
         {
             crd::f64 s = 0.0;
-            for (int t = 0; t < k; ++t) { s += a[i * k + t] * b[j * k + t]; }
+            for (int t = 0; t < k; ++t)
+            {
+                s += a[i * k + t] * b[j * k + t];
+            }
             c[i * n + j] = s;
         }
     }
@@ -49,13 +52,19 @@ inline void bias_add(const crd::f64* x, const crd::f64* bias, crd::f64* y, int r
 {
     for (int i = 0; i < rows; ++i)
     {
-        for (int j = 0; j < cols; ++j) { y[i * cols + j] = x[i * cols + j] + bias[j]; }
+        for (int j = 0; j < cols; ++j)
+        {
+            y[i * cols + j] = x[i * cols + j] + bias[j];
+        }
     }
 }
 // VJP: ḡX = ḡY ; ḡbias[j] = Σ_i ḡY[i,j] (broadcast is transposed by a sum).
 inline void bias_add_vjp(const crd::f64* gy, crd::f64* gx, crd::f64* gbias, int rows, int cols) noexcept
 {
-    for (int j = 0; j < cols; ++j) { gbias[j] = 0.0; }
+    for (int j = 0; j < cols; ++j)
+    {
+        gbias[j] = 0.0;
+    }
     for (int i = 0; i < rows; ++i)
     {
         for (int j = 0; j < cols; ++j)
@@ -69,11 +78,17 @@ inline void bias_add_vjp(const crd::f64* gy, crd::f64* gx, crd::f64* gbias, int 
 // ---- ReLU (elementwise) ------------------------------------------------------------------------------------
 inline void relu(const crd::f64* x, crd::f64* y, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { y[i] = x[i] > 0.0 ? x[i] : 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        y[i] = x[i] > 0.0 ? x[i] : 0.0;
+    }
 }
 inline void relu_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { gx[i] = x[i] > 0.0 ? gy[i] : 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        gx[i] = x[i] > 0.0 ? gy[i] : 0.0;
+    }
 }
 
 // ---- softmax + cross-entropy loss (row = sample, cols = classes; labels = class index per row) --------------
@@ -86,7 +101,10 @@ inline void relu_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, int n)
     {
         const crd::f64* z = logits + i * cols;
         crd::f64        mx = z[0];
-        for (int j = 1; j < cols; ++j) { mx = z[j] > mx ? z[j] : mx; }
+        for (int j = 1; j < cols; ++j)
+        {
+            mx = z[j] > mx ? z[j] : mx;
+        }
         crd::f64 sum = 0.0;
         for (int j = 0; j < cols; ++j)
         {
@@ -95,7 +113,10 @@ inline void relu_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, int n)
             sum += e;
         }
         const crd::f64 inv = 1.0 / sum;
-        for (int j = 0; j < cols; ++j) { probs[i * cols + j] *= inv; }
+        for (int j = 0; j < cols; ++j)
+        {
+            probs[i * cols + j] *= inv;
+        }
         loss -= crd::math::log(probs[i * cols + labels[i]]);
     }
     return loss / static_cast<crd::f64>(rows);
@@ -107,7 +128,10 @@ inline void softmax_cross_entropy_vjp(const crd::f64* probs, const int* labels, 
     const crd::f64 inv = 1.0 / static_cast<crd::f64>(rows);
     for (int i = 0; i < rows; ++i)
     {
-        for (int j = 0; j < cols; ++j) { glogits[i * cols + j] = probs[i * cols + j] * inv; }
+        for (int j = 0; j < cols; ++j)
+        {
+            glogits[i * cols + j] = probs[i * cols + j] * inv;
+        }
         glogits[i * cols + labels[i]] -= inv;
     }
 }
@@ -123,7 +147,10 @@ inline void softmax_cross_entropy_vjp(const crd::f64* probs, const int* labels, 
 inline void gelu(const crd::f64* x, crd::f64* y, int n) noexcept
 {
     constexpr crd::f64 inv_sqrt2 = 0.70710678118654752440;
-    for (int i = 0; i < n; ++i) { y[i] = 0.5 * x[i] * (1.0 + crd::math::deterministic::erf(x[i] * inv_sqrt2)); }
+    for (int i = 0; i < n; ++i)
+    {
+        y[i] = 0.5 * x[i] * (1.0 + crd::math::deterministic::erf(x[i] * inv_sqrt2));
+    }
 }
 inline void gelu_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, int n) noexcept
 {
@@ -140,19 +167,31 @@ inline void gelu_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, int n)
 // ---- tanh / sigmoid (VJP saves the OUTPUT y, torch convention) ---------------------------------------------
 inline void tanh_act(const crd::f64* x, crd::f64* y, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { y[i] = crd::math::tanh(x[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        y[i] = crd::math::tanh(x[i]);
+    }
 }
 inline void tanh_vjp(const crd::f64* y, const crd::f64* gy, crd::f64* gx, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { gx[i] = gy[i] * (1.0 - y[i] * y[i]); } // y'(x) = 1 − tanh²
+    for (int i = 0; i < n; ++i) // y'(x) = 1 − tanh²
+    {
+        gx[i] = gy[i] * (1.0 - y[i] * y[i]);
+    }
 }
 inline void sigmoid(const crd::f64* x, crd::f64* y, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { y[i] = 1.0 / (1.0 + crd::math::exp(-x[i])); }
+    for (int i = 0; i < n; ++i)
+    {
+        y[i] = 1.0 / (1.0 + crd::math::exp(-x[i]));
+    }
 }
 inline void sigmoid_vjp(const crd::f64* y, const crd::f64* gy, crd::f64* gx, int n) noexcept
 {
-    for (int i = 0; i < n; ++i) { gx[i] = gy[i] * y[i] * (1.0 - y[i]); } // y'(x) = σ(1−σ)
+    for (int i = 0; i < n; ++i) // y'(x) = σ(1−σ)
+    {
+        gx[i] = gy[i] * y[i] * (1.0 - y[i]);
+    }
 }
 
 // ---- softmax (row = sample, cols = classes; stable) — the STANDALONE op (the fused CE VJP lives above) ------
@@ -162,7 +201,10 @@ inline void softmax(const crd::f64* x, crd::f64* y, int rows, int cols) noexcept
     {
         const crd::f64* z = x + i * cols;
         crd::f64        mx = z[0];
-        for (int j = 1; j < cols; ++j) { mx = z[j] > mx ? z[j] : mx; }
+        for (int j = 1; j < cols; ++j)
+        {
+            mx = z[j] > mx ? z[j] : mx;
+        }
         crd::f64 sum = 0.0;
         for (int j = 0; j < cols; ++j)
         {
@@ -171,7 +213,10 @@ inline void softmax(const crd::f64* x, crd::f64* y, int rows, int cols) noexcept
             sum += e;
         }
         const crd::f64 inv = 1.0 / sum;
-        for (int j = 0; j < cols; ++j) { y[i * cols + j] *= inv; }
+        for (int j = 0; j < cols; ++j)
+        {
+            y[i * cols + j] *= inv;
+        }
     }
 }
 // VJP: per row, ḡx_j = y_j·(ḡy_j − Σ_t y_t·ḡy_t) — the softmax Jacobian (diag(y) − y yᵀ) applied to ḡy.
@@ -180,8 +225,14 @@ inline void softmax_vjp(const crd::f64* y, const crd::f64* gy, crd::f64* gx, int
     for (int i = 0; i < rows; ++i)
     {
         crd::f64 dot = 0.0;
-        for (int j = 0; j < cols; ++j) { dot += y[i * cols + j] * gy[i * cols + j]; }
-        for (int j = 0; j < cols; ++j) { gx[i * cols + j] = y[i * cols + j] * (gy[i * cols + j] - dot); }
+        for (int j = 0; j < cols; ++j)
+        {
+            dot += y[i * cols + j] * gy[i * cols + j];
+        }
+        for (int j = 0; j < cols; ++j)
+        {
+            gx[i * cols + j] = y[i * cols + j] * (gy[i * cols + j] - dot);
+        }
     }
 }
 
@@ -195,13 +246,23 @@ inline void layernorm(const crd::f64* x, const crd::f64* gamma, const crd::f64* 
     {
         const crd::f64* xr = x + i * d;
         crd::f64        mean = 0.0;
-        for (int j = 0; j < d; ++j) { mean += xr[j]; }
+        for (int j = 0; j < d; ++j)
+        {
+            mean += xr[j];
+        }
         mean *= invd;
         crd::f64 var = 0.0;
-        for (int j = 0; j < d; ++j) { const crd::f64 t = xr[j] - mean; var += t * t; }
+        for (int j = 0; j < d; ++j)
+        {
+            const crd::f64 t = xr[j] - mean;
+            var += t * t;
+        }
         var *= invd;
         const crd::f64 rstd = 1.0 / crd::math::sqrt(var + eps);
-        for (int j = 0; j < d; ++j) { y[i * d + j] = gamma[j] * ((xr[j] - mean) * rstd) + beta[j]; }
+        for (int j = 0; j < d; ++j)
+        {
+            y[i * d + j] = gamma[j] * ((xr[j] - mean) * rstd) + beta[j];
+        }
     }
 }
 // VJP: ḡγ_j = Σ_i ḡy_ij·x̂_ij ; ḡβ_j = Σ_i ḡy_ij ; ḡx = r·(ĝ − mean(ĝ) − x̂·mean(ĝ·x̂)) with ĝ = ḡy·γ.
@@ -209,16 +270,27 @@ inline void layernorm_vjp(const crd::f64* x, const crd::f64* gamma, const crd::f
                           crd::f64* ggamma, crd::f64* gbeta, int rows, int d) noexcept
 {
     const crd::f64 invd = 1.0 / static_cast<crd::f64>(d);
-    for (int j = 0; j < d; ++j) { ggamma[j] = 0.0; gbeta[j] = 0.0; }
+    for (int j = 0; j < d; ++j)
+    {
+        ggamma[j] = 0.0;
+        gbeta[j] = 0.0;
+    }
     for (int i = 0; i < rows; ++i)
     {
         const crd::f64* xr = x + i * d;
         const crd::f64* gr = gy + i * d;
         crd::f64        mean = 0.0;
-        for (int j = 0; j < d; ++j) { mean += xr[j]; }
+        for (int j = 0; j < d; ++j)
+        {
+            mean += xr[j];
+        }
         mean *= invd;
         crd::f64 var = 0.0;
-        for (int j = 0; j < d; ++j) { const crd::f64 t = xr[j] - mean; var += t * t; }
+        for (int j = 0; j < d; ++j)
+        {
+            const crd::f64 t = xr[j] - mean;
+            var += t * t;
+        }
         var *= invd;
         const crd::f64 rstd = 1.0 / crd::math::sqrt(var + eps);
         crd::f64 mean_g   = 0.0; // mean_j ĝ_j
@@ -278,7 +350,10 @@ inline void max_pool_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, in
 {
     const int oh = (h - k) / s + 1;
     const int ow = (w - k) / s + 1;
-    for (crd::i64 i = 0; i < static_cast<crd::i64>(planes) * h * w; ++i) { gx[i] = 0.0; }
+    for (crd::i64 i = 0; i < static_cast<crd::i64>(planes) * h * w; ++i)
+    {
+        gx[i] = 0.0;
+    }
     for (int p = 0; p < planes; ++p)
     {
         const crd::f64* xp  = x + static_cast<crd::i64>(p) * h * w;
@@ -297,7 +372,11 @@ inline void max_pool_vjp(const crd::f64* x, const crd::f64* gy, crd::f64* gx, in
                     {
                         const int      off = base + ki * w + kj;
                         const crd::f64 v   = xp[off];
-                        if (v > m) { m = v; arg = off; }
+                        if (v > m)
+                        {
+                            m = v;
+                            arg = off;
+                        }
                     }
                 }
                 gxp[arg] += gyp[oi * ow + oj];
@@ -322,7 +401,10 @@ inline void avg_pool(const crd::f64* x, crd::f64* y, int planes, int h, int w, i
                 crd::f64        acc = 0.0;
                 for (int ki = 0; ki < k; ++ki)
                 {
-                    for (int kj = 0; kj < k; ++kj) { acc += win[ki * w + kj]; }
+                    for (int kj = 0; kj < k; ++kj)
+                    {
+                        acc += win[ki * w + kj];
+                    }
                 }
                 yp[oi * ow + oj] = acc * inv;
             }
@@ -334,7 +416,10 @@ inline void avg_pool_vjp(const crd::f64* gy, crd::f64* gx, int planes, int h, in
     const int      oh  = (h - k) / s + 1;
     const int      ow  = (w - k) / s + 1;
     const crd::f64 inv = 1.0 / static_cast<crd::f64>(k * k);
-    for (crd::i64 i = 0; i < static_cast<crd::i64>(planes) * h * w; ++i) { gx[i] = 0.0; }
+    for (crd::i64 i = 0; i < static_cast<crd::i64>(planes) * h * w; ++i)
+    {
+        gx[i] = 0.0;
+    }
     for (int p = 0; p < planes; ++p)
     {
         crd::f64*       gxp = gx + static_cast<crd::i64>(p) * h * w;
@@ -347,7 +432,10 @@ inline void avg_pool_vjp(const crd::f64* gy, crd::f64* gx, int planes, int h, in
                 const int      base = (oi * s) * w + oj * s;
                 for (int ki = 0; ki < k; ++ki)
                 {
-                    for (int kj = 0; kj < k; ++kj) { gxp[base + ki * w + kj] += g; }
+                    for (int kj = 0; kj < k; ++kj)
+                    {
+                        gxp[base + ki * w + kj] += g;
+                    }
                 }
             }
         }
@@ -403,11 +491,17 @@ inline void col2im_one_f64(const crd::f64* col, int chans, int h, int w, int kh,
                 for (int oi = 0; oi < oh; ++oi)
                 {
                     const int ih = oi * stride + ki - pad;
-                    if (ih < 0 || ih >= h) { continue; }
+                    if (ih < 0 || ih >= h)
+                    {
+                        continue;
+                    }
                     for (int oj = 0; oj < ow; ++oj)
                     {
                         const int iw = oj * stride + kj - pad;
-                        if (iw >= 0 && iw < w) { plane[static_cast<crd::i64>(ih) * w + iw] += src[oi * ow + oj]; }
+                        if (iw >= 0 && iw < w)
+                        {
+                            plane[static_cast<crd::i64>(ih) * w + iw] += src[oi * ow + oj];
+                        }
                     }
                 }
             }
@@ -430,7 +524,10 @@ inline void conv2d(const crd::f64* x, const crd::f64* w, const crd::f64* bias, c
         mj::gemm(w, col, yi, oc, ckk, ohw); // yi[OC×OHW] = W[OC×CKK]·col[CKK×OHW]
         for (int o = 0; o < oc; ++o)
         {
-            for (int q = 0; q < ohw; ++q) { yi[static_cast<crd::i64>(o) * ohw + q] += bias[o]; }
+            for (int q = 0; q < ohw; ++q)
+            {
+                yi[static_cast<crd::i64>(o) * ohw + q] += bias[o];
+            }
         }
     }
 }
@@ -444,8 +541,14 @@ inline void conv2d_vjp(const crd::f64* x, const crd::f64* w, const crd::f64* gy,
     const int ow  = (wi + 2 * pad - kw) / stride + 1;
     const int ckk = chans * kh * kw;
     const int ohw = oh * ow;
-    for (crd::i64 i = 0; i < static_cast<crd::i64>(oc) * ckk; ++i) { gw[i] = 0.0; }
-    for (int o = 0; o < oc; ++o) { gb[o] = 0.0; }
+    for (crd::i64 i = 0; i < static_cast<crd::i64>(oc) * ckk; ++i)
+    {
+        gw[i] = 0.0;
+    }
+    for (int o = 0; o < oc; ++o)
+    {
+        gb[o] = 0.0;
+    }
     for (int img = 0; img < n; ++img)
     {
         const crd::f64* xi  = x + static_cast<crd::i64>(img) * chans * h * wi;
@@ -468,12 +571,18 @@ inline void conv2d_vjp(const crd::f64* x, const crd::f64* w, const crd::f64* gy,
         for (int o = 0; o < oc; ++o)
         {
             crd::f64 s = 0.0;
-            for (int q = 0; q < ohw; ++q) { s += gyi[static_cast<crd::i64>(o) * ohw + q]; }
+            for (int q = 0; q < ohw; ++q)
+            {
+                s += gyi[static_cast<crd::i64>(o) * ohw + q];
+            }
             gb[o] += s;
         }
         // ḡcol[CKK×OHW] = Wᵀ[CKK×OC]·ḡY[OC×OHW] (W stored OC×CKK) → col2im → ḡX
         mj::gemm_tn(w, gyi, gcol, ckk, oc, ohw);
-        for (crd::i64 i = 0; i < static_cast<crd::i64>(chans) * h * wi; ++i) { gxi[i] = 0.0; }
+        for (crd::i64 i = 0; i < static_cast<crd::i64>(chans) * h * wi; ++i)
+        {
+            gxi[i] = 0.0;
+        }
         col2im_one_f64(gcol, chans, h, wi, kh, kw, pad, stride, oh, ow, gxi);
     }
 }

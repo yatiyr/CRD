@@ -108,9 +108,21 @@ void make_spd_laplacian_3d(crd::u32 k, crd::u32& n, crd::containers::Array<Trip>
             {
                 const crd::u32 d = id(i, j, l);
                 t.push_back({d, d, 6.0});
-                if (i + 1 < k) { t.push_back({d, id(i + 1, j, l), -1.0}); t.push_back({id(i + 1, j, l), d, -1.0}); }
-                if (j + 1 < k) { t.push_back({d, id(i, j + 1, l), -1.0}); t.push_back({id(i, j + 1, l), d, -1.0}); }
-                if (l + 1 < k) { t.push_back({d, id(i, j, l + 1), -1.0}); t.push_back({id(i, j, l + 1), d, -1.0}); }
+                if (i + 1 < k)
+                {
+                    t.push_back({d, id(i + 1, j, l), -1.0});
+                    t.push_back({id(i + 1, j, l), d, -1.0});
+                }
+                if (j + 1 < k)
+                {
+                    t.push_back({d, id(i, j + 1, l), -1.0});
+                    t.push_back({id(i, j + 1, l), d, -1.0});
+                }
+                if (l + 1 < k)
+                {
+                    t.push_back({d, id(i, j, l + 1), -1.0});
+                    t.push_back({id(i, j, l + 1), d, -1.0});
+                }
             }
         }
     }
@@ -131,9 +143,21 @@ void make_indefinite_laplacian_3d(crd::u32 k, double sigma, crd::u32& n, crd::co
             {
                 const crd::u32 d = id(i, j, l);
                 t.push_back({d, d, 6.0 - sigma}); // diagonal shifted negative-ward ⇒ indefinite
-                if (i + 1 < k) { t.push_back({d, id(i + 1, j, l), -1.0}); t.push_back({id(i + 1, j, l), d, -1.0}); }
-                if (j + 1 < k) { t.push_back({d, id(i, j + 1, l), -1.0}); t.push_back({id(i, j + 1, l), d, -1.0}); }
-                if (l + 1 < k) { t.push_back({d, id(i, j, l + 1), -1.0}); t.push_back({id(i, j, l + 1), d, -1.0}); }
+                if (i + 1 < k)
+                {
+                    t.push_back({d, id(i + 1, j, l), -1.0});
+                    t.push_back({id(i + 1, j, l), d, -1.0});
+                }
+                if (j + 1 < k)
+                {
+                    t.push_back({d, id(i, j + 1, l), -1.0});
+                    t.push_back({id(i, j + 1, l), d, -1.0});
+                }
+                if (l + 1 < k)
+                {
+                    t.push_back({d, id(i, j, l + 1), -1.0});
+                    t.push_back({id(i, j, l + 1), d, -1.0});
+                }
             }
         }
     }

@@ -493,6 +493,11 @@ def _dom_expr(dom):
     return "EvalDomain::%s" % (dom if dom else "Unspecified")
 
 
+def _reject_if(cond, ind="    "):
+    """An Allman `if (cond) return false;` block for the generated verifiers (one statement still gets braces)."""
+    return "%sif (%s)\n%s{\n%s    return false;\n%s}\n" % (ind, cond, ind, ind, ind)
+
+
 def emit_cpp(model):
     d = model["dialect"]
     out = [_header(model, "cpp"), "\n#include <crd/ceir/gen/%s_ops.hpp>\n\n" % d,
@@ -511,40 +516,43 @@ def emit_cpp(model):
         if variadic:
             min_ops = n_ops - 1  # every fixed operand before the trailing variadic one
             if min_ops > 0:
-                out.append("    if (op.num_operands() < %dU) { return false; }\n" % min_ops)
+                out.append(_reject_if("op.num_operands() < %dU" % min_ops))
             # else: a lone variadic operand admits ANY count (>= 0) — emit no check (a `< 0U` would be an always-false tautology)
         else:
-            out.append("    if (op.num_operands() != %dU) { return false; }\n" % n_ops)
+            out.append(_reject_if("op.num_operands() != %dU" % n_ops))
         res_variadic = op["results"] and op["results"][-1].get("variadic", False)
         n_res = len(op["results"])
         if res_variadic:
             if n_res - 1 > 0:
-                out.append("    if (op.num_results() < %dU) { return false; }\n" % (n_res - 1)) # fixed results before the variadic
+                out.append(_reject_if("op.num_results() < %dU" % (n_res - 1))) # fixed results before the variadic
             # else: a lone variadic result admits any count (>= 0) — no check (a `< 0U` tautology)
         else:
-            out.append("    if (op.num_results() != %dU) { return false; }\n" % n_res)
+            out.append(_reject_if("op.num_results() != %dU" % n_res))
         sig = op["region_sig"]
         if not sig:
-            out.append("    if (op.num_regions() != %dU) { return false; }\n" % op["num_regions"])
+            out.append(_reject_if("op.num_regions() != %dU" % op["num_regions"]))
         else:
             reg_variadic = sig[-1]["variadic"]
             nfixed = len(sig) - 1 if reg_variadic else len(sig)
             if reg_variadic:
-                out.append("    if (op.num_regions() < %dU) { return false; }\n" % len(sig)) # fixed + >=1 variadic region
+                out.append(_reject_if("op.num_regions() < %dU" % len(sig))) # fixed + >=1 variadic region
             else:
-                out.append("    if (op.num_regions() != %dU) { return false; }\n" % len(sig))
+                out.append(_reject_if("op.num_regions() != %dU" % len(sig)))
             # per-region ENTRY-BLOCK arg count — the structural half of the region signature (the arg TYPES are
             # construction-time). Checked only WHEN a block is present, so a freshly-built skeleton (empty regions) still
             # verifies; a populated entry block must match the declared arity (full block-existence is CEIR-5b's SSACFG rule).
             for i in range(nfixed):
-                out.append("    if (op.region(%dU)->first_block() != nullptr && op.region(%dU)->first_block()->num_args() != %dU) { return false; }\n"
-                           % (i, i, sig[i]["argc"]))
+                out.append(_reject_if("op.region(%dU)->first_block() != nullptr && op.region(%dU)->first_block()->num_args() != %dU"
+                                      % (i, i, sig[i]["argc"])))
             if reg_variadic:
-                out.append("    for (u32 ri = %dU; ri < op.num_regions(); ++ri) { const Block* const rb = op.region(ri)->first_block();\n" % nfixed)
-                out.append("      if (rb != nullptr && rb->num_args() != %dU) { return false; } }\n" % sig[-1]["argc"])
+                out.append("    for (u32 ri = %dU; ri < op.num_regions(); ++ri)\n    {\n" % nfixed)
+                out.append("        const Block* const rb = op.region(ri)->first_block();\n")
+                out.append(_reject_if("rb != nullptr && rb->num_args() != %dU" % sig[-1]["argc"], "        "))
+                out.append("    }\n")
         for a in req:
-            out.append('    { const AttrId a = op.attr("%s");\n' % a["name"])
-            out.append("      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::%s) { return false; } }\n" % ATTR_KINDS[a["kind"]])
+            out.append('    {\n        const AttrId a = op.attr("%s");\n' % a["name"])
+            out.append(_reject_if("!a.valid() || ctx.attr_value(a).kind != AttrKind::%s" % ATTR_KINDS[a["kind"]], "        "))
+            out.append("    }\n")
         out.append("    return true;\n}\n")
     out.append("} // namespace\n\n")
     for op in model["ops"]:
@@ -870,7 +878,8 @@ def emit_smoke(model):
     out.append("    REQUIRE(schemas.size() == %dU);\n\n" % len(model["ops"]))
     out.append("    crd::containers::StringView prev;\n")
     out.append("    for (const OpSchema& s : schemas)\n    {\n")
-    out.append("        if (!prev.empty()) { CHECK(prev < s.name); } // reflection is emitted sorted by name\n")
+    out.append("        if (!prev.empty()) // reflection is emitted sorted by name\n        {\n")
+    out.append("            CHECK(prev < s.name);\n        }\n")
     out.append("        prev = s.name;\n")
     out.append("        const OpId reflected = ctx.intern_op(s.dialect, s.name);\n")
     out.append("        CHECK(ctx.intern_op(s.dialect, s.name) == reflected); // interning is idempotent\n")

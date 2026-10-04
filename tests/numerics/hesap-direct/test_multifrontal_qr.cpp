@@ -1405,11 +1405,17 @@ TEST_CASE("v5c-2a complex QR: square 4x4 RhR==AhA + solve (diagnostic)", "[hesap
     auto aij = [](crd::u32 i, crd::u32 j) -> T
     {
         if (i == j)
+        {
             return T{7.0, 0.5};
+        }
         if (j == i + 1)
+        {
             return T{1.0, 0.3};
+        }
         if (i == j + 1)
+        {
             return T{-1.0, 0.2};
+        }
         return T{0.0, 0.0};
     };
     sp::SparsePattern a(&alloc);

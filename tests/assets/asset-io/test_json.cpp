@@ -72,8 +72,14 @@ TEST_CASE("assetio: JSON failure classes -- no partial DOM survives", "[assetio]
 
     // depth bomb: 80 nested arrays exceed the 64 cap — clean failure, no stack blow
     char bomb[161];
-    for (int i = 0; i < 80; ++i) { bomb[i] = '['; }
-    for (int i = 0; i < 80; ++i) { bomb[80 + i] = ']'; }
+    for (int i = 0; i < 80; ++i)
+    {
+        bomb[i] = '[';
+    }
+    for (int i = 0; i < 80; ++i)
+    {
+        bomb[80 + i] = ']';
+    }
     bomb[160] = '\0';
     CHECK_FALSE(js::parse(span_of(bomb), doc));
 }

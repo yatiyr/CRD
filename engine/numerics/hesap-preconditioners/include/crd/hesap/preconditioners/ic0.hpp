@@ -93,8 +93,14 @@ public:
         for (int attempt = 0; attempt < 64 && !ok; ++attempt)
         {
             ok = try_factor(alpha);
-            if (!ok) { alpha = (alpha == R(0)) ? alpha0 : alpha * R(2); }
-            else { m_shift = alpha; }
+            if (!ok)
+            {
+                alpha = (alpha == R(0)) ? alpha0 : alpha * R(2);
+            }
+            else
+            {
+                m_shift = alpha;
+            }
         }
         CRD_ASSERT_MSG(ok, "Ic0Preconditioner: diagonal shift failed to yield an SPD level-0 factor");
         m_lh = build_conj_transpose(m_l, alloc); // Lᴴ (upper CSR) for the back solve
@@ -108,10 +114,16 @@ public:
     // M⁻ᴴ = M⁻¹, so apply_adjoint == apply.
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
     {
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = r[i] * m_dinv[i]; } // scale in: D⁻¹ᐟ² r
+        for (crd::u32 i = 0; i < m_n; ++i) // scale in: D⁻¹ᐟ² r
+        {
+            z[i] = r[i] * m_dinv[i];
+        }
         forward_solve(z, m_t);                                          // L y = (scaled r)
         back_solve(m_t, z);                                            // Lᴴ z = y
-        for (crd::u32 i = 0; i < m_n; ++i) { z[i] = z[i] * m_dinv[i]; } // scale out: D⁻¹ᐟ²
+        for (crd::u32 i = 0; i < m_n; ++i) // scale out: D⁻¹ᐟ²
+        {
+            z[i] = z[i] * m_dinv[i];
+        }
         return true;
     }
     [[nodiscard]] bool apply_adjoint(crd::containers::ConstSpan<T> r, crd::containers::Span<T> z) const override
@@ -125,13 +137,25 @@ public:
 private:
     [[nodiscard]] static T ic_conj(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return T{v.re, -v.im}; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return T{v.re, -v.im};
+        }
+        else
+        {
+            return v;
+        }
     }
     [[nodiscard]] static R ic_real(T v) noexcept
     {
-        if constexpr (crd::hesap::dense::is_complex_v<T>) { return v.re; }
-        else { return v; }
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return v.re;
+        }
+        else
+        {
+            return v;
+        }
     }
     static Csr alloc_empty(crd::memory::IAllocator* alloc) // placeholder, reassigned after factor()
     {
@@ -143,7 +167,10 @@ private:
     {
         Csr   lt   = crd::hesap::sparse::transpose<T>(l, alloc);
         auto& vals = lt.values().values;
-        for (crd::usize k = 0; k < vals.size(); ++k) { vals[k] = ic_conj(vals[k]); }
+        for (crd::usize k = 0; k < vals.size(); ++k)
+        {
+            vals[k] = ic_conj(vals[k]);
+        }
         return lt;
     }
 
@@ -160,44 +187,71 @@ private:
         const auto* inner = m_l.pattern().inner_idx.data();
         T*          lval  = m_l.values().values.data();
         // Reload the original lower values + apply the diagonal shift.
-        for (crd::usize k = 0; k < m_a_lower.size(); ++k) { lval[k] = m_a_lower[k]; }
+        for (crd::usize k = 0; k < m_a_lower.size(); ++k)
+        {
+            lval[k] = m_a_lower[k];
+        }
         for (crd::u32 i = 0; i < m_n; ++i)
         {
             const crd::u32 hi = outer[i + 1];
             CRD_ASSERT_MSG(hi > outer[i] && inner[hi - 1] == i, "Ic0Preconditioner: missing diagonal entry");
             lval[hi - 1] = lval[hi - 1] + T(shift);
         }
-        for (crd::u32 i = 0; i < m_n; ++i) { m_jpos[i] = -1; }
+        for (crd::u32 i = 0; i < m_n; ++i)
+        {
+            m_jpos[i] = -1;
+        }
 
         for (crd::u32 i = 0; i < m_n; ++i)
         {
             const crd::u32 lo = outer[i];
             const crd::u32 hi = outer[i + 1];
-            for (crd::u32 p = lo; p < hi; ++p) { m_jpos[inner[p]] = static_cast<crd::i32>(p); }
+            for (crd::u32 p = lo; p < hi; ++p)
+            {
+                m_jpos[inner[p]] = static_cast<crd::i32>(p);
+            }
 
             for (crd::u32 p = lo; p < hi; ++p) // ascending columns (CSR sorted)
             {
                 const crd::u32 j = inner[p];
-                if (j >= i) { break; } // reached the diagonal
+                if (j >= i) // reached the diagonal
+                {
+                    break;
+                }
                 // L_ij = (A_ij − Σ_{m<j, common} L_im·conj(L_jm)) / L_jj
                 T s = lval[p];
                 for (crd::u32 q = outer[j]; q < outer[j + 1]; ++q)
                 {
                     const crd::u32 m = inner[q];
-                    if (m >= j) { break; }
+                    if (m >= j)
+                    {
+                        break;
+                    }
                     const crd::i32 ip = m_jpos[m];
-                    if (ip >= 0) { s = s - lval[static_cast<crd::u32>(ip)] * ic_conj(lval[q]); }
+                    if (ip >= 0)
+                    {
+                        s = s - lval[static_cast<crd::u32>(ip)] * ic_conj(lval[q]);
+                    }
                 }
                 lval[p] = s / lval[outer[j + 1] - 1]; // / L_jj (real-positive)
             }
             // L_ii = sqrt(A_ii − Σ_{j<i} |L_ij|²)
             T sii = lval[hi - 1];
-            for (crd::u32 p = lo; p < hi - 1; ++p) { sii = sii - lval[p] * ic_conj(lval[p]); }
+            for (crd::u32 p = lo; p < hi - 1; ++p)
+            {
+                sii = sii - lval[p] * ic_conj(lval[p]);
+            }
             const R d = ic_real(sii);
-            if (!(d > R(0))) { return false; } // non-positive pivot ⇒ retry with a larger shift
+            if (!(d > R(0))) // non-positive pivot ⇒ retry with a larger shift
+            {
+                return false;
+            }
             lval[hi - 1] = T(std::sqrt(d));
 
-            for (crd::u32 p = lo; p < hi; ++p) { m_jpos[inner[p]] = -1; }
+            for (crd::u32 p = lo; p < hi; ++p)
+            {
+                m_jpos[inner[p]] = -1;
+            }
         }
         return true;
     }
@@ -212,7 +266,10 @@ private:
         {
             T acc = r[i];
             const crd::u32 hi = outer[i + 1];
-            for (crd::u32 p = outer[i]; p < hi - 1; ++p) { acc = acc - lval[p] * y[inner[p]]; } // cols j<i
+            for (crd::u32 p = outer[i]; p < hi - 1; ++p) // cols j<i
+            {
+                acc = acc - lval[p] * y[inner[p]];
+            }
             y[i] = acc / lval[hi - 1];                                                          // / L_ii
         }
     }
@@ -228,7 +285,10 @@ private:
             const crd::u32 i  = m_n - 1 - ii;
             T              acc = y[i];
             const crd::u32 lo = outer[i];
-            for (crd::u32 p = lo + 1; p < outer[i + 1]; ++p) { acc = acc - hval[p] * z[inner[p]]; } // cols j>i
+            for (crd::u32 p = lo + 1; p < outer[i + 1]; ++p) // cols j>i
+            {
+                acc = acc - hval[p] * z[inner[p]];
+            }
             z[i] = acc / hval[lo];                                                                  // / conj(L_ii)
         }
     }

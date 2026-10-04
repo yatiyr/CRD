@@ -62,8 +62,14 @@ TEST_CASE("ceir 23e: spmv_csr runs on a Vulkan device (runtime For + ForBreakIf 
     const crd::u32 ci_u[8]  = {0U, 1U, 0U, 2U, 3U, 1U, 2U, 3U};
     float          rp_f[5]  = {};
     float          ci_f[8]  = {};
-    for (int i = 0; i < 5; ++i) { rp_f[i] = bits_as_float(rp_u[i]); } // u32 row_ptr uploaded as bit-reinterpret
-    for (int i = 0; i < 8; ++i) { ci_f[i] = bits_as_float(ci_u[i]); } // u32 col_idx uploaded as bit-reinterpret
+    for (int i = 0; i < 5; ++i) // u32 row_ptr uploaded as bit-reinterpret
+    {
+        rp_f[i] = bits_as_float(rp_u[i]);
+    }
+    for (int i = 0; i < 8; ++i) // u32 col_idx uploaded as bit-reinterpret
+    {
+        ci_f[i] = bits_as_float(ci_u[i]);
+    }
     float values[8] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F};
     float x[4]      = {2.0F, 3.0F, 5.0F, 7.0F};
     float y[4]      = {-1.0F, -1.0F, -1.0F, -1.0F};
@@ -73,7 +79,11 @@ TEST_CASE("ceir 23e: spmv_csr runs on a Vulkan device (runtime For + ForBreakIf 
     cfg.backend  = crd::gpu::GpuBackend::Vulkan;
     cfg.headless = true;
     auto devctx  = crd::gpu::create_vulkan_gpu_context(cfg);
-    if (devctx == nullptr) { WARN("no Vulkan device — skipping the CEIR-23e SpMV gate"); return; }
+    if (devctx == nullptr)
+    {
+        WARN("no Vulkan device — skipping the CEIR-23e SpMV gate");
+        return;
+    }
     auto* const                    vk = static_cast<crd::gpu::VulkanGpuContext*>(devctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
 
@@ -91,7 +101,10 @@ TEST_CASE("ceir 23e: spmv_csr runs on a Vulkan device (runtime For + ForBreakIf 
     for (int i = 0; i < 4; ++i)
     {
         float acc = 0.0F;
-        for (crd::u32 k = rp_u[i]; k < rp_u[i + 1]; ++k) { acc += values[k] * x[ci_u[k]]; }
+        for (crd::u32 k = rp_u[i]; k < rp_u[i + 1]; ++k)
+        {
+            acc += values[k] * x[ci_u[k]];
+        }
         CHECK(absf(y[i] - acc) <= 1e-5F * (1.0F + absf(acc)));
     }
 }

@@ -44,7 +44,9 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
     out_total    = guard_bytes + usable_bytes;
     void* base   = ::VirtualAlloc(nullptr, out_total, MEM_RESERVE, PAGE_NOACCESS);
     if (!base)
+    {
         return nullptr;
+    }
     // Commit only the usable region; guard stays reserved-but-inaccessible.
     auto* usable = static_cast<crd::u8*>(base) + guard_bytes;
     if (!::VirtualAlloc(usable, usable_bytes, MEM_COMMIT, PAGE_READWRITE))
@@ -58,7 +60,9 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
 static void platform_stack_free(void* base, crd::usize /*total*/) noexcept
 {
     if (base)
+    {
         ::VirtualFree(base, 0, MEM_RELEASE);
+    }
 }
 
 #else // POSIX / Linux
@@ -75,7 +79,9 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
     void* base   = ::mmap(nullptr, out_total, PROT_NONE,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED)
+    {
         return nullptr;
+    }
     auto* usable = static_cast<crd::u8*>(base) + guard_bytes;
     if (::mprotect(usable, usable_bytes, PROT_READ | PROT_WRITE) != 0)
     {
@@ -88,7 +94,9 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
 static void platform_stack_free(void* base, crd::usize total) noexcept
 {
     if (base)
+    {
         ::munmap(base, total);
+    }
 }
 
 #endif
@@ -150,7 +158,9 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
 void FiberPool::shutdown_tier(Tier& tier) noexcept
 {
     if (!tier.fibers)
+    {
         return;
+    }
     CRD_ASSERT_MSG(tier.acquired_count.load(std::memory_order_relaxed) == 0U,
                    "FiberPool::shutdown: fibers are still Active");
     for (crd::u32 i = 0; i < tier.count; ++i)
@@ -181,7 +191,9 @@ bool FiberPool::init(const FiberPoolConfig& cfg)
     static constexpr crd::usize kLargeStack  = 2048U * 1024U;
 
     if (!init_tier(m_small, cfg.small_count, kSmallStack, FiberTier::Small, cfg.trampoline))
+    {
         return false;
+    }
 
     if (!init_tier(m_medium, cfg.medium_count, kMediumStack, FiberTier::Medium, cfg.trampoline))
     {
@@ -203,7 +215,9 @@ bool FiberPool::init(const FiberPoolConfig& cfg)
 void FiberPool::shutdown() noexcept
 {
     if (!m_initialized)
+    {
         return;
+    }
     shutdown_tier(m_large);
     shutdown_tier(m_medium);
     shutdown_tier(m_small);

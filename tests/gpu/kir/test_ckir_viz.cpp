@@ -108,7 +108,10 @@ TEST_CASE("ceir 22c-3b: the authored tensor_viz_normalize.ckir computes mag/max 
     }
     // the normalized peak is 1.0 within f32 (max/max = 1.0; the display invariant).
     crd::f64 nmax = 0.0;
-    for (int i = 0; i < kL; ++i) { nmax = nmax > norm[i] ? nmax : norm[i]; }
+    for (int i = 0; i < kL; ++i)
+    {
+        nmax = nmax > norm[i] ? nmax : norm[i];
+    }
     CHECK(absd(nmax - 1.0) < 1e-6);
 }
 
@@ -124,18 +127,27 @@ TEST_CASE("ceir 23b-1: the authored quant_dequantize_q8.ckir dequantizes u32-pac
 
     constexpr int nq = 64; // N % 4 == 0
     crd::i32      b[nq];
-    for (int i = 0; i < nq; ++i) { b[i] = ((i * 37 + 11) % 256) - 128; } // int8 values spanning [-128,127]
+    for (int i = 0; i < nq; ++i) // int8 values spanning [-128,127]
+    {
+        b[i] = ((i * 37 + 11) % 256) - 128;
+    }
     crd::f64 packed[nq / 4];
     for (int w = 0; w < nq / 4; ++w)
     {
         crd::u32 word = 0;
-        for (int j = 0; j < 4; ++j) { word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j)); }
+        for (int j = 0; j < 4; ++j)
+        {
+            word |= static_cast<crd::u32>(b[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j));
+        }
         packed[w] = static_cast<crd::f64>(word); // u32 ≤ 2^32 < 2^53 ⇒ exact in f64
     }
     crd::f64 scale[1] = {0.5};
     crd::f64 zp[1]    = {3.0};
     crd::f64 out[nq];
-    for (int i = 0; i < nq; ++i) { out[i] = -999.0; }
+    for (int i = 0; i < nq; ++i)
+    {
+        out[i] = -999.0;
+    }
     kir::KernelBuffer bufs[4] = {{packed, nq / 4, 0, 0}, {scale, 1, 0, 1}, {zp, 1, 0, 2}, {out, nq, 0, 3}};
     kir::eval_cpu_kernel(kg, ke, bufs, 4, static_cast<crd::u32>(nq), &root, 1U);
 
@@ -160,19 +172,31 @@ TEST_CASE("ceir 23b-2c: the fused quant_gemm_q8.ckir (dequant-inline gemm) vs th
     constexpr int inner = 8; // K
     constexpr int cols  = 8; // N
     crd::f64      a_in[rows * inner];
-    for (int i = 0; i < rows * inner; ++i) { a_in[i] = 0.25 * static_cast<crd::f64>((i * 13 + 5) % 9 - 4); } // small floats in [-1,1]
+    for (int i = 0; i < rows * inner; ++i) // small floats in [-1,1]
+    {
+        a_in[i] = 0.25 * static_cast<crd::f64>((i * 13 + 5) % 9 - 4);
+    }
     crd::i32 wq[inner * cols];
-    for (int i = 0; i < inner * cols; ++i) { wq[i] = ((i * 37 + 11) % 256) - 128; } // int8 weights spanning [-128,127]
+    for (int i = 0; i < inner * cols; ++i) // int8 weights spanning [-128,127]
+    {
+        wq[i] = ((i * 37 + 11) % 256) - 128;
+    }
     crd::f64 packed[inner * cols / 4];
     for (int w = 0; w < inner * cols / 4; ++w)
     {
         crd::u32 word = 0;
-        for (int j = 0; j < 4; ++j) { word |= static_cast<crd::u32>(wq[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j)); }
+        for (int j = 0; j < 4; ++j)
+        {
+            word |= static_cast<crd::u32>(wq[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j));
+        }
         packed[w] = static_cast<crd::f64>(word); // u32 < 2^53 ⇒ exact in f64
     }
     crd::f64 scale[1] = {0.125};
     crd::f64 d_out[rows * cols];
-    for (int i = 0; i < rows * cols; ++i) { d_out[i] = -999.0; }
+    for (int i = 0; i < rows * cols; ++i)
+    {
+        d_out[i] = -999.0;
+    }
     kir::KernelBuffer bufs[4] = {{a_in, rows * inner, 0, 0}, {packed, inner * cols / 4, 0, 1}, {scale, 1, 0, 2}, {d_out, rows * cols, 0, 3}};
     kir::eval_cpu_kernel(kg, ke, bufs, 4, static_cast<crd::u32>(rows * cols), &root, 1U);
 
@@ -181,7 +205,10 @@ TEST_CASE("ceir 23b-2c: the fused quant_gemm_q8.ckir (dequant-inline gemm) vs th
         for (int n = 0; n < cols; ++n)
         {
             crd::f64 acc = 0.0;
-            for (int k = 0; k < inner; ++k) { acc += a_in[m * inner + k] * static_cast<crd::f64>(wq[k * cols + n]); } // D=scale*A·int8(W)
+            for (int k = 0; k < inner; ++k) // D=scale*A·int8(W)
+            {
+                acc += a_in[m * inner + k] * static_cast<crd::f64>(wq[k * cols + n]);
+            }
             const crd::f64 ref = acc * scale[0];
             CHECK(absd(d_out[m * cols + n] - ref) <= 1e-4 * (1.0 + absd(ref)));
         }
@@ -203,9 +230,15 @@ TEST_CASE("ceir 23c-a: the authored relu.ckir computes max(x, 0) per element (th
 
     constexpr int len = 32; // the MLP hidden width h1[4,8]
     crd::f64      in[len];
-    for (int i = 0; i < len; ++i) { in[i] = static_cast<crd::f64>(i - 16) * 0.5; } // span negatives and positives
+    for (int i = 0; i < len; ++i) // span negatives and positives
+    {
+        in[i] = static_cast<crd::f64>(i - 16) * 0.5;
+    }
     crd::f64 out[len];
-    for (int i = 0; i < len; ++i) { out[i] = -999.0; }
+    for (int i = 0; i < len; ++i)
+    {
+        out[i] = -999.0;
+    }
     kir::KernelBuffer bufs[2] = {{in, len, 0, 0}, {out, len, 0, 1}};
     kir::eval_cpu_kernel(kg, ke, bufs, 2, static_cast<crd::u32>(len), &root, 1U);
     for (int i = 0; i < len; ++i)
@@ -282,16 +315,28 @@ TEST_CASE("ceir 24b-2: the authored softmax.ckir computes scaled rowwise softmax
         crd::f64       sc[3 * 5];
         crd::f64       sv[1] = {scale_v};
         crd::f64       pr[3 * 5];
-        for (int i = 0; i < n; ++i) { sc[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5); }
-        for (int i = 0; i < n; ++i) { pr[i] = -1.0; }
+        for (int i = 0; i < n; ++i)
+        {
+            sc[i] = 0.3 * (static_cast<crd::f64>(i) - static_cast<crd::f64>(n) * 0.5);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            pr[i] = -1.0;
+        }
         kir::KernelBuffer bufs[3] = {{sc, n, 0, 0}, {sv, 1, 0, 1}, {pr, n, 0, 2}};
         kir::eval_cpu_kernel(kg, ke, bufs, 3, static_cast<crd::u32>(sq), &root, 1U);
         for (int r = 0; r < sq; ++r)
         {
             crd::f64 m = -1e30;
-            for (int c = 0; c < sk; ++c) { m = crd::math::max(m, scale_v * sc[r * sk + c]); }
+            for (int c = 0; c < sk; ++c)
+            {
+                m = crd::math::max(m, scale_v * sc[r * sk + c]);
+            }
             crd::f64 dn = 0.0;
-            for (int c = 0; c < sk; ++c) { dn += crd::math::exp(scale_v * sc[r * sk + c] - m); }
+            for (int c = 0; c < sk; ++c)
+            {
+                dn += crd::math::exp(scale_v * sc[r * sk + c] - m);
+            }
             for (int c = 0; c < sk; ++c)
             {
                 const crd::f64 ref = crd::math::exp(scale_v * sc[r * sk + c] - m) / dn;
@@ -320,17 +365,26 @@ TEST_CASE("ceir 23z: the authored quant_dequantize_q8_sym.ckir (symmetric, out =
 
     constexpr int len = 64; // len % 4 == 0
     crd::i32      q[len];
-    for (int i = 0; i < len; ++i) { q[i] = ((i * 37 + 11) % 256) - 128; } // int8 values spanning [-128,127]
+    for (int i = 0; i < len; ++i) // int8 values spanning [-128,127]
+    {
+        q[i] = ((i * 37 + 11) % 256) - 128;
+    }
     crd::f64 packed[len / 4];
     for (int w = 0; w < len / 4; ++w)
     {
         crd::u32 word = 0;
-        for (int j = 0; j < 4; ++j) { word |= static_cast<crd::u32>(q[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j)); }
+        for (int j = 0; j < 4; ++j)
+        {
+            word |= static_cast<crd::u32>(q[4 * w + j] & 0xFF) << (8U * static_cast<crd::u32>(j));
+        }
         packed[w] = static_cast<crd::f64>(word);
     }
     crd::f64 scale[1] = {0.5};
     crd::f64 out[len];
-    for (int i = 0; i < len; ++i) { out[i] = -999.0; }
+    for (int i = 0; i < len; ++i)
+    {
+        out[i] = -999.0;
+    }
     kir::KernelBuffer bufs[3] = {{packed, len / 4, 0, 0}, {scale, 1, 0, 1}, {out, len, 0, 2}};
     kir::eval_cpu_kernel(kg, ke, bufs, 3, static_cast<crd::u32>(len), &root, 1U);
 

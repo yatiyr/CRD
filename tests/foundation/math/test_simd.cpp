@@ -40,7 +40,10 @@ namespace
     f32 lanes[8]; v.store(lanes);
     for (int i = 0; i < 8; ++i)
     {
-        if (!bit_eq(lanes[i], expected[i])) return false;
+        if (!bit_eq(lanes[i], expected[i]))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -286,7 +289,10 @@ TEST_CASE("simd Mat4f identity behaves as identity under multiply", "[simd][mat4
     {
         IM.cols[c].store(lanes);
         f32 mlanes[4]; M.cols[c].store(mlanes);
-        for (int r = 0; r < 4; ++r) REQUIRE(bit_eq(lanes[r], mlanes[r]));
+        for (int r = 0; r < 4; ++r)
+        {
+            REQUIRE(bit_eq(lanes[r], mlanes[r]));
+        }
     }
     // NOLINTEND(readability-identifier-naming)
 }
@@ -354,14 +360,20 @@ TEST_CASE("simd Mat4f transpose is involutive", "[simd][mat4f]")
 TEST_CASE("simd Mat4f load/store column-major roundtrip", "[simd][mat4f]")
 {
     f32 src[16];
-    for (int i = 0; i < 16; ++i) src[i] = static_cast<f32>(i + 1);
+    for (int i = 0; i < 16; ++i)
+    {
+        src[i] = static_cast<f32>(i + 1);
+    }
 
     // M = matrix per LA notation.
     const Mat4f M = Mat4f::load_column_major(src); // NOLINT(readability-identifier-naming)
 
     f32 dst[16] = {};
     M.store_column_major(dst);
-    for (int i = 0; i < 16; ++i) REQUIRE(bit_eq(dst[i], src[i]));
+    for (int i = 0; i < 16; ++i)
+    {
+        REQUIRE(bit_eq(dst[i], src[i]));
+    }
 }
 
 TEST_CASE("simd Mat4f alignment is 16 bytes", "[simd][mat4f]")

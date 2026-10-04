@@ -28,12 +28,16 @@ template <typename T> cont::ConstSpan<T> span_of(const T* p, crd::usize n) noexc
 void put_u32(cont::Array<crd::u8>& a, crd::u32 v) noexcept
 {
     for (int i = 0; i < 4; ++i)
+    {
         a.push_back(static_cast<crd::u8>(v >> (8 * i)));
+    }
 }
 void put_u64(cont::Array<crd::u8>& a, crd::u64 v) noexcept
 {
     for (int i = 0; i < 8; ++i)
+    {
         a.push_back(static_cast<crd::u8>(v >> (8 * i)));
+    }
 }
 void put_utf16(cont::Array<crd::u8>& a, const char* s) noexcept
 {
@@ -46,7 +50,9 @@ void put_utf16(cont::Array<crd::u8>& a, const char* s) noexcept
 void put_cstr(cont::Array<crd::u8>& a, const char* s) noexcept
 {
     for (; *s != '\0'; ++s)
+    {
         a.push_back(static_cast<crd::u8>(*s));
+    }
     a.push_back(0); // NUL
 }
 
@@ -60,7 +66,9 @@ void put_module(cont::Array<crd::u8>& a, crd::u64 base, crd::u32 size, crd::u32 
     put_u32(a, timestamp);
     put_u32(a, name_rva);
     for (int i = 0; i < 13; ++i)
+    {
         put_u32(a, 0); // VS_FIXEDFILEINFO
+    }
     put_u32(a, cv_size);
     put_u32(a, cv_rva); // cv_record
     put_u32(a, 0);
@@ -109,7 +117,9 @@ cont::Array<crd::u8> make_minidump()
     // cv0 (RSDS)
     put_u32(d, 0x53445352U); // 'RSDS'
     for (crd::u8 b : kGuid)
+    {
         d.push_back(b);
+    }
     put_u32(d, 7); // age
     put_cstr(d, "app.pdb");
     // name1
@@ -128,7 +138,9 @@ void put_unloaded_entry(cont::Array<crd::u8>& a, crd::u64 base, crd::u32 size, c
     put_u32(a, ts);
     put_u32(a, name_rva);
     while (a.size() - start < stride) // forward-compat pad to the declared stride
+    {
         a.push_back(0);
+    }
 }
 
 // A minidump carrying ONLY an UnloadedModuleListStream (stream 14): two unloaded modules (winhttp.dll, oldmod.dll).
@@ -291,7 +303,9 @@ TEST_CASE("identity_matches rejects wrong symbols instead of guessing", "[perf][
     g.id_kind = SymbolIdKind::GnuBuildId;
     g.id_len  = 20;
     for (crd::u8 i = 0; i < 20; ++i)
+    {
         g.id[i] = static_cast<crd::u8>(0x40U + i);
+    }
     ModuleIdentity g_same = g;
     CHECK(identity_matches(g, g_same));
     ModuleIdentity g_flip = g;

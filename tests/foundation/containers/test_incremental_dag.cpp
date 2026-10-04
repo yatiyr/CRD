@@ -28,10 +28,16 @@ IncrementalDag diamond(crd::memory::IAllocator* a)
 }
 [[nodiscard]] bool eq(const Array<u64>& v, const u64* expect, usize n) noexcept
 {
-    if (v.size() != n) { return false; }
+    if (v.size() != n)
+    {
+        return false;
+    }
     for (usize i = 0; i < n; ++i)
     {
-        if (v[i] != expect[i]) { return false; }
+        if (v[i] != expect[i])
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -81,7 +87,10 @@ TEST_CASE("incremental dag: the SEC-107 rule - interface change propagates, cont
     crd::memory::GrowableTlsfAllocator root;
     IncrementalDag               dag = diamond(&root);
     // seed every node with a (content, interface) revision.
-    for (u64 id = 1U; id <= 4U; ++id) { dag.set_revision(id, /*content*/ 100U + id, /*interface*/ 200U + id); }
+    for (u64 id = 1U; id <= 4U; ++id)
+    {
+        dag.set_revision(id, /*content*/ 100U + id, /*interface*/ 200U + id);
+    }
     CHECK(dag.content_of(1U) == 101U);
     CHECK(dag.interface_of(1U) == 201U);
 

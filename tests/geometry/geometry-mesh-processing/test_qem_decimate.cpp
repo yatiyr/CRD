@@ -68,7 +68,10 @@ void make_cube(crd::containers::Array<Vec3<f32>>& pos,
         // right (x=1, normal +x)
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : cube_indices) { idx.push_back(i); }
+    for (u32 i : cube_indices)
+    {
+        idx.push_back(i);
+    }
 }
 
 void make_quad(crd::containers::Array<Vec3<f32>>& pos,
@@ -79,7 +82,10 @@ void make_quad(crd::containers::Array<Vec3<f32>>& pos,
     pos.push_back(Vec3<f32>{1, 1, 0});
     pos.push_back(Vec3<f32>{0, 1, 0});
     const u32 quad_indices[] = {0, 1, 2,  0, 2, 3};
-    for (u32 i : quad_indices) { idx.push_back(i); }
+    for (u32 i : quad_indices)
+    {
+        idx.push_back(i);
+    }
 }
 
 } // anonymous namespace
@@ -305,7 +311,10 @@ TEST_CASE("qem_decimate: f64 precision tier decimates a cube",
         0, 4, 7,  0, 7, 3,
         1, 2, 6,  1, 6, 5,
     };
-    for (u32 i : cube_indices) { idx.push_back(i); }
+    for (u32 i : cube_indices)
+    {
+        idx.push_back(i);
+    }
 
     HalfEdgeMesh<f64> m{&f.alloc};
     REQUIRE(m.build_from(crd::containers::ConstSpan<Vec3<f64>>{pos.data(), pos.size()},

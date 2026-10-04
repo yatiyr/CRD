@@ -109,7 +109,10 @@ TEST_CASE("REN-40-C1 GATE: attribute-aware decimation keeps UVs on the true fiel
                 const crd::f32 x = (w[0] * vp[a].x) + (w[1] * vp[b].x) + (w[2] * vp[c].x);
                 const crd::f32 u = (w[0] * vuv[a * 2U]) + (w[1] * vuv[b * 2U]) + (w[2] * vuv[c * 2U]);
                 const crd::f32 e = crd::math::abs(u - (x * x)); // against the exact field
-                if (e > worst) { worst = e; }
+                if (e > worst)
+                {
+                    worst = e;
+                }
             }
         }
         return worst;

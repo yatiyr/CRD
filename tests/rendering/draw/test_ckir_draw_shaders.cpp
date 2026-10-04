@@ -146,7 +146,10 @@ TEST_CASE("REN-38-F7: the AUTHORED draw suite cooks, honours the varying contrac
             for (crd::usize i = 0; i < fg.serial_nodes().size(); ++i)
             {
                 const kir::KNode& nd = fg.serial_nodes()[i];
-                if (nd.op != kir::KOp::Smoothstep) { continue; }
+                if (nd.op != kir::KOp::Smoothstep)
+                {
+                    continue;
+                }
                 ++n_ss;
                 REQUIRE(nd.a >= 0);
                 REQUIRE(nd.c >= 0);
@@ -173,7 +176,10 @@ TEST_CASE("REN-38-F7 DRIFT GATE: the shipped draw assets match the embedded pack
           "[draw][ren38]")
 {
     const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0') { SKIP("CRD_ASSETS_DIR not set (run through ctest)"); }
+    if (root == nullptr || root[0] == '\0')
+    {
+        SKIP("CRD_ASSETS_DIR not set (run through ctest)");
+    }
     crd::memory::TlsfAllocator alloc(32U << 20U);
     namespace vc = crd::vertcook;
     namespace mc = crd::matcook;

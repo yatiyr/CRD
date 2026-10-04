@@ -699,7 +699,11 @@ void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
                 bool already_visited = false;
                 for (crd::u64 h : rc.visited_path_hashes)
                 {
-                    if (h == path_hash) { already_visited = true; break; }
+                    if (h == path_hash)
+                    {
+                        already_visited = true;
+                        break;
+                    }
                 }
                 if (already_visited)
                 {

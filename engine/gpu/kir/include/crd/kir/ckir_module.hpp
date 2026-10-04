@@ -38,8 +38,15 @@ namespace module_detail
 {
 [[nodiscard]] inline bool name_eq(const char* a, const char* b) noexcept
 {
-    if (a == nullptr || b == nullptr) { return a == b; }
-    while (*a != '\0' && *a == *b) { ++a; ++b; }
+    if (a == nullptr || b == nullptr)
+    {
+        return a == b;
+    }
+    while (*a != '\0' && *a == *b)
+    {
+        ++a;
+        ++b;
+    }
     return *a == *b;
 }
 } // namespace module_detail
@@ -58,7 +65,10 @@ public:
     {
         for (crd::usize i = 0; i < m_fns.size(); ++i)
         {
-            if (module_detail::name_eq(m_fns[i].name, name)) { return &m_fns[i]; }
+            if (module_detail::name_eq(m_fns[i].name, name))
+            {
+                return &m_fns[i];
+            }
         }
         return nullptr;
     }
@@ -70,13 +80,28 @@ public:
     [[nodiscard]] int call(KGraph& g, const char* name, const int* args, int n_args) const
     {
         const KFn* fn = find(name);
-        if (fn == nullptr || fn->body == nullptr || n_args != fn->n_params) { return -1; }
-        for (int i = 0; i < n_args; ++i) { if (args[i] < 0 || args[i] >= g.size()) { return -1; } }
+        if (fn == nullptr || fn->body == nullptr || n_args != fn->n_params)
+        {
+            return -1;
+        }
+        for (int i = 0; i < n_args; ++i)
+        {
+            if (args[i] < 0 || args[i] >= g.size())
+            {
+                return -1;
+            }
+        }
         DType dtype = DType::F32;
         if (fn->generic_dtype && n_args > 0)
         {
             dtype = g.node(args[0]).dtype();
-            for (int i = 1; i < n_args; ++i) { if (g.node(args[i]).dtype() != dtype) { return -1; } } // uniform-dtype constraint
+            for (int i = 1; i < n_args; ++i) // uniform-dtype constraint
+            {
+                if (g.node(args[i]).dtype() != dtype)
+                {
+                    return -1;
+                }
+            }
         }
         return fn->body(g, args, n_args, dtype, fn->user);
     }
@@ -87,21 +112,48 @@ public:
     [[nodiscard]] int call_node(KGraph& g, const char* name, const int* args, int n_args) const
     {
         const int idx = index_of(name);
-        if (idx < 0 || m_fns[static_cast<crd::usize>(idx)].body == nullptr) { return -1; }
+        if (idx < 0 || m_fns[static_cast<crd::usize>(idx)].body == nullptr)
+        {
+            return -1;
+        }
         const KFn& fn = m_fns[static_cast<crd::usize>(idx)];
-        if (n_args != fn.n_params || n_args > 16) { return -1; }
-        for (int i = 0; i < n_args; ++i) { if (args[i] < 0 || args[i] >= g.size()) { return -1; } }
+        if (n_args != fn.n_params || n_args > 16)
+        {
+            return -1;
+        }
+        for (int i = 0; i < n_args; ++i)
+        {
+            if (args[i] < 0 || args[i] >= g.size())
+            {
+                return -1;
+            }
+        }
         DType dtype = DType::F32;
         if (fn.generic_dtype && n_args > 0)
         {
             dtype = g.node(args[0]).dtype();
-            for (int i = 1; i < n_args; ++i) { if (g.node(args[i]).dtype() != dtype) { return -1; } }
+            for (int i = 1; i < n_args; ++i)
+            {
+                if (g.node(args[i]).dtype() != dtype)
+                {
+                    return -1;
+                }
+            }
         }
         Shape ashapes[16];
-        for (int i = 0; i < n_args; ++i) { ashapes[i] = g.node(args[i]).shape; }
+        for (int i = 0; i < n_args; ++i)
+        {
+            ashapes[i] = g.node(args[i]).shape;
+        }
         Shape osh; // default = empty; shape-preserving fallback uses arg[0] when there is no rule
-        if (fn.shape_rule != nullptr) { osh = fn.shape_rule(ashapes, n_args, dtype); }
-        else if (n_args > 0) { osh = ashapes[0]; }
+        if (fn.shape_rule != nullptr)
+        {
+            osh = fn.shape_rule(ashapes, n_args, dtype);
+        }
+        else if (n_args > 0)
+        {
+            osh = ashapes[0];
+        }
         return g.call_node(idx, args, n_args, osh, dtype);
     }
 
@@ -111,20 +163,41 @@ public:
     {
         int calls[512];
         int nc = 0;
-        for (int i = 0; i < g.size() && nc < 512; ++i) { if (g.node(i).op == KOp::Call) { calls[nc++] = i; } }
+        for (int i = 0; i < g.size() && nc < 512; ++i)
+        {
+            if (g.node(i).op == KOp::Call)
+            {
+                calls[nc++] = i;
+            }
+        }
         for (int c = 0; c < nc; ++c)
         {
             const int    cn  = calls[c];
             const KNode& node = g.node(cn);
             const int    idx = node.iidx;
-            if (idx < 0 || idx >= count()) { continue; }
+            if (idx < 0 || idx >= count())
+            {
+                continue;
+            }
             int       args[16];
             const int na = static_cast<int>(node.n_ext) < 16 ? static_cast<int>(node.n_ext) : 16;
-            for (int k = 0; k < na; ++k) { args[k] = g.ext_operand(node, k); }
+            for (int k = 0; k < na; ++k)
+            {
+                args[k] = g.ext_operand(node, k);
+            }
             const int out = m_fns[static_cast<crd::usize>(idx)].body(g, args, na, node.dtype(), m_fns[static_cast<crd::usize>(idx)].user);
-            if (out < 0) { continue; }
+            if (out < 0)
+            {
+                continue;
+            }
             g.redirect(cn, out); // splice the inlined body in place of the Call for all downstream consumers
-            for (int r = 0; r < n_roots; ++r) { if (roots[r] == cn) { roots[r] = out; } }
+            for (int r = 0; r < n_roots; ++r)
+            {
+                if (roots[r] == cn)
+                {
+                    roots[r] = out;
+                }
+            }
         }
         return nc;
     }
@@ -132,7 +205,13 @@ public:
 private:
     [[nodiscard]] int index_of(const char* name) const
     {
-        for (crd::usize i = 0; i < m_fns.size(); ++i) { if (module_detail::name_eq(m_fns[i].name, name)) { return static_cast<int>(i); } }
+        for (crd::usize i = 0; i < m_fns.size(); ++i)
+        {
+            if (module_detail::name_eq(m_fns[i].name, name))
+            {
+                return static_cast<int>(i);
+            }
+        }
         return -1;
     }
     crd::containers::Array<KFn> m_fns;
@@ -235,9 +314,15 @@ inline void register_numerics(KModule& m)
 [[nodiscard]] inline int fn_ffn(KGraph& g, const int* args, int /*n*/, DType /*t*/, void* user)
 {
     const KModule* m = static_cast<const KModule*>(user);
-    if (m == nullptr) { return -1; }
+    if (m == nullptr)
+    {
+        return -1;
+    }
     const int h = m->call(g, "linear", args, 3); // intra-module call — LINKED by name, not inlined by the author
-    if (h < 0) { return -1; }
+    if (h < 0)
+    {
+        return -1;
+    }
     const int hy[1] = {h};
     return m->call(g, "gelu", hy, 1); // compose the activation, again by name
 }
@@ -297,7 +382,10 @@ inline void register_stdlib(KModule& m)
 [[nodiscard]] inline int fn_attention(KGraph& g, const int* args, int /*n*/, DType t, void* user)
 {
     const KModule* mod = static_cast<const KModule*>(user);
-    if (mod == nullptr) { return -1; }
+    if (mod == nullptr)
+    {
+        return -1;
+    }
     const int      q  = args[0];
     const int      k  = args[1];
     const int      v  = args[2];
@@ -309,7 +397,10 @@ inline void register_stdlib(KModule& m)
     const int      scal = g.constant(1.0 / crd::math::sqrt(static_cast<crd::f64>(dim)), g.node(sc).shape, t);
     const int      sn   = g.binary(KOp::Mul, sc, scal);           // scaled scores
     const int      sm   = mod->call(g, "softmax", &sn, 1);        // LINKED softmax over the last axis → [S, S]
-    if (sm < 0) { return -1; }
+    if (sm < 0)
+    {
+        return -1;
+    }
     return g.contract(sm, v);                                     // ·v → [S, D]
 }
 
@@ -320,28 +411,49 @@ inline void register_stdlib(KModule& m)
 [[nodiscard]] inline int fn_transformer_block(KGraph& g, const int* args, int /*n*/, DType /*t*/, void* user)
 {
     const KModule* mod = static_cast<const KModule*>(user);
-    if (mod == nullptr) { return -1; }
+    if (mod == nullptr)
+    {
+        return -1;
+    }
     const int x = args[0];
     // sub-block 1: h = x + attention(layernorm(x))   (pre-norm self-attention + residual)
     const int ln1_args[3] = {x, args[1], args[2]};
     const int a1 = mod->call(g, "layernorm", ln1_args, 3);
-    if (a1 < 0) { return -1; }
+    if (a1 < 0)
+    {
+        return -1;
+    }
     const int attn_args[3] = {a1, a1, a1};                        // self-attention: q = k = v = the normed input
     const int at = mod->call(g, "attention", attn_args, 3);
-    if (at < 0) { return -1; }
+    if (at < 0)
+    {
+        return -1;
+    }
     const int h = g.binary(KOp::Add, x, at);                      // residual 1
     // sub-block 2: out = h + linear(gelu(linear(layernorm(h))))   (pre-norm FFN + residual)
     const int ln2_args[3] = {h, args[3], args[4]};
     const int a2 = mod->call(g, "layernorm", ln2_args, 3);
-    if (a2 < 0) { return -1; }
+    if (a2 < 0)
+    {
+        return -1;
+    }
     const int lin1_args[3] = {a2, args[5], args[6]};
     const int f1 = mod->call(g, "linear", lin1_args, 3);          // [S,N]·[N,H] + [H] → [S,H]
-    if (f1 < 0) { return -1; }
+    if (f1 < 0)
+    {
+        return -1;
+    }
     const int gf = mod->call(g, "gelu", &f1, 1);
-    if (gf < 0) { return -1; }
+    if (gf < 0)
+    {
+        return -1;
+    }
     const int lin2_args[3] = {gf, args[7], args[8]};
     const int f2 = mod->call(g, "linear", lin2_args, 3);          // [S,H]·[H,N] + [N] → [S,N]
-    if (f2 < 0) { return -1; }
+    if (f2 < 0)
+    {
+        return -1;
+    }
     return g.binary(KOp::Add, h, f2);                             // residual 2
 }
 

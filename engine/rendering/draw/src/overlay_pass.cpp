@@ -97,12 +97,18 @@ void pack_header(crd::containers::Array<crd::u32>& w, const OverlayPassConfig& c
 
 bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer, const OverlayPassConfig& config)
 {
-    if (!is_initialised() || !is_overlay_enabled()) { return true; } // wire-unconditionally contract — a quiet no-op
+    if (!is_initialised() || !is_overlay_enabled()) // wire-unconditionally contract — a quiet no-op
+    {
+        return true;
+    }
     auto& s = detail::renderer_state();
 
     const auto lines     = buffer.lines();
     const auto triangles = buffer.triangles();
-    if (lines.size() == 0U && triangles.size() == 0U && !config.grid.enabled) { return true; }
+    if (lines.size() == 0U && triangles.size() == 0U && !config.grid.enabled)
+    {
+        return true;
+    }
 
     // ⛔ REN-39: ONE upload per buffer per submission, ALL buckets packed contiguously, each bucket drawn as a
     // RANGE (`draw_overlay_range`'s first-vertex offset). The old scheme re-uploaded the SAME instance region
@@ -139,7 +145,10 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
             {
                 const auto m       = is_tri ? triangles[i].flags.depth() : lines[i].flags.depth();
                 const bool in_this = variant_of(m) == v || (m == DepthMode::XRay && v == kVariantGreaterDimmed);
-                if (!in_this) { continue; }
+                if (!in_this)
+                {
+                    continue;
+                }
                 if (packed == cap) // never silent: a clamped overlay says so (the no-silent-caps rule)
                 {
                     ++dropped;
@@ -172,11 +181,17 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
             CRD_LOG_WARN(g_log_overlay, "overlay {} bin over its per-frame cap ({}) -- {} instance(s) dropped",
                          is_tri ? "triangle" : "line", cap, dropped);
         }
-        if (s.scratch.size() == static_cast<crd::usize>(kHeaderWords) && !config.grid.enabled) { return; }
+        if (s.scratch.size() == static_cast<crd::usize>(kHeaderWords) && !config.grid.enabled)
+        {
+            return;
+        }
         if (!s.raster->upload_storage(storage, 0U, s.scratch.data(), static_cast<crd::u32>(s.scratch.size() * 4U)))
         {
             CRD_LOG_ERROR(g_log_overlay, "draw-buffer upload refused -- skipping {} bins", is_tri ? "tri" : "line");
-            for (crd::u32 v = 0; v < kVariantCount; ++v) { ranges[is_tri ? 1 : 0][v].count = 0U; }
+            for (crd::u32 v = 0; v < kVariantCount; ++v)
+            {
+                ranges[is_tri ? 1 : 0][v].count = 0U;
+            }
             ok = false;
         }
     };
@@ -197,7 +212,10 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
                             crd::u32 first_vertex, crd::u32 vertex_count) -> bool
     {
         auto enc = s.raster->create_command_encoder();
-        if (enc == nullptr) { return false; }
+        if (enc == nullptr)
+        {
+            return false;
+        }
         gpu::RenderingDesc       rd{};
         gpu::ColorAttachmentDesc c{};
         c.target = &target;
@@ -209,7 +227,10 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
         // CEIR-34 R2: name the target as its own companion-depth carrier so the encoder routes the overlay's depth
         // bucket through the generic draw_storage_depth_load arm (the Always bucket keeps depth disabled ⇒ the
         // colour-only draw_storage arm). The backend derives the read-only depth view from this colour target.
-        if (rd.depth.enabled) { rd.depth.target = &target; }
+        if (rd.depth.enabled)
+        {
+            rd.depth.target = &target;
+        }
         enc->begin_rendering(rd);
         gpu::RasterDrawPacket pk{};
         pk.program                        = &prog;
@@ -240,13 +261,19 @@ bool submit_overlay(crd::gpu::IRasterTarget& target, const RenderBuffer& buffer,
     for (crd::u32 v = 0; v < kVariantCount; ++v)
     {
         const BucketRange& r = ranges[1][v];
-        if (r.count == 0U) { continue; }
+        if (r.count == 0U)
+        {
+            continue;
+        }
         ok = overlay_draw(*s.tri_prog, *s.storage, compare_of[v], r.first * 3U, r.count * 3U) && ok;
     }
     for (crd::u32 v = 0; v < kVariantCount; ++v)
     {
         const BucketRange& r = ranges[0][v];
-        if (r.count == 0U) { continue; }
+        if (r.count == 0U)
+        {
+            continue;
+        }
         ok = overlay_draw(*s.line_prog, *s.line_storage, compare_of[v], r.first * 6U, r.count * 6U) && ok;
     }
 

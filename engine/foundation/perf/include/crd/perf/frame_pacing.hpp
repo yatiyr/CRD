@@ -52,7 +52,10 @@ public:
         m_interval_sum   = 0;
         m_interval_min   = 0;
         m_interval_max   = 0;
-        for (crd::u32 i = 0; i <= kBuckets; ++i) m_interval_hist[i] = 0;
+        for (crd::u32 i = 0; i <= kBuckets; ++i)
+        {
+            m_interval_hist[i] = 0;
+        }
 
         m_dur_count = 0;
         m_dur_sum   = 0;
@@ -61,7 +64,10 @@ public:
         m_lat_sum   = 0;
         m_lat_min   = 0;
         m_lat_max   = 0;
-        for (crd::u32 i = 0; i <= kBuckets; ++i) m_lat_hist[i] = 0;
+        for (crd::u32 i = 0; i <= kBuckets; ++i)
+        {
+            m_lat_hist[i] = 0;
+        }
     }
 
     // Feed one frame boundary. The interval (pacing) is begin_ns - previous begin_ns; the duration (work) is
@@ -76,7 +82,10 @@ public:
         m_have_prev     = true;
 
         crd::i64 dur = end_ns - begin_ns; // a truncated capture can hand us end < begin -> clamp like interval/latency
-        if (dur < 0) dur = 0;
+        if (dur < 0)
+        {
+            dur = 0;
+        }
         m_dur_sum += dur;
         ++m_dur_count;
     }
@@ -84,9 +93,18 @@ public:
     // Feed a frame-to-frame interval directly (pacing only; use when the duration is unknown).
     void add_interval(crd::i64 interval_ns) noexcept
     {
-        if (interval_ns < 0) interval_ns = 0;
-        if (m_interval_count == 0 || interval_ns < m_interval_min) m_interval_min = interval_ns;
-        if (m_interval_count == 0 || interval_ns > m_interval_max) m_interval_max = interval_ns;
+        if (interval_ns < 0)
+        {
+            interval_ns = 0;
+        }
+        if (m_interval_count == 0 || interval_ns < m_interval_min)
+        {
+            m_interval_min = interval_ns;
+        }
+        if (m_interval_count == 0 || interval_ns > m_interval_max)
+        {
+            m_interval_max = interval_ns;
+        }
         m_interval_sum += interval_ns;
         ++m_interval_count;
         ++m_interval_hist[bucket_of(interval_ns)];
@@ -97,9 +115,18 @@ public:
     void add_latency(crd::i64 input_ns, crd::i64 present_ns) noexcept
     {
         crd::i64 latency_ns = present_ns - input_ns;
-        if (latency_ns < 0) latency_ns = 0;
-        if (m_lat_count == 0 || latency_ns < m_lat_min) m_lat_min = latency_ns;
-        if (m_lat_count == 0 || latency_ns > m_lat_max) m_lat_max = latency_ns;
+        if (latency_ns < 0)
+        {
+            latency_ns = 0;
+        }
+        if (m_lat_count == 0 || latency_ns < m_lat_min)
+        {
+            m_lat_min = latency_ns;
+        }
+        if (m_lat_count == 0 || latency_ns > m_lat_max)
+        {
+            m_lat_max = latency_ns;
+        }
         m_lat_sum += latency_ns;
         ++m_lat_count;
         ++m_lat_hist[bucket_of(latency_ns)];
@@ -124,11 +151,16 @@ public:
     // Frames whose interval is at/over threshold_ns (bucket-quantized). Never derived from throughput or work.
     [[nodiscard]] crd::u64 stutter_count(crd::i64 threshold_ns) const noexcept
     {
-        if (threshold_ns <= 0) return m_interval_count;
+        if (threshold_ns <= 0)
+        {
+            return m_interval_count;
+        }
         crd::u64 first = static_cast<crd::u64>(threshold_ns / m_bucket_width_ns);
         crd::u64 c     = m_interval_hist[kBuckets]; // overflow is always over-threshold
         for (crd::u32 b = static_cast<crd::u32>(first < kBuckets ? first : kBuckets); b < kBuckets; ++b)
+        {
             c += m_interval_hist[b];
+        }
         return c;
     }
 
@@ -155,23 +187,41 @@ private:
     [[nodiscard]] crd::u32 bucket_of(crd::i64 value_ns) const noexcept
     {
         crd::i64 idx = value_ns / m_bucket_width_ns;
-        if (idx < 0) idx = 0;
-        if (idx >= static_cast<crd::i64>(kBuckets)) return kBuckets; // overflow bucket
+        if (idx < 0)
+        {
+            idx = 0;
+        }
+        if (idx >= static_cast<crd::i64>(kBuckets)) // overflow bucket
+        {
+            return kBuckets;
+        }
         return static_cast<crd::u32>(idx);
     }
 
     [[nodiscard]] crd::i64 percentile(const crd::u32 (&hist)[kBuckets + 1], crd::u64 count, crd::i64 observed_max,
                                       crd::u32 pct) const noexcept
     {
-        if (count == 0) return 0;
-        if (pct > 100) pct = 100;
+        if (count == 0)
+        {
+            return 0;
+        }
+        if (pct > 100)
+        {
+            pct = 100;
+        }
         crd::u64 rank = (static_cast<crd::u64>(pct) * count + 99) / 100; // ceil(pct% of count)
-        if (rank == 0) rank = 1;
+        if (rank == 0)
+        {
+            rank = 1;
+        }
         crd::u64 cum = 0;
         for (crd::u32 b = 0; b < kBuckets; ++b)
         {
             cum += hist[b];
-            if (cum >= rank) return static_cast<crd::i64>(b + 1) * m_bucket_width_ns; // conservative upper edge
+            if (cum >= rank) // conservative upper edge
+            {
+                return static_cast<crd::i64>(b + 1) * m_bucket_width_ns;
+            }
         }
         return observed_max; // rank fell in the overflow bucket -> report the observed maximum
     }

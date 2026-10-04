@@ -596,7 +596,10 @@ TEST_CASE("ceir type: ownership qualifiers intern, dedup, and round-trip byte-ex
     };
     // 9 keyword carriers over f32 + 2 nested (a resource underlying and an aggregate) to exercise recursion.
     TypeId ts[11];
-    for (int i = 0; i < 9; ++i) { ts[i] = ctx.type_qualified(kinds[i], f32); }
+    for (int i = 0; i < 9; ++i)
+    {
+        ts[i] = ctx.type_qualified(kinds[i], f32);
+    }
     ts[9]                 = ctx.type_qualified(OwnershipKind::BorrowedView, ctx.type_buffer(BufferMode::Plain, f32));
     const TypeId tup2[2]  = {f32, ctx.type_i32()};
     ts[10]                = ctx.type_qualified(OwnershipKind::OwnedResource, ctx.type_tuple(ConstSpan<TypeId>(tup2, 2U)));

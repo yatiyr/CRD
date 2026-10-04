@@ -157,7 +157,9 @@ public:
     void for_each_counter(Fn&& fn) const
     {
         for (crd::u32 i = 0U; i < m_capacity; ++i)
+        {
             fn(m_counters[i]); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        }
     }
 
 private:

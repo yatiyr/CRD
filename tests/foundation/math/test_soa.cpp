@@ -329,12 +329,21 @@ TEST_CASE("soa scatter8 leaves untouched lanes intact",
     f32 c0_lanes[8]; c0.pos_x.store(c0_lanes);
     for (usize i = 0; i < 8; ++i)
     {
-        if (i == 5) REQUIRE(bit_eq(c0_lanes[i], 11.0F));
-        else        REQUIRE(bit_eq(c0_lanes[i], 99.0F));
+        if (i == 5)
+        {
+            REQUIRE(bit_eq(c0_lanes[i], 11.0F));
+        }
+        else
+        {
+            REQUIRE(bit_eq(c0_lanes[i], 99.0F));
+        }
     }
     // Chunk 1 untouched.
     f32 c1_lanes[8]; c1.pos_x.store(c1_lanes);
-    for (usize i = 0; i < 8; ++i) REQUIRE(bit_eq(c1_lanes[i], 99.0F));
+    for (usize i = 0; i < 8; ++i)
+    {
+        REQUIRE(bit_eq(c1_lanes[i], 99.0F));
+    }
 }
 
 // ===========================================================================

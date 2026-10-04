@@ -94,7 +94,9 @@ TEST_CASE("parallel_for captures one sample per job",
     auto* c = crd::jobs::parallel_for(count, num_jobs,
                                       [&](crd::u32 b, crd::u32 e) {
                                           for (crd::u32 i = b; i < e; ++i)
+                                          {
                                               sum.fetch_add(i, std::memory_order_relaxed);
+                                          }
                                       });
     crd::jobs::wait(c);
 
@@ -153,7 +155,9 @@ TEST_CASE("nested CRD_PERF_SCOPE inside a job becomes a child region",
         // measurable body
         volatile int x = 0;
         for (int i = 0; i < 100; ++i)
+        {
             x += i;
+        }
         (void)x;
     });
     crd::jobs::run_and_wait(job);

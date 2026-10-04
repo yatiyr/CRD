@@ -112,7 +112,9 @@ TEST_CASE("REN-40-I3: root clusters have parent_error = FLT_MAX",
     for (crd::u32 ci = 0; ci < report.cluster_count; ++ci)
     {
         if (result.clusters[ci].parent_error == std::numeric_limits<crd::f32>::max())
+        {
             ++root_count;
+        }
     }
     REQUIRE(root_count > 0U);
 }
@@ -136,7 +138,9 @@ TEST_CASE("REN-40-I3: leaf clusters cover all original triangles",
     for (crd::u32 ci = 0; ci < static_cast<crd::u32>(result.clusters.size()); ++ci)
     {
         if (result.clusters[ci].level == 0U)
+        {
             leaf_tris += result.clusters[ci].triangle_count;
+        }
     }
     REQUIRE(leaf_tris == tc);
 }

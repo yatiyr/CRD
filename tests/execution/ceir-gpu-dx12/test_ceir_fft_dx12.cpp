@@ -45,7 +45,11 @@ ce::Operation* build_fft_op(ce::Context& ctx, ce::Module& m, const char* dir)
 {
     const ce::OpId decl = ctx.intern_op("resource", "declare");
     ce::Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
     top->append(f);
     ce::Block* const     b  = ce::func::func_body_block(f);
@@ -125,7 +129,11 @@ TEST_CASE("ceir 22b: synth_fft runs forward+inverse c2c FFT on a DX12 device (==
     }
 
     crd::gpu::Dx12ComputeContext compute(&alloc);
-    if (!compute.valid()) { WARN("no D3D12 device — skipping the CEIR-22b fft device gate"); return; }
+    if (!compute.valid())
+    {
+        WARN("no D3D12 device — skipping the CEIR-22b fft device gate");
+        return;
+    }
 
     const auto run_dir = [&](const char* dir, const crd::f64* ref_r, const crd::f64* ref_i) {
         ce::Module* const   mm = ctx.create_module();
@@ -136,7 +144,11 @@ TEST_CASE("ceir 22b: synth_fft runs forward+inverse c2c FFT on a DX12 device (==
 
         crd::f64 orr[kN];
         crd::f64 oi[kN];
-        for (int i = 0; i < kN; ++i) { orr[i] = -99.0; oi[i] = -99.0; }
+        for (int i = 0; i < kN; ++i)
+        {
+            orr[i] = -99.0;
+            oi[i] = -99.0;
+        }
         kir::KernelBuffer bufs[6] = {{ir, kN, 0, 0},     {ii, kN, 0, 1},   {twr, kHalf, 0, 2},
                                      {twi, kHalf, 0, 3},  {orr, kN, 0, 4},  {oi, kN, 0, 5}};
         kir::eval_cpu_kernel(g, s.plan.entry, bufs, 6, ls, &alloc);
@@ -152,8 +164,18 @@ TEST_CASE("ceir 22b: synth_fft runs forward+inverse c2c FFT on a DX12 device (==
         float h_twi[kHalf];
         float h_or[kN];
         float h_oi[kN];
-        for (int i = 0; i < kN; ++i) { h_ir[i] = static_cast<float>(ir[i]); h_ii[i] = static_cast<float>(ii[i]); h_or[i] = -99.0F; h_oi[i] = -99.0F; }
-        for (int k = 0; k < kHalf; ++k) { h_twr[k] = static_cast<float>(twr[k]); h_twi[k] = static_cast<float>(twi[k]); }
+        for (int i = 0; i < kN; ++i)
+        {
+            h_ir[i] = static_cast<float>(ir[i]);
+            h_ii[i] = static_cast<float>(ii[i]);
+            h_or[i] = -99.0F;
+            h_oi[i] = -99.0F;
+        }
+        for (int k = 0; k < kHalf; ++k)
+        {
+            h_twr[k] = static_cast<float>(twr[k]);
+            h_twi[k] = static_cast<float>(twi[k]);
+        }
         float*    host[6] = {h_ir, h_ii, h_twr, h_twi, h_or, h_oi};
         const int lens[6] = {kN, kN, kHalf, kHalf, kN, kN};
         crd::kir_test::dispatch_kernel_1wg(compute, *pipe, host, lens, 6, 1U);

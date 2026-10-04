@@ -25,8 +25,14 @@ TEST_CASE("gbmv: tridiagonal A*x", "[hesap][blas2][banded][gbmv]")
     for (crd::usize i = 0; i < 4; ++i)
     {
         a.at(i, i) = 2.0;
-        if (i > 0) a.at(i, i - 1) = -1.0;
-        if (i + 1 < 4) a.at(i, i + 1) = -1.0;
+        if (i > 0)
+        {
+            a.at(i, i - 1) = -1.0;
+        }
+        if (i + 1 < 4)
+        {
+            a.at(i, i + 1) = -1.0;
+        }
     }
     Vector<crd::f64> x(&alloc, {1.0, 1.0, 1.0, 1.0});
     Vector<crd::f64> y(&alloc, 4);

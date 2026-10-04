@@ -60,8 +60,14 @@ inline constexpr crd::u32 kFspaiLocalMax = 256U; // strict-lower pattern cap (s�
 template <typename T>
 [[nodiscard]] inline crd::hesap::dense::RealType<T> spai_real(T v) noexcept
 {
-    if constexpr (crd::hesap::dense::is_complex_v<T>) { return v.re; }
-    else { return v; }
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return v.re;
+    }
+    else
+    {
+        return v;
+    }
 }
 } // namespace detail
 
@@ -146,7 +152,10 @@ private:
     {
         for (crd::u32 p = c.col_ptr[k]; p < c.col_ptr[k + 1]; ++p)
         {
-            if (c.col_row[p] == k) { return c.col_val[p]; }
+            if (c.col_row[p] == k)
+            {
+                return c.col_val[p];
+            }
         }
         return T{};
     }
@@ -166,11 +175,17 @@ private:
         crd::u32 nlow = 0;
         for (crd::u32 p = c.col_ptr[k]; p < c.col_ptr[k + 1]; ++p)
         {
-            if (c.col_row[p] > k) { ++nlow; }
+            if (c.col_row[p] > k)
+            {
+                ++nlow;
+            }
         }
         auto store_diagonal = [&]() {
             R dk = detail::spai_real(akk);
-            if (dk < diagfloor) { dk = diagfloor; }
+            if (dk < diagfloor)
+            {
+                dk = diagfloor;
+            }
             sr[0]          = k;
             sv[0]          = T(R(1) / std::sqrt(dk));
             c.stage_cnt[k] = 1;
@@ -202,15 +217,24 @@ private:
         for (;;)
         {
             // ---- assemble A(P,P) (s×s row-major), akj = A(P,k), rhs = -akj ----
-            for (crd::usize idx = 0; idx < static_cast<crd::usize>(sz) * sz; ++idx) { w.app[idx] = T{}; }
-            for (crd::u32 p = 0; p < sz; ++p) { w.akj[p] = T{}; }
+            for (crd::usize idx = 0; idx < static_cast<crd::usize>(sz) * sz; ++idx)
+            {
+                w.app[idx] = T{};
+            }
+            for (crd::u32 p = 0; p < sz; ++p)
+            {
+                w.akj[p] = T{};
+            }
             for (crd::u32 p = 0; p < sz; ++p)
             {
                 const crd::u32 ip = w.plist[p];
                 for (crd::u32 q = c.row_ptr[ip]; q < c.row_ptr[ip + 1]; ++q)
                 {
                     const crd::u32 cc = c.row_col[q];
-                    if (cc == k) { w.akj[p] = c.row_val[q]; }
+                    if (cc == k)
+                    {
+                        w.akj[p] = c.row_val[q];
+                    }
                     else if (w.pmark[cc] >= 0)
                     {
                         w.app[static_cast<crd::usize>(p) * sz + static_cast<crd::u32>(w.pmark[cc])] = c.row_val[q];
@@ -227,15 +251,27 @@ private:
 
             // ---- d_k = A(k,k) + A(k,P)·y  (A(k,P[p]) = conj(A(P[p],k)) = conj(akj[p])) ----
             T dacc = akk;
-            for (crd::u32 p = 0; p < sz; ++p) { dacc = dacc + detail::spai_conj(w.akj[p]) * w.rhs[p]; }
+            for (crd::u32 p = 0; p < sz; ++p)
+            {
+                dacc = dacc + detail::spai_conj(w.akj[p]) * w.rhs[p];
+            }
             dk = detail::spai_real(dacc);
-            if (dk < diagfloor) { dk = diagfloor; }
+            if (dk < diagfloor)
+            {
+                dk = diagfloor;
+            }
 
-            if (c.pattern == SpaiPattern::Static || sz >= c.cap_J) { break; }
+            if (c.pattern == SpaiPattern::Static || sz >= c.cap_J)
+            {
+                break;
+            }
 
             // ---- adaptive augmentation: v = (e_k with y on P); profit_j = |(A·v)_j|²/A(j,j) ----
             w.vval[k] = T(R(1));
-            for (crd::u32 p = 0; p < sz; ++p) { w.vval[w.plist[p]] = w.rhs[p]; }
+            for (crd::u32 p = 0; p < sz; ++p)
+            {
+                w.vval[w.plist[p]] = w.rhs[p];
+            }
 
             crd::u32 cand_n   = 0;
             auto     scan_row = [&](crd::u32 i) {
@@ -250,7 +286,10 @@ private:
                 }
             };
             scan_row(k);
-            for (crd::u32 p = 0; p < sz; ++p) { scan_row(w.plist[p]); }
+            for (crd::u32 p = 0; p < sz; ++p)
+            {
+                scan_row(w.plist[p]);
+            }
 
             R best_profit = R(0);
             for (crd::u32 t = 0; t < cand_n; ++t)
@@ -260,22 +299,34 @@ private:
                 for (crd::u32 q = c.row_ptr[j]; q < c.row_ptr[j + 1]; ++q)
                 {
                     const crd::u32 cc = c.row_col[q];
-                    if (cc == k || w.pmark[cc] >= 0) { av = av + c.row_val[q] * w.vval[cc]; }
+                    if (cc == k || w.pmark[cc] >= 0)
+                    {
+                        av = av + c.row_val[q] * w.vval[cc];
+                    }
                 }
                 const T ajj = diag_of(c, j);
                 const R d   = detail::spai_real(ajj);
                 w.cprofit[t] = (d > smlnum) ? detail::spai_abs2(av) / d : R(0);
-                if (w.cprofit[t] > best_profit) { best_profit = w.cprofit[t]; }
+                if (w.cprofit[t] > best_profit)
+                {
+                    best_profit = w.cprofit[t];
+                }
             }
 
             // reset v for the rows we set (k + P); the candidate markers reset below
             w.vval[k] = T{};
-            for (crd::u32 p = 0; p < sz; ++p) { w.vval[w.plist[p]] = T{}; }
+            for (crd::u32 p = 0; p < sz; ++p)
+            {
+                w.vval[w.plist[p]] = T{};
+            }
 
             const bool converged = best_profit <= c.epsilon * c.epsilon * dk;
             if (cand_n == 0 || converged)
             {
-                for (crd::u32 t = 0; t < cand_n; ++t) { w.cmark[w.clist[t]] = -1; }
+                for (crd::u32 t = 0; t < cand_n; ++t)
+                {
+                    w.cmark[w.clist[t]] = -1;
+                }
                 break;
             }
 
@@ -285,18 +336,33 @@ private:
                 crd::u32 best = cand_n;
                 for (crd::u32 t = 0; t < cand_n; ++t)
                 {
-                    if (w.cmark[w.clist[t]] != 1) { continue; }
-                    if (best == cand_n || w.cprofit[t] > w.cprofit[best]) { best = t; }
+                    if (w.cmark[w.clist[t]] != 1)
+                    {
+                        continue;
+                    }
+                    if (best == cand_n || w.cprofit[t] > w.cprofit[best])
+                    {
+                        best = t;
+                    }
                 }
-                if (best == cand_n || w.cprofit[best] <= c.epsilon * c.epsilon * dk) { break; }
+                if (best == cand_n || w.cprofit[best] <= c.epsilon * c.epsilon * dk)
+                {
+                    break;
+                }
                 const crd::u32 j = w.clist[best];
                 w.cmark[j]       = 2; // consumed
                 w.pmark[j]       = static_cast<crd::i32>(sz);
                 w.plist[sz++]    = j;
                 ++added;
             }
-            for (crd::u32 t = 0; t < cand_n; ++t) { w.cmark[w.clist[t]] = -1; }
-            if (added == 0) { break; }
+            for (crd::u32 t = 0; t < cand_n; ++t)
+            {
+                w.cmark[w.clist[t]] = -1;
+            }
+            if (added == 0)
+            {
+                break;
+            }
         }
 
         // ---- store L column k: (k, 1/√d_k) + (P[p], y[p]/√d_k) ----
@@ -311,7 +377,10 @@ private:
             ++cnt;
         }
         c.stage_cnt[k] = cnt;
-        for (crd::u32 p = 0; p < sz; ++p) { w.pmark[w.plist[p]] = -1; }
+        for (crd::u32 p = 0; p < sz; ++p)
+        {
+            w.pmark[w.plist[p]] = -1;
+        }
     }
 
     static Csr build_fspai(const Csr& a, SpaiPattern pattern, R epsilon, crd::u32 max_per_col,
@@ -319,7 +388,10 @@ private:
     {
         const crd::u32 n = a.rows();
         crd::hesap::sparse::TripletBuilder<T> tb(alloc, n, n);
-        if (n == 0) { return tb.compress(); }
+        if (n == 0)
+        {
+            return tb.compress();
+        }
 
         auto        acsc    = crd::hesap::sparse::to_csc<T>(a, alloc);
         const auto* col_ptr = acsc.pattern().outer_ptr.data();
@@ -335,18 +407,33 @@ private:
             crd::u32 low = 0;
             for (crd::u32 p = col_ptr[j]; p < col_ptr[j + 1]; ++p)
             {
-                if (col_row[p] > j) { ++low; }
+                if (col_row[p] > j)
+                {
+                    ++low;
+                }
             }
             max_low = low > max_low ? low : max_low;
         }
         crd::u32 cap_J = (pattern == SpaiPattern::Static)
                              ? (max_low + 1U)
                              : (max_per_col != 0 ? max_per_col : std::max<crd::u32>(10U, 3U * max_low + 1U));
-        if (cap_J > n) { cap_J = n; }
-        if (cap_J == 0) { cap_J = 1; }
+        if (cap_J > n)
+        {
+            cap_J = n;
+        }
+        if (cap_J == 0)
+        {
+            cap_J = 1;
+        }
         crd::u32 cap_sz = cap_J - 1U; // strict-lower pattern excludes the diagonal
-        if (cap_sz > detail::kFspaiLocalMax) { cap_sz = detail::kFspaiLocalMax; }
-        if (cap_sz < 1) { cap_sz = 1; }
+        if (cap_sz > detail::kFspaiLocalMax)
+        {
+            cap_sz = detail::kFspaiLocalMax;
+        }
+        if (cap_sz < 1)
+        {
+            cap_sz = 1;
+        }
 
         const crd::u32 workers = crd::jobs::num_workers() == 0 ? 1U : crd::jobs::num_workers();
         crd::containers::Array<ColScratch> ws(alloc);
@@ -383,7 +470,10 @@ private:
 
         const crd::u32 jobs    = workers < n ? workers : n;
         auto*          counter = crd::jobs::parallel_for(n, jobs, [pc = &ctx](crd::u32 b, crd::u32 e) {
-            for (crd::u32 k = b; k < e; ++k) { process_column(*pc, k); }
+            for (crd::u32 k = b; k < e; ++k)
+            {
+                process_column(*pc, k);
+            }
         });
         crd::jobs::wait(counter);
         crd::jobs::frame_reset();
@@ -393,7 +483,10 @@ private:
             const crd::u32* sr  = stage_row.data() + static_cast<crd::usize>(k) * cap_J;
             const T*        sv  = stage_val.data() + static_cast<crd::usize>(k) * cap_J;
             const crd::u32  cnt = stage_cnt[k];
-            for (crd::u32 t = 0; t < cnt; ++t) { tb.add(sr[t], k, sv[t]); }
+            for (crd::u32 t = 0; t < cnt; ++t)
+            {
+                tb.add(sr[t], k, sv[t]);
+            }
         }
         return tb.compress();
     }

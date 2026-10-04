@@ -44,7 +44,10 @@ CommandResult blob_f64_result(crd::memory::IAllocator* alloc, crd::containers::C
     const auto*      raw     = reinterpret_cast<const crd::u8*>(values.data());
     const crd::usize n_bytes = values.size() * sizeof(crd::f64);
     blob.bytes.reserve(n_bytes);
-    for (crd::usize i = 0; i < n_bytes; ++i) { blob.bytes.push_back(raw[i]); }
+    for (crd::usize i = 0; i < n_bytes; ++i)
+    {
+        blob.bytes.push_back(raw[i]);
+    }
     r.value = std::move(blob);
     return r;
 }
@@ -82,7 +85,10 @@ struct Sphere
     T operator()(const T* x, int n) const
     {
         T s = T(0.0);
-        for (int i = 0; i < n; ++i) { s = s + x[i] * x[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            s = s + x[i] * x[i];
+        }
         return s;
     }
 };
@@ -92,58 +98,108 @@ struct Cubes
     T operator()(const T* x, int n) const
     {
         T s = T(0.0);
-        for (int i = 0; i < n; ++i) { s = s + x[i] * x[i] * x[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            s = s + x[i] * x[i] * x[i];
+        }
         return s;
     }
 };
 
 crd::f64 eval_value(crd::u64 func, const crd::f64* x, int n)
 {
-    if (func == 1) { return Sphere{}(x, n); }
-    if (func == 2) { return Cubes{}(x, n); }
+    if (func == 1)
+    {
+        return Sphere{}
+        (x, n);
+    }
+    if (func == 2)
+    {
+        return Cubes{}
+        (x, n);
+    }
     return Rosenbrock{}(x, n);
 }
 
 CommandResult impl_gradient(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
-    if (x.empty()) { return error_result(args.alloc, "ad.gradient: x is required"); }
+    if (x.empty())
+    {
+        return error_result(args.alloc, "ad.gradient: x is required");
+    }
     const crd::u64 func = args.get_u64("func").value_or(0);
-    if (func > 2) { return error_result(args.alloc, "ad.gradient: func must be 0..2"); }
+    if (func > 2)
+    {
+        return error_result(args.alloc, "ad.gradient: func must be 0..2");
+    }
     const int n = static_cast<int>(x.size());
-    if (n > 32) { return error_result(args.alloc, "ad.gradient: n must be <= 32"); }
+    if (n > 32)
+    {
+        return error_result(args.alloc, "ad.gradient: n must be <= 32");
+    }
 
     ad::JetPackD<8> scratch[32];
     crd::f64        g[32];
     const crd::containers::Span<crd::f64>        gs{g, static_cast<crd::usize>(n)};
     const crd::containers::Span<ad::JetPackD<8>> ss{scratch, static_cast<crd::usize>(n)};
-    if (func == 1) { ad::gradient<8>(Sphere{}, x, gs, ss); }
-    else if (func == 2) { ad::gradient<8>(Cubes{}, x, gs, ss); }
-    else { ad::gradient<8>(Rosenbrock{}, x, gs, ss); }
+    if (func == 1)
+    {
+        ad::gradient<8>(Sphere{}, x, gs, ss);
+    }
+    else if (func == 2)
+    {
+        ad::gradient<8>(Cubes{}, x, gs, ss);
+    }
+    else
+    {
+        ad::gradient<8>(Rosenbrock{}, x, gs, ss);
+    }
 
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(static_cast<crd::usize>(n) + 1);
     out.push_back(eval_value(func, x.data(), n));
-    for (int i = 0; i < n; ++i) { out.push_back(g[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(g[i]);
+    }
     return blob_f64_result(args.alloc, {out.data(), out.size()});
 }
 
 template <int N>
 void hessian_run(crd::u64 func, const crd::f64* x, crd::f64* h)
 {
-    if (func == 1) { ad::hessian<N>(Sphere{}, x, h); }
-    else if (func == 2) { ad::hessian<N>(Cubes{}, x, h); }
-    else { ad::hessian<N>(Rosenbrock{}, x, h); }
+    if (func == 1)
+    {
+        ad::hessian<N>(Sphere{}, x, h);
+    }
+    else if (func == 2)
+    {
+        ad::hessian<N>(Cubes{}, x, h);
+    }
+    else
+    {
+        ad::hessian<N>(Rosenbrock{}, x, h);
+    }
 }
 
 CommandResult impl_hessian(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
-    if (x.empty()) { return error_result(args.alloc, "ad.hessian: x is required"); }
+    if (x.empty())
+    {
+        return error_result(args.alloc, "ad.hessian: x is required");
+    }
     const crd::u64 func = args.get_u64("func").value_or(0);
-    if (func > 2) { return error_result(args.alloc, "ad.hessian: func must be 0..2"); }
+    if (func > 2)
+    {
+        return error_result(args.alloc, "ad.hessian: func must be 0..2");
+    }
     const int n = static_cast<int>(x.size());
-    if (n < 1 || n > 6) { return error_result(args.alloc, "ad.hessian: n must be 1..6"); }
+    if (n < 1 || n > 6)
+    {
+        return error_result(args.alloc, "ad.hessian: n must be 1..6");
+    }
 
     crd::f64 h[36];
     switch (n)
@@ -158,7 +214,10 @@ CommandResult impl_hessian(const CommandArgs& args)
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(1 + static_cast<crd::usize>(n) * static_cast<crd::usize>(n));
     out.push_back(eval_value(func, x.data(), n));
-    for (int i = 0; i < n * n; ++i) { out.push_back(h[i]); }
+    for (int i = 0; i < n * n; ++i)
+    {
+        out.push_back(h[i]);
+    }
     return blob_f64_result(args.alloc, {out.data(), out.size()});
 }
 
@@ -168,20 +227,41 @@ void taylor_run(crd::u64 func, crd::f64 x0, crd::f64* out)
     using TJ = ad::TaylorJet<crd::f64, K>;
     const TJ t = TJ::var(x0);
     TJ       r;
-    if (func == 1) { r = ad::sin(t); }
-    else if (func == 2) { r = TJ(1.0) / (TJ(1.0) - t); }
-    else if (func == 3) { r = ad::sqrt(TJ(1.0) + t); }
-    else { r = ad::exp(t); }
-    for (int k = 0; k <= K; ++k) { out[k] = r.a[k]; }
+    if (func == 1)
+    {
+        r = ad::sin(t);
+    }
+    else if (func == 2)
+    {
+        r = TJ(1.0) / (TJ(1.0) - t);
+    }
+    else if (func == 3)
+    {
+        r = ad::sqrt(TJ(1.0) + t);
+    }
+    else
+    {
+        r = ad::exp(t);
+    }
+    for (int k = 0; k <= K; ++k)
+    {
+        out[k] = r.a[k];
+    }
 }
 
 CommandResult impl_taylor(const CommandArgs& args)
 {
     const auto x0 = args.get_f64("x0");
-    if (!x0) { return error_result(args.alloc, "ad.taylor: x0 is required"); }
+    if (!x0)
+    {
+        return error_result(args.alloc, "ad.taylor: x0 is required");
+    }
     const crd::u64 func  = args.get_u64("func").value_or(0);
     const crd::u64 order = args.get_u64("order").value_or(8);
-    if (func > 3) { return error_result(args.alloc, "ad.taylor: func must be 0..3"); }
+    if (func > 3)
+    {
+        return error_result(args.alloc, "ad.taylor: func must be 0..3");
+    }
 
     crd::f64 co[17];
     int      len = 0;
@@ -249,12 +329,26 @@ CommandSchema make_taylor_schema(crd::memory::IAllocator* alloc)
 struct RSphere
 {
     template <class V>
-    V operator()(const V* x, int n) const { V s = x[0] * x[0]; for (int i = 1; i < n; ++i) { s = s + x[i] * x[i]; } return s; }
+    V operator()(const V* x, int n) const
+    {
+        V s = x[0] * x[0];
+        for (int i = 1; i < n; ++i)
+        {
+            s = s + x[i] * x[i];
+        }
+        return s; }
 };
 struct RCubes
 {
     template <class V>
-    V operator()(const V* x, int n) const { V s = x[0] * x[0] * x[0]; for (int i = 1; i < n; ++i) { s = s + x[i] * x[i] * x[i]; } return s; }
+    V operator()(const V* x, int n) const
+    {
+        V s = x[0] * x[0] * x[0];
+        for (int i = 1; i < n; ++i)
+        {
+            s = s + x[i] * x[i] * x[i];
+        }
+        return s; }
 };
 struct RRosen
 {
@@ -276,17 +370,33 @@ struct RRosen
 struct RExpSum
 {
     template <class V>
-    V operator()(const V* x, int n) const { using crd::math::exp; V s = exp(x[0]); for (int i = 1; i < n; ++i) { s = s + exp(x[i]); } return s; }
+    V operator()(const V* x, int n) const
+    {
+        using crd::math::exp; V s = exp(x[0]);
+        for (int i = 1; i < n; ++i)
+        {
+            s = s + exp(x[i]);
+        }
+        return s; }
 };
 
 CommandResult impl_rgradient(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
-    if (x.empty()) { return error_result(args.alloc, "ad.rgradient: x is required"); }
+    if (x.empty())
+    {
+        return error_result(args.alloc, "ad.rgradient: x is required");
+    }
     const crd::u64 func = args.get_u64("func").value_or(0);
-    if (func > 3) { return error_result(args.alloc, "ad.rgradient: func must be 0..3"); }
+    if (func > 3)
+    {
+        return error_result(args.alloc, "ad.rgradient: func must be 0..3");
+    }
     const int n = static_cast<int>(x.size());
-    if (n < 2 || n > 256) { return error_result(args.alloc, "ad.rgradient: n must be 2..256"); }
+    if (n < 2 || n > 256)
+    {
+        return error_result(args.alloc, "ad.rgradient: n must be 2..256");
+    }
 
     rev::Tape tape(args.alloc);
     rev::Var  scratch[256];
@@ -294,15 +404,38 @@ CommandResult impl_rgradient(const CommandArgs& args)
     crd::f64  fval = 0.0;
     const crd::containers::Span<crd::f64> gs{g, static_cast<crd::usize>(n)};
     const crd::containers::Span<rev::Var> ss{scratch, static_cast<crd::usize>(n)};
-    if (func == 1) { rev::gradient(RSphere{}, x, gs, tape, ss); fval = RSphere{}(x.data(), n); }
-    else if (func == 2) { rev::gradient(RCubes{}, x, gs, tape, ss); fval = RCubes{}(x.data(), n); }
-    else if (func == 3) { rev::gradient(RExpSum{}, x, gs, tape, ss); fval = RExpSum{}(x.data(), n); }
-    else { rev::gradient(RRosen{}, x, gs, tape, ss); fval = RRosen{}(x.data(), n); }
+    if (func == 1)
+    {
+        rev::gradient(RSphere{}, x, gs, tape, ss);
+        fval = RSphere{}
+        (x.data(), n);
+    }
+    else if (func == 2)
+    {
+        rev::gradient(RCubes{}, x, gs, tape, ss);
+        fval = RCubes{}
+        (x.data(), n);
+    }
+    else if (func == 3)
+    {
+        rev::gradient(RExpSum{}, x, gs, tape, ss);
+        fval = RExpSum{}
+        (x.data(), n);
+    }
+    else
+    {
+        rev::gradient(RRosen{}, x, gs, tape, ss);
+        fval = RRosen{}
+        (x.data(), n);
+    }
 
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(static_cast<crd::usize>(n) + 1);
     out.push_back(fval);
-    for (int i = 0; i < n; ++i) { out.push_back(g[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(g[i]);
+    }
     return blob_f64_result(args.alloc, {out.data(), out.size()});
 }
 
@@ -311,16 +444,25 @@ struct RCoupled
 {
     void operator()(const rev::Var* x, int n, rev::Var* y, int m) const
     {
-        for (int j = 0; j < m; ++j) { y[j] = x[j] * x[j] + x[(j + 1) % n]; }
+        for (int j = 0; j < m; ++j)
+        {
+            y[j] = x[j] * x[j] + x[(j + 1) % n];
+        }
     }
 };
 
 CommandResult impl_jacobian(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
-    if (x.empty()) { return error_result(args.alloc, "ad.jacobian: x is required"); }
+    if (x.empty())
+    {
+        return error_result(args.alloc, "ad.jacobian: x is required");
+    }
     const int n = static_cast<int>(x.size());
-    if (n < 2 || n > 64) { return error_result(args.alloc, "ad.jacobian: n must be 2..64"); }
+    if (n < 2 || n > 64)
+    {
+        return error_result(args.alloc, "ad.jacobian: n must be 2..64");
+    }
     rev::Tape tape(args.alloc);
     rev::Var  xs[64];
     rev::Var  ys[64];
@@ -336,12 +478,24 @@ CommandResult impl_hvp(const CommandArgs& args)
 {
     const auto x = args.get_f64_array("x");
     const auto v = args.get_f64_array("v");
-    if (x.empty() || v.empty()) { return error_result(args.alloc, "ad.hvp: x and v are required"); }
+    if (x.empty() || v.empty())
+    {
+        return error_result(args.alloc, "ad.hvp: x and v are required");
+    }
     const crd::u64 func = args.get_u64("func").value_or(0);
-    if (func > 2) { return error_result(args.alloc, "ad.hvp: func must be 0..2"); }
+    if (func > 2)
+    {
+        return error_result(args.alloc, "ad.hvp: func must be 0..2");
+    }
     const int n = static_cast<int>(x.size());
-    if (n < 2 || n > 64) { return error_result(args.alloc, "ad.hvp: n must be 2..64"); }
-    if (static_cast<int>(v.size()) != n) { return error_result(args.alloc, "ad.hvp: v must match x length"); }
+    if (n < 2 || n > 64)
+    {
+        return error_result(args.alloc, "ad.hvp: n must be 2..64");
+    }
+    if (static_cast<int>(v.size()) != n)
+    {
+        return error_result(args.alloc, "ad.hvp: v must match x length");
+    }
 
     using RTD = rev::RTape<rev::Dual<crd::f64>>;
     RTD                            tape(args.alloc);
@@ -351,14 +505,29 @@ CommandResult impl_hvp(const CommandArgs& args)
     const crd::containers::Span<crd::f64>                       gs{grad, static_cast<crd::usize>(n)};
     const crd::containers::Span<crd::f64>                       hs{hv, static_cast<crd::usize>(n)};
     const crd::containers::Span<rev::RVar<rev::Dual<crd::f64>>> ss{scr, static_cast<crd::usize>(n)};
-    if (func == 1) { rev::hvp(RSphere{}, x, v, gs, hs, tape, ss); }
-    else if (func == 2) { rev::hvp(RCubes{}, x, v, gs, hs, tape, ss); }
-    else { rev::hvp(RRosen{}, x, v, gs, hs, tape, ss); }
+    if (func == 1)
+    {
+        rev::hvp(RSphere{}, x, v, gs, hs, tape, ss);
+    }
+    else if (func == 2)
+    {
+        rev::hvp(RCubes{}, x, v, gs, hs, tape, ss);
+    }
+    else
+    {
+        rev::hvp(RRosen{}, x, v, gs, hs, tape, ss);
+    }
 
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(2 * static_cast<crd::usize>(n));
-    for (int i = 0; i < n; ++i) { out.push_back(grad[i]); }
-    for (int i = 0; i < n; ++i) { out.push_back(hv[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(grad[i]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(hv[i]);
+    }
     return blob_f64_result(args.alloc, {out.data(), out.size()});
 }
 
@@ -367,22 +536,41 @@ struct RImplF
 {
     void operator()(const rev::Var* x, const rev::Var* th, rev::Var* out, int n, int /*np*/) const
     {
-        for (int i = 0; i < n; ++i) { out[i] = x[i] * x[i] - th[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            out[i] = x[i] * x[i] - th[i];
+        }
     }
 };
 
 CommandResult impl_implicit(const CommandArgs& args)
 {
     const auto theta = args.get_f64_array("theta");
-    if (theta.empty()) { return error_result(args.alloc, "ad.implicit: theta is required"); }
+    if (theta.empty())
+    {
+        return error_result(args.alloc, "ad.implicit: theta is required");
+    }
     const int n = static_cast<int>(theta.size());
-    if (n < 1 || n > 16) { return error_result(args.alloc, "ad.implicit: n must be 1..16"); }
-    for (int i = 0; i < n; ++i) { if (theta[i] <= 0.0) { return error_result(args.alloc, "ad.implicit: theta must be > 0"); } }
+    if (n < 1 || n > 16)
+    {
+        return error_result(args.alloc, "ad.implicit: n must be 1..16");
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        if (theta[i] <= 0.0)
+        {
+            return error_result(args.alloc, "ad.implicit: theta must be > 0");
+        }
+    }
 
     crd::f64 xstar[16];
     crd::f64 xbar[16];
     crd::f64 tbar[16];
-    for (int i = 0; i < n; ++i) { xstar[i] = crd::math::sqrt(theta[i]); xbar[i] = 1.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        xstar[i] = crd::math::sqrt(theta[i]);
+        xbar[i] = 1.0;
+    }
     rev::Tape tape(args.alloc);
     rev::Var  vscr[3 * 16];
     crd::f64  jac[16 * 16];
@@ -393,8 +581,14 @@ CommandResult impl_implicit(const CommandArgs& args)
 
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(2 * static_cast<crd::usize>(n));
-    for (int i = 0; i < n; ++i) { out.push_back(xstar[i]); }
-    for (int i = 0; i < n; ++i) { out.push_back(tbar[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(xstar[i]);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        out.push_back(tbar[i]);
+    }
     return blob_f64_result(args.alloc, {out.data(), out.size()});
 }
 

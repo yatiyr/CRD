@@ -84,7 +84,10 @@ TEST_CASE("ceir arith gen: the reflection record is coherent with the generated 
     crd::containers::StringView prev;
     for (const OpSchema& s : schemas)
     {
-        if (!prev.empty()) { CHECK(prev < s.name); }
+        if (!prev.empty())
+        {
+            CHECK(prev < s.name);
+        }
         prev = s.name;
     }
 
@@ -92,7 +95,10 @@ TEST_CASE("ceir arith gen: the reflection record is coherent with the generated 
     const OpSchema* c = nullptr;
     for (const OpSchema& s : schemas)
     {
-        if (s.qualified == crd::containers::StringView("arith.const")) { c = &s; }
+        if (s.qualified == crd::containers::StringView("arith.const"))
+        {
+            c = &s;
+        }
     }
     REQUIRE(c != nullptr);
     CHECK(c->version == 1U);

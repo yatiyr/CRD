@@ -88,7 +88,10 @@ namespace
         rec.values_off = static_cast<crd::u32>(tl.auto_values.size());
         const crd::i64 ticks[3] = {0, 240, 480}; // 0 s · 10 s · 20 s at 24 fps
         const crd::f32 vals[3]  = {a, b, a};     // out and back — the loop boundary is C1-continuous
-        for (crd::i64 t : ticks) { tl.auto_ticks.push_back(t); }
+        for (crd::i64 t : ticks)
+        {
+            tl.auto_ticks.push_back(t);
+        }
         for (crd::f32 v : vals) // [in_tangent · value · out_tangent] triples, zero tangents = ease in/out
         {
             tl.auto_values.push_back(0.0F);
@@ -121,7 +124,10 @@ void collect_pack_artifacts(const crd::platform::fs::Path& pack_path, crd::memor
                             crd::containers::Array<crd::resources::ResourceId>& out_clips)
 {
     crd::containers::Array<crd::u8> bytes(alloc);
-    if (!crd::platform::fs::read_file_binary(pack_path, bytes)) { return; }
+    if (!crd::platform::fs::read_file_binary(pack_path, bytes))
+    {
+        return;
+    }
     crd::resources::CrdrFile file(alloc);
     if (crd::resources::crdr_read(crd::containers::as_const_span(bytes), file, alloc)
         != crd::resources::CrdrError::Ok)
@@ -130,9 +136,15 @@ void collect_pack_artifacts(const crd::platform::fs::Path& pack_path, crd::memor
     }
     const crd::resources::CrdrChunk* mfst = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_MFST);
     const crd::resources::CrdrChunk* strp = crd::resources::crdr_find_chunk(file, crd::resources::kFourCC_STRP);
-    if (mfst == nullptr) { return; }
+    if (mfst == nullptr)
+    {
+        return;
+    }
     crd::containers::Array<crd::resources::ManifestEntry> entries(alloc);
-    if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc)) { return; }
+    if (!crd::resources::manifest_read_entries(mfst->payload, entries, alloc))
+    {
+        return;
+    }
     for (const auto& e : entries)
     {
         if (e.type_fourcc == crd::resources::kFourCC_MESH)
@@ -145,8 +157,14 @@ void collect_pack_artifacts(const crd::platform::fs::Path& pack_path, crd::memor
             }
             out_mesh_names.push_back(static_cast<crd::containers::String&&>(name));
         }
-        if (e.type_fourcc == crd::anim::kFourCC_SKEL) { out_skeletons.push_back(e.id); }
-        if (e.type_fourcc == crd::anim::kFourCC_ANIM) { out_clips.push_back(e.id); }
+        if (e.type_fourcc == crd::anim::kFourCC_SKEL)
+        {
+            out_skeletons.push_back(e.id);
+        }
+        if (e.type_fourcc == crd::anim::kFourCC_ANIM)
+        {
+            out_clips.push_back(e.id);
+        }
     }
 }
 
@@ -236,7 +254,10 @@ int main(int argc, char** argv)
     crd::u32    fox_count  = 24U;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--headless") == 0) { headless = true; }
+        if (std::strcmp(argv[i], "--headless") == 0)
+        {
+            headless = true;
+        }
         else if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc)
         {
             const long v = std::strtol(argv[++i], nullptr, 10);
@@ -245,8 +266,14 @@ int main(int argc, char** argv)
                 // round-to-nearest without the (x + 0.5) cast the tidy gate rejects: walk the floor up while
                 // the next side still fits the requested total
                 auto s = static_cast<crd::u32>(crd::math::sqrt(static_cast<crd::f32>(v)));
-                while (static_cast<long>(s + 1U) * static_cast<long>(s + 1U) <= v) { ++s; }
-                if (s < 1U) { s = 1U; }
+                while (static_cast<long>(s + 1U) * static_cast<long>(s + 1U) <= v)
+                {
+                    ++s;
+                }
+                if (s < 1U)
+                {
+                    s = 1U;
+                }
                 grid_side = s;
             }
         }
@@ -257,13 +284,22 @@ int main(int argc, char** argv)
         }
         // REN-8: A/B the per-frame readback copy. Run-to-run fps varies by ~10 on this host, so a claim like
         // "removing the readback made it faster" is only honest if BOTH arms are measured on the same build.
-        else if (std::strcmp(argv[i], "--readback") == 0) { force_readback = true; }
+        else if (std::strcmp(argv[i], "--readback") == 0)
+        {
+            force_readback = true;
+        }
         // REN-3.2-b: A/B the shadows. If an object looks unlit with shadows ON and STILL looks unlit with them
         // OFF, the cause is its NORMALS (ndl == 0 gives the same flat ambient as vis == 0), not the shadow map.
-        else if (std::strcmp(argv[i], "--no-shadows") == 0) { want_shadows = false; }
+        else if (std::strcmp(argv[i], "--no-shadows") == 0)
+        {
+            want_shadows = false;
+        }
         // PCSS (contact-hardening soft shadows) is the DEFAULT; `--hard-shadows` keeps fixed-radius PCF so the
         // A/B measures both arms on one build (the same rule every other quality flag follows here).
-        else if (std::strcmp(argv[i], "--hard-shadows") == 0) { want_pcss = false; }
+        else if (std::strcmp(argv[i], "--hard-shadows") == 0)
+        {
+            want_pcss = false;
+        }
         // ⭐⭐ REN-39-C2: A/B the draw path. INDEXED is the default (post-transform vertex reuse — the frame was
         // measured VERTEX-bound); `--pull-draws` keeps the classic pull so the before/after board measures BOTH
         // arms on the SAME build (the readback A/B rule, one flag over).
@@ -273,30 +309,54 @@ int main(int argc, char** argv)
         }
         // ⭐⭐ REN-40-A: `--gpu-cull` runs the frustum cull (camera + every cascade) ON THE DEVICE through the
         // authored `forward_csm_gpu` graph. ⛔ Default OFF so the A/B measures BOTH arms on ONE build.
-        else if (std::strcmp(argv[i], "--gpu-cull") == 0) { want_gpu_cull = true; }
+        else if (std::strcmp(argv[i], "--gpu-cull") == 0)
+        {
+            want_gpu_cull = true;
+        }
         // ⛔ `--gpu-cull-verify` keeps the CPU cull running beside the device one so the two verdicts can be
         // compared in ONE frame. It gives up the speedup on purpose — it is the correctness arm, not the fast one.
-        else if (std::strcmp(argv[i], "--gpu-cull-verify") == 0) { want_gpu_cull = want_verify = true; }
+        else if (std::strcmp(argv[i], "--gpu-cull-verify") == 0)
+        {
+            want_gpu_cull = want_verify = true;
+        }
         // ⭐⭐ REN-40-F: `--gpu-skin` moves the bone palette to the device. ⛔ Requires the GPU frame graph
         // (the `gpu_skin` compute pass lives there), so it forces the same TOML as `--gpu-cull`.
-        else if (std::strcmp(argv[i], "--gpu-skin") == 0) { want_gpu_skin = true; }
+        else if (std::strcmp(argv[i], "--gpu-skin") == 0)
+        {
+            want_gpu_skin = true;
+        }
         // ⛔ REN-40-A: `--no-bvh` drops the CPU cull's BVH BROAD PHASE. The device cull brute-forces every
         // instance, so this is how a GPU-vs-CPU count disagreement is attributed: if it vanishes here, the broad
         // phase was the one dropping geometry, not the kernel.
-        else if (std::strcmp(argv[i], "--no-bvh") == 0) { want_no_bvh = true; }
+        else if (std::strcmp(argv[i], "--no-bvh") == 0)
+        {
+            want_no_bvh = true;
+        }
         // ⭐⭐ REN-40-C2: `--lod [asset]` turns on discrete LOD chains. The shipped default policy is
         // `lod/scene_default.crdlod` (0.5 / 0.25 / 0.08 at 512 / 128 / 40 px).
-        else if (std::strcmp(argv[i], "--lod-showcase") == 0) { want_lod_showcase = true; }
-        else if (std::strcmp(argv[i], "--lod-override-probe") == 0) { want_lod_override_probe = true; }
+        else if (std::strcmp(argv[i], "--lod-showcase") == 0)
+        {
+            want_lod_showcase = true;
+        }
+        else if (std::strcmp(argv[i], "--lod-override-probe") == 0)
+        {
+            want_lod_override_probe = true;
+        }
         else if (std::strcmp(argv[i], "--lod") == 0)
         {
             want_lod = true;
-            if (i + 1 < argc && argv[i + 1][0] != '-') { lod_asset = argv[++i]; }
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                lod_asset = argv[++i];
+            }
         }
         // ⛔ REN-40-A: `--frame <asset>` installs an authored frame graph BY NAME, independent of every other
         // switch. It is how "is the ASSET wrong?" gets separated from "is the FEATURE wrong?" — the two questions
         // a combined flag makes indistinguishable.
-        else if (std::strcmp(argv[i], "--frame") == 0 && i + 1 < argc) { frame_override = argv[++i]; }
+        else if (std::strcmp(argv[i], "--frame") == 0 && i + 1 < argc)
+        {
+            frame_override = argv[++i];
+        }
         // ⛔⛔ REN-40-A: `--fixed-dt <ms>` drives the clock from the FRAME COUNTER, not the wall clock.
         // Without it two runs of the same scene land on DIFFERENT camera poses at the same `--screenshot-at`
         // (the frame rate differs), so an A/B pixel comparison measures the camera, not the change. Two images
@@ -307,7 +367,10 @@ int main(int argc, char** argv)
             fixed_dt_ms = std::strtod(argv[++i], nullptr);
         }
         // REN-39: "what does the user SEE", as a file — the presented canvas at ~2.5 s, then exit.
-        else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) { screenshot_path = argv[++i]; }
+        else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
+        {
+            screenshot_path = argv[++i];
+        }
         // `--screenshot-at <sec>`: capture at a chosen point of the 20 s camera loop (e.g. the low close pass)
         else if (std::strcmp(argv[i], "--screenshot-at") == 0 && i + 1 < argc)
         {
@@ -319,7 +382,10 @@ int main(int argc, char** argv)
                 ++i;
             }
         }
-        else if (std::strcmp(argv[i], "--no-validation") == 0) { want_validation = false; }
+        else if (std::strcmp(argv[i], "--no-validation") == 0)
+        {
+            want_validation = false;
+        }
         else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
         {
             ++i;
@@ -328,9 +394,18 @@ int main(int argc, char** argv)
         else if (std::strcmp(argv[i], "--present") == 0 && i + 1 < argc)
         {
             ++i;
-            if (std::strcmp(argv[i], "immediate") == 0)    { present_mode = crd::gpu::PresentMode::Immediate; }
-            else if (std::strcmp(argv[i], "mailbox") == 0) { present_mode = crd::gpu::PresentMode::Mailbox; }
-            else                                           { present_mode = crd::gpu::PresentMode::Fifo; }
+            if (std::strcmp(argv[i], "immediate") == 0)
+            {
+                present_mode = crd::gpu::PresentMode::Immediate;
+            }
+            else if (std::strcmp(argv[i], "mailbox") == 0)
+            {
+                present_mode = crd::gpu::PresentMode::Mailbox;
+            }
+            else
+            {
+                present_mode = crd::gpu::PresentMode::Fifo;
+            }
         }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
@@ -493,8 +568,14 @@ int main(int argc, char** argv)
     for (crd::usize mi = 0; mi < pack_meshes.size(); ++mi)
     {
         auto handle = rm.load_sync<crd::resources::MeshResource>(pack_meshes[mi]);
-        if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr) { continue; }
-        if (handle.get()->has_skin()) { skinned_meshes.push_back(pack_meshes[mi]); }
+        if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr)
+        {
+            continue;
+        }
+        if (handle.get()->has_skin())
+        {
+            skinned_meshes.push_back(pack_meshes[mi]);
+        }
         else if (name_contains(pack_mesh_names[mi], ".stl") || name_contains(pack_mesh_names[mi], ".obj")
                  || name_contains(pack_mesh_names[mi], ".ply") || name_contains(pack_mesh_names[mi], ".3mf"))
         {
@@ -515,7 +596,12 @@ int main(int argc, char** argv)
                     const auto* f = reinterpret_cast<const crd::f32*>(mr->vertices.data() + v * stride);
                     cx += static_cast<double>(f[0]); cy += static_cast<double>(f[1]); cz += static_cast<double>(f[2]);
                 }
-                if (vc > 0U) { cx /= static_cast<double>(vc); cy /= static_cast<double>(vc); cz /= static_cast<double>(vc); }
+                if (vc > 0U)
+                {
+                    cx /= static_cast<double>(vc);
+                    cy /= static_cast<double>(vc);
+                    cz /= static_cast<double>(vc);
+                }
                 crd::usize outward = 0;
                 for (crd::usize v = 0; v < vc; ++v)
                 {
@@ -528,7 +614,10 @@ int main(int argc, char** argv)
                     const double d = static_cast<double>(f[3]) * (static_cast<double>(f[0]) - cx)
                                      + static_cast<double>(f[4]) * (static_cast<double>(f[1]) - cy)
                                      + static_cast<double>(f[5]) * (static_cast<double>(f[2]) - cz);
-                    if (d > 0.0) { ++outward; }
+                    if (d > 0.0)
+                    {
+                        ++outward;
+                    }
                 }
                 CRD_LOG_INFO(g_log_sandbox,
                              "[normal-check] {} verts={} mean_len={:.4f} outward={:.1f}%",
@@ -537,7 +626,10 @@ int main(int argc, char** argv)
                              vc > 0U ? 100.0 * static_cast<double>(outward) / static_cast<double>(vc) : 0.0);
             }
         }
-        else { static_meshes.push_back(pack_meshes[mi]); }
+        else
+        {
+            static_meshes.push_back(pack_meshes[mi]);
+        }
     }
     // ── ⭐⭐ REN-40-C2: THE LOD SHOWCASE — a scene built to SEE a level chain, and nothing else. ──────────────
     // ⛔ WHY IT IS ITS OWN SCENE. The 10k/1M grid is the wrong instrument for judging LOD: it mixes seven meshes,
@@ -558,7 +650,10 @@ int main(int argc, char** argv)
         for (const auto& mid : static_meshes)
         {
             auto h = rm.load_sync<crd::resources::MeshResource>(mid);
-            if (h.state() != crd::resources::LoadState::Ready || h.get() == nullptr) { continue; }
+            if (h.state() != crd::resources::LoadState::Ready || h.get() == nullptr)
+            {
+                continue;
+            }
             const auto tris = static_cast<crd::u32>(h.get()->indices.size() / 12U);
             if (tris > best_tris)
             {
@@ -578,10 +673,16 @@ int main(int argc, char** argv)
                 const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
                 crd::f32       m  = ex > ey ? ex : ey;
                 m                 = m > ez ? m : ez;
-                if (m > 1.0e-6F) { scale = 2.0F / m; }
+                if (m > 1.0e-6F)
+                {
+                    scale = 2.0F / m;
+                }
             }
             crd::resources::ResourceId material{};
-            if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+            if (mesh->primitives.size() > 0U)
+            {
+                material = mesh->primitives[0].material_id;
+            }
             CRD_LOG_INFO(g_log_sandbox, "LOD showcase: {} instances of the {}-triangle mesh, spaced 3.0 along +Z",
                          inst_total, best_tris);
             for (crd::u32 i = 0; i < inst_total; ++i)
@@ -619,7 +720,10 @@ int main(int argc, char** argv)
                 const crd::resources::ResourceId mesh_id =
                     static_meshes[(static_cast<crd::usize>(gz) * side + gx) % static_meshes.size()];
                 auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
-                if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr) { continue; }
+                if (handle.state() != crd::resources::LoadState::Ready || handle.get() == nullptr)
+                {
+                    continue;
+                }
                 const auto* mesh = handle.get();
 
                 crd::f32 scale = 1.0F;
@@ -630,10 +734,16 @@ int main(int argc, char** argv)
                     const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
                     crd::f32       m  = ex > ey ? ex : ey;
                     m                 = m > ez ? m : ez;
-                    if (m > 1.0e-6F) { scale = 1.5F / m; }
+                    if (m > 1.0e-6F)
+                    {
+                        scale = 1.5F / m;
+                    }
                 }
                 crd::resources::ResourceId material{};
-                if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+                if (mesh->primitives.size() > 0U)
+                {
+                    material = mesh->primitives[0].material_id;
+                }
 
                 const crd::f32 half = (static_cast<crd::f32>(side) - 1.0F) * 0.5F;
                 const crd::f32 sp   = 2.0F; // FIXED SPACING: the world GROWS with the count, so a
@@ -668,10 +778,16 @@ int main(int argc, char** argv)
             const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
             crd::f32       mx = ex > ey ? ex : ey;
             mx                = mx > ez ? mx : ez;
-            if (mx > 1.0e-6F) { scale = 2.5F / mx; }
+            if (mx > 1.0e-6F)
+            {
+                scale = 2.5F / mx;
+            }
         }
         crd::resources::ResourceId material{};
-        if (mesh != nullptr && mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+        if (mesh != nullptr && mesh->primitives.size() > 0U)
+        {
+            material = mesh->primitives[0].material_id;
+        }
         for (crd::u32 i = 0; i < ring_count; ++i)
         {
             const crd::f32 ang = static_cast<crd::f32>(i) * (6.2831853F / static_cast<crd::f32>(ring_count));
@@ -687,7 +803,10 @@ int main(int argc, char** argv)
             world.add_component(e, crd::scene::MeshRenderer{skinned_meshes[0], material});
             crd::scene::SkeletonAnimator animator;
             animator.skeleton = pack_skeletons[0];
-            if (pack_clips.size() > 0U) { animator.clip = pack_clips[i % pack_clips.size()]; }
+            if (pack_clips.size() > 0U)
+            {
+                animator.clip = pack_clips[i % pack_clips.size()];
+            }
             animator.time = static_cast<crd::f32>(i) * 0.17F; // staggered phases
             world.add_component(e, animator);
             animated.push_back(e);
@@ -708,7 +827,10 @@ int main(int argc, char** argv)
     {
         auto handle = rm.load_sync<crd::resources::MeshResource>(monument_meshes[mi]);
         const auto* mesh = handle.get();
-        if (mesh == nullptr) { continue; }
+        if (mesh == nullptr)
+        {
+            continue;
+        }
         crd::f32 scale = 1.0F;
         if (mesh->has_bounds())
         {
@@ -717,10 +839,16 @@ int main(int argc, char** argv)
             const crd::f32 ez = mesh->bounds_max[2] - mesh->bounds_min[2];
             crd::f32       mx = ex > ey ? ex : ey;
             mx                = mx > ez ? mx : ez;
-            if (mx > 1.0e-6F) { scale = 5.0F / mx; }
+            if (mx > 1.0e-6F)
+            {
+                scale = 5.0F / mx;
+            }
         }
         crd::resources::ResourceId material{};
-        if (mesh->primitives.size() > 0U) { material = mesh->primitives[0].material_id; }
+        if (mesh->primitives.size() > 0U)
+        {
+            material = mesh->primitives[0].material_id;
+        }
         const crd::f32 ang = static_cast<crd::f32>(mi) * (6.2831853F / static_cast<crd::f32>(monument_meshes.size()))
                              + 0.5F;
         const crd::f32 x = crd::math::cos(ang) * 17.0F;
@@ -766,7 +894,10 @@ int main(int argc, char** argv)
     }
     const bool scene_ready = scene_renderer.init(*raster, rm) && scene_renderer.init_programs(*gpu_context)
                              && cells.size() > 0U;
-    if (!scene_ready) { CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only"); }
+    if (!scene_ready)
+    {
+        CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only");
+    }
 
     // the canvas now carries DEPTH — the scene pass writes it; the overlay depth-tests against it
     auto canvas = raster->create_color_depth_target(surface->width(), surface->height());
@@ -802,7 +933,10 @@ int main(int argc, char** argv)
 
     // RET-6 pt 4: the debug-draw overlay (axis triad + the infinite grid) composes over the scene
     const bool draw_ready = crd::draw::init(*gpu_context, *raster);
-    if (!draw_ready) { CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay"); }
+    if (!draw_ready)
+    {
+        CRD_LOG_WARN(g_log_sandbox, "crd-draw init failed -- continuing without the draw overlay");
+    }
     crd::draw::RenderBuffer draw_buf(crd::memory::default_allocator());
     if (draw_ready) // the RET-6 debug-draw suite over the real scene depth (wire shapes + the translucent slab)
     {
@@ -849,7 +983,10 @@ int main(int argc, char** argv)
     if (want_gpu_cull || want_gpu_skin)
     {
         scene_renderer.set_gpu_cull(true);
-        if (want_verify) { scene_renderer.set_gpu_cull_verify(true); }
+        if (want_verify)
+        {
+            scene_renderer.set_gpu_cull_verify(true);
+        }
         // the GRAPH arrives through `post_frames` below — see the note there
         CRD_LOG_INFO(g_log_sandbox, "GPU cull: ON (device-side frustum cull, camera + every cascade){}",
                      want_verify ? " + CPU verify arm" : "");
@@ -897,7 +1034,10 @@ int main(int argc, char** argv)
             // frame that is the scene's HDR transient (live depth, pre-tonemap), not the captured canvas.
             // Drawing the raw canvas here rendered an image the graph never barriered.
             crd::gpu::IRasterTarget* t = o->renderer != nullptr ? o->renderer->overlay_target(ctx) : nullptr;
-            if (t == nullptr) { t = o->target; } // no resolvable scene image ⇒ the app's own canvas
+            if (t == nullptr) // no resolvable scene image ⇒ the app's own canvas
+            {
+                t = o->target;
+            }
             if (!crd::draw::submit_overlay(*t, *o->buf, o->cfg))
             {
                 CRD_LOG_WARN(g_log_sandbox, "draw overlay submission refused");
@@ -920,7 +1060,10 @@ int main(int argc, char** argv)
     // registry/resolver — the Gate-9 selector, no relative path or embedded TOML in the caller. There is ONE path:
     // `set_frame_graph(canonical_id)`. (RAF-12 deleted the relative-name wrapper; `--frame` takes a canonical id.)
     const auto install_frame = [&](const char* id) -> bool {
-        if (id == nullptr) { return false; }
+        if (id == nullptr)
+        {
+            return false;
+        }
         return scene_renderer.set_frame_graph(id);
     };
     const char* const gpu_frame        = (want_gpu_cull || want_gpu_skin) ? "engine://frame/forward_csm_gpu" : nullptr;
@@ -947,8 +1090,14 @@ int main(int argc, char** argv)
     // This is why the sRGB radio was inert under `--gpu-cull` before: it mapped BOTH arms to the one gpu frame.
     // Written as a helper rather than nested ternaries so the precedence is a statement, not a parse.
     const auto pick_frame = [&](const char* gpu_variant, const char* def) -> const char* {
-        if (frame_override != nullptr) { return frame_override; }
-        if (gpu_frame != nullptr) { return gpu_variant; }
+        if (frame_override != nullptr)
+        {
+            return frame_override;
+        }
+        if (gpu_frame != nullptr)
+        {
+            return gpu_variant;
+        }
         return def;
     };
     const char* const frame_0 = pick_frame("engine://frame/forward_csm_gpu_srgb", "engine://frame/forward_csm_srgb");
@@ -983,7 +1132,10 @@ int main(int argc, char** argv)
     const auto smoke_start_time    = std::chrono::steady_clock::now();
     while (app.is_running())
     {
-        if (!app.tick()) { break; }
+        if (!app.tick())
+        {
+            break;
+        }
 
         const auto     cur   = app.window().framebuffer_size();
         const crd::u32 cur_w = cur.width > 0 ? static_cast<crd::u32>(cur.width) : 0U;
@@ -999,7 +1151,10 @@ int main(int argc, char** argv)
             if (surface->resize(win_w, win_h))
             {
                 canvas = raster->create_color_depth_target(surface->width(), surface->height());
-                if (canvas == nullptr) { break; }
+                if (canvas == nullptr)
+                {
+                    break;
+                }
             }
         }
 
@@ -1088,7 +1243,12 @@ int main(int argc, char** argv)
             const auto halton = [](crd::u32 i, crd::u32 b) {
                 float f = 1.0F;
                 float r = 0.0F;
-                while (i > 0U) { f /= static_cast<float>(b); r += f * static_cast<float>(i % b); i /= b; }
+                while (i > 0U)
+                {
+                    f /= static_cast<float>(b);
+                    r += f * static_cast<float>(i % b);
+                    i /= b;
+                }
                 return r;
             };
             const crd::u32 ji = (frame % 8U) + 1U; // 1..8 (index 0 is the origin — skip it)
@@ -1190,7 +1350,10 @@ int main(int argc, char** argv)
                 crd::containers::Array<unsigned char> bmp(crd::memory::default_allocator());
                 bmp.resize(54U + static_cast<crd::usize>(row) * sh, static_cast<unsigned char>(0));
                 const auto p4 = [&](crd::u32 o, crd::u32 v) {
-                    for (crd::u32 k = 0; k < 4U; ++k) { bmp[o + k] = static_cast<unsigned char>((v >> (8U * k)) & 0xFFU); }
+                    for (crd::u32 k = 0; k < 4U; ++k)
+                    {
+                        bmp[o + k] = static_cast<unsigned char>((v >> (8U * k)) & 0xFFU);
+                    }
                 };
                 bmp[0] = 'B'; bmp[1] = 'M';
                 p4(2U, 54U + row * sh); p4(10U, 54U); p4(14U, 40U); p4(18U, sw); p4(22U, sh);
@@ -1238,7 +1401,10 @@ int main(int argc, char** argv)
                             // completely different causes.
                             for (crd::u32 sl = 0; sl < 8U; ++sl)
                             {
-                                if (gc.slot_instances[sl] == 0U && gc.slot_indices[sl] == 0U) { continue; }
+                                if (gc.slot_instances[sl] == 0U && gc.slot_indices[sl] == 0U)
+                                {
+                                    continue;
+                                }
                                 CRD_LOG_INFO(g_log_sandbox,
                                              "gpu-cull view0 slot {}: instances={} index_count={} first_index={}",
                                              sl, gc.slot_instances[sl], gc.slot_indices[sl], gc.slot_first[sl]);
@@ -1246,7 +1412,10 @@ int main(int argc, char** argv)
                             CRD_LOG_INFO(g_log_sandbox, "gpu-cull bounds: {}/{} instance AABBs DIFFER on device",
                                          gc.bounds_mismatch, gc.bounds_checked);
                         }
-                        else { CRD_LOG_WARN(g_log_sandbox, "gpu-cull: readback unavailable"); }
+                        else
+                        {
+                            CRD_LOG_WARN(g_log_sandbox, "gpu-cull: readback unavailable");
+                        }
                     }
                 }
                 app.close();
@@ -1288,7 +1457,10 @@ int main(int argc, char** argv)
                 raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F});
             }
         }
-        else { raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F}); }
+        else
+        {
+            raster->clear(*canvas, crd::gpu::ClearColor{0.09F, 0.10F, 0.13F, 1.0F});
+        }
 
         // (the overlay config refresh moved ABOVE render() — the woven pass records inside it)
         const auto t_after_scene = now_ms();
@@ -1391,7 +1563,10 @@ int main(int argc, char** argv)
                 app.close();
             }
         }
-        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape)) { app.close(); }
+        if (app.window().input().state().was_key_pressed(crd::platform::Key::Escape))
+        {
+            app.close();
+        }
     }
 
     // Teardown order — two rules, both scars:

@@ -935,7 +935,10 @@ TEST_CASE("GEO-7: instantiate_obek_batch APPLIES per-slot transforms to root ent
         const crd::f32 x = crd::math::to_raw_vec(t->translation).x;
         for (crd::u32 i = 0; i < 3U; ++i)
         {
-            if (x == static_cast<crd::f32>(i + 1U) * 10.0F) { saw[i] = true; }
+            if (x == static_cast<crd::f32>(i + 1U) * 10.0F)
+            {
+                saw[i] = true;
+            }
         }
         CHECK(target.has_component<crd::scene::TransformDirtyFlag>(e));
     }
@@ -953,8 +956,14 @@ TEST_CASE("GEO-7: instantiate_obek_batch APPLIES per-slot transforms to root ent
     for (EntityId e : target2)
     {
         const crd::f32 x = crd::math::to_raw_vec(target2.get_component<Transform>(e)->translation).x;
-        if (x == 10.0F) { ++at_ten; }
-        if (x == 0.0F) { ++at_zero; }
+        if (x == 10.0F)
+        {
+            ++at_ten;
+        }
+        if (x == 0.0F)
+        {
+            ++at_zero;
+        }
     }
     CHECK(at_ten == 1U);
     CHECK(at_zero == 2U);

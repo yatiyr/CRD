@@ -32,7 +32,10 @@ CRD_FORCEINLINE Vec4i bitcast_to_int(Vec4f a) noexcept
     Vec4i r; r.v = vreinterpretq_s32_f32(a.v); return r;
 #else
     Vec4i r;
-    for (int i = 0; i < 4; ++i) r.v[i] = std::bit_cast<crd::i32>(a.v[i]);
+    for (int i = 0; i < 4; ++i)
+    {
+        r.v[i] = std::bit_cast<crd::i32>(a.v[i]);
+    }
     return r;
 #endif
 }
@@ -45,7 +48,10 @@ CRD_FORCEINLINE Vec4f bitcast_to_float(Vec4i a) noexcept
     Vec4f r; r.v = vreinterpretq_f32_s32(a.v); return r;
 #else
     Vec4f r;
-    for (int i = 0; i < 4; ++i) r.v[i] = std::bit_cast<f32>(a.v[i]);
+    for (int i = 0; i < 4; ++i)
+    {
+        r.v[i] = std::bit_cast<f32>(a.v[i]);
+    }
     return r;
 #endif
 }
@@ -81,7 +87,10 @@ CRD_FORCEINLINE Vec4i convert_truncate(Vec4f a) noexcept
     Vec4i r; r.v = vcvtq_s32_f32(a.v); return r;  // NEON cvtq rounds toward zero
 #else
     Vec4i r;
-    for (int i = 0; i < 4; ++i) r.v[i] = static_cast<crd::i32>(a.v[i]);  // C cast → trunc
+    for (int i = 0; i < 4; ++i) // C cast → trunc
+    {
+        r.v[i] = static_cast<crd::i32>(a.v[i]);
+    }
     return r;
 #endif
 }
@@ -104,7 +113,10 @@ CRD_FORCEINLINE Vec4f convert_to_float(Vec4i a) noexcept
     Vec4f r; r.v = vcvtq_f32_s32(a.v); return r;
 #else
     Vec4f r;
-    for (int i = 0; i < 4; ++i) r.v[i] = static_cast<f32>(a.v[i]);
+    for (int i = 0; i < 4; ++i)
+    {
+        r.v[i] = static_cast<f32>(a.v[i]);
+    }
     return r;
 #endif
 }
@@ -150,9 +162,18 @@ CRD_FORCEINLINE Vec4f round_nearest(Vec4f a) noexcept
         const f32 x = a.v[i];
         const f32 fl = std::floor(x);
         const f32 frac = x - fl;
-        if (frac > 0.5F) r.v[i] = fl + 1.0F;
-        else if (frac < 0.5F) r.v[i] = fl;
-        else r.v[i] = (static_cast<crd::i32>(fl) & 1) == 0 ? fl : fl + 1.0F;
+        if (frac > 0.5F)
+        {
+            r.v[i] = fl + 1.0F;
+        }
+        else if (frac < 0.5F)
+        {
+            r.v[i] = fl;
+        }
+        else
+        {
+            r.v[i] = (static_cast<crd::i32>(fl) & 1) == 0 ? fl : fl + 1.0F;
+        }
     }
     return r;
 #endif

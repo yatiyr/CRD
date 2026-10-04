@@ -33,8 +33,14 @@ inline void root_vjp(const F& Ffn, const crd::f64* x_star, const crd::f64* theta
     Var* xv  = vscr;
     Var* thv = xv + n;
     Var* out = thv + np;
-    for (int i = 0; i < n; ++i) { xv[i] = make_leaf(tape, x_star[i]); }
-    for (int j = 0; j < np; ++j) { thv[j] = make_leaf(tape, theta[j]); }
+    for (int i = 0; i < n; ++i)
+    {
+        xv[i] = make_leaf(tape, x_star[i]);
+    }
+    for (int j = 0; j < np; ++j)
+    {
+        thv[j] = make_leaf(tape, theta[j]);
+    }
     Ffn(xv, thv, out, n, np);
     // ∂F/∂x (n×n): one backward per equation, seeded with e_i
     for (int i = 0; i < n; ++i)
@@ -42,16 +48,25 @@ inline void root_vjp(const F& Ffn, const crd::f64* x_star, const crd::f64* theta
         tape.zero_adjoints();
         tape.seed(out[i].node, 1.0);
         tape.backward();
-        for (int k = 0; k < n; ++k) { jac[i * n + k] = tape.grad(xv[k].node); }
+        for (int k = 0; k < n; ++k)
+        {
+            jac[i * n + k] = tape.grad(xv[k].node);
+        }
     }
     // z = (∂F/∂x)⁻ᵀ x̄
     sp::dense_lu_factor(jac, piv, n);
     sp::dense_lu_solve_t(jac, piv, xbar, z, n, tmp);
     // θ̄ = −(∂F/∂θ)ᵀ z : seed the F output with z, ONE backward, read the θ-grads
     tape.zero_adjoints();
-    for (int i = 0; i < n; ++i) { tape.seed(out[i].node, z[i]); }
+    for (int i = 0; i < n; ++i)
+    {
+        tape.seed(out[i].node, z[i]);
+    }
     tape.backward();
-    for (int j = 0; j < np; ++j) { theta_bar[j] = -tape.grad(thv[j].node); }
+    for (int j = 0; j < np; ++j)
+    {
+        theta_bar[j] = -tape.grad(thv[j].node);
+    }
 }
 
 // ---- FIXED-POINT VJP: x* = g(x*,θ) — reuse the root rule with F = g − x ---------------------------------------
@@ -64,7 +79,10 @@ inline void fixed_point_vjp(const G& g, const crd::f64* x_star, const crd::f64* 
     const auto fwrap = [&g](const Var* x, const Var* th, Var* out, int nn, int npp) noexcept
     {
         g(x, th, out, nn, npp);
-        for (int i = 0; i < nn; ++i) { out[i] = out[i] - x[i]; } // F = g − x
+        for (int i = 0; i < nn; ++i) // F = g − x
+        {
+            out[i] = out[i] - x[i];
+        }
     };
     root_vjp(fwrap, x_star, theta, xbar, theta_bar, n, np, tape, vscr, jac, piv, z, tmp);
 }
@@ -78,10 +96,16 @@ inline void qp_eq_vjp(const crd::f64* Q, const crd::f64* A, const crd::f64* x_st
                       crd::f64* kkt, int* piv, crd::f64* rhs, crd::f64* dvec) noexcept
 {
     const int ntot = n + m;
-    for (int i = 0; i < ntot * ntot; ++i) { kkt[i] = 0.0; }
+    for (int i = 0; i < ntot * ntot; ++i)
+    {
+        kkt[i] = 0.0;
+    }
     for (int i = 0; i < n; ++i) // top-left Q
     {
-        for (int j = 0; j < n; ++j) { kkt[i * ntot + j] = Q[i * n + j]; }
+        for (int j = 0; j < n; ++j)
+        {
+            kkt[i * ntot + j] = Q[i * n + j];
+        }
     }
     for (int i = 0; i < m; ++i) // A (bottom-left) and Aᵀ (top-right)
     {
@@ -91,21 +115,39 @@ inline void qp_eq_vjp(const crd::f64* Q, const crd::f64* A, const crd::f64* x_st
             kkt[j * ntot + (n + i)] = A[i * n + j];
         }
     }
-    for (int i = 0; i < n; ++i) { rhs[i] = -xbar[i]; }
-    for (int i = 0; i < m; ++i) { rhs[n + i] = 0.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        rhs[i] = -xbar[i];
+    }
+    for (int i = 0; i < m; ++i)
+    {
+        rhs[n + i] = 0.0;
+    }
     sp::dense_lu_factor(kkt, piv, ntot);
     sp::dense_lu_solve(kkt, piv, rhs, dvec, ntot);
     const crd::f64* dx = dvec;     // n
     const crd::f64* dn = dvec + n; // m
-    for (int j = 0; j < n; ++j) { gq[j] = dx[j]; }
-    for (int i = 0; i < m; ++i) { gb[i] = -dn[i]; }
-    for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j)
     {
-        for (int j = 0; j < n; ++j) { gQ[i * n + j] = 0.5 * (dx[i] * x_star[j] + x_star[i] * dx[j]); }
+        gq[j] = dx[j];
     }
     for (int i = 0; i < m; ++i)
     {
-        for (int j = 0; j < n; ++j) { gA[i * n + j] = dn[i] * x_star[j] + nu_star[i] * dx[j]; }
+        gb[i] = -dn[i];
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        for (int j = 0; j < n; ++j)
+        {
+            gQ[i * n + j] = 0.5 * (dx[i] * x_star[j] + x_star[i] * dx[j]);
+        }
+    }
+    for (int i = 0; i < m; ++i)
+    {
+        for (int j = 0; j < n; ++j)
+        {
+            gA[i * n + j] = dn[i] * x_star[j] + nu_star[i] * dx[j];
+        }
     }
 }
 

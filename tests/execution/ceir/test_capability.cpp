@@ -37,14 +37,20 @@ Module* mod_with_ops(Context& ctx, ConstSpan<OpId> kinds)
     Module* const m   = ctx.create_module();
     Block* const  top = ctx.create_block(0U);
     m->body()->append(top);
-    for (usize i = 0; i < kinds.size(); ++i) { top->append(ctx.create_operation(kinds[i], {}, 0U)); }
+    for (usize i = 0; i < kinds.size(); ++i)
+    {
+        top->append(ctx.create_operation(kinds[i], {}, 0U));
+    }
     return m;
 }
 [[nodiscard]] bool set_has(const Array<CapabilityId>& s, CapabilityId c) noexcept
 {
     for (usize i = 0; i < s.size(); ++i)
     {
-        if (s[i] == c) { return true; }
+        if (s[i] == c)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -90,7 +96,10 @@ TEST_CASE("ceir 8f: the program capability set is the module-wide sorted-UNIQUE 
     ctx.program_capabilities(*mod_with_ops(ctx, ConstSpan<OpId>(kinds, 2U)), prog);
     CHECK(prog.size() == 2U); // {scene.read, gpu.compute} — scene.read appears once
     // sorted: strictly increasing ids
-    for (usize i = 1; i < prog.size(); ++i) { CHECK(prog[i - 1U].value < prog[i].value); }
+    for (usize i = 1; i < prog.size(); ++i)
+    {
+        CHECK(prog[i - 1U].value < prog[i].value);
+    }
 }
 
 TEST_CASE("ceir 8f: capabilities_satisfied is the host-grant check (required subset of granted)", "[ceir][capability]")

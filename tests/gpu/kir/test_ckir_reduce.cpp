@@ -24,7 +24,10 @@ crd::f64 run_reduce(const kir::ReducePlan& plan, const crd::f64* xin, crd::memor
     const int n = plan.n;
     crd::containers::Array<crd::f64> in(alloc);
     in.resize(static_cast<crd::usize>(n));
-    for (int i = 0; i < n; ++i) { in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i])); }
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<crd::usize>(i)] = static_cast<crd::f64>(static_cast<float>(xin[i]));
+    }
 
     if (plan.single_pass)
     {
@@ -50,7 +53,10 @@ TEST_CASE("B-cmp: CKIR single-workgroup reduction == sum/min/max reference (f32)
     crd::memory::TlsfAllocator alloc(64U << 20U);
     crd::containers::Array<crd::f64> x(&alloc);
     x.resize(n);
-    for (int i = 0; i < n; ++i) { x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 13 + 7) % 97) - 48.0 + 0.5 * static_cast<crd::f64>(i % 3); }
+    for (int i = 0; i < n; ++i)
+    {
+        x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 13 + 7) % 97) - 48.0 + 0.5 * static_cast<crd::f64>(i % 3);
+    }
 
     SECTION("sum")
     {
@@ -59,9 +65,15 @@ TEST_CASE("B-cmp: CKIR single-workgroup reduction == sum/min/max reference (f32)
         REQUIRE(plan.single_pass);
         const crd::f64 got = run_reduce(plan, x.data(), &alloc);
         crd::f64       ref = 0.0; // tree/serial order differs from a linear sum only by f32 rounding
-        for (int i = 0; i < n; ++i) { ref += static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)])); }
+        for (int i = 0; i < n; ++i)
+        {
+            ref += static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)]));
+        }
         crd::f64 mag = 1.0;
-        for (int i = 0; i < n; ++i) { mag = mag > fabs64(x[static_cast<crd::usize>(i)]) ? mag : fabs64(x[static_cast<crd::usize>(i)]); }
+        for (int i = 0; i < n; ++i)
+        {
+            mag = mag > fabs64(x[static_cast<crd::usize>(i)]) ? mag : fabs64(x[static_cast<crd::usize>(i)]);
+        }
         CHECK(fabs64(got - ref) < 1e-4 * static_cast<crd::f64>(n) * mag);
     }
     SECTION("max")
@@ -70,7 +82,10 @@ TEST_CASE("B-cmp: CKIR single-workgroup reduction == sum/min/max reference (f32)
         const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Max, 256);
         const crd::f64        got  = run_reduce(plan, x.data(), &alloc);
         crd::f64              ref  = x[0];
-        for (int i = 1; i < n; ++i) { ref = ref > x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)]; }
+        for (int i = 1; i < n; ++i)
+        {
+            ref = ref > x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)];
+        }
         CHECK(got == static_cast<crd::f64>(static_cast<float>(ref)));
     }
     SECTION("min")
@@ -79,7 +94,10 @@ TEST_CASE("B-cmp: CKIR single-workgroup reduction == sum/min/max reference (f32)
         const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Min, 256);
         const crd::f64        got  = run_reduce(plan, x.data(), &alloc);
         crd::f64              ref  = x[0];
-        for (int i = 1; i < n; ++i) { ref = ref < x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)]; }
+        for (int i = 1; i < n; ++i)
+        {
+            ref = ref < x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)];
+        }
         CHECK(got == static_cast<crd::f64>(static_cast<float>(ref)));
     }
 }
@@ -90,7 +108,10 @@ TEST_CASE("B-cmp: CKIR 2-pass device reduction (65536 elems) == sum/min/max refe
     crd::memory::TlsfAllocator alloc(128U << 20U);
     crd::containers::Array<crd::f64> x(&alloc);
     x.resize(n);
-    for (int i = 0; i < n; ++i) { x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251) - 125.0; }
+    for (int i = 0; i < n; ++i)
+    {
+        x[static_cast<crd::usize>(i)] = static_cast<crd::f64>((i * 31 + 5) % 251) - 125.0;
+    }
 
     kir::KGraph g0(&alloc); kir::KGraph g1(&alloc); kir::KGraph* graphs[2] = {&g0, &g1};
 
@@ -100,9 +121,15 @@ TEST_CASE("B-cmp: CKIR 2-pass device reduction (65536 elems) == sum/min/max refe
         REQUIRE_FALSE(plan.single_pass);
         const crd::f64 got = run_reduce(plan, x.data(), &alloc);
         crd::f64       ref = 0.0;
-        for (int i = 0; i < n; ++i) { ref += static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)])); }
+        for (int i = 0; i < n; ++i)
+        {
+            ref += static_cast<crd::f64>(static_cast<float>(x[static_cast<crd::usize>(i)]));
+        }
         crd::f64 mag = 1.0;
-        for (int i = 0; i < n; ++i) { mag = mag > fabs64(x[static_cast<crd::usize>(i)]) ? mag : fabs64(x[static_cast<crd::usize>(i)]); }
+        for (int i = 0; i < n; ++i)
+        {
+            mag = mag > fabs64(x[static_cast<crd::usize>(i)]) ? mag : fabs64(x[static_cast<crd::usize>(i)]);
+        }
         CHECK(fabs64(got - ref) < 1e-4 * static_cast<crd::f64>(n) * mag);
     }
     SECTION("max")
@@ -110,7 +137,10 @@ TEST_CASE("B-cmp: CKIR 2-pass device reduction (65536 elems) == sum/min/max refe
         const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Max, 256, 64);
         const crd::f64        got  = run_reduce(plan, x.data(), &alloc);
         crd::f64              ref  = x[0];
-        for (int i = 1; i < n; ++i) { ref = ref > x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)]; }
+        for (int i = 1; i < n; ++i)
+        {
+            ref = ref > x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)];
+        }
         CHECK(got == static_cast<crd::f64>(static_cast<float>(ref)));
     }
     SECTION("min")
@@ -118,7 +148,10 @@ TEST_CASE("B-cmp: CKIR 2-pass device reduction (65536 elems) == sum/min/max refe
         const kir::ReducePlan plan = kir::build_reduce(graphs, n, kir::KOp::Min, 256, 64);
         const crd::f64        got  = run_reduce(plan, x.data(), &alloc);
         crd::f64              ref  = x[0];
-        for (int i = 1; i < n; ++i) { ref = ref < x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)]; }
+        for (int i = 1; i < n; ++i)
+        {
+            ref = ref < x[static_cast<crd::usize>(i)] ? ref : x[static_cast<crd::usize>(i)];
+        }
         CHECK(got == static_cast<crd::f64>(static_cast<float>(ref)));
     }
 }

@@ -66,7 +66,10 @@ crd::containers::Array<u32> brute_overlap(crd::containers::ConstSpan<AABB3<f32>>
     crd::containers::Array<u32> out(a);
     for (u32 i = 0; i < objs.size(); ++i)
     {
-        if (aabb_overlap(objs[i], q)) { out.push_back(i); }
+        if (aabb_overlap(objs[i], q))
+        {
+            out.push_back(i);
+        }
     }
     std::sort(out.data(), out.data() + out.size());
     return out;
@@ -159,7 +162,10 @@ TEST_CASE("LooseOctree update fast-path: small motion within loose AABB causes Z
     {
         const Vec3f c2{centers[i].x + ud(rng), centers[i].y + ud(rng), centers[i].z + ud(rng)};
         const bool restructured = tree.update(handles[i], aabb_around(c2, 0.1F));
-        if (!restructured) { ++fast_path_hits; }
+        if (!restructured)
+        {
+            ++fast_path_hits;
+        }
     }
 
     // The CORRECTNESS CHECK: zero restructures means zero new nodes, no
@@ -228,7 +234,10 @@ TEST_CASE("LooseOctree overlap matches brute force on random AABB cloud",
         auto expected = brute_overlap(crd::containers::ConstSpan<AABB3<f32>>{objs.data(), objs.size()},
                                         q, &f.alloc);
         REQUIRE(got.size() == expected.size());
-        for (usize i = 0; i < got.size(); ++i) { REQUIRE(got[i] == expected[i]); }
+        for (usize i = 0; i < got.size(); ++i)
+        {
+            REQUIRE(got[i] == expected[i]);
+        }
     }
 }
 
@@ -333,15 +342,24 @@ TEST_CASE("LooseOctree determinism under permuted insert order",
     };
 
     crd::containers::Array<u32> order_a(&f.alloc);
-    for (u32 i = 0; i < 100U; ++i) { order_a.push_back(i); }
+    for (u32 i = 0; i < 100U; ++i)
+    {
+        order_a.push_back(i);
+    }
     crd::containers::Array<u32> order_b(&f.alloc);
-    for (u32 i = 0; i < 100U; ++i) { order_b.push_back(99U - i); }
+    for (u32 i = 0; i < 100U; ++i)
+    {
+        order_b.push_back(99U - i);
+    }
 
     const AABB3<f32> q = aabb_around(Vec3f{0, 0, 0}, 30.0F);
     auto hits_a = build_and_overlap(crd::containers::ConstSpan<u32>{order_a.data(), order_a.size()}, q);
     auto hits_b = build_and_overlap(crd::containers::ConstSpan<u32>{order_b.data(), order_b.size()}, q);
     REQUIRE(hits_a.size() == hits_b.size());
-    for (usize i = 0; i < hits_a.size(); ++i) { REQUIRE(hits_a[i] == hits_b[i]); }
+    for (usize i = 0; i < hits_a.size(); ++i)
+    {
+        REQUIRE(hits_a[i] == hits_b[i]);
+    }
 }
 
 TEST_CASE("LooseOctree insert/remove cycle keeps surviving handles valid",
@@ -361,7 +379,10 @@ TEST_CASE("LooseOctree insert/remove cycle keeps surviving handles valid",
     REQUIRE(tree.object_count() == 10U);
 
     // Remove evens (0,2,4,6,8).
-    for (u32 i = 0; i < 10U; i += 2U) { tree.remove(all[i]); }
+    for (u32 i = 0; i < 10U; i += 2U)
+    {
+        tree.remove(all[i]);
+    }
     REQUIRE(tree.object_count() == 5U);
 
     // Verify odds (1,3,5,7,9) still present + queryable.
@@ -423,7 +444,10 @@ TEST_CASE("LooseOctree all-coincident objects all retrievable",
     tree.overlap(aabb_around(Vec3f{1.0F, 2.0F, 3.0F}, 1.0F), hits);
     REQUIRE(hits.size() == 15U);
     std::sort(hits.data(), hits.data() + hits.size());
-    for (u32 i = 0; i < 15U; ++i) { REQUIRE(hits[i] == i); }
+    for (u32 i = 0; i < 15U; ++i)
+    {
+        REQUIRE(hits[i] == i);
+    }
 }
 
 // =============================================================================
@@ -503,10 +527,17 @@ TEST_CASE("LooseOctree concurrent overlap queries via crd-jobs (proves naturally
                 {
                     for (usize i = 0; i < got.size(); ++i)
                     {
-                        if (got[i] != corpus_ptr->ref[q][i]) { ok = false; break; }
+                        if (got[i] != corpus_ptr->ref[q][i])
+                        {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if (!ok) { corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed); }
+                if (!ok)
+                {
+                    corpus_ptr->mismatches.fetch_add(1U, std::memory_order_relaxed);
+                }
             }
         });
     crd::jobs::wait(counter);

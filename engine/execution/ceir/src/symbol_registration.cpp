@@ -19,9 +19,15 @@ namespace
 bool register_symbol(Context& ctx, Module& module, Operation* op) noexcept
 {
     const AttrId name_id = op->attr("sym_name");
-    if (!name_id.valid()) { return true; } // not a symbol-defining op
+    if (!name_id.valid()) // not a symbol-defining op
+    {
+        return true;
+    }
     const AttrValue nv = ctx.attr_value(name_id);
-    if (nv.kind != AttrKind::String) { return true; }
+    if (nv.kind != AttrKind::String)
+    {
+        return true;
+    }
 
     Visibility   vis    = Visibility::Public;
     const AttrId vis_id = op->attr("sym_visibility");
@@ -30,12 +36,21 @@ bool register_symbol(Context& ctx, Module& module, Operation* op) noexcept
         const AttrValue vv = ctx.attr_value(vis_id);
         if (vv.kind == AttrKind::String)
         {
-            if (sv_is(vv.s, "private")) { vis = Visibility::Private; }
-            else if (sv_is(vv.s, "nested")) { vis = Visibility::Nested; }
+            if (sv_is(vv.s, "private"))
+            {
+                vis = Visibility::Private;
+            }
+            else if (sv_is(vv.s, "nested"))
+            {
+                vis = Visibility::Nested;
+            }
         }
     }
     SymbolTable* const symbols = module.symbols();
-    if (symbols == nullptr) { return true; }
+    if (symbols == nullptr)
+    {
+        return true;
+    }
     return symbols->define(nv.s, op, vis); // false ⇒ duplicate name (a load error)
 }
 } // namespace crd::ceir::detail

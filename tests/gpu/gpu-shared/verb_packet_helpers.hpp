@@ -250,7 +250,10 @@ inline void enc_draw_overlay(g::IRasterContext& r, g::IRasterTarget& target, g::
     rd.color.push_back(c);
     rd.depth.enabled = (compare != g::DepthCompare::Always); // read-only depth test carried by `compare`
     rd.depth.compare = compare;
-    if (rd.depth.enabled) { rd.depth.target = &target; } // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
+    if (rd.depth.enabled) // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
+    {
+        rd.depth.target = &target;
+    }
     enc->begin_rendering(rd);
     g::RasterDrawPacket pk{};
     pk.program                        = &prog;
@@ -280,7 +283,10 @@ inline void enc_draw_overlay_range(g::IRasterContext& r, g::IRasterTarget& targe
     rd.color.push_back(c);
     rd.depth.enabled = (compare != g::DepthCompare::Always);
     rd.depth.compare = compare;
-    if (rd.depth.enabled) { rd.depth.target = &target; } // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
+    if (rd.depth.enabled) // CEIR-34 R2: companion-depth carrier ⇒ the depth-load arm
+    {
+        rd.depth.target = &target;
+    }
     enc->begin_rendering(rd);
     g::RasterDrawPacket pk{};
     pk.program                        = &prog;

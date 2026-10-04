@@ -14,11 +14,26 @@ namespace crd::resources
 
 LdrCodec ldr_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept
 {
-    if (png_sniff(bytes)) { return LdrCodec::Png; }
-    if (jpeg_sniff(bytes)) { return LdrCodec::Jpeg; }
-    if (bmp_sniff(bytes)) { return LdrCodec::Bmp; }
-    if (gif_sniff(bytes)) { return LdrCodec::Gif; }
-    if (tga_sniff(bytes)) { return LdrCodec::Tga; } // heuristic — LAST
+    if (png_sniff(bytes))
+    {
+        return LdrCodec::Png;
+    }
+    if (jpeg_sniff(bytes))
+    {
+        return LdrCodec::Jpeg;
+    }
+    if (bmp_sniff(bytes))
+    {
+        return LdrCodec::Bmp;
+    }
+    if (gif_sniff(bytes))
+    {
+        return LdrCodec::Gif;
+    }
+    if (tga_sniff(bytes)) // heuristic — LAST
+    {
+        return LdrCodec::Tga;
+    }
     return LdrCodec::Unknown;
 }
 

@@ -16,7 +16,10 @@ constexpr u32 kMaxAttrsInline = 64U; // an op with more attrs than this is patho
     const usize n = a.size() < b.size() ? a.size() : b.size();
     for (usize i = 0; i < n; ++i)
     {
-        if (a[i] != b[i]) { return static_cast<unsigned char>(a[i]) < static_cast<unsigned char>(b[i]); }
+        if (a[i] != b[i])
+        {
+            return static_cast<unsigned char>(a[i]) < static_cast<unsigned char>(b[i]);
+        }
     }
     return a.size() < b.size();
 }
@@ -27,9 +30,15 @@ constexpr u32 kMaxAttrsInline = 64U; // an op with more attrs than this is patho
 // ("p:clear_color:0", the frame param-bag encoding). Bare names print byte-identically to the pre-fix output.
 [[nodiscard]] bool name_needs_quote(containers::StringView s) noexcept
 {
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     const char c0 = s[0];
-    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) { return true; }
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_'))
+    {
+        return true;
+    }
     for (usize i = 0; i < s.size(); ++i)
     {
         const char c = s[i];
@@ -58,14 +67,26 @@ private:
     // ── pass 1: deterministic SSA value numbering (a fixed pre-order walk) ──
     void assign_ids(Region* r)
     {
-        if (r == nullptr) { return; }
+        if (r == nullptr)
+        {
+            return;
+        }
         for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
         {
-            for (u32 i = 0; i < b->num_args(); ++i) { m_ids.insert(b->arg(i), m_next++); }
+            for (u32 i = 0; i < b->num_args(); ++i)
+            {
+                m_ids.insert(b->arg(i), m_next++);
+            }
             for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
             {
-                for (u32 i = 0; i < op->num_results(); ++i) { m_ids.insert(op->result(i), m_next++); }
-                for (u32 i = 0; i < op->num_regions(); ++i) { assign_ids(op->region(i)); }
+                for (u32 i = 0; i < op->num_results(); ++i)
+                {
+                    m_ids.insert(op->result(i), m_next++);
+                }
+                for (u32 i = 0; i < op->num_regions(); ++i)
+                {
+                    assign_ids(op->region(i));
+                }
             }
         }
     }
@@ -75,7 +96,10 @@ private:
     {
         m_out.append("{\n");
         u32 bi = 0U;
-        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region()) { emit_block(b, depth + 1U, bi++); }
+        for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+        {
+            emit_block(b, depth + 1U, bi++);
+        }
         indent(depth);
         m_out.push_back('}');
     }
@@ -90,13 +114,19 @@ private:
             m_out.push_back('(');
             for (u32 i = 0; i < b->num_args(); ++i)
             {
-                if (i != 0U) { m_out.append(", "); }
+                if (i != 0U)
+                {
+                    m_out.append(", ");
+                }
                 emit_value_def(b->arg(i));
             }
             m_out.push_back(')');
         }
         m_out.append(":\n");
-        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block()) { emit_op(op, depth + 1U); }
+        for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            emit_op(op, depth + 1U);
+        }
     }
 
     void emit_op(Operation* op, u32 depth)
@@ -106,7 +136,10 @@ private:
         {
             for (u32 i = 0; i < op->num_results(); ++i)
             {
-                if (i != 0U) { m_out.append(", "); }
+                if (i != 0U)
+                {
+                    m_out.append(", ");
+                }
                 m_out.push_back('%');
                 emit_u32(*m_ids.find(op->result(i)));
             }
@@ -117,7 +150,10 @@ private:
         m_out.push_back('(');
         for (u32 i = 0; i < op->num_operands(); ++i)
         {
-            if (i != 0U) { m_out.append(", "); }
+            if (i != 0U)
+            {
+                m_out.append(", ");
+            }
             emit_value_ref(op->operand(i));
         }
         m_out.push_back(')');
@@ -156,10 +192,16 @@ private:
     void emit_attrs(Operation* op)
     {
         const u32 n = op->num_attrs();
-        if (n == 0U) { return; }
+        if (n == 0U)
+        {
+            return;
+        }
         const u32 m = n < kMaxAttrsInline ? n : kMaxAttrsInline;
         u32       order[kMaxAttrsInline];
-        for (u32 i = 0; i < m; ++i) { order[i] = i; }
+        for (u32 i = 0; i < m; ++i)
+        {
+            order[i] = i;
+        }
         for (u32 i = 1; i < m; ++i) // insertion sort by attr name → canonical (position-independent) output
         {
             const u32 v = order[i];
@@ -174,10 +216,19 @@ private:
         m_out.append(" {");
         for (u32 i = 0; i < m; ++i)
         {
-            if (i != 0U) { m_out.append(", "); }
+            if (i != 0U)
+            {
+                m_out.append(", ");
+            }
             const containers::StringView an = op->attr_name(order[i]);
-            if (name_needs_quote(an)) { emit_quoted(an); } // "p:clear_color:0" — a frame param-bag key (has ':')
-            else { m_out.append(an.data(), an.size()); }   // bare ident — byte-identical to before
+            if (name_needs_quote(an)) // "p:clear_color:0" — a frame param-bag key (has ':')
+            {
+                emit_quoted(an);
+            }
+            else // bare ident — byte-identical to before
+            {
+                m_out.append(an.data(), an.size());
+            }
             m_out.append(" = ");
             emit_attr_value(m_ctx.attr_value(op->attr_id_at(order[i])));
         }
@@ -194,15 +245,24 @@ private:
         case AttrKind::String: emit_quoted(v.s); break;
         case AttrKind::SymbolRef:
             m_out.push_back('@');
-            if (name_needs_quote(v.s)) { emit_quoted(v.s); } // CEIR-31b-3-c-i: @"engine://ui/blur" — a non-ident asset id
-            else { m_out.append(v.s.data(), v.s.size()); }   // @bare_ident — byte-identical to before
+            if (name_needs_quote(v.s)) // CEIR-31b-3-c-i: @"engine://ui/blur" — a non-ident asset id
+            {
+                emit_quoted(v.s);
+            }
+            else // @bare_ident — byte-identical to before
+            {
+                m_out.append(v.s.data(), v.s.size());
+            }
             break;
         case AttrKind::Type: emit_type(v.t); break;
         case AttrKind::Array: // CEIR-8b: [v0,v1,...]
             m_out.push_back('[');
             for (usize i = 0; i < v.elems.size(); ++i)
             {
-                if (i != 0U) { m_out.push_back(','); }
+                if (i != 0U)
+                {
+                    m_out.push_back(',');
+                }
                 emit_attr_id(v.elems[i]);
             }
             m_out.push_back(']');
@@ -211,7 +271,10 @@ private:
             m_out.push_back('{'); // from the op-attribute dict's `name = value` (parsed at the op level, not in a value)
             for (usize i = 0; i < v.keys.size(); ++i)
             {
-                if (i != 0U) { m_out.push_back(','); }
+                if (i != 0U)
+                {
+                    m_out.push_back(',');
+                }
                 emit_quoted(v.keys[i]);
                 m_out.push_back(':');
                 emit_attr_id(v.elems[i]);
@@ -358,13 +421,19 @@ private:
             m_out.append("fn<(");
             for (u32 i = 0; i < t.count; ++i) // params
             {
-                if (i != 0U) { m_out.push_back(','); }
+                if (i != 0U)
+                {
+                    m_out.push_back(',');
+                }
                 emit_type(t.members[i]);
             }
             m_out.append(")->(");
             for (usize i = t.count; i < t.members.size(); ++i) // results
             {
-                if (i != static_cast<usize>(t.count)) { m_out.push_back(','); }
+                if (i != static_cast<usize>(t.count))
+                {
+                    m_out.push_back(',');
+                }
                 emit_type(t.members[i]);
             }
             m_out.append(")>");
@@ -513,7 +582,10 @@ private:
                 any = true;
             }
         }
-        if (!any) { m_out.push_back('1'); } // dimensionless
+        if (!any) // dimensionless
+        {
+            m_out.push_back('1');
+        }
     }
 
     void emit_dim_body(const Type& t)
@@ -550,18 +622,36 @@ private:
 
     void emit_view_ranges(u32 mask)
     {
-        if ((mask & static_cast<u32>(ViewRange::Byte)) != 0U) { m_out.append(",byte"); }
-        if ((mask & static_cast<u32>(ViewRange::Element)) != 0U) { m_out.append(",element"); }
-        if ((mask & static_cast<u32>(ViewRange::Mip)) != 0U) { m_out.append(",mip"); }
-        if ((mask & static_cast<u32>(ViewRange::Layer)) != 0U) { m_out.append(",layer"); }
-        if ((mask & static_cast<u32>(ViewRange::Aspect)) != 0U) { m_out.append(",aspect"); }
+        if ((mask & static_cast<u32>(ViewRange::Byte)) != 0U)
+        {
+            m_out.append(",byte");
+        }
+        if ((mask & static_cast<u32>(ViewRange::Element)) != 0U)
+        {
+            m_out.append(",element");
+        }
+        if ((mask & static_cast<u32>(ViewRange::Mip)) != 0U)
+        {
+            m_out.append(",mip");
+        }
+        if ((mask & static_cast<u32>(ViewRange::Layer)) != 0U)
+        {
+            m_out.append(",layer");
+        }
+        if ((mask & static_cast<u32>(ViewRange::Aspect)) != 0U)
+        {
+            m_out.append(",aspect");
+        }
     }
 
     void emit_type_list(containers::ConstSpan<TypeId> members)
     {
         for (usize i = 0; i < members.size(); ++i)
         {
-            if (i != 0U) { m_out.push_back(','); }
+            if (i != 0U)
+            {
+                m_out.push_back(',');
+            }
             emit_type(members[i]);
         }
     }
@@ -585,7 +675,10 @@ private:
         for (usize i = 0; i < s.size(); ++i)
         {
             const char c = s[i];
-            if (c == '"' || c == '\\') { m_out.push_back('\\'); }
+            if (c == '"' || c == '\\')
+            {
+                m_out.push_back('\\');
+            }
             m_out.push_back(c);
         }
         m_out.push_back('"');
@@ -613,14 +706,24 @@ private:
         for (usize i = 0; i < used; ++i)
         {
             const char c = buf[i];
-            if (c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i') { marked = true; break; } // nan/inf too
+            if (c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i') // nan/inf too
+            {
+                marked = true;
+                break;
+            }
         }
-        if (!marked) { m_out.append(".0"); }
+        if (!marked)
+        {
+            m_out.append(".0");
+        }
     }
 
     void indent(u32 depth)
     {
-        for (u32 i = 0; i < depth * 2U; ++i) { m_out.push_back(' '); }
+        for (u32 i = 0; i < depth * 2U; ++i)
+        {
+            m_out.push_back(' ');
+        }
     }
 
     Context&                              m_ctx;

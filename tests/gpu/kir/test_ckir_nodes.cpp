@@ -31,8 +31,14 @@ crd::f64 rmix(crd::f64 a, crd::f64 b, crd::f64 t) { return a * (1.0 - t) + b * t
 // pick component `c` of a 3-vector (avoids nested conditional operators the tidy gate forbids).
 crd::f64 pick3(int c, crd::f64 a, crd::f64 b, crd::f64 d)
 {
-    if (c == 0) { return a; }
-    if (c == 1) { return b; }
+    if (c == 0)
+    {
+        return a;
+    }
+    if (c == 1)
+    {
+        return b;
+    }
     return d;
 }
 crd::f64 rsmoothstep(crd::f64 e0, crd::f64 e1, crd::f64 x)
@@ -75,8 +81,31 @@ TEST_CASE("B6-a: nodes math + geometric bit-exact vs the MaterialX reference on 
     const int brgb = g.vec3(bz, rx, gy);
 
     int bad = 0;
-    const auto chk = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int nc, auto ref) { crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < nc; ++c) { if (o[i * nc + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int nc, auto ref)
+    {
+        crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < nc; ++c)
+            {
+                if (o[i * nc + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     chk(nd::add(g, a, b), [&](int i) { return av[i] + bv[i]; });
     chk(nd::subtract(g, a, b), [&](int i) { return av[i] - bv[i]; });
@@ -144,7 +173,20 @@ TEST_CASE("B6-a: nodes adjustment (luminance/contrast/range/saturate/hsv) bit-ex
     const int rgb = g.vec3(rx, gy, bz);
 
     int bad = 0;
-    const auto chkv = [&](int node, int nc, auto ref) { crd::f64 o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < nc; ++c) { if (o[i * nc + c] != ref(i, c)) { ++bad; } } } };
+    const auto chkv = [&](int node, int nc, auto ref)
+    {
+        crd::f64 o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < nc; ++c)
+            {
+                if (o[i * nc + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     // luminance: vec3(dot(rgb, ACEScg lumacoeffs)) — all 3 channels equal.
     chkv(nd::luminance(g, rgb), 3, [&](int i, int /*c*/) { return rv[i] * nd::kLumaR + gv[i] * nd::kLumaG + zv[i] * nd::kLumaB; });
@@ -167,30 +209,63 @@ TEST_CASE("B6-a: nodes adjustment (luminance/contrast/range/saturate/hsv) bit-ex
         const crd::f64 v = mx;
         const crd::f64 s = mx > 0.0 ? delta / mx : 0.0;
         crd::f64       h = 0.0;
-        if (r >= mx) { h = (gg - b) / delta; }
-        else if (gg >= mx) { h = 2.0 + (b - r) / delta; }
-        else { h = 4.0 + (r - gg) / delta; }
+        if (r >= mx)
+        {
+            h = (gg - b) / delta;
+        }
+        else if (gg >= mx)
+        {
+            h = 2.0 + (b - r) / delta;
+        }
+        else
+        {
+            h = 4.0 + (r - gg) / delta;
+        }
         h *= (1.0 / 6.0);
-        if (h < 0.0) { h += 1.0; }
-        if (s <= 0.0) { h = 0.0; }
+        if (h < 0.0)
+        {
+            h += 1.0;
+        }
+        if (s <= 0.0)
+        {
+            h = 0.0;
+        }
         return pick3(c, h, s, v);
     };
     chkv(nd::rgbtohsv(g, rgb), 3, ref_rgbtohsv);
     // hsvtorgb.
     const auto ref_hsvtorgb = [&](crd::f64 h, crd::f64 s, crd::f64 v, int c)
     {
-        if (s < 0.0001) { return v; }
+        if (s < 0.0001)
+        {
+            return v;
+        }
         const crd::f64 h6 = 6.0 * (h - rfloor(h));
         const crd::f64 hi = crd::math::trunc(h6);
         const crd::f64 f  = h6 - hi;
         const crd::f64 p  = v * (1.0 - s);
         const crd::f64 q  = v * (1.0 - s * f);
         const crd::f64 t  = v * (1.0 - s * (1.0 - f));
-        if (hi == 0.0) { return pick3(c, v, t, p); }
-        if (hi == 1.0) { return pick3(c, q, v, p); }
-        if (hi == 2.0) { return pick3(c, p, v, t); }
-        if (hi == 3.0) { return pick3(c, p, q, v); }
-        if (hi == 4.0) { return pick3(c, t, p, v); }
+        if (hi == 0.0)
+        {
+            return pick3(c, v, t, p);
+        }
+        if (hi == 1.0)
+        {
+            return pick3(c, q, v, p);
+        }
+        if (hi == 2.0)
+        {
+            return pick3(c, p, v, t);
+        }
+        if (hi == 3.0)
+        {
+            return pick3(c, p, q, v);
+        }
+        if (hi == 4.0)
+        {
+            return pick3(c, t, p, v);
+        }
         return pick3(c, v, p, q);
     };
     {
@@ -238,7 +313,19 @@ TEST_CASE("B6-a: nodes compositing (blend + Porter-Duff) bit-exact vs MaterialX"
 
     int bad = 0;
     const auto chk4 = [&](int node, auto basef) { crd::f64 o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
-        for (int i = 0; i < kN; ++i) { for (int c = 0; c < 4; ++c) { const crd::f64 bgc = v[4 + c][i]; const crd::f64 want = rmix(bgc, basef(i, c), v[8][i]); if (o[i * 4 + c] != want) { ++bad; } } } };
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                const crd::f64 bgc = v[4 + c][i];
+                const crd::f64 want = rmix(bgc, basef(i, c), v[8][i]);
+                if (o[i * 4 + c] != want)
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
     const auto fch = [&](int i, int c) { return v[c][i]; };     // fg channel c
     const auto bch = [&](int i, int c) { return v[4 + c][i]; }; // bg channel c
 
@@ -253,7 +340,19 @@ TEST_CASE("B6-a: nodes compositing (blend + Porter-Duff) bit-exact vs MaterialX"
 
     // Porter-Duff (rgb uses alpha; alpha composited separately), then the mix tail.
     const auto pd = [&](int node, auto rgbf, auto af) { crd::f64 o[kN * 4]; kir::eval_cpu(g, inp, &alloc, node, o);
-        for (int i = 0; i < kN; ++i) { for (int c = 0; c < 4; ++c) { const crd::f64 base = c < 3 ? rgbf(i, c) : af(i); const crd::f64 want = rmix(v[4 + c][i], base, v[8][i]); if (o[i * 4 + c] != want) { ++bad; } } } };
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                const crd::f64 base = c < 3 ? rgbf(i, c) : af(i);
+                const crd::f64 want = rmix(v[4 + c][i], base, v[8][i]);
+                if (o[i * 4 + c] != want)
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
     pd(nd::over(g, fg4, bg4, mx), [&](int i, int c) { return fch(i, c) + bch(i, c) * (1.0 - v[3][i]); }, [&](int i) { return v[3][i] + v[7][i] * (1.0 - v[3][i]); });
     pd(nd::comp_in(g, fg4, bg4, mx), [&](int i, int c) { return fch(i, c) * v[7][i]; }, [&](int i) { return v[3][i] * v[7][i]; });
     pd(nd::comp_out(g, fg4, bg4, mx), [&](int i, int c) { return fch(i, c) * (1.0 - v[7][i]); }, [&](int i) { return v[3][i] * (1.0 - v[7][i]); });
@@ -270,12 +369,28 @@ TEST_CASE("B6-a: nodes compositing (blend + Porter-Duff) bit-exact vs MaterialX"
             crd::f64       base[4];
             for (int c = 0; c < 3; ++c)
             {
-                if (summed <= 1.0) { base[c] = fch(i, c) + bch(i, c); }
-                else if (rabs(v[7][i]) < 1e-8) { base[c] = 0.0; }
-                else { base[c] = fch(i, c) + bch(i, c) * ((1.0 - v[3][i]) / v[7][i]); }
+                if (summed <= 1.0)
+                {
+                    base[c] = fch(i, c) + bch(i, c);
+                }
+                else if (rabs(v[7][i]) < 1e-8)
+                {
+                    base[c] = 0.0;
+                }
+                else
+                {
+                    base[c] = fch(i, c) + bch(i, c) * ((1.0 - v[3][i]) / v[7][i]);
+                }
             }
             base[3] = rmin(summed, 1.0);
-            for (int c = 0; c < 4; ++c) { const crd::f64 want = rmix(v[4 + c][i], base[c], v[8][i]); if (o[i * 4 + c] != want) { ++bad; } }
+            for (int c = 0; c < 4; ++c)
+            {
+                const crd::f64 want = rmix(v[4 + c][i], base[c], v[8][i]);
+                if (o[i * 4 + c] != want)
+                {
+                    ++bad;
+                }
+            }
         }
     }
     // mix / premult / unpremult.
@@ -283,9 +398,29 @@ TEST_CASE("B6-a: nodes compositing (blend + Porter-Duff) bit-exact vs MaterialX"
     {
         crd::f64 o[kN * 4];
         kir::eval_cpu(g, inp, &alloc, nd::premult(g, fg4), o);
-        for (int i = 0; i < kN; ++i) { for (int c = 0; c < 4; ++c) { const crd::f64 want = c < 3 ? fch(i, c) * v[3][i] : v[3][i]; if (o[i * 4 + c] != want) { ++bad; } } }
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                const crd::f64 want = c < 3 ? fch(i, c) * v[3][i] : v[3][i];
+                if (o[i * 4 + c] != want)
+                {
+                    ++bad;
+                }
+            }
+        }
         kir::eval_cpu(g, inp, &alloc, nd::unpremult(g, fg4), o);
-        for (int i = 0; i < kN; ++i) { for (int c = 0; c < 4; ++c) { const crd::f64 want = c < 3 ? fch(i, c) / v[3][i] : v[3][i]; if (o[i * 4 + c] != want) { ++bad; } } }
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                const crd::f64 want = c < 3 ? fch(i, c) / v[3][i] : v[3][i];
+                if (o[i * 4 + c] != want)
+                {
+                    ++bad;
+                }
+            }
+        }
     }
 
     CHECK(bad == 0);
@@ -319,7 +454,17 @@ TEST_CASE("B6-a: nodes logical + conditional + channel bit-exact vs MaterialX", 
     const crd::f64* inp[] = {lav, lbv, v1v, v2v, wv};
 
     int bad = 0;
-    const auto chk = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chk = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     chk(nd::logical_and(g, la, lb), [&](int i) { return rmin(lav[i], lbv[i]); });
     chk(nd::logical_or(g, la, lb), [&](int i) { return rmax(lav[i], lbv[i]); });
@@ -346,7 +491,13 @@ TEST_CASE("B6-a: nodes logical + conditional + channel bit-exact vs MaterialX", 
         chk(nd::extract(g, vecn, 1), [&](int i) { return v2v[i]; });
         crd::f64 o3[kN * 3];
         kir::eval_cpu(g, inp, &alloc, nd::combine3(g, v1, v2, la), o3);
-        for (int i = 0; i < kN; ++i) { if (o3[i * 3] != v1v[i] || o3[i * 3 + 1] != v2v[i] || o3[i * 3 + 2] != lav[i]) { ++bad; } }
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o3[i * 3] != v1v[i] || o3[i * 3 + 1] != v2v[i] || o3[i * 3 + 2] != lav[i])
+            {
+                ++bad;
+            }
+        }
     }
 
     CHECK(bad == 0);
@@ -382,9 +533,23 @@ TEST_CASE("B6-a: nodes guard branches (burn/dodge edge) bit-exact vs MaterialX",
     {
         crd::f64 o[4 * 4];
         kir::eval_cpu(g, inp, &alloc, nd::burn(g, fg4, bg4, mx), o);
-        for (int i = 0; i < 4; ++i) { const crd::f64 want = rabs(fv[i]) < 1e-8 ? 0.0 : 1.0 - (1.0 - bv[i]) / fv[i]; if (o[i * 4] != want) { ++bad; } } // channel 0
+        for (int i = 0; i < 4; ++i) // channel 0
+        {
+            const crd::f64 want = rabs(fv[i]) < 1e-8 ? 0.0 : 1.0 - (1.0 - bv[i]) / fv[i];
+            if (o[i * 4] != want)
+            {
+                ++bad;
+            }
+        }
         kir::eval_cpu(g, inp, &alloc, nd::dodge(g, fg4, bg4, mx), o);
-        for (int i = 0; i < 4; ++i) { const crd::f64 want = rabs(1.0 - fv[i]) < 1e-8 ? 0.0 : bv[i] / (1.0 - fv[i]); if (o[i * 4] != want) { ++bad; } }
+        for (int i = 0; i < 4; ++i)
+        {
+            const crd::f64 want = rabs(1.0 - fv[i]) < 1e-8 ? 0.0 : bv[i] / (1.0 - fv[i]);
+            if (o[i * 4] != want)
+            {
+                ++bad;
+            }
+        }
     }
     CHECK(bad == 0);
 }
@@ -416,7 +581,17 @@ TEST_CASE("B6-b: nodes shapes (ramplr/ramptb/checkerboard) bit-exact vs Material
     const int tc = g.vec2(tx, ty);
 
     int        bad = 0;
-    const auto chk = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chk = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     chk(nd::ramplr(g, vl, vr, tc), [&](int i) { const crd::f64 t = rclamp(txv[i], 0.0, 1.0); return rmix(vlv[i], vrv[i], t); });
     chk(nd::ramptb(g, vl, vr, tc), [&](int i) { const crd::f64 t = rclamp(tyv[i], 0.0, 1.0); return rmix(vrv[i], vlv[i], t); }); // valueb=vr, valuet=vl
@@ -475,8 +650,31 @@ TEST_CASE("B6-c: nodes UV (rotate2d/rotate3d/place2d/triplanar) bit-exact vs Mat
     const auto       dnorm3 = [](crd::f64 x, crd::f64 y, crd::f64 z) { return crd::math::sqrt(x * x + y * y + z * z); };
 
     int        bad = 0;
-    const auto chkv = [&](int node, int nc, auto ref) { crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < nc; ++c) { if (o[i * nc + c] != ref(i, c)) { ++bad; } } } };
-    const auto chk  = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
+    const auto chkv = [&](int node, int nc, auto ref)
+    {
+        crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < nc; ++c)
+            {
+                if (o[i * nc + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
+    const auto chk  = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
 
     // rotate2d: (ca*x+sa*y, -sa*x+ca*y).
     const auto rot2 = [&](int i, int c) { const crd::f64 rad = amv[i] * deg2rad; const crd::f64 sa = crd::math::sin(rad); const crd::f64 ca = crd::math::cos(rad); return c == 0 ? (ca * txv[i] + sa * tyv[i]) : (-sa * txv[i] + ca * tyv[i]); };
@@ -602,8 +800,31 @@ TEST_CASE("B6-d: nodes NPR (facingratio / gooch_shade) bit-exact vs MaterialX", 
     const auto dot3   = [](crd::f64 ax, crd::f64 ay, crd::f64 az, crd::f64 bx, crd::f64 by, crd::f64 bz) { return ax * bx + ay * by + az * bz; };
 
     int        bad = 0;
-    const auto chk  = [&](int node, auto ref) { crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { if (o[i] != ref(i)) { ++bad; } } };
-    const auto chkv = [&](int node, int nc, auto ref) { crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o); for (int i = 0; i < kN; ++i) { for (int c = 0; c < nc; ++c) { if (o[i * nc + c] != ref(i, c)) { ++bad; } } } };
+    const auto chk  = [&](int node, auto ref)
+    {
+        crd::f64 o[kN]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            if (o[i] != ref(i))
+            {
+                ++bad;
+            }
+        }
+    };
+    const auto chkv = [&](int node, int nc, auto ref)
+    {
+        crd::f64 o[kN * 3]; kir::eval_cpu(g, inp, &alloc, node, o);
+        for (int i = 0; i < kN; ++i)
+        {
+            for (int c = 0; c < nc; ++c)
+            {
+                if (o[i * nc + c] != ref(i, c))
+                {
+                    ++bad;
+                }
+            }
+        }
+    };
 
     // facingratio, all four (faceforward, invert) combinations.
     const auto fr = [&](int i, bool ff, bool inv) { const crd::f64 d = dot3(vxv[i], vyv[i], vzv[i], nxv[i], nyv[i], nzv[i]); crd::f64 f = ff ? rabs(d) : (d * -1.0); return inv ? (1.0 - f) : f; };

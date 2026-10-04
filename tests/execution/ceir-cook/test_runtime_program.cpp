@@ -228,7 +228,10 @@ TEST_CASE("ceir runtime 7b: a corrupted interface-hash header word (content inta
     REQUIRE(prog != nullptr);
     REQUIRE(dep != nullptr);
     crd::containers::Array<u8> corrupt(&root);
-    for (usize i = 0; i < meta->payload.size(); ++i) { corrupt.push_back(meta->payload[i]); }
+    for (usize i = 0; i < meta->payload.size(); ++i)
+    {
+        corrupt.push_back(meta->payload[i]);
+    }
     REQUIRE(corrupt.size() > 19U);
     corrupt[12] = static_cast<u8>(corrupt[12] ^ 0xFFU); // flip a bit in the DECLARED interface hash
 

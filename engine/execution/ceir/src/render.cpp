@@ -15,10 +15,19 @@ namespace
 // the color/depth FORMAT specificity (the typed-clear-vs-format check) is find_render_misuse's, named-forward.
 bool verify_attachment(const Context& ctx, const Type& t) noexcept
 {
-    if (t.members.size() != 1U) { return false; }
+    if (t.members.size() != 1U)
+    {
+        return false;
+    }
     const Type u = ctx.type_of(t.members[0]);
-    if (u.kind == TypeKind::Image || u.kind == TypeKind::TypeParam) { return true; }
-    if (u.kind == TypeKind::View && u.members.size() >= 1U) { return ctx.type_of(u.members[0]).kind == TypeKind::Image; }
+    if (u.kind == TypeKind::Image || u.kind == TypeKind::TypeParam)
+    {
+        return true;
+    }
+    if (u.kind == TypeKind::View && u.members.size() >= 1U)
+    {
+        return ctx.type_of(u.members[0]).kind == TypeKind::Image;
+    }
     return false;
 }
 

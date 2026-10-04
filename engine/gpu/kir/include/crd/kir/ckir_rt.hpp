@@ -59,7 +59,10 @@ namespace crd::kir::rt
     const int base = g.binary(k::KOp::Mul, lid, cu(6U));
     const auto ld  = [&](crd::u32 c) { return g.buffer_load(rays, g.binary(k::KOp::Add, base, cu(c))); };
     g.stmt_trace_ray_pipeline(as, pl, ld(0), ld(1), ld(2), ld(3), ld(4), ld(5), cf(0.001), cf(1.0e30));
-    if (use_ser) { g.stmt_reorder_thread(); }
+    if (use_ser)
+    {
+        g.stmt_reorder_thread();
+    }
     g.stmt_buffer_store(out, lid, g.payload_load(pl, 0));
     k::KEntry e;
     e.stage             = k::KStage::RayGen;
@@ -692,7 +695,10 @@ struct PathTraceNeeConfig
     };
 
     // ── direct lighting at the primary (G-buffer) vertex ──
-    if (cfg.strategy != PtStrategy::Bsdf) { nee(ppx, ppy, ppz, pnx, pny, pnz, cf(1.0), cf(1.0), cf(1.0), 1000U); }
+    if (cfg.strategy != PtStrategy::Bsdf)
+    {
+        nee(ppx, ppy, ppz, pnx, pny, pnz, cf(1.0), cf(1.0), cf(1.0), 1000U);
+    }
 
     // ── scatter the primary ray (cosine BSDF) ──
     int surf_t[3];
@@ -1029,7 +1035,10 @@ struct ManyLightConfig
     if (cfg.power_sampling)
     {
         total = cf(0.0);
-        for (crd::u32 i = 0; i < cfg.nlights; ++i) { total = add(total, light_power(i)); }
+        for (crd::u32 i = 0; i < cfg.nlights; ++i)
+        {
+            total = add(total, light_power(i));
+        }
         const int u = mul(ulight, total); // scan the CDF: pick the first light whose cumulative power crosses u
         int acc = cf(0.0);
         int sel_f = cf(0.0);
@@ -1385,7 +1394,10 @@ struct PathTraceFullConfig
     g.stmt_buffer_store(out, uadd(b3, cu(1U)), mul(lp(out, b3, 1U), inv));
     g.stmt_buffer_store(out, uadd(b3, cu(2U)), mul(lp(out, b3, 2U), inv));
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); }
+    if (oob_guard >= 0)
+    {
+        g.stmt_if_end(oob_guard);
+    }
     k::KEntry e;
     e.stage             = k::KStage::Compute;
     e.local_size[0]     = cfg.local_size;

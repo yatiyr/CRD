@@ -61,20 +61,43 @@ void newton_solve(const F& Ffn, const f64* theta, f64* x, int n, int np)
             D xd[8];
             D thd[8];
             D out[8];
-            for (int i = 0; i < n; ++i) { xd[i] = D{x[i], col == i ? 1.0 : 0.0}; }
-            for (int j = 0; j < np; ++j) { thd[j] = D{theta[j], 0.0}; }
+            for (int i = 0; i < n; ++i)
+            {
+                xd[i] = D{x[i], col == i ? 1.0 : 0.0};
+            }
+            for (int j = 0; j < np; ++j)
+            {
+                thd[j] = D{theta[j], 0.0};
+            }
             Ffn(xd, thd, out, n, np);
-            for (int i = 0; i < n; ++i) { if (col == 0) { fx[i] = out[i].v; } jac[i * n + col] = out[i].d; }
+            for (int i = 0; i < n; ++i)
+            {
+                if (col == 0)
+                {
+                    fx[i] = out[i].v;
+                }
+                jac[i * n + col] = out[i].d;
+            }
         }
         f64 rhs[8];
         f64 dx[8];
-        for (int i = 0; i < n; ++i) { rhs[i] = -fx[i]; }
+        for (int i = 0; i < n; ++i)
+        {
+            rhs[i] = -fx[i];
+        }
         int piv[8];
         sp::dense_lu_factor(jac, piv, n);
         sp::dense_lu_solve(jac, piv, rhs, dx, n);
         f64 nrm = 0.0;
-        for (int i = 0; i < n; ++i) { x[i] += dx[i]; nrm += dx[i] * dx[i]; }
-        if (nrm < 1e-28) { break; }
+        for (int i = 0; i < n; ++i)
+        {
+            x[i] += dx[i];
+            nrm += dx[i] * dx[i];
+        }
+        if (nrm < 1e-28)
+        {
+            break;
+        }
     }
 }
 } // namespace
@@ -100,7 +123,10 @@ TEST_CASE("v16-g: root_vjp (IFT) == FD of the re-solved root; deterministic", "[
     int piv[n];
     rev::root_vjp(RootF{}, x_star, theta, xbar, tbar, n, np, tape, vscr, jac, piv, z, tmp);
     rev::root_vjp(RootF{}, x_star, theta, xbar, tbar2, n, np, tape, vscr, jac, piv, z, tmp);
-    for (int j = 0; j < np; ++j) { CHECK(tbar[j] == tbar2[j]); } // deterministic
+    for (int j = 0; j < np; ++j) // deterministic
+    {
+        CHECK(tbar[j] == tbar2[j]);
+    }
 
     // FD: perturb θ, re-solve the root, L = xbar·x*
     auto loss = [&](const f64* th) -> f64
@@ -134,7 +160,14 @@ TEST_CASE("v16-g: fixed_point_vjp (IFT) == FD of the re-solved fixed point", "[a
     auto solve_fp = [&](const f64* th, f64* xs)
     {
         xs[0] = 0.0; xs[1] = 0.0;
-        for (int it = 0; it < 200; ++it) { f64 g[n]; FixG{}(xs, th, g, n, np); xs[0] = g[0]; xs[1] = g[1]; }
+        for (int it = 0; it < 200; ++it)
+        {
+            f64 g[n];
+            FixG{}
+            (xs, th, g, n, np);
+            xs[0] = g[0];
+            xs[1] = g[1];
+        }
     };
     f64 x_star[n];
     solve_fp(theta, x_star);
@@ -178,15 +211,43 @@ TEST_CASE("v16-g: qp_eq_vjp (OptNet) == FD of the re-solved equality qmatP", "[a
         f64 y[nkkt];
         f64 tmp[nkkt];
         int piv[nkkt];
-        for (int i = 0; i < nkkt * nkkt; ++i) { mkkt[i] = 0.0; }
-        for (int i = 0; i < nq; ++i) { for (int j = 0; j < nq; ++j) { mkkt[i * nkkt + j] = qm[i * nq + j]; } }
-        for (int i = 0; i < mq; ++i) { for (int j = 0; j < nq; ++j) { mkkt[(nq + i) * nkkt + j] = am[i * nq + j]; mkkt[j * nkkt + (nq + i)] = am[i * nq + j]; } }
-        for (int i = 0; i < nq; ++i) { rhs[i] = -qq[i]; }
-        for (int i = 0; i < mq; ++i) { rhs[nq + i] = bb[i]; }
+        for (int i = 0; i < nkkt * nkkt; ++i)
+        {
+            mkkt[i] = 0.0;
+        }
+        for (int i = 0; i < nq; ++i)
+        {
+            for (int j = 0; j < nq; ++j)
+            {
+                mkkt[i * nkkt + j] = qm[i * nq + j];
+            }
+        }
+        for (int i = 0; i < mq; ++i)
+        {
+            for (int j = 0; j < nq; ++j)
+            {
+                mkkt[(nq + i) * nkkt + j] = am[i * nq + j];
+                mkkt[j * nkkt + (nq + i)] = am[i * nq + j];
+            }
+        }
+        for (int i = 0; i < nq; ++i)
+        {
+            rhs[i] = -qq[i];
+        }
+        for (int i = 0; i < mq; ++i)
+        {
+            rhs[nq + i] = bb[i];
+        }
         sp::dense_lu_factor(mkkt, piv, nkkt);
         sp::dense_lu_solve(mkkt, piv, rhs, y, nkkt);
-        for (int i = 0; i < nq; ++i) { xs[i] = y[i]; }
-        for (int i = 0; i < mq; ++i) { nus[i] = y[nq + i]; }
+        for (int i = 0; i < nq; ++i)
+        {
+            xs[i] = y[i];
+        }
+        for (int i = 0; i < mq; ++i)
+        {
+            nus[i] = y[nq + i];
+        }
         (void)tmp;
     };
     f64 x_star[nq];
@@ -206,11 +267,30 @@ TEST_CASE("v16-g: qp_eq_vjp (OptNet) == FD of the re-solved equality qmatP", "[a
 
     auto loss_of = [&](const f64* qm, const f64* qq, const f64* am, const f64* bb) -> f64
     { f64 xs[nq];
-    f64 nus[mq]; solve_qp(qm, qq, am, bb, xs, nus); f64 loss = 0.0; for (int i = 0; i < nq; ++i) { loss += xbar[i] * xs[i]; } return loss; };
+    f64 nus[mq]; solve_qp(qm, qq, am, bb, xs, nus); f64 loss = 0.0;
+        for (int i = 0; i < nq; ++i)
+        {
+            loss += xbar[i] * xs[i];
+        }
+        return loss; };
     const f64 hh = 1e-6;
     // gq, gamat, gb (unconstrained params) — direct FD
-    for (int j = 0; j < nq; ++j) { f64 qq[nq] = {q[0], q[1], q[2]}; qq[j] += hh; const f64 fp = loss_of(qmat, qq, amat, b); qq[j] -= 2 * hh; CHECK_THAT(gq[j], WithinAbs((fp - loss_of(qmat, qq, amat, b)) / (2 * hh), 1e-6)); }
-    for (int i = 0; i < mq; ++i) { f64 bb[mq] = {b[0]}; bb[i] += hh; const f64 fp = loss_of(qmat, q, amat, bb); bb[i] -= 2 * hh; CHECK_THAT(gb[i], WithinAbs((fp - loss_of(qmat, q, amat, bb)) / (2 * hh), 1e-6)); }
+    for (int j = 0; j < nq; ++j)
+    {
+        f64 qq[nq] = {q[0], q[1], q[2]};
+        qq[j] += hh;
+        const f64 fp = loss_of(qmat, qq, amat, b);
+        qq[j] -= 2 * hh;
+        CHECK_THAT(gq[j], WithinAbs((fp - loss_of(qmat, qq, amat, b)) / (2 * hh), 1e-6));
+    }
+    for (int i = 0; i < mq; ++i)
+    {
+        f64 bb[mq] = {b[0]};
+        bb[i] += hh;
+        const f64 fp = loss_of(qmat, q, amat, bb);
+        bb[i] -= 2 * hh;
+        CHECK_THAT(gb[i], WithinAbs((fp - loss_of(qmat, q, amat, bb)) / (2 * hh), 1e-6));
+    }
     for (int i = 0; i < mq; ++i)
     {
         for (int j = 0; j < nq; ++j)
@@ -228,12 +308,21 @@ TEST_CASE("v16-g: qp_eq_vjp (OptNet) == FD of the re-solved equality qmatP", "[a
         for (int j = i; j < nq; ++j)
         {
             f64 qm[nq * nq];
-            for (int k = 0; k < nq * nq; ++k) { qm[k] = qmat[k]; }
+            for (int k = 0; k < nq * nq; ++k)
+            {
+                qm[k] = qmat[k];
+            }
             qm[i * nq + j] += hh;
-            if (i != j) { qm[j * nq + i] += hh; }
+            if (i != j)
+            {
+                qm[j * nq + i] += hh;
+            }
             const f64 fp = loss_of(qm, q, amat, b);
             qm[i * nq + j] -= 2 * hh;
-            if (i != j) { qm[j * nq + i] -= 2 * hh; }
+            if (i != j)
+            {
+                qm[j * nq + i] -= 2 * hh;
+            }
             const f64 fd  = (fp - loss_of(qm, q, amat, b)) / (2 * hh);
             const f64 ana = (i == j) ? gqmat[i * nq + i] : (gqmat[i * nq + j] + gqmat[j * nq + i]);
             CHECK_THAT(ana, WithinAbs(fd, 1e-6));

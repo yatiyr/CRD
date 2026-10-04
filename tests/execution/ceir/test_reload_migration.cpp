@@ -59,7 +59,10 @@ Operation* state_cell(Context& c, const Reg& r, Block* b, Value* init, Value* ne
 {
     Value* seed[2] = {init, next};
     Operation* const op = c.create_operation(r.state, ConstSpan<Value*>(seed, 2U), 1U, ty);
-    if (depth != 1U) { c.set_attr(op, "depth", c.attr_int(static_cast<i64>(depth))); }
+    if (depth != 1U)
+    {
+        c.set_attr(op, "depth", c.attr_int(static_cast<i64>(depth)));
+    }
     b->append(op);
     return op;
 }

@@ -34,7 +34,10 @@ namespace
         }
         crd::u32 base = 0;
         const crd::u64 mean = n > 0 ? sum / n : 0;
-        while (base < 28 && (mean >> base) > 0) { ++base; }
+        while (base < 28 && (mean >> base) > 0)
+        {
+            ++base;
+        }
         crd::u64 best = ~0ULL;
         best_param    = 0;
         for (crd::u32 p = base > 2 ? base - 2 : 0; p <= base + 1 && p <= 30; ++p)
@@ -44,7 +47,10 @@ namespace
             {
                 const crd::u64 u = (static_cast<crd::u64>(r[i]) << 1U) ^ static_cast<crd::u64>(r[i] >> 63);
                 bits += (u >> p) + 1 + p;
-                if (bits > (1ULL << 40U)) { break; } // hopeless parameter — stop counting
+                if (bits > (1ULL << 40U)) // hopeless parameter — stop counting
+                {
+                    break;
+                }
             }
             if (bits < best)
             {
@@ -131,7 +137,10 @@ namespace
         {
             crd::containers::Array<crd::f64> xf(alloc);
             xf.resize(n);
-            for (crd::usize i = 0; i < n; ++i) { xf[i] = static_cast<crd::f64>(x[i]); }
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                xf[i] = static_cast<crd::f64>(x[i]);
+            }
             const crd::hesap::dsp::ArModel<crd::f64> model =
                 crd::hesap::dsp::aryule<crd::f64>(alloc, crd::containers::ConstSpan<crd::f64>(xf.data(), n),
                                                   kLpcOrder);
@@ -142,7 +151,10 @@ namespace
             {
                 cf[j] = -model.a[j + 1];
                 const crd::f64 mag = cf[j] < 0.0 ? -cf[j] : cf[j];
-                if (mag > cmax) { cmax = mag; }
+                if (mag > cmax)
+                {
+                    cmax = mag;
+                }
             }
             if (cmax > 0.0)
             {
@@ -165,14 +177,23 @@ namespace
                     {
                         crd::i64 q = static_cast<crd::i64>(
                             cf[j] * static_cast<crd::f64>(1LL << shift) + (cf[j] >= 0.0 ? 0.5 : -0.5));
-                        if (q >= lim) { q = lim - 1; }
-                        if (q < -lim) { q = -lim; }
+                        if (q >= lim)
+                        {
+                            q = lim - 1;
+                        }
+                        if (q < -lim)
+                        {
+                            q = -lim;
+                        }
                         lpc.coef[j] = q;
                     }
                     for (crd::usize i = kLpcOrder; i < n; ++i)
                     {
                         crd::i64 acc = 0;
-                        for (crd::u32 j = 0; j < kLpcOrder; ++j) { acc += lpc.coef[j] * x[i - 1 - j]; }
+                        for (crd::u32 j = 0; j < kLpcOrder; ++j)
+                        {
+                            acc += lpc.coef[j] * x[i - 1 - j];
+                        }
                         res[i - kLpcOrder] = x[i] - (acc >> static_cast<crd::u32>(shift));
                     }
                     crd::u32       param = 0;
@@ -228,7 +249,10 @@ namespace
             for (crd::usize i = plan.order; i < n; ++i)
             {
                 crd::i64 acc = 0;
-                for (crd::u32 j = 0; j < plan.order; ++j) { acc += plan.coef[j] * x[i - 1 - j]; }
+                for (crd::u32 j = 0; j < plan.order; ++j)
+                {
+                    acc += plan.coef[j] * x[i - 1 - j];
+                }
                 res[i - plan.order] = x[i] - (acc >> static_cast<crd::u32>(plan.shift));
             }
         }
@@ -261,10 +285,22 @@ namespace
 crd::containers::Array<crd::u8> flac_encode(const AudioPcm& pcm, crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<crd::u8> out(alloc);
-    if (!pcm.valid() || pcm.is_float()) { return out; }
-    if (pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24) { return out; }
-    if (pcm.channels != 1 && pcm.channels != 2) { return out; }
-    if (pcm.sample_rate >= (1U << 20U)) { return out; } // STREAMINFO's 20-bit rate field is the format's cap
+    if (!pcm.valid() || pcm.is_float())
+    {
+        return out;
+    }
+    if (pcm.bits_per_sample != 16 && pcm.bits_per_sample != 24)
+    {
+        return out;
+    }
+    if (pcm.channels != 1 && pcm.channels != 2)
+    {
+        return out;
+    }
+    if (pcm.sample_rate >= (1U << 20U)) // STREAMINFO's 20-bit rate field is the format's cap
+    {
+        return out;
+    }
 
     const crd::u32 bps       = pcm.bits_per_sample;
     const crd::u32 nch       = pcm.channels;
@@ -305,7 +341,10 @@ crd::containers::Array<crd::u8> flac_encode(const AudioPcm& pcm, crd::memory::IA
         bw.write_bits(bps - 1, 5);
         bw.write_bits(total, 36);
     }
-    for (crd::u8 b : digest) { out.push_back(b); }
+    for (crd::u8 b : digest)
+    {
+        out.push_back(b);
+    }
 
     // frames
     crd::containers::Array<crd::i64> cha(alloc);
@@ -340,7 +379,10 @@ crd::containers::Array<crd::u8> flac_encode(const AudioPcm& pcm, crd::memory::IA
         const crd::i64* sub_b = chb.data();
         crd::u32        bps_a = bps;
         crd::u32        bps_b = bps;
-        if (nch == 1) { plan_a = plan_subframe(alloc, cha.data(), block, bps); }
+        if (nch == 1)
+        {
+            plan_a = plan_subframe(alloc, cha.data(), block, bps);
+        }
         else
         {
             SubframePlan   ia;
@@ -371,7 +413,10 @@ crd::containers::Array<crd::u8> flac_encode(const AudioPcm& pcm, crd::memory::IA
                 best       = cost_rs;
                 assignment = 9;
             }
-            if (cost_ms < best) { assignment = 10; }
+            if (cost_ms < best)
+            {
+                assignment = 10;
+            }
             switch (assignment)
             {
             case 8: // L/S
@@ -425,17 +470,29 @@ crd::containers::Array<crd::u8> flac_encode(const AudioPcm& pcm, crd::memory::IA
             bw.write_bits(block - 1, 16);
             // header CRC-8 (the writer is byte-aligned here by construction)
             crd::u8 crc = 0;
-            for (crd::u8 b : frame) { crc = detail::crc8_update(crc, b); }
+            for (crd::u8 b : frame)
+            {
+                crc = detail::crc8_update(crc, b);
+            }
             bw.write_bits(crc, 8);
 
             write_subframe(bw, alloc, sub_a, block, bps_a, plan_a);
-            if (nch == 2) { write_subframe(bw, alloc, sub_b, block, bps_b, plan_b); }
+            if (nch == 2)
+            {
+                write_subframe(bw, alloc, sub_b, block, bps_b, plan_b);
+            }
             bw.align_zero();
             crd::u16 crc16 = 0;
-            for (crd::u8 b : frame) { crc16 = detail::crc16_update(crc16, b); }
+            for (crd::u8 b : frame)
+            {
+                crc16 = detail::crc16_update(crc16, b);
+            }
             bw.write_bits(crc16, 16);
         }
-        for (crd::u8 b : frame) { out.push_back(b); }
+        for (crd::u8 b : frame)
+        {
+            out.push_back(b);
+        }
     }
     return out;
 }

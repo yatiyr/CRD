@@ -61,14 +61,23 @@ bool verify_delaunay(const crd::containers::Array<Vec2<T>>& pts,
         const u32 c = tris[3U * t + 2U];
         // CCW check.
         const T o = crd::geometry::primitives::orient2d(pts[a], pts[b], pts[c]);
-        if (o <= static_cast<T>(0)) { return false; }
+        if (o <= static_cast<T>(0))
+        {
+            return false;
+        }
         // Empty-circumcircle: every other input point has incircle <= 0.
         for (u32 p = 0; p < pts.size(); ++p)
         {
-            if (p == a || p == b || p == c) { continue; }
+            if (p == a || p == b || p == c)
+            {
+                continue;
+            }
             const T s = crd::geometry::primitives::incircle(pts[a], pts[b], pts[c], pts[p]);
             // Tolerate cocircular (s == 0); reject strict > 0.
-            if (s > static_cast<T>(0)) { return false; }
+            if (s > static_cast<T>(0))
+            {
+                return false;
+            }
         }
     }
     return true;

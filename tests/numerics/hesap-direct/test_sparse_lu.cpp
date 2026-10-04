@@ -138,13 +138,21 @@ TEST_CASE("GP-LU 2D-grid Laplacian (residual)", "[lu][v5b-1]")
             const crd::u32 v = idx(r, c);
             tb.add(v, v, 4.0);
             if (r > 0)
+            {
                 tb.add(v, idx(r - 1, c), -1.0);
+            }
             if (r + 1 < w)
+            {
                 tb.add(v, idx(r + 1, c), -1.0);
+            }
             if (c > 0)
+            {
                 tb.add(v, idx(r, c - 1), -1.0);
+            }
             if (c + 1 < w)
+            {
                 tb.add(v, idx(r, c + 1), -1.0);
+            }
         }
     }
     Csr64 a = tb.compress();
@@ -164,7 +172,9 @@ TEST_CASE("GP-LU 2D-grid Laplacian (residual)", "[lu][v5b-1]")
     crd::containers::Array<crd::f64> x(&alloc);
     x.resize(nn);
     for (crd::u32 i = 0; i < nn; ++i)
+    {
         x[i] = b[i];
+    }
     REQUIRE(lu.solve({x.data(), nn}));
     CHECK(rel_resid(&alloc, a, x.data(), b.data()) < 1e-10);
 }
@@ -253,9 +263,13 @@ TEST_CASE("GP-LU complex (Complex64) residual", "[lu][v5b-1][complex]")
     {
         tb.add(i, i, C{static_cast<crd::f64>(n + 2), 1.0});
         if (i + 1 < n)
+        {
             tb.add(i, i + 1, C{1.0, -0.5});
+        }
         if (i > 0)
+        {
             tb.add(i, i - 1, C{-2.0, 0.3});
+        }
     }
     auto a = tb.compress();
     auto acsc = sp::to_csc<C>(a, &alloc);
@@ -274,7 +288,9 @@ TEST_CASE("GP-LU complex (Complex64) residual", "[lu][v5b-1][complex]")
     crd::containers::Array<C> x(&alloc);
     x.resize(n);
     for (crd::u32 i = 0; i < n; ++i)
+    {
         x[i] = b[i];
+    }
     REQUIRE(lu.solve({x.data(), n}));
     double err = 0.0;
     for (crd::u32 i = 0; i < n; ++i)
@@ -296,7 +312,9 @@ TEST_CASE("GP-LU is run-to-run deterministic (a fixed matrix is a pure function)
     crd::containers::Array<crd::f64> b(&alloc);
     b.resize(n);
     for (crd::u32 i = 0; i < n; ++i)
+    {
         b[i] = 1.0 + static_cast<crd::f64>(i % 7);
+    }
 
     crd::containers::Array<crd::f64> x1(&alloc);
     crd::containers::Array<crd::f64> x2(&alloc);

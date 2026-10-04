@@ -221,7 +221,10 @@ TEST_CASE("ceir 23c-e: quantize_q8_0 rounding cross-check - amax scale, half-awa
         INFO("ctrl j=" << j);
         CHECK(cb[0].qs[j] == exp[j]);
     }
-    for (crd::u32 j = 12U; j < 32U; ++j) { CHECK(cb[0].qs[j] == 0); } // exact zeros stay zero
+    for (crd::u32 j = 12U; j < 32U; ++j) // exact zeros stay zero
+    {
+        CHECK(cb[0].qs[j] == 0);
+    }
 
     // ── varied blocks (distinct per-block amax) — the f16 scale encode is EXACT and the round-trip stays within the derived
     //    quantization bound |x − qs·d_f16| ≤ d/2 + 127·|d − d_f16| (the ±½-step floor plus the f16 scale slack). ──
@@ -245,7 +248,10 @@ TEST_CASE("ceir 23c-e: quantize_q8_0 rounding cross-check - amax scale, half-awa
     for (crd::u32 b = 0; b < nblk; ++b)
     {
         crd::f32 amax = 0.0F;
-        for (crd::u32 j = 0; j < 32U; ++j) { amax = absf(x[b * 32U + j]) > amax ? absf(x[b * 32U + j]) : amax; }
+        for (crd::u32 j = 0; j < 32U; ++j)
+        {
+            amax = absf(x[b * 32U + j]) > amax ? absf(x[b * 32U + j]) : amax;
+        }
         const crd::f32 d = amax / 127.0F;
         CHECK(blk[b].d == f32_to_f16_bits(d)); // the f16 scale encoding is exact (independent amax → d)
         const crd::f32 df16 = f16_bits_to_f32(blk[b].d);

@@ -326,12 +326,30 @@ void flood_fill_outside(VoxelGrid& grid, crd::memory::IAllocator* alloc) noexcep
     {
         const VoxelIndex v = stack.back();
         stack.pop_back();
-        if (v.ix > 0U)              { try_push(v.ix - 1U, v.iy,      v.iz); }
-        if (v.ix + 1U < grid.nx())  { try_push(v.ix + 1U, v.iy,      v.iz); }
-        if (v.iy > 0U)              { try_push(v.ix,      v.iy - 1U, v.iz); }
-        if (v.iy + 1U < grid.ny())  { try_push(v.ix,      v.iy + 1U, v.iz); }
-        if (v.iz > 0U)              { try_push(v.ix,      v.iy,      v.iz - 1U); }
-        if (v.iz + 1U < grid.nz())  { try_push(v.ix,      v.iy,      v.iz + 1U); }
+        if (v.ix > 0U)
+        {
+            try_push(v.ix - 1U, v.iy,      v.iz);
+        }
+        if (v.ix + 1U < grid.nx())
+        {
+            try_push(v.ix + 1U, v.iy,      v.iz);
+        }
+        if (v.iy > 0U)
+        {
+            try_push(v.ix,      v.iy - 1U, v.iz);
+        }
+        if (v.iy + 1U < grid.ny())
+        {
+            try_push(v.ix,      v.iy + 1U, v.iz);
+        }
+        if (v.iz > 0U)
+        {
+            try_push(v.ix,      v.iy,      v.iz - 1U);
+        }
+        if (v.iz + 1U < grid.nz())
+        {
+            try_push(v.ix,      v.iy,      v.iz + 1U);
+        }
     }
 }
 

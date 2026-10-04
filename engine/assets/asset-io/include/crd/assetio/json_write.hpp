@@ -92,7 +92,10 @@ public:
 private:
     void comma()
     {
-        if (!m_first) { m_out.append(","); }
+        if (!m_first)
+        {
+            m_out.append(",");
+        }
         m_first = false;
     }
 
@@ -107,12 +110,30 @@ private:
         {
             const char c = s[i];
             const auto u = static_cast<unsigned char>(c);
-            if (c == '"') { m_out.append("\\\""); }
-            else if (c == '\\') { m_out.append("\\\\"); }
-            else if (u >= 0x20U) { m_out.push_back(c); } // UTF-8 bytes pass through verbatim
-            else if (c == '\n') { m_out.append("\\n"); }
-            else if (c == '\t') { m_out.append("\\t"); }
-            else if (c == '\r') { m_out.append("\\r"); }
+            if (c == '"')
+            {
+                m_out.append("\\\"");
+            }
+            else if (c == '\\')
+            {
+                m_out.append("\\\\");
+            }
+            else if (u >= 0x20U) // UTF-8 bytes pass through verbatim
+            {
+                m_out.push_back(c);
+            }
+            else if (c == '\n')
+            {
+                m_out.append("\\n");
+            }
+            else if (c == '\t')
+            {
+                m_out.append("\\t");
+            }
+            else if (c == '\r')
+            {
+                m_out.append("\\r");
+            }
             else
             {
                 char b[8];

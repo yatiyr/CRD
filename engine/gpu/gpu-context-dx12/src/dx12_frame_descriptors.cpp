@@ -35,18 +35,27 @@ HRESULT Dx12FrameDescriptors::reserve(UINT count, Dx12DescriptorRange& out) noex
     {
         return E_INVALIDARG;
     }
-    if (count > m_limits.maximum_page || count > m_limits.total_slots - m_used) { return E_OUTOFMEMORY; }
+    if (count > m_limits.maximum_page || count > m_limits.total_slots - m_used)
+    {
+        return E_OUTOFMEMORY;
+    }
 
     Page* page = m_current;
     if (page == nullptr || count > page->capacity - page->used)
     {
         // Append only to unwritten tails. Switching back to an older page is safe; its published slots stay intact.
         page = m_head;
-        while (page != nullptr && count > page->capacity - page->used) { page = page->next; }
+        while (page != nullptr && count > page->capacity - page->used)
+        {
+            page = page->next;
+        }
         if (page == nullptr)
         {
             const UINT available = m_limits.total_slots - m_capacity;
-            if (count > available) { return E_OUTOFMEMORY; }
+            if (count > available)
+            {
+                return E_OUTOFMEMORY;
+            }
             UINT capacity = m_current != nullptr ? m_current->capacity : m_limits.initial_page;
             if (m_current != nullptr && capacity < m_limits.maximum_page)
             {
@@ -56,9 +65,15 @@ HRESULT Dx12FrameDescriptors::reserve(UINT count, Dx12DescriptorRange& out) noex
             {
                 capacity = capacity <= m_limits.maximum_page / 2U ? capacity * 2U : m_limits.maximum_page;
             }
-            if (capacity > available) { capacity = available; }
+            if (capacity > available)
+            {
+                capacity = available;
+            }
             void* storage = m_allocator->try_allocate(sizeof(Page), alignof(Page));
-            if (storage == nullptr) { return E_OUTOFMEMORY; }
+            if (storage == nullptr)
+            {
+                return E_OUTOFMEMORY;
+            }
             page = std::construct_at(static_cast<Page*>(storage));
             D3D12_DESCRIPTOR_HEAP_DESC desc{};
             desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -97,7 +112,10 @@ void Dx12FrameDescriptors::reset_after_retirement() noexcept
     for (Page* page = m_head; page != nullptr; page = page->next)
     {
         page->used = 0U;
-        if (m_current == nullptr || page->capacity > m_current->capacity) { m_current = page; }
+        if (m_current == nullptr || page->capacity > m_current->capacity)
+        {
+            m_current = page;
+        }
     }
     m_used = 0U;
 }

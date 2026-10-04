@@ -17,37 +17,99 @@ namespace
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
 [[nodiscard]] bool verify_all_reduce(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("mesh");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("fn");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("mesh");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("fn");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_mesh(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 0U) { return false; }
-    if (op.num_results() != 0U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("name");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("shape");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String) { return false; } }
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 0U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("name");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("shape");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
     return true;
 }
 [[nodiscard]] bool verify_shard(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_operands() != 1U) { return false; }
-    if (op.num_results() != 1U) { return false; }
-    if (op.num_regions() != 0U) { return false; }
-    { const AttrId a = op.attr("mesh");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef) { return false; } }
-    { const AttrId a = op.attr("axis");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
-    { const AttrId a = op.attr("mesh_axis");
-      if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int) { return false; } }
+    if (op.num_operands() != 1U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("mesh");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::SymbolRef)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("axis");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    {
+        const AttrId a = op.attr("mesh_axis");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace

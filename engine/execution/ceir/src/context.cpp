@@ -17,7 +17,10 @@ namespace
     {
         const unsigned char ca = static_cast<unsigned char>(a[i]);
         const unsigned char cb = static_cast<unsigned char>(b[i]);
-        if (ca != cb) { return ca < cb; }
+        if (ca != cb)
+        {
+            return ca < cb;
+        }
     }
     return a.size() < b.size();
 }
@@ -38,19 +41,31 @@ OpId Context::intern_op(containers::StringView dialect, containers::StringView n
     const usize n = dialect.size() + 1U + name.size();
     CRD_ASSERT_MSG(n < sizeof(buf), "ceir op name too long (the loaders reject such a name before interning)");
     usize k = 0;
-    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    for (usize i = 0; i < dialect.size(); ++i)
+    {
+        buf[k++] = dialect[i];
+    }
     buf[k++] = '.';
-    for (usize i = 0; i < name.size(); ++i) { buf[k++] = name[i]; }
+    for (usize i = 0; i < name.size(); ++i)
+    {
+        buf[k++] = name[i];
+    }
     buf[k] = '\0';
 
     const u64 h = containers::hash_string(buf, n);
     for (usize i = 0; i < m_op_names.size(); ++i)
     {
-        if (m_op_names[i].hash == h) { return OpId{h}; } // already interned — no arena/heap churn
+        if (m_op_names[i].hash == h) // already interned — no arena/heap churn
+        {
+            return OpId{h};
+        }
     }
     // New kind: copy the name into the arena and record it (reverse lookup for diagnostics).
     char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
-    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    for (usize i = 0; i <= n; ++i)
+    {
+        stored[i] = buf[i];
+    }
     m_op_names.push_back(OpName{h, containers::StringView(stored, n)});
     return OpId{h};
 }
@@ -59,7 +74,10 @@ containers::StringView Context::op_name(OpId id) const noexcept
 {
     for (usize i = 0; i < m_op_names.size(); ++i)
     {
-        if (m_op_names[i].hash == id.value) { return m_op_names[i].name; }
+        if (m_op_names[i].hash == id.value)
+        {
+            return m_op_names[i].name;
+        }
     }
     return containers::StringView{};
 }
@@ -71,18 +89,30 @@ TypeClassId Context::intern_type_class(containers::StringView dialect, container
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
     CRD_ASSERT_MSG(n < sizeof(buf), "intern_type_class: dialect.class too long");
-    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    for (usize i = 0; i < dialect.size(); ++i)
+    {
+        buf[k++] = dialect[i];
+    }
     buf[k++] = '.';
-    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    for (usize i = 0; i < cls.size(); ++i)
+    {
+        buf[k++] = cls[i];
+    }
     buf[k] = '\0';
 
     const u64 h = containers::hash_string(buf, n);
     for (usize i = 0; i < m_type_class_names.size(); ++i)
     {
-        if (m_type_class_names[i].hash == h) { return TypeClassId{h}; } // already interned — no churn
+        if (m_type_class_names[i].hash == h) // already interned — no churn
+        {
+            return TypeClassId{h};
+        }
     }
     char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
-    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    for (usize i = 0; i <= n; ++i)
+    {
+        stored[i] = buf[i];
+    }
     m_type_class_names.push_back(OpName{h, containers::StringView(stored, n)});
     return TypeClassId{h};
 }
@@ -91,7 +121,10 @@ containers::StringView Context::type_class_name(TypeClassId id) const noexcept
 {
     for (usize i = 0; i < m_type_class_names.size(); ++i)
     {
-        if (m_type_class_names[i].hash == id.value) { return m_type_class_names[i].name; }
+        if (m_type_class_names[i].hash == id.value)
+        {
+            return m_type_class_names[i].name;
+        }
     }
     return containers::StringView{};
 }
@@ -105,7 +138,10 @@ const TypeClassInfo* Context::type_class_info(TypeClassId id) const noexcept
 bool Context::verify_extern(const Type& t) const noexcept
 {
     const TypeClassInfo* const info = type_class_info(t.type_class);
-    if (info == nullptr || info->verify == nullptr) { return true; } // unregistered / no hook ⇒ preserve (U-§56)
+    if (info == nullptr || info->verify == nullptr) // unregistered / no hook ⇒ preserve (U-§56)
+    {
+        return true;
+    }
     return info->verify(*this, t);
 }
 
@@ -116,7 +152,10 @@ TypeId Context::type_extern(TypeClassId cls, const Type& params)
     t.type_class = cls;
     // A registered class stamps its CURRENT schema version (authoritative); an unregistered class keeps the caller's
     // (the decoder path sets it from the blob for a preserved unknown type — this factory path is for known classes).
-    if (const TypeClassInfo* const info = type_class_info(cls)) { t.type_class_version = info->version; }
+    if (const TypeClassInfo* const info = type_class_info(cls))
+    {
+        t.type_class_version = info->version;
+    }
     // ⛔ the FACTORY boundary asserts (builder misuse = programmer error); the decoder/parser use verify_extern + reject.
     CRD_ASSERT_MSG(verify_extern(t), "type_extern: the type-class verify hook rejected this instance");
     return intern_type(t);
@@ -132,9 +171,15 @@ Module* Context::create_module(RegionKind body_kind)
 
 containers::StringView Context::intern_symbol(containers::StringView name)
 {
-    if (name.empty()) { return {}; }
+    if (name.empty())
+    {
+        return {};
+    }
     char* const stored = static_cast<char*>(m_arena.allocate(name.size(), 1U));
-    for (usize i = 0; i < name.size(); ++i) { stored[i] = name[i]; }
+    for (usize i = 0; i < name.size(); ++i)
+    {
+        stored[i] = name[i];
+    }
     return containers::StringView(stored, name.size());
 }
 
@@ -145,7 +190,10 @@ AttrId Context::intern_attr(const AttrValue& v)
     CRD_ASSERT_MSG(attr_is_canonical(v), "intern_attr: non-canonical attribute value");
     for (usize i = 0; i < m_attr_values.size(); ++i)
     {
-        if (m_attr_values[i] == v) { return AttrId{static_cast<u32>(i + 1U)}; } // dedup by value (element-wise for aggregates)
+        if (m_attr_values[i] == v) // dedup by value (element-wise for aggregates)
+        {
+            return AttrId{static_cast<u32>(i + 1U)};
+        }
     }
     AttrValue stored = v;
     // deep-stabilize the borrowed aggregate spans into the arena (like intern_type's child span); scalars/wrappers carry
@@ -153,14 +201,20 @@ AttrId Context::intern_attr(const AttrValue& v)
     if (v.elems.size() > 0U)
     {
         auto* const e = static_cast<AttrId*>(m_arena.allocate(v.elems.size() * sizeof(AttrId), alignof(AttrId)));
-        for (usize i = 0; i < v.elems.size(); ++i) { e[i] = v.elems[i]; }
+        for (usize i = 0; i < v.elems.size(); ++i)
+        {
+            e[i] = v.elems[i];
+        }
         stored.elems = containers::ConstSpan<AttrId>(e, v.elems.size());
     }
     if (v.keys.size() > 0U)
     {
         auto* const k = static_cast<containers::StringView*>(
             m_arena.allocate(v.keys.size() * sizeof(containers::StringView), alignof(containers::StringView)));
-        for (usize i = 0; i < v.keys.size(); ++i) { k[i] = intern_symbol(v.keys[i]); }
+        for (usize i = 0; i < v.keys.size(); ++i)
+        {
+            k[i] = intern_symbol(v.keys[i]);
+        }
         stored.keys = containers::ConstSpan<containers::StringView>(k, v.keys.size());
     }
     m_attr_values.push_back(stored);
@@ -207,7 +261,10 @@ AttrId Context::attr_typed(TypeId ty, AttrId value)
 AttrId Context::attr_extern(AttrClassId cls, AttrId value)
 {
     u32 ver = 0U;
-    if (const AttrClassInfo* const info = attr_class_info(cls)) { ver = info->version; } // registered class stamps its version
+    if (const AttrClassInfo* const info = attr_class_info(cls)) // registered class stamps its version
+    {
+        ver = info->version;
+    }
     const AttrValue v = AttrValue::of_extern(cls, ver, value);
     CRD_ASSERT_MSG(verify_attr_extern(v), "attr_extern: the class verify hook rejected the value (or a wrapper payload)");
     return intern_attr(v);
@@ -220,17 +277,29 @@ AttrClassId Context::intern_attr_class(containers::StringView dialect, container
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
     CRD_ASSERT_MSG(n < sizeof(buf), "intern_attr_class: dialect.attr too long");
-    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    for (usize i = 0; i < dialect.size(); ++i)
+    {
+        buf[k++] = dialect[i];
+    }
     buf[k++] = '.';
-    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    for (usize i = 0; i < cls.size(); ++i)
+    {
+        buf[k++] = cls[i];
+    }
     buf[k] = '\0';
     const u64 h = containers::hash_string(buf, n);
     for (usize i = 0; i < m_attr_class_names.size(); ++i)
     {
-        if (m_attr_class_names[i].hash == h) { return AttrClassId{h}; }
+        if (m_attr_class_names[i].hash == h)
+        {
+            return AttrClassId{h};
+        }
     }
     char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
-    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    for (usize i = 0; i <= n; ++i)
+    {
+        stored[i] = buf[i];
+    }
     m_attr_class_names.push_back(OpName{h, containers::StringView(stored, n)});
     return AttrClassId{h};
 }
@@ -239,7 +308,10 @@ containers::StringView Context::attr_class_name(AttrClassId id) const noexcept
 {
     for (usize i = 0; i < m_attr_class_names.size(); ++i)
     {
-        if (m_attr_class_names[i].hash == id.value) { return m_attr_class_names[i].name; }
+        if (m_attr_class_names[i].hash == id.value)
+        {
+            return m_attr_class_names[i].name;
+        }
     }
     return containers::StringView{};
 }
@@ -257,12 +329,18 @@ bool Context::verify_attr_extern(const AttrValue& v) const noexcept
     if (v.kind == AttrKind::TypedConst || v.kind == AttrKind::Extern)
     {
         const AttrValue pv = attr_value(v.payload);
-        if (pv.kind == AttrKind::TypedConst || pv.kind == AttrKind::Extern) { return false; }
+        if (pv.kind == AttrKind::TypedConst || pv.kind == AttrKind::Extern)
+        {
+            return false;
+        }
     }
     if (v.kind == AttrKind::Extern)
     {
         const AttrClassInfo* const info = attr_class_info(v.attr_class);
-        if (info != nullptr && info->verify != nullptr) { return info->verify(*this, v); }
+        if (info != nullptr && info->verify != nullptr)
+        {
+            return info->verify(*this, v);
+        }
     }
     return true;
 }
@@ -275,17 +353,29 @@ LocationClassId Context::intern_location_class(containers::StringView dialect, c
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
     CRD_ASSERT_MSG(n < sizeof(buf), "intern_location_class: dialect.location too long");
-    for (usize i = 0; i < dialect.size(); ++i) { buf[k++] = dialect[i]; }
+    for (usize i = 0; i < dialect.size(); ++i)
+    {
+        buf[k++] = dialect[i];
+    }
     buf[k++] = '.';
-    for (usize i = 0; i < cls.size(); ++i) { buf[k++] = cls[i]; }
+    for (usize i = 0; i < cls.size(); ++i)
+    {
+        buf[k++] = cls[i];
+    }
     buf[k] = '\0';
     const u64 h = containers::hash_string(buf, n);
     for (usize i = 0; i < m_location_class_names.size(); ++i)
     {
-        if (m_location_class_names[i].hash == h) { return LocationClassId{h}; }
+        if (m_location_class_names[i].hash == h)
+        {
+            return LocationClassId{h};
+        }
     }
     char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
-    for (usize i = 0; i <= n; ++i) { stored[i] = buf[i]; }
+    for (usize i = 0; i <= n; ++i)
+    {
+        stored[i] = buf[i];
+    }
     m_location_class_names.push_back(OpName{h, containers::StringView(stored, n)});
     return LocationClassId{h};
 }
@@ -294,7 +384,10 @@ containers::StringView Context::location_class_name(LocationClassId id) const no
 {
     for (usize i = 0; i < m_location_class_names.size(); ++i)
     {
-        if (m_location_class_names[i].hash == id.value) { return m_location_class_names[i].name; }
+        if (m_location_class_names[i].hash == id.value)
+        {
+            return m_location_class_names[i].name;
+        }
     }
     return containers::StringView{};
 }
@@ -319,34 +412,58 @@ ResourceClass Context::effect_resource_class(const EffectRecord& e) const noexce
 
 bool Context::effect_location_valid(const EffectRecord& e) const noexcept
 {
-    if (e.target != EffectTarget::Extern) { return true; }
+    if (e.target != EffectTarget::Extern)
+    {
+        return true;
+    }
     const LocationClassInfo* const info = location_class_info(e.location_class);
-    if (info != nullptr && info->verify != nullptr) { return info->verify(*this, e); }
+    if (info != nullptr && info->verify != nullptr)
+    {
+        return info->verify(*this, e);
+    }
     return true; // unregistered / no hook ⇒ preserve (the analysis treats an unregistered class as Universe)
 }
 
 // ── CEIR-8d (ADR-0114) stable semantic identity — module-scoped, pre-order, idempotent assignment ──
 void Context::stable_id_scan_max(Region* r, u64& mx) const noexcept
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (op->m_stable_id.value > mx) { mx = op->m_stable_id.value; }
-            for (u32 i = 0; i < op->num_regions(); ++i) { stable_id_scan_max(op->region(i), mx); }
+            if (op->m_stable_id.value > mx)
+            {
+                mx = op->m_stable_id.value;
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                stable_id_scan_max(op->region(i), mx);
+            }
         }
     }
 }
 void Context::stable_id_assign_unset(Region* r, u64& next) const noexcept
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (!op->m_stable_id.valid()) { op->m_stable_id = StableId{next++}; } // one-time; never re-derive an assigned id
-            for (u32 i = 0; i < op->num_regions(); ++i) { stable_id_assign_unset(op->region(i), next); }
+            if (!op->m_stable_id.valid()) // one-time; never re-derive an assigned id
+            {
+                op->m_stable_id = StableId{next++};
+            }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                stable_id_assign_unset(op->region(i), next);
+            }
         }
     }
 }
@@ -357,31 +474,46 @@ void Context::assign_stable_ids(const Module& m) const noexcept
     // ⛔ CEIR-8d id-reuse guard (advisor pre-close): draw NEW ids from the WATERMARK too, not just the live max — a
     // tombstoned (erased) op is invisible to the scan, so without this a later op would reuse the dead op's id and the
     // §2.7 delete/re-add discriminator would silently pass (state corruption). Identity is monotone per module.
-    if (m.m_stable_id_watermark > mx) { mx = m.m_stable_id_watermark; }
+    if (m.m_stable_id_watermark > mx)
+    {
+        mx = m.m_stable_id_watermark;
+    }
     u64 next = mx + 1U;
     stable_id_assign_unset(m.body(), next);
     m.m_stable_id_watermark = next - 1U; // the new high-water mark (>= the old one — monotone)
 }
 void Context::set_stable_id(Operation* op, StableId id) noexcept
 {
-    if (op != nullptr) { op->m_stable_id = id; } // deserialization-only (the STID loader); Context is a friend of Operation
+    if (op != nullptr) // deserialization-only (the STID loader); Context is a friend of Operation
+    {
+        op->m_stable_id = id;
+    }
 }
 void Context::set_stable_id_watermark(Module* m, u64 watermark) noexcept
 {
-    if (m != nullptr) { m->m_stable_id_watermark = watermark; } // deserialization-only: restore the monotone high-water mark
+    if (m != nullptr) // deserialization-only: restore the monotone high-water mark
+    {
+        m->m_stable_id_watermark = watermark;
+    }
 }
 void Context::pin_stable_id(Operation* op, StableId id) noexcept
 {
     // ADR-0128 D3 lowering-time pin (CEIR-32e) — NOT the deserialization-only set_stable_id. The caller keeps `id` in a
     // reserved LOW band + calls reserve_stable_id_floor, so assign_stable_ids leaves this (valid) id alone and draws the
     // sequential ids ABOVE the band. Uniqueness among pins is the caller's contract (a dup corrupts the migration key).
-    if (op != nullptr) { op->m_stable_id = id; }
+    if (op != nullptr)
+    {
+        op->m_stable_id = id;
+    }
 }
 void Context::reserve_stable_id_floor(Module* m, u64 floor) noexcept
 {
     // ADR-0128 D3 lowering-time reserve (CEIR-32e) — a MONOTONE raise (never lowers a live watermark), so assign_stable_ids
     // assigns every unset op an id strictly above the CHIR-pinned band. Distinct from set_stable_id_watermark (restore).
-    if (m != nullptr && floor > m->m_stable_id_watermark) { m->m_stable_id_watermark = floor; }
+    if (m != nullptr && floor > m->m_stable_id_watermark)
+    {
+        m->m_stable_id_watermark = floor;
+    }
 }
 
 // ── CEIR-8i (ADR-0119) transaction support — inverse/rebuild atoms the `Transaction` recorder routes through ──
@@ -390,15 +522,24 @@ namespace
 // Pre-order (block args → op results, recursing regions — the printer/STID order) search for the op carrying `id`.
 [[nodiscard]] const Operation* find_sid(Region* r, StableId id) noexcept
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (op->stable_id() == id) { return op; }
+            if (op->stable_id() == id)
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (const Operation* const hit = find_sid(op->region(i), id)) { return hit; }
+                if (const Operation* const hit = find_sid(op->region(i), id))
+                {
+                    return hit;
+                }
             }
         }
     }
@@ -408,15 +549,24 @@ namespace
 // (nullptr ⇒ clean). Reuses the shared detail::register_symbol path (never a second registration path).
 [[nodiscard]] const Operation* resync_walk(Region* r, Context& ctx, Module& m) noexcept
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (!detail::register_symbol(ctx, m, op)) { return op; }
+            if (!detail::register_symbol(ctx, m, op))
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (const Operation* const dup = resync_walk(op->region(i), ctx, m)) { return dup; }
+                if (const Operation* const dup = resync_walk(op->region(i), ctx, m))
+                {
+                    return dup;
+                }
             }
         }
     }
@@ -427,7 +577,10 @@ namespace
 void Context::reinsert_erased_op(Operation* op, Block* block, Operation* before,
                                  containers::ConstSpan<Value*> operands) noexcept
 {
-    if (op == nullptr) { return; }
+    if (op == nullptr)
+    {
+        return;
+    }
     // erase() left the operand array + Use slots allocated (arena) but zeroed the count and nulled each Use.value; restore
     // the count and re-thread the recorded operand values into those same slots (re-adding each to its value's use-list).
     op->m_num_operands = static_cast<u32>(operands.size());
@@ -436,23 +589,41 @@ void Context::reinsert_erased_op(Operation* op, Block* block, Operation* before,
         Use& u  = op->m_operands[i];
         u.owner = op;
         u.value = operands[i];
-        if (operands[i] != nullptr) { operands[i]->add_use(&u); }
+        if (operands[i] != nullptr)
+        {
+            operands[i]->add_use(&u);
+        }
     }
     op->m_erased = false;
-    if (block != nullptr) { block->insert_before(op, before); } // before == nullptr ⇒ append (Block::insert_before)
+    if (block != nullptr) // before == nullptr ⇒ append (Block::insert_before)
+    {
+        block->insert_before(op, before);
+    }
 }
 
 void Context::detach_and_point_use(Use* u, Value* value) noexcept
 {
-    if (u == nullptr) { return; }
-    if (u->value != nullptr) { u->value->remove_use(u); } // unlink from its current value's list (nulls u->value/next/prev)
+    if (u == nullptr)
+    {
+        return;
+    }
+    if (u->value != nullptr) // unlink from its current value's list (nulls u->value/next/prev)
+    {
+        u->value->remove_use(u);
+    }
     u->value = value;
-    if (value != nullptr) { value->add_use(u); }
+    if (value != nullptr)
+    {
+        value->add_use(u);
+    }
 }
 
 void Context::rauw_recording(Value* from, Value* to, containers::Array<Use*>& moved)
 {
-    if (from == nullptr || from == to) { return; }
+    if (from == nullptr || from == to)
+    {
+        return;
+    }
     while (from->m_first_use != nullptr) // friend read; detach advances the head so the loop terminates
     {
         Use* const u = from->m_first_use;
@@ -463,7 +634,10 @@ void Context::rauw_recording(Value* from, Value* to, containers::Array<Use*>& mo
 
 void Context::restore_attr_dict(Operation* op, NamedAttr* dict, u32 count) noexcept
 {
-    if (op == nullptr) { return; }
+    if (op == nullptr)
+    {
+        return;
+    }
     op->m_attrs     = dict;  // the prior (Context-arena) snapshot BECOMES live module state (must outlive the Transaction)
     op->m_num_attrs = count; // dict == nullptr / count == 0 restores a no-attr op
 }
@@ -485,7 +659,10 @@ bool Context::resync_symbols(Module& m, const Operation*& first_dup)
 
 const Operation* Context::find_by_stable_id(const Module& m, StableId id) const noexcept
 {
-    if (!id.valid()) { return nullptr; }
+    if (!id.valid())
+    {
+        return nullptr;
+    }
     return find_sid(m.body(), id);
 }
 
@@ -495,7 +672,10 @@ CapabilityId Context::intern_capability(containers::StringView name)
     const u64 h = containers::hash_string(name.data(), name.size()); // the InterfaceId FNV shape — no verify/version
     for (usize i = 0; i < m_capability_names.size(); ++i)
     {
-        if (m_capability_names[i].hash == h) { return CapabilityId{h}; }
+        if (m_capability_names[i].hash == h)
+        {
+            return CapabilityId{h};
+        }
     }
     m_capability_names.push_back(OpName{h, intern_symbol(name)});
     return CapabilityId{h};
@@ -505,7 +685,10 @@ containers::StringView Context::capability_name(CapabilityId id) const noexcept
 {
     for (usize i = 0; i < m_capability_names.size(); ++i)
     {
-        if (m_capability_names[i].hash == id.value) { return m_capability_names[i].name; }
+        if (m_capability_names[i].hash == id.value)
+        {
+            return m_capability_names[i].name;
+        }
     }
     return containers::StringView{};
 }
@@ -516,18 +699,30 @@ namespace
 // callee; no call-resolution / "transitive" machinery. An UNREGISTERED op contributes `external.process` (EMPTY≠UNKNOWN).
 void gather_program_caps(const Context& ctx, Region* r, containers::Array<CapabilityId>& out, CapabilityId external_process)
 {
-    if (r == nullptr) { return; }
+    if (r == nullptr)
+    {
+        return;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.op_info(op->kind()) == nullptr) { out.push_back(external_process); }
+            if (ctx.op_info(op->kind()) == nullptr)
+            {
+                out.push_back(external_process);
+            }
             else
             {
                 const containers::ConstSpan<CapabilityId> caps = ctx.op_capabilities(op->kind());
-                for (usize i = 0; i < caps.size(); ++i) { out.push_back(caps[i]); }
+                for (usize i = 0; i < caps.size(); ++i)
+                {
+                    out.push_back(caps[i]);
+                }
             }
-            for (u32 i = 0; i < op->num_regions(); ++i) { gather_program_caps(ctx, op->region(i), out, external_process); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                gather_program_caps(ctx, op->region(i), out, external_process);
+            }
         }
     }
 }
@@ -554,17 +749,29 @@ void Context::program_capabilities(const Module& m, containers::Array<Capability
     usize w = 0;
     for (usize i = 0; i < out.size(); ++i)
     {
-        if (w == 0U || !(out[w - 1U] == out[i])) { out[w++] = out[i]; }
+        if (w == 0U || !(out[w - 1U] == out[i]))
+        {
+            out[w++] = out[i];
+        }
     }
-    while (out.size() > w) { out.pop_back(); }
+    while (out.size() > w)
+    {
+        out.pop_back();
+    }
 }
 
 SafetyBits Context::op_safety(OpId kind) const noexcept
 {
     const OpInfo* const info = op_info(kind);
-    if (info == nullptr) { return {true, true, true}; } // ⛔ EMPTY≠UNKNOWN: unregistered ⇒ maximally unsafe
+    if (info == nullptr) // ⛔ EMPTY≠UNKNOWN: unregistered ⇒ maximally unsafe
+    {
+        return {true, true, true};
+    }
     SafetyBits s{false, false, false};
-    for (u32 i = 0; i < info->num_effects; ++i) { s = s.merged(effect_safety(info->effects[i].family)); }
+    for (u32 i = 0; i < info->num_effects; ++i)
+    {
+        s = s.merged(effect_safety(info->effects[i].family));
+    }
     return s; // a registered EFFECT-FREE op ⇒ all-false ⇒ realtime_safe (genuinely declared no effects)
 }
 
@@ -574,15 +781,24 @@ bool Context::capabilities_satisfied(containers::ConstSpan<CapabilityId> require
     for (usize i = 0; i < required.size(); ++i)
     {
         bool found = false;
-        for (usize j = 0; j < granted.size() && !found; ++j) { found = required[i] == granted[j]; }
-        if (!found) { return false; } // an ungranted required capability ⇒ the host must NOT run this program
+        for (usize j = 0; j < granted.size() && !found; ++j)
+        {
+            found = required[i] == granted[j];
+        }
+        if (!found) // an ungranted required capability ⇒ the host must NOT run this program
+        {
+            return false;
+        }
     }
     return true;
 }
 
 AttrValue Context::attr_value(AttrId id) const noexcept
 {
-    if (!id.valid() || id.value > m_attr_values.size()) { return AttrValue::of_int(0); }
+    if (!id.valid() || id.value > m_attr_values.size())
+    {
+        return AttrValue::of_int(0);
+    }
     return m_attr_values[id.value - 1U];
 }
 
@@ -602,7 +818,10 @@ void Context::set_attr(Operation* op, containers::StringView name, AttrId value)
     }
     const u32        n     = op->m_num_attrs; // grow by rebuild (old slice leaks into the arena — operand-grow policy)
     NamedAttr* const grown = memory::construct_array<NamedAttr>(m_arena, n + 1U);
-    for (u32 k = 0; k < n; ++k) { grown[k] = op->m_attrs[k]; }
+    for (u32 k = 0; k < n; ++k)
+    {
+        grown[k] = op->m_attrs[k];
+    }
     grown[n]        = NamedAttr{intern_symbol(name), value};
     op->m_attrs     = grown;
     op->m_num_attrs = n + 1U;
@@ -620,21 +839,30 @@ TypeId Context::intern_type(const Type& t)
     CRD_ASSERT_MSG(type_is_canonical(t), "intern_type: non-canonical or structurally-invalid type");
     for (usize i = 0; i < m_types.size(); ++i)
     {
-        if (m_types[i] == t) { return TypeId{static_cast<u32>(i + 1U)}; } // dedup by structural equality (content)
+        if (m_types[i] == t) // dedup by structural equality (content)
+        {
+            return TypeId{static_cast<u32>(i + 1U)};
+        }
     }
     Type stored = t;
     stored.name = intern_symbol(t.name); // arena-stable name (empty stays empty)
     if (!t.members.empty())
     {
         TypeId* const dst = memory::construct_array<TypeId>(m_arena, static_cast<u32>(t.members.size()));
-        for (usize i = 0; i < t.members.size(); ++i) { dst[i] = t.members[i]; }
+        for (usize i = 0; i < t.members.size(); ++i)
+        {
+            dst[i] = t.members[i];
+        }
         stored.members = containers::ConstSpan<TypeId>(dst, t.members.size());
     }
     if (!t.labels.empty())
     {
         containers::StringView* const dst =
             memory::construct_array<containers::StringView>(m_arena, static_cast<u32>(t.labels.size()));
-        for (usize i = 0; i < t.labels.size(); ++i) { dst[i] = intern_symbol(t.labels[i]); }
+        for (usize i = 0; i < t.labels.size(); ++i)
+        {
+            dst[i] = intern_symbol(t.labels[i]);
+        }
         stored.labels = containers::ConstSpan<containers::StringView>(dst, t.labels.size());
     }
     m_types.push_back(stored);
@@ -775,8 +1003,14 @@ TypeId Context::type_trait(containers::StringView name, containers::ConstSpan<Ty
 TypeId Context::type_callable(containers::ConstSpan<TypeId> params, containers::ConstSpan<TypeId> results)
 {
     containers::Array<TypeId> all(allocator()); // members = params ++ results; count = param count (results follow)
-    for (usize i = 0; i < params.size(); ++i) { all.push_back(params[i]); }
-    for (usize i = 0; i < results.size(); ++i) { all.push_back(results[i]); }
+    for (usize i = 0; i < params.size(); ++i)
+    {
+        all.push_back(params[i]);
+    }
+    for (usize i = 0; i < results.size(); ++i)
+    {
+        all.push_back(results[i]);
+    }
     Type t    = Type::scalar(TypeKind::Callable);
     t.count   = static_cast<u32>(params.size());
     t.members = containers::ConstSpan<TypeId>(all.data(), all.size());
@@ -785,7 +1019,10 @@ TypeId Context::type_callable(containers::ConstSpan<TypeId> params, containers::
 
 bool Context::type_has_params(TypeId id) const noexcept
 {
-    if (!id.valid()) { return false; }
+    if (!id.valid())
+    {
+        return false;
+    }
     // iterative worklist + seen-set — the interned type DAG can share children (tuple<X,X>), so a naive recursion is
     // exponential; visiting each TypeId once is linear in the DAG.
     containers::Array<TypeId>    work(allocator());
@@ -794,11 +1031,20 @@ bool Context::type_has_params(TypeId id) const noexcept
     for (usize wi = 0; wi < work.size(); ++wi)
     {
         const TypeId cur = work[wi];
-        if (seen.find(cur.value) != nullptr) { continue; }
+        if (seen.find(cur.value) != nullptr)
+        {
+            continue;
+        }
         seen.insert(cur.value, 1U);
         const Type t = type_of(cur);
-        if (t.kind == TypeKind::TypeParam) { return true; }
-        for (usize i = 0; i < t.members.size(); ++i) { work.push_back(t.members[i]); }
+        if (t.kind == TypeKind::TypeParam)
+        {
+            return true;
+        }
+        for (usize i = 0; i < t.members.size(); ++i)
+        {
+            work.push_back(t.members[i]);
+        }
     }
     return false;
 }
@@ -808,7 +1054,10 @@ void Context::register_conformance(TypeId concrete, TypeId trait)
     CRD_ASSERT_MSG(concrete.valid() && trait.valid(), "register_conformance: invalid type id");
     for (usize i = 0; i < m_conformances.size(); ++i) // dedup — a fact registered twice is one fact
     {
-        if (m_conformances[i].concrete == concrete.value && m_conformances[i].trait == trait.value) { return; }
+        if (m_conformances[i].concrete == concrete.value && m_conformances[i].trait == trait.value)
+        {
+            return;
+        }
     }
     m_conformances.push_back(Conformance{concrete.value, trait.value});
 }
@@ -825,11 +1074,20 @@ namespace
     for (usize wi = 0; wi < work.size(); ++wi)
     {
         const TypeId cur = work[wi];
-        if (cur == target) { return true; }
-        if (seen.find(cur.value) != nullptr) { continue; }
+        if (cur == target)
+        {
+            return true;
+        }
+        if (seen.find(cur.value) != nullptr)
+        {
+            continue;
+        }
         seen.insert(cur.value, 1U);
         const Type tt = ctx.type_of(cur); // cur is a Trait; members = its supertraits
-        for (usize i = 0; i < tt.members.size(); ++i) { work.push_back(tt.members[i]); }
+        for (usize i = 0; i < tt.members.size(); ++i)
+        {
+            work.push_back(tt.members[i]);
+        }
     }
     return false;
 }
@@ -856,8 +1114,14 @@ namespace
 TypeId subst_rec(Context& ctx, TypeId id, containers::ConstSpan<TypeBinding> bindings,
                  containers::HashMap<u32, u32>& memo, SubstResult& err)
 {
-    if (!err.ok || !id.valid()) { return id; }
-    if (const u32* const cached = memo.find(id.value)) { return TypeId{*cached}; }
+    if (!err.ok || !id.valid())
+    {
+        return id;
+    }
+    if (const u32* const cached = memo.find(id.value))
+    {
+        return TypeId{*cached};
+    }
     const Type t = ctx.type_of(id);
     TypeId     out;
     if (t.kind == TypeKind::TypeParam)
@@ -865,7 +1129,11 @@ TypeId subst_rec(Context& ctx, TypeId id, containers::ConstSpan<TypeBinding> bin
         TypeId bound;
         for (usize i = 0; i < bindings.size(); ++i)
         {
-            if (bindings[i].param == id) { bound = bindings[i].concrete; break; }
+            if (bindings[i].param == id)
+            {
+                bound = bindings[i].concrete;
+                break;
+            }
         }
         if (!bound.valid())
         {
@@ -897,8 +1165,14 @@ TypeId subst_rec(Context& ctx, TypeId id, containers::ConstSpan<TypeBinding> bin
         for (usize i = 0; i < t.members.size(); ++i)
         {
             const TypeId sm = subst_rec(ctx, t.members[i], bindings, memo, err);
-            if (!err.ok) { return id; }
-            if (sm != t.members[i]) { changed = true; }
+            if (!err.ok)
+            {
+                return id;
+            }
+            if (sm != t.members[i])
+            {
+                changed = true;
+            }
             subbed.push_back(sm);
         }
         if (!changed)
@@ -915,8 +1189,14 @@ TypeId subst_rec(Context& ctx, TypeId id, containers::ConstSpan<TypeBinding> bin
             // -REPARSE (the decoder re-checks composition), breaking form-agreement. Re-check the kinds whose composition
             // predicates admit a TypeParam so this path honors the same rules the other three do.
             bool compose_ok = true;
-            if (t.kind == TypeKind::Quantity) { compose_ok = ctx.quantity_composition_valid(subbed[0]); }
-            else if (t.kind == TypeKind::Qualified) { compose_ok = ctx.qualified_composition_valid(subbed[0]); }
+            if (t.kind == TypeKind::Quantity)
+            {
+                compose_ok = ctx.quantity_composition_valid(subbed[0]);
+            }
+            else if (t.kind == TypeKind::Qualified)
+            {
+                compose_ok = ctx.qualified_composition_valid(subbed[0]);
+            }
             else if (t.kind == TypeKind::Tensor || t.kind == TypeKind::SparseTensor)
             {
                 compose_ok = ctx.tensor_composition_valid(subbed[0], subbed[1]);
@@ -941,7 +1221,10 @@ SubstResult Context::substitute(TypeId id, containers::ConstSpan<TypeBinding> bi
     SubstResult                   r;
     r.ok               = true; // reused as the "no violation yet" flag during the walk
     const TypeId out   = subst_rec(*this, id, bindings, memo, r);
-    if (!r.ok) { return r; }   // r carries failed_param / failed_trait
+    if (!r.ok) // r carries failed_param / failed_trait
+    {
+        return r;
+    }
     r.type = out;
     return r;
 }
@@ -952,7 +1235,10 @@ TypeId Context::type_buffer(BufferMode mode, TypeId element)
     Type t            = Type::scalar(TypeKind::Buffer);
     t.count           = static_cast<u32>(mode);
     const TypeId m[1] = {element};
-    if (mode != BufferMode::Raw) { t.members = containers::ConstSpan<TypeId>(m, 1U); } // raw has no element type
+    if (mode != BufferMode::Raw) // raw has no element type
+    {
+        t.members = containers::ConstSpan<TypeId>(m, 1U);
+    }
     return intern_type(t);
 }
 
@@ -997,7 +1283,10 @@ TypeId Context::type_view(TypeId underlying, u32 range_mask)
 
 bool Context::view_combination_valid(TypeId underlying, u32 range_mask) const noexcept
 {
-    if (!underlying.valid() || (range_mask & ~kViewRangeAll) != 0U) { return false; } // only the defined range bits
+    if (!underlying.valid() || (range_mask & ~kViewRangeAll) != 0U) // only the defined range bits
+    {
+        return false;
+    }
     const Type u = type_of(underlying);
     if (u.kind == TypeKind::Buffer) // buffers admit byte + element ranges
     {
@@ -1042,7 +1331,10 @@ bool Context::shape_members_valid(containers::ConstSpan<TypeId> dims) const noex
 {
     for (usize i = 0; i < dims.size(); ++i)
     {
-        if (!dims[i].valid() || type_of(dims[i]).kind != TypeKind::Dim) { return false; }
+        if (!dims[i].valid() || type_of(dims[i]).kind != TypeKind::Dim)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -1057,9 +1349,15 @@ TypeId Context::type_shape(containers::ConstSpan<TypeId> dims)
 
 bool Context::tensor_composition_valid(TypeId element, TypeId shape) const noexcept
 {
-    if (!element.valid() || !shape.valid()) { return false; }
+    if (!element.valid() || !shape.valid())
+    {
+        return false;
+    }
     const TypeKind ek = type_of(element).kind;
-    if (ek == TypeKind::Dim || ek == TypeKind::Shape) { return false; } // element is a value type, never a dim/shape
+    if (ek == TypeKind::Dim || ek == TypeKind::Shape) // element is a value type, never a dim/shape
+    {
+        return false;
+    }
     return type_of(shape).kind == TypeKind::Shape;
 }
 
@@ -1100,12 +1398,18 @@ struct DimInfo
 // dynamic / a differing symbolic / a symbolic-vs-non-1-static is statically UNKNOWN (defers to a runtime check).
 [[nodiscard]] ShapeCompat broadcast_dim(const DimInfo& a, const DimInfo& b) noexcept
 {
-    if (dim_is_one(a) || dim_is_one(b)) { return ShapeCompat::Compatible; }
+    if (dim_is_one(a) || dim_is_one(b))
+    {
+        return ShapeCompat::Compatible;
+    }
     if (a.kind == DimKind::Static && b.kind == DimKind::Static)
     {
         return a.extent == b.extent ? ShapeCompat::Compatible : ShapeCompat::Incompatible;
     }
-    if (a.kind == DimKind::Symbolic && b.kind == DimKind::Symbolic && a.name == b.name) { return ShapeCompat::Compatible; }
+    if (a.kind == DimKind::Symbolic && b.kind == DimKind::Symbolic && a.name == b.name)
+    {
+        return ShapeCompat::Compatible;
+    }
     return ShapeCompat::Unknown;
 }
 
@@ -1118,9 +1422,15 @@ struct DimInfo
     for (usize i = 0; i < shape.members.size(); ++i)
     {
         const DimInfo d = dim_info(ctx, shape.members[i]);
-        if (d.kind != DimKind::Static) { return false; } // symbolic / dynamic ⇒ Unknown
+        if (d.kind != DimKind::Static) // symbolic / dynamic ⇒ Unknown
+        {
+            return false;
+        }
         const u64 e = static_cast<u64>(d.extent);
-        if (e != 0U && p > (u64_max / e)) { return false; } // overflow ⇒ Unknown
+        if (e != 0U && p > (u64_max / e)) // overflow ⇒ Unknown
+        {
+            return false;
+        }
         p *= e;
     }
     out = p;
@@ -1132,7 +1442,10 @@ BroadcastResult Context::shapes_broadcast(TypeId a, TypeId b) const noexcept
 {
     const Type sa = type_of(a);
     const Type sb = type_of(b);
-    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape) { return BroadcastResult{ShapeCompat::Unknown, 0U}; }
+    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape)
+    {
+        return BroadcastResult{ShapeCompat::Unknown, 0U};
+    }
     const usize   ra = sa.members.size();
     const usize   rb = sb.members.size();
     const usize   n  = ra > rb ? ra : rb;
@@ -1143,21 +1456,36 @@ BroadcastResult Context::shapes_broadcast(TypeId a, TypeId b) const noexcept
         const DimInfo    da = (i < ra) ? dim_info(*this, sa.members[ra - 1U - i]) : one;
         const DimInfo    db = (i < rb) ? dim_info(*this, sb.members[rb - 1U - i]) : one;
         const ShapeCompat c = broadcast_dim(da, db);
-        if (c == ShapeCompat::Incompatible) { return BroadcastResult{ShapeCompat::Incompatible, static_cast<u32>(i)}; }
-        if (c == ShapeCompat::Unknown) { unknown = true; }
+        if (c == ShapeCompat::Incompatible)
+        {
+            return BroadcastResult{ShapeCompat::Incompatible, static_cast<u32>(i)};
+        }
+        if (c == ShapeCompat::Unknown)
+        {
+            unknown = true;
+        }
     }
     return BroadcastResult{unknown ? ShapeCompat::Unknown : ShapeCompat::Compatible, 0U};
 }
 
 ShapeCompat Context::shapes_reshape(TypeId a, TypeId b) const noexcept
 {
-    if (a == b) { return ShapeCompat::Compatible; } // structurally identical
+    if (a == b) // structurally identical
+    {
+        return ShapeCompat::Compatible;
+    }
     const Type sa = type_of(a);
     const Type sb = type_of(b);
-    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape) { return ShapeCompat::Unknown; }
+    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape)
+    {
+        return ShapeCompat::Unknown;
+    }
     u64 pa = 1U;
     u64 pb = 1U;
-    if (!static_extent_product(*this, sa, pa) || !static_extent_product(*this, sb, pb)) { return ShapeCompat::Unknown; }
+    if (!static_extent_product(*this, sa, pa) || !static_extent_product(*this, sb, pb))
+    {
+        return ShapeCompat::Unknown;
+    }
     return pa == pb ? ShapeCompat::Compatible : ShapeCompat::Incompatible;
 }
 
@@ -1165,12 +1493,18 @@ TypeId Context::shapes_broadcast_result(TypeId a, TypeId b)
 {
     const Type sa = type_of(a);
     const Type sb = type_of(b);
-    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape) { return {}; }
+    if (sa.kind != TypeKind::Shape || sb.kind != TypeKind::Shape)
+    {
+        return {};
+    }
     const usize     ra = sa.members.size();
     const usize     rb = sb.members.size();
     const usize     n  = ra > rb ? ra : rb;
     constexpr usize max_broadcast_rank = 16U; // beyond this the caller defers (no real tensor exceeds it); avoids a VLA
-    if (n > max_broadcast_rank) { return {}; }
+    if (n > max_broadcast_rank)
+    {
+        return {};
+    }
     TypeId       dims[max_broadcast_rank];
     const TypeId one = type_dim_static(1U);
     for (usize i = 0; i < n; ++i) // right-aligned: i = 0 is the innermost axis; the shorter rank pads with 1
@@ -1179,7 +1513,10 @@ TypeId Context::shapes_broadcast_result(TypeId a, TypeId b)
         const TypeId  tb = (i < rb) ? sb.members[rb - 1U - i] : one;
         const DimInfo da = dim_info(*this, ta);
         const DimInfo db = dim_info(*this, tb);
-        if (broadcast_dim(da, db) != ShapeCompat::Compatible) { return {}; } // Incompatible / Unknown ⇒ no static result
+        if (broadcast_dim(da, db) != ShapeCompat::Compatible) // Incompatible / Unknown ⇒ no static result
+        {
+            return {};
+        }
         dims[n - 1U - i] = dim_is_one(da) ? tb : ta; // the non-1 dim (both agree when neither is 1)
     }
     return type_shape(containers::ConstSpan<TypeId>(dims, n));
@@ -1188,7 +1525,10 @@ TypeId Context::shapes_broadcast_result(TypeId a, TypeId b)
 // ── Physical quantities (CEIR-3e, §17/§18) ──
 bool Context::quantity_composition_valid(TypeId underlying) const noexcept
 {
-    if (!underlying.valid()) { return false; }
+    if (!underlying.valid())
+    {
+        return false;
+    }
     switch (type_of(underlying).kind) // a quantity tags a NUMERIC value type (or a generic param — a generic quantity)
     {
     case TypeKind::Int:
@@ -1230,7 +1570,10 @@ DimMismatch Context::quantity_dimensions_equal(TypeId a, TypeId b) const noexcep
 // ── Ownership / lifetime qualifiers + escape analysis (CEIR-3f, §19) ──
 bool Context::qualified_composition_valid(TypeId underlying) const noexcept
 {
-    if (!underlying.valid()) { return false; }
+    if (!underlying.valid())
+    {
+        return false;
+    }
     const TypeKind k = type_of(underlying).kind;
     // ⛔ no double-qualify; not structural machinery (Dim/Shape) or a contract (Trait). Everything else — incl. a generic
     // param and resources (own/borrow of a buffer is the §19 point) — is qualifiable.
@@ -1254,7 +1597,10 @@ namespace
 {
     for (const Region* cur = r; cur != nullptr;)
     {
-        if (cur == ancestor) { return true; }
+        if (cur == ancestor)
+        {
+            return true;
+        }
         const Operation* const op = cur->parent_op();
         const Block* const     b  = (op != nullptr) ? op->parent_block() : nullptr;
         cur                       = (b != nullptr) ? b->parent_region() : nullptr;
@@ -1265,13 +1611,19 @@ namespace
 
 const Operation* Context::first_escaping_use(const Value* v, const Region* defining) const noexcept
 {
-    if (v == nullptr || defining == nullptr) { return nullptr; }
+    if (v == nullptr || defining == nullptr)
+    {
+        return nullptr;
+    }
     for (const Use* u = v->first_use(); u != nullptr; u = u->next)
     {
         const Operation* const user = u->owner;
         const Block* const     b    = (user != nullptr) ? user->parent_block() : nullptr;
         const Region* const    ur   = (b != nullptr) ? b->parent_region() : nullptr;
-        if (ur == nullptr || !region_contains(defining, ur)) { return user; } // a use outside defining's subtree
+        if (ur == nullptr || !region_contains(defining, ur)) // a use outside defining's subtree
+        {
+            return user;
+        }
     }
     return nullptr;
 }
@@ -1286,7 +1638,10 @@ namespace
 // A borrowed-view value: typed `!qual<borrow,_>` (a Qualified whose ownership category is BorrowedView).
 [[nodiscard]] bool is_borrowed_view(const Context& ctx, TypeId t) noexcept
 {
-    if (!t.valid()) { return false; }
+    if (!t.valid())
+    {
+        return false;
+    }
     const Type ty = ctx.type_of(t);
     return ty.kind == TypeKind::Qualified && ty.count == static_cast<u32>(OwnershipKind::BorrowedView);
 }
@@ -1295,7 +1650,10 @@ namespace
 // order, so the FIRST offender is stable). Every value defined directly in `r` has `r` as its defining region.
 [[nodiscard]] BorrowEscape scan_region_for_borrow_escape(const Context& ctx, Region* r) noexcept
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (u32 i = 0; i < b->num_args(); ++i)
@@ -1303,7 +1661,10 @@ namespace
             Value* const a = b->arg(i);
             if (is_borrowed_view(ctx, a->type()))
             {
-                if (const Operation* const use = ctx.first_escaping_use(a, r)) { return {a, use}; }
+                if (const Operation* const use = ctx.first_escaping_use(a, r))
+                {
+                    return {a, use};
+                }
             }
         }
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -1313,13 +1674,19 @@ namespace
                 Value* const res = op->result(i);
                 if (is_borrowed_view(ctx, res->type()))
                 {
-                    if (const Operation* const use = ctx.first_escaping_use(res, r)) { return {res, use}; }
+                    if (const Operation* const use = ctx.first_escaping_use(res, r))
+                    {
+                        return {res, use};
+                    }
                 }
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const BorrowEscape e = scan_region_for_borrow_escape(ctx, op->region(i));
-                if (e.value != nullptr) { return e; }
+                if (e.value != nullptr)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -1341,18 +1708,33 @@ namespace
 // question), or (3) its per-instance numerics are legal-but-forbidden by the mode (§28, e.g. fast_math under Certified).
 [[nodiscard]] const Operation* scan_region_for_mode(const Context& ctx, Region* r, CompilerMode mode) noexcept
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (!determinism_satisfies_mode(ctx.op_determinism(op->kind()), mode)) { return op; }
+            if (!determinism_satisfies_mode(ctx.op_determinism(op->kind()), mode))
+            {
+                return op;
+            }
             NumericalSemantics ns;
-            if (!ctx.op_numerics(*op, ns)) { return op; }              // corrupt numerics attr — violates ANY mode
-            if (!numerics_satisfies_mode(ns, mode)) { return op; }     // legal knob the active mode forbids
+            if (!ctx.op_numerics(*op, ns)) // corrupt numerics attr — violates ANY mode
+            {
+                return op;
+            }
+            if (!numerics_satisfies_mode(ns, mode)) // legal knob the active mode forbids
+            {
+                return op;
+            }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (const Operation* const v = scan_region_for_mode(ctx, op->region(i), mode)) { return v; }
+                if (const Operation* const v = scan_region_for_mode(ctx, op->region(i), mode))
+                {
+                    return v;
+                }
             }
         }
     }
@@ -1379,7 +1761,10 @@ bool Context::op_numerics(const Operation& op, NumericalSemantics& out) const no
         return true;
     }
     const AttrValue v = attr_value(id);
-    if (v.kind != AttrKind::Int) { return false; } // wrong kind stored under "numerics" ⇒ corrupt
+    if (v.kind != AttrKind::Int) // wrong kind stored under "numerics" ⇒ corrupt
+    {
+        return false;
+    }
     return unpack_numerics(v.i, out);              // false iff a packed field is out of range
 }
 
@@ -1398,7 +1783,10 @@ bool Context::op_region_exec(const Operation& op, RegionExec& out) const noexcep
         return true;
     }
     const AttrValue v = attr_value(id);
-    if (v.kind != AttrKind::Int) { return false; }
+    if (v.kind != AttrKind::Int)
+    {
+        return false;
+    }
     return unpack_region_exec(v.i, out);
 }
 
@@ -1410,14 +1798,20 @@ void Context::collect_effective_mask(const Operation& op, const EffectQuery& q, 
     // present); it may still DECLINE (return false) and fall through to the static family below.
     if (info != nullptr && info->effects_fn != nullptr && q.symbols != nullptr)
     {
-        if (info->effects_fn(*this, op, q, mask)) { return; }
+        if (info->effects_fn(*this, op, q, mask))
+        {
+            return;
+        }
     }
     if (info == nullptr)
     {
         mask |= effect_family_bit(EffectFamily::ExternalCall); // ⛔ unregistered = opaque barrier (EMPTY≠UNKNOWN)
         return;
     }
-    for (u32 i = 0; i < info->num_effects; ++i) { mask |= effect_family_bit(info->effects[i].family); }
+    for (u32 i = 0; i < info->num_effects; ++i)
+    {
+        mask |= effect_family_bit(info->effects[i].family);
+    }
 }
 
 void Context::collect_region_effective_mask(const Region& r, const EffectQuery& q, u64& mask) const
@@ -1430,7 +1824,10 @@ void Context::collect_region_effective_mask(const Region& r, const EffectQuery& 
             for (u32 i = 0; i < op->num_regions(); ++i) // + its NESTED regions' contents (a call inside a core.if counts)
             {
                 Region* const sub = op->region(i);
-                if (sub != nullptr) { collect_region_effective_mask(*sub, q, mask); }
+                if (sub != nullptr)
+                {
+                    collect_region_effective_mask(*sub, q, mask);
+                }
             }
         }
     }
@@ -1447,7 +1844,10 @@ void Context::effective_effects(const Operation& op, const SymbolTable& table, c
     for (u32 f = 0; f <= static_cast<u32>(kLastEffectFamily); ++f)
     {
         const auto fam = static_cast<EffectFamily>(f);
-        if ((mask & effect_family_bit(fam)) != 0U) { out.push_back(EffectRecord{fam, EffectTarget::None, 0U, 0U}); }
+        if ((mask & effect_family_bit(fam)) != 0U)
+        {
+            out.push_back(EffectRecord{fam, EffectTarget::None, 0U, 0U});
+        }
     }
 }
 
@@ -1460,7 +1860,10 @@ namespace
 [[nodiscard]] DomainViolation scan_region_for_domain(const Context& ctx, const SymbolTable& table, Region* r,
                                                      const RegionExec& tag, const Operation* tag_owner)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -1482,14 +1885,20 @@ namespace
             if (op->attr("region_exec").valid())
             {
                 RegionExec own;
-                if (!ctx.op_region_exec(*op, own)) { return {op, op, EffectFamily::MemoryRead, false}; } // corrupt tag
+                if (!ctx.op_region_exec(*op, own)) // corrupt tag
+                {
+                    return {op, op, EffectFamily::MemoryRead, false};
+                }
                 inner       = own;
                 inner_owner = op;
             }
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const DomainViolation v = scan_region_for_domain(ctx, table, op->region(i), inner, inner_owner);
-                if (v.op != nullptr) { return v; }
+                if (v.op != nullptr)
+                {
+                    return v;
+                }
             }
         }
     }
@@ -1524,7 +1933,10 @@ struct ResolvedAccess
 [[nodiscard]] u32 op_access_count(const Context& ctx, const Operation& op) noexcept
 {
     // CEIR-15d-1: a frame.pass's hazards are DERIVED PER-OPERAND from `access` — ONE access per operand (see op_access_at).
-    if (ctx.op_name(op.kind()) == containers::StringView("frame.pass")) { return op.num_operands(); }
+    if (ctx.op_name(op.kind()) == containers::StringView("frame.pass"))
+    {
+        return op.num_operands();
+    }
     const OpInfo* const info = ctx.op_info(op.kind());
     return info != nullptr ? info->num_effects : 1U;
 }
@@ -1541,7 +1953,10 @@ struct ResolvedAccess
     // (read-of-prev vs write-of-curr ⇒ no false RAW — Fork B, at the hazard level).
     if (ctx.op_name(op.kind()) == containers::StringView("frame.pass"))
     {
-        if (i >= op.num_operands()) { return {ResourceClass::Memory, true, true, nullptr, 0U}; } // OOB ⇒ conservative whole-class
+        if (i >= op.num_operands()) // OOB ⇒ conservative whole-class
+        {
+            return {ResourceClass::Memory, true, true, nullptr, 0U};
+        }
         const Value* const     v   = op.operand(i);
         const Operation* const def = v != nullptr ? v->defining_op() : nullptr;
         if (def != nullptr && ctx.op_name(def->kind()) == containers::StringView("frame.draw_list"))
@@ -1563,11 +1978,18 @@ struct ResolvedAccess
                 usize start = 0U;
                 for (usize k = 0; k <= av.s.size(); ++k)
                 {
-                    if (k != av.s.size() && av.s[k] != ',') { continue; }
+                    if (k != av.s.size() && av.s[k] != ',')
+                    {
+                        continue;
+                    }
                     if (tok == i)
                     {
                         const containers::StringView t(av.s.data() + start, k - start);
-                        if (t.size() > 0U) { reads = t[0] == 'r'; writes = t[t.size() - 1U] == 'w'; } // else keep conservative
+                        if (t.size() > 0U) // else keep conservative
+                        {
+                            reads = t[0] == 'r';
+                            writes = t[t.size() - 1U] == 'w';
+                        }
                         break;
                     }
                     ++tok;
@@ -1578,7 +2000,10 @@ struct ResolvedAccess
         return {ResourceClass::Memory, reads, writes, ctx.resource_root(v), 0U}; // mask 0 = whole range
     }
     const OpInfo* const info = ctx.op_info(op.kind());
-    if (info == nullptr) { return {ResourceClass::Universe, true, true, nullptr, 0U}; } // unknown ⇒ maximally effectful
+    if (info == nullptr) // unknown ⇒ maximally effectful
+    {
+        return {ResourceClass::Universe, true, true, nullptr, 0U};
+    }
     const EffectRecord& e = info->effects[i];
     const EffectAccess  a = effect_access(e.family); // read/write is the FAMILY's; the class may be the LOCATION's (8c)
     // ambient (target None) ⇒ whole class; an OUT-OF-RANGE index on a malformed instance also degrades to whole-class
@@ -1589,8 +2014,14 @@ struct ResolvedAccess
     // is not that; do not bind it to a band until an owning slice earns it). Precise per-resource hazards are available
     // TODAY by targeting the resource's SSA Value via `EffectTarget::Operand`/`Result` (the CEIR-9f ECS proof).
     const Value* res = nullptr;
-    if (e.target == EffectTarget::Operand && e.index < op.num_operands()) { res = op.operand(e.index); }
-    else if (e.target == EffectTarget::Result && e.index < op.num_results()) { res = op.result(e.index); }
+    if (e.target == EffectTarget::Operand && e.index < op.num_operands())
+    {
+        res = op.operand(e.index);
+    }
+    else if (e.target == EffectTarget::Result && e.index < op.num_results())
+    {
+        res = op.result(e.index);
+    }
     // ⭐ CEIR-13d part 3: NORMALIZE the resource to its view-ROOT, so `write(%buf)` vs `read(view(%buf))` now conflicts (the
     // 12c false-negative, struck below). Identity only — the view's byte range is not tracked here (conservative-safe).
     res = ctx.resource_root(res);
@@ -1605,8 +2036,14 @@ struct ResolvedAccess
 // escapes (its root is the yield/call result, not the buffer) — a deeper alias-model hole.
 [[nodiscard]] bool accesses_conflict(const ResolvedAccess& a, const ResolvedAccess& b) noexcept
 {
-    if (!(a.reads || a.writes) || !(b.reads || b.writes)) { return false; } // an inert access touches nothing
-    if (!(a.writes || b.writes)) { return false; }                          // read-read: no ordering needed
+    if (!(a.reads || a.writes) || !(b.reads || b.writes)) // an inert access touches nothing
+    {
+        return false;
+    }
+    if (!(a.writes || b.writes)) // read-read: no ordering needed
+    {
+        return false;
+    }
     const bool class_ov = a.klass == ResourceClass::Universe || b.klass == ResourceClass::Universe ||
                           (a.klass == b.klass &&
                            (a.resource == b.resource || a.resource == nullptr || b.resource == nullptr));
@@ -1615,9 +2052,18 @@ struct ResolvedAccess
 // The hazard kind for a conflicting pair, `a` BEFORE `b` (WAW > RAW > WAR).
 [[nodiscard]] HazardKind pair_hazard(const ResolvedAccess& a, const ResolvedAccess& b) noexcept
 {
-    if (a.writes && b.writes) { return HazardKind::Waw; }
-    if (a.writes && b.reads) { return HazardKind::Raw; }
-    if (a.reads && b.writes) { return HazardKind::War; }
+    if (a.writes && b.writes)
+    {
+        return HazardKind::Waw;
+    }
+    if (a.writes && b.reads)
+    {
+        return HazardKind::Raw;
+    }
+    if (a.reads && b.writes)
+    {
+        return HazardKind::War;
+    }
     return HazardKind::None;
 }
 // The TABLE-aware per-op access list (CEIR-5c): an op with an EffectsFn hook (a `func.call`) contributes its callee-
@@ -1639,7 +2085,10 @@ void gather_accesses(const Context& ctx, const Operation& op, const SymbolTable&
         return;
     }
     const u32 n = op_access_count(ctx, op); // static path — precise per-Value identity (unchanged 4d behaviour)
-    for (u32 i = 0; i < n; ++i) { out.push_back(op_access_at(ctx, op, i)); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        out.push_back(op_access_at(ctx, op, i));
+    }
 }
 // The shared pairwise-conflict core: the strongest hazard (WAW>RAW>WAR) over `before`'s × `after`'s accesses.
 [[nodiscard]] HazardKind strongest_hazard(const containers::Array<ResolvedAccess>& a,
@@ -1653,7 +2102,10 @@ void gather_accesses(const Context& ctx, const Operation& op, const SymbolTable&
             if (accesses_conflict(a[i], b[j]))
             {
                 const HazardKind k = pair_hazard(a[i], b[j]);
-                if (hazard_rank(k) > hazard_rank(strongest)) { strongest = k; }
+                if (hazard_rank(k) > hazard_rank(strongest))
+                {
+                    strongest = k;
+                }
             }
         }
     }
@@ -1672,9 +2124,18 @@ const Value* Context::resource_root(const Value* v) const noexcept
     for (u32 guard = 0U; v != nullptr && guard < 64U; ++guard)
     {
         const Operation* const def = v->defining_op();
-        if (def == nullptr) { break; }
-        if (op_name(def->kind()) != containers::StringView("resource.view")) { break; }
-        if (def->num_operands() < 1U) { break; }
+        if (def == nullptr)
+        {
+            break;
+        }
+        if (op_name(def->kind()) != containers::StringView("resource.view"))
+        {
+            break;
+        }
+        if (def->num_operands() < 1U)
+        {
+            break;
+        }
         v = def->operand(0U);
     }
     return v;
@@ -1694,7 +2155,10 @@ HazardKind Context::ops_hazard(const Operation& before, const Operation& after) 
             if (accesses_conflict(a, b))
             {
                 const HazardKind k = pair_hazard(a, b);
-                if (hazard_rank(k) > hazard_rank(strongest)) { strongest = k; }
+                if (hazard_rank(k) > hazard_rank(strongest))
+                {
+                    strongest = k;
+                }
             }
         }
     }
@@ -1709,7 +2173,10 @@ void Context::collect_block_hazards(const Block& b, containers::Array<Hazard>& o
         for (const Operation* c = a->next_in_block(); c != nullptr; c = c->next_in_block())
         {
             const HazardKind k = ops_hazard(*a, *c);
-            if (k != HazardKind::None) { out.push_back(Hazard{a, c, k}); }
+            if (k != HazardKind::None)
+            {
+                out.push_back(Hazard{a, c, k});
+            }
         }
     }
 }
@@ -1732,7 +2199,10 @@ void Context::collect_block_hazards(const Block& b, const SymbolTable& table, co
         for (const Operation* c = a->next_in_block(); c != nullptr; c = c->next_in_block())
         {
             const HazardKind k = ops_hazard(*a, *c, table);
-            if (k != HazardKind::None) { out.push_back(Hazard{a, c, k}); }
+            if (k != HazardKind::None)
+            {
+                out.push_back(Hazard{a, c, k});
+            }
         }
     }
 }
@@ -1756,7 +2226,10 @@ struct RootEntry
 {
     for (u32 i = 0; i < n; ++i)
     {
-        if (m[i].v == v) { return m[i].idx; }
+        if (m[i].v == v)
+        {
+            return m[i].idx;
+        }
     }
     return kNoRoot;
 }
@@ -1765,18 +2238,36 @@ struct RootEntry
 [[nodiscard]] ResourceLifetimeClass read_lifetime_class(const Context& ctx, const Operation* op) noexcept
 {
     const AttrId a = op->attr(containers::StringView("lifetime"));
-    if (!a.valid()) { return ResourceLifetimeClass::Unspecified; }
+    if (!a.valid())
+    {
+        return ResourceLifetimeClass::Unspecified;
+    }
     const AttrValue v = ctx.attr_value(a);
-    if (v.kind != AttrKind::String) { return ResourceLifetimeClass::Unspecified; }
-    if (v.s == containers::StringView("transient")) { return ResourceLifetimeClass::Transient; }
-    if (v.s == containers::StringView("persistent")) { return ResourceLifetimeClass::Persistent; }
-    if (v.s == containers::StringView("history")) { return ResourceLifetimeClass::History; }
+    if (v.kind != AttrKind::String)
+    {
+        return ResourceLifetimeClass::Unspecified;
+    }
+    if (v.s == containers::StringView("transient"))
+    {
+        return ResourceLifetimeClass::Transient;
+    }
+    if (v.s == containers::StringView("persistent"))
+    {
+        return ResourceLifetimeClass::Persistent;
+    }
+    if (v.s == containers::StringView("history"))
+    {
+        return ResourceLifetimeClass::History;
+    }
     return ResourceLifetimeClass::Unspecified;
 }
 [[nodiscard]] i64 read_size_class(const Context& ctx, const Operation* op) noexcept
 {
     const AttrId a = op->attr(containers::StringView("size_class"));
-    if (!a.valid()) { return 0; }
+    if (!a.valid())
+    {
+        return 0;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::Int ? v.i : 0;
 }
@@ -1811,14 +2302,23 @@ struct RootEntry
             // until its first access, so the memory planner can reuse it up to here (this is the render-graph aliaser's
             // `first_use` model, frame_graph.cpp L1200-1225). The frame converter emits ALL declares up-front, which under
             // the old declare-pos `first` tied every transient's range to ~0 → they all overlapped → zero pooling.
-            if (pos < out[r].first) { out[r].first = pos; }
-            if (out[r].last < pos) { out[r].last = pos; }
+            if (pos < out[r].first)
+            {
+                out[r].first = pos;
+            }
+            if (out[r].last < pos)
+            {
+                out[r].last = pos;
+            }
         }
     }
     if (ctx.op_name(op->kind()) == containers::StringView("resource.export") && op->num_operands() >= 1U)
     {
         const u32 r = root_lookup(m, nm, op->operand(0U));
-        if (r != kNoRoot) { out[r].exported = true; }
+        if (r != kNoRoot)
+        {
+            out[r].exported = true;
+        }
     }
     bool ambient = op_has_ambient_mem_or_universe(ctx, *op);
     for (u32 rg = 0; rg < op->num_regions(); ++rg)
@@ -1866,11 +2366,17 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
         else if (nm == containers::StringView("resource.view") && op->num_results() >= 1U && op->num_operands() >= 1U)
         {
             const u32 root = root_lookup(vmap.data(), static_cast<u32>(vmap.size()), op->operand(0U));
-            if (root != kNoRoot) { vmap.push_back(RootEntry{op->result(0U), root}); }
+            if (root != kNoRoot)
+            {
+                vmap.push_back(RootEntry{op->result(0U), root});
+            }
         }
     }
     const u32 num_ops = pos;
-    if (out.empty()) { return; }
+    if (out.empty())
+    {
+        return;
+    }
     const RootEntry* const m  = vmap.data();
     const u32              nm = static_cast<u32>(vmap.size());
 
@@ -1893,8 +2399,14 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
                 // so this never fires there and full first-use pooling precision holds.
                 if (declare_pos[i] <= pos)
                 {
-                    if (pos < out[i].first) { out[i].first = pos; }
-                    if (out[i].last < pos) { out[i].last = pos; }
+                    if (pos < out[i].first)
+                    {
+                        out[i].first = pos;
+                    }
+                    if (out[i].last < pos)
+                    {
+                        out[i].last = pos;
+                    }
                 }
             }
         }
@@ -1904,14 +2416,20 @@ void Context::compute_block_lifetimes(const Block& b, containers::Array<Resource
     // its declare so the interval stays well-formed (a valid graph has no such transient: ResourceNeverWritten catches it).
     for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
     {
-        if (out[i].first == unused_first) { out[i].first = declare_pos[i]; }
+        if (out[i].first == unused_first)
+        {
+            out[i].first = declare_pos[i];
+        }
     }
 
     // Pass 3 — pin exported resources to block-END: external code may touch a published resource past any op position.
     const u32 endpos = num_ops == 0U ? 0U : num_ops - 1U;
     for (u32 i = 0; i < static_cast<u32>(out.size()); ++i)
     {
-        if (out[i].exported && out[i].last < endpos) { out[i].last = endpos; }
+        if (out[i].exported && out[i].last < endpos)
+        {
+            out[i].last = endpos;
+        }
     }
 }
 
@@ -1922,13 +2440,25 @@ bool Context::resources_interfere(const ResourceLifetime& a, const ResourceLifet
 
 bool Context::resources_may_alias(const ResourceLifetime& a, const ResourceLifetime& b) noexcept
 {
-    if (a.resource == b.resource) { return false; }                             // a resource never aliases itself
-    if (a.lifetime != ResourceLifetimeClass::Transient || b.lifetime != ResourceLifetimeClass::Transient) { return false; }
-    if (a.exported || b.exported) { return false; }                             // a published resource is never poolable
+    if (a.resource == b.resource) // a resource never aliases itself
+    {
+        return false;
+    }
+    if (a.lifetime != ResourceLifetimeClass::Transient || b.lifetime != ResourceLifetimeClass::Transient)
+    {
+        return false;
+    }
+    if (a.exported || b.exported) // a published resource is never poolable
+    {
+        return false;
+    }
     // same resource KIND + same NON-ZERO size_class bucket. ⛔ size_class 0 (unspecified) never pools — same reasoning as
     // unspecified lifetime: aliasing a resource of unknown size into a same-unknown slot is a correctness gamble, refusing
     // is only a pessimization (12d relaxes per profile once real sizes bind).
-    if (a.kind != b.kind || a.size_class == 0 || a.size_class != b.size_class) { return false; }
+    if (a.kind != b.kind || a.size_class == 0 || a.size_class != b.size_class)
+    {
+        return false;
+    }
     return !resources_interfere(a, b);
 }
 
@@ -1969,7 +2499,10 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
     containers::Array<ResourceLifetime> lts(allocator());
     compute_block_lifetimes(b, lts);
     const u32 n = static_cast<u32>(lts.size());
-    if (n == 0U) { return; }
+    if (n == 0U)
+    {
+        return;
+    }
 
     for (u32 i = 0; i < n; ++i) // assignments parallel to lts (declaration order); slot/reason filled below
     {
@@ -1984,12 +2517,27 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
     {
         const ResourceLifetime& r        = lts[i];
         const bool eligible = r.lifetime == ResourceLifetimeClass::Transient && !r.exported && r.size_class != 0;
-        if (eligible && aliasing) { continue; }
+        if (eligible && aliasing)
+        {
+            continue;
+        }
         SlotReason reason = SlotReason::DedicatedLifetime;
-        if (r.lifetime != ResourceLifetimeClass::Transient) { reason = SlotReason::DedicatedLifetime; }
-        else if (r.exported) { reason = SlotReason::DedicatedExported; }
-        else if (r.size_class == 0) { reason = SlotReason::DedicatedUnsized; }
-        else { reason = SlotReason::DedicatedProfile; } // eligible but the Latency profile refused to pool it
+        if (r.lifetime != ResourceLifetimeClass::Transient)
+        {
+            reason = SlotReason::DedicatedLifetime;
+        }
+        else if (r.exported)
+        {
+            reason = SlotReason::DedicatedExported;
+        }
+        else if (r.size_class == 0)
+        {
+            reason = SlotReason::DedicatedUnsized;
+        }
+        else // eligible but the Latency profile refused to pool it
+        {
+            reason = SlotReason::DedicatedProfile;
+        }
         // §162: a history<T> ring's depth = its memory MULTIPLE. ⛔ 12b pins "absent under lifetime=history means 1" (the
         // TAA prev-frame case), so History DEFAULTS to depth 1; a present, valid history_length overrides.
         i64 hlen = r.lifetime == ResourceLifetimeClass::History ? 1 : 0;
@@ -1999,7 +2547,10 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
             if (a.valid())
             {
                 const AttrValue v = attr_value(a);
-                if (v.kind == AttrKind::Int && v.i > 0) { hlen = v.i; }
+                if (v.kind == AttrKind::Int && v.i > 0)
+                {
+                    hlen = v.i;
+                }
             }
         }
         const u32 s = static_cast<u32>(out.slots.size());
@@ -2007,10 +2558,17 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
         slot_last_occ.push_back(r.resource);
         out.assignments[i].slot   = s;
         out.assignments[i].reason = reason;
-        if (eligible) { ++out.transient_logical; ++out.transient_physical; } // DedicatedProfile: own slot, counts in both
+        if (eligible) // DedicatedProfile: own slot, counts in both
+        {
+            ++out.transient_logical;
+            ++out.transient_physical;
+        }
     }
 
-    if (!aliasing) { return; } // Latency: no interval-coloring pass
+    if (!aliasing) // Latency: no interval-coloring pass
+    {
+        return;
+    }
 
     // Pass B — interval-color the poolable-eligible resources in (first asc, decl-index asc) order. First-fit on a
     // start-sorted stream is provably minimal (χ = max concurrent live). ⛔ today lts is ALREADY start-sorted by
@@ -2020,13 +2578,20 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
     for (u32 i = 0; i < n; ++i)
     {
         const ResourceLifetime& r = lts[i];
-        if (r.lifetime == ResourceLifetimeClass::Transient && !r.exported && r.size_class != 0) { order.push_back(i); }
+        if (r.lifetime == ResourceLifetimeClass::Transient && !r.exported && r.size_class != 0)
+        {
+            order.push_back(i);
+        }
     }
     for (u32 a = 1; a < static_cast<u32>(order.size()); ++a) // stable insertion sort by `first`
     {
         const u32 key = order[a];
         u32       j   = a;
-        while (j > 0U && lts[order[j - 1U]].first > lts[key].first) { order[j] = order[j - 1U]; --j; }
+        while (j > 0U && lts[order[j - 1U]].first > lts[key].first)
+        {
+            order[j] = order[j - 1U];
+            --j;
+        }
         order[j] = key;
     }
     const u32 no_slot = ~0U;
@@ -2051,7 +2616,10 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
             out.assignments[idx].slot   = chosen;
             out.assignments[idx].reason = SlotReason::Pooled;
             out.assignments[idx].prior  = slot_last_occ[chosen];
-            if (r.first < sl.first) { sl.first = r.first; }
+            if (r.first < sl.first)
+            {
+                sl.first = r.first;
+            }
             sl.last = r.last;
             ++sl.occupant_count;
             slot_last_occ[chosen] = r.resource;
@@ -2071,40 +2639,73 @@ void Context::plan_block_memory(const Block& b, PlanProfile profile, MemoryPlan&
 // ── CEIR-5a structured control flow: the constant-condition `if` fold ──
 bool Context::fold_constant_if(Operation* if_op)
 {
-    if (if_op == nullptr || if_op->kind() != intern_op("core", "if")) { return false; }
+    if (if_op == nullptr || if_op->kind() != intern_op("core", "if"))
+    {
+        return false;
+    }
     // ⛔ a region-tagged `if` (CEIR-4c region_exec) must NOT be inlined — that would silently delete the region's
     // domain/realtime constraint. Bail before any inspection of the branches.
-    if (if_op->attr("region_exec").valid()) { return false; }
-    if (if_op->num_operands() < 1U || if_op->num_regions() < 2U) { return false; }
+    if (if_op->attr("region_exec").valid())
+    {
+        return false;
+    }
+    if (if_op->num_operands() < 1U || if_op->num_regions() < 2U)
+    {
+        return false;
+    }
 
     // the condition must be a CONSTANT arith.const carrying an integer `value` attribute.
     const Operation* const cond_def = if_op->operand(0)->defining_op();
-    if (cond_def == nullptr || cond_def->kind() != intern_op("arith", "const")) { return false; }
+    if (cond_def == nullptr || cond_def->kind() != intern_op("arith", "const"))
+    {
+        return false;
+    }
     const AttrId cond_attr = cond_def->attr("value");
-    if (!cond_attr.valid()) { return false; }
+    if (!cond_attr.valid())
+    {
+        return false;
+    }
     const AttrValue cv = attr_value(cond_attr);
-    if (cv.kind != AttrKind::Int) { return false; }
+    if (cv.kind != AttrKind::Int)
+    {
+        return false;
+    }
 
     Region* const  taken = (cv.i != 0) ? if_op->region(0) : if_op->region(1); // nonzero → THEN (region 0)
     Block* const   tb    = taken->first_block();
-    if (tb == nullptr || tb->next_in_region() != nullptr) { return false; } // single-block regions only
+    if (tb == nullptr || tb->next_in_region() != nullptr) // single-block regions only
+    {
+        return false;
+    }
     Operation* const term = tb->last_op();
-    if (term == nullptr || term->kind() != intern_op("core", "yield")) { return false; } // must end with core.yield
+    if (term == nullptr || term->kind() != intern_op("core", "yield")) // must end with core.yield
+    {
+        return false;
+    }
     // ⛔ refuse to move an EXECUTION-CONTEXT boundary: if any op in the taken block carries a `region_exec` tag (CEIR-4c),
     // splicing it into the parent changes its enclosing context — bail (relaxing this is 5a-remaining, with the value-
     // producing fold). The 2nd instance of band-4 metadata making a band-5 rewrite unsound: a rewrite must AUDIT the
     // attributes it moves, not only the op it deletes.
     for (const Operation* inner = tb->first_op(); inner != nullptr; inner = inner->next_in_block())
     {
-        if (inner->attr("region_exec").valid()) { return false; }
+        if (inner->attr("region_exec").valid())
+        {
+            return false;
+        }
     }
     // ⛔ the yield's operand count MUST match the if's result count, or the RAUW below would index `term->operand(i)`
     // out of bounds — a UAF-shaped bug. Bail on a mismatch (a malformed program the 5b verifier will also reject).
-    if (term->num_operands() != if_op->num_results()) { return false; }
+    if (term->num_operands() != if_op->num_results())
+    {
+        return false;
+    }
 
     // splice every op of the taken block EXCEPT the yield into the parent block, before the `if`, preserving order.
     Block* const parent = if_op->parent_block();
-    if (parent == nullptr) { return false; }
+    if (parent == nullptr)
+    {
+        return false;
+    }
     Operation* cur = tb->first_op();
     while (cur != nullptr && cur != term)
     {
@@ -2115,7 +2716,10 @@ bool Context::fold_constant_if(Operation* if_op)
     }
     // VALUE FORWARDING: replace each of the if's results with the taken region's corresponding yielded value (now spliced
     // into the parent, so it dominates every former use of the if's result). RAUW leaves the if's results use-free.
-    for (u32 i = 0; i < if_op->num_results(); ++i) { if_op->result(i)->replace_all_uses_with(term->operand(i)); }
+    for (u32 i = 0; i < if_op->num_results(); ++i)
+    {
+        if_op->result(i)->replace_all_uses_with(term->operand(i));
+    }
     term->erase();   // the now-orphaned yield
     if_op->erase();  // drops the cond use; the non-taken region + emptied taken region leak into the arena (by design)
     return true;
@@ -2154,8 +2758,14 @@ struct DomScope
 {
     for (const DomScope* cur = s; cur != nullptr; cur = cur->parent)
     {
-        if (cur->defs->contains(v)) { return true; }
-        if (respect_isolation && cur->isolated) { return false; } // this scope cannot see its parent
+        if (cur->defs->contains(v))
+        {
+            return true;
+        }
+        if (respect_isolation && cur->isolated) // this scope cannot see its parent
+        {
+            return false;
+        }
     }
     return false;
 }
@@ -2173,12 +2783,18 @@ struct DomScope
     Region* const reg = owner.region(ri);
     Block* const  bb  = reg->first_block();
     u32           expected = owner.num_results();
-    if (ctx.op_name(owner.kind()) == containers::StringView("core.while") && ri == 0U) { expected = 1U; } // the table
+    if (ctx.op_name(owner.kind()) == containers::StringView("core.while") && ri == 0U) // the table
+    {
+        expected = 1U;
+    }
     Operation* const last = (bb != nullptr) ? bb->last_op() : nullptr;
     const bool is_yield   = last != nullptr && ctx.op_name(last->kind()) == containers::StringView("core.yield");
     if (is_yield)
     {
-        if (last->num_operands() != expected) { return {last, nullptr, StructureErrorKind::YieldCountMismatch}; }
+        if (last->num_operands() != expected)
+        {
+            return {last, nullptr, StructureErrorKind::YieldCountMismatch};
+        }
     }
     else if (expected != 0U)
     {
@@ -2204,16 +2820,25 @@ struct DomScope
             }
         }
         containers::HashMap<const Value*, u8> defs(ctx.allocator());
-        for (u32 i = 0; i < b->num_args(); ++i) { defs.insert(b->arg(i), 1U); }
+        for (u32 i = 0; i < b->num_args(); ++i)
+        {
+            defs.insert(b->arg(i), 1U);
+        }
         // CEIR-5d: an ORDER-FREE set of every value defined in THIS block (args + all op results) — lets the dominance
         // check tell a same-block FEEDBACK edge (defined later HERE) from a genuine UseBeforeDef (defined in a later block
         // / never). Every def-use cycle has ≥1 same-block back-edge; a back-edge is legal ONLY as a StateEdge op's `next`
         // ⇒ every surviving cycle passes through a state op (§20), enforced by the existing walk — no separate SCC pass.
         containers::HashMap<const Value*, u8> all_defs(ctx.allocator());
-        for (u32 i = 0; i < b->num_args(); ++i) { all_defs.insert(b->arg(i), 1U); }
+        for (u32 i = 0; i < b->num_args(); ++i)
+        {
+            all_defs.insert(b->arg(i), 1U);
+        }
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            for (u32 i = 0; i < op->num_results(); ++i) { all_defs.insert(op->result(i), 1U); }
+            for (u32 i = 0; i < op->num_results(); ++i)
+            {
+                all_defs.insert(op->result(i), 1U);
+            }
         }
         const DomScope scope{&defs, parent, isolated};
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -2226,20 +2851,29 @@ struct DomScope
                 if (did.valid())
                 {
                     const AttrValue dv = ctx.attr_value(did);
-                    if (dv.kind != AttrKind::Int || dv.i < 1) { return {op, nullptr, StructureErrorKind::StateDepthInvalid}; }
+                    if (dv.kind != AttrKind::Int || dv.i < 1)
+                    {
+                        return {op, nullptr, StructureErrorKind::StateDepthInvalid};
+                    }
                 }
             }
             for (u32 i = 0; i < op->num_operands(); ++i) // every operand must be VISIBLE at this use (dominance)
             {
                 const Value* const v = op->operand(i);
-                if (dom_visible(v, &scope, /*respect*/ true)) { continue; }
+                if (dom_visible(v, &scope, /*respect*/ true))
+                {
+                    continue;
+                }
                 if (all_defs.contains(v)) // defined LATER in THIS block ⇒ a same-block back-edge (a feedback edge)
                 {
                     // ⛔ the ONE legal back-edge (§20): a StateEdge op's LAST operand (its `next`/feedback). Any other
                     // same-block back-edge is a combinational feedback cycle. (The state op must HEAD its cycle in list
                     // order — an equivalently-cyclic program listed otherwise must be re-ordered; a canonicalization
                     // concern, not a semantics loss.)
-                    if (state_edge && i + 1U == op->num_operands()) { continue; }
+                    if (state_edge && i + 1U == op->num_operands())
+                    {
+                        continue;
+                    }
                     return {op, v, StructureErrorKind::FeedbackWithoutState};
                 }
                 const StructureErrorKind k = dom_visible(v, &scope, /*respect*/ false)
@@ -2258,14 +2892,23 @@ struct DomScope
                 if (core) // the yield↔owner contract binds the core structured ops only
                 {
                     const StructureError ye = check_yield_count(ctx, *op, ri);
-                    if (ye.kind != StructureErrorKind::None) { return ye; }
+                    if (ye.kind != StructureErrorKind::None)
+                    {
+                        return ye;
+                    }
                 }
                 // capture visibility: a nested region sees defs up to (but not incl.) THIS op's results — and nothing
                 // above an IsolatedFromAbove owner.
                 const StructureError e = walk_region(ctx, op->region(ri), &scope, sub_isolated);
-                if (e.kind != StructureErrorKind::None) { return e; }
+                if (e.kind != StructureErrorKind::None)
+                {
+                    return e;
+                }
             }
-            for (u32 i = 0; i < op->num_results(); ++i) { defs.insert(op->result(i), 1U); } // now this op's results are visible
+            for (u32 i = 0; i < op->num_results(); ++i) // now this op's results are visible
+            {
+                defs.insert(op->result(i), 1U);
+            }
         }
     }
     return {};
@@ -2312,19 +2955,34 @@ struct TokenScan
             {
                 const Value* const v = op->operand(i);
                 u32* const         c = s.consumed.find(v); // non-null ⇔ v is a registered token
-                if (c == nullptr) { continue; }
-                if (!is_consumer) { return {v, op, TokenMisuseKind::ConsumedByNonConsumer}; }
-                if (++(*c) >= 2U) { return {v, op, TokenMisuseKind::MultiplyConsumed}; } // count SLOTS: join(t,t) = 2
+                if (c == nullptr)
+                {
+                    continue;
+                }
+                if (!is_consumer)
+                {
+                    return {v, op, TokenMisuseKind::ConsumedByNonConsumer};
+                }
+                if (++(*c) >= 2U) // count SLOTS: join(t,t) = 2
+                {
+                    return {v, op, TokenMisuseKind::MultiplyConsumed};
+                }
             }
             if (s.ctx.has_trait(op->kind(), OpTrait::TokenProducer)) // EVERY result of a producer is a token
             {
-                for (u32 j = 0; j < op->num_results(); ++j) { s.consumed.insert(op->result(j), 0U); }
+                for (u32 j = 0; j < op->num_results(); ++j)
+                {
+                    s.consumed.insert(op->result(j), 0U);
+                }
                 s.producers.push_back(op);
             }
             for (u32 ri = 0; ri < op->num_regions(); ++ri)
             {
                 const TokenMisuse e = scan_tokens(s, op->region(ri));
-                if (e.kind != TokenMisuseKind::None) { return e; }
+                if (e.kind != TokenMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -2338,7 +2996,10 @@ TokenMisuse Context::find_token_misuse(const Module& m) const
     containers::Array<const Operation*>    producers(allocator());
     TokenScan                              s{*this, consumed, producers};
     const TokenMisuse                      use_err = scan_tokens(s, m.body());
-    if (use_err.kind != TokenMisuseKind::None) { return use_err; }
+    if (use_err.kind != TokenMisuseKind::None)
+    {
+        return use_err;
+    }
     // post-walk: the FIRST (pre-order) token that was never consumed — a leaked/dropped async op (no await XOR cancel).
     for (u32 i = 0; i < static_cast<u32>(producers.size()); ++i)
     {
@@ -2347,7 +3008,10 @@ TokenMisuse Context::find_token_misuse(const Module& m) const
         {
             const Value* const r = p->result(j);
             const u32* const   c = consumed.find(r);
-            if (c != nullptr && *c == 0U) { return {r, p, TokenMisuseKind::Unconsumed}; }
+            if (c != nullptr && *c == 0U)
+            {
+                return {r, p, TokenMisuseKind::Unconsumed};
+            }
         }
     }
     return {};
@@ -2381,7 +3045,10 @@ namespace
 [[nodiscard]] crd::u32 ceir_popcount5(crd::u32 mask) noexcept
 {
     crd::u32 n = 0U;
-    for (crd::u32 b = 0; b < 5U; ++b) { n += (mask >> b) & 1U; }
+    for (crd::u32 b = 0; b < 5U; ++b)
+    {
+        n += (mask >> b) & 1U;
+    }
     return n;
 }
 // the pre-order walk — the FIRST resource-op misuse, or {None}. ⛔ The per-op check ORDER is CONTRACTUAL (the negative
@@ -2389,7 +3056,10 @@ namespace
 // == operand → mask-valid → arity; export = operand-resource; declare/import = result-resource.
 ResourceMisuse scan_resources(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -2401,7 +3071,10 @@ ResourceMisuse scan_resources(const Context& ctx, const Region* r) // NOLINT(mis
                 {
                     const Value* const vv = op->result(0U);
                     const Type         vt = ctx.type_of(vv->type());
-                    if (vt.kind != TypeKind::View) { return {vv, op, ResourceMisuseKind::ViewResultNotView}; }
+                    if (vt.kind != TypeKind::View)
+                    {
+                        return {vv, op, ResourceMisuseKind::ViewResultNotView};
+                    }
                     const Value* const res = op->operand(0U);
                     const TypeKind     rk  = ctx.type_of(res->type()).kind;
                     if (rk != TypeKind::Buffer && rk != TypeKind::Image) // only Buffer/Image are viewable (view_combination_valid)
@@ -2440,7 +3113,10 @@ ResourceMisuse scan_resources(const Context& ctx, const Region* r) // NOLINT(mis
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const ResourceMisuse e = scan_resources(ctx, op->region(i));
-                if (e.kind != ResourceMisuseKind::None) { return e; }
+                if (e.kind != ResourceMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -2497,7 +3173,10 @@ constexpr containers::StringView kIntentAttrNames[] = {
 {
     for (crd::u32 i = 0; i < n; ++i)
     {
-        if (s == set[i]) { return true; }
+        if (s == set[i])
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -2507,7 +3186,10 @@ constexpr containers::StringView kIntentAttrNames[] = {
                                          const containers::StringView* set, crd::u32 n) noexcept
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return true; }
+    if (!a.valid())
+    {
+        return true;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::String && ceir_sv_in(v.s, set, n);
 }
@@ -2515,7 +3197,10 @@ constexpr containers::StringView kIntentAttrNames[] = {
 // the exact kind): lifetime → history_length(value) → history_length(without-history) → memory_domain → residency.
 ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -2531,7 +3216,10 @@ ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) /
                 if (hl.valid())
                 {
                     const AttrValue hv = ctx.attr_value(hl);
-                    if (hv.kind != AttrKind::Int || hv.i < 1) { return {op, ResourceIntentMisuseKind::HistoryLengthInvalid}; }
+                    if (hv.kind != AttrKind::Int || hv.i < 1)
+                    {
+                        return {op, ResourceIntentMisuseKind::HistoryLengthInvalid};
+                    }
                     // lifetime is absent-or-valid here (a bad lifetime already returned above), so "history" iff String=="history".
                     const AttrId lf         = op->attr(containers::StringView("lifetime"));
                     bool         is_history = false;
@@ -2540,7 +3228,10 @@ ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) /
                         const AttrValue lv = ctx.attr_value(lf);
                         is_history = lv.kind == AttrKind::String && lv.s == containers::StringView("history");
                     }
-                    if (!is_history) { return {op, ResourceIntentMisuseKind::HistoryLengthWithoutHistory}; }
+                    if (!is_history)
+                    {
+                        return {op, ResourceIntentMisuseKind::HistoryLengthWithoutHistory};
+                    }
                 }
                 if (!ceir_intent_string_ok(ctx, op, containers::StringView("memory_domain"), kMemoryDomainVocab, kMemoryDomainVocabCount))
                 {
@@ -2563,13 +3254,19 @@ ResourceIntentMisuse scan_resource_intent(const Context& ctx, const Region* r) /
             {
                 for (const containers::StringView an : kIntentAttrNames)
                 {
-                    if (op->has_attr(an)) { return {op, ResourceIntentMisuseKind::IntentAttrOnImport}; }
+                    if (op->has_attr(an))
+                    {
+                        return {op, ResourceIntentMisuseKind::IntentAttrOnImport};
+                    }
                 }
             }
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const ResourceIntentMisuse e = scan_resource_intent(ctx, op->region(i));
-                if (e.kind != ResourceIntentMisuseKind::None) { return e; }
+                if (e.kind != ResourceIntentMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -2614,8 +3311,14 @@ namespace
 [[nodiscard]] bool ceir_is_buffer_or_view_of_buffer(const Context& ctx, TypeId t) noexcept
 {
     const Type ty = ctx.type_of(t);
-    if (ty.kind == TypeKind::Buffer) { return true; }
-    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind == TypeKind::Buffer; }
+    if (ty.kind == TypeKind::Buffer)
+    {
+        return true;
+    }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U)
+    {
+        return ctx.type_of(ty.members[0]).kind == TypeKind::Buffer;
+    }
     return false;
 }
 // Parse the `access` string: comma-separated tokens, each EXACTLY "r" | "w" | "rw", one per binding in operand order (an
@@ -2624,7 +3327,10 @@ namespace
 [[nodiscard]] bool ceir_parse_access(containers::StringView s, crd::u32& count) noexcept
 {
     count = 0;
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     crd::usize start = 0;
     for (crd::usize i = 0; i <= s.size(); ++i)
     {
@@ -2633,7 +3339,10 @@ namespace
             const crd::usize len = i - start;
             const char*      t   = s.data() + start;
             const bool       ok  = (len == 1U && (t[0] == 'r' || t[0] == 'w')) || (len == 2U && t[0] == 'r' && t[1] == 'w');
-            if (!ok) { return false; }
+            if (!ok)
+            {
+                return false;
+            }
             ++count;
             start = i + 1U;
         }
@@ -2645,7 +3354,10 @@ namespace
 // args-is-buffer → access(kind-fold → tokens → arity) → bindings-resource.
 DispatchMisuse scan_dispatch(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -2682,9 +3394,18 @@ DispatchMisuse scan_dispatch(const Context& ctx, const Region* r) // NOLINT(misc
                 // ⛔ a wrong-KIND (or ABSENT -> attr_value yields Int) `access` folds into AccessTokenInvalid, the 12b fold
                 // doctrine — NOT silently skipped: a deserialized module is built RAW (graceful-reject), so per-op verify
                 // may not have run before this standalone walk, and a false-clean here would be a real path.
-                if (av.kind != AttrKind::String) { return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid}; }
-                if (!ceir_parse_access(av.s, tokens)) { return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid}; }
-                if (tokens != bindings) { return {nullptr, op, DispatchMisuseKind::AccessArityMismatch}; }
+                if (av.kind != AttrKind::String)
+                {
+                    return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid};
+                }
+                if (!ceir_parse_access(av.s, tokens))
+                {
+                    return {nullptr, op, DispatchMisuseKind::AccessTokenInvalid};
+                }
+                if (tokens != bindings)
+                {
+                    return {nullptr, op, DispatchMisuseKind::AccessArityMismatch};
+                }
                 for (crd::u32 i = fixed; i < op->num_operands(); ++i)
                 {
                     if (!ceir_is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
@@ -2696,7 +3417,10 @@ DispatchMisuse scan_dispatch(const Context& ctx, const Region* r) // NOLINT(misc
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const DispatchMisuse e = scan_dispatch(ctx, op->region(i));
-                if (e.kind != DispatchMisuseKind::None) { return e; }
+                if (e.kind != DispatchMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -2729,7 +3453,10 @@ namespace
 [[nodiscard]] TypeKind ceir_effective_kind(const Context& ctx, TypeId t) noexcept
 {
     const Type ty = ctx.type_of(t);
-    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind; }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U)
+    {
+        return ctx.type_of(ty.members[0]).kind;
+    }
     return ty.kind;
 }
 // a TRANSFERABLE operand: a Buffer or Image, or a View of one. ⛔ opaque ExternalResource is OUT (kind unknowable).
@@ -2743,7 +3470,10 @@ namespace
 // dst-transferable → value(kind-fold → on-image); mip_gen = is-image.
 TransferMisuse scan_transfer(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -2781,7 +3511,10 @@ TransferMisuse scan_transfer(const Context& ctx, const Region* r) // NOLINT(misc
                 if (a.valid())
                 {
                     const AttrValue av = ctx.attr_value(a);
-                    if (av.kind != AttrKind::Int) { return {nullptr, op, TransferMisuseKind::ClearValueInvalid}; }
+                    if (av.kind != AttrKind::Int)
+                    {
+                        return {nullptr, op, TransferMisuseKind::ClearValueInvalid};
+                    }
                     if (op->num_operands() >= 1U && ceir_effective_kind(ctx, op->operand(0U)->type()) == TypeKind::Image)
                     {
                         return {nullptr, op, TransferMisuseKind::ClearValueOnImage};
@@ -2798,7 +3531,10 @@ TransferMisuse scan_transfer(const Context& ctx, const Region* r) // NOLINT(misc
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const TransferMisuse e = scan_transfer(ctx, op->region(i));
-                if (e.kind != TransferMisuseKind::None) { return e; }
+                if (e.kind != TransferMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -2852,7 +3588,10 @@ constexpr containers::StringView kGeometryVocab[] = {containers::StringView("sto
                                          const containers::StringView* set, crd::u32 n) noexcept
 {
     const AttrId a = op->attr(name);
-    if (!a.valid()) { return true; }
+    if (!a.valid())
+    {
+        return true;
+    }
     const AttrValue v = ctx.attr_value(a);
     return v.kind == AttrKind::String && ceir_sv_in(v.s, set, n);
 }
@@ -2860,8 +3599,14 @@ constexpr containers::StringView kGeometryVocab[] = {containers::StringView("sto
 [[nodiscard]] bool ceir_is_image_or_view_of_image(const Context& ctx, TypeId t) noexcept
 {
     const Type ty = ctx.type_of(t);
-    if (ty.kind == TypeKind::Image) { return true; }
-    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { return ctx.type_of(ty.members[0]).kind == TypeKind::Image; }
+    if (ty.kind == TypeKind::Image)
+    {
+        return true;
+    }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U)
+    {
+        return ctx.type_of(ty.members[0]).kind == TypeKind::Image;
+    }
     return false;
 }
 // The underlying image FORMAT element type of an attachment operand (unwrap View one-hop → Image → members[0]); an
@@ -2869,14 +3614,23 @@ constexpr containers::StringView kGeometryVocab[] = {containers::StringView("sto
 [[nodiscard]] TypeId ceir_image_format(const Context& ctx, TypeId t) noexcept
 {
     Type ty = ctx.type_of(t);
-    if (ty.kind == TypeKind::View && ty.members.size() >= 1U) { ty = ctx.type_of(ty.members[0]); }
-    if (ty.kind == TypeKind::Image && ty.members.size() >= 1U) { return ty.members[0]; }
+    if (ty.kind == TypeKind::View && ty.members.size() >= 1U)
+    {
+        ty = ctx.type_of(ty.members[0]);
+    }
+    if (ty.kind == TypeKind::Image && ty.members.size() >= 1U)
+    {
+        return ty.members[0];
+    }
     return TypeId{};
 }
 // Is `fmt` an UNSIGNED-integer format? A uint typed-clear needs one (RAH-1a.1). An unsigned Int element.
 [[nodiscard]] bool ceir_is_uint_format(const Context& ctx, TypeId fmt) noexcept
 {
-    if (!fmt.valid()) { return false; }
+    if (!fmt.valid())
+    {
+        return false;
+    }
     const Type f = ctx.type_of(fmt);
     return f.kind == TypeKind::Int && !f.is_signed;
 }
@@ -2885,10 +3639,19 @@ enum class RAtt : crd::u8 { None = 0, Color, Depth };
 [[nodiscard]] RAtt ceir_attachment_class(const Context& ctx, TypeId t) noexcept
 {
     const Type ty = ctx.type_of(t);
-    if (ty.kind != TypeKind::Extern) { return RAtt::None; }
+    if (ty.kind != TypeKind::Extern)
+    {
+        return RAtt::None;
+    }
     const containers::StringView n = ctx.type_class_name(ty.type_class);
-    if (n == containers::StringView("render.color_attachment")) { return RAtt::Color; }
-    if (n == containers::StringView("render.depth_attachment")) { return RAtt::Depth; }
+    if (n == containers::StringView("render.color_attachment"))
+    {
+        return RAtt::Color;
+    }
+    if (n == containers::StringView("render.depth_attachment"))
+    {
+        return RAtt::Depth;
+    }
     return RAtt::None;
 }
 [[nodiscard]] bool ceir_is_pow2_1_64(crd::i64 v) noexcept { return v >= 1 && v <= 64 && (v & (v - 1)) == 0; }
@@ -2899,7 +3662,10 @@ enum class RAtt : crd::u8 { None = 0, Color, Depth };
     const EffectRecord* const                 d  = fx.data();
     for (crd::u32 i = 0; i < static_cast<crd::u32>(fx.size()); ++i)
     {
-        if (d[i].family == EffectFamily::GPUCommand) { return true; }
+        if (d[i].family == EffectFamily::GPUCommand)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -2922,19 +3688,51 @@ struct DrawShape
 // a scope is a draw, guaranteed by find_render_misuse), so there is NO second name list to keep in sync (the 14c fragility).
 [[nodiscard]] bool draw_shape_of(containers::StringView nm, DrawShape& out)
 {
-    if (nm == containers::StringView("render.draw")) { out = {2U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
-    if (nm == containers::StringView("render.draw_indexed")) { out = {2U, 1U, {RenderMisuseKind::DrawIndexBufferNotBuffer, RenderMisuseKind::None}, false}; return true; }
-    if (nm == containers::StringView("render.draw_indirect")) { out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, true}; return true; }
-    if (nm == containers::StringView("render.draw_indirect_count")) { out = {0U, 2U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::IndirectCountNotBuffer}, true}; return true; }
-    if (nm == containers::StringView("render.mesh_dispatch")) { out = {3U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
-    if (nm == containers::StringView("render.mesh_dispatch_indirect")) { out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.draw"))
+    {
+        out = {2U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false};
+        return true;
+    }
+    if (nm == containers::StringView("render.draw_indexed"))
+    {
+        out = {2U, 1U, {RenderMisuseKind::DrawIndexBufferNotBuffer, RenderMisuseKind::None}, false};
+        return true;
+    }
+    if (nm == containers::StringView("render.draw_indirect"))
+    {
+        out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, true};
+        return true;
+    }
+    if (nm == containers::StringView("render.draw_indirect_count"))
+    {
+        out = {0U, 2U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::IndirectCountNotBuffer}, true};
+        return true;
+    }
+    if (nm == containers::StringView("render.mesh_dispatch"))
+    {
+        out = {3U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false};
+        return true;
+    }
+    if (nm == containers::StringView("render.mesh_dispatch_indirect"))
+    {
+        out = {0U, 1U, {RenderMisuseKind::IndirectArgsNotBuffer, RenderMisuseKind::None}, false};
+        return true;
+    }
     // ⭐ CEIR-16-mesh-2: the per-draw-item amplification. ZERO operands (all per-item data is HOST DrawList data resolved at
     // record) ⇒ 0 counts, 0 buffers, arity 0 — ceir_check_draw validates program-symbol + access=="" for it.
-    if (nm == containers::StringView("render.mesh_dispatch_list")) { out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.mesh_dispatch_list"))
+    {
+        out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false};
+        return true;
+    }
     // ⭐ CEIR-16d: the SCENE per-draw-item verb ladder. ZERO operands (all per-item data is HOST DrawList data resolved at
     // record; the verb is chosen per-item from the item's fields) ⇒ 0 counts, 0 buffers, arity 0 — the same shape as
     // mesh_dispatch_list; ceir_check_draw validates program-symbol + access=="".
-    if (nm == containers::StringView("render.scene_draw_list")) { out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false}; return true; }
+    if (nm == containers::StringView("render.scene_draw_list"))
+    {
+        out = {0U, 0U, {RenderMisuseKind::None, RenderMisuseKind::None}, false};
+        return true;
+    }
     return false;
 }
 // The CEIR-14b/14c draw contract for op-shape `sh`: identity (program symbol) BEFORE contract, then counts Index-typed, the
@@ -2966,16 +3764,28 @@ struct DrawShape
         if (md.valid())
         {
             const AttrValue mv = ctx.attr_value(md);
-            if (mv.kind != AttrKind::Int || mv.i < 1) { return {nullptr, op, RenderMisuseKind::MaxDrawsInvalid}; }
+            if (mv.kind != AttrKind::Int || mv.i < 1)
+            {
+                return {nullptr, op, RenderMisuseKind::MaxDrawsInvalid};
+            }
         }
     }
     const crd::u32  fixed    = sh.n_counts + sh.n_buffers;
     const crd::u32  bindings = op->num_operands() >= fixed ? op->num_operands() - fixed : 0U;
     crd::u32        tokens   = 0;
     const AttrValue av       = ctx.attr_value(op->attr(containers::StringView("access")));
-    if (av.kind != AttrKind::String) { return {nullptr, op, RenderMisuseKind::DrawAccessInvalid}; }
-    if (!ceir_parse_access(av.s, tokens)) { return {nullptr, op, RenderMisuseKind::DrawAccessInvalid}; }
-    if (tokens != bindings) { return {nullptr, op, RenderMisuseKind::DrawAccessArity}; }
+    if (av.kind != AttrKind::String)
+    {
+        return {nullptr, op, RenderMisuseKind::DrawAccessInvalid};
+    }
+    if (!ceir_parse_access(av.s, tokens))
+    {
+        return {nullptr, op, RenderMisuseKind::DrawAccessInvalid};
+    }
+    if (tokens != bindings)
+    {
+        return {nullptr, op, RenderMisuseKind::DrawAccessArity};
+    }
     for (crd::u32 i = fixed; i < op->num_operands(); ++i)
     {
         if (!ceir_is_resource_kind(ctx.type_of(op->operand(i)->type()).kind))
@@ -2993,7 +3803,10 @@ struct DrawShape
 // access → bindings; a non-render GPUCommand op inside a scope is ComputeInRenderScope.
 RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_scope) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -3047,15 +3860,27 @@ RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_sco
             }
             else if (nm == containers::StringView("render.scope"))
             {
-                if (in_scope) { return {nullptr, op, RenderMisuseKind::NestedRenderScope}; }
+                if (in_scope)
+                {
+                    return {nullptr, op, RenderMisuseKind::NestedRenderScope};
+                }
                 crd::u32 depths = 0;
                 for (crd::u32 i = 0; i < op->num_operands(); ++i)
                 {
                     const RAtt a = ceir_attachment_class(ctx, op->operand(i)->type());
-                    if (a == RAtt::None) { return {op->operand(i), op, RenderMisuseKind::ScopeOperandNotAttachment}; }
-                    if (a == RAtt::Depth) { ++depths; }
+                    if (a == RAtt::None)
+                    {
+                        return {op->operand(i), op, RenderMisuseKind::ScopeOperandNotAttachment};
+                    }
+                    if (a == RAtt::Depth)
+                    {
+                        ++depths;
+                    }
                 }
-                if (depths > 1U) { return {nullptr, op, RenderMisuseKind::MultipleDepthAttachments}; }
+                if (depths > 1U)
+                {
+                    return {nullptr, op, RenderMisuseKind::MultipleDepthAttachments};
+                }
                 // width/height are REQUIRED Int >= 1 (a wrong-kind/absent folds into RenderAreaInvalid — standalone-robust).
                 const AttrValue w = ctx.attr_value(op->attr(containers::StringView("width")));
                 const AttrValue h = ctx.attr_value(op->attr(containers::StringView("height")));
@@ -3076,15 +3901,24 @@ RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_sco
                 for (crd::u32 i = 0; i < op->num_regions(); ++i)
                 {
                     const RenderMisuse e = scan_render_region(ctx, op->region(i), true);
-                    if (e.kind != RenderMisuseKind::None) { return e; }
+                    if (e.kind != RenderMisuseKind::None)
+                    {
+                        return e;
+                    }
                 }
                 continue;
             }
             else if (draw)
             {
-                if (!in_scope) { return {nullptr, op, RenderMisuseKind::DrawOutsideScope}; }
+                if (!in_scope)
+                {
+                    return {nullptr, op, RenderMisuseKind::DrawOutsideScope};
+                }
                 const RenderMisuse e = ceir_check_draw(ctx, op, dsh);
-                if (e.kind != RenderMisuseKind::None) { return e; }
+                if (e.kind != RenderMisuseKind::None)
+                {
+                    return e;
+                }
                 // ⛔ CEIR-16z-2: the scene ladder's optional GEOMETRY mode (storage | procedural; absent = storage). A
                 // visbuffer (procedural) scene draws gl_VertexIndex geometry with NO storage — the closed vocab keeps the
                 // mode DECLARED, never inferred from a null storage buffer (which is the resolve-failure skip, not a mode).
@@ -3103,7 +3937,10 @@ RenderMisuse scan_render_region(const Context& ctx, const Region* r, bool in_sco
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const RenderMisuse e = scan_render_region(ctx, op->region(i), in_scope);
-                if (e.kind != RenderMisuseKind::None) { return e; }
+                if (e.kind != RenderMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -3171,9 +4008,15 @@ constexpr containers::StringView kSortVocab[]  = {containers::StringView("none")
 // the same alias hole as resource_root; a frame.history over one is the caller's error, not a false accept here).
 [[nodiscard]] bool ceir_is_history_declare(const Context& ctx, const Value* v) noexcept
 {
-    if (v == nullptr) { return false; }
+    if (v == nullptr)
+    {
+        return false;
+    }
     const Operation* const def = v->defining_op();
-    if (def == nullptr || ctx.op_name(def->kind()) != containers::StringView("resource.declare")) { return false; }
+    if (def == nullptr || ctx.op_name(def->kind()) != containers::StringView("resource.declare"))
+    {
+        return false;
+    }
     const AttrValue lv = ctx.attr_value(def->attr(containers::StringView("lifetime")));
     return lv.kind == AttrKind::String && lv.s == containers::StringView("history");
 }
@@ -3183,19 +4026,31 @@ constexpr containers::StringView kSortVocab[]  = {containers::StringView("none")
 // no desc home (the backward converter's find_graph silently takes the first). `first` threads the "seen one yet" flag.
 const Operation* second_frame_graph(const Context& ctx, const Region* r, const Operation*& first) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return nullptr; }
+    if (r == nullptr)
+    {
+        return nullptr;
+    }
     for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
             if (ctx.op_name(op->kind()) == containers::StringView("frame.graph"))
             {
-                if (first == nullptr) { first = op; }
-                else { return op; }
+                if (first == nullptr)
+                {
+                    first = op;
+                }
+                else
+                {
+                    return op;
+                }
             }
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
-                if (const Operation* s = second_frame_graph(ctx, op->region(i), first)) { return s; }
+                if (const Operation* s = second_frame_graph(ctx, op->region(i), first))
+                {
+                    return s;
+                }
             }
         }
     }
@@ -3204,7 +4059,10 @@ const Operation* second_frame_graph(const Context& ctx, const Region* r, const O
 
 FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -3216,13 +4074,19 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                 for (crd::u32 i = 0; i < op->num_regions(); ++i)
                 {
                     const FrameMisuse e = scan_frame_region(ctx, op->region(i), true);
-                    if (e.kind != FrameMisuseKind::None) { return e; }
+                    if (e.kind != FrameMisuseKind::None)
+                    {
+                        return e;
+                    }
                 }
                 continue;
             }
             if (nm == containers::StringView("frame.pass"))
             {
-                if (!in_graph) { return {nullptr, op, FrameMisuseKind::PassOutsideGraph}; }
+                if (!in_graph)
+                {
+                    return {nullptr, op, FrameMisuseKind::PassOutsideGraph};
+                }
                 if (ctx.attr_value(op->attr(containers::StringView("executor"))).kind != AttrKind::SymbolRef)
                 {
                     return {nullptr, op, FrameMisuseKind::ExecutorNotSymbol};
@@ -3233,7 +4097,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                 {
                     return {nullptr, op, FrameMisuseKind::PassAccessInvalid};
                 }
-                if (tokens != op->num_operands()) { return {nullptr, op, FrameMisuseKind::PassAccessArity}; }
+                if (tokens != op->num_operands())
+                {
+                    return {nullptr, op, FrameMisuseKind::PassAccessArity};
+                }
                 // CEIR-15c-1a: per-operand structural guards. Tokens are validated ∈ {r,w,rw} + count==operands (above), so
                 // walk them in lockstep with the operands (the same tokenization as ceir_parse_access: skip on empty). first
                 // char 'r' ⟺ a READ component, last char 'w' ⟺ a WRITE component.
@@ -3243,7 +4110,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                     crd::usize start = 0U;
                     for (crd::usize c = 0; c <= ac.s.size(); ++c)
                     {
-                        if (c != ac.s.size() && ac.s[c] != ',') { continue; }
+                        if (c != ac.s.size() && ac.s[c] != ',')
+                        {
+                            continue;
+                        }
                         const containers::StringView tok(ac.s.data() + start, c - start);
                         start                = c + 1U;
                         const bool         has_read  = tok.size() > 0U && tok[0] == 'r';
@@ -3257,7 +4127,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                         }
                         // §9 (CEIR-15c-1c-2): a draw-list operand is QUERIED, never written — a write token on one is
                         // meaningless (the backward converter ignores the token, silently normalizing it).
-                        if (ceir_is_frame_draw_list(ctx, t) && has_write) { return {v, op, FrameMisuseKind::DrawListNotWritable}; }
+                        if (ceir_is_frame_draw_list(ctx, t) && has_write)
+                        {
+                            return {v, op, FrameMisuseKind::DrawListNotWritable};
+                        }
                         // guard 1: the operand must be DEFINED in THIS frame.graph region (the flat-graph shape: declares and
                         // passes are siblings in the graph region's block). A block-arg (def==null) or a foreign-region value
                         // has no [[resource]] home in the desc — the backward converter reads a garbage/empty name.
@@ -3293,7 +4166,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
             else if (nm == containers::StringView("frame.draw_list"))
             {
                 // §8 (CEIR-15c-1c-2): only frame.pass had an outside-graph kind; a draw_list in the func body is now flagged too.
-                if (!in_graph) { return {nullptr, op, FrameMisuseKind::DrawListOutsideGraph}; }
+                if (!in_graph)
+                {
+                    return {nullptr, op, FrameMisuseKind::DrawListOutsideGraph};
+                }
                 if (!ceir_render_string_ok(ctx, op, containers::StringView("cull"), kCullVocab, 3U))
                 {
                     return {nullptr, op, FrameMisuseKind::DrawListCullInvalid};
@@ -3306,13 +4182,19 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                 if (lim.valid())
                 {
                     const AttrValue lv = ctx.attr_value(lim);
-                    if (lv.kind == AttrKind::Int && lv.i < 0) { return {nullptr, op, FrameMisuseKind::DrawListLimitInvalid}; }
+                    if (lv.kind == AttrKind::Int && lv.i < 0)
+                    {
+                        return {nullptr, op, FrameMisuseKind::DrawListLimitInvalid};
+                    }
                 }
             }
             else if (nm == containers::StringView("frame.history"))
             {
                 // §8 (CEIR-15c-1c-2): a frame.history outside any frame.graph region.
-                if (!in_graph) { return {nullptr, op, FrameMisuseKind::HistoryOutsideGraph}; }
+                if (!in_graph)
+                {
+                    return {nullptr, op, FrameMisuseKind::HistoryOutsideGraph};
+                }
                 if (op->num_operands() < 1U || !ceir_is_history_declare(ctx, op->operand(0U)))
                 {
                     const Value* v = op->num_operands() >= 1U ? op->operand(0U) : nullptr;
@@ -3332,7 +4214,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
                 if (fb.valid())
                 {
                     const AttrValue fv = ctx.attr_value(fb);
-                    if (fv.kind != AttrKind::Int || fv.i < 1) { return {nullptr, op, FrameMisuseKind::HistoryFramesBackInvalid}; }
+                    if (fv.kind != AttrKind::Int || fv.i < 1)
+                    {
+                        return {nullptr, op, FrameMisuseKind::HistoryFramesBackInvalid};
+                    }
                 }
             }
             else if (in_graph && ceir_op_is_gpu_command(ctx, op->kind()))
@@ -3345,7 +4230,10 @@ FrameMisuse scan_frame_region(const Context& ctx, const Region* r, bool in_graph
             for (crd::u32 i = 0; i < op->num_regions(); ++i)
             {
                 const FrameMisuse e = scan_frame_region(ctx, op->region(i), in_graph);
-                if (e.kind != FrameMisuseKind::None) { return e; }
+                if (e.kind != FrameMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }
@@ -3396,10 +4284,16 @@ FrameMisuse Context::find_frame_misuse(const Module& m) const noexcept
 
 u32 Context::register_file(containers::StringView path)
 {
-    if (path.empty()) { return 0U; }
+    if (path.empty())
+    {
+        return 0U;
+    }
     for (usize i = 0; i < m_files.size(); ++i)
     {
-        if (m_files[i] == path) { return static_cast<u32>(i + 1U); } // dedup by path
+        if (m_files[i] == path) // dedup by path
+        {
+            return static_cast<u32>(i + 1U);
+        }
     }
     m_files.push_back(intern_symbol(path)); // arena-copy so the id is stable for the Context's life
     return static_cast<u32>(m_files.size()); // index + 1 (0 = unknown)
@@ -3407,7 +4301,10 @@ u32 Context::register_file(containers::StringView path)
 
 containers::StringView Context::file_path(u32 file_id) const noexcept
 {
-    if (file_id == 0U || file_id > m_files.size()) { return {}; }
+    if (file_id == 0U || file_id > m_files.size())
+    {
+        return {};
+    }
     return m_files[file_id - 1U];
 }
 
@@ -3420,7 +4317,10 @@ Region* Context::create_region(RegionKind kind)
 
 void Context::set_region_kind(Region* r, RegionKind kind) noexcept
 {
-    if (r != nullptr) { r->m_kind = kind; }
+    if (r != nullptr)
+    {
+        r->m_kind = kind;
+    }
 }
 
 Block* Context::create_block(u32 num_args, TypeId arg_type)
@@ -3428,7 +4328,10 @@ Block* Context::create_block(u32 num_args, TypeId arg_type)
     Block* const b = memory::construct<Block>(m_arena);
     b->m_num_args  = num_args;
     b->m_args      = memory::construct_array<Value>(m_arena, num_args);
-    for (u32 i = 0; i < num_args; ++i) { b->m_args[i].init(arg_type, ValueKind::BlockArg, i, b); }
+    for (u32 i = 0; i < num_args; ++i)
+    {
+        b->m_args[i].init(arg_type, ValueKind::BlockArg, i, b);
+    }
     return b;
 }
 
@@ -3440,7 +4343,10 @@ Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> op
 
     op->m_num_results = num_results;
     op->m_results     = memory::construct_array<Value>(m_arena, num_results);
-    for (u32 i = 0; i < num_results; ++i) { op->m_results[i].init(result_type, ValueKind::OpResult, i, op); }
+    for (u32 i = 0; i < num_results; ++i)
+    {
+        op->m_results[i].init(result_type, ValueKind::OpResult, i, op);
+    }
 
     op->m_num_regions = num_regions;
     op->m_regions     = memory::construct_array<Region*>(m_arena, num_regions); // trivially-init; overwritten below
@@ -3453,7 +4359,10 @@ Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> op
     const auto num_operands = static_cast<u32>(operands.size());
     op->m_num_operands      = num_operands;
     op->m_operands          = memory::construct_array<Use>(m_arena, num_operands);
-    for (u32 i = 0; i < num_operands; ++i) { op->set_operand(i, operands[i]); } // wires the def-use lists
+    for (u32 i = 0; i < num_operands; ++i) // wires the def-use lists
+    {
+        op->set_operand(i, operands[i]);
+    }
 
     return op;
 }
@@ -3463,7 +4372,10 @@ Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> op
 crd::u32 render_draw_binding_start(containers::StringView op_name) noexcept
 {
     DrawShape sh;
-    if (!draw_shape_of(op_name, sh)) { return 0U; }
+    if (!draw_shape_of(op_name, sh))
+    {
+        return 0U;
+    }
     return sh.n_counts + sh.n_buffers;
 }
 } // namespace crd::ceir

@@ -20,7 +20,11 @@ constexpr usize kMaxRank = 16U;
 [[nodiscard]] usize tensor_rank(const Context& ctx, TypeId tensor, bool& have_rank) noexcept
 {
     const Type tt = ctx.type_of(tensor);
-    if (tt.members.size() < 2U) { have_rank = false; return 0U; }
+    if (tt.members.size() < 2U)
+    {
+        have_rank = false;
+        return 0U;
+    }
     have_rank = true;
     return ctx.type_of(tt.members[1]).members.size();
 }
@@ -36,7 +40,10 @@ constexpr usize kMaxRank = 16U;
 [[nodiscard]] bool parse_int_list(containers::StringView s, i64* out, u32 max, u32& count) noexcept
 {
     count = 0U;
-    if (s.size() == 0U) { return true; }
+    if (s.size() == 0U)
+    {
+        return true;
+    }
     usize start = 0U;
     for (usize i = 0; i <= s.size(); ++i)
     {
@@ -46,11 +53,17 @@ constexpr usize kMaxRank = 16U;
             bool any = false;
             for (usize j = start; j < i; ++j)
             {
-                if (s[j] < '0' || s[j] > '9') { return false; }
+                if (s[j] < '0' || s[j] > '9')
+                {
+                    return false;
+                }
                 v   = v * 10 + static_cast<i64>(s[j] - '0');
                 any = true;
             }
-            if (!any || count >= max) { return false; }
+            if (!any || count >= max)
+            {
+                return false;
+            }
             out[count++] = v;
             start = i + 1U;
         }
@@ -60,7 +73,10 @@ constexpr usize kMaxRank = 16U;
 
 LayoutMisuse scan_layout_region(const Context& ctx, const Region* r) // NOLINT(misc-no-recursion)
 {
-    if (r == nullptr) { return {}; }
+    if (r == nullptr)
+    {
+        return {};
+    }
     for (Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
@@ -92,7 +108,10 @@ LayoutMisuse scan_layout_region(const Context& ctx, const Region* r) // NOLINT(m
                 //    via create_operation) FOLDS to the generated verify_constrain's arity check, never silently passing the param
                 //    section below. After this, operand(0) is a well-formed Tensor (OperandNotTensor returned above otherwise), so
                 //    its rank is ALWAYS available (a type_tensor Tensor is [element, shape]) — `have_rank` stays a defensive guard.
-                if (op->num_operands() < 1U || op->num_results() < 1U) { continue; }
+                if (op->num_operands() < 1U || op->num_results() < 1U)
+                {
+                    continue;
+                }
                 // the tensor RANK (for the strides/block arity — always static, §21).
                 bool        have_rank = false;
                 const usize rank = (op->num_operands() >= 1U && is_tensor(ctx, op->operand(0U)))
@@ -104,7 +123,10 @@ LayoutMisuse scan_layout_region(const Context& ctx, const Region* r) // NOLINT(m
                 const AttrValue sv = ctx.attr_value(op->attr(containers::StringView("strides")));
                 if (sv.kind == AttrKind::String)
                 {
-                    if (kv.s != containers::StringView("strided")) { return {nullptr, op, LayoutMisuseKind::ParamKindMismatch}; }
+                    if (kv.s != containers::StringView("strided"))
+                    {
+                        return {nullptr, op, LayoutMisuseKind::ParamKindMismatch};
+                    }
                     if (!parse_int_list(sv.s, buf, kMaxRank, cnt) || (have_rank && cnt != rank))
                     {
                         return {nullptr, op, LayoutMisuseKind::StridesArityMismatch};
@@ -113,14 +135,20 @@ LayoutMisuse scan_layout_region(const Context& ctx, const Region* r) // NOLINT(m
                 const AttrValue bv = ctx.attr_value(op->attr(containers::StringView("block")));
                 if (bv.kind == AttrKind::String)
                 {
-                    if (kv.s != containers::StringView("blocked")) { return {nullptr, op, LayoutMisuseKind::ParamKindMismatch}; }
+                    if (kv.s != containers::StringView("blocked"))
+                    {
+                        return {nullptr, op, LayoutMisuseKind::ParamKindMismatch};
+                    }
                     if (!parse_int_list(bv.s, buf, kMaxRank, cnt) || (have_rank && cnt != rank))
                     {
                         return {nullptr, op, LayoutMisuseKind::BlockInvalid};
                     }
                     for (u32 i = 0; i < cnt; ++i)
                     {
-                        if (buf[i] < 1) { return {nullptr, op, LayoutMisuseKind::BlockInvalid}; }
+                        if (buf[i] < 1)
+                        {
+                            return {nullptr, op, LayoutMisuseKind::BlockInvalid};
+                        }
                     }
                 }
                 const AttrValue wv = ctx.attr_value(op->attr(containers::StringView("swizzle")));
@@ -132,7 +160,10 @@ LayoutMisuse scan_layout_region(const Context& ctx, const Region* r) // NOLINT(m
             for (u32 i = 0; i < op->num_regions(); ++i)
             {
                 const LayoutMisuse e = scan_layout_region(ctx, op->region(i));
-                if (e.kind != LayoutMisuseKind::None) { return e; }
+                if (e.kind != LayoutMisuseKind::None)
+                {
+                    return e;
+                }
             }
         }
     }

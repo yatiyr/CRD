@@ -35,15 +35,27 @@ namespace crd::ceir
 // it is Pure (side-effect-free — the write-through-declare `compute.dispatch` is NOT Pure ⇒ kept), and NO result has uses.
 [[nodiscard]] inline bool dce_is_dead(const Context& ctx, const Operation& op) noexcept
 {
-    if (op.num_regions() != 0U) { return false; } // container / structured op — not a leaf DCE target (26b: structured DCE)
+    if (op.num_regions() != 0U) // container / structured op — not a leaf DCE target (26b: structured DCE)
+    {
+        return false;
+    }
     // ⛔ UNREGISTERED ⇒ never dead (EMPTY≠UNKNOWN, context.hpp:648-651). `op_has_trait` ALREADY returns false for an unknown
     //    kind (has_trait: `op_info==nullptr ⇒ false`, dialect.cpp:162-165), so the Pure check below would keep it anyway — but
     //    state the maximally-effectful contract EXPLICITLY so a future trait-lookup change can never make an unknown op dead.
-    if (ctx.op_info(op.kind()) == nullptr) { return false; }
-    if (!ctx.op_has_trait(op, OpTrait::Pure)) { return false; } // effectful ⇒ keep (incl. resultless buffer-writing dispatch)
+    if (ctx.op_info(op.kind()) == nullptr)
+    {
+        return false;
+    }
+    if (!ctx.op_has_trait(op, OpTrait::Pure)) // effectful ⇒ keep (incl. resultless buffer-writing dispatch)
+    {
+        return false;
+    }
     for (u32 i = 0; i < op.num_results(); ++i)
     {
-        if (op.result(i)->has_uses()) { return false; } // a live result ⇒ keep
+        if (op.result(i)->has_uses()) // a live result ⇒ keep
+        {
+            return false;
+        }
     }
     return true; // registered, pure, leaf, every result unused ⇒ dead
 }
@@ -56,8 +68,14 @@ inline void dce_collect(const Context& ctx, Region* region, containers::Array<Op
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            for (u32 i = 0; i < op->num_regions(); ++i) { dce_collect(ctx, op->region(i), dead); }
-            if (dce_is_dead(ctx, *op)) { dead.push_back(op); }
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                dce_collect(ctx, op->region(i), dead);
+            }
+            if (dce_is_dead(ctx, *op))
+            {
+                dead.push_back(op);
+            }
         }
     }
 }
@@ -74,8 +92,14 @@ inline void dce_collect(const Context& ctx, Region* region, containers::Array<Op
     {
         dead.clear();
         dce_collect(ctx, m.body(), dead);
-        if (dead.size() == 0U) { break; }
-        for (usize i = 0; i < dead.size(); ++i) { dead[i]->erase(); }
+        if (dead.size() == 0U)
+        {
+            break;
+        }
+        for (usize i = 0; i < dead.size(); ++i)
+        {
+            dead[i]->erase();
+        }
         any = true;
     }
     return any;

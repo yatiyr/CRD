@@ -119,12 +119,18 @@ public:
         T*       co = m_col_out.data();
         for (crd::u32 j = 0; j < s; ++j)
         {
-            for (crd::usize i = 0; i < m_n; ++i) { ci[i] = xr[i * ldx + j]; } // gather column j
+            for (crd::usize i = 0; i < m_n; ++i) // gather column j
+            {
+                ci[i] = xr[i * ldx + j];
+            }
             if (!m_m->apply(crd::containers::ConstSpan<T>{ci, m_n}, crd::containers::Span<T>{co, m_n}))
             {
                 return false;
             }
-            for (crd::usize i = 0; i < m_n; ++i) { yr[i * ldy + j] = co[i]; } // scatter back
+            for (crd::usize i = 0; i < m_n; ++i) // scatter back
+            {
+                yr[i * ldy + j] = co[i];
+            }
         }
         return true;
     }

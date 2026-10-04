@@ -59,14 +59,28 @@ VariantMatrixResult cook_variant_matrix(
         crd::containers::Array<crd::u8> ir = crd::kir::serialize_graph(g, e, a);
         const crd::resources::ResourceId id = crd::resources::ResourceId::from_content(crd::containers::as_const_span(ir));
         bool is_new = true;
-        for (crd::usize s = 0; s < seen.size(); ++s) { if (seen[s] == id) { is_new = false; break; } }
+        for (crd::usize s = 0; s < seen.size(); ++s)
+        {
+            if (seen[s] == id)
+            {
+                is_new = false;
+                break;
+            }
+        }
 
         char nm[32];
         std::snprintf(nm, sizeof(nm), "variant_%08x", key);
         CookResult r = cook_compute_shader(g, e, crd::containers::StringView(nm), opts, a);
-        if (!r.ok) { out.error.append("variant cook failed for a key"); return out; }
+        if (!r.ok)
+        {
+            out.error.append("variant cook failed for a key");
+            return out;
+        }
 
-        if (is_new) { seen.push_back(id); }
+        if (is_new)
+        {
+            seen.push_back(id);
+        }
         VariantManifestEntry ent;
         ent.key  = key;
         ent.hash = id;
@@ -94,8 +108,19 @@ VariantMatrixResult cook_variant_matrix_parallel(
         crd::containers::Array<crd::u8>  ir = crd::kir::serialize_graph(g, e, a);
         const crd::resources::ResourceId h  = crd::resources::ResourceId::from_content(crd::containers::as_const_span(ir));
         bool is_new = true;
-        for (crd::usize s = 0; s < seen.size(); ++s) { if (seen[s] == h) { is_new = false; break; } }
-        if (is_new) { seen.push_back(h); unique_keys.push_back(key); }
+        for (crd::usize s = 0; s < seen.size(); ++s)
+        {
+            if (seen[s] == h)
+            {
+                is_new = false;
+                break;
+            }
+        }
+        if (is_new)
+        {
+            seen.push_back(h);
+            unique_keys.push_back(key);
+        }
         VariantManifestEntry ent;
         ent.key  = key;
         ent.hash = h;
@@ -120,7 +145,10 @@ VariantMatrixResult cook_variant_matrix_parallel(
         Ctx            ctx{build, user, unique_keys.data(), &opts, ok.data()};
         const crd::u32 nw    = crd::jobs::num_workers();
         crd::u32       njobs = (nw == 0U ? 1U : nw);
-        if (njobs > nu) { njobs = nu; }
+        if (njobs > nu)
+        {
+            njobs = nu;
+        }
         // StackSize::Large (2 MB): the cook runs the GLSL front-end (shaderc/glslang) + emitter + serializer, which need a
         // real thread-sized stack — the default 64 KB Small fiber OVERFLOWS inside shaderc (silent 0xC0000005). A normal OS
         // thread gives shaderc 1 MB; the 2 MB Large fiber matches that with headroom. (16 Large fibers exist by default.)
@@ -133,7 +161,10 @@ VariantMatrixResult cook_variant_matrix_parallel(
                     crd::kir::KGraph           g(&wa);
                     crd::kir::KEntry           ke = ctxp->build(g, ctxp->uk[i], ctxp->user);
                     CookResult                 r  = cook_compute_shader(g, ke, crd::containers::StringView("v"), *ctxp->opts, &wa);
-                    if (r.ok) { ctxp->ok[i] = static_cast<crd::u8>(1); } // disjoint indices — no race
+                    if (r.ok) // disjoint indices — no race
+                    {
+                        ctxp->ok[i] = static_cast<crd::u8>(1);
+                    }
                 }
             },
             crd::jobs::StackSize::Large);
@@ -141,7 +172,11 @@ VariantMatrixResult cook_variant_matrix_parallel(
     }
     for (crd::u32 i = 0; i < nu; ++i)
     {
-        if (ok[i] == 0U) { out.error.append("parallel: a variant cook failed"); return out; }
+        if (ok[i] == 0U)
+        {
+            out.error.append("parallel: a variant cook failed");
+            return out;
+        }
     }
     out.ok = true;
     return out;
@@ -173,7 +208,14 @@ CookResult cook_variant_container(
         crd::containers::Array<crd::u8>  ir = crd::kir::serialize_graph(g, e, a);
         const crd::resources::ResourceId h  = crd::resources::ResourceId::from_content(crd::containers::as_const_span(ir));
         int                              idx = -1;
-        for (crd::usize s = 0; s < seen.size(); ++s) { if (seen[s] == h) { idx = static_cast<int>(s); break; } }
+        for (crd::usize s = 0; s < seen.size(); ++s)
+        {
+            if (seen[s] == h)
+            {
+                idx = static_cast<int>(s);
+                break;
+            }
+        }
         if (idx < 0)
         {
             idx = static_cast<int>(seen.size());
@@ -184,13 +226,24 @@ CookResult cook_variant_container(
             w32(hashcat, static_cast<crd::u32>(h.lo >> 32U));
 
             CookResult r = cook_compute_shader(g, e, crd::containers::StringView("variant"), spv, a);
-            if (!r.ok) { out.error.append("container: variant cook failed"); return out; }
+            if (!r.ok)
+            {
+                out.error.append("container: variant cook failed");
+                return out;
+            }
             ShaderBundle b(a);
-            if (!read_shader_bundle(crd::containers::as_const_span(r.crdr), b)) { out.error.append("container: bundle read failed"); return out; }
+            if (!read_shader_bundle(crd::containers::as_const_span(r.crdr), b))
+            {
+                out.error.append("container: bundle read failed");
+                return out;
+            }
             const auto code = b.bytecode(CookBackend::SpirV);
             uoff.push_back(static_cast<crd::u32>(uspv.size()));
             ulen.push_back(static_cast<crd::u32>(code.size()));
-            for (crd::usize k = 0; k < code.size(); ++k) { uspv.push_back(code[k]); }
+            for (crd::usize k = 0; k < code.size(); ++k)
+            {
+                uspv.push_back(code[k]);
+            }
         }
         req_key.push_back(key);
         req_idx.push_back(static_cast<crd::u32>(idx));
@@ -202,7 +255,11 @@ CookResult cook_variant_container(
     crd::containers::Array<crd::u8> vart(a); // [u32 n_unique][u32 n_requested][ (u32 key, u32 unique_idx) × n_requested ]
     w32(vart, static_cast<crd::u32>(seen.size()));
     w32(vart, static_cast<crd::u32>(req_key.size()));
-    for (crd::usize i = 0; i < req_key.size(); ++i) { w32(vart, req_key[i]); w32(vart, req_idx[i]); }
+    for (crd::usize i = 0; i < req_key.size(); ++i)
+    {
+        w32(vart, req_key[i]);
+        w32(vart, req_idx[i]);
+    }
     w.add_chunk(kVartChunk, crd::containers::as_const_span(vart));
     for (crd::usize i = 0; i < seen.size(); ++i)
     {
@@ -233,7 +290,10 @@ crd::u32 VariantContainer::unique_count() const noexcept
 crd::containers::ConstSpan<crd::u8> VariantContainer::bytecode(crd::u32 key) const noexcept
 {
     const crd::resources::CrdrChunk* c = crd::resources::crdr_find_chunk(file, kVartChunk);
-    if (c == nullptr || c->payload.size() < 8U) { return {}; }
+    if (c == nullptr || c->payload.size() < 8U)
+    {
+        return {};
+    }
     const crd::u32 nreq = r32(c->payload, 4);
     for (crd::u32 i = 0; i < nreq; ++i)
     {

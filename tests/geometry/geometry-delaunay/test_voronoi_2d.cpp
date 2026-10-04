@@ -56,7 +56,10 @@ T cell_signed_area(const VoronoiResult2<T>& r, const VoronoiCell<T>& cell)
 {
     T sum = static_cast<T>(0);
     const u32 n = static_cast<u32>(cell.vertex_indices.size());
-    if (n < 3U) { return static_cast<T>(0); }
+    if (n < 3U)
+    {
+        return static_cast<T>(0);
+    }
     for (u32 i = 0; i < n; ++i)
     {
         const auto& p = r.voronoi_vertices[cell.vertex_indices[i]];
@@ -88,7 +91,10 @@ bool defining_property_holds(const crd::containers::Array<Vec2<T>>& sites,
                 best_s  = s;
             }
         }
-        if (best_s != cell.site_index) { return false; }
+        if (best_s != cell.site_index)
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -195,7 +201,10 @@ TEST_CASE("voronoi_2d: 5 sites (square + center) interior cell bounded",
     u32 bounded_count = 0;
     for (const auto& cell : r.cells)
     {
-        if (cell.is_bounded) { ++bounded_count; }
+        if (cell.is_bounded)
+        {
+            ++bounded_count;
+        }
     }
     CHECK(bounded_count == 1U);
 
@@ -246,7 +255,14 @@ TEST_CASE("voronoi_2d: 16-site exact integer grid (4 inner bounded, 12 perimeter
     u32 unbounded_count = 0;
     for (const auto& cell : r.cells)
     {
-        if (cell.is_bounded) { ++bounded_count; } else { ++unbounded_count; }
+        if (cell.is_bounded)
+        {
+            ++bounded_count;
+        }
+        else
+        {
+            ++unbounded_count;
+        }
     }
     CHECK(bounded_count == 4U);
     CHECK(unbounded_count == 12U);

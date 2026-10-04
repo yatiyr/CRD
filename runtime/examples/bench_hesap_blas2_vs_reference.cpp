@@ -185,8 +185,12 @@ void bench_symv(crd::memory::IAllocator* alloc)
         // Eigen: build dense symmetric matrix, use selfadjointView.
         Eigen::MatrixXd ea(n, n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
+            {
                 ea(i, j) = ca.at(i, j);
+            }
+        }
         Eigen::VectorXd ex(n);
         Eigen::VectorXd ey(n);
         std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
@@ -202,8 +206,12 @@ void bench_symv(crd::memory::IAllocator* alloc)
         ox.resize(n);
         oy.resize(n);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j < n; ++j)
+            {
                 oa[i * n + j] = ca.at(i, j);
+            }
+        }
         std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
         std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
         int oiters = 0;
@@ -266,8 +274,12 @@ void bench_trsv(crd::memory::IAllocator* alloc)
         Eigen::MatrixXd ea(n, n);
         ea.setZero();
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j <= i; ++j)
+            {
                 ea(i, j) = ca.at(i, j);
+            }
+        }
         Eigen::VectorXd eb0(n);
         Eigen::VectorXd eb(n);
         std::memcpy(eb0.data(), cb0.data(), n * sizeof(crd::f64));
@@ -283,8 +295,12 @@ void bench_trsv(crd::memory::IAllocator* alloc)
         crd::containers::Array<crd::f64> oa(alloc);
         oa.resize(n * n, 0.0);
         for (crd::usize i = 0; i < n; ++i)
+        {
             for (crd::usize j = 0; j <= i; ++j)
+            {
                 oa[i * n + j] = ca.at(i, j);
+            }
+        }
         crd::containers::Array<crd::f64> ob0(alloc);
         crd::containers::Array<crd::f64> ob(alloc);
         ob0.resize(n);

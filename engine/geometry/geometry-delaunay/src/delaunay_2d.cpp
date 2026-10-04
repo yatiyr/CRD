@@ -58,13 +58,22 @@ delaunay_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // Build sort order: lex (x, y, original_index).
     crd::containers::Array<crd::u32> order(alloc);
     order.resize(N, crd::u32{0});
-    for (crd::u32 i = 0; i < N; ++i) { order[i] = i; }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        order[i] = i;
+    }
     crd::containers::sort(order.data(), order.data() + order.size(),
                           [&](crd::u32 a, crd::u32 b) noexcept {
                               const auto& pa = points[a];
                               const auto& pb = points[b];
-                              if (pa.x != pb.x) { return pa.x < pb.x; }
-                              if (pa.y != pb.y) { return pa.y < pb.y; }
+                              if (pa.x != pb.x)
+                              {
+                                  return pa.x < pb.x;
+                              }
+                              if (pa.y != pb.y)
+                              {
+                                  return pa.y < pb.y;
+                              }
                               return a < b;
                           });
 
@@ -84,7 +93,10 @@ delaunay_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // Augmented points array = input points ++ 3 super-triangle vertices.
     crd::containers::Array<crd::math::Vec2<T>> aug_pts(alloc);
     aug_pts.reserve(static_cast<crd::usize>(N) + 3U);
-    for (crd::u32 i = 0; i < N; ++i) { aug_pts.push_back(points[i]); }
+    for (crd::u32 i = 0; i < N; ++i)
+    {
+        aug_pts.push_back(points[i]);
+    }
     crd::math::Vec2<T> s0{};
     crd::math::Vec2<T> s1{};
     crd::math::Vec2<T> s2{};
@@ -132,9 +144,15 @@ delaunay_2d(crd::containers::ConstSpan<crd::math::Vec2<T>> points,
     // are all < N (i.e., none is a super-triangle vertex).
     for (crd::u32 ti = 0; ti < pool.pool_size(); ++ti)
     {
-        if (!pool.alive(ti)) { continue; }
+        if (!pool.alive(ti))
+        {
+            continue;
+        }
         const Tri& t = pool[ti];
-        if (t.v[0] >= N || t.v[1] >= N || t.v[2] >= N) { continue; }
+        if (t.v[0] >= N || t.v[1] >= N || t.v[2] >= N)
+        {
+            continue;
+        }
         result.triangle_indices.push_back(t.v[0]);
         result.triangle_indices.push_back(t.v[1]);
         result.triangle_indices.push_back(t.v[2]);

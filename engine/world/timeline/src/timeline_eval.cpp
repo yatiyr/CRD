@@ -74,7 +74,10 @@ RationalTime timeline_duration(const TimelineResource& tl) noexcept
     for (const TrackRec& t : tl.tracks)
     {
         const RationalTime d = track_duration(tl, t);
-        if (compare(d, longest) > 0) { longest = d; }
+        if (compare(d, longest) > 0)
+        {
+            longest = d;
+        }
     }
     return longest;
 }
@@ -96,7 +99,10 @@ namespace
             scalar *= static_cast<EffectType>(fx.type) == EffectType::FreezeFrame ? 0.0 : fx.time_scalar;
             has_effect = true;
         }
-        if (!has_effect) { return add(clip_start, offset); }
+        if (!has_effect)
+        {
+            return add(clip_start, offset);
+        }
         return apply_time_scalar(clip_start, offset, scalar);
     }
 
@@ -106,10 +112,19 @@ namespace
     {
         const crd::f64 num = crd::time::to_seconds_f64(sub(t, win_start));
         const crd::f64 den = crd::time::to_seconds_f64(win_len);
-        if (den <= 0.0) { return 1.0F; }
+        if (den <= 0.0)
+        {
+            return 1.0F;
+        }
         crd::f64 w = num / den;
-        if (w < 0.0) { w = 0.0; }
-        if (w > 1.0) { w = 1.0; }
+        if (w < 0.0)
+        {
+            w = 0.0;
+        }
+        if (w > 1.0)
+        {
+            w = 1.0;
+        }
         return static_cast<crd::f32>(w);
     }
 } // namespace
@@ -124,7 +139,10 @@ void evaluate_tracks(const TimelineResource& tl, const RationalTime& t, crd::con
         for (crd::u32 i = 0; i < track.item_count; ++i)
         {
             const ItemRec& item = tl.items[track.first_item + i];
-            if (item.type == static_cast<crd::u8>(ItemType::Transition)) { continue; }
+            if (item.type == static_cast<crd::u8>(ItemType::Transition))
+            {
+                continue;
+            }
             const RationalTime dur = item.source_range.duration;
             const RationalTime end = add(pos, dur);
             // half-open [pos, end) — the covering item; boundaries land EXACTLY once (rational compare)
@@ -163,8 +181,16 @@ void evaluate_tracks(const TimelineResource& tl, const RationalTime& t, crd::con
                     from_window = true;
                 }
             }
-            if (!active) { pos = end; continue; }
-            if (item.type == static_cast<crd::u8>(ItemType::Gap)) { pos = end; continue; } // gaps show nothing
+            if (!active)
+            {
+                pos = end;
+                continue;
+            }
+            if (item.type == static_cast<crd::u8>(ItemType::Gap)) // gaps show nothing
+            {
+                pos = end;
+                continue;
+            }
 
             ActiveClip clip;
             clip.track_index = static_cast<crd::u32>(ti);
@@ -181,7 +207,10 @@ void evaluate_tracks(const TimelineResource& tl, const RationalTime& t, crd::con
 bool automation_value(const TimelineResource& tl, crd::u32 index, const RationalTime& t, crd::f32& out) noexcept
 {
     out = 0.0F;
-    if (index >= tl.automation.size()) { return false; }
+    if (index >= tl.automation.size())
+    {
+        return false;
+    }
     const AutomationRec& a     = tl.automation[index];
     const auto           inter = static_cast<crd::hesap::interp::KeyInterp>(a.interp);
     const crd::u32       elems = crd::hesap::interp::key_elements(inter);
@@ -254,7 +283,10 @@ bool automation_value(const TimelineResource& tl, crd::u32 index, const Rational
 
 crd::u32 find_automation(const TimelineResource& tl, const char* target) noexcept
 {
-    if (target == nullptr) { return kInvalidIndex; }
+    if (target == nullptr)
+    {
+        return kInvalidIndex;
+    }
     for (crd::usize i = 0; i < tl.automation.size(); ++i)
     {
         if (std::strcmp(tl.str(tl.automation[i].target_off), target) == 0)

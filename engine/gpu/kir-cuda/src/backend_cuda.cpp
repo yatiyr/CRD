@@ -27,7 +27,10 @@ constexpr int kCacheMax = 256;
 crd::u64 hash_src(const char* s)
 {
     crd::u64 h = 1469598103934665603ULL;
-    for (; *s != '\0'; ++s) { h = (h ^ static_cast<crd::u8>(*s)) * 1099511628211ULL; }
+    for (; *s != '\0'; ++s)
+    {
+        h = (h ^ static_cast<crd::u8>(*s)) * 1099511628211ULL;
+    }
     return h;
 }
 struct CacheEntry
@@ -67,7 +70,10 @@ namespace
 bool compile_cubin(const char* src, const char* arch, crd::containers::Array<char>& cubin, bool allow_fma)
 {
     nvrtcProgram prog = nullptr;
-    if (nvrtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS) { return false; }
+    if (nvrtcCreateProgram(&prog, src, "ckir.cu", 0, nullptr, nullptr) != NVRTC_SUCCESS)
+    {
+        return false;
+    }
     char archopt[32];
     std::snprintf(archopt, sizeof(archopt), "--gpu-architecture=%s", arch);
     const char*       fast_opts[] = {"--fmad=true", archopt};
@@ -90,7 +96,11 @@ bool compile_cubin(const char* src, const char* arch, crd::containers::Array<cha
         return false;
     }
     size_t sz = 0;
-    if (nvrtcGetCUBINSize(prog, &sz) != NVRTC_SUCCESS || sz == 0) { nvrtcDestroyProgram(&prog); return false; }
+    if (nvrtcGetCUBINSize(prog, &sz) != NVRTC_SUCCESS || sz == 0)
+    {
+        nvrtcDestroyProgram(&prog);
+        return false;
+    }
     cubin.resize(sz, '\0');
     const nvrtcResult gr = nvrtcGetCUBIN(prog, cubin.data());
     nvrtcDestroyProgram(&prog);
@@ -105,10 +115,19 @@ bool launch_and_readback(CUstream stream, CUfunction fn, crd::u32 gx, crd::u32 g
 {
     for (int i = 0; i < n_inputs; ++i)
     {
-        if (cuMemcpyHtoDAsync(d_in[i], inputs[input_iidx[i]], in_bytes[i], stream) != CUDA_SUCCESS) { return false; }
+        if (cuMemcpyHtoDAsync(d_in[i], inputs[input_iidx[i]], in_bytes[i], stream) != CUDA_SUCCESS)
+        {
+            return false;
+        }
     }
-    if (cuLaunchKernel(fn, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, 1U, bx, 1U, 1U, 0U, stream, params, nullptr) != CUDA_SUCCESS) { return false; }
-    if (cuMemcpyDtoHAsync(out, d_out, out_bytes, stream) != CUDA_SUCCESS) { return false; }
+    if (cuLaunchKernel(fn, gx > 0U ? gx : 1U, gy > 0U ? gy : 1U, 1U, bx, 1U, 1U, 0U, stream, params, nullptr) != CUDA_SUCCESS)
+    {
+        return false;
+    }
+    if (cuMemcpyDtoHAsync(out, d_out, out_bytes, stream) != CUDA_SUCCESS)
+    {
+        return false;
+    }
     return cuStreamSynchronize(stream) == CUDA_SUCCESS;
 }
 } // namespace
@@ -117,30 +136,66 @@ KirBackendCuda::KirBackendCuda(crd::memory::IAllocator* alloc) : m_impl(std::mak
 {
     auto& impl = *m_impl;
     impl.alloc = alloc;
-    if (cuInit(0) != CUDA_SUCCESS) { return; }
+    if (cuInit(0) != CUDA_SUCCESS)
+    {
+        return;
+    }
     int count = 0;
-    if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count == 0) { return; }
-    if (cuDeviceGet(&impl.device, 0) != CUDA_SUCCESS) { return; }
+    if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count == 0)
+    {
+        return;
+    }
+    if (cuDeviceGet(&impl.device, 0) != CUDA_SUCCESS)
+    {
+        return;
+    }
     // primary context (recommended; avoids the v2/v4 cuCtxCreate signature churn)
-    if (cuDevicePrimaryCtxRetain(&impl.ctx, impl.device) != CUDA_SUCCESS) { return; }
-    if (cuCtxSetCurrent(impl.ctx) != CUDA_SUCCESS) { return; }
+    if (cuDevicePrimaryCtxRetain(&impl.ctx, impl.device) != CUDA_SUCCESS)
+    {
+        return;
+    }
+    if (cuCtxSetCurrent(impl.ctx) != CUDA_SUCCESS)
+    {
+        return;
+    }
     int major = 0;
     int minor = 0;
     cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, impl.device);
     cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, impl.device);
     std::snprintf(impl.arch, sizeof(impl.arch), "sm_%d%d", major, minor);
-    if (cuStreamCreate(&impl.stream, CU_STREAM_NON_BLOCKING) != CUDA_SUCCESS) { return; }
+    if (cuStreamCreate(&impl.stream, CU_STREAM_NON_BLOCKING) != CUDA_SUCCESS)
+    {
+        return;
+    }
     impl.ok = true;
 }
 
 KirBackendCuda::~KirBackendCuda()
 {
     auto& impl = *m_impl;
-    if (!impl.ok) { return; }
-    for (int i = 0; i < impl.cache_n; ++i) { cuModuleUnload(impl.cache[i].mod); }
-    for (int i = 0; i < kMaxIn; ++i) { if (impl.pool_in[i] != 0) { cuMemFree(impl.pool_in[i]); } }
-    if (impl.pool_out != 0) { cuMemFree(impl.pool_out); }
-    if (impl.stream != nullptr) { cuStreamDestroy(impl.stream); }
+    if (!impl.ok)
+    {
+        return;
+    }
+    for (int i = 0; i < impl.cache_n; ++i)
+    {
+        cuModuleUnload(impl.cache[i].mod);
+    }
+    for (int i = 0; i < kMaxIn; ++i)
+    {
+        if (impl.pool_in[i] != 0)
+        {
+            cuMemFree(impl.pool_in[i]);
+        }
+    }
+    if (impl.pool_out != 0)
+    {
+        cuMemFree(impl.pool_out);
+    }
+    if (impl.stream != nullptr)
+    {
+        cuStreamDestroy(impl.stream);
+    }
     cuDevicePrimaryCtxRelease(impl.device);
 }
 
@@ -150,7 +205,10 @@ const char* KirBackendCuda::device() const noexcept { return m_impl->arch; } // 
 bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs, int n_inputs, float* out)
 {
     auto& impl = *m_impl;
-    if (!impl.ok || n_inputs > kMaxIn) { return false; }
+    if (!impl.ok || n_inputs > kMaxIn)
+    {
+        return false;
+    }
     const KNode& outn = g.node(output);
 
     // 1. emit CUDA C + derive dims/sizes/params per kernel type
@@ -189,7 +247,10 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
             d2              = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]); // N
             in_bytes[0]     = static_cast<crd::u64>(d0) * d1 * sizeof(float);
             in_bytes[1]     = static_cast<crd::u64>(d1) * d2 * sizeof(float);
-            for (int j = 0; j < fuse.n_bias; ++j) { in_bytes[2 + j] = static_cast<crd::u64>(d2) * sizeof(float); }
+            for (int j = 0; j < fuse.n_bias; ++j)
+            {
+                in_bytes[2 + j] = static_cast<crd::u64>(d2) * sizeof(float);
+            }
             out_bytes = static_cast<crd::u64>(d0) * d2 * sizeof(float);
             tiled     = true;
             fused     = true;
@@ -210,7 +271,10 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         d1              = static_cast<crd::u32>(an.shape.dims[r - 1]); // K
         d2              = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]); // N
         d3              = 1U;
-        for (int k = 0; k < r - 2; ++k) { d3 *= static_cast<crd::u32>(an.shape.dims[k]); }
+        for (int k = 0; k < r - 2; ++k)
+        {
+            d3 *= static_cast<crd::u32>(an.shape.dims[k]);
+        }
         in_bytes[0] = static_cast<crd::u64>(d0) * d1 * d3 * sizeof(float);
         in_bytes[1] = static_cast<crd::u64>(d1) * d2 * d3 * sizeof(float);
         out_bytes   = static_cast<crd::u64>(d0) * d2 * d3 * sizeof(float);
@@ -225,13 +289,25 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
             tgy   = d0 / static_cast<crd::u32>(sch.bm); // M / BM
             tbx   = static_cast<crd::u32>(sch.nt);
         }
-        else if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        else if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
     }
     else if (is_reduce(outn.op))
     {
         const bool fast = (outn.tier == DetTier::Fast && is_fast_reduceable(outn.op)); // T2 parallel block tree-reduce
-        if (fast) { if (!emit_reduce_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_reduce_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_reduce_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_reduce_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 in_numel  = static_cast<crd::u64>(g.node(outn.a).shape.numel());
         const crd::u64 out_numel = static_cast<crd::u64>(outn.shape.numel());
         d0                       = static_cast<crd::u32>(out_numel);          // nout
@@ -242,7 +318,10 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (outn.op == KOp::Gather)
     {
-        if (!emit_gather_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_gather_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   dn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 data_numel = static_cast<crd::u64>(dn.shape.numel());
@@ -256,7 +335,10 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     }
     else if (outn.op == KOp::Scatter)
     {
-        if (!emit_scatter_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_scatter_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const KNode&   bn         = g.node(outn.a);
         const crd::u64 out_numel  = static_cast<crd::u64>(outn.shape.numel());
         const crd::u64 base_numel = static_cast<crd::u64>(bn.shape.numel());
@@ -274,8 +356,17 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     else if (outn.op == KOp::ScanSum)
     {
         const bool fast = (outn.tier == DetTier::Fast); // T2 parallel block prefix-sum
-        if (fast) { if (!emit_scan_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; } }
-        else if (!emit_scan_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (fast)
+        {
+            if (!emit_scan_fast_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+            {
+                return false;
+            }
+        }
+        else if (!emit_scan_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 numel   = static_cast<crd::u64>(outn.shape.numel());
         const crd::u32 scanlen = static_cast<crd::u32>(outn.shape.dims[outn.shape.rank - 1]);
         d0                     = static_cast<crd::u32>(numel / scanlen); // nrows
@@ -294,8 +385,14 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         int            br   = 0;
         int            bc   = 0;
         select_attention_tile(dim, static_cast<int>(slen), impl.arch, br, bc); // DB-tuned (BR,BC) for (arch,S,D), else heuristic
-        if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs) { return false; }
-        for (int i = 0; i < 3; ++i) { in_bytes[i] = static_cast<crd::u64>(slen) * static_cast<crd::u32>(dim) * sizeof(float); }
+        if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            in_bytes[i] = static_cast<crd::u64>(slen) * static_cast<crd::u32>(dim) * sizeof(float);
+        }
         out_bytes  = static_cast<crd::u64>(slen) * static_cast<crd::u32>(dim) * sizeof(float);
         attention  = true;
         attn_scale = static_cast<float>(outn.cval);
@@ -307,19 +404,31 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     // `comps` floats per element). CUDA has no native vector arithmetic, so each value becomes `comps` scalar temps.
     else if (graph_uses_vec(g, output, impl.alloc))
     {
-        if (!emit_vec_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_vec_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         d0                = static_cast<crd::u32>(on); // n
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * static_cast<crd::u64>(kern.in_comps[i]) * sizeof(float);
+        }
         out_bytes = on * static_cast<crd::u64>(kern.out_comps) * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
     else
     {
-        if (!emit_elementwise_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs) { return false; }
+        if (!emit_elementwise_cuda(g, output, impl.alloc, kern) || kern.n_inputs != n_inputs)
+        {
+            return false;
+        }
         const crd::u64 on = static_cast<crd::u64>(outn.shape.numel());
         d0                = static_cast<crd::u32>(on); // n
-        for (int i = 0; i < n_inputs; ++i) { in_bytes[i] = on * sizeof(float); }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            in_bytes[i] = on * sizeof(float);
+        }
         out_bytes = on * sizeof(float);
         groups    = (static_cast<crd::u32>(on) + 255U) / 256U;
     }
@@ -327,17 +436,42 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     // 2. compile + load — MODULE CACHE (source-hash keyed): skip the NVRTC recompile on repeat runs of this kernel
     const crd::u64 khash = hash_src(kern.source.c_str());
     CUfunction     fn    = nullptr;
-    for (int i = 0; i < impl.cache_n; ++i) { if (impl.cache[i].hash == khash) { fn = impl.cache[i].fn; break; } }
+    for (int i = 0; i < impl.cache_n; ++i)
+    {
+        if (impl.cache[i].hash == khash)
+        {
+            fn = impl.cache[i].fn;
+            break;
+        }
+    }
     if (fn == nullptr)
     {
         crd::containers::Array<char> cubin(impl.alloc);
-        if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, fast_fma)) { return false; }
+        if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, fast_fma))
+        {
+            return false;
+        }
         CUmodule       mod = nullptr;
         const CUresult ldr = cuModuleLoadData(&mod, cubin.data());
-        if (ldr != CUDA_SUCCESS) { std::fprintf(stderr, "[ckir-cuda] cuModuleLoadData failed: %d\n", static_cast<int>(ldr)); return false; }
-        if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { std::fprintf(stderr, "[ckir-cuda] cuModuleGetFunction failed\n"); cuModuleUnload(mod); return false; }
-        if (impl.cache_n < kCacheMax) { impl.cache[impl.cache_n++] = CacheEntry{khash, mod, fn}; }
-        else { cuModuleUnload(mod); } // cache full: use once, don't leak (rare — 256 distinct kernels)
+        if (ldr != CUDA_SUCCESS)
+        {
+            std::fprintf(stderr, "[ckir-cuda] cuModuleLoadData failed: %d\n", static_cast<int>(ldr));
+            return false;
+        }
+        if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS)
+        {
+            std::fprintf(stderr, "[ckir-cuda] cuModuleGetFunction failed\n");
+            cuModuleUnload(mod);
+            return false;
+        }
+        if (impl.cache_n < kCacheMax)
+        {
+            impl.cache[impl.cache_n++] = CacheEntry{khash, mod, fn};
+        }
+        else // cache full: use once, don't leak (rare — 256 distinct kernels)
+        {
+            cuModuleUnload(mod);
+        }
     }
 
     // 3. device memory — persistent POOL: grow a buffer only when the needed size exceeds its capacity, else reuse
@@ -346,20 +480,45 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
     {
         if (impl.pool_in_cap[i] < in_bytes[i])
         {
-            if (impl.pool_in[i] != 0) { cuMemFree(impl.pool_in[i]); impl.pool_in[i] = 0; }
-            if (cuMemAlloc(&impl.pool_in[i], in_bytes[i]) != CUDA_SUCCESS) { impl.pool_in_cap[i] = 0; alloc_ok = false; }
-            else { impl.pool_in_cap[i] = in_bytes[i]; }
+            if (impl.pool_in[i] != 0)
+            {
+                cuMemFree(impl.pool_in[i]);
+                impl.pool_in[i] = 0;
+            }
+            if (cuMemAlloc(&impl.pool_in[i], in_bytes[i]) != CUDA_SUCCESS)
+            {
+                impl.pool_in_cap[i] = 0;
+                alloc_ok = false;
+            }
+            else
+            {
+                impl.pool_in_cap[i] = in_bytes[i];
+            }
         }
     }
     if (alloc_ok && impl.pool_out_cap < out_bytes)
     {
-        if (impl.pool_out != 0) { cuMemFree(impl.pool_out); impl.pool_out = 0; }
-        if (cuMemAlloc(&impl.pool_out, out_bytes) != CUDA_SUCCESS) { impl.pool_out_cap = 0; alloc_ok = false; }
-        else { impl.pool_out_cap = out_bytes; }
+        if (impl.pool_out != 0)
+        {
+            cuMemFree(impl.pool_out);
+            impl.pool_out = 0;
+        }
+        if (cuMemAlloc(&impl.pool_out, out_bytes) != CUDA_SUCCESS)
+        {
+            impl.pool_out_cap = 0;
+            alloc_ok = false;
+        }
+        else
+        {
+            impl.pool_out_cap = out_bytes;
+        }
     }
 
     // 4. build the kernel-arg pointer array, launch on the stream, read back (buffers persist in the pool)
-    if (!alloc_ok) { return false; }
+    if (!alloc_ok)
+    {
+        return false;
+    }
     void* params[kMaxIn + 8];
     int   np = 0;
     // Non-tiled Contract packs {M,K,N,nbatch} into ONE 16-byte arg — emit_contract_cuda's `uint4 dims` push ABI (a byte-
@@ -379,27 +538,57 @@ bool KirBackendCuda::run(const KGraph& g, int output, const float* const* inputs
         params[np++] = &impl.pool_in[0];
         params[np++] = &impl.pool_in[1];
         params[np++] = &impl.pool_out;
-        for (int j = 2; j < n_inputs; ++j) { params[np++] = &impl.pool_in[j]; }
+        for (int j = 2; j < n_inputs; ++j)
+        {
+            params[np++] = &impl.pool_in[j];
+        }
         params[np++] = &d0; params[np++] = &d2; params[np++] = &d1;
     }
     else
     {
-        for (int i = 0; i < n_inputs; ++i) { params[np++] = &impl.pool_in[i]; }
+        for (int i = 0; i < n_inputs; ++i)
+        {
+            params[np++] = &impl.pool_in[i];
+        }
         params[np++] = &impl.pool_out;
-        if (tiled) { params[np++] = &d0; params[np++] = &d2; params[np++] = &d1; } // tiled ckir(A,Bm,C, M,N,K)
-        else if (outn.op == KOp::Contract) { params[np++] = cdims; } // non-tiled ckir(A,Bm,C, uint4{M,K,N,nbatch})
+        if (tiled) // tiled ckir(A,Bm,C, M,N,K)
+        {
+            params[np++] = &d0;
+            params[np++] = &d2;
+            params[np++] = &d1;
+        }
+        else if (outn.op == KOp::Contract) // non-tiled ckir(A,Bm,C, uint4{M,K,N,nbatch})
+        {
+            params[np++] = cdims;
+        }
         else
         {
             params[np++] = &d0;
-            if (outn.op == KOp::Scatter) { params[np++] = &d1; params[np++] = &d2; }
-            else if (is_reduce(outn.op) || outn.op == KOp::Gather || outn.op == KOp::ScanSum) { params[np++] = &d1; } // these three take just the row size
+            if (outn.op == KOp::Scatter)
+            {
+                params[np++] = &d1;
+                params[np++] = &d2;
+            }
+            // these three take just the row size
+            else if (is_reduce(outn.op) || outn.op == KOp::Gather || outn.op == KOp::ScanSum)
+            {
+                params[np++] = &d1;
+            }
         }
     }
     crd::u32 gx = groups;
     crd::u32 gy = 1U;
     crd::u32 bx = 256U;
-    if (attention) { bx = attn_bx; }        // flash: ceil(S/BR) blocks × BR threads
-    else if (tiled) { gx = tgx; gy = tgy; bx = tbx; } // WarpTiled Contract: 2-D grid
+    if (attention) // flash: ceil(S/BR) blocks × BR threads
+    {
+        bx = attn_bx;
+    }
+    else if (tiled) // WarpTiled Contract: 2-D grid
+    {
+        gx = tgx;
+        gy = tgy;
+        bx = tbx;
+    }
     return launch_and_readback(impl.stream, fn, gx, gy, bx, params, impl.pool_in, in_bytes, n_inputs, kern.input_iidx, inputs, impl.pool_out, out_bytes, out);
 }
 
@@ -412,18 +601,30 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
 {
     ContractTiming t;
     auto&          impl = *m_impl;
-    if (!impl.ok || n_inputs != 2 || iters <= 0) { return t; }
+    if (!impl.ok || n_inputs != 2 || iters <= 0)
+    {
+        return t;
+    }
     const KNode& c = g.node(output);
-    if (c.op != KOp::Contract) { return t; }
+    if (c.op != KOp::Contract)
+    {
+        return t;
+    }
     const KNode&   an = g.node(c.a);
     const KNode&   bn = g.node(c.b);
     const int      r  = an.shape.rank;
-    if (r < 2 || bn.shape.rank < 2) { return t; }
+    if (r < 2 || bn.shape.rank < 2)
+    {
+        return t;
+    }
     const crd::u32 mm = static_cast<crd::u32>(an.shape.dims[r - 2]);
     const crd::u32 kk = static_cast<crd::u32>(an.shape.dims[r - 1]);
     const crd::u32 nn = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
     crd::u32       batch = 1U;
-    for (int k = 0; k < r - 2; ++k) { batch *= static_cast<crd::u32>(an.shape.dims[k]); }
+    for (int k = 0; k < r - 2; ++k)
+    {
+        batch *= static_cast<crd::u32>(an.shape.dims[k]);
+    }
 
     // 1. emit with the GIVEN schedule (tiled), else the naive baseline
     GlslKernel kern(impl.alloc);
@@ -432,16 +633,29 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
     {
         tiled = true;
     }
-    else if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs) { return t; }
+    else if (!emit_contract_cuda(g, output, kern) || kern.n_inputs != n_inputs)
+    {
+        return t;
+    }
 
     // 2. compile locally (own module — freed at the end; no persistent-cache churn during a sweep). The fast tier (WarpTiled
     // fma=true) compiles WITH FMA fusion — the AS-4 perf lever (--fmad=false halves GEMM throughput).
     crd::containers::Array<char> cubin(impl.alloc);
-    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, tiled && sched.fma)) { return t; }
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, tiled && sched.fma))
+    {
+        return t;
+    }
     CUmodule mod = nullptr;
-    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
+    {
+        return t;
+    }
     CUfunction fn = nullptr;
-    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS)
+    {
+        cuModuleUnload(mod);
+        return t;
+    }
 
     // 3. buffers + upload (outside the timed region)
     const crd::u64 in0_bytes = static_cast<crd::u64>(mm) * kk * batch * sizeof(float);
@@ -470,8 +684,16 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
         params[np++] = &d_in0;
         params[np++] = &d_in1;
         params[np++] = &d_out;
-        if (tiled) { params[np++] = &pm; params[np++] = &pn; params[np++] = &pk; }
-        else { params[np++] = ndims; }
+        if (tiled)
+        {
+            params[np++] = &pm;
+            params[np++] = &pn;
+            params[np++] = &pk;
+        }
+        else
+        {
+            params[np++] = ndims;
+        }
         const crd::u32 gx = tiled ? (nn / static_cast<crd::u32>(sched.bn)) : (mm * nn * batch + 255U) / 256U;
         const crd::u32 gy = tiled ? (mm / static_cast<crd::u32>(sched.bm)) : 1U;
         const crd::u32 bx = tiled ? static_cast<crd::u32>(sched.nt) : 256U;
@@ -493,9 +715,19 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
                 cuEventRecord(ev0, impl.stream);
                 const CUresult lr = cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
                 cuEventRecord(ev1, impl.stream);
-                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS)
+                {
+                    break;
+                }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS)
+                {
+                    any = true;
+                    if (static_cast<double>(ms) < best)
+                    {
+                        best = static_cast<double>(ms);
+                    }
+                }
             }
             if (any)
             {
@@ -507,9 +739,18 @@ ContractTiming KirBackendCuda::time_contract_schedule(const KGraph& g, int outpu
             cuEventDestroy(ev1);
         }
     }
-    if (d_in0 != 0) { cuMemFree(d_in0); }
-    if (d_in1 != 0) { cuMemFree(d_in1); }
-    if (d_out != 0) { cuMemFree(d_out); }
+    if (d_in0 != 0)
+    {
+        cuMemFree(d_in0);
+    }
+    if (d_in1 != 0)
+    {
+        cuMemFree(d_in1);
+    }
+    if (d_out != 0)
+    {
+        cuMemFree(d_out);
+    }
     cuModuleUnload(mod);
     return t;
 }
@@ -522,13 +763,25 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
 {
     ContractTiming t;
     auto&          impl = *m_impl;
-    if (!impl.ok || n_inputs < 2 || n_inputs > kMaxIn || iters <= 0) { return t; }
+    if (!impl.ok || n_inputs < 2 || n_inputs > kMaxIn || iters <= 0)
+    {
+        return t;
+    }
     const FuseInfo fuse = detect_fuse(g, output, impl.alloc);
-    if (!fuse.ok) { return t; }
+    if (!fuse.ok)
+    {
+        return t;
+    }
     const TileSchedule sch = select_schedule(g, fuse.contract, impl.arch);
-    if (sch.kind != Sched::WarpTiled) { return t; }
+    if (sch.kind != Sched::WarpTiled)
+    {
+        return t;
+    }
     GlslKernel kern(impl.alloc);
-    if (!emit_contract_tiled_fused_cuda(g, output, fuse.contract, sch, fuse, impl.alloc, kern) || kern.n_inputs != n_inputs) { return t; }
+    if (!emit_contract_tiled_fused_cuda(g, output, fuse.contract, sch, fuse, impl.alloc, kern) || kern.n_inputs != n_inputs)
+    {
+        return t;
+    }
 
     const KNode&   cn = g.node(fuse.contract);
     const KNode&   an = g.node(cn.a);
@@ -539,16 +792,29 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
     const crd::u32 nn = static_cast<crd::u32>(bn.shape.dims[bn.shape.rank - 1]);
 
     crd::containers::Array<char> cubin(impl.alloc);
-    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, sch.fma)) { return t; }
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, sch.fma))
+    {
+        return t;
+    }
     CUmodule mod = nullptr;
-    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
+    {
+        return t;
+    }
     CUfunction fn = nullptr;
-    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS)
+    {
+        cuModuleUnload(mod);
+        return t;
+    }
 
     crd::u64    in_bytes[kMaxIn] = {};
     in_bytes[0]                  = static_cast<crd::u64>(mm) * kk * sizeof(float);
     in_bytes[1]                  = static_cast<crd::u64>(kk) * nn * sizeof(float);
-    for (int j = 2; j < n_inputs; ++j) { in_bytes[j] = static_cast<crd::u64>(nn) * sizeof(float); } // per-column bias [N]
+    for (int j = 2; j < n_inputs; ++j) // per-column bias [N]
+    {
+        in_bytes[j] = static_cast<crd::u64>(nn) * sizeof(float);
+    }
     const crd::u64 out_bytes = static_cast<crd::u64>(mm) * nn * sizeof(float);
     CUdeviceptr    d_in[kMaxIn] = {};
     CUdeviceptr    d_out        = 0;
@@ -568,14 +834,20 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
         params[np++] = &d_in[0]; // A
         params[np++] = &d_in[1]; // Bm
         params[np++] = &d_out;   // C
-        for (int j = 2; j < n_inputs; ++j) { params[np++] = &d_in[j]; } // bias0..
+        for (int j = 2; j < n_inputs; ++j) // bias0..
+        {
+            params[np++] = &d_in[j];
+        }
         params[np++] = &pm;
         params[np++] = &pn;
         params[np++] = &pk; // ckir(A,Bm,C,bias..,M,N,K)
         const crd::u32 gx = nn / static_cast<crd::u32>(sch.bn);
         const crd::u32 gy = mm / static_cast<crd::u32>(sch.bm);
         const crd::u32 bx = static_cast<crd::u32>(sch.nt);
-        for (int w = 0; w < warmup; ++w) { cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr); }
+        for (int w = 0; w < warmup; ++w)
+        {
+            cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+        }
         cuStreamSynchronize(impl.stream);
         CUevent ev0 = nullptr;
         CUevent ev1 = nullptr;
@@ -588,9 +860,19 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
                 cuEventRecord(ev0, impl.stream);
                 const CUresult lr = cuLaunchKernel(fn, gx, gy, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
                 cuEventRecord(ev1, impl.stream);
-                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS)
+                {
+                    break;
+                }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS)
+                {
+                    any = true;
+                    if (static_cast<double>(ms) < best)
+                    {
+                        best = static_cast<double>(ms);
+                    }
+                }
             }
             if (any)
             {
@@ -602,8 +884,17 @@ ContractTiming KirBackendCuda::time_fused_contract(const KGraph& g, int output, 
             cuEventDestroy(ev1);
         }
     }
-    for (int i = 0; i < n_inputs; ++i) { if (d_in[i] != 0) { cuMemFree(d_in[i]); } }
-    if (d_out != 0) { cuMemFree(d_out); }
+    for (int i = 0; i < n_inputs; ++i)
+    {
+        if (d_in[i] != 0)
+        {
+            cuMemFree(d_in[i]);
+        }
+    }
+    if (d_out != 0)
+    {
+        cuMemFree(d_out);
+    }
     cuModuleUnload(mod);
     return t;
 }
@@ -616,24 +907,46 @@ ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int b
 {
     ContractTiming t;
     auto&          impl = *m_impl;
-    if (!impl.ok || n_inputs != 3 || iters <= 0) { return t; }
+    if (!impl.ok || n_inputs != 3 || iters <= 0)
+    {
+        return t;
+    }
     const KNode& an = g.node(output);
-    if (an.op != KOp::Attention) { return t; }
+    if (an.op != KOp::Attention)
+    {
+        return t;
+    }
     const KNode& qn = g.node(an.a);
-    if (qn.shape.rank != 2) { return t; }
+    if (qn.shape.rank != 2)
+    {
+        return t;
+    }
     const crd::u32 slen  = static_cast<crd::u32>(qn.shape.dims[0]);
     const crd::u32 dim   = static_cast<crd::u32>(qn.shape.dims[1]);
     const float    scale = static_cast<float>(an.cval);
 
     GlslKernel kern(impl.alloc);
-    if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs) { return t; }
+    if (!emit_attention_flash_cuda(g, output, br, bc, kern) || kern.n_inputs != n_inputs)
+    {
+        return t;
+    }
 
     crd::containers::Array<char> cubin(impl.alloc);
-    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, true)) { return t; } // fast tier: FMA on
+    if (!compile_cubin(kern.source.c_str(), impl.arch, cubin, true)) // fast tier: FMA on
+    {
+        return t;
+    }
     CUmodule mod = nullptr;
-    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS) { return t; }
+    if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
+    {
+        return t;
+    }
     CUfunction fn = nullptr;
-    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS) { cuModuleUnload(mod); return t; }
+    if (cuModuleGetFunction(&fn, mod, "ckir") != CUDA_SUCCESS)
+    {
+        cuModuleUnload(mod);
+        return t;
+    }
 
     const crd::u64 bytes = static_cast<crd::u64>(slen) * dim * sizeof(float);
     CUdeviceptr    d_q   = 0;
@@ -662,7 +975,10 @@ ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int b
         params[np++] = &psc; // ckir(Q,K,V,O,S,scale)
         const crd::u32 gx = (slen + static_cast<crd::u32>(br) - 1U) / static_cast<crd::u32>(br);
         const crd::u32 bx = static_cast<crd::u32>(br);
-        for (int w = 0; w < warmup; ++w) { cuLaunchKernel(fn, gx, 1U, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr); }
+        for (int w = 0; w < warmup; ++w)
+        {
+            cuLaunchKernel(fn, gx, 1U, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
+        }
         cuStreamSynchronize(impl.stream);
         CUevent ev0 = nullptr;
         CUevent ev1 = nullptr;
@@ -675,9 +991,19 @@ ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int b
                 cuEventRecord(ev0, impl.stream);
                 const CUresult lr = cuLaunchKernel(fn, gx, 1U, 1U, bx, 1U, 1U, 0U, impl.stream, params, nullptr);
                 cuEventRecord(ev1, impl.stream);
-                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS) { break; }
+                if (cuEventSynchronize(ev1) != CUDA_SUCCESS || lr != CUDA_SUCCESS)
+                {
+                    break;
+                }
                 float ms = 0.0F;
-                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS) { any = true; if (static_cast<double>(ms) < best) { best = static_cast<double>(ms); } }
+                if (cuEventElapsedTime(&ms, ev0, ev1) == CUDA_SUCCESS)
+                {
+                    any = true;
+                    if (static_cast<double>(ms) < best)
+                    {
+                        best = static_cast<double>(ms);
+                    }
+                }
             }
             if (any)
             {
@@ -689,10 +1015,22 @@ ContractTiming KirBackendCuda::time_attention(const KGraph& g, int output, int b
             cuEventDestroy(ev1);
         }
     }
-    if (d_q != 0) { cuMemFree(d_q); }
-    if (d_k != 0) { cuMemFree(d_k); }
-    if (d_v != 0) { cuMemFree(d_v); }
-    if (d_o != 0) { cuMemFree(d_o); }
+    if (d_q != 0)
+    {
+        cuMemFree(d_q);
+    }
+    if (d_k != 0)
+    {
+        cuMemFree(d_k);
+    }
+    if (d_v != 0)
+    {
+        cuMemFree(d_v);
+    }
+    if (d_o != 0)
+    {
+        cuMemFree(d_o);
+    }
     cuModuleUnload(mod);
     return t;
 }

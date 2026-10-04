@@ -29,7 +29,10 @@ namespace
 TypeId shp(Context& ctx, const u32* dims, u32 rank)
 {
     TypeId d[8];
-    for (u32 i = 0; i < rank; ++i) { d[i] = ctx.type_dim_static(dims[i]); }
+    for (u32 i = 0; i < rank; ++i)
+    {
+        d[i] = ctx.type_dim_static(dims[i]);
+    }
     return ctx.type_shape(ConstSpan<TypeId>(d, rank));
 }
 Value* decl_tensor(Context& ctx, Block* b, TypeId t)
@@ -42,7 +45,11 @@ Value* decl_tensor(Context& ctx, Block* b, TypeId t)
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -50,7 +57,10 @@ Block* mkmain(Context& ctx, Module& m)
 u32 numel(const u32* d, u32 r)
 {
     u32 n = 1U;
-    for (u32 i = 0; i < r; ++i) { n *= d[i]; }
+    for (u32 i = 0; i < r; ++i)
+    {
+        n *= d[i];
+    }
     return n;
 }
 } // namespace
@@ -84,7 +94,11 @@ TEST_CASE("ceir 25b-2b: synth_broadcast runs on a Vulkan device (both axes) == e
     }
 
     kir::KirBackendVulkan vk(&kalloc);
-    if (!vk.valid()) { WARN("no Vulkan device -- skipping the CEIR-25b-2b broadcast device gate"); return; }
+    if (!vk.valid())
+    {
+        WARN("no Vulkan device -- skipping the CEIR-25b-2b broadcast device gate");
+        return;
+    }
     kir::KirBackendCpu cpu(&kalloc);
 
     for (const Case& cs : cases)
@@ -92,7 +106,10 @@ TEST_CASE("ceir 25b-2b: synth_broadcast runs on a Vulkan device (both axes) == e
         const u32 in_n  = numel(cs.in_dims, 2U);
         const u32 out_n = numel(cs.out_dims, 2U);
         static float in_data[16];
-        for (u32 i = 0; i < in_n; ++i) { in_data[i] = static_cast<float>(10 * (i + 1)); }
+        for (u32 i = 0; i < in_n; ++i)
+        {
+            in_data[i] = static_cast<float>(10 * (i + 1));
+        }
 
         Module* const    m  = ctx.create_module();
         Block* const     b  = mkmain(ctx, *m);
@@ -156,7 +173,10 @@ TEST_CASE("ceir 25b-2b: synth_transpose runs on a Vulkan device (rank-2 [1,0] AN
         if (have_dev)
         {
             static float in_data[6];
-            for (int i = 0; i < 6; ++i) { in_data[i] = static_cast<float>(i + 1); }
+            for (int i = 0; i < 6; ++i)
+            {
+                in_data[i] = static_cast<float>(i + 1);
+            }
             const float* inputs[1] = {static_cast<const float*>(in_data)};
             float        gpu_out[6];
             float        cpu_out[6];
@@ -190,7 +210,10 @@ TEST_CASE("ceir 25b-2b: synth_transpose runs on a Vulkan device (rank-2 [1,0] AN
         if (have_dev)
         {
             static float in_data[24];
-            for (int i = 0; i < 24; ++i) { in_data[i] = static_cast<float>(i); }
+            for (int i = 0; i < 24; ++i)
+            {
+                in_data[i] = static_cast<float>(i);
+            }
             const float* inputs[1] = {static_cast<const float*>(in_data)};
             float        gpu_out[24];
             float        cpu_out[24];
@@ -212,6 +235,12 @@ TEST_CASE("ceir 25b-2b: synth_transpose runs on a Vulkan device (rank-2 [1,0] AN
             }
         }
     }
-    if (have_dev) { CHECK(vk.validation_errors() == 0); }
-    else { WARN("no Vulkan device -- ran synthesis-only for the CEIR-25b-2b transpose gate"); }
+    if (have_dev)
+    {
+        CHECK(vk.validation_errors() == 0);
+    }
+    else
+    {
+        WARN("no Vulkan device -- ran synthesis-only for the CEIR-25b-2b transpose gate");
+    }
 }

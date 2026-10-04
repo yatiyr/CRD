@@ -68,7 +68,11 @@ TypeId tf(Context& ctx, TypeId shape) { return ctx.type_tensor(ctx.type_f32(), s
 Block* mkmain(Context& ctx, Module& m)
 {
     Block* top = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     return func::func_body_block(f);
@@ -137,7 +141,14 @@ ceg::TensorPipelinePlan build_sandwich(Context& ctx, Module& m, memory::IAllocat
     Value* const   w3 = decl(ctx, dcl, b, tf(ctx, sh2(ctx, dim, dim)));
     Value* const   c3 = decl(ctx, dcl, b, tf(ctx, sh2(ctx, rows, dim)));
     (void)gemm(ctx, b, mo->result(0U), w3, c3, rows, dim);
-    if (io != nullptr) { io->x = x; io->w0 = w0; io->w1 = w1; io->w2 = w2; io->w3 = w3; } // capture BEFORE expand (these survive it)
+    if (io != nullptr) // capture BEFORE expand (these survive it)
+    {
+        io->x = x;
+        io->w0 = w0;
+        io->w1 = w1;
+        io->w2 = w2;
+        io->w3 = w3;
+    }
 
     const ceg::MlExpandResult er = ceg::expand_ml_ops(ctx, m);
     REQUIRE(er.error == ceg::MlExpandError::None);
@@ -164,20 +175,29 @@ bool has_xfer(const TransferPlan& tp, u32 buffer, u32 before, TransferDir dir)
     for (usize i = 0; i < tp.transfers.size(); ++i)
     {
         const Transfer& t = tp.transfers[i];
-        if (t.buffer == buffer && t.before_stage == before && t.direction == dir) { return true; }
+        if (t.buffer == buffer && t.before_stage == before && t.direction == dir)
+        {
+            return true;
+        }
     }
     return false;
 }
 u32 count_dir(const TransferPlan& tp, TransferDir dir)
 {
     u32 n = 0;
-    for (usize i = 0; i < tp.transfers.size(); ++i) { n += tp.transfers[i].direction == dir ? 1U : 0U; }
+    for (usize i = 0; i < tp.transfers.size(); ++i)
+    {
+        n += tp.transfers[i].direction == dir ? 1U : 0U;
+    }
     return n;
 }
 u32 count_before(const TransferPlan& tp, u32 before)
 {
     u32 n = 0;
-    for (usize i = 0; i < tp.transfers.size(); ++i) { n += tp.transfers[i].before_stage == before ? 1U : 0U; }
+    for (usize i = 0; i < tp.transfers.size(); ++i)
+    {
+        n += tp.transfers[i].before_stage == before ? 1U : 0U;
+    }
     return n;
 }
 ConstSpan<ProviderClass> classes(const ProviderClass* p, usize n) { return ConstSpan<ProviderClass>(p, n); }
@@ -207,7 +227,10 @@ ExecuteError mock_gpu_stage(const ceg::TensorPipelinePlan& slice, void* user)
     auto& md = *static_cast<MockDevice*>(user);
     ++md.gpu_calls;
     md.gpu_ops.push_back(slice.stages[0].op);
-    if (md.gpu_err != ExecuteError::None) { return md.gpu_err; }
+    if (md.gpu_err != ExecuteError::None)
+    {
+        return md.gpu_err;
+    }
     return ceg::execute_tensor_pipeline_host(*md.ctx, slice, ConstSpan<f32*>(md.dev, md.nb), md.alloc, nullptr, md.host_opts);
 }
 
@@ -216,11 +239,26 @@ ExecuteError mock_transfer(const Transfer& t, f32* host_ptr, u64 bytes, void* us
 {
     auto& md = *static_cast<MockDevice*>(user);
     md.xfer_log.push_back(t);
-    if (md.xfer_err != ExecuteError::None) { return md.xfer_err; }
+    if (md.xfer_err != ExecuteError::None)
+    {
+        return md.xfer_err;
+    }
     const usize n  = static_cast<usize>(bytes / sizeof(f32));
     f32* const  dp = md.dev[static_cast<usize>(t.buffer)];
-    if (t.direction == TransferDir::HostToDevice) { for (usize e = 0; e < n; ++e) { dp[e] = host_ptr[e]; } }
-    else { for (usize e = 0; e < n; ++e) { host_ptr[e] = dp[e]; } }
+    if (t.direction == TransferDir::HostToDevice)
+    {
+        for (usize e = 0; e < n; ++e)
+        {
+            dp[e] = host_ptr[e];
+        }
+    }
+    else
+    {
+        for (usize e = 0; e < n; ++e)
+        {
+            host_ptr[e] = dp[e];
+        }
+    }
     return ExecuteError::None;
 }
 
@@ -253,7 +291,10 @@ ExecuteError run_two_class_mock(MockDevice& md, const ceg::TensorPipelinePlan& p
     for (usize i = 0; i < nb; ++i)
     {
         offs[i] = total;
-        if (plan.buffers[i].alias_of < 0) { total += plan.buffers[i].bytes / sizeof(f32); }
+        if (plan.buffers[i].alias_of < 0)
+        {
+            total += plan.buffers[i].bytes / sizeof(f32);
+        }
     }
     containers::Array<f32> hstore(md.alloc);
     hstore.resize(static_cast<usize>(total), sentinel);
@@ -268,10 +309,19 @@ ExecuteError run_two_class_mock(MockDevice& md, const ceg::TensorPipelinePlan& p
     md.nb = nb;
     for (usize i = 0; i < nb; ++i)
     {
-        if (plan.buffers[i].role != BufferRole::ExternalIn) { continue; }
+        if (plan.buffers[i].role != BufferRole::ExternalIn)
+        {
+            continue;
+        }
         for (usize s = 0; s < n_seeds; ++s)
         {
-            if (seeds[s].value == plan.buffers[i].value) { for (u32 e = 0; e < seeds[s].count; ++e) { hptr[i][e] = seeds[s].floats[e]; } }
+            if (seeds[s].value == plan.buffers[i].value)
+            {
+                for (u32 e = 0; e < seeds[s].count; ++e)
+                {
+                    hptr[i][e] = seeds[s].floats[e];
+                }
+            }
         }
     }
     const ExecuteError ee = ceg::execute_two_class(*md.ctx, plan, sc, ConstSpan<f32*>(hptr, nb), &md, &mock_gpu_stage, &mock_transfer,
@@ -279,9 +329,18 @@ ExecuteError run_two_class_mock(MockDevice& md, const ceg::TensorPipelinePlan& p
     if (out != nullptr)
     {
         i32 oi = -1;
-        for (usize i = 0; i < nb; ++i) { if (plan.buffers[i].role == BufferRole::Output) { oi = static_cast<i32>(i); } }
+        for (usize i = 0; i < nb; ++i)
+        {
+            if (plan.buffers[i].role == BufferRole::Output)
+            {
+                oi = static_cast<i32>(i);
+            }
+        }
         REQUIRE(oi >= 0);
-        for (usize e = 0; e < out_len; ++e) { out[e] = hptr[static_cast<usize>(oi)][e]; } // the runner left the Output Host-visible
+        for (usize e = 0; e < out_len; ++e) // the runner left the Output Host-visible
+        {
+            out[e] = hptr[static_cast<usize>(oi)][e];
+        }
     }
     return ee;
 }
@@ -309,7 +368,10 @@ TEST_CASE("ceir 30b-2a: plan_transfers all-Host is empty, all-Gpu is uploads + o
     // every H2D is an UPLOAD before some stage (never after the last) — no inter-stage cross-class movement in an all-Gpu run.
     for (usize i = 0; i < tg.transfers.size(); ++i)
     {
-        if (tg.transfers[i].direction == TransferDir::HostToDevice) { CHECK(tg.transfers[i].before_stage < plan.stages.size()); }
+        if (tg.transfers[i].direction == TransferDir::HostToDevice)
+        {
+            CHECK(tg.transfers[i].before_stage < plan.stages.size());
+        }
     }
 }
 
@@ -388,7 +450,13 @@ TEST_CASE("ceir 30b-2a: plan_transfers names the landlord for an aliased buffer 
 
     // the reshape result is an Alias buffer; its landlord is the realized gemm-output buffer.
     u32 alias_idx = 0;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].value == rs->result(0U)) { alias_idx = static_cast<u32>(i); } }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        if (plan.buffers[i].value == rs->result(0U))
+        {
+            alias_idx = static_cast<u32>(i);
+        }
+    }
     REQUIRE(plan.buffers[alias_idx].alias_of >= 0);                              // the reshape IS an alias
     const u32 landlord = static_cast<u32>(plan.buffers[alias_idx].alias_of);
     CHECK(plan.buffers[landlord].alias_of < 0);                                  // the landlord is a realized buffer
@@ -443,7 +511,10 @@ TEST_CASE("ceir 30b-2a: stage_class_from_partition maps the 29c-2 partition to o
 
     const containers::Array<ProviderClass> sc = ceg::stage_class_from_partition(plan, ConstSpan<MlProvider>(provs, 1U), ProviderClass::Gpu, &alloc);
     REQUIRE(sc.size() == 5U);
-    for (usize s = 0; s < sc.size(); ++s) { CHECK(sc[s] == ProviderClass::Gpu); } // cuda_graphs=Gpu, fallback→Gpu — ONE class
+    for (usize s = 0; s < sc.size(); ++s) // cuda_graphs=Gpu, fallback→Gpu — ONE class
+    {
+        CHECK(sc[s] == ProviderClass::Gpu);
+    }
 
     const TransferPlan tp = ceg::plan_transfers(plan, ConstSpan<ProviderClass>(sc.data(), sc.size()), &alloc);
     CHECK(count_dir(tp, TransferDir::DeviceToHost) == 1U); // only the final Output readback — no inter-stage crossing (one class)
@@ -474,7 +545,13 @@ TEST_CASE("ceir 30b-2a: plan_transfers dedupes a shared external and skips a res
     REQUIRE(plan.stages.size() == 3U); // [Gemm, Gemm, Elementwise]
 
     u32 abuf = 0;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].value == a) { abuf = static_cast<u32>(i); } }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        if (plan.buffers[i].value == a)
+        {
+            abuf = static_cast<u32>(i);
+        }
+    }
     const u32 pbuf = stage_out(plan, 0U); // gemm(a,W) → p
     const u32 qbuf = stage_out(plan, 1U); // gemm(a,V) → q
 
@@ -485,7 +562,13 @@ TEST_CASE("ceir 30b-2a: plan_transfers dedupes a shared external and skips a res
         CHECK(has_xfer(tp, abuf, 0U, TransferDir::HostToDevice));   // stage 0 uploads `a`
         CHECK(!has_xfer(tp, abuf, 1U, TransferDir::HostToDevice));  // stage 1 reuses it — the DEDUPE (same writer, no rewrite)
         u32 a_uploads = 0;
-        for (usize i = 0; i < tp.transfers.size(); ++i) { if (tp.transfers[i].buffer == abuf) { ++a_uploads; } }
+        for (usize i = 0; i < tp.transfers.size(); ++i)
+        {
+            if (tp.transfers[i].buffer == abuf)
+            {
+                ++a_uploads;
+            }
+        }
         CHECK(a_uploads == 1U);
     }
     SECTION("[Gpu,Host,Gpu]: a resident buffer is not re-transferred")
@@ -529,7 +612,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         f32                   got[16];
         const ExecuteError    ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F, &profile);
         REQUIRE(ee == ExecuteError::None);
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == d.oracle[i]); } // BIT-EXACT vs the CPU oracle (the placement changed nothing)
+        for (u32 i = 0; i < 16U; ++i) // BIT-EXACT vs the CPU oracle (the placement changed nothing)
+        {
+            CHECK(got[i] == d.oracle[i]);
+        }
 
         // the log == plan_transfers, by identity + in order (execute_two_class applies before_stage ascending, tp order within):
         const TransferPlan tp = ceg::plan_transfers(plan, classes(sc, 5U), &alloc);
@@ -549,7 +635,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         REQUIRE(profile.stages.size() == 5U);
         const ceg::StageKind want[5] = {ceg::StageKind::Gemm, ceg::StageKind::Gemm, ceg::StageKind::VizDispatch,
                                         ceg::StageKind::Gemm, ceg::StageKind::Gemm};
-        for (usize i = 0; i < 5U; ++i) { CHECK(profile.stages[i].kind == want[i]); }
+        for (usize i = 0; i < 5U; ++i)
+        {
+            CHECK(profile.stages[i].kind == want[i]);
+        }
     }
     SECTION("reverse [Host,Gpu,Gpu,Gpu,Host]: bit-exact; the Output ends on Host (no final readback logged)")
     {
@@ -561,7 +650,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         f32                got[16];
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         REQUIRE(ee == ExecuteError::None);
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == d.oracle[i]); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == d.oracle[i]);
+        }
         REQUIRE(md.gpu_calls == 3U); // stages 1,2,3 on the device
         // the runner drove the FLIPPED transfer set (xp H→D@1, y D→H@4, NO readback — the Output ends Host), by identity:
         const TransferPlan tp = ceg::plan_transfers(plan, classes(sc, 5U), &alloc);
@@ -584,7 +676,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         f32                got[16];
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         REQUIRE(ee == ExecuteError::None);
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == d.oracle[i]); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == d.oracle[i]);
+        }
         CHECK(md.gpu_calls == 0U);
         CHECK(md.xfer_log.size() == 0U);
     }
@@ -598,7 +693,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         f32                got[16];
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         REQUIRE(ee == ExecuteError::None);
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == d.oracle[i]); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == d.oracle[i]);
+        }
         CHECK(md.gpu_calls == 5U);
     }
     SECTION("arity mismatch (4 classes for a 5-stage plan) → BindingArity; nothing ran")
@@ -613,7 +711,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         CHECK(ee == ExecuteError::BindingArity);
         CHECK(md.gpu_calls == 0U);
         CHECK(md.xfer_log.size() == 0U);
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == -777.0F); } // the Output was never touched
+        for (u32 i = 0; i < 16U; ++i) // the Output was never touched
+        {
+            CHECK(got[i] == -777.0F);
+        }
     }
     SECTION("host_opts.kernel=nullptr → the Host relu is UnresolvedKernel; the Gpu prefix (stage 0) ran, then abort")
     {
@@ -624,7 +725,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         CHECK(ee == ExecuteError::UnresolvedKernel);
         CHECK(md.gpu_calls == 1U); // stage 0 (Gpu gemm — no kernel) ran; stage 2 (Host relu) needs the resolver → abort
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == -777.0F); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == -777.0F);
+        }
     }
     SECTION("a device-stage error propagates; nothing after it runs")
     {
@@ -638,7 +742,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         CHECK(ee == ExecuteError::UnmappedBinding);
         CHECK(md.gpu_calls == 1U); // stage 0 was called, returned the injected error → the runner aborts
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == -777.0F); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == -777.0F);
+        }
     }
     SECTION("a transfer error propagates before any stage runs")
     {
@@ -652,7 +759,10 @@ TEST_CASE("ceir 30b-2b-2a: execute_two_class runs a mixed Host+device plan devic
         const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
         CHECK(ee == ExecuteError::UnmappedBinding);
         CHECK(md.gpu_calls == 0U); // no stage ran
-        for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == -777.0F); }
+        for (u32 i = 0; i < 16U; ++i)
+        {
+            CHECK(got[i] == -777.0F);
+        }
     }
 }
 
@@ -672,7 +782,13 @@ TEST_CASE("ceir 30b-2b-2a: the two-class runner honours aliased (shared) interme
     const Seed seeds[5] = {{io.x, d.x, 16U}, {io.w0, d.w0, 16U}, {io.w1, d.w1, 16U}, {io.w2, d.w2, 16U}, {io.w3, d.w3, 16U}};
 
     u32 aliases = 0;
-    for (usize i = 0; i < plan.buffers.size(); ++i) { if (plan.buffers[i].alias_of >= 0) { ++aliases; } }
+    for (usize i = 0; i < plan.buffers.size(); ++i)
+    {
+        if (plan.buffers[i].alias_of >= 0)
+        {
+            ++aliases;
+        }
+    }
     REQUIRE(aliases >= 1U); // share=true actually produced at least one alias (else this would not exercise the landlord path)
 
     const ProviderClass sc[5] = {ProviderClass::Gpu, ProviderClass::Host, ProviderClass::Host, ProviderClass::Host, ProviderClass::Gpu};
@@ -683,10 +799,16 @@ TEST_CASE("ceir 30b-2b-2a: the two-class runner honours aliased (shared) interme
     f32                got[16];
     const ExecuteError ee = run_two_class_mock(md, plan, classes(sc, 5U), seeds, 5U, got, 16U, -777.0F);
     REQUIRE(ee == ExecuteError::None);
-    for (u32 i = 0; i < 16U; ++i) { CHECK(got[i] == d.oracle[i]); } // aliased storage, still bit-exact
+    for (u32 i = 0; i < 16U; ++i) // aliased storage, still bit-exact
+    {
+        CHECK(got[i] == d.oracle[i]);
+    }
 
     // runner-side contract: EVERY planned transfer names a LANDLORD, never an alias index (plan_transfers resolves aliases).
-    for (usize i = 0; i < md.xfer_log.size(); ++i) { CHECK(plan.buffers[static_cast<usize>(md.xfer_log[i].buffer)].alias_of < 0); }
+    for (usize i = 0; i < md.xfer_log.size(); ++i)
+    {
+        CHECK(plan.buffers[static_cast<usize>(md.xfer_log[i].buffer)].alias_of < 0);
+    }
     // and at least one boundary-crossing buffer is the LANDLORD OF AN ALIAS — i.e. the landlord plumbing ran THROUGH a transfer,
     // not only inside the Host run (else this fixture doesn't exercise the claim and the assertion becomes a row note).
     u32 landlord_crossings = 0;
@@ -695,7 +817,11 @@ TEST_CASE("ceir 30b-2b-2a: the two-class runner honours aliased (shared) interme
         const u32 lb = md.xfer_log[i].buffer;
         for (usize j = 0; j < plan.buffers.size(); ++j)
         {
-            if (plan.buffers[j].alias_of == static_cast<i32>(lb)) { ++landlord_crossings; break; }
+            if (plan.buffers[j].alias_of == static_cast<i32>(lb))
+            {
+                ++landlord_crossings;
+                break;
+            }
         }
     }
     CHECK(landlord_crossings >= 1U);

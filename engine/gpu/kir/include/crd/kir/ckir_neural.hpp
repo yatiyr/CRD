@@ -43,7 +43,10 @@ struct CoopVecMlpConfig
     [[nodiscard]] int weight_count() const noexcept
     {
         int c = hidden * in_dim;
-        for (int l = 1; l < hidden_layers; ++l) { c += hidden * hidden; }
+        for (int l = 1; l < hidden_layers; ++l)
+        {
+            c += hidden * hidden;
+        }
         return c + out_dim * hidden;
     }
     [[nodiscard]] int bias_count() const noexcept { return hidden * hidden_layers + out_dim; }
@@ -52,9 +55,21 @@ struct CoopVecMlpConfig
 // (rows, cols) = (output dim, input dim) of the RowMajor weight matrix for matmul `l` (0-based).
 inline void coopvec_layer_dims(const CoopVecMlpConfig& c, int l, int& rows, int& cols) noexcept
 {
-    if (l == 0) { rows = c.hidden; cols = c.in_dim; }
-    else if (l < c.hidden_layers) { rows = c.hidden; cols = c.hidden; }
-    else { rows = c.out_dim; cols = c.hidden; } // the linear output layer
+    if (l == 0)
+    {
+        rows = c.hidden;
+        cols = c.in_dim;
+    }
+    else if (l < c.hidden_layers)
+    {
+        rows = c.hidden;
+        cols = c.hidden;
+    }
+    else // the linear output layer
+    {
+        rows = c.out_dim;
+        cols = c.hidden;
+    }
 }
 
 // Emit the per-invocation coopvec MLP as GLSL (`GL_NV_cooperative_vector`). Bindings: 0=In(N×in_dim fp16), 1=W(concat fp16),
@@ -62,7 +77,10 @@ inline void coopvec_layer_dims(const CoopVecMlpConfig& c, int l, int& rows, int&
 // offset/stride are in BYTES (fp16 = 2). Returns false on an invalid config.
 inline bool emit_coopvec_mlp_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
 {
-    if (!c.valid()) { return false; }
+    if (!c.valid())
+    {
+        return false;
+    }
     using neural_detail::u;
     crd::containers::String& s = out.source;
     s.clear();
@@ -140,11 +158,20 @@ inline bool emit_coopvec_mlp_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
 // (self-verifying — both compute the identical MLP). Two ping-pong local arrays sized to the widest layer. Returns false if invalid.
 inline bool emit_scalar_mlp_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
 {
-    if (!c.valid()) { return false; }
+    if (!c.valid())
+    {
+        return false;
+    }
     using neural_detail::u;
     int maxd = c.in_dim;
-    if (c.hidden > maxd) { maxd = c.hidden; }
-    if (c.out_dim > maxd) { maxd = c.out_dim; }
+    if (c.hidden > maxd)
+    {
+        maxd = c.hidden;
+    }
+    if (c.out_dim > maxd)
+    {
+        maxd = c.out_dim;
+    }
     crd::containers::String& s = out.source;
     s.clear();
     s.append("#version 460\n");
@@ -188,7 +215,10 @@ inline bool emit_scalar_mlp_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
         s.append("u + uint(k)]) * a[k]; }\n");
         // round through fp16 to match the coopvec kernel's fp16 activation store, then ReLU on the hidden layers.
         s.append("    float v = float(float16_t(acc));\n");
-        if (l + 1 < c.layers()) { s.append("    if (v < 0.0) { v = 0.0; }\n"); }
+        if (l + 1 < c.layers())
+        {
+            s.append("    if (v < 0.0) { v = 0.0; }\n");
+        }
         s.append("    b[r] = v;\n  }\n");
         s.append("  for (int i = 0; i < ");
         u(s, rows);
@@ -215,7 +245,10 @@ inline void eval_coopvec_mlp_cpu(const CoopVecMlpConfig& c, const crd::u16* w, c
     {
         float* cur = &buf_a[0];
         float* nxt = &buf_b[0];
-        for (int i = 0; i < c.in_dim; ++i) { cur[i] = crd::math::f16_bits_to_f32(in[sample * c.in_dim + i]); }
+        for (int i = 0; i < c.in_dim; ++i)
+        {
+            cur[i] = crd::math::f16_bits_to_f32(in[sample * c.in_dim + i]);
+        }
         int woff = 0;
         int boff = 0;
         for (int l = 0; l < c.layers(); ++l)
@@ -226,9 +259,15 @@ inline void eval_coopvec_mlp_cpu(const CoopVecMlpConfig& c, const crd::u16* w, c
             for (int r = 0; r < rows; ++r)
             {
                 float acc = crd::math::f16_bits_to_f32(b[boff + r]);
-                for (int k = 0; k < cols; ++k) { acc += crd::math::f16_bits_to_f32(w[woff + r * cols + k]) * cur[k]; }
+                for (int k = 0; k < cols; ++k)
+                {
+                    acc += crd::math::f16_bits_to_f32(w[woff + r * cols + k]) * cur[k];
+                }
                 float v = crd::math::f16_bits_to_f32(crd::math::f32_to_f16_bits(acc)); // fp16 activation store
-                if (l + 1 < c.layers() && v < 0.0F) { v = 0.0F; }                      // ReLU (hidden only)
+                if (l + 1 < c.layers() && v < 0.0F) // ReLU (hidden only)
+                {
+                    v = 0.0F;
+                }
                 nxt[r] = v;
             }
             woff += rows * cols;
@@ -237,7 +276,10 @@ inline void eval_coopvec_mlp_cpu(const CoopVecMlpConfig& c, const crd::u16* w, c
             cur        = nxt;
             nxt        = tmp;
         }
-        for (int o = 0; o < c.out_dim; ++o) { out[sample * c.out_dim + o] = crd::math::f32_to_f16_bits(cur[o]); }
+        for (int o = 0; o < c.out_dim; ++o)
+        {
+            out[sample * c.out_dim + o] = crd::math::f32_to_f16_bits(cur[o]);
+        }
     }
 }
 
@@ -252,7 +294,10 @@ inline void eval_coopvec_mlp_cpu(const CoopVecMlpConfig& c, const crd::u16* w, c
 // SGD; a multi-layer MLP composes this per layer with the transposed-matmul deltas. `dim` ≤ 1024.
 inline bool emit_coopvec_linear_train_glsl(int dim, GlslKernel& out)
 {
-    if (dim <= 0 || dim > 1024) { return false; }
+    if (dim <= 0 || dim > 1024)
+    {
+        return false;
+    }
     using neural_detail::u;
     crd::containers::String& s = out.source;
     s.clear();
@@ -322,7 +367,10 @@ inline void neural_uv_encode(float u, float v, int dim, float* feat) noexcept
 // RGBA8, W×H), 3=Cfg(uint[0]=W, [1]=H). Requires in_dim % 4 == 0 and out_dim ≥ 3. 8×8 workgroup tiles.
 inline bool emit_neural_material_render_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
 {
-    if (!c.valid() || (c.in_dim % 4) != 0 || c.out_dim < 3) { return false; }
+    if (!c.valid() || (c.in_dim % 4) != 0 || c.out_dim < 3)
+    {
+        return false;
+    }
     using neural_detail::u;
     crd::containers::String& s = out.source;
     s.clear();
@@ -407,7 +455,10 @@ inline bool emit_neural_material_render_glsl(const CoopVecMlpConfig& c, GlslKern
 // out_dim ≥ 3. Runs coopvec in the FRAGMENT stage (the intended neural-material path — per-pixel MLP).
 inline bool emit_neural_surface_fs_glsl(const CoopVecMlpConfig& c, GlslKernel& out)
 {
-    if (!c.valid() || (c.in_dim % 4) != 0 || c.out_dim < 3) { return false; }
+    if (!c.valid() || (c.in_dim % 4) != 0 || c.out_dim < 3)
+    {
+        return false;
+    }
     using neural_detail::u;
     crd::containers::String& s = out.source;
     s.clear();
@@ -481,10 +532,26 @@ inline bool emit_neural_surface_fs_glsl(const CoopVecMlpConfig& c, GlslKernel& o
     s.append("[1]), float(a");
     u(s, nl);
     s.append("[2])), 0.0, 1.0);\n");
-    if (c.out_dim > 3) { s.append("  float metallic = clamp(float(a"); u(s, nl); s.append("[3]), 0.0, 1.0);\n"); }
-    else { s.append("  float metallic = 0.0;\n"); }
-    if (c.out_dim > 4) { s.append("  float roughness = clamp(float(a"); u(s, nl); s.append("[4]), 0.045, 1.0);\n"); }
-    else { s.append("  float roughness = 0.5;\n"); }
+    if (c.out_dim > 3)
+    {
+        s.append("  float metallic = clamp(float(a");
+        u(s, nl);
+        s.append("[3]), 0.0, 1.0);\n");
+    }
+    else
+    {
+        s.append("  float metallic = 0.0;\n");
+    }
+    if (c.out_dim > 4)
+    {
+        s.append("  float roughness = clamp(float(a");
+        u(s, nl);
+        s.append("[4]), 0.045, 1.0);\n");
+    }
+    else
+    {
+        s.append("  float roughness = 0.5;\n");
+    }
     if (c.out_dim >= 8) // a LEARNED normal: outputs 5..7 → tangent-space normal, [0,1]→[-1,1], normalized then re-encoded
     {
         s.append("  vec3 ln = vec3(float(a");
@@ -495,7 +562,10 @@ inline bool emit_neural_surface_fs_glsl(const CoopVecMlpConfig& c, GlslKernel& o
         u(s, nl);
         s.append("[7])) * 2.0 - 1.0;\n  vec3 enc_n = normalize(ln + vec3(0.0,0.0,1e-4)) * 0.5 + 0.5;\n");
     }
-    else { s.append("  vec3 enc_n = normalize(v_normal) * 0.5 + 0.5;\n"); } // geometric fallback
+    else // geometric fallback
+    {
+        s.append("  vec3 enc_n = normalize(v_normal) * 0.5 + 0.5;\n");
+    }
     s.append("  o_0 = vec4(base, metallic);\n");
     s.append("  o_1 = vec4(enc_n, roughness);\n");
     s.append("  o_2 = vec4(0.0, 0.0, 0.0, 1.0);\n"); // emissive = 0, occlusion = 1

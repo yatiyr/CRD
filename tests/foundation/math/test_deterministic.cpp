@@ -33,7 +33,10 @@ namespace
 // +tiny vs -tiny is small, not 0x80000000 = 2.1B).
 [[nodiscard]] u32 ulp_diff(f32 a, f32 b) noexcept
 {
-    if (a == b) return 0U;  // catches +0 vs -0 (== treats them equal in IEEE)
+    if (a == b) // catches +0 vs -0 (== treats them equal in IEEE)
+    {
+        return 0U;
+    }
     auto map_to_ordered = [](f32 v) noexcept -> crd::i32
     {
         const u32 raw = std::bit_cast<u32>(v);
@@ -66,7 +69,10 @@ TEST_CASE("deterministic sin matches std::sin within 4 ulps over [-2pi, 2pi]",
         const f32 expected = std::sin(t);
         const f32 got      = det::sin(t);
         const u32 d        = ulp_diff(expected, got);
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp diff = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -86,7 +92,13 @@ TEST_CASE("deterministic cos matches std::cos within 4 ulps over [-2pi, 2pi]",
         const f32 e = std::cos(t);
         const f32 g = det::cos(t);
         const u32 d = ulp_diff(e, g);
-        if (d > max_ulp) { max_ulp = d; worst_t = t; worst_got = g; worst_exp = e; }
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+            worst_t = t;
+            worst_got = g;
+            worst_exp = e;
+        }
     }
     INFO("max ulp = " << max_ulp << "  at t = " << worst_t
                      << "  std=" << worst_exp << "  det=" << worst_got);
@@ -107,7 +119,13 @@ TEST_CASE("deterministic tan matches std::tan over [-pi/3, pi/3] within 8 ulps",
         const f32 e = std::tan(t);
         const f32 g = det::tan(t);
         const u32 d = ulp_diff(e, g);
-        if (d > max_ulp) { max_ulp = d; worst_t = t; worst_got = g; worst_exp = e; }
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+            worst_t = t;
+            worst_got = g;
+            worst_exp = e;
+        }
     }
     INFO("max ulp = " << max_ulp << "  at t = " << worst_t
                      << "  std=" << worst_exp << "  det=" << worst_got);
@@ -123,7 +141,10 @@ TEST_CASE("deterministic atan matches std::atan within 4 ulps over [-10, 10]",
     {
         const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::atan(t), det::atan(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp diff = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -138,9 +159,15 @@ TEST_CASE("deterministic atan2 quadrants match std::atan2 within 4 ulps",
     {
         for (f32 x : pts)
         {
-            if (x == 0.0F && y == 0.0F) continue;
+            if (x == 0.0F && y == 0.0F)
+            {
+                continue;
+            }
             const u32 d = ulp_diff(std::atan2(y, x), det::atan2(y, x));
-            if (d > max_ulp) max_ulp = d;
+            if (d > max_ulp)
+            {
+                max_ulp = d;
+            }
         }
     }
     INFO("max ulp diff = " << max_ulp);
@@ -157,8 +184,14 @@ TEST_CASE("deterministic asin / acos match std::asin / std::acos within 4 ulps",
         const f32 t = -1.0F + 2.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 da = ulp_diff(std::asin(t), det::asin(t));
         const u32 dc = ulp_diff(std::acos(t), det::acos(t));
-        if (da > max_ulp) max_ulp = da;
-        if (dc > max_ulp) max_ulp = dc;
+        if (da > max_ulp)
+        {
+            max_ulp = da;
+        }
+        if (dc > max_ulp)
+        {
+            max_ulp = dc;
+        }
     }
     INFO("max ulp diff = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -173,7 +206,10 @@ TEST_CASE("deterministic exp matches std::exp within 8 ulps over [-10, 10]",
     {
         const f32 t = -10.0F + 20.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::exp(t), det::exp(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp diff = " << max_ulp);
     REQUIRE(max_ulp <= 8U);
@@ -189,7 +225,10 @@ TEST_CASE("deterministic log matches std::log within 4 ulps over [0.01, 100]",
         const f32 frac = static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 t = 0.01F * std::pow(10000.0F, frac);  // log-spaced
         const u32 d = ulp_diff(std::log(t), det::log(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp diff = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -206,7 +245,10 @@ TEST_CASE("deterministic pow matches std::pow within 16 ulps for typical inputs"
         for (f32 e : exponents)
         {
             const u32 d = ulp_diff(std::pow(b, e), det::pow(b, e));
-            if (d > max_ulp) max_ulp = d;
+            if (d > max_ulp)
+            {
+                max_ulp = d;
+            }
         }
     }
     INFO("max ulp diff = " << max_ulp);
@@ -379,7 +421,10 @@ TEST_CASE("deterministic expm1 matches std::expm1 within 4 ulps over [-2, 2]",
     {
         const f32 t = -2.0F + 4.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::expm1(t), det::expm1(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -403,7 +448,10 @@ TEST_CASE("deterministic log1p matches std::log1p within 4 ulps over [-0.9, 9]",
     {
         const f32 t = -0.9F + 9.9F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::log1p(t), det::log1p(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 4U);
@@ -441,7 +489,10 @@ TEST_CASE("deterministic sinh matches std::sinh within 8 ulps over [-3, 3]",
     {
         const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::sinh(t), det::sinh(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 8U);
@@ -456,7 +507,10 @@ TEST_CASE("deterministic cosh matches std::cosh within 8 ulps over [-3, 3]",
     {
         const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::cosh(t), det::cosh(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 8U);
@@ -477,7 +531,10 @@ TEST_CASE("deterministic tanh matches std::tanh within 128 ulps over [-5, 5]",
     {
         const f32 t = -5.0F + 10.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const u32 d = ulp_diff(std::tanh(t), det::tanh(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 128U);
@@ -528,7 +585,10 @@ using crd::u64;
 
 [[nodiscard]] u64 ulp_diff64(f64 a, f64 b) noexcept
 {
-    if (a == b) return 0ULL;
+    if (a == b)
+    {
+        return 0ULL;
+    }
     auto map_to_ordered = [](f64 v) noexcept -> crd::i64
     {
         const u64 raw = std::bit_cast<u64>(v);
@@ -555,8 +615,14 @@ TEST_CASE("deterministic f64 sin / cos accuracy over [-2pi, 2pi]",
         const f64 t = -2.0 * det::kPiF64 + (4.0 * det::kPiF64) * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 ds = ulp_diff64(std::sin(t), det::sin(t));
         const u64 dc = ulp_diff64(std::cos(t), det::cos(t));
-        if (ds > max_ulp_sin) max_ulp_sin = ds;
-        if (dc > max_ulp_cos) max_ulp_cos = dc;
+        if (ds > max_ulp_sin)
+        {
+            max_ulp_sin = ds;
+        }
+        if (dc > max_ulp_cos)
+        {
+            max_ulp_cos = dc;
+        }
     }
     INFO("sin max ulp = " << max_ulp_sin << "  cos max ulp = " << max_ulp_cos);
     // Bound 8 ulps not 4: Cephes f64 sin/cos has ~3-ulp typical accuracy
@@ -575,7 +641,10 @@ TEST_CASE("deterministic f64 tan accuracy over [-pi/3, pi/3]",
     {
         const f64 t = -det::kPiF64 / 3.0 + (2.0 * det::kPiF64 / 3.0) * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::tan(t), det::tan(t));
-        if (d > max_ulp) max_ulp = d;
+        if (d > max_ulp)
+        {
+            max_ulp = d;
+        }
     }
     INFO("max ulp = " << max_ulp);
     REQUIRE(max_ulp <= 8ULL);
@@ -590,17 +659,30 @@ TEST_CASE("deterministic f64 atan / atan2 / asin / acos accuracy",
     {
         const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::atan(t), det::atan(t));
-        if (d > max_atan) max_atan = d;
+        if (d > max_atan)
+        {
+            max_atan = d;
+        }
     }
     INFO("atan max ulp = " << max_atan);
     REQUIRE(max_atan <= 4ULL);
 
     const f64 pts[] = { -3.0, -1.5, -0.5, 0.0, 0.5, 1.5, 3.0 };
     u64 max_atan2 = 0;
-    for (f64 y : pts) for (f64 x : pts) {
-        if (x == 0.0 && y == 0.0) continue;
-        const u64 d = ulp_diff64(std::atan2(y, x), det::atan2(y, x));
-        if (d > max_atan2) max_atan2 = d;
+    for (f64 y : pts)
+    {
+        for (f64 x : pts)
+        {
+            if (x == 0.0 && y == 0.0)
+            {
+                continue;
+            }
+            const u64 d = ulp_diff64(std::atan2(y, x), det::atan2(y, x));
+            if (d > max_atan2)
+            {
+                max_atan2 = d;
+            }
+        }
     }
     INFO("atan2 max ulp = " << max_atan2);
     REQUIRE(max_atan2 <= 4ULL);
@@ -612,8 +694,14 @@ TEST_CASE("deterministic f64 atan / atan2 / asin / acos accuracy",
         const f64 t = -1.0 + 2.0 * static_cast<f64>(i) / 31.0;
         const u64 da = ulp_diff64(std::asin(t), det::asin(t));
         const u64 dc = ulp_diff64(std::acos(t), det::acos(t));
-        if (da > max_asin) max_asin = da;
-        if (dc > max_acos) max_acos = dc;
+        if (da > max_asin)
+        {
+            max_asin = da;
+        }
+        if (dc > max_acos)
+        {
+            max_acos = dc;
+        }
     }
     INFO("asin = " << max_asin << "  acos = " << max_acos);
     REQUIRE(max_asin <= 8ULL);
@@ -629,7 +717,10 @@ TEST_CASE("deterministic f64 exp / log accuracy",
     {
         const f64 t = -10.0 + 20.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const u64 d = ulp_diff64(std::exp(t), det::exp(t));
-        if (d > max_exp) max_exp = d;
+        if (d > max_exp)
+        {
+            max_exp = d;
+        }
     }
     INFO("exp max ulp = " << max_exp);
     REQUIRE(max_exp <= 8ULL);
@@ -640,7 +731,10 @@ TEST_CASE("deterministic f64 exp / log accuracy",
         const f64 frac = static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const f64 t = 0.01 * std::pow(10000.0, frac);
         const u64 d = ulp_diff64(std::log(t), det::log(t));
-        if (d > max_log) max_log = d;
+        if (d > max_log)
+        {
+            max_log = d;
+        }
     }
     INFO("log max ulp = " << max_log);
     REQUIRE(max_log <= 4ULL);
@@ -652,9 +746,16 @@ TEST_CASE("deterministic f64 pow / expm1 / log1p accuracy",
     const f64 bases[]    = { 0.5, 1.5, 2.0, 7.0, 10.0 };
     const f64 exponents[] = { -2.0, -0.5, 0.5, 1.0, 2.0, 3.0 };
     u64 max_pow = 0;
-    for (f64 b : bases) for (f64 e : exponents) {
-        const u64 d = ulp_diff64(std::pow(b, e), det::pow(b, e));
-        if (d > max_pow) max_pow = d;
+    for (f64 b : bases)
+    {
+        for (f64 e : exponents)
+        {
+            const u64 d = ulp_diff64(std::pow(b, e), det::pow(b, e));
+            if (d > max_pow)
+            {
+                max_pow = d;
+            }
+        }
     }
     INFO("pow max ulp = " << max_pow);
     REQUIRE(max_pow <= 16ULL);
@@ -665,13 +766,19 @@ TEST_CASE("deterministic f64 pow / expm1 / log1p accuracy",
     {
         const f64 t = -1.5 + 3.0 * static_cast<f64>(i) / 31.0;
         const u64 de = ulp_diff64(std::expm1(t), det::expm1(t));
-        if (de > max_em1) max_em1 = de;
+        if (de > max_em1)
+        {
+            max_em1 = de;
+        }
     }
     for (int i = 0; i < 32; ++i)
     {
         const f64 t = -0.9 + 9.9 * static_cast<f64>(i) / 31.0;
         const u64 dl = ulp_diff64(std::log1p(t), det::log1p(t));
-        if (dl > max_lp1) max_lp1 = dl;
+        if (dl > max_lp1)
+        {
+            max_lp1 = dl;
+        }
     }
     INFO("expm1 = " << max_em1 << "  log1p = " << max_lp1);
     // 16-ulp bound: Taylor degree 11 truncation + exp/log fallback drift.
@@ -690,8 +797,14 @@ TEST_CASE("deterministic f64 sinh / cosh / tanh accuracy",
         const f64 t = -3.0 + 6.0 * static_cast<f64>(i) / 31.0;
         const u64 ds = ulp_diff64(std::sinh(t), det::sinh(t));
         const u64 dc = ulp_diff64(std::cosh(t), det::cosh(t));
-        if (ds > max_sinh) max_sinh = ds;
-        if (dc > max_cosh) max_cosh = dc;
+        if (ds > max_sinh)
+        {
+            max_sinh = ds;
+        }
+        if (dc > max_cosh)
+        {
+            max_cosh = dc;
+        }
     }
     INFO("sinh = " << max_sinh << "  cosh = " << max_cosh);
     // 16-ulp: derived from exp; small drift accumulates.
@@ -702,7 +815,10 @@ TEST_CASE("deterministic f64 sinh / cosh / tanh accuracy",
     {
         const f64 t = -5.0 + 10.0 * static_cast<f64>(i) / 31.0;
         const u64 d = ulp_diff64(std::tanh(t), det::tanh(t));
-        if (d > max_tanh) max_tanh = d;
+        if (d > max_tanh)
+        {
+            max_tanh = d;
+        }
     }
     INFO("tanh = " << max_tanh);
     // f64 saturation: at x=5, tanh(5)=1-9e-5 measured against f64 ulp at 1.0
@@ -729,10 +845,12 @@ TEST_CASE("deterministic f64 GOLDEN cross-check identities",
     REQUIRE(bits64(det::cosh(1.5)) == bits64(det::cosh(-1.5)));
 
     // Round trips
-    for (f64 x : { 0.5, 1.5, 3.0 }) {
+    for (f64 x : { 0.5, 1.5, 3.0 })
+    {
         REQUIRE(std::abs(det::log(det::exp(x)) - x) < 1.0e-12);
     }
-    for (f64 x : { -0.4, -0.1, 0.1, 0.4 }) {
+    for (f64 x : { -0.4, -0.1, 0.1, 0.4 })
+    {
         REQUIRE(std::abs(det::log1p(det::expm1(x)) - x) < 1.0e-12);
     }
 }
@@ -769,7 +887,10 @@ TEST_CASE("deterministic erf f32 known values + std parity",
     {
         const f32 t = -3.0F + 6.0F * static_cast<f32>(i) / static_cast<f32>(k_n - 1);
         const f32 d = std::abs(std::erf(t) - det::erf(t));
-        if (d > max_err) max_err = d;
+        if (d > max_err)
+        {
+            max_err = d;
+        }
     }
     INFO("max abs err = " << max_err);
     REQUIRE(max_err < 1.0e-5F);
@@ -811,7 +932,10 @@ TEST_CASE("deterministic gamma f32 known values + std parity",
         const f32 e = std::tgamma(t);
         const f32 g = det::gamma(t);
         const f32 r = std::abs(e - g) / std::abs(e);
-        if (r > max_rel) max_rel = r;
+        if (r > max_rel)
+        {
+            max_rel = r;
+        }
     }
     INFO("max rel err = " << max_rel);
     REQUIRE(max_rel < 1.0e-4F);
@@ -850,7 +974,10 @@ TEST_CASE("deterministic erf / erfc f64 known values + std parity",
     {
         const f64 t = -3.0 + 6.0 * static_cast<f64>(i) / static_cast<f64>(k_n - 1);
         const f64 d = std::abs(std::erf(t) - det::erf(t));
-        if (d > max_err) max_err = d;
+        if (d > max_err)
+        {
+            max_err = d;
+        }
     }
     INFO("max abs err = " << max_err);
     REQUIRE(max_err < 1.0e-12);
@@ -884,7 +1011,10 @@ TEST_CASE("deterministic gamma f64 known values + std parity",
         const f64 e = std::tgamma(t);
         const f64 g = det::gamma(t);
         const f64 r = std::abs(e - g) / std::abs(e);
-        if (r > max_rel) max_rel = r;
+        if (r > max_rel)
+        {
+            max_rel = r;
+        }
     }
     INFO("max rel err = " << max_rel);
     REQUIRE(max_rel < 1.0e-10);

@@ -71,9 +71,21 @@ inline void classify(const KGraph& g, const KEntry& e, Frequency* out) noexcept
         default:
         {
             const int ops[4] = {nd.a, nd.b, nd.c, nd.d};
-            for (int k = 0; k < 4; ++k) { if (ops[k] >= 0) { f = freq_max(f, out[ops[k]]); } }
-            for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { f = freq_max(f, out[g.ext_operand(nd, k)]); }
-            if (is_fragment_forcing(nd.op)) { f = Frequency::Fragment; }
+            for (int k = 0; k < 4; ++k)
+            {
+                if (ops[k] >= 0)
+                {
+                    f = freq_max(f, out[ops[k]]);
+                }
+            }
+            for (int k = 0; k < static_cast<int>(nd.n_ext); ++k)
+            {
+                f = freq_max(f, out[g.ext_operand(nd, k)]);
+            }
+            if (is_fragment_forcing(nd.op))
+            {
+                f = Frequency::Fragment;
+            }
             break;
         }
         }
@@ -86,11 +98,26 @@ inline void classify(const KGraph& g, const KEntry& e, Frequency* out) noexcept
 [[nodiscard]] inline Frequency entry_frequency(const KEntry& e, const Frequency* freq) noexcept
 {
     Frequency f = Frequency::Constant;
-    if (e.position >= 0) { f = freq_max(f, freq[e.position]); }
-    if (e.frag_depth >= 0) { f = freq_max(f, freq[e.frag_depth]); }
-    if (e.discard_cond >= 0) { f = Frequency::Fragment; }
-    if (e.storage_write_value >= 0) { f = Frequency::Fragment; }
-    for (int k = 0; k < e.n_out; ++k) { f = freq_max(f, freq[e.out[k].node]); }
+    if (e.position >= 0)
+    {
+        f = freq_max(f, freq[e.position]);
+    }
+    if (e.frag_depth >= 0)
+    {
+        f = freq_max(f, freq[e.frag_depth]);
+    }
+    if (e.discard_cond >= 0)
+    {
+        f = Frequency::Fragment;
+    }
+    if (e.storage_write_value >= 0)
+    {
+        f = Frequency::Fragment;
+    }
+    for (int k = 0; k < e.n_out; ++k)
+    {
+        f = freq_max(f, freq[e.out[k].node]);
+    }
     return f;
 }
 
@@ -114,20 +141,59 @@ inline void lower_entry(KGraph& g, KEntry& e)
     // skeleton never surfaced it (its trivial `mesh_prim` shared `position`'s subtree, so it survived by accident).
     int* slots[kMaxStageOutputs + 12];
     int  n = 0;
-    if (e.position >= 0) { slots[n++] = &e.position; }
-    if (e.frag_depth >= 0) { slots[n++] = &e.frag_depth; }
-    if (e.discard_cond >= 0) { slots[n++] = &e.discard_cond; }
-    if (e.shading_rate >= 0) { slots[n++] = &e.shading_rate; }
-    if (e.mesh_prim >= 0) { slots[n++] = &e.mesh_prim; }         // B4 MESH: the per-primitive local-index triple
-    if (e.task_emit >= 0) { slots[n++] = &e.task_emit; }         // B4 TASK: the mesh-workgroup amplification count
-    for (crd::u32 k = 0; k < e.n_task_payload; ++k) { if (e.task_payload[k] >= 0) { slots[n++] = &e.task_payload[k]; } }
-    if (e.storage_write_index >= 0) { slots[n++] = &e.storage_write_index; }
-    if (e.storage_write_value >= 0) { slots[n++] = &e.storage_write_value; }
-    for (int k = 0; k < e.n_out; ++k) { slots[n++] = &e.out[k].node; }
+    if (e.position >= 0)
+    {
+        slots[n++] = &e.position;
+    }
+    if (e.frag_depth >= 0)
+    {
+        slots[n++] = &e.frag_depth;
+    }
+    if (e.discard_cond >= 0)
+    {
+        slots[n++] = &e.discard_cond;
+    }
+    if (e.shading_rate >= 0)
+    {
+        slots[n++] = &e.shading_rate;
+    }
+    if (e.mesh_prim >= 0) // B4 MESH: the per-primitive local-index triple
+    {
+        slots[n++] = &e.mesh_prim;
+    }
+    if (e.task_emit >= 0) // B4 TASK: the mesh-workgroup amplification count
+    {
+        slots[n++] = &e.task_emit;
+    }
+    for (crd::u32 k = 0; k < e.n_task_payload; ++k)
+    {
+        if (e.task_payload[k] >= 0)
+        {
+            slots[n++] = &e.task_payload[k];
+        }
+    }
+    if (e.storage_write_index >= 0)
+    {
+        slots[n++] = &e.storage_write_index;
+    }
+    if (e.storage_write_value >= 0)
+    {
+        slots[n++] = &e.storage_write_value;
+    }
+    for (int k = 0; k < e.n_out; ++k)
+    {
+        slots[n++] = &e.out[k].node;
+    }
     int roots[kMaxStageOutputs + 12];
-    for (int i = 0; i < n; ++i) { roots[i] = *slots[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        roots[i] = *slots[i];
+    }
     lower(g, roots, n);
-    for (int i = 0; i < n; ++i) { *slots[i] = roots[i]; }
+    for (int i = 0; i < n; ++i)
+    {
+        *slots[i] = roots[i];
+    }
 }
 
 // ── stage split: the uniform/fragment boundary (B7-b) ────────────────────────────────────────────────────────────────
@@ -141,29 +207,50 @@ inline void lower_entry(KGraph& g, KEntry& e)
 inline int uniform_boundary(const KGraph& g, const KEntry& e, const Frequency* freq, crd::u8* seen, int* out, int cap) noexcept
 {
     const int n = g.size();
-    for (int i = 0; i < n; ++i) { seen[static_cast<crd::usize>(i)] = 0; }
+    for (int i = 0; i < n; ++i)
+    {
+        seen[static_cast<crd::usize>(i)] = 0;
+    }
     int        cnt = 0;
     const auto add = [&](int u)
     {
-        if (u < 0 || freq[u] != Frequency::Uniform || seen[static_cast<crd::usize>(u)] != 0) { return; }
+        if (u < 0 || freq[u] != Frequency::Uniform || seen[static_cast<crd::usize>(u)] != 0)
+        {
+            return;
+        }
         seen[static_cast<crd::usize>(u)] = 1;
-        if (cnt < cap) { out[cnt] = u; }
+        if (cnt < cap)
+        {
+            out[cnt] = u;
+        }
         ++cnt;
     };
     for (int i = 0; i < n; ++i)
     {
-        if (freq[i] != Frequency::Fragment) { continue; } // only a fragment consumer creates a hoistable boundary
+        if (freq[i] != Frequency::Fragment) // only a fragment consumer creates a hoistable boundary
+        {
+            continue;
+        }
         const KNode& nd = g.node(i);
         add(nd.a);
         add(nd.b);
         add(nd.c);
         add(nd.d);
-        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k) { add(g.ext_operand(nd, k)); }
+        for (int k = 0; k < static_cast<int>(nd.n_ext); ++k)
+        {
+            add(g.ext_operand(nd, k));
+        }
     }
     if (e.stage == KStage::Fragment) // a Uniform value emitted straight to a fragment output is recomputed per-pixel for nothing
     {
-        for (int k = 0; k < e.n_out; ++k) { add(e.out[k].node); }
-        if (e.frag_depth >= 0) { add(e.frag_depth); }
+        for (int k = 0; k < e.n_out; ++k)
+        {
+            add(e.out[k].node);
+        }
+        if (e.frag_depth >= 0)
+        {
+            add(e.frag_depth);
+        }
     }
     return cnt;
 }
@@ -182,7 +269,10 @@ inline void fold_static_branches(KGraph& g) noexcept
     for (int i = 0; i < n; ++i)
     {
         const KNode& nd = g.node(i);
-        if (nd.op != KOp::Select || nd.c < 0 || g.node(nd.c).op != KOp::Const) { continue; }
+        if (nd.op != KOp::Select || nd.c < 0 || g.node(nd.c).op != KOp::Const)
+        {
+            continue;
+        }
         g.alias(i, g.node(nd.c).cval != 0.0 ? nd.a : nd.b); // cond ? a : b
     }
 }

@@ -64,7 +64,10 @@ MortonGpu60BitPipeline::MortonGpu60BitPipeline(crd::gpu::IComputeContext&   ctx,
 
     // Kernel by name — the backend loads its own cooked kernel; no API, no file format named here.
     impl.pipeline = ctx.create_pipeline(shader_dir, crd::containers::StringView{"compute_morton_codes_60bit"}, 2, sizeof(Morton60PushConstants));
-    if (impl.pipeline == nullptr) { return; }
+    if (impl.pipeline == nullptr)
+    {
+        return;
+    }
 
     impl.valid = true;
 }

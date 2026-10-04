@@ -43,7 +43,10 @@ struct Huff
             code       = static_cast<crd::u16>(code << 1U);
             k += bits[l - 1];
         }
-        for (crd::u32 i = 0; i < nvals && i < 256U; ++i) { values[i] = vals[i]; }
+        for (crd::u32 i = 0; i < nvals && i < 256U; ++i)
+        {
+            values[i] = vals[i];
+        }
         present = true;
     }
 };
@@ -62,11 +65,17 @@ struct BitReader
     {
         if (bits == 0)
         {
-            if (p >= end) { return -1; }
+            if (p >= end)
+            {
+                return -1;
+            }
             crd::u8 b = *p++;
             if (b == 0xFFU)
             {
-                if (p >= end) { return -1; }
+                if (p >= end)
+                {
+                    return -1;
+                }
                 const crd::u8 next = *p++;
                 if (next != 0x00U) // a real marker inside entropy data: RSTn handled by the caller; else stop
                 {
@@ -88,7 +97,10 @@ struct BitReader
         for (int l = 1; l <= 16; ++l)
         {
             const int b = bit();
-            if (b < 0) { return -1; }
+            if (b < 0)
+            {
+                return -1;
+            }
             code = (code << 1U) | static_cast<crd::u32>(b);
             if (h.maxcode[l] != 0xFFFFU && code <= h.maxcode[l])
             {
@@ -105,10 +117,16 @@ struct BitReader
         for (int i = 0; i < s; ++i)
         {
             const int b = bit();
-            if (b < 0) { return false; }
+            if (b < 0)
+            {
+                return false;
+            }
             v = (v << 1) | b;
         }
-        if (s > 0 && v < (1 << (s - 1))) { v += 1 - (1 << s); } // negative branch
+        if (s > 0 && v < (1 << (s - 1))) // negative branch
+        {
+            v += 1 - (1 << s);
+        }
         out = v;
         return true;
     }
@@ -150,7 +168,10 @@ void idct8x8(const crd::i32* coef, crd::u8* out /*64*/) noexcept
         for (int x = 0; x < 8; ++x)
         {
             crd::f32 s = 0.0F;
-            for (int u = 0; u < 8; ++u) { s += kT.c[u][x] * static_cast<crd::f32>(coef[y * 8 + u]); }
+            for (int u = 0; u < 8; ++u)
+            {
+                s += kT.c[u][x] * static_cast<crd::f32>(coef[y * 8 + u]);
+            }
             tmp[y * 8 + x] = s;
         }
     }
@@ -159,11 +180,20 @@ void idct8x8(const crd::i32* coef, crd::u8* out /*64*/) noexcept
         for (int y = 0; y < 8; ++y)
         {
             crd::f32 s = 0.0F;
-            for (int v = 0; v < 8; ++v) { s += kT.c[v][y] * tmp[v * 8 + x]; }
+            for (int v = 0; v < 8; ++v)
+            {
+                s += kT.c[v][y] * tmp[v * 8 + x];
+            }
             const int r = static_cast<int>(std::lround(s)) + 128;
             int       v = r;
-            if (v < 0) { v = 0; }
-            if (v > 255) { v = 255; }
+            if (v < 0)
+            {
+                v = 0;
+            }
+            if (v > 255)
+            {
+                v = 255;
+            }
             out[y * 8 + x] = static_cast<crd::u8>(v);
         }
     }
@@ -196,7 +226,10 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
     out.width  = 0;
     out.height = 0;
     out.pixels.clear();
-    if (!jpeg_sniff(bytes)) { return LdrError::BadMagic; }
+    if (!jpeg_sniff(bytes))
+    {
+        return LdrError::BadMagic;
+    }
 
     crd::u16  qt[4][64] = {};
     Huff      hdc[4];
@@ -213,14 +246,29 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
     // ── marker segments up to SOS ──────────────────────────────────────────────────────────────────────────────────────
     while (p + 4 <= end)
     {
-        if (p[0] != 0xFFU) { return LdrError::BadData; }
+        if (p[0] != 0xFFU)
+        {
+            return LdrError::BadData;
+        }
         const crd::u8 marker = p[1];
         p += 2;
-        if (marker == 0xD8U) { continue; }                                       // stray SOI
-        if (marker == 0x01U || (marker >= 0xD0U && marker <= 0xD7U)) { continue; } // standalone
-        if (p + 2 > end) { return LdrError::Truncated; }
+        if (marker == 0xD8U) // stray SOI
+        {
+            continue;
+        }
+        if (marker == 0x01U || (marker >= 0xD0U && marker <= 0xD7U)) // standalone
+        {
+            continue;
+        }
+        if (p + 2 > end)
+        {
+            return LdrError::Truncated;
+        }
         const crd::u32 seg_len = (static_cast<crd::u32>(p[0]) << 8U) | p[1];
-        if (seg_len < 2U || p + seg_len > end) { return LdrError::Truncated; }
+        if (seg_len < 2U || p + seg_len > end)
+        {
+            return LdrError::Truncated;
+        }
         const crd::u8* seg = p + 2;
         const crd::u32 n   = seg_len - 2U;
 
@@ -231,10 +279,16 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
             {
                 const crd::u8 pq = seg[off] >> 4U;
                 const crd::u8 tq = seg[off] & 15U;
-                if (tq > 3U || pq > 1U) { return LdrError::BadHeader; }
+                if (tq > 3U || pq > 1U)
+                {
+                    return LdrError::BadHeader;
+                }
                 ++off;
                 const crd::u32 need = pq == 1U ? 128U : 64U;
-                if (off + need > n) { return LdrError::Truncated; }
+                if (off + need > n)
+                {
+                    return LdrError::Truncated;
+                }
                 for (int i = 0; i < 64; ++i)
                 {
                     qt[tq][i] = pq == 1U ? static_cast<crd::u16>((seg[off + 2U * i] << 8U) | seg[off + 2U * i + 1U])
@@ -250,25 +304,52 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
             {
                 const crd::u8 tc = seg[off] >> 4U;
                 const crd::u8 th = seg[off] & 15U;
-                if (tc > 1U || th > 3U) { return LdrError::BadHeader; }
+                if (tc > 1U || th > 3U)
+                {
+                    return LdrError::BadHeader;
+                }
                 crd::u32 nv = 0;
-                for (int i = 0; i < 16; ++i) { nv += seg[off + 1U + i]; }
-                if (off + 17U + nv > n || nv > 256U) { return LdrError::Truncated; }
+                for (int i = 0; i < 16; ++i)
+                {
+                    nv += seg[off + 1U + i];
+                }
+                if (off + 17U + nv > n || nv > 256U)
+                {
+                    return LdrError::Truncated;
+                }
                 (tc == 0U ? hdc[th] : hac[th]).build(seg + off + 1U, seg + off + 17U, nv);
                 off += 17U + nv;
             }
         }
         else if (marker == 0xC0U || marker == 0xC1U) // SOF0 baseline / SOF1 extended sequential (same decode path)
         {
-            if (n < 6U) { return LdrError::Truncated; }
-            if (seg[0] != 8U) { return LdrError::Unsupported; } // 12-bit precision
+            if (n < 6U)
+            {
+                return LdrError::Truncated;
+            }
+            if (seg[0] != 8U) // 12-bit precision
+            {
+                return LdrError::Unsupported;
+            }
             h     = (static_cast<crd::u32>(seg[1]) << 8U) | seg[2];
             w     = (static_cast<crd::u32>(seg[3]) << 8U) | seg[4];
             ncomp = seg[5];
-            if (w == 0U || h == 0U) { return LdrError::BadHeader; }
-            if (w > kMaxDim || h > kMaxDim) { return LdrError::TooLarge; }
-            if (ncomp != 1U && ncomp != 3U) { return LdrError::Unsupported; } // CMYK (4) — named, not silent
-            if (n < 6U + ncomp * 3U) { return LdrError::Truncated; }
+            if (w == 0U || h == 0U)
+            {
+                return LdrError::BadHeader;
+            }
+            if (w > kMaxDim || h > kMaxDim)
+            {
+                return LdrError::TooLarge;
+            }
+            if (ncomp != 1U && ncomp != 3U) // CMYK (4) — named, not silent
+            {
+                return LdrError::Unsupported;
+            }
+            if (n < 6U + ncomp * 3U)
+            {
+                return LdrError::Truncated;
+            }
             for (crd::u32 c = 0; c < ncomp; ++c)
             {
                 comp[c].id    = seg[6U + c * 3U];
@@ -287,14 +368,26 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
         }
         else if (marker == 0xDDU) // DRI
         {
-            if (n < 2U) { return LdrError::Truncated; }
+            if (n < 2U)
+            {
+                return LdrError::Truncated;
+            }
             restart_interval = (static_cast<crd::u32>(seg[0]) << 8U) | seg[1];
         }
         else if (marker == 0xDAU) // SOS
         {
-            if (w == 0U) { return LdrError::BadHeader; } // SOS before SOF
-            if (n < 1U + ncomp * 2U + 3U) { return LdrError::Truncated; }
-            if (seg[0] != ncomp) { return LdrError::Unsupported; } // non-interleaved multi-scan
+            if (w == 0U) // SOS before SOF
+            {
+                return LdrError::BadHeader;
+            }
+            if (n < 1U + ncomp * 2U + 3U)
+            {
+                return LdrError::Truncated;
+            }
+            if (seg[0] != ncomp) // non-interleaved multi-scan
+            {
+                return LdrError::Unsupported;
+            }
             for (crd::u32 c = 0; c < ncomp; ++c)
             {
                 const crd::u8 cid = seg[1U + c * 2U];
@@ -308,7 +401,10 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
                         hit            = true;
                     }
                 }
-                if (!hit) { return LdrError::BadHeader; }
+                if (!hit)
+                {
+                    return LdrError::BadHeader;
+                }
             }
             scan_start = p + seg_len;
             break;
@@ -316,7 +412,10 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
         // APPn / COM / others: skip
         p += seg_len;
     }
-    if (scan_start == nullptr) { return LdrError::Truncated; }
+    if (scan_start == nullptr)
+    {
+        return LdrError::Truncated;
+    }
 
     // ── the interleaved MCU scan ───────────────────────────────────────────────────────────────────────────────────────
     crd::u32 hmax = 1;
@@ -349,10 +448,19 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
             {
                 // expect an RSTn marker: realign to the byte boundary and consume it
                 const crd::u8* q = br.p;
-                while (q + 1 < end && !(q[0] == 0xFFU && q[1] >= 0xD0U && q[1] <= 0xD7U)) { ++q; }
-                if (q + 1 >= end) { return LdrError::Truncated; }
+                while (q + 1 < end && !(q[0] == 0xFFU && q[1] >= 0xD0U && q[1] <= 0xD7U))
+                {
+                    ++q;
+                }
+                if (q + 1 >= end)
+                {
+                    return LdrError::Truncated;
+                }
                 br.reset_at(q + 2);
-                for (crd::u32 c = 0; c < ncomp; ++c) { comp[c].dc_pred = 0; }
+                for (crd::u32 c = 0; c < ncomp; ++c)
+                {
+                    comp[c].dc_pred = 0;
+                }
             }
             ++mcu_count;
             for (crd::u32 c = 0; c < ncomp; ++c)
@@ -367,15 +475,24 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
                     {
                         crd::i32 coef[64] = {};
                         const int t       = br.decode(hdc[comp[c].dc_tbl]); // DC: category + diff
-                        if (t < 0) { return LdrError::Truncated; }
+                        if (t < 0)
+                        {
+                            return LdrError::Truncated;
+                        }
                         int diff = 0;
-                        if (t > 0 && !br.receive_extend(t, diff)) { return LdrError::Truncated; }
+                        if (t > 0 && !br.receive_extend(t, diff))
+                        {
+                            return LdrError::Truncated;
+                        }
                         comp[c].dc_pred += diff;
                         coef[0] = comp[c].dc_pred * qt[comp[c].quant][0];
                         for (int k = 1; k < 64;) // AC: run/size symbols
                         {
                             const int rs = br.decode(hac[comp[c].ac_tbl]);
-                            if (rs < 0) { return LdrError::Truncated; }
+                            if (rs < 0)
+                            {
+                                return LdrError::Truncated;
+                            }
                             const int r = rs >> 4;
                             const int s = rs & 15;
                             if (s == 0)
@@ -388,9 +505,15 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
                                 break; // EOB
                             }
                             k += r;
-                            if (k > 63) { return LdrError::BadData; }
+                            if (k > 63)
+                            {
+                                return LdrError::BadData;
+                            }
                             int v = 0;
-                            if (!br.receive_extend(s, v)) { return LdrError::Truncated; }
+                            if (!br.receive_extend(s, v))
+                            {
+                                return LdrError::Truncated;
+                            }
                             coef[kZigzag[k]] = v * qt[comp[c].quant][k];
                             ++k;
                         }
@@ -444,8 +567,14 @@ LdrError jpeg_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, c
             const crd::f32 bf = yy + 1.772F * cb;
             const auto     c8 = [](crd::f32 v) noexcept {
                 int r = static_cast<int>(std::lround(v));
-                if (r < 0) { r = 0; }
-                if (r > 255) { r = 255; }
+                if (r < 0)
+                {
+                    r = 0;
+                }
+                if (r > 255)
+                {
+                    r = 255;
+                }
                 return static_cast<crd::u8>(r);
             };
             d[0] = c8(rf);

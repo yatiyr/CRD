@@ -332,7 +332,10 @@ TEST_CASE("QR: Q*R reconstruction at N=128 (multi-block trailing update)",
                 s += q.at(i, p) * qr.packed().at(p, j);
             }
             const double d = std::abs(s - a_orig.at(i, j));
-            if (d > max_err) max_err = d;
+            if (d > max_err)
+            {
+                max_err = d;
+            }
         }
     }
     REQUIRE(max_err < 1e-8);

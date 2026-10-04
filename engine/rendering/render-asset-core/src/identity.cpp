@@ -180,14 +180,38 @@ AssetType infer_type(StringView first_segment) noexcept
 
 StringView asset_extension(StringView folder) noexcept
 {
-    if (folder == "frame") { return ".frame.toml"; }
-    if (folder == "vertex") { return ".crdv"; }
-    if (folder == "material") { return ".crdm"; }
-    if (folder == "post") { return ".crdp"; }
-    if (folder == "lighting") { return ".crdl"; }
-    if (folder == "technique") { return ".crdt"; }
-    if (folder == "lod") { return ".crdlod"; }
-    if (folder == "ckir") { return ".ckir"; } // CEIR-18p: authored CKIR programs — their own engine path (later: "chir")
+    if (folder == "frame")
+    {
+        return ".frame.toml";
+    }
+    if (folder == "vertex")
+    {
+        return ".crdv";
+    }
+    if (folder == "material")
+    {
+        return ".crdm";
+    }
+    if (folder == "post")
+    {
+        return ".crdp";
+    }
+    if (folder == "lighting")
+    {
+        return ".crdl";
+    }
+    if (folder == "technique")
+    {
+        return ".crdt";
+    }
+    if (folder == "lod")
+    {
+        return ".crdlod";
+    }
+    if (folder == "ckir") // CEIR-18p: authored CKIR programs — their own engine path (later: "chir")
+    {
+        return ".ckir";
+    }
     return {};
 }
 

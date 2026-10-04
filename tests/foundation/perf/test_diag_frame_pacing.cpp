@@ -22,8 +22,14 @@ TEST_CASE("pacing is not throughput: equal mean interval, different tail", "[per
     crd::perf::FramePacingAnalyzer alt;
 
     // Identical throughput (mean interval 16 ms) -- steady 16/16/16..., alternating 8/24/8/24...
-    for (int i = 0; i < 100; ++i) steady.add_interval(16 * MS);
-    for (int i = 0; i < 100; ++i) alt.add_interval((i % 2 == 0) ? 8 * MS : 24 * MS);
+    for (int i = 0; i < 100; ++i)
+    {
+        steady.add_interval(16 * MS);
+    }
+    for (int i = 0; i < 100; ++i)
+    {
+        alt.add_interval((i % 2 == 0) ? 8 * MS : 24 * MS);
+    }
 
     REQUIRE(steady.mean_interval_ns() == alt.mean_interval_ns()); // same throughput...
     REQUIRE(steady.mean_interval_ns() == 16 * MS);
@@ -45,8 +51,14 @@ TEST_CASE("pacing is not shader/work time: equal pacing, different frame duratio
     crd::perf::FramePacingAnalyzer heavy;
 
     // Identical begin cadence (16 ms) -> identical pacing; different per-frame work (4 ms vs 12 ms).
-    for (int i = 0; i < 50; ++i) light.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 4 * MS);
-    for (int i = 0; i < 50; ++i) heavy.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 12 * MS);
+    for (int i = 0; i < 50; ++i)
+    {
+        light.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 4 * MS);
+    }
+    for (int i = 0; i < 50; ++i)
+    {
+        heavy.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 12 * MS);
+    }
 
     // Pacing is identical -- proving it is computed from frame boundaries, not from the work/shader time.
     REQUIRE(light.mean_interval_ns() == heavy.mean_interval_ns());
@@ -64,9 +76,15 @@ TEST_CASE("input-to-present is not the frame duration", "[perf][diag][pacing]")
     crd::perf::FramePacingAnalyzer a;
 
     // 16 ms frames...
-    for (int i = 0; i < 10; ++i) a.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 16 * MS);
+    for (int i = 0; i < 10; ++i)
+    {
+        a.add_frame(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 16 * MS);
+    }
     // ...but a 3-frame-deep pipeline means present lands 48 ms after the input that produced it.
-    for (int i = 0; i < 10; ++i) a.add_latency(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 48 * MS);
+    for (int i = 0; i < 10; ++i)
+    {
+        a.add_latency(static_cast<crd::i64>(i) * 16 * MS, static_cast<crd::i64>(i) * 16 * MS + 48 * MS);
+    }
 
     REQUIRE(a.mean_duration_ns() == 16 * MS);
     REQUIRE(a.mean_latency_ns() == 48 * MS);

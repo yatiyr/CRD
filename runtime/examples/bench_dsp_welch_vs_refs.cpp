@@ -17,14 +17,21 @@ int main()
     const int reps = 10;
     cont::Array<double> x(&a);
     x.resize(N);
-    for (crd::usize i = 0; i < N; ++i) x[i] = std::sin(0.05 * i) + 0.3 * std::sin(0.21 * i);
+    for (crd::usize i = 0; i < N; ++i)
+    {
+        x[i] = std::sin(0.05 * i) + 0.3 * std::sin(0.21 * i);
+    }
     crd::jobs::Config cfg;
     cfg.num_threads = 0; // all cores
     crd::jobs::init(cfg);
     auto w = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), N), 1.0, nperseg);
     auto t0 = std::chrono::high_resolution_clock::now();
     double chk = 0;
-    for (int r = 0; r < reps; ++r) { auto p = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), N), 1.0, nperseg); chk += p[10]; }
+    for (int r = 0; r < reps; ++r)
+    {
+        auto p = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), N), 1.0, nperseg);
+        chk += p[10];
+    }
     auto t1 = std::chrono::high_resolution_clock::now();
     std::printf("CERID welch(10M, nperseg=4096) workers=%u  %.3f ms/call (chk=%.6f)\n",
                 crd::jobs::num_workers(), std::chrono::duration<double, std::milli>(t1 - t0).count() / reps, chk);

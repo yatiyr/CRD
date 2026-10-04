@@ -40,7 +40,10 @@ crd::containers::String rpc(const char* request)
     crd::containers::String flat(&g_alloc);
     for (crd::usize i = 0; i < response.size(); ++i)
     {
-        if (response.c_str()[i] == '\\') { continue; }
+        if (response.c_str()[i] == '\\')
+        {
+            continue;
+        }
         flat.push_back(response.c_str()[i]);
     }
     return std::strstr(flat.c_str(), needle) != nullptr;
@@ -56,18 +59,30 @@ void push_f32(crd::containers::Array<crd::u8>& b, crd::f32 v)
 {
     crd::u8 raw[4];
     std::memcpy(raw, &v, 4);
-    for (crd::u8 x : raw) { b.push_back(x); }
+    for (crd::u8 x : raw)
+    {
+        b.push_back(x);
+    }
 }
 
 // a 1-triangle binary STL — the model the agent imports and cooks
 void write_stl(const char* path)
 {
     crd::containers::Array<crd::u8> stl(&g_alloc);
-    for (int i = 0; i < 80; ++i) { stl.push_back(0); }
+    for (int i = 0; i < 80; ++i)
+    {
+        stl.push_back(0);
+    }
     const crd::u8 one[4] = {1, 0, 0, 0};
-    for (crd::u8 x : one) { stl.push_back(x); }
+    for (crd::u8 x : one)
+    {
+        stl.push_back(x);
+    }
     const crd::f32 tri[12] = {0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0};
-    for (crd::f32 v : tri) { push_f32(stl, v); }
+    for (crd::f32 v : tri)
+    {
+        push_f32(stl, v);
+    }
     stl.push_back(0);
     stl.push_back(0);
     REQUIRE(fs::write_file_binary(fs::Path(crd::containers::StringView(path)),

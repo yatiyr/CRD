@@ -107,7 +107,10 @@ void run_depth_float_gpu(crd::gpu::IGpuContext& gctx, crd::gpu::IRasterContext& 
 
     constexpr u32 tw = 16U;
     float depth[tw * tw];
-    for (u32 i = 0; i < tw * tw; ++i) { depth[i] = 0.5F; }
+    for (u32 i = 0; i < tw * tw; ++i)
+    {
+        depth[i] = 0.5F;
+    }
     auto dtex = raster.create_depth_texture(tw, tw, depth);
     auto color = raster.create_color_target(dim, dim);
     REQUIRE(dtex != nullptr);

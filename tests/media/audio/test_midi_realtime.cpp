@@ -36,7 +36,10 @@ memory::TlsfAllocator& galloc()
 void push_bytes(containers::Array<u8>& out, const void* p, usize n)
 {
     const auto* b = static_cast<const u8*>(p);
-    for (usize i = 0; i < n; ++i) { out.push_back(b[i]); }
+    for (usize i = 0; i < n; ++i)
+    {
+        out.push_back(b[i]);
+    }
 }
 
 } // namespace
@@ -132,7 +135,10 @@ TEST_CASE("the SPSC command ring: cross-thread order and completeness", "[audio]
             cmd.type  = audio::AudioCommandType::SetVoiceGain;
             cmd.voice = static_cast<u16>(i & 0x1F);
             cmd.gain  = static_cast<f32>(i); // the sequence rides the payload — order is checkable
-            while (!ring.try_push(cmd)) { std::this_thread::yield(); }
+            while (!ring.try_push(cmd))
+            {
+                std::this_thread::yield();
+            }
         }
         done.store(true, std::memory_order_release);
     });

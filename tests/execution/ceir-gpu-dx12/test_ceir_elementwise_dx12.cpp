@@ -43,7 +43,11 @@ Operation* build_ew_op(Context& ctx, Module& m, const char* fn)
 {
     const OpId decl = ctx.intern_op("resource", "declare");
     Block*     top  = m.body()->first_block();
-    if (top == nullptr) { top = ctx.create_block(0U); m.body()->append(top); }
+    if (top == nullptr)
+    {
+        top = ctx.create_block(0U);
+        m.body()->append(top);
+    }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
     top->append(f);
     Block* const     b  = func::func_body_block(f);
@@ -62,12 +66,30 @@ Operation* build_ew_op(Context& ctx, Module& m, const char* fn)
 float ref_op(const char* fn, float a, float b)
 {
     const StringView f(fn);
-    if (f == StringView("add")) { return a + b; }
-    if (f == StringView("sub")) { return a - b; }
-    if (f == StringView("mul")) { return a * b; }
-    if (f == StringView("div")) { return a / b; }
-    if (f == StringView("max")) { return a > b ? a : b; }
-    if (f == StringView("min")) { return a < b ? a : b; }
+    if (f == StringView("add"))
+    {
+        return a + b;
+    }
+    if (f == StringView("sub"))
+    {
+        return a - b;
+    }
+    if (f == StringView("mul"))
+    {
+        return a * b;
+    }
+    if (f == StringView("div"))
+    {
+        return a / b;
+    }
+    if (f == StringView("max"))
+    {
+        return a > b ? a : b;
+    }
+    if (f == StringView("min"))
+    {
+        return a < b ? a : b;
+    }
     return static_cast<float>(std::pow(static_cast<double>(a), static_cast<double>(b))); // pow
 }
 } // namespace
@@ -102,7 +124,11 @@ TEST_CASE("ceir 25b-2a: synth_elementwise runs the full binary vocab on a D3D12 
 
     // -- DEVICE (soft-skip with no adapter) --
     kir::KirBackendDx12 dx(&kalloc);
-    if (!dx.valid()) { WARN("no DX12 device -- skipping the CEIR-25b-2a elementwise device gate"); return; }
+    if (!dx.valid())
+    {
+        WARN("no DX12 device -- skipping the CEIR-25b-2a elementwise device gate");
+        return;
+    }
     kir::KirBackendCpu cpu(&kalloc);
 
     struct Case

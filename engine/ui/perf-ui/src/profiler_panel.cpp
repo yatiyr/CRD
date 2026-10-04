@@ -64,8 +64,14 @@ bool compute_time_bounds(IProfilerSource& src, crd::i64& begin_ns, crd::i64& end
             }
             else
             {
-                if (s.begin_ns < begin_ns) begin_ns = s.begin_ns;
-                if (s.end_ns   > end_ns)   end_ns   = s.end_ns;
+                if (s.begin_ns < begin_ns)
+                {
+                    begin_ns = s.begin_ns;
+                }
+                if (s.end_ns   > end_ns)
+                {
+                    end_ns   = s.end_ns;
+                }
             }
         }
     }
@@ -221,11 +227,25 @@ void draw_timeline(IProfilerSource& src, float& ns_per_pixel, float& scroll_ns) 
     // Zoom controls.
     ImGui::Text("Zoom:");
     ImGui::SameLine();
-    if (ImGui::Button("Fit")) { ns_per_pixel = static_cast<float>(span_ns / 1024.0); scroll_ns = 0.0F; }
+    if (ImGui::Button("Fit"))
+    {
+        ns_per_pixel = static_cast<float>(span_ns / 1024.0);
+        scroll_ns = 0.0F;
+    }
     ImGui::SameLine();
-    if (ImGui::Button("- 2x")) { ns_per_pixel *= 2.0F; }
+    if (ImGui::Button("- 2x"))
+    {
+        ns_per_pixel *= 2.0F;
+    }
     ImGui::SameLine();
-    if (ImGui::Button("+ 2x")) { ns_per_pixel *= 0.5F; if (ns_per_pixel < 1.0F) ns_per_pixel = 1.0F; }
+    if (ImGui::Button("+ 2x"))
+    {
+        ns_per_pixel *= 0.5F;
+        if (ns_per_pixel < 1.0F)
+        {
+            ns_per_pixel = 1.0F;
+        }
+    }
     ImGui::SameLine();
     ImGui::Text("(%.1f ns/px)", static_cast<double>(ns_per_pixel));
 
@@ -487,8 +507,14 @@ void draw_counters(IProfilerSource& src) noexcept
             ImGui::TextUnformatted(info.kind == CounterKind::Set ? "Set" : "Add");
             ImGui::TableSetColumnIndex(3);
             const char* tn = "dur";
-            if (info.type == CounterType::I64)      { tn = "i64"; }
-            else if (info.type == CounterType::F64) { tn = "f64"; }
+            if (info.type == CounterType::I64)
+            {
+                tn = "i64";
+            }
+            else if (info.type == CounterType::F64)
+            {
+                tn = "f64";
+            }
             ImGui::TextUnformatted(tn);
         }
         ImGui::EndTable();
@@ -528,8 +554,14 @@ void draw_counters(IProfilerSource& src) noexcept
                 values[k] =
                     static_cast<float>(static_cast<crd::i64>(rec->values[i].bits)) * 1e-6F;
             }
-            if (values[k] < vmin) vmin = values[k];
-            if (values[k] > vmax) vmax = values[k];
+            if (values[k] < vmin)
+            {
+                vmin = values[k];
+            }
+            if (values[k] > vmax)
+            {
+                vmax = values[k];
+            }
         }
         char label[80];
         std::snprintf(label, sizeof(label), "%s##plot_%u",
@@ -668,8 +700,14 @@ void draw_memory(IProfilerSource& src) noexcept
                 values[k] = static_cast<float>(rec->allocators[i].bytes_in_use)
                             * (1.0F / 1024.0F);
             }
-            if (values[k] < vmin) vmin = values[k];
-            if (values[k] > vmax) vmax = values[k];
+            if (values[k] < vmin)
+            {
+                vmin = values[k];
+            }
+            if (values[k] > vmax)
+            {
+                vmax = values[k];
+            }
         }
         char label[80];
         std::snprintf(label, sizeof(label), "%s (KB)##alloc_plot_%u",
@@ -780,12 +818,30 @@ void ProfilerPanel::draw() noexcept
     }
     IProfilerSource& src = *m_source;
 
-    if (m_show_frame_summary)    { draw_frame_summary(src); }
-    if (m_show_timeline)         { draw_timeline(src, m_timeline_ns_per_pixel, m_timeline_scroll_ns); }
-    if (m_show_flame_graph)      { draw_flame_graph(src); }
-    if (m_show_counters)         { draw_counters(src); }
-    if (m_show_gpu_passes)       { draw_gpu_passes(src); }
-    if (m_show_memory)           { draw_memory(src); }
+    if (m_show_frame_summary)
+    {
+        draw_frame_summary(src);
+    }
+    if (m_show_timeline)
+    {
+        draw_timeline(src, m_timeline_ns_per_pixel, m_timeline_scroll_ns);
+    }
+    if (m_show_flame_graph)
+    {
+        draw_flame_graph(src);
+    }
+    if (m_show_counters)
+    {
+        draw_counters(src);
+    }
+    if (m_show_gpu_passes)
+    {
+        draw_gpu_passes(src);
+    }
+    if (m_show_memory)
+    {
+        draw_memory(src);
+    }
     if (m_show_capture_controls)
     {
         draw_capture_controls(*this, m_save_path_buf, sizeof(m_save_path_buf),

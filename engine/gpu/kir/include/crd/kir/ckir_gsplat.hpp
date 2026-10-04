@@ -263,7 +263,10 @@ struct GsplatProjectConfig
     st(7, col_r); st(8, col_g); st(9, col_b);
     st(10, opac_out); st(11, valid);
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -455,7 +458,10 @@ struct GsplatDepthKeyConfig
     g.stmt_buffer_store(key_b, tid, key);
     g.stmt_buffer_store(val_b, tid, g.cast(tid, DType::U32));
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -713,7 +719,10 @@ struct GsplatBinConfig
     const int tc  = g.select(g.binary(KOp::CmpGt, valid, ks(0.5)), mul(g, cx, cy), ks(0.0));
     g.stmt_buffer_store(tc_b, tid, tc);
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -801,7 +810,10 @@ struct GsplatBinConfig
     }
     g.stmt_if_end(cif);
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -1299,7 +1311,10 @@ struct GsplatQuantizeConfig
     g.stmt_buffer_store(qb, gi, q);
     g.stmt_for_end(loop);
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -1340,7 +1355,10 @@ struct GsplatQuantizeConfig
     g.stmt_buffer_store(ob, gi, xr);
     g.stmt_for_end(loop);
 
-    if (oob_guard >= 0) { g.stmt_if_end(oob_guard); } // close the tail-thread guard
+    if (oob_guard >= 0) // close the tail-thread guard
+    {
+        g.stmt_if_end(oob_guard);
+    }
     KEntry e;
     e.stage             = KStage::Compute;
     e.local_size[0]     = static_cast<crd::u32>(cfg.local_size);
@@ -1416,7 +1434,10 @@ struct GsplatDiffConfig
     const int mux = pl(0); const int muy = pl(1); const int s = pl(2); const int op = pl(3); const int col = pl(4);
     const int s2  = g.binary(KOp::Max, sq(g, s), ks(1.0e-9));
     const int s3  = g.binary(KOp::Max, mul(g, s2, s), ks(1.0e-9));
-    for (int k = 0; k < 5; ++k) { g.stmt_buffer_store(grd_b, cu(static_cast<crd::u32>(k)), ks(0.0)); }
+    for (int k = 0; k < 5; ++k)
+    {
+        g.stmt_buffer_store(grd_b, cu(static_cast<crd::u32>(k)), ks(0.0));
+    }
 
     const int loop = g.stmt_for_begin(cu(static_cast<crd::u32>(cfg.width * cfg.height)));
     const int q    = g.kernel_loop_var(loop);

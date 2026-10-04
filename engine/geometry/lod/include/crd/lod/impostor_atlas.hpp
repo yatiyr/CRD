@@ -37,7 +37,14 @@ namespace crd::lod
 [[nodiscard]] constexpr crd::u32 impostor_num_mips(crd::u32 tile) noexcept
 {
     crd::u32 n = 0U;
-    for (crd::u32 t = tile; t >= 1U; t >>= 1U) { ++n; if (t == 1U) { break; } }
+    for (crd::u32 t = tile; t >= 1U; t >>= 1U)
+    {
+        ++n;
+        if (t == 1U)
+        {
+            break;
+        }
+    }
     return n == 0U ? 1U : n;
 }
 // ⛔ THE MIP-CHAIN CEILING. `impostor_num_mips = log2(tile)+1`, so tile ≤ 32768 (2^15) ⇒ ≤ 16 levels. The authored
@@ -50,7 +57,11 @@ inline constexpr crd::u32 kImpostorMaxMips = 16U;
 [[nodiscard]] constexpr crd::u32 impostor_level_offset(crd::u32 grid, crd::u32 tile, crd::u32 m) noexcept
 {
     crd::u32 off = 0U;
-    for (crd::u32 k = 0U; k < m; ++k) { const crd::u32 s = grid * (tile >> k); off += s * s; }
+    for (crd::u32 k = 0U; k < m; ++k)
+    {
+        const crd::u32 s = grid * (tile >> k);
+        off += s * s;
+    }
     return off;
 }
 // total texels across every mip level — the atlas's word count (1 texel = 1 packed u32).

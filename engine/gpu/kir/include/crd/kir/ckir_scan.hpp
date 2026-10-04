@@ -186,10 +186,18 @@ struct ScanPlan
     // phase 1: blocked local inclusive scan (freeze originals first — CKIR lazy shared re-read)
     const int c0 = mul(tid, ku(static_cast<crd::u32>(pt)));
     int       rr[64];
-    for (int k = 0; k < pt; ++k) { rr[k] = g.shared_load(data, add(c0, ku(static_cast<crd::u32>(k)))); g.stmt_materialize(rr[k]); }
+    for (int k = 0; k < pt; ++k)
+    {
+        rr[k] = g.shared_load(data, add(c0, ku(static_cast<crd::u32>(k))));
+        g.stmt_materialize(rr[k]);
+    }
     int s = rr[0];
     g.stmt_shared_store(data, c0, s);
-    for (int k = 1; k < pt; ++k) { s = add(s, rr[k]); g.stmt_shared_store(data, add(c0, ku(static_cast<crd::u32>(k))), s); }
+    for (int k = 1; k < pt; ++k)
+    {
+        s = add(s, rr[k]);
+        g.stmt_shared_store(data, add(c0, ku(static_cast<crd::u32>(k))), s);
+    }
     g.stmt_shared_store(tsum, tid, s);
     g.stmt_barrier();
 
@@ -309,7 +317,10 @@ struct ScanPlan
     if (n <= threads * 8)
     {
         int t = threads;
-        while (t > n) { t /= 2; }
+        while (t > n)
+        {
+            t /= 2;
+        }
         plan.single_pass     = true;
         plan.nblocks         = 1;
         plan.elems_per_block = n;
@@ -326,7 +337,10 @@ struct ScanPlan
     plan.block_graph     = graphs[0];
     // pass 1: EXCLUSIVE scan of the nblocks blocksums in one workgroup (threads capped to nblocks).
     int st = threads;
-    while (st > nblocks) { st /= 2; }
+    while (st > nblocks)
+    {
+        st /= 2;
+    }
     plan.scan_sums   = build_scan_block(*graphs[1], nblocks, st, false, false);
     plan.sums_graph  = graphs[1];
     plan.add_off     = build_scan_addoff(*graphs[2], plan.elems_per_block, threads);

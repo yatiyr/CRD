@@ -53,12 +53,18 @@ bool sampled_correct(const float* c, int mm, int nn, int kk)
         const int   i   = (s * 977) % mm;
         const int   j   = (s * 1471) % nn;
         double      acc = 0.0;
-        for (int k = 0; k < kk; ++k) { acc += static_cast<double>(av_at(i, k)) * static_cast<double>(bv_at(k, j)); }
+        for (int k = 0; k < kk; ++k)
+        {
+            acc += static_cast<double>(av_at(i, k)) * static_cast<double>(bv_at(k, j));
+        }
         const float ref = static_cast<float>(acc);
         const float got = c[static_cast<crd::usize>(i) * nn + j];
         const float rel = (got - ref) / (1.0F + (ref < 0.0F ? -ref : ref));
         const float ar  = rel < 0.0F ? -rel : rel;
-        if (ar > maxrel) { maxrel = ar; }
+        if (ar > maxrel)
+        {
+            maxrel = ar;
+        }
     }
     return maxrel < 3e-3F;
 }
@@ -68,7 +74,11 @@ TEST_CASE("AS-1b: the CUDA autotuner reproduces/beats the hand-tuned GEMM winner
 {
     crd::memory::TlsfAllocator alloc(512U << 20U);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
 
     constexpr int mm = 1024;
     constexpr int nn = 1024;
@@ -84,8 +94,20 @@ TEST_CASE("AS-1b: the CUDA autotuner reproduces/beats the hand-tuned GEMM winner
     av.resize(static_cast<crd::usize>(mm) * kk);
     bv.resize(static_cast<crd::usize>(kk) * nn);
     out.resize(static_cast<crd::usize>(mm) * nn);
-    for (int i = 0; i < mm; ++i) { for (int k = 0; k < kk; ++k) { av[static_cast<crd::usize>(i) * kk + k] = av_at(i, k); } }
-    for (int k = 0; k < kk; ++k) { for (int j = 0; j < nn; ++j) { bv[static_cast<crd::usize>(k) * nn + j] = bv_at(k, j); } }
+    for (int i = 0; i < mm; ++i)
+    {
+        for (int k = 0; k < kk; ++k)
+        {
+            av[static_cast<crd::usize>(i) * kk + k] = av_at(i, k);
+        }
+    }
+    for (int k = 0; k < kk; ++k)
+    {
+        for (int j = 0; j < nn; ++j)
+        {
+            bv[static_cast<crd::usize>(k) * nn + j] = bv_at(k, j);
+        }
+    }
     const float* inputs[] = {av.data(), bv.data()};
 
     // 1. enumerate the valid space, heuristic-rank the top-K to explore (the whole space is 1500+ — AS-3 prunes analytically).
@@ -104,7 +126,10 @@ TEST_CASE("AS-1b: the CUDA autotuner reproduces/beats the hand-tuned GEMM winner
     REQUIRE(seed.kind == kir::Sched::WarpTiled);
     const auto measure = [&](const kir::TileSchedule& s) -> kir::ContractTiming {
         const kir::ContractTiming r = cu.time_contract_schedule(g, c, s, inputs, 2, out.data(), 3, 12);
-        if (r.ok && !sampled_correct(out.data(), mm, nn, kk)) { return kir::ContractTiming{}; } // correctness gate
+        if (r.ok && !sampled_correct(out.data(), mm, nn, kk)) // correctness gate
+        {
+            return kir::ContractTiming{};
+        }
         return r;
     };
     const kir::ContractTiming sr = measure(seed);
@@ -117,9 +142,16 @@ TEST_CASE("AS-1b: the CUDA autotuner reproduces/beats the hand-tuned GEMM winner
     for (int t = 0; t < ntop; ++t)
     {
         const kir::ContractTiming r = measure(cand[idx[t]]);
-        if (!r.ok) { continue; }
+        if (!r.ok)
+        {
+            continue;
+        }
         ++measured; ++correct;
-        if (r.min_ms < best_ms) { best_ms = r.min_ms; best = cand[idx[t]]; }
+        if (r.min_ms < best_ms)
+        {
+            best_ms = r.min_ms;
+            best = cand[idx[t]];
+        }
     }
     CHECK(correct == measured); // every emittable candidate computed correctly
 
@@ -139,7 +171,14 @@ TEST_CASE("AS-1b: the CUDA autotuner reproduces/beats the hand-tuned GEMM winner
     REQUIRE(w1.ok);
     REQUIRE(w2.ok);
     bool bit_identical = true;
-    for (crd::usize i = 0; i < out1.size(); ++i) { if (out1[i] != out2[i]) { bit_identical = false; break; } }
+    for (crd::usize i = 0; i < out1.size(); ++i)
+    {
+        if (out1[i] != out2[i])
+        {
+            bit_identical = false;
+            break;
+        }
+    }
 
     const double gflops     = 2.0 * static_cast<double>(mm) * nn * kk / (best_ms * 1.0e6);
     const double vs_naive   = nr.min_ms / best_ms;
@@ -165,7 +204,11 @@ TEST_CASE("AS-3: the analytical cost model finds the GEMM optimum measuring only
 {
     crd::memory::TlsfAllocator alloc(512U << 20U);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
 
     constexpr int mm = 1024;
     constexpr int nn = 1024;
@@ -181,8 +224,20 @@ TEST_CASE("AS-3: the analytical cost model finds the GEMM optimum measuring only
     av.resize(static_cast<crd::usize>(mm) * kk);
     bv.resize(static_cast<crd::usize>(kk) * nn);
     out.resize(static_cast<crd::usize>(mm) * nn);
-    for (int i = 0; i < mm; ++i) { for (int k = 0; k < kk; ++k) { av[static_cast<crd::usize>(i) * kk + k] = av_at(i, k); } }
-    for (int k = 0; k < kk; ++k) { for (int j = 0; j < nn; ++j) { bv[static_cast<crd::usize>(k) * nn + j] = bv_at(k, j); } }
+    for (int i = 0; i < mm; ++i)
+    {
+        for (int k = 0; k < kk; ++k)
+        {
+            av[static_cast<crd::usize>(i) * kk + k] = av_at(i, k);
+        }
+    }
+    for (int k = 0; k < kk; ++k)
+    {
+        for (int j = 0; j < nn; ++j)
+        {
+            bv[static_cast<crd::usize>(k) * nn + j] = bv_at(k, j);
+        }
+    }
     const float* inputs[] = {av.data(), bv.data()};
 
     // rank the FULL valid space by the analytical cost model, take only the top-6.
@@ -198,7 +253,10 @@ TEST_CASE("AS-3: the analytical cost model finds the GEMM optimum measuring only
 
     const auto measure = [&](const kir::TileSchedule& s) -> kir::ContractTiming {
         const kir::ContractTiming r = cu.time_contract_schedule(g, c, s, inputs, 2, out.data(), 3, 12);
-        if (r.ok && !sampled_correct(out.data(), mm, nn, kk)) { return kir::ContractTiming{}; }
+        if (r.ok && !sampled_correct(out.data(), mm, nn, kk))
+        {
+            return kir::ContractTiming{};
+        }
         return r;
     };
 
@@ -206,7 +264,10 @@ TEST_CASE("AS-3: the analytical cost model finds the GEMM optimum measuring only
     for (int t = 0; t < ntop; ++t)
     {
         const kir::ContractTiming r = measure(cand[idx[t]]);
-        if (r.ok && r.min_ms < best_ms) { best_ms = r.min_ms; }
+        if (r.ok && r.min_ms < best_ms)
+        {
+            best_ms = r.min_ms;
+        }
     }
     REQUIRE(best_ms < 1.0e29);
 
@@ -231,7 +292,11 @@ TEST_CASE("AS-4: the autotuner is SHAPE-GENERAL -- rectangular MLP GEMM tunes co
 {
     crd::memory::TlsfAllocator alloc(512U << 20U);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
 
     // a rectangular MLP-shaped GEMM: M=2048, N=512, K=1024 (A[2048,1024] * B[1024,512]).
     const crd::kir::AutotuneResult r = crd::kir::autotune_contract(cu, 2048, 512, 1024, 16, true, &alloc);
@@ -261,7 +326,11 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
 {
     crd::memory::TlsfAllocator alloc(512U << 20U);
     kir::KirBackendCuda        cu(&alloc);
-    if (!cu.valid()) { WARN("no CUDA device available; skipping"); return; }
+    if (!cu.valid())
+    {
+        WARN("no CUDA device available; skipping");
+        return;
+    }
     kir::KirBackendCpu cpu(&alloc);
 
     constexpr int dim      = 64;
@@ -302,7 +371,14 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
         REQUIRE(cnt > 0);
         const auto max_err = [](const float* aa, const float* bb, crd::usize n) {
             float e = 0.0F;
-            for (crd::usize i = 0; i < n; ++i) { const float d = aa[i] > bb[i] ? aa[i] - bb[i] : bb[i] - aa[i]; if (d > e) { e = d; } }
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                const float d = aa[i] > bb[i] ? aa[i] - bb[i] : bb[i] - aa[i];
+                if (d > e)
+                {
+                    e = d;
+                }
+            }
             return e;
         };
 
@@ -327,12 +403,26 @@ TEST_CASE("AS-4: the flash-attention autotuner sweeps (BR,BC), oracle-validates,
         {
             const at::AttentionSchedule& s = space[ci];
             const kir::ContractTiming    r = cu.time_attention(g, y, s.br, s.bc, inputs, 3, out.data(), 3, 12);
-            if (!r.ok) { continue; }
+            if (!r.ok)
+            {
+                continue;
+            }
             CHECK(max_err(out.data(), oracle.data(), nelem) < 2.0e-3F); // ORACLE gate (fast tier): a wrong tile can never win
             ++measured;
-            if (s.br == 64 && s.bc == 32) { def_ms = r.min_ms; }
-            if (s.br == db_br && s.bc == db_bc) { db_ms = r.min_ms; }
-            if (r.min_ms < best_ms) { best_ms = r.min_ms; best_br = s.br; best_bc = s.bc; }
+            if (s.br == 64 && s.bc == 32)
+            {
+                def_ms = r.min_ms;
+            }
+            if (s.br == db_br && s.bc == db_bc)
+            {
+                db_ms = r.min_ms;
+            }
+            if (r.min_ms < best_ms)
+            {
+                best_ms = r.min_ms;
+                best_br = s.br;
+                best_bc = s.bc;
+            }
         }
         REQUIRE(measured > 0);
 

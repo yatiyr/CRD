@@ -150,7 +150,9 @@ TEST_CASE("fiber_pool: pool_index is unique and in range", "[jobs][fiber_pool]")
     CHECK(all_unique);
 
     for (Fiber* f : acquired)
+    {
         pool.release(f);
+    }
 
     pool.shutdown();
 }
@@ -207,7 +209,9 @@ TEST_CASE("fiber_pool: full acquire-release cycle is repeatable", "[jobs][fiber_
         CHECK(pool.available_count(FiberTier::Small) == 0U);
 
         for (Fiber* f : held)
+        {
             pool.release(f);
+        }
         CHECK(pool.available_count(FiberTier::Small) == kCount);
     }
 
@@ -226,7 +230,9 @@ TEST_CASE("fiber_pool: tiers are independent", "[jobs][fiber_pool]")
     // Exhaust the Small tier.
     crd::containers::Array<Fiber*> smalls;
     for (crd::u32 i = 0; i < 4U; ++i)
+    {
         smalls.push_back(pool.acquire(FiberTier::Small));
+    }
     CHECK(pool.available_count(FiberTier::Small) == 0U);
 
     // Medium and Large must still be fully available.
@@ -241,7 +247,9 @@ TEST_CASE("fiber_pool: tiers are independent", "[jobs][fiber_pool]")
     pool.release(m);
     pool.release(l);
     for (Fiber* f : smalls)
+    {
         pool.release(f);
+    }
 
     pool.shutdown();
 }
@@ -265,7 +273,9 @@ TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
 
     crd::containers::Array<Fiber*> held;
     for (crd::u32 i = 0; i < kCount; ++i)
+    {
         held.push_back(pool.acquire(FiberTier::Small));
+    }
 
     // One more acquire on an empty pool.
     Fiber* extra = pool.acquire(FiberTier::Small);
@@ -276,7 +286,9 @@ TEST_CASE("fiber_pool: exhaustion returns nullptr", "[jobs][fiber_pool]")
 #endif
 
     for (Fiber* f : held)
+    {
         pool.release(f);
+    }
 
     pool.shutdown();
 }
@@ -319,20 +331,28 @@ TEST_CASE("fiber_pool: peak usage tracking", "[jobs][fiber_pool]")
     // Acquire half the tier.
     crd::containers::Array<Fiber*> batch1;
     for (crd::u32 i = 0; i < 3U; ++i)
+    {
         batch1.push_back(pool.acquire(FiberTier::Small));
+    }
     CHECK(pool.peak_acquired(FiberTier::Small) == 3U);
 
     // Release and re-acquire at higher watermark.
     for (Fiber* f : batch1)
+    {
         pool.release(f);
+    }
 
     crd::containers::Array<Fiber*> batch2;
     for (crd::u32 i = 0; i < kCount; ++i)
+    {
         batch2.push_back(pool.acquire(FiberTier::Small));
+    }
     CHECK(pool.peak_acquired(FiberTier::Small) == kCount);
 
     for (Fiber* f : batch2)
+    {
         pool.release(f);
+    }
 
     // Peak should remain at kCount even after full release.
     CHECK(pool.peak_acquired(FiberTier::Small) == kCount);
@@ -396,7 +416,9 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
     // One flag per fiber index; true while that fiber is held by a thread.
     std::atomic<bool> in_use[kSmallCount]{};
     for (auto& b : in_use)
+    {
         b.store(false, std::memory_order_relaxed);
+    }
 
     std::atomic<bool> corruption_detected{false};
 
@@ -411,7 +433,9 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
             {
                 Fiber* f = pool.acquire(FiberTier::Small);
                 if (!f)
+                {
                     continue; // pool momentarily exhausted — rare, skip iteration
+                }
 
                 const crd::u32 idx = f->pool_index;
 
@@ -419,7 +443,9 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
                 // → the free list was corrupted (ABA or incorrect state tracking).
                 const bool already_held = in_use[idx].exchange(true, std::memory_order_acq_rel);
                 if (already_held)
+                {
                     corruption_detected.store(true, std::memory_order_relaxed);
+                }
 
                 std::this_thread::yield();
 
@@ -430,7 +456,9 @@ TEST_CASE("fiber_pool: concurrent acquire-release stress (ABA safety)", "[jobs][
     }
 
     for (auto& th : threads)
+    {
         th.join();
+    }
 
     CHECK_FALSE(corruption_detected.load());
     // After all threads complete, every fiber must be back in the pool.
@@ -471,7 +499,9 @@ TEST_CASE("fiber_pool: DG05 exhaustion/reclamation stress preserves uniqueness a
 
     std::atomic<bool> in_use[kSmallCount]{};
     for (auto& b : in_use)
+    {
         b.store(false, std::memory_order_relaxed);
+    }
 
     std::atomic<bool> corruption_detected{false};
     std::atomic<crd::u64> total_acquired{0U};
@@ -491,16 +521,22 @@ TEST_CASE("fiber_pool: DG05 exhaustion/reclamation stress preserves uniqueness a
                 {
                     Fiber* f = pool.acquire(FiberTier::Small);
                     if (!f)
+                    {
                         break; // pool momentarily drained — expected under oversubscription
+                    }
                     const crd::u32 idx = f->pool_index;
                     if (in_use[idx].exchange(true, std::memory_order_acq_rel))
+                    {
                         corruption_detected.store(true, std::memory_order_relaxed);
+                    }
                     held[got++] = f;
                 }
                 total_acquired.fetch_add(got, std::memory_order_relaxed);
 
                 if ((iter & 1U) == 0U)
+                {
                     std::this_thread::yield();
+                }
 
                 // Release in reverse order on even threads, forward on odd, so the
                 // free-list ordering is churned rather than perfectly LIFO-restored.
@@ -525,14 +561,18 @@ TEST_CASE("fiber_pool: DG05 exhaustion/reclamation stress preserves uniqueness a
     }
 
     for (auto& th : threads)
+    {
         th.join();
+    }
 
     CHECK_FALSE(corruption_detected.load());
     CHECK(total_acquired.load() > 0U);
     // Completion: every fiber returned to the pool, no leaks, list intact.
     CHECK(pool.available_count(FiberTier::Small) == kSmallCount);
     for (auto& b : in_use)
+    {
         CHECK_FALSE(b.load(std::memory_order_relaxed));
+    }
 
     // The free list is still fully functional after the churn: drain it dry once.
     crd::u32 drained = 0U;
@@ -541,13 +581,19 @@ TEST_CASE("fiber_pool: DG05 exhaustion/reclamation stress preserves uniqueness a
     {
         all[i] = pool.acquire(FiberTier::Small);
         if (all[i])
+        {
             ++drained;
+        }
     }
     CHECK(drained == kSmallCount);
     CHECK(pool.acquire(FiberTier::Small) == nullptr); // exhausted exactly
     for (crd::u32 i = 0; i < kSmallCount; ++i)
+    {
         if (all[i])
+        {
             pool.release(all[i]);
+        }
+    }
     CHECK(pool.available_count(FiberTier::Small) == kSmallCount);
 
 #if CRD_ENABLE_ASSERTS

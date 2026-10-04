@@ -123,7 +123,10 @@ void app_list(crd::containers::String& o, const crd::containers::Array<crd::cont
     app(o, "[");
     for (crd::usize i = 0; i < l.size(); ++i)
     {
-        if (i > 0) { app(o, ", "); }
+        if (i > 0)
+        {
+            app(o, ", ");
+        }
         app_quoted(o, l[i]);
     }
     app(o, "]");
@@ -133,10 +136,16 @@ void app_refs(crd::containers::String& o, const crd::containers::Array<FrameReso
     app(o, "[");
     for (crd::usize i = 0; i < r.size(); ++i)
     {
-        if (i > 0) { app(o, ", "); }
+        if (i > 0)
+        {
+            app(o, ", ");
+        }
         app(o, "\"");
         o.append(r[i].name.c_str());
-        if (r[i].indexed) { app(o, "[$index]"); } // the subscript is part of the REFERENCE, so it round-trips
+        if (r[i].indexed) // the subscript is part of the REFERENCE, so it round-trips
+        {
+            app(o, "[$index]");
+        }
         app(o, "\"");
     }
     app(o, "]");
@@ -198,13 +207,19 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\nas = ");
         app_quoted(o, inc.as);
         app(o, "\n");
-        if (inc.atomic) { app(o, "atomic = true\n"); }
+        if (inc.atomic)
+        {
+            app(o, "atomic = true\n");
+        }
         if (inc.bind.size() > 0)
         {
             app(o, "bind = { ");
             for (crd::usize k = 0; k < inc.bind.size(); ++k)
             {
-                if (k > 0) { app(o, ", "); }
+                if (k > 0)
+                {
+                    app(o, ", ");
+                }
                 app_quoted(o, inc.bind[k].from); // ⛔ `@input` is not a bare TOML key — always quote it
                 app(o, " = ");
                 app_quoted(o, inc.bind[k].to);
@@ -219,12 +234,18 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app_quoted(o, an.name);
         app(o, "\n");
         const auto emit_list = [&](const char* key, const crd::containers::Array<crd::containers::String>& l) {
-            if (l.size() == 0) { return; }
+            if (l.size() == 0)
+            {
+                return;
+            }
             app(o, key);
             app(o, " = [");
             for (crd::usize k = 0; k < l.size(); ++k)
             {
-                if (k > 0) { app(o, ", "); }
+                if (k > 0)
+                {
+                    app(o, ", ");
+                }
                 app_quoted(o, l[k]);
             }
             app(o, "]\n");
@@ -267,10 +288,30 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\nformat = \"");
         app(o, from_format(r.format));
         app(o, "\"\n");
-        if (r.width != 0U)      { app(o, "width = ");      app_u32(o, r.width);      app(o, "\n"); }
-        if (r.height != 0U)     { app(o, "height = ");     app_u32(o, r.height);     app(o, "\n"); }
-        if (r.scale > 0.0F)     { app(o, "scale = ");      app_f64(o, static_cast<double>(r.scale)); app(o, "\n"); }
-        if (r.layers != 1U)     { app(o, "layers = ");     app_u32(o, r.layers);     app(o, "\n"); }
+        if (r.width != 0U)
+        {
+            app(o, "width = ");
+            app_u32(o, r.width);
+            app(o, "\n");
+        }
+        if (r.height != 0U)
+        {
+            app(o, "height = ");
+            app_u32(o, r.height);
+            app(o, "\n");
+        }
+        if (r.scale > 0.0F)
+        {
+            app(o, "scale = ");
+            app_f64(o, static_cast<double>(r.scale));
+            app(o, "\n");
+        }
+        if (r.layers != 1U)
+        {
+            app(o, "layers = ");
+            app_u32(o, r.layers);
+            app(o, "\n");
+        }
         // REN-38-B2: shape. Only when it differs from the default, so an ordinary 2-D transient
         // round-trips byte-clean.
         if (r.kind_2d != crd::gpu::FgImageKind::Tex2D)
@@ -286,19 +327,64 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             }
             app(o, "\"\n");
         }
-        if (r.depth != 1U)      { app(o, "depth = ");      app_u32(o, r.depth);      app(o, "\n"); }
-        if (r.mips != 1U)       { app(o, "mips = ");       app_u32(o, r.mips);       app(o, "\n"); }
-        if (r.samples != 1U)    { app(o, "samples = ");    app_u32(o, r.samples);    app(o, "\n"); }
-        if (r.sampled)          { app(o, "sampled = true\n"); }
-        if (r.depth_buffer)     { app(o, "depth_buffer = true\n"); }
-        if (r.storage)          { app(o, "storage = true\n"); }
-        if (r.no_alias)         { app(o, "no_alias = true\n"); } // REN-38-B6
-        if (r.resizable)        { app(o, "resizable = true\n"); } // REN-41: persistent follows the output on resize
+        if (r.depth != 1U)
+        {
+            app(o, "depth = ");
+            app_u32(o, r.depth);
+            app(o, "\n");
+        }
+        if (r.mips != 1U)
+        {
+            app(o, "mips = ");
+            app_u32(o, r.mips);
+            app(o, "\n");
+        }
+        if (r.samples != 1U)
+        {
+            app(o, "samples = ");
+            app_u32(o, r.samples);
+            app(o, "\n");
+        }
+        if (r.sampled)
+        {
+            app(o, "sampled = true\n");
+        }
+        if (r.depth_buffer)
+        {
+            app(o, "depth_buffer = true\n");
+        }
+        if (r.storage)
+        {
+            app(o, "storage = true\n");
+        }
+        if (r.no_alias) // REN-38-B6
+        {
+            app(o, "no_alias = true\n");
+        }
+        if (r.resizable) // REN-41: persistent follows the output on resize
+        {
+            app(o, "resizable = true\n");
+        }
         // REN-38-B3: emit STRIDE and COUNT, not the derived `size_bytes`. Re-parsing a counter buffer's
         // size would add its 4-byte counter a SECOND time, so the round trip would grow it every cook.
-        if (r.stride != 0U)     { app(o, "stride = ");     app_u32(o, r.stride);     app(o, "\n"); }
-        if (r.count != 0U)      { app(o, "count = ");      app_u32(o, r.count);      app(o, "\n"); }
-        if (r.size_bytes != 0U && r.stride == 0U) { app(o, "size_bytes = "); app_u32(o, r.size_bytes); app(o, "\n"); }
+        if (r.stride != 0U)
+        {
+            app(o, "stride = ");
+            app_u32(o, r.stride);
+            app(o, "\n");
+        }
+        if (r.count != 0U)
+        {
+            app(o, "count = ");
+            app_u32(o, r.count);
+            app(o, "\n");
+        }
+        if (r.size_bytes != 0U && r.stride == 0U)
+        {
+            app(o, "size_bytes = ");
+            app_u32(o, r.size_bytes);
+            app(o, "\n");
+        }
     }
 
     for (crd::usize i = 0; i < desc.draw_lists.size(); ++i)
@@ -307,15 +393,35 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         app(o, "\n[[draw_list]]\nname = ");
         app_quoted(o, d.name);
         app(o, "\n");
-        if (d.all.size() > 0)  { app(o, "all = ");  app_list(o, d.all);  app(o, "\n"); }
-        if (d.any.size() > 0)  { app(o, "any = ");  app_list(o, d.any);  app(o, "\n"); }
-        if (d.none.size() > 0) { app(o, "none = "); app_list(o, d.none); app(o, "\n"); }
+        if (d.all.size() > 0)
+        {
+            app(o, "all = ");
+            app_list(o, d.all);
+            app(o, "\n");
+        }
+        if (d.any.size() > 0)
+        {
+            app(o, "any = ");
+            app_list(o, d.any);
+            app(o, "\n");
+        }
+        if (d.none.size() > 0)
+        {
+            app(o, "none = ");
+            app_list(o, d.none);
+            app(o, "\n");
+        }
         app(o, "cull = \"");
         app(o, from_cull(d.cull));
         app(o, "\"\nsort = \"");
         app(o, from_sort(d.sort));
         app(o, "\"\n");
-        if (d.limit != 0U) { app(o, "limit = "); app_u32(o, d.limit); app(o, "\n"); }
+        if (d.limit != 0U)
+        {
+            app(o, "limit = ");
+            app_u32(o, d.limit);
+            app(o, "\n");
+        }
     }
 
     for (crd::usize i = 0; i < desc.passes.size(); ++i)
@@ -331,16 +437,37 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         using SV            = crd::containers::StringView;
         const auto semit = [&](const char* toml_key, const char* pkey) {
             const SV v = pass_str(p, SV(pkey));
-            if (!v.empty()) { app(o, toml_key); app(o, " = "); app_quoted_sv(o, v); app(o, "\n"); }
+            if (!v.empty())
+            {
+                app(o, toml_key);
+                app(o, " = ");
+                app_quoted_sv(o, v);
+                app(o, "\n");
+            }
         };
-        if (p.reads.size() > 0)   { app(o, "reads = ");     app_refs(o, p.reads);       app(o, "\n"); }
-        if (p.writes.size() > 0)  { app(o, "writes = ");    app_refs(o, p.writes);      app(o, "\n"); }
+        if (p.reads.size() > 0)
+        {
+            app(o, "reads = ");
+            app_refs(o, p.reads);
+            app(o, "\n");
+        }
+        if (p.writes.size() > 0)
+        {
+            app(o, "writes = ");
+            app_refs(o, p.writes);
+            app(o, "\n");
+        }
         semit("draw_list", pp::kDrawList);
         semit("view", pp::kView);
         semit("shader", pp::kShader);
         semit("kernel", pp::kKernel);
         // RAF-12.3: a CUSTOM pass' app executor id — a KEPT struct field; round-trip it.
-        if (!p.executor.empty())  { app(o, "executor = ");  app_quoted(o, p.executor);  app(o, "\n"); }
+        if (!p.executor.empty())
+        {
+            app(o, "executor = ");
+            app_quoted(o, p.executor);
+            app(o, "\n");
+        }
         semit("raygen", pp::kRaygen);
         semit("miss", pp::kMiss);
         semit("closest_hit", pp::kClosestHit);
@@ -364,7 +491,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             app(o, "blend = [");
             for (crd::u32 k = 0; k < blend_count && k < 4U; ++k)
             {
-                if (k > 0U) { app(o, ", "); }
+                if (k > 0U)
+                {
+                    app(o, ", ");
+                }
                 app(o, "\"");
                 switch (static_cast<crd::gpu::BlendMode>(
                     pass_u32(p, SV(pp::kBlendSlot[k]), static_cast<crd::u32>(crd::gpu::BlendMode::Opaque))))
@@ -423,7 +553,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             app(o, cm == crd::gpu::ConservativeMode::Underestimate ? "underestimate" : "overestimate");
             app(o, "\"\n");
         }
-        if (p.queue != FrameQueue::Graphics) { app(o, "queue = \"async\"\n"); }
+        if (p.queue != FrameQueue::Graphics)
+        {
+            app(o, "queue = \"async\"\n");
+        }
         // REN-38-B8: only a pass that DECLARED a sampler emits one (reconstructed from its decomposed params).
         if (pass_flag(p, SV(pp::kHasSampler)))
         {
@@ -444,12 +577,25 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             default:                                      app(o, "repeat"); break;
             }
             app(o, "\"\n");
-            if (smp.anisotropy > 1U) { app(o, "anisotropy = "); app_u32(o, smp.anisotropy); app(o, "\n"); }
-            if (smp.compare) { app(o, "compare = true\n"); }
+            if (smp.anisotropy > 1U)
+            {
+                app(o, "anisotropy = ");
+                app_u32(o, smp.anisotropy);
+                app(o, "\n");
+            }
+            if (smp.compare)
+            {
+                app(o, "compare = true\n");
+            }
         }
         const char* mp =
             from_material(static_cast<FrameMaterialPass>(pass_u32(p, SV(pp::kMaterialPass), 0U)));
-        if (mp != nullptr) { app(o, "material_pass = \""); app(o, mp); app(o, "\"\n"); }
+        if (mp != nullptr)
+        {
+            app(o, "material_pass = \"");
+            app(o, mp);
+            app(o, "\"\n");
+        }
         if (p.for_each != FrameForEach::None)
         {
             app(o, "for_each = \"");
@@ -474,7 +620,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 app(o, "clear_color = [");
                 for (crd::u32 c = 0; c < 4U; ++c)
                 {
-                    if (c > 0U) { app(o, ", "); }
+                    if (c > 0U)
+                    {
+                        app(o, ", ");
+                    }
                     app_f64(o, static_cast<double>(cc[c]));
                 }
                 app(o, "]\n");
@@ -510,13 +659,33 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 }
                 return "keep";
             };
-            if (pass_flag(p, SV(pp::kLoad))) { app(o, "load = true\n"); }
-            if (pass_flag(p, SV(pp::kLoadDepth))) { app(o, "load_depth = true\n"); }
+            if (pass_flag(p, SV(pp::kLoad)))
+            {
+                app(o, "load = true\n");
+            }
+            if (pass_flag(p, SV(pp::kLoadDepth)))
+            {
+                app(o, "load_depth = true\n");
+            }
             semit("shared_depth", pp::kSharedDepth);
-            if (pass_flag(p, SV(pp::kDepthAsFloat))) { app(o, "depth_as_float = true\n"); }
-            if (pass_flag(p, SV(pp::kUntracked))) { app(o, "untracked_storage = true\n"); }
-            if (!st.depth_write) { app(o, "depth_write = false\n"); }
-            if (st.depth_bias != 0.0F) { app(o, "depth_bias = "); app_f64(o, static_cast<double>(st.depth_bias)); app(o, "\n"); }
+            if (pass_flag(p, SV(pp::kDepthAsFloat)))
+            {
+                app(o, "depth_as_float = true\n");
+            }
+            if (pass_flag(p, SV(pp::kUntracked)))
+            {
+                app(o, "untracked_storage = true\n");
+            }
+            if (!st.depth_write)
+            {
+                app(o, "depth_write = false\n");
+            }
+            if (st.depth_bias != 0.0F)
+            {
+                app(o, "depth_bias = ");
+                app_f64(o, static_cast<double>(st.depth_bias));
+                app(o, "\n");
+            }
             if (st.depth_bias_slope != 0.0F)
             {
                 app(o, "depth_bias_slope = ");
@@ -535,7 +704,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                 app(o, st.face_cull == crd::gpu::FaceCull::Back ? "back" : "front");
                 app(o, "\"\n");
             }
-            if (st.front_face != crd::gpu::FrontFace::CounterClockwise) { app(o, "front_face = \"cw\"\n"); }
+            if (st.front_face != crd::gpu::FrontFace::CounterClockwise)
+            {
+                app(o, "front_face = \"cw\"\n");
+            }
             if (st.stencil_enable)
             {
                 app(o, "stencil = true\n");
@@ -574,7 +746,11 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
         for (crd::usize k = 0; k < p.params.size(); ++k)
         {
             const FrameParam& prm = p.params[k];
-            if (!is_folded_param_name(SV(prm.name.c_str(), prm.name.size()))) { any_authored = true; break; }
+            if (!is_folded_param_name(SV(prm.name.c_str(), prm.name.size())))
+            {
+                any_authored = true;
+                break;
+            }
         }
         if (any_authored)
         {
@@ -582,7 +758,10 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
             for (crd::usize k = 0; k < p.params.size(); ++k)
             {
                 const FrameParam& prm = p.params[k];
-                if (is_folded_param_name(SV(prm.name.c_str(), prm.name.size()))) { continue; }
+                if (is_folded_param_name(SV(prm.name.c_str(), prm.name.size())))
+                {
+                    continue;
+                }
                 o.append(prm.name.c_str());
                 app(o, " = ");
                 if (prm.type == FrameParamType::Vec4)
@@ -590,16 +769,28 @@ crd::containers::String emit_frame_toml(const FrameGraphDesc& desc, crd::memory:
                     app(o, "[");
                     for (crd::u32 c = 0; c < 4U; ++c)
                     {
-                        if (c > 0U) { app(o, ", "); }
+                        if (c > 0U)
+                        {
+                            app(o, ", ");
+                        }
                         app_f64(o, prm.v[c]);
                     }
                     app(o, "]");
                 }
-                else if (prm.type == FrameParamType::Bool) { app(o, prm.v[0] != 0.0 ? "true" : "false"); }
+                else if (prm.type == FrameParamType::Bool)
+                {
+                    app(o, prm.v[0] != 0.0 ? "true" : "false");
+                }
                 // CEIR-31b-4-b-iv-g-2: a STRING generic param (e.g. `derive_spec_2_read = "blur_src"`) emits as a quoted
                 // TOML string from `prm.str` — without this it fell to app_f64(v[0]) and the payload was dropped on save.
-                else if (prm.type == FrameParamType::String) { app_quoted_sv(o, SV(prm.str.c_str(), prm.str.size())); }
-                else { app_f64(o, prm.v[0]); }
+                else if (prm.type == FrameParamType::String)
+                {
+                    app_quoted_sv(o, SV(prm.str.c_str(), prm.str.size()));
+                }
+                else
+                {
+                    app_f64(o, prm.v[0]);
+                }
                 app(o, "\n");
             }
         }

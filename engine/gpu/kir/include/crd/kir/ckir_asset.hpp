@@ -167,15 +167,33 @@ struct Tok
 
     static bool is_ws(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-    void fail(const char* m) noexcept { if (ok) { ok = false; err = pos; msg = m; } }
+    void fail(const char* m) noexcept
+    {
+        if (ok)
+        {
+            ok = false;
+            err = pos;
+            msg = m;
+        }
+    }
 
     // skip whitespace AND `#` line comments.
     void skip() noexcept
     {
         for (;;)
         {
-            while (pos < in.size() && is_ws(in[pos])) { ++pos; }
-            if (pos < in.size() && in[pos] == '#') { while (pos < in.size() && in[pos] != '\n') { ++pos; } continue; }
+            while (pos < in.size() && is_ws(in[pos]))
+            {
+                ++pos;
+            }
+            if (pos < in.size() && in[pos] == '#')
+            {
+                while (pos < in.size() && in[pos] != '\n')
+                {
+                    ++pos;
+                }
+                continue;
+            }
             break;
         }
     }
@@ -190,28 +208,51 @@ struct Tok
         {
             const char c = in[pos];
             const bool w = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
-            if (!w) { break; }
+            if (!w)
+            {
+                break;
+            }
             ++pos;
         }
         e = pos;
-        if (b == e) { fail("expected a word"); return false; }
+        if (b == e)
+        {
+            fail("expected a word");
+            return false;
+        }
         return true;
     }
     [[nodiscard]] bool word_is(crd::usize b, crd::usize e, const char* k) const noexcept
     {
         crd::usize n = 0;
-        for (crd::usize i = b; i < e; ++i, ++n) { if (k[n] == '\0' || k[n] != in[i]) { return false; } }
+        for (crd::usize i = b; i < e; ++i, ++n)
+        {
+            if (k[n] == '\0' || k[n] != in[i])
+            {
+                return false;
+            }
+        }
         return k[n] == '\0';
     }
     // consume one literal char (skipping ws/comments first); fail if it is not `c`.
-    void lit(char c) noexcept { if (peek() != c) { fail("expected a delimiter"); return; } ++pos; }
+    void lit(char c) noexcept
+    {
+        if (peek() != c)
+        {
+            fail("expected a delimiter");
+            return;
+        }
+        ++pos; }
     [[nodiscard]] bool at(char c) noexcept { return peek() == c; }
 
     // a "double-bracket" header opener: returns the header word for `[[word]]`, else fails. Assumes the caller peeked `[`.
     bool header(crd::usize& b, crd::usize& e) noexcept
     {
         lit('['); lit('[');
-        if (!word(b, e)) { return false; }
+        if (!word(b, e))
+        {
+            return false;
+        }
         lit(']'); lit(']');
         return ok;
     }
@@ -221,35 +262,68 @@ struct Tok
         skip();
         const crd::usize b   = pos;
         bool             neg = false;
-        if (pos < in.size() && (in[pos] == '-' || in[pos] == '+')) { neg = in[pos] == '-'; ++pos; }
+        if (pos < in.size() && (in[pos] == '-' || in[pos] == '+'))
+        {
+            neg = in[pos] == '-';
+            ++pos;
+        }
         crd::u64   v = 0;
         crd::usize d = pos;
         for (; pos < in.size() && in[pos] >= '0' && in[pos] <= '9'; ++pos)
         {
             const crd::u64 digit = static_cast<crd::u64>(in[pos] - '0');
-            if (v > (0x7FFFFFFFFFFFFFFFULL - digit) / 10U) { fail("integer out of range"); return 0; } // REPO.DEV.9 fuzz finding
+            if (v > (0x7FFFFFFFFFFFFFFFULL - digit) / 10U) // REPO.DEV.9 fuzz finding
+            {
+                fail("integer out of range");
+                return 0;
+            }
             v = v * 10U + digit;
         }
-        if (pos == d) { pos = b; fail("expected integer"); return 0; }
+        if (pos == d)
+        {
+            pos = b;
+            fail("expected integer");
+            return 0;
+        }
         return neg ? -static_cast<crd::i64>(v) : static_cast<crd::i64>(v);
     }
     [[nodiscard]] bool bool_val() noexcept
     {
         crd::usize b = 0; crd::usize e = 0;
-        if (!word(b, e)) { return false; }
-        if (word_is(b, e, "true")) { return true; }
-        if (word_is(b, e, "false")) { return false; }
+        if (!word(b, e))
+        {
+            return false;
+        }
+        if (word_is(b, e, "true"))
+        {
+            return true;
+        }
+        if (word_is(b, e, "false"))
+        {
+            return false;
+        }
         pos = b; fail("expected true/false"); return false;
     }
     // a "quoted string" → returns [b,e) of the CONTENTS (no quotes).
     bool str_val(crd::usize& b, crd::usize& e) noexcept
     {
-        if (peek() != '"') { fail("expected string"); return false; }
+        if (peek() != '"')
+        {
+            fail("expected string");
+            return false;
+        }
         ++pos;
         b = pos;
-        while (pos < in.size() && in[pos] != '"') { ++pos; }
+        while (pos < in.size() && in[pos] != '"')
+        {
+            ++pos;
+        }
         e = pos;
-        if (pos >= in.size()) { fail("unterminated string"); return false; }
+        if (pos >= in.size())
+        {
+            fail("unterminated string");
+            return false;
+        }
         ++pos; // closing quote
         return true;
     }
@@ -257,13 +331,31 @@ struct Tok
     [[nodiscard]] crd::i32 noderef() noexcept
     {
         crd::usize b = 0; crd::usize e = 0;
-        if (!str_val(b, e)) { return -1; }
-        if (e - b < 2 || in[b] != 'n') { pos = b; fail("expected a node ref \"n<idx>\""); return -1; }
+        if (!str_val(b, e))
+        {
+            return -1;
+        }
+        if (e - b < 2 || in[b] != 'n')
+        {
+            pos = b;
+            fail("expected a node ref \"n<idx>\"");
+            return -1;
+        }
         crd::i64 v = 0;
         for (crd::usize i = b + 1; i < e; ++i)
         {
-            if (in[i] < '0' || in[i] > '9') { pos = b; fail("bad node ref"); return -1; }
-            if (v > 214748364) { pos = b; fail("node ref out of range"); return -1; } // REPO.DEV.9 fuzz finding: no i64 overflow, no i32 wrap
+            if (in[i] < '0' || in[i] > '9')
+            {
+                pos = b;
+                fail("bad node ref");
+                return -1;
+            }
+            if (v > 214748364) // REPO.DEV.9 fuzz finding: no i64 overflow, no i32 wrap
+            {
+                pos = b;
+                fail("node ref out of range");
+                return -1;
+            }
             v = v * 10 + (in[i] - '0');
         }
         return static_cast<crd::i32>(v);
@@ -271,19 +363,44 @@ struct Tok
     [[nodiscard]] crd::f64 hex_f64() noexcept
     {
         crd::usize b = 0; crd::usize e = 0;
-        if (!str_val(b, e)) { return 0.0; }
+        if (!str_val(b, e))
+        {
+            return 0.0;
+        }
         crd::usize i = b;
-        if (e - i >= 2 && in[i] == '0' && (in[i + 1] == 'x' || in[i + 1] == 'X')) { i += 2; }
-        else { pos = b; fail("expected 0x hex"); return 0.0; }
+        if (e - i >= 2 && in[i] == '0' && (in[i + 1] == 'x' || in[i + 1] == 'X'))
+        {
+            i += 2;
+        }
+        else
+        {
+            pos = b;
+            fail("expected 0x hex");
+            return 0.0;
+        }
         crd::u64 bits = 0;
         for (; i < e; ++i)
         {
             const char h = in[i];
             crd::u64   d = 0;
-            if (h >= '0' && h <= '9') { d = static_cast<crd::u64>(h - '0'); }
-            else if (h >= 'a' && h <= 'f') { d = static_cast<crd::u64>(h - 'a') + 10U; }
-            else if (h >= 'A' && h <= 'F') { d = static_cast<crd::u64>(h - 'A') + 10U; }
-            else { pos = b; fail("bad hex digit"); return 0.0; }
+            if (h >= '0' && h <= '9')
+            {
+                d = static_cast<crd::u64>(h - '0');
+            }
+            else if (h >= 'a' && h <= 'f')
+            {
+                d = static_cast<crd::u64>(h - 'a') + 10U;
+            }
+            else if (h >= 'A' && h <= 'F')
+            {
+                d = static_cast<crd::u64>(h - 'A') + 10U;
+            }
+            else
+            {
+                pos = b;
+                fail("bad hex digit");
+                return 0.0;
+            }
             bits = (bits << 4U) | d;
         }
         crd::f64 v = 0.0;
@@ -294,8 +411,17 @@ struct Tok
     [[nodiscard]] int enum_val(const char* const* names, int count, const char* m) noexcept
     {
         crd::usize b = 0; crd::usize e = 0;
-        if (!str_val(b, e)) { return 0; }
-        for (int k = 0; k < count; ++k) { if (word_is(b, e, names[k])) { return k; } }
+        if (!str_val(b, e))
+        {
+            return 0;
+        }
+        for (int k = 0; k < count; ++k)
+        {
+            if (word_is(b, e, names[k]))
+            {
+                return k;
+            }
+        }
         pos = b; fail(m); return 0;
     }
 };
@@ -334,7 +460,14 @@ struct Tok
     td::w_kv_i(s, "mesh_prim", e.mesh_prim);
     td::w_kv_i(s, "task_emit", e.task_emit);
     s.append("task_payload = [");
-    for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (k) { s.append(", "); } td::w_i64(s, e.task_payload[k]); }
+    for (int k = 0; k < KEntry::kMaxTaskPayload; ++k)
+    {
+        if (k)
+        {
+            s.append(", ");
+        }
+        td::w_i64(s, e.task_payload[k]);
+    }
     s.append("]\n");
     td::w_kv_u(s, "n_task_payload", e.n_task_payload);
     td::w_kv_u(s, "tess_patch_size", e.tess_patch_size);
@@ -363,31 +496,75 @@ struct Tok
         s.append("\"\n");
         td::w_kv_s(s, "op", td::kKOpNames[static_cast<int>(n.op)]);
         // type — elide when default.
-        if (n.type.scalar != def_type.scalar) { td::w_kv_s(s, "dtype", td::kDTypeNames[static_cast<int>(n.type.scalar)]); }
-        if (n.type.kind != def_type.kind) { td::w_kv_s(s, "tkind", td::kTKindNames[static_cast<int>(n.type.kind)]); }
-        if (n.type.rows != def_type.rows) { td::w_kv_u(s, "trows", n.type.rows); }
-        if (n.type.cols != def_type.cols) { td::w_kv_u(s, "tcols", n.type.cols); }
-        if (n.type.count != def_type.count) { td::w_kv_u(s, "tcount", n.type.count); }
-        if (n.type.struct_id != def_type.struct_id) { td::w_kv_i(s, "tstruct", n.type.struct_id); }
-        if (n.type.elem_comps != def_type.elem_comps) { td::w_kv_u(s, "telem", n.type.elem_comps); }
+        if (n.type.scalar != def_type.scalar)
+        {
+            td::w_kv_s(s, "dtype", td::kDTypeNames[static_cast<int>(n.type.scalar)]);
+        }
+        if (n.type.kind != def_type.kind)
+        {
+            td::w_kv_s(s, "tkind", td::kTKindNames[static_cast<int>(n.type.kind)]);
+        }
+        if (n.type.rows != def_type.rows)
+        {
+            td::w_kv_u(s, "trows", n.type.rows);
+        }
+        if (n.type.cols != def_type.cols)
+        {
+            td::w_kv_u(s, "tcols", n.type.cols);
+        }
+        if (n.type.count != def_type.count)
+        {
+            td::w_kv_u(s, "tcount", n.type.count);
+        }
+        if (n.type.struct_id != def_type.struct_id)
+        {
+            td::w_kv_i(s, "tstruct", n.type.struct_id);
+        }
+        if (n.type.elem_comps != def_type.elem_comps)
+        {
+            td::w_kv_u(s, "telem", n.type.elem_comps);
+        }
         // shape — elide when rank 0 (scalar).
         if (n.shape.rank != 0)
         {
             s.append("shape = [");
-            for (int k = 0; k < n.shape.rank && k < kMaxRank; ++k) { if (k) { s.append(", "); } td::w_i64(s, n.shape.dims[k]); }
+            for (int k = 0; k < n.shape.rank && k < kMaxRank; ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                td::w_i64(s, n.shape.dims[k]);
+            }
             s.append("]\n");
         }
         // operand edges — `in = [ …node refs… ]` up to the highest set operand; "" marks a -1 gap. Elide if none.
         const crd::i32 ops[4] = {n.a, n.b, n.c, n.d};
         int            hi     = -1;
-        for (int k = 0; k < 4; ++k) { if (ops[k] >= 0) { hi = k; } }
+        for (int k = 0; k < 4; ++k)
+        {
+            if (ops[k] >= 0)
+            {
+                hi = k;
+            }
+        }
         if (hi >= 0)
         {
             s.append("in = [");
             for (int k = 0; k <= hi; ++k)
             {
-                if (k) { s.append(", "); }
-                if (ops[k] >= 0) { td::w_noderef(s, ops[k]); } else { s.append("\"\""); }
+                if (k)
+                {
+                    s.append(", ");
+                }
+                if (ops[k] >= 0)
+                {
+                    td::w_noderef(s, ops[k]);
+                }
+                else
+                {
+                    s.append("\"\"");
+                }
             }
             s.append("]\n");
         }
@@ -395,21 +572,55 @@ struct Tok
         // way through the text form (REPO.DEV.11 fuzz finding: the blob kept 0x8000000000000000, the text did not).
         crd::u64 cbits = 0U;
         std::memcpy(&cbits, &n.cval, sizeof(cbits));
-        if (cbits != 0U) { td::w_kv_hex(s, "cval", n.cval); }
-        if (n.iidx != 0) { td::w_kv_i(s, "iidx", n.iidx); }
-        if (n.axes != 0U) { td::w_kv_u(s, "axes", n.axes); }
+        if (cbits != 0U)
+        {
+            td::w_kv_hex(s, "cval", n.cval);
+        }
+        if (n.iidx != 0)
+        {
+            td::w_kv_i(s, "iidx", n.iidx);
+        }
+        if (n.axes != 0U)
+        {
+            td::w_kv_u(s, "axes", n.axes);
+        }
         bool any_perm = false;
-        for (int k = 0; k < kMaxRank; ++k) { if (n.perm[k] != 0U) { any_perm = true; } }
+        for (int k = 0; k < kMaxRank; ++k)
+        {
+            if (n.perm[k] != 0U)
+            {
+                any_perm = true;
+            }
+        }
         if (any_perm)
         {
             s.append("perm = [");
-            for (int k = 0; k < kMaxRank; ++k) { if (k) { s.append(", "); } td::w_u64(s, n.perm[k]); }
+            for (int k = 0; k < kMaxRank; ++k)
+            {
+                if (k)
+                {
+                    s.append(", ");
+                }
+                td::w_u64(s, n.perm[k]);
+            }
             s.append("]\n");
         }
-        if (n.tier != DetTier::Exact) { td::w_kv_s(s, "tier", td::kTierNames[static_cast<int>(n.tier)]); }
-        if (n.ext != -1) { td::w_kv_i(s, "ext", n.ext); }
-        if (n.n_ext != 0U) { td::w_kv_u(s, "n_ext", n.n_ext); }
-        if (n.dset != 0U) { td::w_kv_u(s, "dset", n.dset); }
+        if (n.tier != DetTier::Exact)
+        {
+            td::w_kv_s(s, "tier", td::kTierNames[static_cast<int>(n.tier)]);
+        }
+        if (n.ext != -1)
+        {
+            td::w_kv_i(s, "ext", n.ext);
+        }
+        if (n.n_ext != 0U)
+        {
+            td::w_kv_u(s, "n_ext", n.n_ext);
+        }
+        if (n.dset != 0U)
+        {
+            td::w_kv_u(s, "dset", n.dset);
+        }
     }
 
     // ── ext / struct-field / struct-begin pools (aggregate/variadic operand support). ⛔ These are SECTIONS ([[ext]]/[[sbegin]]),
@@ -421,14 +632,28 @@ struct Tok
     if (ext.size() > 0)
     {
         s.append("\n[[ext]]\nvalues = [");
-        for (crd::usize i = 0; i < ext.size(); ++i) { if (i) { s.append(", "); } td::w_i64(s, ext[i]); }
+        for (crd::usize i = 0; i < ext.size(); ++i)
+        {
+            if (i)
+            {
+                s.append(", ");
+            }
+            td::w_i64(s, ext[i]);
+        }
         s.append("]\n");
     }
     const auto& sbegin = g.serial_sbegin();
     if (sbegin.size() > 0)
     {
         s.append("\n[[sbegin]]\nvalues = [");
-        for (crd::usize i = 0; i < sbegin.size(); ++i) { if (i) { s.append(", "); } td::w_u64(s, sbegin[i]); }
+        for (crd::usize i = 0; i < sbegin.size(); ++i)
+        {
+            if (i)
+            {
+                s.append(", ");
+            }
+            td::w_u64(s, sbegin[i]);
+        }
         s.append("]\n");
     }
     const auto& sfields = g.serial_sfields();
@@ -452,17 +677,46 @@ struct Tok
         const KStmt& st = stmts[i];
         s.append("\n[[stmt]]\n");
         td::w_kv_s(s, "kind", td::kKStmtNames[static_cast<int>(st.kind)]);
-        if (st.target != -1) { s.append("target = "); td::w_noderef(s, st.target); s.append("\n"); }
-        if (st.index != -1) { s.append("index = "); td::w_noderef(s, st.index); s.append("\n"); }
-        if (st.value != -1) { s.append("value = "); td::w_noderef(s, st.value); s.append("\n"); }
-        if (st.scope != BarrierScope::Workgroup) { td::w_kv_s(s, "scope", td::kScopeNames[static_cast<int>(st.scope)]); }
+        if (st.target != -1)
+        {
+            s.append("target = ");
+            td::w_noderef(s, st.target);
+            s.append("\n");
+        }
+        if (st.index != -1)
+        {
+            s.append("index = ");
+            td::w_noderef(s, st.index);
+            s.append("\n");
+        }
+        if (st.value != -1)
+        {
+            s.append("value = ");
+            td::w_noderef(s, st.value);
+            s.append("\n");
+        }
+        if (st.scope != BarrierScope::Workgroup)
+        {
+            td::w_kv_s(s, "scope", td::kScopeNames[static_cast<int>(st.scope)]);
+        }
         if (st.body_begin != -1 || st.body_count != 0)
         {
             s.append("body = ["); td::w_i64(s, st.body_begin); s.append(", "); td::w_i64(s, st.body_count); s.append("]\n");
         }
-        if (st.result != -1) { s.append("result = "); td::w_noderef(s, st.result); s.append("\n"); }
-        if (st.ext != -1) { td::w_kv_i(s, "ext", st.ext); }
-        if (st.n_ext != 0U) { td::w_kv_u(s, "n_ext", st.n_ext); }
+        if (st.result != -1)
+        {
+            s.append("result = ");
+            td::w_noderef(s, st.result);
+            s.append("\n");
+        }
+        if (st.ext != -1)
+        {
+            td::w_kv_i(s, "ext", st.ext);
+        }
+        if (st.n_ext != 0U)
+        {
+            td::w_kv_u(s, "n_ext", st.n_ext);
+        }
     }
     return s;
 }
@@ -499,22 +753,62 @@ struct CkirReadResult
         while (t.ok && !t.eof() && !t.at('['))
         {
             crd::usize b = 0; crd::usize en2 = 0;
-            if (!t.word(b, en2)) { break; }
+            if (!t.word(b, en2))
+            {
+                break;
+            }
             t.lit('=');
-            if (t.word_is(b, en2, "dtype")) { ty.scalar = static_cast<DType>(t.enum_val(td::kDTypeNames, static_cast<int>(DType::U32) + 1, "bad dtype")); }
-            else if (t.word_is(b, en2, "tkind")) { ty.kind = static_cast<TKind>(t.enum_val(td::kTKindNames, static_cast<int>(TKind::Sampler) + 1, "bad tkind")); }
-            else if (t.word_is(b, en2, "trows")) { ty.rows = static_cast<crd::u8>(t.int_val()); }
-            else if (t.word_is(b, en2, "tcols")) { ty.cols = static_cast<crd::u8>(t.int_val()); }
-            else if (t.word_is(b, en2, "tcount")) { ty.count = static_cast<crd::u16>(t.int_val()); }
-            else if (t.word_is(b, en2, "tstruct")) { ty.struct_id = static_cast<crd::i16>(t.int_val()); }
-            else if (t.word_is(b, en2, "telem")) { ty.elem_comps = static_cast<crd::u16>(t.int_val()); }
-            else { t.pos = b; t.fail("unknown sfield key"); }
+            if (t.word_is(b, en2, "dtype"))
+            {
+                ty.scalar = static_cast<DType>(t.enum_val(td::kDTypeNames, static_cast<int>(DType::U32) + 1, "bad dtype"));
+            }
+            else if (t.word_is(b, en2, "tkind"))
+            {
+                ty.kind = static_cast<TKind>(t.enum_val(td::kTKindNames, static_cast<int>(TKind::Sampler) + 1, "bad tkind"));
+            }
+            else if (t.word_is(b, en2, "trows"))
+            {
+                ty.rows = static_cast<crd::u8>(t.int_val());
+            }
+            else if (t.word_is(b, en2, "tcols"))
+            {
+                ty.cols = static_cast<crd::u8>(t.int_val());
+            }
+            else if (t.word_is(b, en2, "tcount"))
+            {
+                ty.count = static_cast<crd::u16>(t.int_val());
+            }
+            else if (t.word_is(b, en2, "tstruct"))
+            {
+                ty.struct_id = static_cast<crd::i16>(t.int_val());
+            }
+            else if (t.word_is(b, en2, "telem"))
+            {
+                ty.elem_comps = static_cast<crd::u16>(t.int_val());
+            }
+            else
+            {
+                t.pos = b;
+                t.fail("unknown sfield key");
+            }
         }
     };
     // read a `[ … ]` array of ints via a callback.
     const auto read_int_array = [&](auto&& push) {
         t.lit('[');
-        if (!t.at(']')) { for (;;) { push(t.int_val()); if (t.at(',')) { t.lit(','); continue; } break; } }
+        if (!t.at(']'))
+        {
+            for (;;)
+            {
+                push(t.int_val());
+                if (t.at(','))
+                {
+                    t.lit(',');
+                    continue;
+                }
+                break;
+            }
+        }
         t.lit(']');
     };
 
@@ -523,7 +817,10 @@ struct CkirReadResult
         if (t.at('['))
         {
             crd::usize hb = 0; crd::usize he = 0;
-            if (!t.header(hb, he)) { break; }
+            if (!t.header(hb, he))
+            {
+                break;
+            }
             if (t.word_is(hb, he, "node"))
             {
                 // value-init: KNode.op has NO default member initializer (ckir.hpp:846), so a bare `[[node]]` (e.g. a
@@ -536,18 +833,62 @@ struct CkirReadResult
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "id")) { crd::usize sb = 0; crd::usize se = 0; (void)t.str_val(sb, se); } // canonical "n<index>" == pool order; ignored (order authoritative)
-                    else if (t.word_is(b, en2, "op")) { n.op = static_cast<KOp>(t.enum_val(td::kKOpNames, td::kKOpCount, "bad op")); op_seen = true; }
-                    else if (t.word_is(b, en2, "dtype")) { n.type.scalar = static_cast<DType>(t.enum_val(td::kDTypeNames, static_cast<int>(DType::U32) + 1, "bad dtype")); }
-                    else if (t.word_is(b, en2, "tkind")) { n.type.kind = static_cast<TKind>(t.enum_val(td::kTKindNames, static_cast<int>(TKind::Sampler) + 1, "bad tkind")); }
-                    else if (t.word_is(b, en2, "trows")) { n.type.rows = static_cast<crd::u8>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tcols")) { n.type.cols = static_cast<crd::u8>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tcount")) { n.type.count = static_cast<crd::u16>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tstruct")) { n.type.struct_id = static_cast<crd::i16>(t.int_val()); }
-                    else if (t.word_is(b, en2, "telem")) { n.type.elem_comps = static_cast<crd::u16>(t.int_val()); }
-                    else if (t.word_is(b, en2, "shape")) { int r = 0; read_int_array([&](crd::i64 v) { if (r < kMaxRank) { n.shape.dims[r] = v; } ++r; }); n.shape.rank = r; }
+                    if (t.word_is(b, en2, "id")) // canonical "n<index>" == pool order; ignored (order authoritative)
+                    {
+                        crd::usize sb = 0;
+                        crd::usize se = 0;
+                        (void)t.str_val(sb, se);
+                    }
+                    else if (t.word_is(b, en2, "op"))
+                    {
+                        n.op = static_cast<KOp>(t.enum_val(td::kKOpNames, td::kKOpCount, "bad op"));
+                        op_seen = true;
+                    }
+                    else if (t.word_is(b, en2, "dtype"))
+                    {
+                        n.type.scalar = static_cast<DType>(t.enum_val(td::kDTypeNames, static_cast<int>(DType::U32) + 1, "bad dtype"));
+                    }
+                    else if (t.word_is(b, en2, "tkind"))
+                    {
+                        n.type.kind = static_cast<TKind>(t.enum_val(td::kTKindNames, static_cast<int>(TKind::Sampler) + 1, "bad tkind"));
+                    }
+                    else if (t.word_is(b, en2, "trows"))
+                    {
+                        n.type.rows = static_cast<crd::u8>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tcols"))
+                    {
+                        n.type.cols = static_cast<crd::u8>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tcount"))
+                    {
+                        n.type.count = static_cast<crd::u16>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tstruct"))
+                    {
+                        n.type.struct_id = static_cast<crd::i16>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "telem"))
+                    {
+                        n.type.elem_comps = static_cast<crd::u16>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "shape"))
+                    {
+                        int r = 0;
+                        read_int_array([&](crd::i64 v)
+                        {
+                            if (r < kMaxRank)
+                            {
+                                n.shape.dims[r] = v;
+                            }
+                            ++r; });
+                        n.shape.rank = r;
+                    }
                     else if (t.word_is(b, en2, "in"))
                     {
                         int k = 0;
@@ -560,31 +901,115 @@ struct CkirReadResult
                                 // an operand is either a "n<idx>" ref or "" (a gap).
                                 crd::usize pk = t.pos;
                                 crd::usize sb = 0; crd::usize se = 0;
-                                if (t.peek() == '"') { crd::usize save = t.pos; (void)t.str_val(sb, se); if (se == sb) { ref = -1; } else { t.pos = save; ref = t.noderef(); } }
-                                else { t.fail("expected operand ref"); }
+                                if (t.peek() == '"')
+                                {
+                                    crd::usize save = t.pos;
+                                    (void)t.str_val(sb, se);
+                                    if (se == sb)
+                                    {
+                                        ref = -1;
+                                    }
+                                    else
+                                    {
+                                        t.pos = save;
+                                        ref = t.noderef();
+                                    }
+                                }
+                                else
+                                {
+                                    t.fail("expected operand ref");
+                                }
                                 (void)pk;
-                                if (k == 0) { n.a = ref; } else if (k == 1) { n.b = ref; } else if (k == 2) { n.c = ref; } else if (k == 3) { n.d = ref; }
+                                if (k == 0)
+                                {
+                                    n.a = ref;
+                                }
+                                else if (k == 1)
+                                {
+                                    n.b = ref;
+                                }
+                                else if (k == 2)
+                                {
+                                    n.c = ref;
+                                }
+                                else if (k == 3)
+                                {
+                                    n.d = ref;
+                                }
                                 ++k;
-                                if (t.at(',')) { t.lit(','); continue; }
+                                if (t.at(','))
+                                {
+                                    t.lit(',');
+                                    continue;
+                                }
                                 break;
                             }
                         }
                         t.lit(']');
                     }
-                    else if (t.word_is(b, en2, "cval")) { n.cval = t.hex_f64(); }
-                    else if (t.word_is(b, en2, "iidx")) { n.iidx = static_cast<crd::i32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "axes")) { n.axes = static_cast<crd::u32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "perm")) { int k = 0; read_int_array([&](crd::i64 v) { if (k < kMaxRank) { n.perm[k] = static_cast<crd::u8>(v); } ++k; }); }
-                    else if (t.word_is(b, en2, "tier")) { n.tier = static_cast<DetTier>(t.enum_val(td::kTierNames, static_cast<int>(DetTier::Fast) + 1, "bad tier")); }
-                    else if (t.word_is(b, en2, "ext")) { n.ext = static_cast<crd::i32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "n_ext")) { n.n_ext = static_cast<crd::u16>(t.int_val()); }
-                    else if (t.word_is(b, en2, "dset")) { n.dset = static_cast<crd::u8>(t.int_val()); }
-                    else { t.pos = b; t.fail("unknown node key"); }
+                    else if (t.word_is(b, en2, "cval"))
+                    {
+                        n.cval = t.hex_f64();
+                    }
+                    else if (t.word_is(b, en2, "iidx"))
+                    {
+                        n.iidx = static_cast<crd::i32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "axes"))
+                    {
+                        n.axes = static_cast<crd::u32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "perm"))
+                    {
+                        int k = 0;
+                        read_int_array([&](crd::i64 v)
+                        {
+                            if (k < kMaxRank)
+                            {
+                                n.perm[k] = static_cast<crd::u8>(v);
+                            }
+                            ++k; });
+                    }
+                    else if (t.word_is(b, en2, "tier"))
+                    {
+                        n.tier = static_cast<DetTier>(t.enum_val(td::kTierNames, static_cast<int>(DetTier::Fast) + 1, "bad tier"));
+                    }
+                    else if (t.word_is(b, en2, "ext"))
+                    {
+                        n.ext = static_cast<crd::i32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "n_ext"))
+                    {
+                        n.n_ext = static_cast<crd::u16>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "dset"))
+                    {
+                        n.dset = static_cast<crd::u8>(t.int_val());
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown node key");
+                    }
                 }
-                if (t.ok && !op_seen) { t.fail("node: missing op"); } // CEIR-35b: an op-less node has an indeterminate op
-                if (t.ok) { nodes.push_back(n); }
+                if (t.ok && !op_seen) // CEIR-35b: an op-less node has an indeterminate op
+                {
+                    t.fail("node: missing op");
+                }
+                if (t.ok)
+                {
+                    nodes.push_back(n);
+                }
             }
-            else if (t.word_is(hb, he, "sfield")) { KType ty; read_type_block(ty); if (t.ok) { sfields.push_back(ty); } }
+            else if (t.word_is(hb, he, "sfield"))
+            {
+                KType ty;
+                read_type_block(ty);
+                if (t.ok)
+                {
+                    sfields.push_back(ty);
+                }
+            }
             else if (t.word_is(hb, he, "stmt"))
             {
                 KStmt st;
@@ -592,56 +1017,208 @@ struct CkirReadResult
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "kind")) { st.kind = static_cast<KStmtKind>(t.enum_val(td::kKStmtNames, td::kKStmtCount, "bad kind")); kind_seen = true; }
-                    else if (t.word_is(b, en2, "target")) { st.target = t.noderef(); }
-                    else if (t.word_is(b, en2, "index")) { st.index = t.noderef(); }
-                    else if (t.word_is(b, en2, "value")) { st.value = t.noderef(); }
-                    else if (t.word_is(b, en2, "scope")) { st.scope = static_cast<BarrierScope>(t.enum_val(td::kScopeNames, static_cast<int>(BarrierScope::Buffer) + 1, "bad scope")); }
-                    else if (t.word_is(b, en2, "body")) { int k = 0; read_int_array([&](crd::i64 v) { if (k == 0) { st.body_begin = static_cast<crd::i32>(v); } else if (k == 1) { st.body_count = static_cast<crd::i32>(v); } ++k; }); }
-                    else if (t.word_is(b, en2, "result")) { st.result = t.noderef(); }
-                    else if (t.word_is(b, en2, "ext")) { st.ext = static_cast<crd::i32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "n_ext")) { st.n_ext = static_cast<crd::u16>(t.int_val()); }
-                    else { t.pos = b; t.fail("unknown stmt key"); }
+                    if (t.word_is(b, en2, "kind"))
+                    {
+                        st.kind = static_cast<KStmtKind>(t.enum_val(td::kKStmtNames, td::kKStmtCount, "bad kind"));
+                        kind_seen = true;
+                    }
+                    else if (t.word_is(b, en2, "target"))
+                    {
+                        st.target = t.noderef();
+                    }
+                    else if (t.word_is(b, en2, "index"))
+                    {
+                        st.index = t.noderef();
+                    }
+                    else if (t.word_is(b, en2, "value"))
+                    {
+                        st.value = t.noderef();
+                    }
+                    else if (t.word_is(b, en2, "scope"))
+                    {
+                        st.scope = static_cast<BarrierScope>(t.enum_val(td::kScopeNames, static_cast<int>(BarrierScope::Buffer) + 1, "bad scope"));
+                    }
+                    else if (t.word_is(b, en2, "body"))
+                    {
+                        int k = 0;
+                        read_int_array([&](crd::i64 v)
+                        {
+                            if (k == 0)
+                            {
+                                st.body_begin = static_cast<crd::i32>(v);
+                            }
+                            else if (k == 1)
+                            {
+                                st.body_count = static_cast<crd::i32>(v);
+                            }
+                            ++k; });
+                    }
+                    else if (t.word_is(b, en2, "result"))
+                    {
+                        st.result = t.noderef();
+                    }
+                    else if (t.word_is(b, en2, "ext"))
+                    {
+                        st.ext = static_cast<crd::i32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "n_ext"))
+                    {
+                        st.n_ext = static_cast<crd::u16>(t.int_val());
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown stmt key");
+                    }
                 }
-                if (t.ok && !kind_seen) { t.fail("stmt: missing kind"); } // CEIR-35b: reject a kind-less stmt
-                if (t.ok) { stmts.push_back(st); }
+                if (t.ok && !kind_seen) // CEIR-35b: reject a kind-less stmt
+                {
+                    t.fail("stmt: missing kind");
+                }
+                if (t.ok)
+                {
+                    stmts.push_back(st);
+                }
             }
             else if (t.word_is(hb, he, "entry"))
             {
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "stage")) { en.stage = static_cast<KStage>(t.enum_val(td::kStageNames, kStageCount, "bad stage")); stage_seen = true; }
-                    else if (t.word_is(b, en2, "inputs")) { nin = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "position")) { en.position = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "frag_depth")) { en.frag_depth = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "discard_cond")) { en.discard_cond = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "early_fragment_tests")) { en.early_fragment_tests = t.bool_val(); }
-                    else if (t.word_is(b, en2, "depth_mode")) { en.depth_mode = static_cast<DepthMode>(t.enum_val(td::kDepthNames, static_cast<int>(DepthMode::Less) + 1, "bad depth_mode")); }
-                    else if (t.word_is(b, en2, "shading_rate")) { en.shading_rate = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "storage_write_index")) { en.storage_write_index = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "storage_write_value")) { en.storage_write_value = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "interlock")) { en.interlock = t.bool_val(); }
-                    else if (t.word_is(b, en2, "n_out")) { en.n_out = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "local_size")) { int k = 0; read_int_array([&](crd::i64 v) { if (k < 3) { en.local_size[k] = static_cast<crd::u32>(v); } ++k; }); }
-                    else if (t.word_is(b, en2, "kernel_body_begin")) { en.kernel_body_begin = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "kernel_body_count")) { en.kernel_body_count = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "mesh_vertices")) { en.mesh_vertices = static_cast<crd::u32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "mesh_primitives")) { en.mesh_primitives = static_cast<crd::u32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "mesh_prim")) { en.mesh_prim = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "task_emit")) { en.task_emit = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "task_payload")) { int k = 0; read_int_array([&](crd::i64 v) { if (k < KEntry::kMaxTaskPayload) { en.task_payload[k] = static_cast<int>(v); } ++k; }); }
-                    else if (t.word_is(b, en2, "n_task_payload")) { en.n_task_payload = static_cast<crd::u32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tess_patch_size")) { en.tess_patch_size = static_cast<crd::u32>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tess_inner")) { en.tess_inner = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "tess_outer")) { en.tess_outer = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "mesh_payload_in")) { en.mesh_payload_in = t.bool_val(); }
-                    else if (t.word_is(b, en2, "storage_read_only")) { en.storage_read_only = t.bool_val(); }
-                    else { t.pos = b; t.fail("unknown entry key"); }
+                    if (t.word_is(b, en2, "stage"))
+                    {
+                        en.stage = static_cast<KStage>(t.enum_val(td::kStageNames, kStageCount, "bad stage"));
+                        stage_seen = true;
+                    }
+                    else if (t.word_is(b, en2, "inputs"))
+                    {
+                        nin = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "position"))
+                    {
+                        en.position = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "frag_depth"))
+                    {
+                        en.frag_depth = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "discard_cond"))
+                    {
+                        en.discard_cond = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "early_fragment_tests"))
+                    {
+                        en.early_fragment_tests = t.bool_val();
+                    }
+                    else if (t.word_is(b, en2, "depth_mode"))
+                    {
+                        en.depth_mode = static_cast<DepthMode>(t.enum_val(td::kDepthNames, static_cast<int>(DepthMode::Less) + 1, "bad depth_mode"));
+                    }
+                    else if (t.word_is(b, en2, "shading_rate"))
+                    {
+                        en.shading_rate = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "storage_write_index"))
+                    {
+                        en.storage_write_index = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "storage_write_value"))
+                    {
+                        en.storage_write_value = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "interlock"))
+                    {
+                        en.interlock = t.bool_val();
+                    }
+                    else if (t.word_is(b, en2, "n_out"))
+                    {
+                        en.n_out = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "local_size"))
+                    {
+                        int k = 0;
+                        read_int_array([&](crd::i64 v)
+                        {
+                            if (k < 3)
+                            {
+                                en.local_size[k] = static_cast<crd::u32>(v);
+                            }
+                            ++k; });
+                    }
+                    else if (t.word_is(b, en2, "kernel_body_begin"))
+                    {
+                        en.kernel_body_begin = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "kernel_body_count"))
+                    {
+                        en.kernel_body_count = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "mesh_vertices"))
+                    {
+                        en.mesh_vertices = static_cast<crd::u32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "mesh_primitives"))
+                    {
+                        en.mesh_primitives = static_cast<crd::u32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "mesh_prim"))
+                    {
+                        en.mesh_prim = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "task_emit"))
+                    {
+                        en.task_emit = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "task_payload"))
+                    {
+                        int k = 0;
+                        read_int_array([&](crd::i64 v)
+                        {
+                            if (k < KEntry::kMaxTaskPayload)
+                            {
+                                en.task_payload[k] = static_cast<int>(v);
+                            }
+                            ++k; });
+                    }
+                    else if (t.word_is(b, en2, "n_task_payload"))
+                    {
+                        en.n_task_payload = static_cast<crd::u32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tess_patch_size"))
+                    {
+                        en.tess_patch_size = static_cast<crd::u32>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tess_inner"))
+                    {
+                        en.tess_inner = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "tess_outer"))
+                    {
+                        en.tess_outer = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "mesh_payload_in"))
+                    {
+                        en.mesh_payload_in = t.bool_val();
+                    }
+                    else if (t.word_is(b, en2, "storage_read_only"))
+                    {
+                        en.storage_read_only = t.bool_val();
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown entry key");
+                    }
                 }
             }
             else if (t.word_is(hb, he, "out"))
@@ -650,24 +1227,53 @@ struct CkirReadResult
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "node")) { o.node = t.noderef(); }
-                    else if (t.word_is(b, en2, "location")) { o.location = static_cast<int>(t.int_val()); }
-                    else if (t.word_is(b, en2, "interp")) { o.interp = static_cast<Interp>(t.enum_val(td::kInterpNames, static_cast<int>(Interp::Sample) + 1, "bad interp")); }
-                    else { t.pos = b; t.fail("unknown out key"); }
+                    if (t.word_is(b, en2, "node"))
+                    {
+                        o.node = t.noderef();
+                    }
+                    else if (t.word_is(b, en2, "location"))
+                    {
+                        o.location = static_cast<int>(t.int_val());
+                    }
+                    else if (t.word_is(b, en2, "interp"))
+                    {
+                        o.interp = static_cast<Interp>(t.enum_val(td::kInterpNames, static_cast<int>(Interp::Sample) + 1, "bad interp"));
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown out key");
+                    }
                 }
-                if (t.ok && n_out_seen < kMaxStageOutputs) { en.out[n_out_seen++] = o; }
+                if (t.ok && n_out_seen < kMaxStageOutputs)
+                {
+                    en.out[n_out_seen++] = o;
+                }
             }
             else if (t.word_is(hb, he, "ext")) // CEIR-19c: the global ext-operand pool (a SECTION, not a bare key — see the writer note)
             {
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "values")) { read_int_array([&](crd::i64 v) { ext.push_back(static_cast<crd::i32>(v)); }); }
-                    else { t.pos = b; t.fail("unknown ext key"); }
+                    if (t.word_is(b, en2, "values"))
+                    {
+                        read_int_array([&](crd::i64 v) { ext.push_back(static_cast<crd::i32>(v)); });
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown ext key");
+                    }
                 }
             }
             else if (t.word_is(hb, he, "sbegin")) // CEIR-19c: the struct-begin pool (a SECTION, same collision fix as [[ext]])
@@ -675,29 +1281,61 @@ struct CkirReadResult
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
-                    if (!t.word(b, en2)) { break; }
+                    if (!t.word(b, en2))
+                    {
+                        break;
+                    }
                     t.lit('=');
-                    if (t.word_is(b, en2, "values")) { read_int_array([&](crd::i64 v) { sbegin.push_back(static_cast<crd::u32>(v)); }); }
-                    else { t.pos = b; t.fail("unknown sbegin key"); }
+                    if (t.word_is(b, en2, "values"))
+                    {
+                        read_int_array([&](crd::i64 v) { sbegin.push_back(static_cast<crd::u32>(v)); });
+                    }
+                    else
+                    {
+                        t.pos = b;
+                        t.fail("unknown sbegin key");
+                    }
                 }
             }
-            else { t.fail("unknown [[section]]"); }
+            else
+            {
+                t.fail("unknown [[section]]");
+            }
         }
         else
         {
             // a top-level `key = value` (only `schema` today — ext/sbegin are now [[ext]]/[[sbegin]] SECTIONS, see the writer note).
             crd::usize b = 0; crd::usize en2 = 0;
-            if (!t.word(b, en2)) { break; }
+            if (!t.word(b, en2))
+            {
+                break;
+            }
             t.lit('=');
-            if (t.word_is(b, en2, "schema")) { (void)t.int_val(); }
-            else { t.pos = b; t.fail("unknown top-level key"); }
+            if (t.word_is(b, en2, "schema"))
+            {
+                (void)t.int_val();
+            }
+            else
+            {
+                t.pos = b;
+                t.fail("unknown top-level key");
+            }
         }
     }
 
-    if (!t.ok) { return CkirReadResult{false, t.err, t.msg}; }
+    if (!t.ok)
+    {
+        return CkirReadResult{false, t.err, t.msg};
+    }
     // ⛔ a real CKIR program has value nodes; empty / non-`.ckir` input (0 nodes) is REPORTED, never a silent empty graph.
-    if (nodes.size() == 0) { return CkirReadResult{false, 0, "not a CKIR program (no nodes)"}; }
-    if (!stage_seen) { return CkirReadResult{false, 0, "not a CKIR program (no [[entry]] stage)"}; }
+    if (nodes.size() == 0)
+    {
+        return CkirReadResult{false, 0, "not a CKIR program (no nodes)"};
+    }
+    if (!stage_seen)
+    {
+        return CkirReadResult{false, 0, "not a CKIR program (no [[entry]] stage)"};
+    }
 
     // ── CEIR-35b: post-parse STRUCTURAL BOUNDS validation (the mutation-fuzz finding). Every node/stmt/ext/struct index was
     // stored RAW; a corrupt or hostile .ckir can carry an out-of-range ref that a downstream consumer (serialize_graph, an
@@ -721,21 +1359,57 @@ struct CkirReadResult
         for (crd::usize i = 0; i < nodes.size(); ++i)
         {
             const KNode& n = nodes[i];
-            if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d)) { return CkirReadResult{false, 0, "node operand ref out of range"}; }
-            if (!extwin_ok(n.ext, n.n_ext)) { return CkirReadResult{false, 0, "node ext-operand window out of range"}; }
-            if (!sid_ok(n.type.struct_id)) { return CkirReadResult{false, 0, "node struct id out of range"}; }
+            if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d))
+            {
+                return CkirReadResult{false, 0, "node operand ref out of range"};
+            }
+            if (!extwin_ok(n.ext, n.n_ext))
+            {
+                return CkirReadResult{false, 0, "node ext-operand window out of range"};
+            }
+            if (!sid_ok(n.type.struct_id))
+            {
+                return CkirReadResult{false, 0, "node struct id out of range"};
+            }
         }
         // ext-pool entries are themselves node refs (the variadic operands of aggregate nodes AND of RT/atomic stmts).
-        for (crd::usize i = 0; i < ext.size(); ++i) { if (!nref_ok(ext[i])) { return CkirReadResult{false, 0, "ext-pool operand ref out of range"}; } }
+        for (crd::usize i = 0; i < ext.size(); ++i)
+        {
+            if (!nref_ok(ext[i]))
+            {
+                return CkirReadResult{false, 0, "ext-pool operand ref out of range"};
+            }
+        }
         // a struct field's type may itself reference a struct; sbegin[] values are offsets into the sfields pool.
-        for (crd::usize i = 0; i < sfields.size(); ++i) { if (!sid_ok(sfields[i].struct_id)) { return CkirReadResult{false, 0, "sfield struct id out of range"}; } }
-        for (crd::usize i = 0; i < sbegin.size(); ++i) { if (static_cast<crd::i64>(sbegin[i]) > n_sflds) { return CkirReadResult{false, 0, "struct field offset out of range"}; } }
+        for (crd::usize i = 0; i < sfields.size(); ++i)
+        {
+            if (!sid_ok(sfields[i].struct_id))
+            {
+                return CkirReadResult{false, 0, "sfield struct id out of range"};
+            }
+        }
+        for (crd::usize i = 0; i < sbegin.size(); ++i)
+        {
+            if (static_cast<crd::i64>(sbegin[i]) > n_sflds)
+            {
+                return CkirReadResult{false, 0, "struct field offset out of range"};
+            }
+        }
         for (crd::usize i = 0; i < stmts.size(); ++i)
         {
             const KStmt& st = stmts[i];
-            if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result)) { return CkirReadResult{false, 0, "stmt operand ref out of range"}; }
-            if (!bodywin_ok(st.body_begin, st.body_count)) { return CkirReadResult{false, 0, "stmt body range out of range"}; }
-            if (!extwin_ok(st.ext, st.n_ext)) { return CkirReadResult{false, 0, "stmt ext-operand window out of range"}; }
+            if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result))
+            {
+                return CkirReadResult{false, 0, "stmt operand ref out of range"};
+            }
+            if (!bodywin_ok(st.body_begin, st.body_count))
+            {
+                return CkirReadResult{false, 0, "stmt body range out of range"};
+            }
+            if (!extwin_ok(st.ext, st.n_ext))
+            {
+                return CkirReadResult{false, 0, "stmt ext-operand window out of range"};
+            }
         }
         // the entry: every node ref, the kernel-body stmt range, and the stage-output refs.
         if (!nref_ok(en.position) || !nref_ok(en.frag_depth) || !nref_ok(en.discard_cond) || !nref_ok(en.shading_rate)
@@ -744,14 +1418,35 @@ struct CkirReadResult
         {
             return CkirReadResult{false, 0, "entry node ref out of range"};
         }
-        for (int k = 0; k < KEntry::kMaxTaskPayload; ++k) { if (!nref_ok(en.task_payload[k])) { return CkirReadResult{false, 0, "entry task_payload ref out of range"}; } }
-        if (!bodywin_ok(en.kernel_body_begin, en.kernel_body_count)) { return CkirReadResult{false, 0, "entry kernel body range out of range"}; }
-        if (en.n_out < 0 || en.n_out > kMaxStageOutputs) { return CkirReadResult{false, 0, "entry n_out out of range"}; }
-        if (n_out_seen != en.n_out) { return CkirReadResult{false, 0, "entry n_out does not match the [[out]] blocks"}; } // REPO.DEV.9 fuzz finding
+        for (int k = 0; k < KEntry::kMaxTaskPayload; ++k)
+        {
+            if (!nref_ok(en.task_payload[k]))
+            {
+                return CkirReadResult{false, 0, "entry task_payload ref out of range"};
+            }
+        }
+        if (!bodywin_ok(en.kernel_body_begin, en.kernel_body_count))
+        {
+            return CkirReadResult{false, 0, "entry kernel body range out of range"};
+        }
+        if (en.n_out < 0 || en.n_out > kMaxStageOutputs)
+        {
+            return CkirReadResult{false, 0, "entry n_out out of range"};
+        }
+        if (n_out_seen != en.n_out) // REPO.DEV.9 fuzz finding
+        {
+            return CkirReadResult{false, 0, "entry n_out does not match the [[out]] blocks"};
+        }
         // A stage output must NAME a node: -1 is a gap for operands, not for an output (`[[out]]` without `node =` left
         // it -1, the writer emitted "n-1" and rejected its own output; REPO.DEV.11 fuzz finding). Same rule as verify's
         // "output names no node" and the blob reader.
-        for (int k = 0; k < n_out_seen; ++k) { if (en.out[k].node < 0 || !nref_ok(en.out[k].node)) { return CkirReadResult{false, 0, "stage output names no node"}; } }
+        for (int k = 0; k < n_out_seen; ++k)
+        {
+            if (en.out[k].node < 0 || !nref_ok(en.out[k].node))
+            {
+                return CkirReadResult{false, 0, "stage output names no node"};
+            }
+        }
     }
 
     e = en;

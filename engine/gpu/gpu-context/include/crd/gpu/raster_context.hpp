@@ -305,7 +305,10 @@ public:
     using OverlayFn = void (*)(void* backend_cmd, void* user);
     [[nodiscard]] virtual bool present(class IRasterTarget& target, OverlayFn overlay, void* user)
     {
-        if (overlay == nullptr) { return present(target); }
+        if (overlay == nullptr)
+        {
+            return present(target);
+        }
         (void)user;
         return false; // a surface that cannot composite overlays says so — honesty over a silent plain present
     }

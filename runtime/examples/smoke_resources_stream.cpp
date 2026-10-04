@@ -41,9 +41,15 @@ struct StreamBlobLoader final : public ILoader
     [[nodiscard]] void* load(const LoadContext& ctx) override
     {
         CrdrFile file(&m_alloc);
-        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok) { return nullptr; }
+        if (crdr_read(ctx.bytes, file, &m_alloc) != CrdrError::Ok)
+        {
+            return nullptr;
+        }
         const CrdrChunk* chunk = crdr_find_chunk(file, kFourCC_BLOB);
-        if (chunk == nullptr || chunk->payload.size() < 4U) { return nullptr; }
+        if (chunk == nullptr || chunk->payload.size() < 4U)
+        {
+            return nullptr;
+        }
 
         void* raw = m_alloc.allocate(sizeof(StreamBlobResource), alignof(StreamBlobResource));
         auto* res = new (raw) StreamBlobResource();
@@ -53,7 +59,10 @@ struct StreamBlobLoader final : public ILoader
 
     void unload(void* payload) noexcept override
     {
-        if (payload == nullptr) { return; }
+        if (payload == nullptr)
+        {
+            return;
+        }
         auto* res = static_cast<StreamBlobResource*>(payload);
         res->~StreamBlobResource();
         m_alloc.deallocate(res);
@@ -81,7 +90,10 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
 
     crd::containers::Array<crd::u8> pool(&g_alloc);
     const char name[] = "stream_blob";
-    for (const char c : name) { pool.push_back(static_cast<crd::u8>(c)); }
+    for (const char c : name)
+    {
+        pool.push_back(static_cast<crd::u8>(c));
+    }
     pool.push_back(0U);
 
     crd::containers::Array<ManifestEntry> entries(&g_alloc);
@@ -106,7 +118,10 @@ static void write_blob_pack(const crd::platform::fs::Path& path,
     manifest_write(p2, crd::containers::as_const_span(entries),
                    crd::containers::as_const_span(pool));
     auto pack_bytes = p2.finish();
-    for (const crd::u8 b : art_bytes) { pack_bytes.push_back(b); }
+    for (const crd::u8 b : art_bytes)
+    {
+        pack_bytes.push_back(b);
+    }
 
     if (!crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack_bytes)))
     {

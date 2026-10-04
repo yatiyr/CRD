@@ -35,7 +35,10 @@ struct ChunkView
     {
         for (crd::u32 i = 0; i < component_count; ++i)
         {
-            if (component_ids[i] == c) { return component_arrays[i]; }
+            if (component_ids[i] == c)
+            {
+                return component_arrays[i];
+            }
         }
         return nullptr;
     }
@@ -45,7 +48,10 @@ struct ChunkView
     {
         for (crd::u32 i = 0; i < component_count; ++i)
         {
-            if (component_ids[i] == c) { return component_versions[i]; }
+            if (component_ids[i] == c)
+            {
+                return component_versions[i];
+            }
         }
         return 0;
     }

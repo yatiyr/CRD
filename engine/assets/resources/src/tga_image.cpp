@@ -29,7 +29,10 @@ struct TgaHeader
 
 [[nodiscard]] bool read_header(crd::containers::ConstSpan<crd::u8> bytes, TgaHeader& h) noexcept
 {
-    if (bytes.size() < 18U) { return false; }
+    if (bytes.size() < 18U)
+    {
+        return false;
+    }
     const crd::u8* p = bytes.data();
     h.id_len         = p[0];
     h.cmap_type      = p[1];
@@ -50,14 +53,32 @@ struct TgaHeader
 {
     const bool type_ok = h.image_type == 1 || h.image_type == 2 || h.image_type == 3 || h.image_type == 9
                       || h.image_type == 10 || h.image_type == 11;
-    if (!type_ok || h.w == 0U || h.h == 0U) { return false; }
+    if (!type_ok || h.w == 0U || h.h == 0U)
+    {
+        return false;
+    }
     const bool is_pal = h.image_type == 1 || h.image_type == 9;
-    if (is_pal && (h.cmap_type != 1U || h.cmap_len == 0U || h.bpp != 8U)) { return false; }
-    if (!is_pal && h.cmap_type != 0U) { return false; }
+    if (is_pal && (h.cmap_type != 1U || h.cmap_len == 0U || h.bpp != 8U))
+    {
+        return false;
+    }
+    if (!is_pal && h.cmap_type != 0U)
+    {
+        return false;
+    }
     const bool is_gray = h.image_type == 3 || h.image_type == 11;
-    if (is_gray && h.bpp != 8U) { return false; }
-    if (!is_pal && !is_gray && h.bpp != 16U && h.bpp != 24U && h.bpp != 32U) { return false; }
-    if (is_pal && h.cmap_bits != 16U && h.cmap_bits != 24U && h.cmap_bits != 32U) { return false; }
+    if (is_gray && h.bpp != 8U)
+    {
+        return false;
+    }
+    if (!is_pal && !is_gray && h.bpp != 16U && h.bpp != 24U && h.bpp != 32U)
+    {
+        return false;
+    }
+    if (is_pal && h.cmap_bits != 16U && h.cmap_bits != 24U && h.cmap_bits != 32U)
+    {
+        return false;
+    }
     return true;
 }
 
@@ -124,9 +145,18 @@ LdrError tga_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     out.height = 0;
     out.pixels.clear();
     TgaHeader h{};
-    if (!read_header(bytes, h)) { return LdrError::Truncated; }
-    if (!header_consistent(h)) { return LdrError::BadHeader; }
-    if (h.w > kMaxDim || h.h > kMaxDim) { return LdrError::TooLarge; }
+    if (!read_header(bytes, h))
+    {
+        return LdrError::Truncated;
+    }
+    if (!header_consistent(h))
+    {
+        return LdrError::BadHeader;
+    }
+    if (h.w > kMaxDim || h.h > kMaxDim)
+    {
+        return LdrError::TooLarge;
+    }
 
     const bool    rle        = h.image_type >= 9U;
     const crd::u8 image_kind = static_cast<crd::u8>(rle ? h.image_type - 8U : h.image_type); // 1/2/3
@@ -140,7 +170,10 @@ LdrError tga_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     {
         const crd::u32   entry_bytes = h.cmap_bits / 8U;
         const crd::usize pal_bytes   = static_cast<crd::usize>(h.cmap_len) * entry_bytes;
-        if (off + pal_bytes > bytes.size()) { return LdrError::Truncated; }
+        if (off + pal_bytes > bytes.size())
+        {
+            return LdrError::Truncated;
+        }
         pal.resize(static_cast<crd::usize>(h.cmap_len) * 4U, 255);
         for (crd::u32 i = 0; i < h.cmap_len; ++i)
         {
@@ -159,9 +192,18 @@ LdrError tga_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     out.height = h.h;
     out.pixels.resize(static_cast<crd::usize>(h.w) * h.h * 4U, 0);
     out.source_bit_depth = h.bpp == 16U ? crd::u8{5} : crd::u8{8};
-    if (image_kind == 3U) { out.source_channels = 1; }
-    else if (h.bpp == 32U) { out.source_channels = 4; }
-    else { out.source_channels = 3; }
+    if (image_kind == 3U)
+    {
+        out.source_channels = 1;
+    }
+    else if (h.bpp == 32U)
+    {
+        out.source_channels = 4;
+    }
+    else
+    {
+        out.source_channels = 3;
+    }
 
     const bool     top_origin = (h.desc & 0x20U) != 0U;
     const bool     right_left = (h.desc & 0x10U) != 0U;
@@ -183,7 +225,10 @@ LdrError tga_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     const crd::u8* end = bytes.data() + bytes.size();
     if (!rle)
     {
-        if (static_cast<crd::u64>(end - p) < n_px * rec_bytes) { return LdrError::Truncated; }
+        if (static_cast<crd::u64>(end - p) < n_px * rec_bytes)
+        {
+            return LdrError::Truncated;
+        }
         for (crd::u64 i = 0; i < n_px; ++i)
         {
             crd::u8 rgba[4];
@@ -197,21 +242,36 @@ LdrError tga_decode(crd::containers::ConstSpan<crd::u8> bytes, LdrImage& out, cr
     crd::u64 i = 0;
     while (i < n_px)
     {
-        if (p >= end) { return LdrError::Truncated; }
+        if (p >= end)
+        {
+            return LdrError::Truncated;
+        }
         const crd::u8  packet = *p++;
         const crd::u64 count  = static_cast<crd::u64>(packet & 0x7FU) + 1U;
-        if (i + count > n_px) { return LdrError::BadData; } // a run past the image is corruption
+        if (i + count > n_px) // a run past the image is corruption
+        {
+            return LdrError::BadData;
+        }
         if ((packet & 0x80U) != 0U)
         {
-            if (static_cast<crd::u64>(end - p) < rec_bytes) { return LdrError::Truncated; }
+            if (static_cast<crd::u64>(end - p) < rec_bytes)
+            {
+                return LdrError::Truncated;
+            }
             crd::u8 rgba[4];
             emit_pixel(p, h.bpp, image_kind, pal.data(), static_cast<crd::u32>(pal.size() / 4U), rgba);
             p += rec_bytes;
-            for (crd::u64 k = 0; k < count; ++k) { place(i + k, rgba); }
+            for (crd::u64 k = 0; k < count; ++k)
+            {
+                place(i + k, rgba);
+            }
         }
         else
         {
-            if (static_cast<crd::u64>(end - p) < count * rec_bytes) { return LdrError::Truncated; }
+            if (static_cast<crd::u64>(end - p) < count * rec_bytes)
+            {
+                return LdrError::Truncated;
+            }
             for (crd::u64 k = 0; k < count; ++k)
             {
                 crd::u8 rgba[4];

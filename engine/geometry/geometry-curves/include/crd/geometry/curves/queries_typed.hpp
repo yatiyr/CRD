@@ -142,7 +142,10 @@ template <typename D, typename T>
     Polyline3<T> raw(alloc);
     raw.closed = c.closed;
     raw.points.reserve(c.points.size());
-    for (const auto& p : c.points) { raw.points.push_back(to_raw_vec(p)); }
+    for (const auto& p : c.points)
+    {
+        raw.points.push_back(to_raw_vec(p));
+    }
     return raw;
 }
 
@@ -153,7 +156,10 @@ template <typename D, typename T>
     Polyline3<T> raw(alloc);
     raw.closed = v.closed;
     raw.points.reserve(v.points.size());
-    for (const auto& p : v.points) { raw.points.push_back(to_raw_vec(p)); }
+    for (const auto& p : v.points)
+    {
+        raw.points.push_back(to_raw_vec(p));
+    }
     return raw;
 }
 
@@ -163,7 +169,10 @@ template <typename D, typename T>
 {
     crd::containers::Array<crd::math::Vec3<T>> raw_pts(alloc);
     raw_pts.reserve(c.points.size());
-    for (const auto& p : c.points) { raw_pts.push_back(to_raw_vec(p)); }
+    for (const auto& p : c.points)
+    {
+        raw_pts.push_back(to_raw_vec(p));
+    }
     return CatmullRom3<T>(alloc,
                           crd::containers::ConstSpan<crd::math::Vec3<T>>{raw_pts.data(), raw_pts.size()},
                           c.param, c.closed);
@@ -176,9 +185,15 @@ template <typename D, typename T>
     BSpline3<T> raw(alloc);
     raw.closed = c.closed;
     raw.points.reserve(c.points.size());
-    for (const auto& p : c.points) { raw.points.push_back(to_raw_vec(p)); }
+    for (const auto& p : c.points)
+    {
+        raw.points.push_back(to_raw_vec(p));
+    }
     raw.knots.reserve(c.knots.size());
-    for (const auto& k : c.knots) { raw.knots.push_back(k.value); }
+    for (const auto& k : c.knots)
+    {
+        raw.knots.push_back(k.value);
+    }
     return raw;
 }
 
@@ -216,7 +231,10 @@ template <typename D, typename T>
     Polyline3<crd::units::Quantity<D, T>> out(alloc);
     out.closed = raw.closed;
     out.points.reserve(raw.points.size());
-    for (const auto& p : raw.points) { out.points.push_back(from_raw_vec<D>(p)); }
+    for (const auto& p : raw.points)
+    {
+        out.points.push_back(from_raw_vec<D>(p));
+    }
     return out;
 }
 
@@ -445,7 +463,10 @@ intersect_ray_typed(const Curve&                                              cu
     const crd::geometry::primitives::Ray3<T> raw_ray{to_raw_vec(ray.origin), to_raw_vec(ray.direction)};
     auto raw_curve = detail_typed::strip(curve, alloc);
     auto raw_hit = intersect_ray(detail_typed::to_view(raw_curve), raw_ray, tolerance, alloc);
-    if (!raw_hit) { return std::nullopt; }
+    if (!raw_hit)
+    {
+        return std::nullopt;
+    }
     return CurveRayHitQ<D, T>{raw_hit->t_curve, raw_hit->t_ray, from_raw_vec<D>(raw_hit->point)};
 }
 

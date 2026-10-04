@@ -40,7 +40,10 @@ crd::containers::Array<Vec3f> make_cloud(u32 n, u32 seed, crd::memory::IAllocato
     pts.reserve(n);
     std::mt19937 rng(seed);
     std::uniform_real_distribution<f32> u(-1.0F, 1.0F);
-    for (u32 i = 0; i < n; ++i) { pts.push_back(Vec3f{u(rng), u(rng), u(rng)}); }
+    for (u32 i = 0; i < n; ++i)
+    {
+        pts.push_back(Vec3f{u(rng), u(rng), u(rng)});
+    }
     return pts;
 }
 } // namespace
@@ -53,7 +56,10 @@ TEST_CASE("kd_radius typed wrapper matches raw call", "[geometry-spatial][kd][ty
     // Typed view bridged from the same backing buffer.
     crd::containers::Array<Vec3<Length32>> typed_pts(&f.alloc);
     typed_pts.reserve(raw_pts.size());
-    for (const auto& p : raw_pts) { typed_pts.push_back(from_raw_vec<Length>(p)); }
+    for (const auto& p : raw_pts)
+    {
+        typed_pts.push_back(from_raw_vec<Length>(p));
+    }
 
     auto tree = kd_build<f32>(crd::containers::ConstSpan<Vec3f>{raw_pts.data(), raw_pts.size()},
                                 &f.alloc);
@@ -87,7 +93,10 @@ TEST_CASE("kd_nearest_n typed wrapper matches raw call", "[geometry-spatial][kd]
     auto raw_pts = make_cloud(200U, 71U, &f.alloc);
     crd::containers::Array<Vec3<Length32>> typed_pts(&f.alloc);
     typed_pts.reserve(raw_pts.size());
-    for (const auto& p : raw_pts) { typed_pts.push_back(from_raw_vec<Length>(p)); }
+    for (const auto& p : raw_pts)
+    {
+        typed_pts.push_back(from_raw_vec<Length>(p));
+    }
 
     auto tree = kd_build<f32>(crd::containers::ConstSpan<Vec3f>{raw_pts.data(), raw_pts.size()},
                                 &f.alloc);

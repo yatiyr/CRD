@@ -171,11 +171,31 @@ static_assert(static_cast<u8>(kLastProviderClass) == 4U, "ProviderClass has 5 §
 }
 [[nodiscard]] constexpr bool provider_class_from_name(containers::StringView s, ProviderClass& out) noexcept
 {
-    if (s == provider_class_name(ProviderClass::Host)) { out = ProviderClass::Host; return true; }
-    if (s == provider_class_name(ProviderClass::Gpu)) { out = ProviderClass::Gpu; return true; }
-    if (s == provider_class_name(ProviderClass::Npu)) { out = ProviderClass::Npu; return true; }
-    if (s == provider_class_name(ProviderClass::Media)) { out = ProviderClass::Media; return true; }
-    if (s == provider_class_name(ProviderClass::External)) { out = ProviderClass::External; return true; }
+    if (s == provider_class_name(ProviderClass::Host))
+    {
+        out = ProviderClass::Host;
+        return true;
+    }
+    if (s == provider_class_name(ProviderClass::Gpu))
+    {
+        out = ProviderClass::Gpu;
+        return true;
+    }
+    if (s == provider_class_name(ProviderClass::Npu))
+    {
+        out = ProviderClass::Npu;
+        return true;
+    }
+    if (s == provider_class_name(ProviderClass::Media))
+    {
+        out = ProviderClass::Media;
+        return true;
+    }
+    if (s == provider_class_name(ProviderClass::External))
+    {
+        out = ProviderClass::External;
+        return true;
+    }
     return false;
 }
 // A compile-time drift lock across the two directions of the ONE table (a lowercasing typo or a missing member fails the build).
@@ -197,10 +217,16 @@ static_assert(provider_class_names_roundtrip(), "provider_class_name <-> provide
 [[nodiscard]] constexpr bool unpack_region_exec(i64 packed, RegionExec& out) noexcept
 {
     const auto bits = static_cast<u64>(packed);
-    if ((bits >> 8U) != 0U) { return false; }
+    if ((bits >> 8U) != 0U)
+    {
+        return false;
+    }
     const auto d  = static_cast<u8>(bits & 0xFU);
     const auto rt = static_cast<u8>((bits >> 4U) & 0xFU);
-    if (d > static_cast<u8>(kLastEvalDomain) || rt > static_cast<u8>(kLastRealtimeClass)) { return false; }
+    if (d > static_cast<u8>(kLastEvalDomain) || rt > static_cast<u8>(kLastRealtimeClass))
+    {
+        return false;
+    }
     out.domain   = static_cast<EvalDomain>(d);
     out.realtime = static_cast<RealtimeClass>(rt);
     return true;
@@ -279,7 +305,10 @@ inline constexpr u8 kNumericsFieldCount[12] = {3U, 3U, 3U, 3U, 3U, 5U, 4U, 3U, 4
                       static_cast<u8>(n.precision_promote), static_cast<u8>(n.mixed_precision),
                       static_cast<u8>(n.stochastic_round)};
     u64 bits = 0U;
-    for (u32 i = 0; i < 12U; ++i) { bits |= static_cast<u64>(f[i]) << (4U * i); }
+    for (u32 i = 0; i < 12U; ++i)
+    {
+        bits |= static_cast<u64>(f[i]) << (4U * i);
+    }
     return static_cast<i64>(bits);
 }
 
@@ -289,12 +318,18 @@ inline constexpr u8 kNumericsFieldCount[12] = {3U, 3U, 3U, 3U, 3U, 5U, 4U, 3U, 4
 [[nodiscard]] constexpr bool unpack_numerics(i64 packed, NumericalSemantics& out) noexcept
 {
     const auto bits = static_cast<u64>(packed);
-    if ((bits >> 48U) != 0U) { return false; } // only the low 48 bits (12 nibbles) are defined
+    if ((bits >> 48U) != 0U) // only the low 48 bits (12 nibbles) are defined
+    {
+        return false;
+    }
     u8 f[12] = {};
     for (u32 i = 0; i < 12U; ++i)
     {
         f[i] = static_cast<u8>((bits >> (4U * i)) & 0xFU);
-        if (f[i] >= kNumericsFieldCount[i]) { return false; } // out-of-range enum ⇒ reject
+        if (f[i] >= kNumericsFieldCount[i]) // out-of-range enum ⇒ reject
+        {
+            return false;
+        }
     }
     out.ieee              = static_cast<IeeeMode>(f[0]);
     out.fast_math         = static_cast<Toggle>(f[1]);
