@@ -27,9 +27,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <string>
+#include <iomanip>
+#include <string_view>
 
 namespace cont = crd::containers;
 namespace cd   = crd::diag;
@@ -64,8 +66,9 @@ std::atomic<unsigned> g_uniq{0};
 
 fs::path fresh_dir(const char* mode)
 {
-    fs::path p =
-        fs::temp_directory_path() / ("crd_cc_" + std::string{mode} + "_" + std::to_string(g_uniq.fetch_add(1U)));
+    char leaf[96];
+    (void)std::snprintf(leaf, sizeof(leaf), "crd_cc_%s_%u", mode, g_uniq.fetch_add(1U));
+    fs::path p = fs::temp_directory_path() / leaf;
     std::error_code ec;
     fs::remove_all(p, ec); // clean slate; the specimen's install() creates it
     return p;
@@ -96,7 +99,7 @@ std::size_t count_crash_dumps(const fs::path& dir)
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
     {
-        if (it->path().extension() == ".dmp" && it->path().filename().string().rfind("crash_", 0) == 0)
+        if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with("crash_"))
         {
             ++n;
             CHECK(fs::file_size(it->path()) > 0U); // a reported dump is a real, non-empty file
@@ -114,7 +117,7 @@ fs::path first_crash_dump(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
-        if (it->path().extension() == ".dmp" && it->path().filename().string().rfind("crash_", 0) == 0)
+        if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with("crash_"))
             return it->path();
     return {};
 }
@@ -156,9 +159,9 @@ TEST_CASE("crash capture: a wild write terminates with the fault code and writes
         // RSDS CV record -- the identity later symbolization (DIAG.5d) matches or rejects.
         const fs::path dump = first_crash_dump(dir);
         REQUIRE_FALSE(dump.empty());
-        CHECK(crd_test_minidump::exception_code(dump.wstring()) == kAccessViolation);
-        const std::wstring want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename().wstring();
-        CHECK(crd_test_minidump::names_module_with_cv(dump.wstring(), want));
+        CHECK(crd_test_minidump::exception_code(dump.c_str()) == kAccessViolation);
+        const fs::path want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename();
+        CHECK(crd_test_minidump::names_module_with_cv(dump.c_str(), want.c_str()));
     }
 
     std::error_code ec;
@@ -445,9 +448,9 @@ struct RecordFields
     long        tid    = -1;
     int         signal = -1;
     int         code   = -1;
-    std::string addr;             // si_addr as written ("0x0" for a null write)
-    std::string exe;              // the "correctly identified binary" (its path)
-    std::string arch;             // the token after "regs" (e.g. "x86_64")
+    cont::String addr;            // si_addr as written ("0x0" for a null write)
+    cont::String exe;             // the "correctly identified binary" (its path)
+    cont::String arch;            // the token after "regs" (e.g. "x86_64")
     bool        has_regs = false; // the register dump is present
     bool        has_cr2  = false; // completeness: the last register line reached (not truncated) on x86_64
     bool        ok       = false;
@@ -459,7 +462,7 @@ std::size_t count_crash_records(const fs::path& dir)
     std::size_t     n = 0;
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
-        if (it->path().extension() == ".log" && it->path().filename().string().rfind("crash_", 0) == 0)
+        if (it->path().extension() == ".log" && it->path().filename().string().starts_with("crash_"))
         {
             ++n;
             CHECK(fs::file_size(it->path()) > 0U); // a written record is a real, non-empty file
@@ -472,7 +475,7 @@ fs::path first_crash_record(const fs::path& dir)
 {
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
-        if (it->path().extension() == ".log" && it->path().filename().string().rfind("crash_", 0) == 0)
+        if (it->path().extension() == ".log" && it->path().filename().string().starts_with("crash_"))
             return it->path();
     return {};
 }
@@ -480,37 +483,53 @@ fs::path first_crash_record(const fs::path& dir)
 // Parse the record. The header fields (pid/tid/signal/code/addr/exe) are read only BEFORE the "regs" sentinel, so a
 // bare keyword that ever appears inside the register dump cannot overwrite a header value; after "regs" we only note
 // the dump is present and that its final "cr2" line was reached (a completeness/truncation check on x86_64).
+// One whitespace-delimited token into a bounded buffer (the record's longest token is the exe path).
+bool read_token(std::ifstream& f, char (&tok)[4096])
+{
+    return static_cast<bool>(f >> std::setw(static_cast<int>(sizeof(tok))) >> tok);
+}
+
+bool read_field(std::ifstream& f, cont::String& out)
+{
+    char tok[4096];
+    if (!read_token(f, tok))
+        return false;
+    out = std::string_view{tok};
+    return true;
+}
+
 RecordFields parse_record(const fs::path& p)
 {
     RecordFields  r;
     std::ifstream f{p};
-    std::string   tok;
+    char          tok[4096];
     bool          in_regs = false;
-    while (f >> tok)
+    while (read_token(f, tok))
     {
-        if (tok == "regs")
+        const std::string_view t{tok};
+        if (t == "regs")
         {
             in_regs    = true;
             r.has_regs = true;
-            f >> r.arch; // "regs x86_64"
+            (void)read_field(f, r.arch); // "regs x86_64"
             continue;
         }
         if (!in_regs)
         {
-            if (tok == "pid")
+            if (t == "pid")
                 f >> r.pid;
-            else if (tok == "tid")
+            else if (t == "tid")
                 f >> r.tid;
-            else if (tok == "signal")
+            else if (t == "signal")
                 f >> r.signal;
-            else if (tok == "code")
+            else if (t == "code")
                 f >> r.code;
-            else if (tok == "addr")
-                f >> r.addr;
-            else if (tok == "exe")
-                f >> r.exe;
+            else if (t == "addr")
+                (void)read_field(f, r.addr);
+            else if (t == "exe")
+                (void)read_field(f, r.exe);
         }
-        else if (tok == "cr2")
+        else if (t == "cr2")
         {
             r.has_cr2 = true;
         }
@@ -544,7 +563,8 @@ TEST_CASE("crash capture (linux): a wild write terminates with SIGSEGV and write
         // identified binary are recovered from the on-disk record, and the register dump is present and complete.
         CHECK(rf.addr == "0x0");      // a wild null write -> si_addr == 0
         CHECK_FALSE(rf.exe.empty());
-        CHECK(fs::path{rf.exe}.filename() == fs::path{specimen_path().c_str()}.filename()); // names this specimen
+        // names this specimen
+        CHECK(fs::path{rf.exe.c_str()}.filename() == fs::path{specimen_path().c_str()}.filename());
         CHECK(rf.has_regs);
         if (rf.arch == "x86_64")
             CHECK(rf.has_cr2);        // the final register line was reached: the record is not truncated (cr2 == si_addr)

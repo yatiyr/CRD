@@ -14,17 +14,21 @@
 #include "sched_minimize.hpp"
 #include "sched_record.hpp"
 #include <crd/jobs/jobs.hpp>
+#include <crd/containers/array.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include <vector>
 
 namespace
 {
+// A scheduler tag trace or script (the yield-point tags are string literals with static storage).
+using TagTrace = crd::containers::Array<const char*>;
+
 std::atomic<int> g_point_hits{0}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) test counter
 
 void count_point(void* /*user*/, const char* /*tag*/) noexcept
@@ -72,14 +76,14 @@ struct ExposeResult
     bool                     reacquired = false; // the freed child slot was popped again by a fresh run()
     bool                     deadlocked = false; // the driver's safety net tripped
     bool                     found      = false; // the detector reported the reclamation this run
-    std::vector<const char*> observed;           // the driver's tag trace
+    TagTrace                 observed;           // the driver's tag trace
 };
 
 // One run of the forced reclamation choreography, driving `script`, under whatever handshake mode is
 // currently set (the CALLER owns the BreakGuard). Resets the violation counter and statics; inits and
 // shuts down its own pool. This is the single source of the choreography -- case 4, case 5's seed, its
 // oracle and its replay all go through here so none of them can drift.
-ExposeResult expose_with(const std::vector<const char*>& script)
+ExposeResult expose_with(const TagTrace& script)
 {
     g_go.store(false, std::memory_order_relaxed);
     g_child_counter.store(nullptr, std::memory_order_relaxed);
@@ -107,7 +111,7 @@ ExposeResult expose_with(const std::vector<const char*>& script)
     crd::jobs::wait(c_root);
 
     crd::jobs::Counter* const        target = g_child_counter.load(std::memory_order_acquire);
-    std::vector<crd::jobs::Counter*> noops;
+    crd::containers::Array<crd::jobs::Counter*> noops;
     for (crd::u32 i = 0U; i < cfg.max_counters; ++i)
     {
         crd::jobs::JobDecl noop{};
@@ -244,10 +248,9 @@ void stress_root(void* /*data*/) noexcept
 
 // From an observed tag trace, the subsequence of tags that appear in `script`, in trace order (used to
 // assert a script was replayed in its scripted order).
-std::vector<const char*> scripted_subsequence(const std::vector<const char*>& observed,
-                                              const std::vector<const char*>& script)
+TagTrace scripted_subsequence(const TagTrace& observed, const TagTrace& script)
 {
-    std::vector<const char*> seen;
+    TagTrace seen;
     for (const char* observed_tag : observed)
     {
         for (const char* scripted : script)
@@ -353,7 +356,7 @@ TEST_CASE("schedcheck: the driver replays a scripted order without deadlock", "[
     // Robust script: the three always-present, single-occurrence park points in their natural order. The
     // driver imposes it (parking a point that arrives before its predecessor is consumed) and must not
     // deadlock -- num_threads >= 3 keeps a peer runnable while one worker is held at a point.
-    const std::vector<const char*> script = {"fp.published", "fp.finalizing", "wait.resumed"};
+    const TagTrace script = {"fp.published", "fp.finalizing", "wait.resumed"};
     crd::jobs::test::SchedDriver drv(script);
     crd::jobs::detail::sched_check_reset_violations();
     drv.install();
@@ -387,7 +390,7 @@ TEST_CASE("schedcheck: the driver replays a scripted order without deadlock", "[
     CHECK(crd::jobs::detail::sched_check_violations() == 0U);
 
     // The scripted tags appear in the observed trace in exactly the scripted order (replay reproduced it).
-    std::vector<const char*> seen;
+    TagTrace seen;
     for (const char* observed_tag : drv.observed())
     {
         for (const char* scripted : script)
@@ -415,8 +418,7 @@ TEST_CASE("schedcheck: the broken handshake variant is FOUND and replayed from i
     // scheduler finishes touching it (fp.finalizing) -- the reclamation the park_finalized handshake exists
     // to forbid. The synthetic test.reacquired tag holds the scheduler at fp.finalizing until the re-acquire
     // has happened (otherwise fp.finalizing would fire the instant wait.resumed was consumed).
-    const std::vector<const char*> script = {"fp.published", "wait.resumed", "test.reacquired",
-                                             "fp.finalizing"};
+    const TagTrace script = {"fp.published", "wait.resumed", "test.reacquired", "fp.finalizing"};
 
     const BreakGuard   guard; // handshake dropped for this case (reset in the dtor even on a thrown assertion)
     const ExposeResult r = expose_with(script);
@@ -427,7 +429,7 @@ TEST_CASE("schedcheck: the broken handshake variant is FOUND and replayed from i
     CHECK(r.found);                     // FOUND: the detector caught the reclamation
 
     // REPLAYED: the scripted tags appear in the observed trace in exactly the scripted order.
-    const std::vector<const char*> seen = scripted_subsequence(r.observed, script);
+    const TagTrace seen = scripted_subsequence(r.observed, script);
     CHECK(seen.size() == script.size());
     if (seen.size() == script.size())
     {
@@ -450,10 +452,10 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
 
     // All-K-runs-must-find: a subset that only SOMETIMES finds (a race) is not a reproduction. (For this
     // failure every subset the greedy minimizer visits is in fact deterministic; K is margin.)
-    constexpr int kRuns = 3;
-    auto          reproduces = [&](const std::vector<const char*>& s) -> bool
+    constexpr int runs = 3;
+    auto          reproduces = [&](const TagTrace& s) -> bool
     {
-        for (int i = 0; i < kRuns; ++i)
+        for (int i = 0; i < runs; ++i)
         {
             const ExposeResult r = expose_with(s);
             if (!r.arrived || !r.reacquired)
@@ -468,8 +470,8 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
     // "failure sequence" to minimize, not the hand-written script. (It carries the dec.zero/dec.claim drain
     // points too, which minimization must discover are inessential.)
     const ExposeResult seed_run = expose_with(
-        std::vector<const char*>{"fp.published", "wait.resumed", "test.reacquired", "fp.finalizing"});
-    std::vector<const char*> seed;
+        TagTrace{"fp.published", "wait.resumed", "test.reacquired", "fp.finalizing"});
+    TagTrace seed;
     for (const char* tag : seed_run.observed)
     {
         bool dup = false;
@@ -489,33 +491,26 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
     // Precondition: minimizing a non-failing input yields garbage, so assert the seed reproduces first.
     REQUIRE(reproduces(seed));
 
-    const std::vector<const char*> minimal = crd::jobs::test::minimize_failure(seed, reproduces);
+    const TagTrace minimal = crd::jobs::test::minimize_failure(seed, reproduces);
 
     // The reclamation needs exactly one thing: hold fp.finalizing until the test has re-acquired the slot.
     // So the minimal failing sequence is precisely {test.reacquired, fp.finalizing}; nothing else matters.
-    auto has = [&](const std::vector<const char*>& v, const char* t)
-    {
-        for (const char* m : v)
-        {
-            if (std::strcmp(m, t) == 0)
-                return true;
-        }
-        return false;
-    };
+    auto has = [](const TagTrace& v, const char* t)
+    { return std::ranges::any_of(v, [t](const char* m) { return std::strcmp(m, t) == 0; }); };
     CHECK(minimal.size() == 2U);
     CHECK(has(minimal, "test.reacquired"));
     CHECK(has(minimal, "fp.finalizing"));
 
     // 1-minimality: dropping either essential tag no longer reproduces (both are deterministic not-found --
     // [fp.finalizing] alone is released immediately; [test.reacquired] alone never holds the scheduler).
-    CHECK_FALSE(reproduces(std::vector<const char*>{"fp.finalizing"}));
-    CHECK_FALSE(reproduces(std::vector<const char*>{"test.reacquired"}));
+    CHECK_FALSE(reproduces(TagTrace{"fp.finalizing"}));
+    CHECK_FALSE(reproduces(TagTrace{"test.reacquired"}));
 
     // Replayed from the minimized log: it still finds, without deadlock, in the minimized order.
     const ExposeResult replay = expose_with(minimal);
     CHECK(replay.found);
     CHECK_FALSE(replay.deadlocked);
-    const std::vector<const char*> seen = scripted_subsequence(replay.observed, minimal);
+    const TagTrace seen = scripted_subsequence(replay.observed, minimal);
     CHECK(seen.size() == minimal.size());
     if (seen.size() == minimal.size())
     {
@@ -584,14 +579,14 @@ TEST_CASE("schedcheck: perturbed multicore park/reclaim stress -- the detector s
     cfg.num_threads = 4U;
     crd::jobs::init(cfg);
 
-    constexpr int kRoots = 2000;
-    constexpr int kBatch = 32; // <= small_fiber_count/2 and << max_counters, so a batch never exhausts pools
+    constexpr int roots = 2000;
+    constexpr int batch_size = 32; // <= small_fiber_count/2 and << max_counters, so a batch never exhausts pools
     g_stress.phase.store(1, std::memory_order_relaxed); // running
     int launched = 0;
-    while (launched < kRoots)
+    while (launched < roots)
     {
-        const int                        n = (kRoots - launched < kBatch) ? (kRoots - launched) : kBatch;
-        std::vector<crd::jobs::Counter*> cs;
+        const int n = (roots - launched < batch_size) ? (roots - launched) : batch_size;
+        crd::containers::Array<crd::jobs::Counter*> cs;
         cs.reserve(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i)
         {
@@ -613,7 +608,7 @@ TEST_CASE("schedcheck: perturbed multicore park/reclaim stress -- the detector s
     watchdog.join();
     crd::set_assert_platform_handler(prev_assert_handler);
 
-    CHECK(g_stress.children.load(std::memory_order_relaxed) == kRoots); // every child ran (no lost work)
+    CHECK(g_stress.children.load(std::memory_order_relaxed) == roots); // every child ran (no lost work)
     CHECK(g_stress.published.load(std::memory_order_relaxed) > 0);      // the park path was reached
     CHECK(g_stress.wait_resumed.load(std::memory_order_relaxed) > 0);   // fibers actually parked and resumed
     // dec.claim fires only when the decrement drained a still-Pending waiter -- i.e. a genuine park+resume

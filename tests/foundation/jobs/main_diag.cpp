@@ -1,9 +1,9 @@
 #define CATCH_CONFIG_RUNNER
 #include <catch2/catch_session.hpp>
 #include <crd/core/crash.hpp>
+#include <crd/containers/string.hpp>
 
 #include <filesystem>
-#include <string>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -33,7 +33,7 @@ int main(int argc, char* argv[])
     // Minidump + stderr exception info for all crash types.
     // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
     // crashes/ would trip the repository structure check.
-    const std::string crash_dir = (std::filesystem::temp_directory_path() / "crd-test-crashes").string();
+    const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
     (void)crd::crash::install(crash_dir.c_str());
 
 #if defined(_WIN32)

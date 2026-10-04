@@ -29,7 +29,8 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
       {"test": "REN-38 RT GATE (DX12): the authored pipeline traces and the ANY-HIT can IGNORE every hit", "defect": "TP-1"},
       {"test": "REN-38-F13 GATE (DX12): authored INTERSECTION + CALLABLE stages trace a procedural sphere through the SBT", "defect": "TP-1"},
       {"test": "CEIR-19b GATE: the authored hybrid RT-shadow renderer casts a ray-traced shadow (DX12)", "defect": "TP-1"},
-      {"test": "REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scene TLAS through the live host", "defect": "TP-1"}
+      {"test": "REN-38-F6 GATE (DX12): the authored RT PIPELINE graph traces the scene TLAS through the live host", "defect": "TP-1"},
+      {"test": "DX12 cached DXR pipelines mint one Program identity each, retired with the context", "defect": "TP-1"}
     ],
     "linux-gcc-asan": [
       {"test": "assetio: OUR tangents vs the REFERENCE mikktspace.c ORACLE", "defect": "TP-5"}
@@ -48,10 +49,10 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Trigger | `CreateStateObject` for a raytracing pipeline, before any GPU work; the debug layer reports nothing |
 | Reproduction outside Cerid | `dxr-asan-probe` (2026-09-12): a standalone MSVC ASan program linking only D3D12 and DXGI reproduces the same read at the same WARP offset ([investigation](sessions/2026-09-12-dx12-asan-investigation.md#sdk-only-rt-reduction)) |
 | Provider isolation | Identical ASan executables pass all four gates when the signed Microsoft.Direct3D.WARP 1.0.20 DLL is placed beside them, with 32, 36, 31 and 11 assertions ([evidence](sessions/2026-09-13-inner-coverage-route-and-pinned-warp.md)) |
-| Affected | `win-asan` only, the four registered tests. The same tests pass with correct output on every non-sanitized Windows lane and on the hardware adapter |
-| Hosted evidence | [Run 34757652779](https://github.com/yatiyr/CRD/actions/runs/34757652779) at `ae44264`: `win-asan` fails exactly the four registered names, census `driver=10.0.26100.33296`, four reads 0 bytes past D3D12Core regions of 2,568, 2,924, 2,924 and 3,788 bytes; every other lane green. [Run 34766787633](https://github.com/yatiyr/CRD/actions/runs/34766787633) at `a0419cf`: first gated run, "registered failures for this lane: 4; observed failures: 4; results: 6789; ctest exit: 8", `gate: PASS`, `win-asan` green with the sanitizer unsuppressed |
+| Affected | `win-asan` only, the five registered tests: the four RT gates and, since DIAG.7a, the DXR pipeline-identity test, which creates a raytracing state object the same way. The same tests pass with correct output on every non-sanitized Windows lane and on the hardware adapter |
+| Hosted evidence | [Run 34757652779](https://github.com/yatiyr/CRD/actions/runs/34757652779) at `ae44264`: `win-asan` fails exactly the four registered names, census `driver=10.0.26100.33296`, four reads 0 bytes past D3D12Core regions of 2,568, 2,924, 2,924 and 3,788 bytes; every other lane green. [Run 34766787633](https://github.com/yatiyr/CRD/actions/runs/34766787633) at `a0419cf`: first gated run, "registered failures for this lane: 4; observed failures: 4; results: 6789; ctest exit: 8", `gate: PASS`, `win-asan` green with the sanitizer unsuppressed [Run 37191910186](https://github.com/yatiyr/CRD/actions/runs/37191910186) at `660a085` (nightly, 2026-10-04): the DXR pipeline-identity test added by DIAG.7a fails with the same signature, a READ of size 8 by `memmove` in `d3d10warp.dll` 0 bytes past a 2,952-byte region `D3D12Core.dll` allocated, reached from `Dx12RasterContext::dxr_pipeline` through `CreateStateObject`, census `driver=10.0.26100.33438`; registered here the same day. |
 | Engine handling | None required: the read happens inside the provider on runtime-owned memory, and the engine's buffer, descriptor and lifetime contracts are proven by the REPO.3c.5 rows. Not adopted: the 1.0.20 replacement, which fails 13 bit-exact compute gates ([TP-3](#tp-3)); ASan suppressions, message filters and skips, by rule |
-| Retirement | When a hosted image ships a WARP build without the read, the gate fails on the unexpected pass and this entry and its four registrations are removed. After each Windows runtime update, re-check on a workstation with the ASan build through the reversible D3DConfig wrapper |
+| Retirement | When a hosted image ships a WARP build without the read, the gate fails on the unexpected pass and this entry and its registrations are removed. After each Windows runtime update, re-check on a workstation with the ASan build through the reversible D3DConfig wrapper |
 | Row | [REPO.3c.10](ROADMAP.md#slice-repo.3c.10) |
 
 <a id="tp-2"></a>

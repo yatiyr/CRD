@@ -20,14 +20,15 @@ CHIR authors behaviour, CEIR executes, CKIR expresses device programs. Every shi
 ## Evidence and boundaries
 
 Last engine milestone: [CEIR-35 close](docs/sessions/2026-09-11-ceir-35z-band-close.md); execution foundation only.
-Handoff: [first complete-tier repairs](docs/sessions/2026-09-14-first-complete-tier-run-repairs.md).
+Handoff: [nightly CI repairs](docs/sessions/2026-10-04-nightly-ci-repairs.md); earlier:
+[complete-tier repairs](docs/sessions/2026-09-14-first-complete-tier-run-repairs.md).
 IDE: [configurations](docs/design/visual-studio-configurations.md); [sync/recovery](docs/design/project-structure-sync.md).
 Entry: [START_HERE](START_HERE.md); routes: [CONTRIBUTING](docs/CONTRIBUTING.md).
 Collaboration/multiplayer contracts: [ADR-0130](docs/decisions/0130-system-qualification-and-agent-driven-products.md).
 
-User assignment 2026-09-13: fix every CI failure, then complete every row before the first truly Open slice, in
-[order](docs/ROADMAP.md#strict-sequential-execution), driven by a per-minute loop. REPO.3c.3 through 3c.10 closed
-(runs 34757652779, 34766787633). The handoff records failures and local repairs from complete-tier run
-34821419392, including hosted jobs-suite evidence for the end-hook repair. Pending gates remain in ROADMAP;
-the [audit](docs/sessions/2026-09-14-infrastructure-audit.md) maps child evidence and retained qualification.
+User assignment 2026-10-04: work serially, no parallel agents; make CI fully green first. Changes go to CI without
+local whole-tree builds/tests; read CI, repair, repeat. Every lane failed on `660a085` since 2026-09-17; the handoff
+records the twelve causes, the repairs awaiting the next push plus a nightly/manual run, and two open user
+decisions (DIAG.1b hosted TSan; DIAG.6c/7a closure). Pending gates remain in ROADMAP; the
+[audit](docs/sessions/2026-09-14-infrastructure-audit.md) maps child evidence and retained qualification.
 ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.

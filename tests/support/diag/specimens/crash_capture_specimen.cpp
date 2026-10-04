@@ -33,7 +33,6 @@
 //   sigkill                 -- (linux) kill(getpid, SIGKILL): uncatchable, no handler runs, NO record written -- used
 //                              to prove a pre-seeded prior record is retained. Windows: falls through to a plain fault.
 //   inject_dump_fail        -- (asserts only) force MiniDumpWriteDump FALSE, then fault: 0 dumps, marker == DumpFailed.
-#define CRD_DIAG_SPECIMEN_ID "crd-diag-crash-capture-specimen"
 #include "specimen_common.hpp"
 
 #include <crd/core/crash.hpp>
@@ -191,7 +190,10 @@ void chain_prev_handler(int sig, siginfo_t* /*info*/, void* /*ctx*/) noexcept
         const int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0)
         {
-            (void)::write(fd, "1", 1);
+            // GCC's warn_unused_result ignores a (void) cast; the marker's existence (open succeeded) is the
+            // evidence, so the byte count is deliberately unused. Only async-signal-safe calls in this handler.
+            const ssize_t written = ::write(fd, "1", 1);
+            (void)written;
             (void)::close(fd);
         }
     }
@@ -248,6 +250,9 @@ int main(int argc, char** argv)
     }
     crd::crash::set_crash_report_handler(&recording_hook, nullptr);
 
+    // Each mode is a distinct entry point the tests select by name. On a given platform several reduce to the same
+    // plain fault (av, chain and sigkill on Windows; unload_av too on Linux) by design, not by copy-paste.
+    // NOLINTBEGIN(bugprone-branch-clone)
     if (std::strcmp(mode, "av") == 0)
     {
         null_write();
@@ -401,6 +406,7 @@ int main(int argc, char** argv)
         std::fflush(stdout);
         return 60;
     }
+    // NOLINTEND(bugprone-branch-clone)
 
     return 0; // unreachable in every crash mode
 }

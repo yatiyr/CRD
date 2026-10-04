@@ -21,9 +21,10 @@
 
 #if CRD_JOBS_SCHED_CHECK
 
+#include <crd/containers/array.hpp>
+
 #include <cstddef>
 #include <utility>
-#include <vector>
 
 namespace crd::jobs::test
 {
@@ -32,7 +33,7 @@ namespace crd::jobs::test
 // yields garbage). `reproduces` should be an all-K-runs-must-find oracle so a race never reads as a
 // reproduction. Returns a 1-minimal order-preserving subsequence.
 template <typename Reproduces>
-std::vector<const char*> minimize_failure(std::vector<const char*> script, Reproduces reproduces)
+crd::containers::Array<const char*> minimize_failure(crd::containers::Array<const char*> script, Reproduces reproduces)
 {
     bool changed = true;
     while (changed)
@@ -40,7 +41,7 @@ std::vector<const char*> minimize_failure(std::vector<const char*> script, Repro
         changed = false;
         for (std::size_t i = 0U; i < script.size(); ++i)
         {
-            std::vector<const char*> candidate;
+            crd::containers::Array<const char*> candidate;
             candidate.reserve(script.size());
             for (std::size_t j = 0U; j < script.size(); ++j)
             {

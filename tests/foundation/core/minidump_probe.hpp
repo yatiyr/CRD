@@ -11,6 +11,7 @@
 
 #if defined(_WIN32)
 
+#include <crd/containers/array.hpp>
 #include <crd/core/crash.hpp>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -25,36 +26,48 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <cwctype>
 #include <fstream>
-#include <iterator>
-#include <string>
-#include <vector>
 
 namespace crd_test_minidump
 {
-inline std::vector<unsigned char> read_file_bytes(const std::wstring& path)
+// Paths are native wide strings (std::filesystem::path::c_str() on Windows); bytes live in a Cerid Array.
+using Bytes = crd::containers::Array<unsigned char>;
+
+inline Bytes read_file_bytes(const wchar_t* path)
 {
-    std::ifstream f{path, std::ios::binary};
-    return std::vector<unsigned char>{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    Bytes         bytes;
+    std::ifstream f{path, std::ios::binary | std::ios::ate};
+    if (!f)
+        return bytes;
+    const std::streamoff size = f.tellg();
+    if (size <= 0)
+        return bytes;
+    bytes.resize(static_cast<std::size_t>(size));
+    f.seekg(0);
+    if (!f.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+        bytes.clear();
+    return bytes;
 }
 
 // Read the whole ExceptionStream (type 6) of the dump into a struct; false if it is absent or short.
-inline bool read_exception_stream(const std::wstring& dump_path, MINIDUMP_EXCEPTION_STREAM& out)
+inline bool read_exception_stream(const wchar_t* dump_path, MINIDUMP_EXCEPTION_STREAM& out)
 {
-    constexpr std::uint32_t kExceptionStream = 6U; // MINIDUMP_STREAM_TYPE::ExceptionStream
-    const std::size_t       sz               = crd::crash::read_dump_stream(dump_path.c_str(), kExceptionStream, nullptr, 0);
+    constexpr std::uint32_t exception_stream = 6U; // MINIDUMP_STREAM_TYPE::ExceptionStream
+    const std::size_t       sz               = crd::crash::read_dump_stream(dump_path, exception_stream, nullptr, 0);
     if (sz < sizeof(MINIDUMP_EXCEPTION_STREAM))
         return false;
-    std::vector<unsigned char> buf(sz);
-    if (crd::crash::read_dump_stream(dump_path.c_str(), kExceptionStream, buf.data(), buf.size()) != sz)
+    Bytes buf;
+    buf.resize(sz);
+    if (crd::crash::read_dump_stream(dump_path, exception_stream, buf.data(), buf.size()) != sz)
         return false;
     std::memcpy(&out, buf.data(), sizeof(out));
     return true;
 }
 
 // The faulting exception code recorded in the dump, or 0 if the ExceptionStream is absent.
-inline std::uint32_t exception_code(const std::wstring& dump_path)
+inline std::uint32_t exception_code(const wchar_t* dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
@@ -63,7 +76,7 @@ inline std::uint32_t exception_code(const std::wstring& dump_path)
 }
 
 // The thread id recorded in the dump's ExceptionStream (the faulting thread, not the writer), or 0 if absent.
-inline std::uint32_t exception_thread_id(const std::wstring& dump_path)
+inline std::uint32_t exception_thread_id(const wchar_t* dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
@@ -71,29 +84,36 @@ inline std::uint32_t exception_thread_id(const std::wstring& dump_path)
     return static_cast<std::uint32_t>(es.ThreadId);
 }
 
-inline std::wstring to_lower(std::wstring s)
+// Case-insensitive test that the `n` wide characters at `name` end with the NUL-terminated `suffix`.
+inline bool ends_with_icase(const wchar_t* name, std::size_t n, const wchar_t* suffix)
 {
-    for (wchar_t& c : s)
-        c = static_cast<wchar_t>(::towlower(static_cast<wint_t>(c)));
-    return s;
+    const std::size_t m = std::wcslen(suffix);
+    if (n < m)
+        return false;
+    for (std::size_t i = 0; i < m; ++i)
+    {
+        if (::towlower(static_cast<wint_t>(name[n - m + i])) != ::towlower(static_cast<wint_t>(suffix[i])))
+            return false;
+    }
+    return true;
 }
 
 // True iff the dump's module list names a module whose path ends with want_basename (case-insensitive) AND that
 // module carries a CV record in RSDS format (>= 24 bytes: 'RSDS' magic + a 16-byte GUID + a 4-byte age). That is the
 // binary identity a symbol server keys on -- present without any frame being symbolized here.
-inline bool names_module_with_cv(const std::wstring& dump_path, const std::wstring& want_basename)
+inline bool names_module_with_cv(const wchar_t* dump_path, const wchar_t* want_basename)
 {
-    const std::wstring               want = to_lower(want_basename);
-    const std::vector<unsigned char> file = read_file_bytes(dump_path);
+    const Bytes file = read_file_bytes(dump_path);
     if (file.size() < sizeof(std::uint32_t))
         return false;
 
-    constexpr std::uint32_t kModuleListStream = 4U; // MINIDUMP_STREAM_TYPE::ModuleListStream
-    const std::size_t       list_size = crd::crash::read_dump_stream(dump_path.c_str(), kModuleListStream, nullptr, 0);
+    constexpr std::uint32_t module_list_stream = 4U; // MINIDUMP_STREAM_TYPE::ModuleListStream
+    const std::size_t       list_size = crd::crash::read_dump_stream(dump_path, module_list_stream, nullptr, 0);
     if (list_size < sizeof(std::uint32_t))
         return false;
-    std::vector<unsigned char> list(list_size);
-    if (crd::crash::read_dump_stream(dump_path.c_str(), kModuleListStream, list.data(), list.size()) != list_size)
+    Bytes list;
+    list.resize(list_size);
+    if (crd::crash::read_dump_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
         return false;
 
     std::uint32_t count = 0;
@@ -107,7 +127,8 @@ inline bool names_module_with_cv(const std::wstring& dump_path, const std::wstri
         std::memcpy(&mod, list.data() + off, sizeof(mod));
 
         // The module name lives at ModuleNameRva as a MINIDUMP_STRING { u32 Length(bytes); wchar_t Buffer[] } in the
-        // FILE (not the stream), so index the raw bytes.
+        // FILE (not the stream), so index the raw bytes. The buffer is not guaranteed wchar_t-aligned there, so the
+        // characters are copied out before they are compared.
         const std::size_t nrva = static_cast<std::size_t>(mod.ModuleNameRva);
         if (nrva + sizeof(std::uint32_t) > file.size())
             continue;
@@ -117,10 +138,10 @@ inline bool names_module_with_cv(const std::wstring& dump_path, const std::wstri
         const std::size_t soff  = nrva + sizeof(std::uint32_t);
         if (soff + static_cast<std::size_t>(chars) * sizeof(wchar_t) > file.size())
             continue;
-        std::wstring name(chars, L'\0');
+        crd::containers::Array<wchar_t> name;
+        name.resize(chars);
         std::memcpy(name.data(), file.data() + soff, chars * sizeof(wchar_t));
-        const std::wstring name_l = to_lower(name);
-        if (name_l.size() < want.size() || name_l.compare(name_l.size() - want.size(), want.size(), want) != 0)
+        if (!ends_with_icase(name.data(), chars, want_basename))
             continue;
 
         // The named module: require an RSDS CV record -- the identity later symbolization matches or refuses.

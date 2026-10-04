@@ -4,10 +4,10 @@
 // counter, which keeps the root fiber parked on that counter for as long as the test needs.
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/containers/static_array.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -44,7 +44,7 @@ TEST_CASE("wait_graph: a parked fiber is reported waiting on its child's counter
     cfg.num_threads = 4U; // >=2 so the root parks on a worker while the child runs on another
     crd::jobs::init(cfg);
 
-    std::array<crd::jobs::WaitGraphNode, 32> nodes{};
+    crd::containers::StaticArray<crd::jobs::WaitGraphNode, 32> nodes{};
 
     // Nothing in flight yet: the wait graph is empty.
     CHECK(crd::jobs::wait_graph_snapshot(nodes) == 0U);
@@ -93,11 +93,11 @@ TEST_CASE("wait_graph: snapshot truncates but still returns the true parked coun
     cfg.num_threads = 4U;
     crd::jobs::init(cfg);
 
-    constexpr int kParkers = 3;
+    constexpr int parkers = 3;
     // Three independent roots, each parking on its own gated child, give three wait-graph nodes; the shared
     // spin gate keeps all three children (and thus all three roots) parked at once.
-    std::array<crd::jobs::Counter*, kParkers> handles{};
-    for (int i = 0; i < kParkers; ++i)
+    crd::containers::StaticArray<crd::jobs::Counter*, parkers> handles{};
+    for (int i = 0; i < parkers; ++i)
     {
         crd::jobs::JobDecl root{};
         root.fn                              = &parking_root;
@@ -105,22 +105,22 @@ TEST_CASE("wait_graph: snapshot truncates but still returns the true parked coun
     }
 
     // Wait until all three roots are parked.
-    std::array<crd::jobs::WaitGraphNode, 8> full{};
+    crd::containers::StaticArray<crd::jobs::WaitGraphNode, 8> full{};
     crd::usize total    = 0U;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline)
     {
         total = crd::jobs::wait_graph_snapshot(full);
-        if (total >= static_cast<crd::usize>(kParkers))
+        if (total >= static_cast<crd::usize>(parkers))
             break;
         std::this_thread::yield();
     }
-    REQUIRE(total == static_cast<crd::usize>(kParkers));
+    REQUIRE(total == static_cast<crd::usize>(parkers));
 
     // A one-slot buffer: return value is still the true total; exactly one node written.
-    std::array<crd::jobs::WaitGraphNode, 1> tiny{};
+    crd::containers::StaticArray<crd::jobs::WaitGraphNode, 1> tiny{};
     const crd::usize truncated = crd::jobs::wait_graph_snapshot(tiny);
-    CHECK(truncated == static_cast<crd::usize>(kParkers)); // honest total despite truncation
+    CHECK(truncated == static_cast<crd::usize>(parkers)); // honest total despite truncation
     CHECK(tiny[0].waiting_on_remaining == 1U);            // the one written node is a real parked edge
 
     g_gate.store(true, std::memory_order_release);

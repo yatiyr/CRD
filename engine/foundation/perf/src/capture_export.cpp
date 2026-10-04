@@ -116,7 +116,7 @@ struct SeenSet
     // ---- Process 0 = the CPU timeline (CPU + calibrated GPU), microseconds. ----
     {
         comma();
-        out.append("{\"ph\":\"M\",\"pid\":0,\"tid\":0,\"name\":\"process_name\",\"args\":{");
+        out.append(R"({"ph":"M","pid":0,"tid":0,"name":"process_name","args":{)");
         append_kv_str(out, "name", "cpu + calibrated gpu (us)", false);
         out.append("}}");
         ++stats.metadata_events;
@@ -129,9 +129,9 @@ struct SeenSet
         const char*    tname   = view.thread_name(ti);
         const crd::u32 dropped = view.thread_dropped_count(ti);
         comma();
-        out.append("{\"ph\":\"M\",\"pid\":0,\"tid\":");
+        out.append(R"({"ph":"M","pid":0,"tid":)");
         append_u64(out, ti);
-        out.append(",\"name\":\"thread_name\",\"args\":{");
+        out.append(R"(,"name":"thread_name","args":{)");
         append_kv_str(out, "name", tname, false);
         append_kv_u64(out, "dropped", dropped, true);
         out.append("}}");
@@ -141,9 +141,9 @@ struct SeenSet
         {
             // Loss is never hidden: an instant marks that this thread dropped samples to ring overflow.
             comma();
-            out.append("{\"ph\":\"i\",\"s\":\"t\",\"pid\":0,\"tid\":");
+            out.append(R"({"ph":"i","s":"t","pid":0,"tid":)");
             append_u64(out, ti);
-            out.append(",\"name\":\"samples_dropped\",\"ts\":");
+            out.append(R"(,"name":"samples_dropped","ts":)");
             append_us_from_ns(out, static_cast<crd::i64>(view.captured_at_ns()));
             out.append(",\"args\":{");
             append_kv_u64(out, "count", dropped, false);
@@ -176,10 +176,10 @@ struct SeenSet
                 if (seen_gpu_pid.add(pid))
                 {
                     comma();
-                    out.append("{\"ph\":\"M\",\"pid\":");
+                    out.append(R"({"ph":"M","pid":)");
                     append_u64(out, pid);
-                    out.append(",\"tid\":0,\"name\":\"process_name\",\"args\":{");
-                    out.append("\"name\":\"gpu d");
+                    out.append(R"(,"tid":0,"name":"process_name","args":{)");
+                    out.append(R"("name":"gpu d)");
                     append_u64(out, corr->device_id);
                     out.append(" raw ticks (uncalibrated)\"");
                     out.append("}}");
@@ -188,11 +188,11 @@ struct SeenSet
                 if (seen_gpu_track.add((static_cast<crd::u64>(pid) << 32) | tid))
                 {
                     comma();
-                    out.append("{\"ph\":\"M\",\"pid\":");
+                    out.append(R"({"ph":"M","pid":)");
                     append_u64(out, pid);
                     out.append(",\"tid\":");
                     append_u64(out, tid);
-                    out.append(",\"name\":\"thread_name\",\"args\":{\"name\":\"queue ");
+                    out.append(R"(,"name":"thread_name","args":{"name":"queue )");
                     append_u64(out, tid);
                     out.append("\"}}");
                     ++stats.metadata_events;
@@ -200,7 +200,7 @@ struct SeenSet
             }
 
             comma();
-            out.append("{\"ph\":\"X\",\"pid\":");
+            out.append(R"({"ph":"X","pid":)");
             append_u64(out, pid);
             out.append(",\"tid\":");
             append_u64(out, tid);
@@ -255,9 +255,9 @@ struct SeenSet
     if (frames.size() > 0U)
     {
         comma();
-        out.append("{\"ph\":\"M\",\"pid\":0,\"tid\":");
+        out.append(R"({"ph":"M","pid":0,"tid":)");
         append_u64(out, kFramesTid);
-        out.append(",\"name\":\"thread_name\",\"args\":{\"name\":\"frames\"}}");
+        out.append(R"(,"name":"thread_name","args":{"name":"frames"}})");
         ++stats.metadata_events;
     }
     for (crd::u32 f = 0U; f < frames.size(); ++f)
@@ -265,15 +265,15 @@ struct SeenSet
         const FrameRecord& fr = frames[f];
 
         comma();
-        out.append("{\"ph\":\"X\",\"pid\":0,\"tid\":");
+        out.append(R"({"ph":"X","pid":0,"tid":)");
         append_u64(out, kFramesTid);
         out.append(",\"ts\":");
         append_us_from_ns(out, fr.frame_begin_ns);
         out.append(",\"dur\":");
         append_us_from_ns(out, fr.frame_end_ns - fr.frame_begin_ns);
-        out.append(",\"name\":\"frame ");
+        out.append(R"(,"name":"frame )");
         append_u64(out, fr.frame_index);
-        out.append("\",\"cat\":\"frame\"}");
+        out.append(R"(","cat":"frame"})");
         ++stats.frame_events;
 
         const crd::u32 n = fr.counter_count < counter_count ? fr.counter_count : counter_count;
@@ -281,7 +281,7 @@ struct SeenSet
         {
             const CounterInfo info = view.counter_info(ci);
             comma();
-            out.append("{\"ph\":\"C\",\"pid\":0,\"ts\":");
+            out.append(R"({"ph":"C","pid":0,"ts":)");
             append_us_from_ns(out, fr.frame_end_ns);
             append_kv_str(out, "name", info.name, true);
             out.append(",\"args\":{");
@@ -303,7 +303,7 @@ struct SeenSet
         }
     }
 
-    out.append("],\"displayTimeUnit\":\"ns\",\"metadata\":{");
+    out.append(R"(],"displayTimeUnit":"ns","metadata":{)");
     // ADR-0133 ID-1: an offline export DECLARES the schema/version it wrote -- required, not decoration.
     append_kv_str(out, "exporter", "crd-perf", false);
     // A valid CaptureView passed validate_capture_buffer, which accepts only version == kCprofVersion.

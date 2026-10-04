@@ -18,11 +18,12 @@
 
 #include "sched_record.hpp" // SchedEvent
 
+#include <crd/containers/array.hpp>
+
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
-#include <vector>
 
 namespace crd::jobs::test
 {
@@ -30,7 +31,7 @@ namespace crd::jobs::test
 class SchedDriver
 {
 public:
-    explicit SchedDriver(std::vector<const char*> script) : m_script(std::move(script)) {}
+    explicit SchedDriver(crd::containers::Array<const char*> script) : m_script(std::move(script)) {}
 
     void install() noexcept
     {
@@ -40,8 +41,8 @@ public:
     }
     static void uninstall() noexcept { crd::jobs::detail::set_sched_oracle(nullptr); }
 
-    [[nodiscard]] bool                            deadlocked() const noexcept { return m_deadlocked; }
-    [[nodiscard]] const std::vector<const char*>& observed() const noexcept { return m_observed; }
+    [[nodiscard]] bool                                       deadlocked() const noexcept { return m_deadlocked; }
+    [[nodiscard]] const crd::containers::Array<const char*>& observed() const noexcept { return m_observed; }
 
     // Test-thread participation. mark() drives a SYNTHETIC tag through the same cursor logic, so the test
     // thread can occupy a scripted slot (e.g. release a worker held at a later point only after the test
@@ -109,15 +110,15 @@ private:
         m_observed.push_back(tag);
     }
 
-    crd::jobs::detail::SchedOracle m_oracle{};
-    std::vector<const char*>       m_script;
-    std::size_t                    m_next = 0U;
-    std::mutex                     m_mtx;
-    std::condition_variable        m_cv;
-    std::vector<const char*>       m_observed;
-    std::vector<const char*>       m_arrived;
-    std::chrono::milliseconds      m_deadline{5000};
-    bool                           m_deadlocked = false;
+    crd::jobs::detail::SchedOracle      m_oracle{};
+    crd::containers::Array<const char*> m_script;
+    std::size_t                         m_next = 0U;
+    std::mutex                          m_mtx;
+    std::condition_variable             m_cv;
+    crd::containers::Array<const char*> m_observed;
+    crd::containers::Array<const char*> m_arrived;
+    std::chrono::milliseconds           m_deadline{5000};
+    bool                                m_deadlocked = false;
 };
 
 } // namespace crd::jobs::test

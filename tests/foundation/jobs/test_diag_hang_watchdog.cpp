@@ -37,14 +37,16 @@ WaitGraphNode wg(crd::u64 own, crd::u64 waits_on) noexcept
 }
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
-std::atomic<bool> g_gate{false};        // held closed to keep a child (and thus its parent) parked/executing
-std::atomic<int>  g_ticks{0};           // bumped by cheap jobs so a completing stream is observable
+std::atomic<bool> g_gate{false};          // held closed to keep a child (and thus its parent) parked/executing
+std::atomic<bool> g_child_running{false}; // set by gated_child on entry: the child is on a worker, not queued
+std::atomic<int>  g_ticks{0};             // bumped by cheap jobs so a completing stream is observable
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 void tick_job(void* /*data*/) noexcept { g_ticks.fetch_add(1, std::memory_order_relaxed); }
 
 void gated_child(void* /*data*/) noexcept
 {
+    g_child_running.store(true, std::memory_order_release);
     while (!g_gate.load(std::memory_order_acquire))
         std::this_thread::yield(); // keeps this worker EXECUTING (a long/blocked job), not parked
 }
@@ -209,8 +211,8 @@ TEST_CASE("hang watchdog: a completing stream advances progress and goes quiesce
     CHECK(idle.quiescent);              // nothing submitted yet
     CHECK(idle.executing == 0U);
 
-    constexpr int kJobs = 200;
-    for (int i = 0; i < kJobs; ++i)
+    constexpr int job_count = 200;
+    for (int i = 0; i < job_count; ++i)
     {
         crd::jobs::JobDecl j{};
         j.fn = &tick_job;
@@ -218,9 +220,9 @@ TEST_CASE("hang watchdog: a completing stream advances progress and goes quiesce
     }
 
     const ProgressSample after = crd::jobs::progress_snapshot();
-    CHECK(after.completions >= static_cast<crd::u64>(kJobs)); // every job's completion was counted
+    CHECK(after.completions >= static_cast<crd::u64>(job_count)); // every job's completion was counted
     CHECK(after.quiescent);                                   // drained again after the last wait
-    CHECK(g_ticks.load(std::memory_order_relaxed) == kJobs);
+    CHECK(g_ticks.load(std::memory_order_relaxed) == job_count);
 
     crd::jobs::shutdown();
 }
@@ -229,6 +231,7 @@ TEST_CASE("hang watchdog: a parked root over an executing child reads executing>
           "[jobs][diag][hang]")
 {
     g_gate.store(false, std::memory_order_relaxed);
+    g_child_running.store(false, std::memory_order_relaxed);
 
     crd::jobs::Config cfg;
     cfg.num_threads = 4U;
@@ -245,8 +248,12 @@ TEST_CASE("hang watchdog: a parked root over an executing child reads executing>
     const auto     deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline)
     {
+        // Gate on the CHILD having started, not on executing>=1 alone: the root itself counts as executing until it
+        // parks, and between its park and a worker picking the child up nothing executes -- a window the second
+        // snapshot below could land in (hosted win-debug saw SuspectedHang there). Once the child runs it spins
+        // without parking until the gate opens, so executing>=1 is then stable for the whole window.
         s = crd::jobs::progress_snapshot();
-        if (!s.quiescent && s.executing >= 1U)
+        if (g_child_running.load(std::memory_order_acquire) && !s.quiescent && s.executing >= 1U)
             break;
         std::this_thread::yield();
     }
@@ -292,18 +299,18 @@ TEST_CASE("hang watchdog: a completed-but-unwaited counter is not a hang", "[job
 TEST_CASE("hang detector: fires once on K consecutive stale windows, resets on any progress",
           "[jobs][diag][hang]")
 {
-    constexpr HangVerdict S = HangVerdict::SuspectedHang;
-    constexpr HangVerdict P = HangVerdict::Progressing;
-    constexpr HangVerdict Z = HangVerdict::Paused;
-    constexpr HangVerdict N = HangVerdict::None;
+    constexpr HangVerdict s = HangVerdict::SuspectedHang;
+    constexpr HangVerdict p = HangVerdict::Progressing;
+    constexpr HangVerdict z = HangVerdict::Paused;
+    constexpr HangVerdict n = HangVerdict::None;
 
-    CHECK(fire_index({S, S}) == 0);          // two is not enough
-    CHECK(fire_index({S, S, S}) == 3);       // third consecutive fires
-    CHECK(fire_index({S, S, S, S}) == 3);    // and only once
-    CHECK(fire_index({S, S, P, S, S, S}) == 6); // progress resets the run
-    CHECK(fire_index({S, S, Z, S, S, S}) == 6); // a pause window resets it too
-    CHECK(fire_index({S, S, N, S, S, S}) == 6); // quiescence resets it
-    CHECK(fire_index({P, P, P, P}) == 0);    // never on progress
+    CHECK(fire_index({s, s}) == 0);          // two is not enough
+    CHECK(fire_index({s, s, s}) == 3);       // third consecutive fires
+    CHECK(fire_index({s, s, s, s}) == 3);    // and only once
+    CHECK(fire_index({s, s, p, s, s, s}) == 6); // progress resets the run
+    CHECK(fire_index({s, s, z, s, s, s}) == 6); // a pause window resets it too
+    CHECK(fire_index({s, s, n, s, s, s}) == 6); // quiescence resets it
+    CHECK(fire_index({p, p, p, p}) == 0);    // never on progress
 }
 
 TEST_CASE("hang watchdog: enabled watchdog starts and shuts down cleanly", "[jobs][diag][hang]")

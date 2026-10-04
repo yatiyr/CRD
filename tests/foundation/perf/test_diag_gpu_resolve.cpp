@@ -46,9 +46,8 @@ constexpr crd::f64 kPeriod = 2.0;
 class FakeRobustBackend final : public crd::perf::IProfilerGpuBackend
 {
 public:
-    static constexpr crd::u32 kFrames   = 8U;
-    static constexpr crd::u32 kSpans    = 4U; // small, so recording more than this forces slot reuse
-    static constexpr crd::u32 kInFlight = 2U;
+    static constexpr crd::u32 kFrames = 8U;
+    static constexpr crd::u32 kSpans  = 4U; // small, so recording more than this forces slot reuse
 
     struct Span
     {

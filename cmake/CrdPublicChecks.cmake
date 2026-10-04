@@ -25,14 +25,17 @@ function(crd_public_header_exclude module header)
 endfunction()
 
 # The non-imported library targets a module directory builds: the consumer view of the module is their PUBLIC and
-# INTERFACE usage requirements, which is what linking them PRIVATE from another target receives.
+# INTERFACE usage requirements, which is what linking them PRIVATE from another target receives. A library kept out
+# of ALL is an instrument-only twin a consumer never links (crd-jobs-schedcheck carries CRD_JOBS_SCHED_CHECK=1 against
+# crd-jobs' =0), so it is not part of the consumer view; linking both would redefine that macro.
 function(_crd_public_library_targets directory out_var)
     _crd_collect_build_targets("${directory}" targets)
     set(libraries "")
     foreach(target IN LISTS targets)
         get_target_property(type "${target}" TYPE)
         get_target_property(imported "${target}" IMPORTED)
-        if(NOT imported AND type MATCHES "^(STATIC|SHARED|OBJECT|INTERFACE)_LIBRARY$")
+        get_target_property(excluded "${target}" EXCLUDE_FROM_ALL)
+        if(NOT imported AND NOT excluded AND type MATCHES "^(STATIC|SHARED|OBJECT|INTERFACE)_LIBRARY$")
             list(APPEND libraries "${target}")
         endif()
     endforeach()

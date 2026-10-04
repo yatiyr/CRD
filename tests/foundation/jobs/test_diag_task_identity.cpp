@@ -10,8 +10,8 @@
 
 #include <crd/jobs/jobs.hpp>
 #include <crd/core/types.hpp>
+#include <crd/containers/static_array.hpp>
 
-#include <array>
 #include <span>
 #include <thread>
 
@@ -55,11 +55,12 @@ TEST_CASE("diag: task ids are unique across separate runs while counter slots re
     cfg.num_threads = 2U; // background worker so wait() takes the spin path from the main thread
     crd::jobs::init(cfg);
 
-    constexpr crd::usize kN = 64U;
-    std::array<crd::u64, kN>              ids{};  // current_task_id() observed inside each run's job
-    std::array<crd::jobs::Counter*, kN>   ptrs{}; // the Counter* run() handed back each iteration
+    constexpr crd::usize run_count = 64U;
+    // ids: current_task_id() observed inside each run's job; ptrs: the Counter* run() handed back each iteration.
+    crd::containers::StaticArray<crd::u64, run_count>            ids{};
+    crd::containers::StaticArray<crd::jobs::Counter*, run_count> ptrs{};
 
-    for (crd::usize i = 0U; i < kN; ++i)
+    for (crd::usize i = 0U; i < run_count; ++i)
     {
         crd::jobs::JobDecl job{};
         job.fn   = &record_task_id;
@@ -70,14 +71,14 @@ TEST_CASE("diag: task ids are unique across separate runs while counter slots re
         crd::jobs::wait(c); // releases the counter back to the pool -> its slot is now reusable
     }
 
-    for (crd::usize i = 0U; i < kN; ++i)
+    for (crd::usize i = 0U; i < run_count; ++i)
         CHECK(ids[i] != 0U); // 0 is reserved for "no task"; a running job must never see it
 
     // The whole point: ids are all distinct (a fresh stamp per run), yet the pool handed back a
     // recycled address at least once (fewer distinct pointers than runs) -- so the id is genuinely
     // independent of the slot address, which is what diagnostics rely on to tell two runs apart.
-    CHECK(distinct_count(ids.data(), kN) == kN);
-    CHECK(distinct_count(ptrs.data(), kN) < kN);
+    CHECK(distinct_count(ids.data(), run_count) == run_count);
+    CHECK(distinct_count(ptrs.data(), run_count) < run_count);
 
     crd::jobs::shutdown();
 }
@@ -92,21 +93,21 @@ TEST_CASE("diag: all jobs in one batch share a single task id", "[jobs][diag]")
     cfg.num_threads = 2U;
     crd::jobs::init(cfg);
 
-    constexpr crd::usize kBatch = 4U;
-    std::array<crd::u64, kBatch> ids{};
+    constexpr crd::usize batch_size = 4U;
+    crd::containers::StaticArray<crd::u64, batch_size> ids{};
 
-    std::array<crd::jobs::JobDecl, kBatch> jobs{};
-    for (crd::usize i = 0U; i < kBatch; ++i)
+    crd::containers::StaticArray<crd::jobs::JobDecl, batch_size> jobs{};
+    for (crd::usize i = 0U; i < batch_size; ++i)
     {
         jobs[i].fn   = &record_task_id;
         jobs[i].data = &ids[i];
     }
 
-    crd::jobs::Counter* const c = crd::jobs::run(std::span<const crd::jobs::JobDecl>(jobs.data(), kBatch));
+    crd::jobs::Counter* const c = crd::jobs::run(std::span<const crd::jobs::JobDecl>(jobs.data(), batch_size));
     crd::jobs::wait(c);
 
     CHECK(ids[0] != 0U);
-    for (crd::usize i = 1U; i < kBatch; ++i)
+    for (crd::usize i = 1U; i < batch_size; ++i)
         CHECK(ids[i] == ids[0]); // one Counter -> one task_id for the whole batch
 
     crd::jobs::shutdown();
@@ -274,14 +275,14 @@ TEST_CASE("diag: a batch runs across more than one worker thread (pooled, not se
     cfg.num_threads = 4U; // several background workers so a batch can spread
     crd::jobs::init(cfg);
 
-    constexpr crd::usize kN = 64U;
+    constexpr crd::usize job_count = 64U;
     bool multithreaded = false;
 
     for (int round = 0; round < 32 && !multithreaded; ++round)
     {
-        std::array<crd::u32, kN>           where{};
-        std::array<crd::jobs::JobDecl, kN> jobs{};
-        for (crd::usize i = 0U; i < kN; ++i)
+        crd::containers::StaticArray<crd::u32, job_count>           where{};
+        crd::containers::StaticArray<crd::jobs::JobDecl, job_count> jobs{};
+        for (crd::usize i = 0U; i < job_count; ++i)
         {
             jobs[i].fn = [](void* d) noexcept
             {
@@ -290,8 +291,8 @@ TEST_CASE("diag: a batch runs across more than one worker thread (pooled, not se
             };
             jobs[i].data = &where[i];
         }
-        crd::jobs::run_and_wait(std::span<const crd::jobs::JobDecl>(jobs.data(), kN));
-        multithreaded = distinct_count(where.data(), kN) > 1U;
+        crd::jobs::run_and_wait(std::span<const crd::jobs::JobDecl>(jobs.data(), job_count));
+        multithreaded = distinct_count(where.data(), job_count) > 1U;
     }
 
     CHECK(multithreaded); // ran on >1 thread -> real pooled execution, not a sequential fallback

@@ -557,8 +557,8 @@ void               state_read_release() noexcept { reader_leave(); }
 
 [[nodiscard]] NameId intern_name(const char* name) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || name == nullptr)
     {
         return kInvalidNameId;
@@ -610,8 +610,8 @@ void               state_read_release() noexcept { reader_leave(); }
 
 [[nodiscard]] const char* resolve_name(NameId id) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || !id.is_valid() || id.value >= g_state->names_capacity)
     {
         return "";
@@ -624,15 +624,15 @@ void               state_read_release() noexcept { reader_leave(); }
 
 [[nodiscard]] crd::u32 intern_name_capacity() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->names_capacity : 0U;
 }
 
 [[nodiscard]] crd::u32 intern_name_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return 0U;
@@ -645,8 +645,8 @@ void               state_read_release() noexcept { reader_leave(); }
 
 [[nodiscard]] crd::u64 name_bytes_dropped_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     // DIAG.6a(d): names refused because a table/arena was full or a name exceeded kMaxNameBytes. Non-zero means some
     // name is unavailable (kInvalidNameId / the "(name storage exhausted)" literal) -- explicit, never a silent borrow.
     return g_state != nullptr ? g_state->name_bytes_dropped.load(std::memory_order_relaxed) : 0U;
@@ -656,8 +656,8 @@ void               state_read_release() noexcept { reader_leave(); }
 
 crd::u8 register_thread(const char* name) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return detail::kInvalidThread;
@@ -695,8 +695,8 @@ crd::u8 register_thread(const char* name) noexcept
 // many-track producer can fall back. No refresh/re-own path -- every call is a fresh slot; the caller owns the mapping.
 crd::u8 register_external_track(const char* name) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return detail::kInvalidThread;
@@ -785,8 +785,8 @@ void pop_region(NameId id, BeginToken begin, Category cat, crd::u32 color_rgba) 
 
 void frame_mark() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return;
@@ -873,8 +873,8 @@ void frame_mark() noexcept
 
 [[nodiscard]] crd::u64 frame_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->frame_count.load(std::memory_order_acquire) : 0U;
 }
 
@@ -884,8 +884,8 @@ void frame_mark() noexcept
 
 [[nodiscard]] ThreadSamplesView thread_samples(crd::u8 thread_index) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     ThreadSamplesView view{nullptr, 0U, 0U, nullptr};
     if (g_state == nullptr || thread_index >= kMaxThreads)
     {
@@ -909,16 +909,16 @@ void frame_mark() noexcept
 
 [[nodiscard]] crd::u32 thread_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->thread_count.load(std::memory_order_acquire) : 0U;
 }
 
 [[nodiscard]] crd::u32 copy_thread_samples(crd::u8 thread_index, Sample* out, crd::u32 max_samples,
                                            bool* out_contended) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (out_contended != nullptr)
     {
         *out_contended = false;
@@ -973,8 +973,8 @@ void frame_mark() noexcept
 // frees its array). A nothrow failure leaves correlation disabled rather than terminating this noexcept path.
 void enable_thread_correlation(crd::u8 thread_index) noexcept
 {
-    detail::StateGuard           guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard           state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || thread_index >= kMaxThreads)
     {
         return;
@@ -999,8 +999,8 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
 
 [[nodiscard]] bool thread_has_correlation(crd::u8 thread_index) noexcept
 {
-    detail::StateGuard           guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard           state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || thread_index >= kMaxThreads)
     {
         return false;
@@ -1015,8 +1015,8 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
                                                             CorrelationRecord* corr_out, crd::u32 max_samples,
                                                             bool* out_contended) noexcept
 {
-    detail::StateGuard           guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard           state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (out_contended != nullptr)
     {
         *out_contended = false;
@@ -1068,8 +1068,8 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
 // equals the count of contended (out_contended == true) returns. Monotonic within an init()/shutdown() lifetime.
 [[nodiscard]] crd::u64 sample_copy_contended_count(crd::u8 thread_index) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || thread_index >= kMaxThreads)
     {
         return 0U;
@@ -1079,15 +1079,15 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
 
 [[nodiscard]] crd::u32 per_thread_ring_capacity() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->per_thread_ring_slots : 0U;
 }
 
 void clear_samples() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return;
@@ -1132,28 +1132,20 @@ namespace detail
 
 void write_external_sample(crd::u8 thread_index, const Sample& s, const CorrelationRecord* corr) noexcept
 {
-    // Inside namespace detail the global `g_state` is visible unqualified, so this deliberate local shadow trips C4459.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4459)
-#endif
-    detail::ProfilerState* const g_state = detail::g_state.load(std::memory_order_relaxed);
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    if (g_state == nullptr || thread_index >= kMaxThreads)
+    detail::ProfilerState* const state_ptr = detail::g_state.load(std::memory_order_relaxed);
+    if (state_ptr == nullptr || thread_index >= kMaxThreads)
     {
         return;
     }
-    ThreadRing& ring = g_state->rings[thread_index];
+    ThreadRing& ring = state_ptr->rings[thread_index];
     if (!ring.active.load(std::memory_order_acquire))
     {
         return;
     }
-    const crd::u32 mask  = g_state->per_thread_ring_slots - 1U;
+    const crd::u32 mask  = state_ptr->per_thread_ring_slots - 1U;
     const crd::u64 h     = ring.head.load(std::memory_order_relaxed);
     const crd::u64 t     = ring.tail.load(std::memory_order_acquire);
-    const crd::u64 slots = g_state->per_thread_ring_slots;
+    const crd::u64 slots = state_ptr->per_thread_ring_slots;
     if (h - t >= slots)
     {
         ring.dropped.fetch_add(1U, std::memory_order_relaxed);
@@ -1181,21 +1173,13 @@ namespace detail
 [[nodiscard]] CounterId register_counter_impl(const char* static_name, CounterKind kind,
                                               CounterType type) noexcept
 {
-    detail::StateGuard guard_;
-    // Inside namespace detail the global `g_state` is visible unqualified, so this deliberate local shadow trips C4459.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4459)
-#endif
-    detail::ProfilerState* const g_state = guard_.s;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    if (g_state == nullptr || static_name == nullptr)
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const state_ptr = state_guard.s;
+    if (state_ptr == nullptr || static_name == nullptr)
     {
         return kInvalidCounterId;
     }
-    detail::ProfilerState& state = *g_state;
+    detail::ProfilerState& state = *state_ptr;
     std::lock_guard<std::mutex> lock(state.counter_mutex);
 
     const crd::u32 n = state.counter_count_atomic.load(std::memory_order_relaxed);
@@ -1328,15 +1312,15 @@ void counter_add_duration(CounterId id, crd::time::Duration delta) noexcept
 
 [[nodiscard]] crd::u32 counter_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->counter_count_atomic.load(std::memory_order_acquire) : 0U;
 }
 
 [[nodiscard]] CounterInfo counter_info(CounterId id) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     CounterInfo info{"", CounterKind::Set, CounterType::I64};
     if (g_state == nullptr || !id.is_valid() || id.value >= kMaxCounters)
     {
@@ -1354,8 +1338,8 @@ void counter_add_duration(CounterId id, crd::time::Duration delta) noexcept
 
 [[nodiscard]] crd::i64 counter_current_i64(CounterId id) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || !id.is_valid() || id.value >= kMaxCounters)
     {
         return 0;
@@ -1365,8 +1349,8 @@ void counter_add_duration(CounterId id, crd::time::Duration delta) noexcept
 
 [[nodiscard]] crd::f64 counter_current_f64(CounterId id) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || !id.is_valid() || id.value >= kMaxCounters)
     {
         return 0.0;
@@ -1376,8 +1360,8 @@ void counter_add_duration(CounterId id, crd::time::Duration delta) noexcept
 
 [[nodiscard]] crd::time::Duration counter_current_duration(CounterId id) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || !id.is_valid() || id.value >= kMaxCounters)
     {
         return crd::time::Duration{};
@@ -1413,8 +1397,8 @@ struct OwnedName
 [[nodiscard]] crd::u32 register_allocator(const char* name,
                                           crd::memory::IAllocator* allocator) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || name == nullptr || allocator == nullptr)
     {
         return kInvalidAllocatorIdx;
@@ -1475,8 +1459,8 @@ struct OwnedName
 
 void unregister_allocator(crd::u32 allocator_idx) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr || allocator_idx >= kMaxAllocators)
     {
         return;
@@ -1510,22 +1494,22 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] crd::u32 registered_allocator_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->allocator_count_atomic.load(std::memory_order_acquire) : 0U;
 }
 
 [[nodiscard]] crd::u32 live_allocator_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->allocator_live_count.load(std::memory_order_seq_cst) : 0U;
 }
 
 [[nodiscard]] AllocatorInfo allocator_info(crd::u32 allocator_idx) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     AllocatorInfo info{};
     if (g_state == nullptr || allocator_idx >= kMaxAllocators)
     {
@@ -1546,8 +1530,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] AllocatorSnapshot allocator_snapshot(crd::u32 allocator_idx) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     AllocatorSnapshot snap{};
     if (g_state == nullptr || allocator_idx >= kMaxAllocators)
     {
@@ -1582,8 +1566,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 [[nodiscard]] AllocatorSnapshot allocator_snapshot_history(crd::u32 allocator_idx,
                                                            crd::u32 frames_back) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     AllocatorSnapshot snap{};
     if (g_state == nullptr || allocator_idx >= kMaxAllocators)
     {
@@ -1616,8 +1600,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] const FrameRecord* frame_record(crd::u32 frames_back) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return nullptr;
@@ -1635,8 +1619,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] crd::u32 frame_record_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return 0U;
@@ -1648,8 +1632,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] bool copy_frame_record(crd::u32 frames_back, FrameRecord& out) noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)
     {
         return false;
@@ -1687,8 +1671,8 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
 
 [[nodiscard]] crd::u64 frame_history_unavailable_count() noexcept
 {
-    detail::StateGuard guard_;
-    detail::ProfilerState* const g_state = guard_.s;
+    detail::StateGuard state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
     return g_state != nullptr ? g_state->frame_history_unavailable.load(std::memory_order_relaxed) : 0U;
 }
 
@@ -1728,12 +1712,25 @@ void                    set_current_fiber_id(crd::u32) noexcept {}
 }
 
 [[nodiscard]] crd::u32 thread_count() noexcept { return 0U; }
-[[nodiscard]] crd::u32 copy_thread_samples(crd::u8, Sample*, crd::u32) noexcept { return 0U; }
+[[nodiscard]] crd::u32 copy_thread_samples(crd::u8, Sample*, crd::u32, bool* out_contended) noexcept
+{
+    if (out_contended != nullptr)
+    {
+        *out_contended = false; // compiled out: every ring is genuinely empty, never contended
+    }
+    return 0U;
+}
+[[nodiscard]] crd::u64 sample_copy_contended_count(crd::u8) noexcept { return 0U; }
+[[nodiscard]] crd::u32 per_thread_ring_capacity() noexcept { return 0U; } // "0 when the profiler is inactive"
 void enable_thread_correlation(crd::u8) noexcept {} // DIAG.6b(b)
 [[nodiscard]] bool thread_has_correlation(crd::u8) noexcept { return false; }
 [[nodiscard]] crd::u32 copy_thread_samples_with_correlation(crd::u8, Sample*, CorrelationRecord*, crd::u32,
-                                                            bool*) noexcept
+                                                            bool* out_contended) noexcept
 {
+    if (out_contended != nullptr)
+    {
+        *out_contended = false;
+    }
     return 0U;
 }
 void clear_samples() noexcept {}

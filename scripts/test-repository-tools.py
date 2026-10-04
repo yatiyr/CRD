@@ -457,7 +457,7 @@ class CiTiers(unittest.TestCase):
         self.assertEqual(ci_tiers.validate(self.tiers, self.presets, self.workflow), [])
         visible = set(ci_tiers.visible_presets(self.presets))
         owned = {n for n, e in self.tiers['presets'].items() if e['tier'] != 'diagnostic'}
-        self.assertEqual(visible - owned, {'win-tidy-local', 'linux-clang-fuzz'})
+        self.assertEqual(visible - owned, {'win-tidy-local', 'linux-clang-fuzz', 'linux-clang-tsan'})
         for never_hosted in ('win-vs', 'win-relwithdebinfo', 'win-shipping-profile', 'win-debug-scalar',
                              'linux-gcc-debug-scalar'):
             self.assertEqual(self.tiers['presets'][never_hosted]['tier'], 'complete', never_hosted)

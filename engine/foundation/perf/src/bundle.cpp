@@ -325,7 +325,8 @@ bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noex
         const int fd = _fileno(f);
         if (fd >= 0)
         {
-            HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+            // _get_osfhandle returns the OS handle as an intptr_t by contract (same as console_sink.cpp).
+            HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd)); // NOLINT(performance-no-int-to-ptr)
             if (h != INVALID_HANDLE_VALUE)
                 ok = FlushFileBuffers(h) != 0;
         }

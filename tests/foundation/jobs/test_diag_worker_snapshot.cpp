@@ -5,10 +5,10 @@
 // task that worker is stuck on. Actual running-thread stack capture is DIAG.5a/5b's external, qualified domain.
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/containers/static_array.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -39,7 +39,7 @@ TEST_CASE("worker snapshot: an idle pool is fully responsive and complete", "[jo
     cfg.num_threads = 3U; // thread 0 (pump) + two background workers
     crd::jobs::init(cfg);
 
-    std::array<WorkerNode, 8> nodes{};
+    crd::containers::StaticArray<WorkerNode, 8> nodes{};
     const WorkerSnapshotResult res = crd::jobs::worker_snapshot(nodes, 200U);
 
     CHECK(res.total == 3U);      // three worker slots reported
@@ -74,7 +74,7 @@ TEST_CASE("worker snapshot: a worker stuck in one job is honestly incomplete and
         std::this_thread::yield();
     const crd::u64 spin_id = g_spin_task_id.load(std::memory_order_relaxed);
 
-    std::array<WorkerNode, 8> nodes{};
+    crd::containers::StaticArray<WorkerNode, 8> nodes{};
     const WorkerSnapshotResult res = crd::jobs::worker_snapshot(nodes, 150U);
 
     CHECK(res.total == 3U);
@@ -118,7 +118,7 @@ TEST_CASE("worker snapshot: the attempt is time-bounded, not a hang", "[jobs][di
     while (g_spin_task_id.load(std::memory_order_acquire) == 0U)
         std::this_thread::yield();
 
-    std::array<WorkerNode, 8> nodes{};
+    crd::containers::StaticArray<WorkerNode, 8> nodes{};
     const auto                 t0  = std::chrono::steady_clock::now();
     const WorkerSnapshotResult res = crd::jobs::worker_snapshot(nodes, 100U);
     const auto elapsed_ms =
@@ -141,7 +141,7 @@ TEST_CASE("worker snapshot: truncation is honest (total exceeds the buffer)", "[
     cfg.num_threads = 4U; // thread 0 + three background workers
     crd::jobs::init(cfg);
 
-    std::array<WorkerNode, 2> small{}; // smaller than the worker count
+    crd::containers::StaticArray<WorkerNode, 2> small{}; // smaller than the worker count
     const WorkerSnapshotResult res = crd::jobs::worker_snapshot(small, 200U);
 
     CHECK(res.total == 4U);      // reports the true worker count even though only 2 nodes were written

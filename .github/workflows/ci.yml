@@ -1080,8 +1080,11 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      # The native preset enables CRD_PROJECT_SYNC, so the build runs crd-project-sync-check, which requires the
+      # synchronization baseline. Only the configure wrapper writes it on completion (docs/design/project-structure-sync.md);
+      # a bare `cmake --preset` leaves it absent and the check refuses the build.
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: python scripts/project-sync.py configure --build build/win-vs-debug --preset ${{ matrix.preset }}
 
       - name: Build the Debug sandbox profile
         run: cmake --build --preset win-vs-debug

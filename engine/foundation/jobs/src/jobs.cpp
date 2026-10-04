@@ -3,8 +3,8 @@
 #include "worker_pool.hpp"
 #include <crd/core/assert.hpp>
 #include <crd/core/rt_sentinel.hpp>
+#include <crd/containers/static_array.hpp>
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -45,15 +45,15 @@ namespace
 {
 void watchdog_loop(crd::u32 period_ms) noexcept
 {
-    constexpr crd::u32                        kK = 3U; // consecutive stale windows before a report
-    detail::HangDetector                      detector{kK};
-    detail::StarvationDetector                starv_detector{kK};
-    detail::LivelockTracker                   livelock_tracker{kK};
-    ProgressSample                            before = progress_snapshot();
-    LaneSample                                before_lanes = lane_snapshot();
-    std::array<WaitGraphNode, 64>             parked{};         // fixed buffer -- the watchdog never allocates
-    std::array<ProgressNode, 64>              monitored{};      // monitored-task snapshot buffer
-    std::array<ProgressNode, 64>              livelock_fired{}; // tasks that fire livelock this window
+    constexpr crd::u32                              stale_windows = 3U; // consecutive stale windows before a report
+    detail::HangDetector                            detector{stale_windows};
+    detail::StarvationDetector                      starv_detector{stale_windows};
+    detail::LivelockTracker                         livelock_tracker{stale_windows};
+    ProgressSample                                  before = progress_snapshot();
+    LaneSample                                      before_lanes = lane_snapshot();
+    crd::containers::StaticArray<WaitGraphNode, 64> parked{};         // fixed buffer -- the watchdog never allocates
+    crd::containers::StaticArray<ProgressNode, 64>  monitored{};      // monitored-task snapshot buffer
+    crd::containers::StaticArray<ProgressNode, 64>  livelock_fired{}; // tasks that fire livelock this window
 
     while (true)
     {
@@ -99,7 +99,7 @@ void watchdog_loop(crd::u32 period_ms) noexcept
 
         // Priority starvation -- an independent check: a starved system still completes other work, so the hang
         // verdict above never flags it. Fire the per-lane handler once per episode for each lane that has stayed
-        // backlogged-without-progress for kK windows while the rest of the system advanced.
+        // backlogged-without-progress for stale_windows consecutive windows while the rest of the system advanced.
         const crd::u8 starved = detail::starvation_verdict(before_lanes, after_lanes, before.completions,
                                                            after.completions);
         if (const crd::u8 fired = starv_detector.feed(starved); fired != 0U)
@@ -125,7 +125,7 @@ void watchdog_loop(crd::u32 period_ms) noexcept
         // Livelock -- another independent check, over the tasks that opted in via note_progress(). Skip the
         // feed when the window read as Paused: a frozen process (debugger/suspend) leaves every epoch flat,
         // which is exactly the false-positive shape. A monitored task that keeps a worker executing but stops
-        // ticking for kK windows is spinning without progress.
+        // ticking for stale_windows consecutive windows is spinning without progress.
         if (v != detail::HangVerdict::Paused)
         {
             const crd::usize mon_total = monitored_snapshot(monitored);
@@ -240,10 +240,12 @@ static detail::Counter* submit_jobs(std::span<const JobDecl> jobs)
     CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::run: call init() first");
 
     detail::Counter* c = g_pool.counter_pool().acquire(static_cast<crd::u32>(jobs.size()));
-    // Always-on guard (CRD_ASSERT_MSG is a no-op in Release): acquire() already fatals on exhaustion, but never
-    // pack a null counter into jobs -- that would crash later on completion. Defense in depth for the fail path.
+    // Always-on guard: acquire() asserts on exhaustion only where CRD_ASSERT_MSG is active, so with asserts compiled
+    // out (Release/Shipping) this is the one report; never pack a null counter into jobs -- that would crash later on
+    // completion. It names the pool exactly as acquire() does ("CounterPool exhausted"), so one oracle recognises the
+    // exhaustion in every build type (the counter-exhaustion specimen keys on that text).
     if (c == nullptr)
-        CRD_FATAL("crd::jobs::run: counter pool exhausted — raise max_counters in jobs::Config");
+        CRD_FATAL("crd::jobs::run: CounterPool exhausted — raise max_counters in jobs::Config");
 
     for (const JobDecl& src : jobs)
     {

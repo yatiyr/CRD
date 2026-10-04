@@ -18,7 +18,7 @@ evidence for the exact revision every lane built.
 | preflight | every run | none; the `preflight` and `repository` jobs (workflow syntax, mapping, hygiene, documentation, tooling fixtures, generated artifacts) |
 | change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping` |
 | complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution and the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) |
-| diagnostic | never hosted | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)) |
+| diagnostic | never hosted | `win-tidy-local`, `linux-clang-fuzz`, `linux-clang-tsan` ([test instruments](test-instruments.md)) |
 
 The change tier is the lane set the repository ran on every push before this contract, so a source change keeps
 every obligation it had; only a documentation-only push stops after preflight, by design. The complete tier adds the

@@ -8,18 +8,18 @@
 //     individual test may call jobs::init().
 #define CATCH_CONFIG_RUNNER
 #include <crd/core/crash.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <catch2/catch_session.hpp>
 
 #include <filesystem>
-#include <string>
 
 int main(int argc, char* argv[])
 {
     // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
     // crashes/ would trip the repository structure check.
-    const std::string crash_dir = (std::filesystem::temp_directory_path() / "crd-test-crashes").string();
+    const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
     (void)crd::crash::install(crash_dir.c_str());
 
     crd::jobs::Config jobs_cfg;

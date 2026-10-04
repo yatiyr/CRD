@@ -18,7 +18,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <string>
 #include <thread>
 
 // Windows-only: the live minidump path (capture_dump / read_dump_stream) is a Windows artifact; on Linux capture_dump
@@ -49,7 +48,7 @@ std::atomic<bool>     g_captured{false};   // capture on the FIRST fire only -> 
 std::atomic<bool>     g_dump_done{false};  // main waits on this (no allocation while it spins)
 std::atomic<int>      g_dump_result{-1};   // the WriteResult the handler observed
 std::atomic<unsigned> g_evidence_bytes{0}; // what the handler embedded
-std::wstring          g_dump_path;         // assigned after capture_dump returns (threads already resumed)
+fs::path              g_dump_path;         // assigned after capture_dump returns (threads already resumed)
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 void tick_job(void* /*data*/) noexcept {}
@@ -77,7 +76,7 @@ void hang_dumps(const crd::jobs::HangReport& report, void* /*user*/) noexcept
     g_dump_result.store(static_cast<int>(wr), std::memory_order_relaxed);
     g_evidence_bytes.store(note.evidence_bytes, std::memory_order_relaxed);
     if (wr == WriteResult::Ok && path != nullptr)
-        g_dump_path.assign(path); // safe: capture_dump has returned, all threads resumed
+        g_dump_path = path; // safe: capture_dump has returned, all threads resumed
     g_dump_done.store(true, std::memory_order_release);
 }
 } // namespace

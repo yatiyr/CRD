@@ -2,17 +2,18 @@
 // The fatal path (an actual unhandled exception) is qualified by the subprocess specimens in a later sub-unit; here
 // we prove install() reports its result, the resolved path is long-path-safe, and the live capture_dump() (the same
 // writer the fatal filter uses) reports success only when a complete, non-empty file exists -- never otherwise.
+#include <crd/containers/static_array.hpp>
 #include <crd/core/crash.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <string>
+#include <string_view>
 #include <thread>
 
 #if defined(_WIN32)
@@ -29,7 +30,8 @@
 
 #include "minidump_probe.hpp" // Windows-only dump content probe (no-op off Windows)
 
-namespace fs = std::filesystem;
+namespace cont = crd::containers;
+namespace fs   = std::filesystem;
 
 using crd::crash::InstallResult;
 using crd::crash::WriteResult;
@@ -43,14 +45,14 @@ std::atomic<unsigned> g_unique{0};
 fs::path fresh_temp_dir()
 {
     const unsigned n = g_unique.fetch_add(1U, std::memory_order_relaxed);
-    fs::path       p =
-        fs::temp_directory_path() / ("crd_crash_ct_" + std::to_string(n) + "_" + std::to_string(static_cast<unsigned>(
 #if defined(_WIN32)
-                                                                                     ::_getpid()
+    const unsigned pid = static_cast<unsigned>(::_getpid());
 #else
-                                                                                     ::getpid()
+    const unsigned pid = static_cast<unsigned>(::getpid());
 #endif
-                                                                                     )));
+    char leaf[64];
+    (void)std::snprintf(leaf, sizeof(leaf), "crd_crash_ct_%u_%u", n, pid);
+    fs::path        p = fs::temp_directory_path() / leaf;
     std::error_code ec;
     fs::remove_all(p, ec);
     return p;
@@ -146,7 +148,7 @@ TEST_CASE("crash contract: a live capture writes a complete, long-path-safe, non
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path1));
     REQUIRE(path1 != nullptr);
 
-    const std::wstring wpath1{path1};
+    const std::wstring_view wpath1{path1};
     CHECK(wpath1.rfind(L"\\\\?\\", 0) == 0); // resolved to the long-path form
     const fs::path dump1{wpath1};
     CHECK(fs::exists(dump1));
@@ -155,7 +157,7 @@ TEST_CASE("crash contract: a live capture writes a complete, long-path-safe, non
     // A second back-to-back capture must not collide with or overwrite the first.
     const wchar_t* path2 = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path2));
-    const fs::path dump2{std::wstring{path2}};
+    const fs::path dump2{path2};
     CHECK(dump2 != dump1);
     CHECK(fs::exists(dump2));
     CHECK(fs::exists(dump1)); // the first is still there -- not clobbered
@@ -186,8 +188,9 @@ TEST_CASE("crash contract: a hang-kind live dump embeds and round-trips its evid
     const fs::path dir = fresh_temp_dir();
     REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
 
-    const std::array<unsigned char, 12> blob{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC};
-    crd::crash::DumpNote                 note{};
+    const cont::StaticArray<unsigned char, 12> blob{0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                                    0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC};
+    crd::crash::DumpNote                       note{};
     note.kind           = crd::crash::DumpKind::Hang;
     note.evidence       = blob.data();
     note.evidence_bytes = static_cast<std::uint32_t>(blob.size());
@@ -195,19 +198,20 @@ TEST_CASE("crash contract: a hang-kind live dump embeds and round-trips its evid
     const wchar_t* path = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(note, &path));
     REQUIRE(path != nullptr);
-    CHECK(std::wstring{path}.find(L"\\hang_") != std::wstring::npos); // the Hang prefix
+    CHECK(std::wstring_view{path}.find(L"\\hang_") != std::wstring_view::npos); // the Hang prefix
 
-    std::array<unsigned char, 64> read_back{};
-    const std::size_t             n =
+    cont::StaticArray<unsigned char, 64> read_back{};
+    const std::size_t                    n =
         crd::crash::read_dump_stream(path, crd::crash::kEvidenceStreamType, read_back.data(), read_back.size());
     REQUIRE(n == blob.size()); // the evidence stream is present with the exact byte count
     for (std::size_t i = 0; i < blob.size(); ++i)
         CHECK(read_back[i] == blob[i]); // ...and the exact bytes
 
     // The dump really captured threads (MiniDumpWriteDump suspended and walked them): NumberOfThreads >= 1.
-    constexpr std::uint32_t     kThreadListStream = 3U; // MINIDUMP_STREAM_TYPE::ThreadListStream
-    std::array<unsigned char, 8> head{};
-    const std::size_t           tn = crd::crash::read_dump_stream(path, kThreadListStream, head.data(), head.size());
+    constexpr std::uint32_t             thread_list_stream = 3U; // MINIDUMP_STREAM_TYPE::ThreadListStream
+    cont::StaticArray<unsigned char, 8> head{};
+    const std::size_t                   tn =
+        crd::crash::read_dump_stream(path, thread_list_stream, head.data(), head.size());
     REQUIRE(tn >= sizeof(std::uint32_t));
     std::uint32_t num_threads = 0;
     std::memcpy(&num_threads, head.data(), sizeof(num_threads)); // MINIDUMP_THREAD_LIST.NumberOfThreads (leading u32)
@@ -227,7 +231,7 @@ TEST_CASE("crash contract: a manual live dump uses the live_ prefix", "[core][di
     const wchar_t* path = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path)); // the Manual overload
     REQUIRE(path != nullptr);
-    CHECK(std::wstring{path}.find(L"\\live_") != std::wstring::npos);
+    CHECK(std::wstring_view{path}.find(L"\\live_") != std::wstring_view::npos);
 
     crd::crash::uninstall();
     std::error_code ec;
@@ -393,16 +397,16 @@ TEST_CASE("crash contract: the written dump is readable and identifies the fault
     const crd::crash::CrashReport r      = crd::crash::test_fatal_path(0xC0000005U);
     REQUIRE(r.write == WriteResult::Ok);
     REQUIRE(r.dump_path != nullptr);
-    const std::wstring dump_path{r.dump_path}; // valid until the next write overwrites the shared path buffer
+    const fs::path dump_path{r.dump_path}; // copied: the shared path buffer is rewritten by the next write
 
-    CHECK(crd_test_minidump::exception_code(dump_path) == 0xC0000005U); // the fault code landed in the dump
-    CHECK(crd_test_minidump::exception_thread_id(dump_path) == caller); // ...tagged to the faulting thread
+    CHECK(crd_test_minidump::exception_code(dump_path.c_str()) == 0xC0000005U); // the fault code landed in the dump
+    CHECK(crd_test_minidump::exception_thread_id(dump_path.c_str()) == caller); // ...tagged to the faulting thread
 
     wchar_t     exe[MAX_PATH] = {0};
     const DWORD n             = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
     REQUIRE(n > 0U);
-    const std::wstring exe_base = fs::path{std::wstring{exe, n}}.filename().wstring();
-    CHECK(crd_test_minidump::names_module_with_cv(dump_path, exe_base)); // the crashing binary is named + CV-identified
+    const fs::path exe_base = fs::path{exe, exe + n}.filename();
+    CHECK(crd_test_minidump::names_module_with_cv(dump_path.c_str(), exe_base.c_str())); // named + CV-identified
 
     crd::crash::uninstall();
     std::error_code ec;
