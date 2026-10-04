@@ -52,6 +52,7 @@ struct CaptureRegistry
     u64 next_context = 1;
     bool enabled = false;
     bool gpu_based_validation = false; // DIAG.7a(f-3): process-global GBV state (no leak across contexts)
+    detail::Dx12DredProcessState dred{}; // DIAG.7b(b): process-global DRED settings as last applied (no leak)
     bool registration_failed_to_retire = false;
 };
 
@@ -59,6 +60,51 @@ CaptureRegistry& registry()
 {
     static CaptureRegistry instance;
     return instance;
+}
+
+// DIAG.7b(b): apply the requested DRED features to the process-global settings before a device is created. Caller
+// holds devices_mutex. A feature is set only when its requested state differs from the last applied one, forced ON
+// or OFF explicitly, so a scope that did not ask never inherits an earlier scope's breadcrumbs or page-fault tracking.
+void apply_dred_settings(detail::Dx12DredProcessState& applied, bool breadcrumbs, bool page_faults,
+                         detail::Dx12DredActivation& out) noexcept
+{
+    out = detail::Dx12DredActivation{};
+    const bool contexts = breadcrumbs; // context strings ride with breadcrumbs when the runtime supports them
+    if (applied.breadcrumbs == breadcrumbs && applied.page_faults == page_faults &&
+        applied.breadcrumb_contexts == contexts && !breadcrumbs && !page_faults)
+    {
+        return; // nothing requested and nothing to turn off: zero calls, as before DIAG.7b
+    }
+    Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedDataSettings> settings;
+    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&settings))))
+    {
+        out.breadcrumbs = breadcrumbs ? detail::Dx12DredSetup::SettingsAbsent : detail::Dx12DredSetup::NotRequested;
+        out.page_faults = page_faults ? detail::Dx12DredSetup::SettingsAbsent : detail::Dx12DredSetup::NotRequested;
+        return;
+    }
+    const auto enablement = [](bool on) { return on ? D3D12_DRED_ENABLEMENT_FORCED_ON : D3D12_DRED_ENABLEMENT_FORCED_OFF; };
+    if (applied.breadcrumbs != breadcrumbs)
+    {
+        settings->SetAutoBreadcrumbsEnablement(enablement(breadcrumbs));
+        applied.breadcrumbs = breadcrumbs;
+    }
+    if (applied.page_faults != page_faults)
+    {
+        settings->SetPageFaultEnablement(enablement(page_faults));
+        applied.page_faults = page_faults;
+    }
+    Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedDataSettings1> settings1;
+    if (SUCCEEDED(settings.As(&settings1)))
+    {
+        if (applied.breadcrumb_contexts != contexts)
+        {
+            settings1->SetBreadcrumbContextEnablement(enablement(contexts));
+            applied.breadcrumb_contexts = contexts;
+        }
+        out.breadcrumb_contexts = contexts;
+    }
+    out.breadcrumbs = breadcrumbs ? detail::Dx12DredSetup::Set : detail::Dx12DredSetup::NotRequested;
+    out.page_faults = page_faults ? detail::Dx12DredSetup::Set : detail::Dx12DredSetup::NotRequested;
 }
 
 void instrumentation_failure(Dx12ValidationIssue issue, HRESULT result = S_OK, u64 detail = 0U) noexcept
@@ -307,7 +353,13 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
             }
         }
     }
+    apply_dred_settings(state.dred, m_req_dred_breadcrumbs, m_req_dred_page_faults, m_dred);
     const HRESULT result = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&output));
+    if (SUCCEEDED(result) && (m_req_dred_breadcrumbs || m_req_dred_page_faults))
+    {
+        Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData1> dred_data;
+        m_dred.readable = SUCCEEDED(output.As(&dred_data));
+    }
     {
         const std::lock_guard record_lock(state.records_mutex);
         for (auto* capture = state.captures; capture != nullptr; capture = capture->next)
@@ -326,17 +378,23 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         Microsoft::WRL::ComPtr<ID3D12InfoQueue> iq;
         const bool core_active = m_req_core && SUCCEEDED(output.As(&iq));
         va.active[0] = core_active;
-        va.reason[0] = !m_req_core ? ValidationUnsupportedReason::NotRequested
-                       : (core_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::LayerAbsent);
+        va.reason[0] = ValidationUnsupportedReason::NotRequested;
+        if (m_req_core)
+        {
+            va.reason[0] = core_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::LayerAbsent;
+        }
         va.active[1] = false;
-        va.reason[1] = !m_req_sync ? ValidationUnsupportedReason::NotRequested
-                                   : ValidationUnsupportedReason::BackendHasNoEquivalent;
+        va.reason[1] = m_req_sync ? ValidationUnsupportedReason::BackendHasNoEquivalent
+                                  : ValidationUnsupportedReason::NotRequested;
         const bool gbv_active = m_req_gbv && debug_ok && debug1_ok && state.gpu_based_validation;
         va.active[2] = gbv_active;
-        va.reason[2] = !m_req_gbv ? ValidationUnsupportedReason::NotRequested
-                       : (!debug_ok ? ValidationUnsupportedReason::LayerAbsent
-                       : (!debug1_ok ? ValidationUnsupportedReason::ExtensionAbsent
-                       : (gbv_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::FeatureAbsent)));
+        va.reason[2] = ValidationUnsupportedReason::NotRequested;
+        if (m_req_gbv && !debug_ok) { va.reason[2] = ValidationUnsupportedReason::LayerAbsent; }
+        else if (m_req_gbv && !debug1_ok) { va.reason[2] = ValidationUnsupportedReason::ExtensionAbsent; }
+        else if (m_req_gbv)
+        {
+            va.reason[2] = gbv_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::FeatureAbsent;
+        }
     }
     m_ordinal = state.next_context++;
     ++state.live_contexts;
@@ -376,6 +434,13 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     }
     instrumentation_failure(Dx12ValidationIssue::DeviceCapacity);
     return result;
+}
+
+detail::Dx12DredProcessState detail::dx12_dred_process_state() noexcept
+{
+    auto& state = registry();
+    const std::lock_guard device_lock(state.devices_mutex);
+    return state.dred;
 }
 
 detail::Dx12DeviceScope::~Dx12DeviceScope() noexcept

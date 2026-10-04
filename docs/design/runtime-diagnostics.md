@@ -278,6 +278,8 @@ Use minimal async-signal-safe recording or a qualified external collector. Insta
 for every relevant OS thread; collect original registers, signal and process/thread identity without allocating,
 formatting or taking general locks in the handler. Handle installation failure, recursive faults, signal chaining,
 core-policy permissions and normal uninstall. Symbolization/backtraces occur outside compromised execution.
+An alternate signal stack another runtime already installed on a thread (a sanitizer, a test framework) is
+borrowed, never replaced, and left with its owner on uninstall; only a stack crd installed is disabled again.
 
 Acceptance: faults on worker/fiber stacks, exhausted stacks, logger/allocator lock ownership, secondary signals,
 unwritable paths and missing core collector. SIGKILL/OOM-killer cases retain previous records or explicitly report

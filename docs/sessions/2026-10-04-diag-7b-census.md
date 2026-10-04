@@ -72,3 +72,26 @@ direction to carry on serially.
 | (f) | Readable removal bundle in the DIAG.5 evidence container | bundle round-trip |
 | (g) | GBV qualification: an isolated invalid descriptor workload captured only with GBV on | win-debug hardware |
 | (h) | Real device-loss reproduction: contained, hardware-gated, never on the desktop GPU outside a qualified harness | stays visible as a hardware gate |
+
+## (b) landed: DRED setup before device creation
+
+SDK check first: the workstation and the hosted Windows image both use Windows SDK 10.0.26100 (no Agility SDK), whose
+`d3d12.h` declares `ID3D12DeviceRemovedExtendedDataSettings`/`Settings1`/`Settings2`, `ID3D12DeviceRemovedExtendedData1`/
+`Data2`, `D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1`, `D3D12_DRED_PAGE_FAULT_OUTPUT2` and `D3D12_DRED_DEVICE_STATE`.
+
+- `Dx12DeviceScope::request_dred(breadcrumbs, page_faults)` records the request; `create()` applies it to the
+  process-global DRED settings under the device mutex before `D3D12CreateDevice`, through `apply_dred_settings`. Each
+  feature is set only when it differs from the last applied state, explicitly `FORCED_ON` or `FORCED_OFF`, so a scope
+  that requests nothing turns an earlier scope's breadcrumbs back off instead of inheriting them; with nothing
+  requested and nothing applied it makes zero calls, as before. Breadcrumb context strings (`Settings1`) follow
+  breadcrumbs when the runtime offers them.
+- `Dx12DredActivation` (DX12-local, not a common validation mode) reports the creation-time half per feature:
+  `NotRequested`, `Set` or `SettingsAbsent`, whether contexts were enabled, and whether the device exposes
+  `ID3D12DeviceRemovedExtendedData1` for the removal-time read. The query outcome at removal is (c)'s half.
+- `dx12_dred_process_state()` exposes the applied process-global state for the no-inheritance test.
+- The strict gate also required rewriting the nested ternaries in the 7a (f-3) activation reasons as if-chains;
+  behaviour unchanged.
+
+Verification on the workstation (`win-debug`, hardware adapter): `[dred]` 1 case, 22 assertions, the `Set` path (not
+the `SettingsAbsent` fallback); the whole `[validation]` set 29 cases, 4,162 assertions, passed after the change;
+strict gate clean on the three files. Hosted lanes qualify the rest.

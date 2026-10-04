@@ -442,6 +442,12 @@ TEST_CASE("crash contract: uninstall restores the previous handler and disables 
     sentinel.sa_flags = 0;
     REQUIRE(sigaction(SIGSEGV, &sentinel, nullptr) == 0);
 
+    // The alternate stack this thread had before install(): none, or one another runtime owns (Catch2's fatal-condition
+    // handler and AddressSanitizer each install one). crd borrows an existing stack instead of replacing it.
+    stack_t before{};
+    REQUIRE(sigaltstack(nullptr, &before) == 0);
+    const bool had_alt_stack = (before.ss_flags & SS_DISABLE) == 0 && before.ss_sp != nullptr;
+
     const fs::path dir = fresh_temp_dir();
     REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
 
@@ -449,6 +455,13 @@ TEST_CASE("crash contract: uninstall restores the previous handler and disables 
     REQUIRE(sigaction(SIGSEGV, nullptr, &cur) == 0);
     CHECK((cur.sa_flags & SA_ONSTACK) != 0); // crd runs its handler on the alternate stack
     CHECK(cur.sa_handler != SIG_IGN);        // crd's handler displaced the sentinel
+    stack_t during{};
+    REQUIRE(sigaltstack(nullptr, &during) == 0);
+    CHECK((during.ss_flags & SS_DISABLE) == 0); // an alternate stack is active for SA_ONSTACK
+    if (had_alt_stack)
+    {
+        CHECK(during.ss_sp == before.ss_sp); // the owner's stack was kept, not replaced
+    }
 
     crd::crash::uninstall();
 
@@ -456,7 +469,15 @@ TEST_CASE("crash contract: uninstall restores the previous handler and disables 
     CHECK(cur.sa_handler == SIG_IGN); // the sentinel prior handler is restored
     stack_t ss{};
     REQUIRE(sigaltstack(nullptr, &ss) == 0);
-    CHECK((ss.ss_flags & SS_DISABLE) != 0); // the alternate signal stack is disabled
+    if (had_alt_stack)
+    {
+        CHECK((ss.ss_flags & SS_DISABLE) == 0); // a borrowed stack is left with its owner
+        CHECK(ss.ss_sp == before.ss_sp);
+    }
+    else
+    {
+        CHECK((ss.ss_flags & SS_DISABLE) != 0); // crd's own stack is disabled again
+    }
 
     struct sigaction dfl{}; // leave SIGSEGV at the default so a later crashing test is not silently ignored
     dfl.sa_handler = SIG_DFL;

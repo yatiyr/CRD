@@ -876,7 +876,8 @@ static_assert(std::atomic<int>::is_always_lock_free && std::atomic<bool>::is_alw
 // SIGSTKSZ is not a constant expression on glibc >= 2.34, so a static-sized buffer cannot use it.
 constexpr std::size_t                  kAltStackBytes = 64U * 1024U;
 alignas(64) thread_local unsigned char t_alt_stack[kAltStackBytes];
-thread_local bool                      t_alt_installed = false;
+thread_local bool                      t_alt_installed = false; // this thread has an alternate stack for SA_ONSTACK
+thread_local bool                      t_alt_owned     = false; // ...and it is t_alt_stack (ours to disable)
 
 // -- Async-signal-safe primitives: format into a fixed buffer (no libc formatting) then write(2). --
 
@@ -1325,13 +1326,14 @@ void uninstall() noexcept
     s_gate.store(0, std::memory_order_relaxed);
     s_done.store(false, std::memory_order_relaxed);
 
-    if (t_alt_installed) // disable this thread's alt stack (per-thread; other threads' .tbss frees at thread exit)
+    if (t_alt_owned) // disable OUR alt stack on this thread; a borrowed one stays with its owner
     {
         stack_t ss{};
         ss.ss_flags = SS_DISABLE;
         (void)sigaltstack(&ss, nullptr);
-        t_alt_installed = false;
+        t_alt_owned = false;
     }
+    t_alt_installed = false;
 }
 
 WriteResult capture_dump(const DumpNote& /*note*/, const wchar_t** /*out_path*/) noexcept
@@ -1359,12 +1361,25 @@ void guard_current_thread_stack(std::uint32_t /*reserve_bytes*/) noexcept
     // cannot be recorded (there is no separate handler thread as on Windows).
     if (t_alt_installed)
         return;
+    // Keep an alternate stack another runtime already installed on this thread: it owns that stack's lifetime.
+    // AddressSanitizer gives every thread an mmap'ed alternate stack and munmaps whatever stack is current at thread
+    // exit, so replacing it with t_alt_stack made ASan die with "Failed to munmap" on every worker exit (hosted
+    // linux-gcc-asan, 2026-10-04, listing crd-stress-tests). SA_ONSTACK runs our handler on the existing stack.
+    stack_t current{};
+    if (sigaltstack(nullptr, &current) == 0 && (current.ss_flags & SS_DISABLE) == 0 && current.ss_sp != nullptr)
+    {
+        t_alt_installed = true; // borrowed: uninstall() leaves it to its owner
+        return;
+    }
     stack_t ss{};
     ss.ss_sp    = t_alt_stack;
     ss.ss_size  = kAltStackBytes;
     ss.ss_flags = 0;
     if (sigaltstack(&ss, nullptr) == 0)
+    {
         t_alt_installed = true;
+        t_alt_owned     = true;
+    }
 }
 
 #if CRD_ENABLE_ASSERTS

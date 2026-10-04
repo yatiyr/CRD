@@ -306,7 +306,12 @@ void Scheduler::wait_for_work(crd::u32 thread_index)
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wait_for_work called before init");
     if (!m_targeted_wake)
     {
-        m_semaphore.acquire(); // DEFAULT PATH — unchanged
+        // DEFAULT PATH. Return to the worker loop after every wake, not only after taking a token: a broadcast
+        // (wake_all, e.g. a worker_snapshot request) must bring EVERY sleeper back to its loop-top ack, and with
+        // acquire() one worker could drain all the broadcast's tokens while the rest re-slept inside it unacknowledged
+        // (hosted linux-gcc-debug-sse2, 2026-10-04: an idle 2-worker snapshot saw 1 response). A wake without a token
+        // costs one extra loop turn (the ack store and an empty try_pop) before the worker sleeps again.
+        m_semaphore.acquire_or_wake();
         return;
     }
     // TARGETED PATH (opt-in): mark this worker idle, then park on its own semaphore with a short timeout. The

@@ -7,6 +7,11 @@
 #include <cstring>
 #include <cstdlib>
 
+#if !CRD_OS_WINDOWS && CRD_ARCH_X64
+// fiber_switch_lin64.S: the outermost frame of every SysV fiber (calls R12, then R13; CFI marks the stack end).
+extern "C" void crd_fiber_start();
+#endif
+
 namespace crd::jobs::detail
 {
 
@@ -79,18 +84,21 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     // Initial frame layout (from saved_RSP low → high):
     //   [ 0.. 7]  RBX           (8 bytes, zero)
     //   [ 8..15]  RBP           (8 bytes, zero)
-    //   [16..23]  R12           (8 bytes, zero)
-    //   [24..31]  R13           (8 bytes, zero)
+    //   [16..23]  R12           entry_fn     (crd_fiber_start calls it)
+    //   [24..31]  R13           fiber_abort  (crd_fiber_start calls it if entry_fn returns: safety net)
     //   [32..39]  R14           (8 bytes, zero)
     //   [40..47]  R15           (8 bytes, zero)
-    //   [48..55]  entry_fn      ← fiber_switch's `ret` jumps here
-    //   [56..63]  fiber_abort   ← entry_fn's `ret` lands here (safety net)
+    //   [48..55]  crd_fiber_start ← fiber_switch's `ret` jumps here
+    //   [56..63]  zero          (unused; keeps the frame 16-aligned)
     //   Total: 64 bytes
     //
+    // crd_fiber_start (fiber_switch_lin64.S) carries `.cfi_undefined rip`, so every unwinder stops at the fiber's
+    // outermost frame instead of walking past the stack top (DIAG.6c(g); Windows' table walk already stops there).
+    //
     // Alignment invariant:
-    //   p = align16(stack_top), saved_RSP = p - 64
-    //   saved_RSP % 16 = 0  (ensures entry_fn sees RSP % 16 = 8 per SysV ABI)
-    //   (saved_RSP + 56) % 16 = 8 ✓   ← RSP when entry_fn begins
+    //   p = align16(stack_top), saved_RSP = p - 64, saved_RSP % 16 = 0
+    //   crd_fiber_start begins at saved_RSP + 56 (RSP % 16 = 8), adjusts by 8, and calls entry_fn, which therefore
+    //   begins at RSP % 16 = 8 per the SysV ABI ✓
 
     constexpr crd::usize frame_size = 64U;
     CRD_ASSERT(stack_size >= frame_size + 64U);
@@ -101,8 +109,9 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     auto* frame = reinterpret_cast<crd::u8*>(p - frame_size); // NOLINT(performance-no-int-to-ptr)
     std::memset(frame, 0, frame_size);
 
-    *reinterpret_cast<void**>(frame + 48U) = reinterpret_cast<void*>(entry_fn);
-    *reinterpret_cast<void**>(frame + 56U) = reinterpret_cast<void*>(fiber_abort);
+    *reinterpret_cast<void**>(frame + 16U) = reinterpret_cast<void*>(entry_fn);        // R12
+    *reinterpret_cast<void**>(frame + 24U) = reinterpret_cast<void*>(fiber_abort);     // R13
+    *reinterpret_cast<void**>(frame + 48U) = reinterpret_cast<void*>(crd_fiber_start); // first `ret` target
 
     ctx.rsp = frame;
 

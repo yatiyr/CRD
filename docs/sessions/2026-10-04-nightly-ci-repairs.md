@@ -141,3 +141,53 @@ Early results: both repository-check jobs now **pass** (causes 1 and 2 above rep
 Also in this batch: [DIAG.7a g-6](2026-10-04-diag-7a-dx12-program-route.md) and the
 [DIAG.7b census](2026-10-04-diag-7b-census.md). The remaining 21 lanes of run 37219198785 were still running when the
 batch was handed over; their results are read before further work.
+
+## Third batch: the first Linux test results
+
+With the repairs in, every Linux GCC lane of run 37219198785 built for the first time since 2026-09-14 and ran its
+tests. `linux-gcc-debug` and `linux-gcc-debug-sse2` passed all but three of 6,829 tests; `linux-gcc-asan` stopped at
+test discovery. `win-debug-scalar` passed.
+
+- **Worker snapshot on an idle pool saw one of two workers** (`test_diag_worker_snapshot.cpp:47`, `:149`). In the
+  default scheduler mode an idle worker slept inside `Semaphore::acquire()`, which re-sleeps internally when it wakes
+  to an empty count. `request_snapshot()` releases one token per worker and broadcasts, but the first worker to run
+  could drain every token in its own loop turns while the others woke, found nothing and re-slept inside `acquire()`
+  without ever reaching the loop-top acknowledgement. Repair: `Semaphore::acquire_or_wake()` sleeps once and returns
+  after the first wake, token or not, and `Scheduler::wait_for_work` uses it on the default path, so every woken
+  worker revisits its safe point; a wake without a token costs one loop turn. Discriminating proof in WSL
+  (`linux-gcc-debug`, Ubuntu 24.04): with only that change reverted the idle-pool test failed 2 of 10 runs; with it,
+  20 of 20 passed. Full `crd-jobs-tests` passed on Linux (173 cases, 29,719 assertions) and Windows (174 cases).
+- **Fiber unwind crashed** (`test_diag_unwind_qualification.cpp:158`, SIGSEGV). On SysV the initial fiber frame made
+  `fiber_switch` return straight into the entry function with `fiber_abort`'s address as its return address, so
+  libgcc's unwinder (behind glibc `backtrace()`) took `fiber_abort` for a caller, read the CFI of whatever precedes it
+  in memory, computed a frame past the stack top and faulted; Windows' table walk stops at the fiber entry. Any
+  backtrace taken on a Linux fiber (crash record, sampler) was exposed. Repair: `crd_fiber_start` in
+  `fiber_switch_lin64.S`, the first code of every fiber, carries `.cfi_undefined rip` (the standard end-of-stack
+  marker) and clears RBP, then calls the entry function from R12 and the never-return safety net from R13;
+  `fiber_init_stack` stores those in the R12/R13 slots and returns into the trampoline. Alignment is unchanged for the
+  entry function (RSP % 16 == 8). WSL: the `[unwind]` cases pass (2 cases, 43 assertions), including the fiber walk
+  that crashed, and the jobs suite above.
+- **ASan died at thread exit** ("Failed to munmap" while listing `crd-stress-tests`). `guard_current_thread_stack()`
+  replaced each thread's alternate signal stack with a `thread_local` buffer; AddressSanitizer gives every thread an
+  `mmap`ed alternate stack and unmaps whichever one is current at thread exit, so it tried to unmap Cerid's buffer.
+  A standalone `-fsanitize=address` repro in WSL reproduces it ("failed to deallocate 0x10000 bytes", exit 1) and the
+  keep-existing policy exits cleanly, keeping ASan's 32 KiB stack. Repair: an alternate stack another runtime already
+  installed is borrowed, never replaced, and left with its owner on uninstall; only Cerid's own stack is disabled
+  again. The [DIAG.5b contract](../design/runtime-diagnostics.md#diag-5b) states it. Catch2's fatal-condition handler
+  also installs one while tests run, which the uninstall-restoration test had silently relied on Cerid clobbering; that
+  test now records the stack before `install()` and asserts the same stack afterwards (borrowed: kept; none:
+  disabled). WSL: `[crash-capture],[crash]` 18 cases and the whole `crd-core-tests` (22 cases) pass.
+
+Also in this batch: [DIAG.7b(b)](2026-10-04-diag-7b-census.md#b-landed-dred-setup-before-device-creation), the DRED
+setup before device creation, with the 7a (f-3) activation reasons rewritten without nested conditionals.
+
+### Open: clang-cl unguarded-thread overflow (DIAG.5a)
+
+`win-clang-cl` on run 37219198785 failed one of 7,135 tests: `crash capture: a stack overflow on an UNguarded worker
+thread still dumps` exited 0xC0000005 with no dump instead of 0xC00000FD with one dump. The guarded-thread case
+passed, and production workers are guarded (`worker_loop` calls `guard_current_thread_stack`). The unguarded case
+asserts a measured property, that the OS's default guard slack leaves room for the crash filter's hand-off, which
+holds on hosted MSVC and on the workstation's clang-cl. Workstation `win-clang-cl` (clang-cl 20.1.8): the case passed 3
+of 3 runs, guarded case passed. The hosted lane uses clang-cl **22.1.3**, which this workstation does not have, so the
+failure is not reproduced and no code was changed on a guess. It stays open on DIAG.5a: the next hosted run shows
+whether it repeats; a reproduction needs LLVM 22 or a hosted diagnostic run.

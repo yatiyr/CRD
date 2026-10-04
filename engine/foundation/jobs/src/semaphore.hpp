@@ -94,6 +94,20 @@ public:
         }
     }
 
+    // Consume a token if one is available, else sleep ONCE and return after the first wake, token or not (consuming
+    // one if the wake left any). Unlike acquire(), a broadcast that leaves no token for this thread still returns it to
+    // its caller. The worker loop relies on that: every woken worker must revisit its loop-top safe point, otherwise one
+    // fast worker can drain a broadcast's tokens while the others re-sleep inside acquire() without observing it.
+    void acquire_or_wake() noexcept
+    {
+        if (try_drain_one())
+        {
+            return;
+        }
+        wait_on_zero();
+        (void)try_drain_one();
+    }
+
     // Try to consume a token, sleeping at most ~ms milliseconds once.
     // Returns true iff a token was consumed. Callers that must wait longer
     // loop (the scheduler's targeted-wake backstop pattern).

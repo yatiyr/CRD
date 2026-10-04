@@ -2008,3 +2008,72 @@ TEST_CASE("DIAG.7a(g-6): a DX12 Core report on a named compute pipeline correlat
         g::detail::dx12_detach_identity(id);
     }
 }
+
+// DIAG.7b(b): DRED setup before device creation. Requested features are forced on through the process-global DRED
+// settings before D3D12CreateDevice; a later scope that requests nothing turns them back off (no inheritance, the GBV
+// rule); the creation-time capability is reported per feature, and the device exposes the DRED data interface the
+// removal-time read (7b(c)) uses. Whether a query returns data is only known after a removal, so it is not asserted here.
+TEST_CASE("DIAG.7b(b): DRED is set before device creation on request and never inherited", "[dx12][validation][dred]")
+{
+    using g::detail::Dx12DredSetup;
+
+    // (1) Both features requested.
+    {
+        g::detail::Dx12DeviceScope scope; // declared before the device: it must outlive it
+        scope.request_dred(true, true);
+        ComPtr<ID3D12Device> device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        const g::detail::Dx12DredActivation dred = scope.dred();
+        if (dred.breadcrumbs == Dx12DredSetup::SettingsAbsent)
+        {
+            WARN("this runtime exposes no DRED settings interface; capability reported as SettingsAbsent");
+            CHECK(dred.page_faults == Dx12DredSetup::SettingsAbsent);
+            return;
+        }
+        CHECK(dred.breadcrumbs == Dx12DredSetup::Set);
+        CHECK(dred.page_faults == Dx12DredSetup::Set);
+        CHECK(dred.readable); // the created device exposes ID3D12DeviceRemovedExtendedData1
+        const g::detail::Dx12DredProcessState applied = g::detail::dx12_dred_process_state();
+        CHECK(applied.breadcrumbs);
+        CHECK(applied.page_faults);
+        CHECK(applied.breadcrumb_contexts == dred.breadcrumb_contexts);
+    }
+
+    // (2) A later scope that requests nothing does not inherit them: both are forced back off before its device.
+    {
+        g::detail::Dx12DeviceScope scope;
+        ComPtr<ID3D12Device> device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        const g::detail::Dx12DredActivation dred = scope.dred();
+        CHECK(dred.breadcrumbs == Dx12DredSetup::NotRequested);
+        CHECK(dred.page_faults == Dx12DredSetup::NotRequested);
+        CHECK_FALSE(dred.readable); // not probed when nothing was requested
+        const g::detail::Dx12DredProcessState applied = g::detail::dx12_dred_process_state();
+        CHECK_FALSE(applied.breadcrumbs);
+        CHECK_FALSE(applied.page_faults);
+        CHECK_FALSE(applied.breadcrumb_contexts);
+    }
+
+    // (3) Features are independent: page faults alone leave breadcrumbs (and their contexts) off.
+    {
+        g::detail::Dx12DeviceScope scope;
+        scope.request_dred(false, true);
+        ComPtr<ID3D12Device> device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        const g::detail::Dx12DredActivation dred = scope.dred();
+        CHECK(dred.breadcrumbs == Dx12DredSetup::NotRequested);
+        CHECK(dred.page_faults == Dx12DredSetup::Set);
+        CHECK_FALSE(dred.breadcrumb_contexts);
+        const g::detail::Dx12DredProcessState applied = g::detail::dx12_dred_process_state();
+        CHECK_FALSE(applied.breadcrumbs);
+        CHECK(applied.page_faults);
+    }
+
+    // Leave the process as later tests expect it: a no-request scope turns page faults back off.
+    {
+        g::detail::Dx12DeviceScope scope;
+        ComPtr<ID3D12Device> device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        CHECK_FALSE(g::detail::dx12_dred_process_state().page_faults);
+    }
+}
