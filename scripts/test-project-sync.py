@@ -38,6 +38,28 @@ class Fixture(unittest.TestCase):
         self.write(owner['project'], ET.tostring(tree))
         self.assertTrue(any(value.get('excluded') for value in project(self.ws, owner)['items'].values()))
 
+    def test_dependency_cache_items_are_recorded_not_project_source(self):
+        # Hosted CI points CPM_SOURCE_CACHE at <root>/.cpm-cache, so a generated project (crd-imgui) lists dependency
+        # sources there. They are dependency items like build/_deps, never project source, and stay protected from edits.
+        from project_sync.model import outside_project
+        self.native()
+        owner = self.model['targets']['dense']
+        cached = '.cpm-cache/imgui/0123abcd/imgui.cpp'
+        self.write(cached, 'int imgui() { return 1; }\n')
+        path = self.root / owner['project']
+        tree = ET.parse(path).getroot()
+        group = ET.SubElement(tree, '{' + NS + '}ItemGroup')
+        ET.SubElement(group, '{' + NS + '}ClCompile', Include=str(self.root / cached))
+        self.write(owner['project'], ET.tostring(tree))
+        snapshot = project(self.ws, owner)
+        self.assertIn(cached, snapshot['generated'])
+        self.assertNotIn(cached, snapshot['items'])
+        self.assertTrue(outside_project(self.ws, self.root / cached))
+        self.assertTrue(outside_project(self.ws, self.root / 'external/sdk/include/x.h'))
+        self.assertFalse(outside_project(self.ws, self.root / self.name / 'src/main.cpp'))
+        with self.assertRaisesRegex(Conflict, 'Protected repository area'):
+            self.ws.path(cached)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cerid-sync-')
         self.root = Path(self.temp.name).resolve()

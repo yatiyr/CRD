@@ -159,5 +159,8 @@ Operational bounds: 2-second polling and two stable observations; writer lock 10
 generation observer handshake 10 seconds; XML maximum 16 MiB and JSON maximum 32 MiB. DTD/entity input is rejected.
 Native source ownership must agree across configurations; [the native preset offers eight](visual-studio-configurations.md).
 Vendor/generated files are protected. Partial configuration exclusions require All Configurations or an explicit CMake rule.
+Dependency trees inside the checkout (`.cpm-cache/`, where hosted CI keeps `CPM_SOURCE_CACHE`, and `external/`) are
+treated like `build/_deps`: their project items are recorded as dependency items, excluded from the baseline sources
+and the CMake-input digest, and protected from edits.
 Running the CLI in a restricted session that cannot reach an already attached IDE is a conflict, not detached permission.
 Do not save another structural gesture while CMake is replacing its projection; wait for synchronization/reload first.

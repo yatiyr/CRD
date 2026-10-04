@@ -103,10 +103,41 @@ function bodies; `rfind(..., 0) == 0` prefix tests use `starts_with`; one loop i
   DIAG.1b closes on a recorded local TSan run. The row cannot reach Done through CI as mapped.
 - **DIAG.6c and DIAG.7a closure.** Carried from the previous session's unanswered question: whether a row may flip
   with an environment-blocked sub-unit (6c's elevated WPR captures; 7a's PIX-blocked DX12 pass label and the
-  dead-object lifetime caveat), and whether 7a's unproven DX12 program route moves to DIAG.7b.
+  dead-object lifetime caveat), and how the DX12 program route counts: it is now measured as a warning-severity
+  correlation, because no Core error names a pipeline state ([g-6](2026-10-04-diag-7a-dx12-program-route.md)).
 
 ## Publication
 
 A push runs the change tier only. `win-vs`, `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`,
 `linux-gcc-debug-scalar` and both public-check presets run on the nightly or a manual dispatch, so "fully green" needs
 a `workflow_dispatch` (or the next nightly) after the push.
+
+## Second batch, after run 37219198785
+
+The user pushed the first batch as `bf99a5e` and run
+[37219198785](https://github.com/yatiyr/CRD/actions/runs/37219198785) started. Correction to the publication note
+above: this push touched CMake and the workflow, so preflight resolved it to the **complete** tier and every lane,
+including `win-vs` and both public-check presets, runs on the push itself; no manual dispatch was needed. Pushes do not
+cancel each other (`cancel-in-progress` applies to pull requests only).
+
+Early results: both repository-check jobs now **pass** (causes 1 and 2 above repaired). Two lanes failed fast:
+
+- **`win-vs`**: the project-sync configure wrapper now runs, generates the solution, and then refuses
+  "Protected repository area: `.cpm-cache/imgui/.../imgui.cpp`". Hosted CI keeps `CPM_SOURCE_CACHE` inside the
+  checkout, so the generated `crd-imgui` project lists dependency sources under `.cpm-cache/`, which the sync model
+  validated as project paths; locally the same files live under `build/_deps` and were already treated as dependency
+  items. Repair: `THIRD_PARTY_ROOTS` (`.cpm-cache`, `external`) in `project_sync/storage.py`; `cmake_model` skips
+  sources and CMake inputs there (`outside_project`); `project()` records those items as dependency items without
+  edit-path validation. Edits there stay refused. The [sync contract](../design/project-structure-sync.md) states the
+  rule. Regression `test_dependency_cache_items_are_recorded_not_project_source` reproduces the hosted error against
+  the unpatched parser and passes with the fix; `test-project-sync.py` 60 tests OK.
+- **`win-tidy`**: the lane progressed past the perf sources and stopped on older findings:
+  `symbol_index.cpp` (two `data()[i]` subscripts, a loop that is `find`) and `diagnostic_allocator.cpp` (a
+  constant-like `CRD_DIAG_HAS_EXECINFO` macro, replaced by testing `__has_include(<execinfo.h>)` directly, standard
+  since C++17; a misplaced widening cast). Both files clean under the local strict gate. The tidy build step now runs
+  `cmake --build ... -- -k 0`: the job still fails on any finding, but one run reports every independent finding
+  instead of stopping at the first failing step.
+
+Also in this batch: [DIAG.7a g-6](2026-10-04-diag-7a-dx12-program-route.md) and the
+[DIAG.7b census](2026-10-04-diag-7b-census.md). The remaining 21 lanes of run 37219198785 were still running when the
+batch was handed over; their results are read before further work.

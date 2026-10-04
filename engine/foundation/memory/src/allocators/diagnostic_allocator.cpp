@@ -12,14 +12,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h> // RtlCaptureStackBackTrace
-#elif defined(__has_include)
-#if __has_include(<execinfo.h>)
+#elif __has_include(<execinfo.h>) // C++17 standard; tested directly instead of through a constant-like macro
 #include <execinfo.h> // backtrace
-#define CRD_DIAG_HAS_EXECINFO 1
-#endif
-#endif
-#ifndef CRD_DIAG_HAS_EXECINFO
-#define CRD_DIAG_HAS_EXECINFO 0
 #endif
 
 namespace crd::memory
@@ -35,8 +29,8 @@ crd::u32 capture_pcs(void** out, crd::u32 max, crd::u32 skip) noexcept
 #if defined(_WIN32)
     // RtlCaptureStackBackTrace can capture at most a bounded number of frames; skip our own frames.
     return static_cast<crd::u32>(
-        RtlCaptureStackBackTrace(static_cast<ULONG>(skip + 1U), static_cast<ULONG>(max), out, nullptr));
-#elif CRD_DIAG_HAS_EXECINFO
+        RtlCaptureStackBackTrace(static_cast<ULONG>(skip) + 1UL, static_cast<ULONG>(max), out, nullptr));
+#elif __has_include(<execinfo.h>)
     void*     tmp[kMaxStackFrames + 8U];
     const int want = static_cast<int>(max + skip + 1U);
     const int got = backtrace(tmp, want < static_cast<int>(kMaxStackFrames + 8U) ? want

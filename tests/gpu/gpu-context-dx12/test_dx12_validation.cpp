@@ -1530,11 +1530,15 @@ TEST_CASE("DX12 cached DXR pipelines mint one Program identity each, retired wit
     if (gpu == nullptr || !gpu->valid()) { WARN("no D3D12 device available; skipping"); return; }
 
     // The three required RT stages, authored in CKIR and cooked to DXIL libraries (the test_dx12_rt.cpp path).
-    k::KGraph grg(&allocator), gch(&allocator), gms(&allocator);
+    k::KGraph grg(&allocator);
+    k::KGraph gch(&allocator);
+    k::KGraph gms(&allocator);
     const k::KEntry erg = k::rt::build_rt_pipeline_raygen(grg, /*use_ser=*/false);
     const k::KEntry ech = k::rt::build_rt_pipeline_closesthit(gch);
     const k::KEntry ems = k::rt::build_rt_pipeline_miss(gms);
-    k::GlslKernel krg(&allocator), kch(&allocator), kms(&allocator);
+    k::GlslKernel krg(&allocator);
+    k::GlslKernel kch(&allocator);
+    k::GlslKernel kms(&allocator);
     REQUIRE(k::emit_rt_stage_hlsl(grg, erg, &allocator, krg, false));
     REQUIRE(k::emit_rt_stage_hlsl(gch, ech, &allocator, kch, false));
     REQUIRE(k::emit_rt_stage_hlsl(gms, ems, &allocator, kms, false));
@@ -1840,6 +1844,167 @@ TEST_CASE("DIAG.7a(g-5): a DX12 Core hazard on a named resource correlates to it
         list->ResourceBarrier(1U, &ok);
         (void)list->Close();
         CHECK_FALSE(dx12_new_error_correlates(capture, before, id)); // valid consumer produces no correlated error
+        g::detail::dx12_detach_identity(id);
+    }
+}
+
+// DIAG.7a(g-6): the DX12 PROGRAM route under Core validation -- the claimed d2b-dx12 Program identity that g-5 left
+// "feasible but deferred". Measured on the workstation debug layer (2026-10-04): the Core ERRORS that involve a pipeline
+// state do not name it -- a root-signature mismatch at Dispatch (953), Dispatch with no root signature (952) and
+// SetPipelineState on a COPY list (933) carry no object text, and SetPipelineState of a graphics PSO on a COMPUTE list or
+// a Draw without the PSO's render target produce no message at all. The one Core record that names the bound pipeline
+// state is the WARNING for a Draw with a compute PSO set (951): "The current Pipeline State (0x...:'<name>') is a compute
+// Pipeline State". So the DX12 program route correlates at WARNING severity; an error-severity correlation for programs
+// is not available from Core and stays with DIAG.7b (GPU-based validation / DRED). Same three legs as g-5:
+// (a) named -> a correlated WARNING carries the Program id; (b) unnamed -> the warning still fires but nothing parses;
+// (c) a valid dispatch on a named pipeline -> nothing correlates to the id at any severity.
+namespace
+{
+constexpr const char* kG6ComputeHlsl = "[numthreads(1, 1, 1)] void cs_main() {}";
+
+[[nodiscard]] ComPtr<ID3D12RootSignature> dx12_make_empty_root_signature(ID3D12Device* device)
+{
+    D3D12_ROOT_SIGNATURE_DESC rsd{};
+    ComPtr<ID3DBlob>          sig;
+    ComPtr<ID3DBlob>          err;
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+    ComPtr<ID3D12RootSignature> root;
+    if (FAILED(device->CreateRootSignature(0U, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
+    {
+        return nullptr;
+    }
+    return root;
+}
+
+[[nodiscard]] ComPtr<ID3D12PipelineState> dx12_make_compute_pso(ID3D12Device* device, ID3D12RootSignature* root,
+                                                                const crd::containers::Array<crd::u8>& dxil)
+{
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature     = root;
+    desc.CS.pShaderBytecode = dxil.data();
+    desc.CS.BytecodeLength  = dxil.size();
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    return pso;
+}
+
+// The program hazard: a Draw with a COMPUTE pipeline state bound (the record names the bound pipeline state).
+void dx12_record_draw_with_compute_pso(ID3D12GraphicsCommandList* list, ID3D12RootSignature* root,
+                                       ID3D12PipelineState* pso)
+{
+    list->SetGraphicsRootSignature(root);
+    list->SetPipelineState(pso);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list->DrawInstanced(3U, 1U, 0U, 0U);
+}
+
+[[nodiscard]] bool dx12_new_warning_correlates(const g::Dx12ValidationCapture& capture, crd::u32 from,
+                                               const g::ObjectIdentity& id)
+{
+    const crd::u32 now = capture.report().messages;
+    for (crd::u32 i = from; i < now; ++i)
+    {
+        g::Dx12ValidationMessage m;
+        if (capture.message(i, m) && m.identity == id && m.severity == g::Dx12ValidationSeverity::Warning) { return true; }
+    }
+    return false;
+}
+
+[[nodiscard]] bool dx12_new_record_names(const g::Dx12ValidationCapture& capture, crd::u32 from,
+                                         const g::ObjectIdentity& id)
+{
+    const crd::u32 now = capture.report().messages;
+    for (crd::u32 i = from; i < now; ++i)
+    {
+        g::Dx12ValidationMessage m;
+        if (capture.message(i, m) && m.identity == id) { return true; }
+    }
+    return false;
+}
+} // namespace
+
+TEST_CASE("DIAG.7a(g-6): a DX12 Core report on a named compute pipeline correlates to its Program identity",
+          "[dx12][validation][identity][hazard]")
+{
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 g-6 correlated program test");
+    const g::DxilCompileResult cs = g::compile_hlsl_to_dxil(
+        g::ShaderStage::Compute, crd::containers::StringView(kG6ComputeHlsl), "g6_cs", &allocator);
+    if (!cs.ok) { WARN("dxc/DXIL unavailable; skipping the DX12 program-route correlation"); return; }
+
+    g::Dx12ValidationCapture capture(&allocator, 4096U);
+    REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
+
+    g::detail::Dx12DeviceScope lifetime;
+    ComPtr<ID3D12Device> device;
+    REQUIRE(SUCCEEDED(lifetime.create(device)));
+    ComPtr<ID3D12CommandAllocator> commands;
+    REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commands))));
+    const ComPtr<ID3D12RootSignature> root = dx12_make_empty_root_signature(device.Get());
+    REQUIRE(root != nullptr);
+
+    const auto make_list = [&]() {
+        ComPtr<ID3D12GraphicsCommandList> list;
+        REQUIRE(SUCCEEDED(device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, commands.Get(), nullptr,
+                                                    IID_PPV_ARGS(&list))));
+        return list;
+    };
+
+    // (a) HAZARD on a NAMED compute pipeline -> a correlated WARNING carries its Program identity.
+    {
+        auto pso = dx12_make_compute_pso(device.Get(), root.Get(), cs.dxil);
+        REQUIRE(pso != nullptr);
+        const g::ObjectIdentity id = g::detail::dx12_attach_identity(pso.Get(), g::ObjectKind::Program, "dx12-g6-pso");
+        REQUIRE(id.valid());
+        CHECK(id.kind == g::ObjectKind::Program);
+        REQUIRE(g::identity_registry().alive(id));
+
+        const crd::u32 before = capture.report().messages;
+        auto           list   = make_list();
+        dx12_record_draw_with_compute_pso(list.Get(), root.Get(), pso.Get());
+        (void)list->Close();
+
+        for (crd::u32 i = before; i < capture.report().messages; ++i)
+        {
+            g::Dx12ValidationMessage m;
+            if (capture.message(i, m))
+            {
+                UNSCOPED_INFO("dx12 msg id=" << m.id << " sev=" << static_cast<int>(m.severity)
+                              << " ident.valid=" << m.identity.valid() << " text=" << m.text);
+            }
+        }
+        CHECK(capture.report().dropped == 0U);
+        REQUIRE(dx12_new_warning_correlates(capture, before, id)); // a correlated WARNING names THIS program
+        CHECK(g::identity_registry().alive(id));
+        g::detail::dx12_detach_identity(id);
+    }
+
+    // (b) TEETH: the same hazard on an UNNAMED pipeline -> the warning fires, but nothing parses (name load-bearing).
+    {
+        auto pso = dx12_make_compute_pso(device.Get(), root.Get(), cs.dxil);
+        REQUIRE(pso != nullptr); // deliberately NOT named
+        const crd::u32 before = capture.report().messages;
+        const crd::u64 warn0  = capture.report().warnings;
+        auto           list   = make_list();
+        dx12_record_draw_with_compute_pso(list.Get(), root.Get(), pso.Get());
+        (void)list->Close();
+        CHECK(capture.report().warnings > warn0);                       // the hazard still fired
+        CHECK_FALSE(dx12_new_record_has_any_identity(capture, before)); // but no crd token -> no correlation
+    }
+
+    // (c) VALID: dispatch the named compute pipeline with the root signature it was built with -> nothing names it.
+    {
+        auto pso = dx12_make_compute_pso(device.Get(), root.Get(), cs.dxil);
+        REQUIRE(pso != nullptr);
+        const g::ObjectIdentity id =
+            g::detail::dx12_attach_identity(pso.Get(), g::ObjectKind::Program, "dx12-g6-valid");
+        REQUIRE(id.valid());
+        const crd::u32 before = capture.report().messages;
+        auto           list   = make_list();
+        list->SetComputeRootSignature(root.Get());
+        list->SetPipelineState(pso.Get());
+        list->Dispatch(1U, 1U, 1U);
+        (void)list->Close();
+        CHECK_FALSE(dx12_new_record_names(capture, before, id)); // a valid dispatch: no record names the program
         g::detail::dx12_detach_identity(id);
     }
 }

@@ -6,7 +6,8 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 
-from .storage import Conflict, Transaction, Workspace, atomic_write, digest, json_bytes, portable_name, read_json
+from .storage import (THIRD_PARTY_ROOTS, Conflict, Transaction, Workspace, atomic_write, digest, json_bytes,
+                      portable_name, read_json)
 
 MANIFEST = 'cmake/project-structure.json'
 KINDS = {'ClCompile', 'ClInclude', 'None', 'ResourceCompile', 'MASM', 'NASM'}
@@ -87,6 +88,13 @@ def request_file_api(build: Path):
         atomic_write(query, payload)
 
 
+def outside_project(ws: Workspace, path: Path) -> bool:
+    """True for a CMake-reported path that is not project source: outside the checkout, in build/ or a dependency."""
+    if not path.is_relative_to(ws.root) or path.is_relative_to(ws.root / 'build'):
+        return True
+    return any(path.is_relative_to(ws.root / name) for name in THIRD_PARTY_ROOTS)
+
+
 def cmake_model(ws: Workspace, build: Path):
     reply = build / '.cmake/api/v1/reply'
     def document(name):
@@ -130,7 +138,7 @@ def cmake_model(ws: Workspace, build: Path):
             for item in target.get('sources', []):
                 path = Path(item['path'])
                 path = path if path.is_absolute() else ws.root / path
-                if item.get('isGenerated') or not path.is_relative_to(ws.root) or path.is_relative_to(ws.root / 'build'):
+                if item.get('isGenerated') or outside_project(ws, path):
                     continue
                 name = path.relative_to(ws.root).as_posix()
                 ws.path(name)
@@ -148,8 +156,8 @@ def cmake_model(ws: Workspace, build: Path):
     for item in files['inputs']:
         path = Path(item['path'])
         path = path if path.is_absolute() else ws.root / path
-        if (path.is_relative_to(ws.root) and not path.is_relative_to(ws.root / 'build')
-                and not item.get('isGenerated') and not item.get('isExternal') and path.is_file()):
+        if (not outside_project(ws, path) and not item.get('isGenerated') and not item.get('isExternal')
+                and path.is_file()):
             relative = ws.relative(path)
             inputs[relative] = digest(ws.bytes(relative))
     inputs[MANIFEST] = digest(ws.bytes(MANIFEST))

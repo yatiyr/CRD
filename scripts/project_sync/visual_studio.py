@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 from .model import KINDS, MANIFEST, cmake_model, load_manifest, physical_group, target_settings
 from .operations import Plan, remap, register_module
-from .storage import Conflict, Workspace, atomic_write, digest, json_bytes, portable_name, read_json
+from .storage import THIRD_PARTY_ROOTS, Conflict, Workspace, atomic_write, digest, json_bytes, portable_name, read_json
 
 NS = 'http://schemas.microsoft.com/developer/msbuild/2003'
 ET.register_namespace('', NS)
@@ -37,7 +37,8 @@ def included_path(ws: Workspace, project: Path, value: str):
     path = path if path.is_absolute() else project.parent / path
     path = Path(os.path.abspath(path))
     name = ws.relative(path)
-    ws.path(name)
+    if name.split('/')[0] not in THIRD_PARTY_ROOTS:  # dependency items are recorded, never validated as source
+        ws.path(name)
     return name
 
 
@@ -145,7 +146,8 @@ def project(ws: Workspace, owner):
                         raise Conflict(f'Configuration-specific exclusion is not a portable membership edit: {name}; '
                                        'select All Configurations, or author the conditional source in CMake')
                 entry['excluded'] = values == {'true'}
-            if name.startswith('build/') and ('/CMakeFiles/' in name or '/_deps/' in name):
+            dependency = name.split('/')[0] in THIRD_PARTY_ROOTS
+            if dependency or (name.startswith('build/') and ('/CMakeFiles/' in name or '/_deps/' in name)):
                 generated[name] = entry
             elif name in items:
                 raise Conflict(f'Duplicate project source item: {name}')

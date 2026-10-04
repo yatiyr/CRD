@@ -16,6 +16,12 @@ import time
 import uuid
 
 
+# Third-party trees a configure may place inside the checkout (CI points CPM_SOURCE_CACHE at <root>/.cpm-cache;
+# external/ holds prebuilt SDKs). They are protected from edits, and their sources and CMake files belong to
+# dependencies, never to the project structure, exactly like the build tree.
+THIRD_PARTY_ROOTS = ('.cpm-cache', 'external')
+
+
 class Conflict(RuntimeError):
     """A rejected operation which requires an explicit correction or reconciliation."""
 
@@ -98,7 +104,7 @@ class Workspace:
     def path(self, name: str, *, internal=False) -> Path:
         name = portable_name(name)
         path = self.root / name
-        if name.split('/')[0] in {'.git', '.codex', '.agents', '.claude', 'external', 'out', '.cpm-cache'}:
+        if name.split('/')[0] in {'.git', '.codex', '.agents', '.claude', 'out', *THIRD_PARTY_ROOTS}:
             raise Conflict(f'Protected repository area: {name}')
         if name.split('/')[0] == 'build' and not internal:
             if not any(path.is_relative_to(build) for build in self.build_roots):

@@ -386,8 +386,10 @@ jobs:
         shell: pwsh
         run: cmake --preset ${{ matrix.preset }} -DCRD_CLANG_TIDY_WARNINGS_AS_ERRORS=ON "-DCLANG_TIDY_EXE=$env:CRD_CI_TIDY"
 
+      # Every translation unit is a strict-analysis check here, so keep going past a failing one (`-k 0`): the job
+      # still fails on any finding, but one run reports every independent finding instead of the first few.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Evidence bundle and summary
         if: always()

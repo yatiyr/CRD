@@ -222,8 +222,8 @@ cont::String read_cstr(cont::ConstSpan<crd::u8> dump, crd::u64 off, crd::u64 max
                        crd::memory::IAllocator* a) noexcept
 {
     cont::String s(a);
-    for (crd::u64 i = off; i < max && dump.data()[i] != 0; ++i)
-        s.push_back(static_cast<char>(dump.data()[i]));
+    for (crd::u64 i = off; i < max && dump[static_cast<crd::usize>(i)] != 0; ++i)
+        s.push_back(static_cast<char>(dump[static_cast<crd::usize>(i)]));
     return s;
 }
 
@@ -240,10 +240,7 @@ cont::StringView basename_view(const cont::String& path) noexcept
 
 bool sv_has_nul(cont::StringView s) noexcept
 {
-    for (char c : s)
-        if (c == '\0')
-            return true;
-    return false;
+    return s.find('\0') != cont::StringView::npos;
 }
 
 // A basename is safe to use as a lookup path segment iff it is non-empty, not "." or "..", and free of an embedded
