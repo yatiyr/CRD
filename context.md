@@ -28,7 +28,7 @@ Collaboration/multiplayer contracts: [ADR-0130](docs/decisions/0130-system-quali
 
 User assignment 2026-10-04: work serially, no parallel agents; make CI fully green first. Changes go to CI without
 local whole-tree builds/tests; read CI, repair, repeat. Every lane failed on `660a085` since 2026-09-17; the handoff
-records the twelve causes, the repairs awaiting the next push plus a nightly/manual run, and two open user
-decisions (DIAG.1b hosted TSan; DIAG.6c/7a closure). Pending gates remain in ROADMAP; the
+records the causes and repairs. On 2026-10-05 the user accepted all open recommendations
+([decisions](docs/sessions/2026-10-05-user-decisions.md)): lavapipe CI, 7a lifetime/pass, TSan lane, WARP fault. Pending gates remain in ROADMAP; the
 [audit](docs/sessions/2026-09-14-infrastructure-audit.md) maps child evidence and retained qualification.
 ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.
