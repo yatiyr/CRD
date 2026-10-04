@@ -39,6 +39,8 @@ struct Dx12DredProcessState
     bool breadcrumb_contexts = false;
 };
 [[nodiscard]] Dx12DredProcessState dx12_dred_process_state() noexcept;
+// DIAG.7b(g): the process-global GBV state last applied before a device creation (the no-inheritance proof).
+[[nodiscard]] bool dx12_gbv_process_state() noexcept;
 
 // Declare BEFORE the context's device/resources: unregister only after their destruction. One registration per
 // live native device, including shared-device contexts. Device creation and debug enablement are serialized.

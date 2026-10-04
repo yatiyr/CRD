@@ -450,10 +450,16 @@ TEST_CASE("crash contract: threads created after install() reserve the stack gua
     ULONG             existing_seen = 0;
     std::thread       existing([&] {
         started.store(true, std::memory_order_release);
-        while (!go.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        while (!go.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
         existing_seen = guarantee_now();
     });
-    while (!started.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    while (!started.load(std::memory_order_acquire))
+    {
+        std::this_thread::yield();
+    }
 
     const fs::path dir = fresh_temp_dir();
     REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));

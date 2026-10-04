@@ -153,3 +153,61 @@ that the named list maps to its Pass identity and the unnamed queue to none, tha
 terminated, and that the existing allocation maps to a live identity while the freed one keeps a valid, retired
 identity (registry `alive` false): the "recent resource retirement" clause. `[dred]` 4 cases, 82 assertions;
 `[validation]` 32 cases, 4,222 assertions; strict gate clean.
+
+## (f) landed (2026-10-05): every recorded removal is a readable bundle
+
+`crd::crash::DumpKind` gains `DeviceRemoved` (appended; files `gpu_*.dmp`). `dx12_record_removal` now also writes the
+record, when crash capture is installed, as a `DeviceRemoved` live dump whose Cerid evidence stream holds a 16-byte
+`Dx12RemovalBundleHeader` (magic `CRDR`, version 1, record size) followed by the trivially copyable
+`Dx12RemovalRecord`. The stored record keeps the write's `WriteResult` (`NotInstalled` when crash capture is off; the
+existing live-dump cap bounds how many are written). `dx12_read_removal_bundle` reads a dump back with one bounded
+`read_dump_stream` and classifies it: `Ok`, `NoStream`, `BadMagic`, `BadVersion` or `BadSize`, never a misread of
+another build's or another kind's evidence.
+
+`[dred]` (f): without crash capture a timed-out wait records the removal with `NotInstalled` and writes nothing; with it
+installed the same failure writes `gpu_*.dmp`, and reading it back gives the `EngineForced` origin, the recorded
+sequence, `DXGI_ERROR_DEVICE_REMOVED` and both DRED queries `Ok`; a plain live dump reads as `NoStream` and a hang dump
+with foreign evidence as `BadMagic`. Three consecutive passes (5 cases, 106 assertions); `[validation]` 33 cases;
+`crd-core-tests` 30; `crd-jobs-tests [diag]` 73. The strict gate, analysing `crash.hpp` on its own, also required its
+three result/kind enums to use `std::uint8_t` (nothing depends on their width; the one atomic stays lock-free).
+Remaining for DIAG.7b: (g) GPU-based validation qualification and (h) the hardware-gated real fault.
+
+## (g) landed (2026-10-05): GBV qualified by an isolated invalid descriptor workload
+
+Measured first (a throwaway experiment, removed): a compute shader storing through `u0`, bound by a one-entry UAV
+descriptor table whose shader-visible heap slot was never written. With the core layer alone, recording and closing
+the list reports nothing. With GBV on, executing it yields one error, `D3D12_MESSAGE_ID_GPU_BASED_VALIDATION_DESCRIPTOR_UNINITIALIZED`
+(938), after the fence completes; the device stays live.
+
+`[dx12][validation][gbv]` (g) turns that into the qualification. The pipeline is Cerid-named (`Program`).
+- **Core only:** the list is recorded and closed but never submitted, because without GBV the access is undefined on
+  the GPU. No error, no record naming the program and no 938.
+- **GBV:** the device is switched to guarded patching through `ID3D12DebugDevice1`, so the invalid access is skipped.
+  The list runs through the production `dx12_submit` and a bounded `dx12_wait`. After a bounded poll for the report,
+  the test asserts:
+  - a 938 record;
+  - a correlated error carrying the program's identity;
+  - `S_OK` from `GetDeviceRemovedReason`;
+  - no new execution failures.
+- **No GBV available:** when GBV is not active (no Graphics Tools), the test reports a visible SKIP rather than a pass.
+
+**Pre-existing defect found and fixed.** The full DX12 suite crashed (SIGSEGV) in a frame-graph test whenever a GBV
+test (the 7a f-3 activation test or (g)) ran first.
+- lldb placed the fault in the NVIDIA user-mode driver, under `d3d12SDKLayers`, from `Dx12RasterContext::transition`.
+- It came after `frame descriptor reservation failed: HRESULT 0x8007000E`.
+- Root cause: `Dx12DeviceScope::create` reset the process-global GBV switch only when the new scope requested some
+  validation. A scope requesting nothing, which is every plain context, inherited GBV. The GBV descriptor-heap shadow
+  memory then exhausted the frame-graph heap.
+- The fix: the reset now also runs when GBV was left on. `dx12_gbv_process_state()` exposes the applied state, as
+  `dx12_dred_process_state()` does for DRED.
+- The (g) test ends by proving that a no-request scope turns GBV off. Teeth: with the reset disabled, that check fails;
+  restored and rebuilt, it passes.
+
+Verification (`win-debug`, workstation hardware):
+- `[gbv]` 40 assertions, three passes before the final edits.
+- `[gbv],[frame-graph]` and `f-3,[frame-graph]` pass.
+- `[validation]` 34 cases.
+- The whole DX12 test executable: 200 cases, 10,578 assertions, twice.
+- Strict gate clean on the three changed files.
+
+Remaining for DIAG.7b: (h), the contained, hardware-gated real device fault.

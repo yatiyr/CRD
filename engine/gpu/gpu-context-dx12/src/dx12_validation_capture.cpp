@@ -335,8 +335,11 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     bool debug1_ok = false;
     {
         const bool any_req = m_req_core || m_req_sync || m_req_gbv;
+        // DIAG.7b(g): a scope requesting nothing must still turn an earlier scope's GBV off, or GBV instruments every
+        // later device (measured: its descriptor-heap shadow memory exhausted a frame-graph heap -> driver fault).
+        const bool reset_gbv = !m_req_gbv && state.gpu_based_validation;
         Microsoft::WRL::ComPtr<ID3D12Debug> debug;
-        debug_ok = any_req && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
+        debug_ok = (any_req || reset_gbv) && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
         if (debug_ok)
         {
             if ((m_req_core || m_req_gbv) && !state.enabled) { debug->EnableDebugLayer(); state.enabled = true; }
@@ -389,8 +392,14 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         const bool gbv_active = m_req_gbv && debug_ok && debug1_ok && state.gpu_based_validation;
         va.active[2] = gbv_active;
         va.reason[2] = ValidationUnsupportedReason::NotRequested;
-        if (m_req_gbv && !debug_ok) { va.reason[2] = ValidationUnsupportedReason::LayerAbsent; }
-        else if (m_req_gbv && !debug1_ok) { va.reason[2] = ValidationUnsupportedReason::ExtensionAbsent; }
+        if (m_req_gbv && !debug_ok)
+        {
+            va.reason[2] = ValidationUnsupportedReason::LayerAbsent;
+        }
+        else if (m_req_gbv && !debug1_ok)
+        {
+            va.reason[2] = ValidationUnsupportedReason::ExtensionAbsent;
+        }
         else if (m_req_gbv)
         {
             va.reason[2] = gbv_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::FeatureAbsent;
@@ -441,6 +450,13 @@ detail::Dx12DredProcessState detail::dx12_dred_process_state() noexcept
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);
     return state.dred;
+}
+
+bool detail::dx12_gbv_process_state() noexcept
+{
+    auto& state = registry();
+    const std::lock_guard device_lock(state.devices_mutex);
+    return state.gpu_based_validation;
 }
 
 detail::Dx12DeviceScope::~Dx12DeviceScope() noexcept

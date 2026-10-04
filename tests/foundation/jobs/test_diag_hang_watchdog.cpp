@@ -254,7 +254,9 @@ TEST_CASE("hang watchdog: a parked root over an executing child reads executing>
         // without parking until the gate opens, so executing>=1 is then stable for the whole window.
         s = crd::jobs::progress_snapshot();
         if (g_child_running.load(std::memory_order_acquire) && !s.quiescent && s.executing >= 1U)
+        {
             break;
+        }
         std::this_thread::yield();
     }
     CHECK_FALSE(s.quiescent);

@@ -156,7 +156,11 @@ TEST_CASE("IdentityRegistry mints uniquely under concurrent creators", "[gpu][di
     for (crd::u32 k = 0; k < total; ++k)
     {
         const crd::u32 idx = indices[k];
-        if (idx >= total) { in_range = false; continue; }
+        if (idx >= total)
+        {
+            in_range = false;
+            continue;
+        }
         if (seen[idx]) { distinct = false; }
         seen[idx] = true;
     }

@@ -1,3 +1,4 @@
+#include <crd/core/crash.hpp> // DIAG.7b(f): the removal bundle rides a DeviceRemoved live dump
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_compute_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
@@ -16,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <filesystem>
 #include <cstring>
 #include <cstdio>
 #include <thread>
@@ -1868,7 +1870,10 @@ constexpr const char* kG6ComputeHlsl = "[numthreads(1, 1, 1)] void cs_main() {}"
     D3D12_ROOT_SIGNATURE_DESC rsd{};
     ComPtr<ID3DBlob>          sig;
     ComPtr<ID3DBlob>          err;
-    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { return nullptr; }
+    if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+    {
+        return nullptr;
+    }
     ComPtr<ID3D12RootSignature> root;
     if (FAILED(device->CreateRootSignature(0U, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root))))
     {
@@ -1885,7 +1890,10 @@ constexpr const char* kG6ComputeHlsl = "[numthreads(1, 1, 1)] void cs_main() {}"
     desc.CS.pShaderBytecode = dxil.data();
     desc.CS.BytecodeLength  = dxil.size();
     ComPtr<ID3D12PipelineState> pso;
-    if (FAILED(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)))) { return nullptr; }
+    if (FAILED(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso))))
+    {
+        return nullptr;
+    }
     return pso;
 }
 
@@ -1906,7 +1914,10 @@ void dx12_record_draw_with_compute_pso(ID3D12GraphicsCommandList* list, ID3D12Ro
     for (crd::u32 i = from; i < now; ++i)
     {
         g::Dx12ValidationMessage m;
-        if (capture.message(i, m) && m.identity == id && m.severity == g::Dx12ValidationSeverity::Warning) { return true; }
+        if (capture.message(i, m) && m.identity == id && m.severity == g::Dx12ValidationSeverity::Warning)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -1918,7 +1929,10 @@ void dx12_record_draw_with_compute_pso(ID3D12GraphicsCommandList* list, ID3D12Ro
     for (crd::u32 i = from; i < now; ++i)
     {
         g::Dx12ValidationMessage m;
-        if (capture.message(i, m) && m.identity == id) { return true; }
+        if (capture.message(i, m) && m.identity == id)
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -1930,7 +1944,11 @@ TEST_CASE("DIAG.7a(g-6): a DX12 Core report on a named compute pipeline correlat
     crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 g-6 correlated program test");
     const g::DxilCompileResult cs = g::compile_hlsl_to_dxil(
         g::ShaderStage::Compute, crd::containers::StringView(kG6ComputeHlsl), "g6_cs", &allocator);
-    if (!cs.ok) { WARN("dxc/DXIL unavailable; skipping the DX12 program-route correlation"); return; }
+    if (!cs.ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping the DX12 program-route correlation");
+        return;
+    }
 
     g::Dx12ValidationCapture capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
@@ -2098,7 +2116,10 @@ DredLeg dred_leg(bool request_dred, bool remove)
     g::detail::Dx12DeviceScope scope; // declared before the device: it must outlive it
     scope.request_dred(request_dred, request_dred);
     ComPtr<ID3D12Device> device;
-    if (FAILED(scope.create(device))) { return leg; }
+    if (FAILED(scope.create(device)))
+    {
+        return leg;
+    }
 
     // One named, completed submission so the device has done real work before the removal.
     D3D12_COMMAND_QUEUE_DESC qd{};
@@ -2122,7 +2143,10 @@ DredLeg dred_leg(bool request_dred, bool remove)
         HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (event != nullptr)
         {
-            if (SUCCEEDED(fence->SetEventOnCompletion(1U, event))) { (void)WaitForSingleObject(event, 5000U); }
+            if (SUCCEEDED(fence->SetEventOnCompletion(1U, event)))
+            {
+                (void)WaitForSingleObject(event, 5000U);
+            }
             CloseHandle(event);
         }
     }
@@ -2336,4 +2360,275 @@ TEST_CASE("DIAG.7b(e): DRED breadcrumbs and page-fault allocations map to Cerid 
 
     (void)registry.retire(pass);
     (void)registry.retire(live);
+}
+
+// DIAG.7b(f): a recorded removal is written as a readable bundle. With crash capture installed, the engine-forced removal
+// of a timed-out wait writes a DeviceRemoved live dump (gpu_*.dmp) whose evidence stream holds the versioned removal
+// record; reading the file back yields the same origin, sequence and DRED outcome. A dump with no evidence stream and a
+// hang dump with foreign evidence are refused rather than misread; without crash capture nothing is written.
+namespace
+{
+std::filesystem::path first_dump_with_prefix(const std::filesystem::path& dir, const char* prefix)
+{
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
+    {
+        if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with(prefix))
+        {
+            return it->path();
+        }
+    }
+    return {};
+}
+
+// One DRED-enabled device whose bounded wait times out -> the engine forces the removal and records it.
+void force_recorded_removal()
+{
+    g::detail::Dx12DeviceScope scope;
+    scope.request_dred(true, true);
+    ComPtr<ID3D12Device> device;
+    REQUIRE(SUCCEEDED(scope.create(device)));
+    ComPtr<ID3D12Fence> fence;
+    REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    REQUIRE(event != nullptr);
+    CHECK(FAILED(g::detail::dx12_wait(device.Get(), fence.Get(), 1U, event, 50U)));
+    CloseHandle(event);
+}
+} // namespace
+
+TEST_CASE("DIAG.7b(f): a recorded removal is written as a readable bundle", "[dx12][validation][dred]")
+{
+    namespace fs = std::filesystem;
+    using g::detail::Dx12BundleRead;
+    using crd::crash::WriteResult;
+
+    // Without crash capture: recorded, but no bundle is written.
+    crd::crash::uninstall();
+    force_recorded_removal();
+    CHECK(g::detail::dx12_last_removal().bundle_result == static_cast<crd::u32>(WriteResult::NotInstalled));
+
+    char leaf[64];
+    (void)std::snprintf(leaf, sizeof(leaf), "crd_dx12_bundle_%lu", static_cast<unsigned long>(GetCurrentProcessId()));
+    const fs::path  dir = fs::temp_directory_path() / leaf;
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    REQUIRE(crd::crash::InstallResult::Ok == crd::crash::install(dir.string().c_str()));
+
+    // With crash capture: the removal is written as gpu_*.dmp and reads back intact.
+    force_recorded_removal();
+    const g::detail::Dx12RemovalRecord recorded = g::detail::dx12_last_removal();
+    CHECK(recorded.bundle_result == static_cast<crd::u32>(WriteResult::Ok));
+    const fs::path bundle_path = first_dump_with_prefix(dir, "gpu_");
+    REQUIRE_FALSE(bundle_path.empty());
+    g::detail::Dx12RemovalRecord read{};
+    REQUIRE(g::detail::dx12_read_removal_bundle(bundle_path.c_str(), read) == Dx12BundleRead::Ok);
+    CHECK(read.origin == g::detail::Dx12RemovalOrigin::EngineForced);
+    CHECK(read.sequence == recorded.sequence);
+    CHECK(read.dred.removal_reason == static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED));
+    CHECK(read.dred.breadcrumbs == g::detail::Dx12DredQuery::Ok);
+    CHECK(read.dred.page_fault == g::detail::Dx12DredQuery::Ok);
+
+    // Refusals: a live dump without evidence, and a hang dump whose evidence is not a removal bundle.
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(nullptr));
+    const fs::path plain = first_dump_with_prefix(dir, "live_");
+    REQUIRE_FALSE(plain.empty());
+    CHECK(g::detail::dx12_read_removal_bundle(plain.c_str(), read) == Dx12BundleRead::NoStream);
+    const crd::u32       foreign[4] = {0x11111111U, 1U, 2U, 3U};
+    crd::crash::DumpNote note{};
+    note.kind           = crd::crash::DumpKind::Hang;
+    note.evidence       = foreign;
+    note.evidence_bytes = static_cast<std::uint32_t>(sizeof(foreign));
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(note, nullptr));
+    const fs::path hang = first_dump_with_prefix(dir, "hang_");
+    REQUIRE_FALSE(hang.empty());
+    CHECK(g::detail::dx12_read_removal_bundle(hang.c_str(), read) == Dx12BundleRead::BadMagic);
+
+    crd::crash::uninstall();
+    fs::remove_all(dir, ec);
+}
+
+// DIAG.7b(g): GPU-based validation qualified by an isolated invalid descriptor workload. A compute dispatch of a
+// Cerid-named pipeline stores through a descriptor table whose only heap slot was never written. Recording and closing
+// it under the core layer alone reports nothing about the descriptor (its contents are only known at execution). Under
+// GBV the same workload executes through the production submit and bounded wait, and the instrumented shader reports
+// DESCRIPTOR_UNINITIALIZED as an error naming the pipeline's Program identity; the device stays live. The list executes
+// only under GBV, in guarded mode (the invalid access is skipped); without GBV it is recorded and closed, never submitted.
+// A later scope that requests nothing turns GBV back off (no inheritance).
+namespace
+{
+constexpr const char* kGbvComputeHlsl = "RWByteAddressBuffer target : register(u0);\n"
+                                        "[numthreads(1, 1, 1)] void cs_main() { target.Store(0, 1u); }\n";
+
+[[nodiscard]] ComPtr<ID3D12RootSignature> dx12_make_uav_table_root_signature(ID3D12Device* device)
+{
+    D3D12_DESCRIPTOR_RANGE range{};
+    range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    range.NumDescriptors     = 1U;
+    range.BaseShaderRegister = 0U;
+    D3D12_ROOT_PARAMETER parameter{};
+    parameter.ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameter.DescriptorTable.NumDescriptorRanges = 1U;
+    parameter.DescriptorTable.pDescriptorRanges   = &range;
+    D3D12_ROOT_SIGNATURE_DESC rsd{};
+    rsd.NumParameters = 1U;
+    rsd.pParameters   = &parameter;
+    ComPtr<ID3DBlob>            sig;
+    ComPtr<ID3DBlob>            err;
+    ComPtr<ID3D12RootSignature> root;
+    if (SUCCEEDED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err)))
+    {
+        (void)device->CreateRootSignature(0U, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&root));
+    }
+    return root;
+}
+
+[[nodiscard]] bool dx12_new_record_has_id(const g::Dx12ValidationCapture& capture, crd::u32 from, crd::u32 id)
+{
+    const crd::u32 now = capture.report().messages;
+    for (crd::u32 i = from; i < now; ++i)
+    {
+        g::Dx12ValidationMessage m;
+        if (capture.message(i, m) && m.id == id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One device (GBV on or off) recording the invalid dispatch; executes it only when `gbv`. Returns false when GBV was
+// requested but is not active here (no Graphics Tools), so the caller can report the gate instead of a false pass.
+[[nodiscard]] bool dx12_run_uninitialized_descriptor(g::Dx12ValidationCapture& capture,
+                                                     const crd::containers::Array<crd::u8>& dxil, bool gbv)
+{
+    g::detail::Dx12DeviceScope scope;
+    scope.request_validation(true, false, gbv);
+    ComPtr<ID3D12Device> device;
+    REQUIRE(SUCCEEDED(scope.create(device)));
+    if (gbv && !scope.activation().active[2])
+    {
+        return false;
+    }
+    CHECK(g::detail::dx12_gbv_process_state() == gbv);
+    if (gbv)
+    {
+        // Guarded patching: the invalid access is reported and skipped instead of reaching the GPU.
+        ComPtr<ID3D12DebugDevice1> debug_device;
+        REQUIRE(SUCCEEDED(device.As(&debug_device)));
+        D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS settings{};
+        settings.MaxMessagesPerCommandList = 16U;
+        settings.DefaultShaderPatchMode    = D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE_GUARDED_VALIDATION;
+        REQUIRE(SUCCEEDED(debug_device->SetDebugParameter(D3D12_DEBUG_DEVICE_PARAMETER_GPU_BASED_VALIDATION_SETTINGS,
+                                                          &settings, sizeof(settings))));
+    }
+
+    const ComPtr<ID3D12RootSignature> root = dx12_make_uav_table_root_signature(device.Get());
+    REQUIRE(root != nullptr);
+    auto pso = dx12_make_compute_pso(device.Get(), root.Get(), dxil);
+    REQUIRE(pso != nullptr);
+    const g::ObjectIdentity id = g::detail::dx12_attach_identity(pso.Get(), g::ObjectKind::Program, "dx12-gbv-pso");
+    REQUIRE(id.valid());
+    D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+    heap_desc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heap_desc.NumDescriptors = 1U;
+    heap_desc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> heap;
+    REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&heap)))); // slot 0 is never written
+
+    D3D12_COMMAND_QUEUE_DESC queue_desc{};
+    queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    ComPtr<ID3D12CommandQueue>        queue;
+    ComPtr<ID3D12CommandAllocator>    commands;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    ComPtr<ID3D12Fence>               fence;
+    REQUIRE(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+    REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commands))));
+    REQUIRE(SUCCEEDED(device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, commands.Get(), nullptr,
+                                                IID_PPV_ARGS(&list))));
+    REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+
+    const crd::u32 before    = capture.report().messages;
+    const crd::u64 errors0   = capture.report().errors;
+    const crd::u64 failures0 = capture.report().execution_failures;
+    const crd::u32 report_id = D3D12_MESSAGE_ID_GPU_BASED_VALIDATION_DESCRIPTOR_UNINITIALIZED;
+    ID3D12DescriptorHeap* heaps[] = {heap.Get()};
+    list->SetDescriptorHeaps(1U, heaps);
+    list->SetComputeRootSignature(root.Get());
+    list->SetPipelineState(pso.Get());
+    list->SetComputeRootDescriptorTable(0U, heap->GetGPUDescriptorHandleForHeapStart());
+    list->Dispatch(1U, 1U, 1U);
+
+    if (!gbv)
+    {
+        REQUIRE(SUCCEEDED(list->Close()));
+        CHECK(capture.report().errors == errors0); // the core layer accepts the recording
+        CHECK_FALSE(dx12_new_record_names(capture, before, id));
+        CHECK_FALSE(dx12_new_record_has_id(capture, before, report_id));
+    }
+    else
+    {
+        UINT64 value     = 0U;
+        bool   submitted = false;
+        REQUIRE(SUCCEEDED(
+            g::detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), value, submitted)));
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        REQUIRE(event != nullptr);
+        CHECK(SUCCEEDED(g::detail::dx12_wait(device.Get(), fence.Get(), value, event, 10000U)));
+        CloseHandle(event);
+        // The runtime surfaces GBV reports when it observes the list's completion; poll briefly, bounded.
+        for (int i = 0; i < 200 && !dx12_new_record_has_id(capture, before, report_id); ++i)
+        {
+            (void)fence->GetCompletedValue();
+            Sleep(10U);
+        }
+        for (crd::u32 i = before; i < capture.report().messages; ++i)
+        {
+            g::Dx12ValidationMessage m;
+            if (capture.message(i, m))
+            {
+                UNSCOPED_INFO("dx12 msg id=" << m.id << " sev=" << static_cast<int>(m.severity)
+                              << " ident.valid=" << m.identity.valid() << " text=" << m.text);
+            }
+        }
+        CHECK(capture.report().errors > errors0);
+        CHECK(dx12_new_record_has_id(capture, before, report_id));
+        CHECK(dx12_new_error_correlates(capture, before, id)); // the GBV error names THIS program
+        CHECK(device->GetDeviceRemovedReason() == S_OK);       // guarded: reported, not a device fault
+        CHECK(capture.report().execution_failures == failures0);
+    }
+    CHECK(capture.report().dropped == 0U);
+    g::detail::dx12_detach_identity(id);
+    return true;
+}
+} // namespace
+
+TEST_CASE("DIAG.7b(g): GPU-based validation reports an uninitialized descriptor only when enabled",
+          "[dx12][validation][gbv]")
+{
+    crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 7b(g) GBV qualification test");
+    const g::DxilCompileResult cs = g::compile_hlsl_to_dxil(
+        g::ShaderStage::Compute, crd::containers::StringView(kGbvComputeHlsl), "gbv_cs", &allocator);
+    if (!cs.ok)
+    {
+        WARN("dxc/DXIL unavailable; skipping the GBV qualification");
+        return;
+    }
+    g::Dx12ValidationCapture capture(&allocator, 4096U);
+    REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
+
+    CHECK(dx12_run_uninitialized_descriptor(capture, cs.dxil, false));
+    if (!dx12_run_uninitialized_descriptor(capture, cs.dxil, true))
+    {
+        SKIP("GPU-based validation is not available here (Graphics Tools absent)");
+    }
+    // No inheritance: a later scope that requests nothing at all turns GBV back off before its device. (Before this
+    // check existed GBV leaked into every later device; its descriptor-heap shadow memory then exhausted a frame-graph
+    // heap and the driver faulted in a later test.)
+    {
+        g::detail::Dx12DeviceScope scope;
+        ComPtr<ID3D12Device>       device;
+        REQUIRE(SUCCEEDED(scope.create(device)));
+        CHECK_FALSE(g::detail::dx12_gbv_process_state());
+    }
 }

@@ -72,7 +72,9 @@ TEST_CASE("diag: task ids are unique across separate runs while counter slots re
     }
 
     for (crd::usize i = 0U; i < run_count; ++i)
+    {
         CHECK(ids[i] != 0U); // 0 is reserved for "no task"; a running job must never see it
+    }
 
     // The whole point: ids are all distinct (a fresh stamp per run), yet the pool handed back a
     // recycled address at least once (fewer distinct pointers than runs) -- so the id is genuinely
@@ -108,7 +110,9 @@ TEST_CASE("diag: all jobs in one batch share a single task id", "[jobs][diag]")
 
     CHECK(ids[0] != 0U);
     for (crd::usize i = 1U; i < batch_size; ++i)
+    {
         CHECK(ids[i] == ids[0]); // one Counter -> one task_id for the whole batch
+    }
 
     crd::jobs::shutdown();
 }

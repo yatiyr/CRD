@@ -40,14 +40,20 @@ inline Bytes read_file_bytes(const wchar_t* path)
     Bytes         bytes;
     std::ifstream f{path, std::ios::binary | std::ios::ate};
     if (!f)
+    {
         return bytes;
+    }
     const std::streamoff size = f.tellg();
     if (size <= 0)
+    {
         return bytes;
+    }
     bytes.resize(static_cast<std::size_t>(size));
     f.seekg(0);
     if (!f.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+    {
         bytes.clear();
+    }
     return bytes;
 }
 
@@ -61,7 +67,9 @@ inline bool read_exception_stream(const wchar_t* dump_path, MINIDUMP_EXCEPTION_S
     Bytes buf;
     buf.resize(sz);
     if (crd::crash::read_dump_stream(dump_path, exception_stream, buf.data(), buf.size()) != sz)
+    {
         return false;
+    }
     std::memcpy(&out, buf.data(), sizeof(out));
     return true;
 }
@@ -89,11 +97,15 @@ inline bool ends_with_icase(const wchar_t* name, std::size_t n, const wchar_t* s
 {
     const std::size_t m = std::wcslen(suffix);
     if (n < m)
+    {
         return false;
+    }
     for (std::size_t i = 0; i < m; ++i)
     {
         if (::towlower(static_cast<wint_t>(name[n - m + i])) != ::towlower(static_cast<wint_t>(suffix[i])))
+        {
             return false;
+        }
     }
     return true;
 }
@@ -127,7 +139,9 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
     Bytes list;
     list.resize(list_size);
     if (crd::crash::read_dump_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
+    {
         return result;
+    }
 
     std::uint32_t count = 0;
     std::memcpy(&count, list.data(), sizeof(count));
@@ -155,7 +169,9 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
         name.resize(chars);
         std::memcpy(name.data(), file.data() + soff, chars * sizeof(wchar_t));
         if (!ends_with_icase(name.data(), chars, want_basename))
+        {
             continue;
+        }
 
         result.named            = true;
         const std::size_t crva  = static_cast<std::size_t>(mod.CvRecord.Rva);
@@ -173,19 +189,27 @@ inline bool image_has_rsds(const wchar_t* image_path)
 {
     const Bytes image = read_file_bytes(image_path);
     if (image.size() < sizeof(IMAGE_DOS_HEADER))
+    {
         return false;
+    }
     IMAGE_DOS_HEADER dos{};
     std::memcpy(&dos, image.data(), sizeof(dos));
     const std::size_t nt_off = static_cast<std::size_t>(dos.e_lfanew);
     if (dos.e_magic != IMAGE_DOS_SIGNATURE || nt_off + sizeof(IMAGE_NT_HEADERS64) > image.size())
+    {
         return false;
+    }
     IMAGE_NT_HEADERS64 nt{};
     std::memcpy(&nt, image.data() + nt_off, sizeof(nt));
     if (nt.Signature != IMAGE_NT_SIGNATURE || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    {
         return false;
+    }
     const IMAGE_DATA_DIRECTORY debug_dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     if (debug_dir.VirtualAddress == 0U || debug_dir.Size == 0U)
+    {
         return false;
+    }
 
     // Map the debug directory's RVA to a file offset through the section table.
     const std::size_t sections_off =
@@ -196,7 +220,9 @@ inline bool image_has_rsds(const wchar_t* image_path)
     {
         const std::size_t sh_off = sections_off + static_cast<std::size_t>(i) * sizeof(IMAGE_SECTION_HEADER);
         if (sh_off + sizeof(IMAGE_SECTION_HEADER) > image.size())
+        {
             return false;
+        }
         IMAGE_SECTION_HEADER sh{};
         std::memcpy(&sh, image.data() + sh_off, sizeof(sh));
         if (debug_dir.VirtualAddress >= sh.VirtualAddress &&
@@ -208,20 +234,26 @@ inline bool image_has_rsds(const wchar_t* image_path)
         }
     }
     if (!mapped)
+    {
         return false;
+    }
 
     const std::size_t entries = debug_dir.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
     for (std::size_t i = 0; i < entries; ++i)
     {
         const std::size_t entry_off = dir_off + i * sizeof(IMAGE_DEBUG_DIRECTORY);
         if (entry_off + sizeof(IMAGE_DEBUG_DIRECTORY) > image.size())
+        {
             return false;
+        }
         IMAGE_DEBUG_DIRECTORY entry{};
         std::memcpy(&entry, image.data() + entry_off, sizeof(entry));
         const std::size_t data_off = entry.PointerToRawData;
         if (entry.Type == IMAGE_DEBUG_TYPE_CODEVIEW && data_off + entry.SizeOfData <= image.size() &&
             is_rsds(image.data() + data_off, entry.SizeOfData))
+        {
             return true;
+        }
     }
     return false;
 }

@@ -99,7 +99,36 @@ struct Dx12RemovalRecord
     Dx12RemovalOrigin origin   = Dx12RemovalOrigin::None;
     u64               sequence = 0; // 1-based count of removals recorded in this process
     Dx12DredReport    dred{};
+    // (f) The crash::WriteResult of the removal bundle written for this record (NotInstalled when crash capture is
+    // off). Set on the stored record after the write; the copy inside the bundle carries the value before it.
+    u32 bundle_result = 0;
 };
+
+// DIAG.7b(f): the removal bundle. Every recorded removal is also written, when crash capture is installed, as a live
+// dump of kind DeviceRemoved (gpu_*.dmp) whose evidence stream holds this header followed by the Dx12RemovalRecord. The
+// reader refuses a stream whose magic, version or size does not match this build, rather than misreading it.
+inline constexpr u32 kDx12RemovalBundleMagic   = 0x52445243U; // 'CRDR'
+inline constexpr u32 kDx12RemovalBundleVersion = 1U;
+
+struct Dx12RemovalBundleHeader
+{
+    u32 magic        = kDx12RemovalBundleMagic;
+    u32 version      = kDx12RemovalBundleVersion;
+    u32 record_bytes = 0;
+    u32 reserved     = 0;
+};
+
+enum class Dx12BundleRead : u8
+{
+    Ok,
+    NoStream,   // the dump has no Cerid evidence stream (not a removal bundle)
+    BadMagic,   // the evidence stream is not a removal bundle (e.g. a hang dump's evidence)
+    BadVersion, // a removal bundle of another format version
+    BadSize,    // the size does not match this build's record
+};
+
+// Read a removal bundle back from a dump file. Never throws; `out` is written only on Ok.
+[[nodiscard]] Dx12BundleRead dx12_read_removal_bundle(const wchar_t* dump_path, Dx12RemovalRecord& out) noexcept;
 
 // The completion helpers call this whenever they stop a failed device: read DRED and keep it as the process's
 // last-known removal, which survives the provider's shutdown (it is not owned by any context).

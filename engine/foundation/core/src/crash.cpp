@@ -187,9 +187,17 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
 
     const wchar_t* prefix = L"\\crash_";
     if (kind == crd::crash::DumpKind::Hang)
+    {
         prefix = L"\\hang_";
+    }
     else if (kind == crd::crash::DumpKind::Manual)
+    {
         prefix = L"\\live_";
+    }
+    else if (kind == crd::crash::DumpKind::DeviceRemoved)
+    {
+        prefix = L"\\gpu_";
+    }
 
     // <dir>\<prefix><pid>_<tick64hex>_<serial>_<attempt>.dmp -- backslash only (\\?\ suppresses '/' normalization).
     std::size_t base = 0;

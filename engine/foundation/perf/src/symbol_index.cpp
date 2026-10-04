@@ -223,7 +223,9 @@ cont::String read_cstr(cont::ConstSpan<crd::u8> dump, crd::u64 off, crd::u64 max
 {
     cont::String s(a);
     for (crd::u64 i = off; i < max && dump[static_cast<crd::usize>(i)] != 0; ++i)
+    {
         s.push_back(static_cast<char>(dump[static_cast<crd::usize>(i)]));
+    }
     return s;
 }
 

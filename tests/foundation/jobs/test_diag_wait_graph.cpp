@@ -112,7 +112,9 @@ TEST_CASE("wait_graph: snapshot truncates but still returns the true parked coun
     {
         total = crd::jobs::wait_graph_snapshot(full);
         if (total >= static_cast<crd::usize>(parkers))
+        {
             break;
+        }
         std::this_thread::yield();
     }
     REQUIRE(total == static_cast<crd::usize>(parkers));

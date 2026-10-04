@@ -118,7 +118,9 @@ fs::path first_crash_dump(const fs::path& dir)
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
         if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with("crash_"))
+        {
             return it->path();
+        }
     return {};
 }
 
@@ -485,7 +487,9 @@ fs::path first_crash_record(const fs::path& dir)
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
         if (it->path().extension() == ".log" && it->path().filename().string().starts_with("crash_"))
+        {
             return it->path();
+        }
     return {};
 }
 
@@ -502,7 +506,9 @@ bool read_field(std::ifstream& f, cont::String& out)
 {
     char tok[4096];
     if (!read_token(f, tok))
+    {
         return false;
+    }
     out = std::string_view{tok};
     return true;
 }
@@ -526,17 +532,29 @@ RecordFields parse_record(const fs::path& p)
         if (!in_regs)
         {
             if (t == "pid")
+            {
                 f >> r.pid;
+            }
             else if (t == "tid")
+            {
                 f >> r.tid;
+            }
             else if (t == "signal")
+            {
                 f >> r.signal;
+            }
             else if (t == "code")
+            {
                 f >> r.code;
+            }
             else if (t == "addr")
+            {
                 (void)read_field(f, r.addr);
+            }
             else if (t == "exe")
+            {
                 (void)read_field(f, r.exe);
+            }
         }
         else if (t == "cr2")
         {

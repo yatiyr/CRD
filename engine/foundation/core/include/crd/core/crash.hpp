@@ -9,7 +9,7 @@ namespace crd::crash
 {
 
 // How install() resolved. Every value except the three Ok* forms means no handler is active.
-enum class InstallResult : std::uint32_t
+enum class InstallResult : std::uint8_t
 {
     Ok,                      // installed fresh over whatever was there
     OkReinstalled,           // our own handler was already installed; re-registered, previous preserved
@@ -21,7 +21,7 @@ enum class InstallResult : std::uint32_t
 };
 
 // How a dump write went. Only Ok means a complete, flushed, closed dump exists at the reported path.
-enum class WriteResult : std::uint32_t
+enum class WriteResult : std::uint8_t
 {
     Ok,
     NotInstalled,   // install() has not run (no resolved output path)
@@ -34,11 +34,12 @@ enum class WriteResult : std::uint32_t
 };
 
 // What produced a dump; selects the filename prefix (crash_ / hang_ / live_).
-enum class DumpKind : std::uint32_t
+enum class DumpKind : std::uint8_t
 {
     Crash,  // the fatal unhandled-exception path
     Hang,   // a non-fatal dump requested by a hang/watchdog observer (the process keeps running)
     Manual, // any other deliberate live capture
+    DeviceRemoved, // a GPU provider recorded a device removal (DIAG.7b); the evidence stream carries its report
 };
 
 // The MINIDUMP user-stream type under which a live dump's evidence blob is stored (above LastReservedStream so it
