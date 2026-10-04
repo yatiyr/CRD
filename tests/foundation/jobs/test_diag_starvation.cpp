@@ -159,17 +159,17 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
     crd::jobs::init(cfg);
 
     // Queue a deep batch of time-consuming Normal jobs UPFRONT (one run(), no feeder/refill race): each spins
-    // ~1ms, so the single background worker is continuously busy on the Normal lane for ~kNormalJobs ms --
+    // ~1ms, so the single background worker is continuously busy on the Normal lane for ~normal_jobs ms --
     // far beyond the K=3 (~60ms) detection window -- and never idles into the Low lane. Normal pops advance the
     // whole time (each job completes), which is exactly what tells starvation apart from a hang. Held unwaited
     // (main does not pump), so only the background worker drains it during detection.
-    constexpr int      kNormalJobs = 300;
-    crd::jobs::JobDecl  normals[kNormalJobs];
+    constexpr int      normal_jobs = 300;
+    crd::jobs::JobDecl  normals[normal_jobs];
     for (auto& j : normals)
     {
         j.fn = &busy_1ms; // default priority = Normal
     }
-    crd::jobs::Counter* const nc = crd::jobs::run({normals, static_cast<crd::usize>(kNormalJobs)});
+    crd::jobs::Counter* const nc = crd::jobs::run({normals, static_cast<crd::usize>(normal_jobs)});
 
     // Seed one Low-priority job behind the deep Normal queue: it sits in the Low injection queue, which the busy
     // worker never reaches while Normal is non-empty.
@@ -218,9 +218,15 @@ TEST_CASE("starvation watchdog: a healthy multi-lane stream never fires", "[jobs
     {
         crd::jobs::JobDecl j{};
         j.fn       = &noop_job;
-        j.priority = (i % 3 == 0)   ? crd::jobs::Priority::High
-                     : (i % 3 == 1) ? crd::jobs::Priority::Normal
-                                    : crd::jobs::Priority::Low;
+        j.priority = crd::jobs::Priority::Low;
+        if (i % 3 == 0)
+        {
+            j.priority = crd::jobs::Priority::High;
+        }
+        else if (i % 3 == 1)
+        {
+            j.priority = crd::jobs::Priority::Normal;
+        }
         crd::jobs::run_and_wait(j);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(150));

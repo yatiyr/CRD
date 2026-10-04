@@ -97,12 +97,13 @@ TEST_CASE("gpu-tracks: three (device,queue) keys land on three distinct tracks a
     };
 
     // Emit 3 samples per key; queue_id is stamped == begin_ns so we can join a record back to its sample after save.
-    constexpr crd::u32 kPer = 3U;
+    constexpr crd::u32 per_key = 3U;
     for (const auto& e : plan)
     {
-        for (crd::u32 j = 0U; j < kPer; ++j)
+        for (crd::u32 j = 0U; j < per_key; ++j)
         {
-            const crd::i64 begin = static_cast<crd::i64>(1000U + e.key.device_id * 100U + e.key.queue_id * 10U + j);
+            const crd::i64 begin = 1000 + (static_cast<crd::i64>(e.key.device_id) * 100) +
+                                   (static_cast<crd::i64>(e.key.queue_id) * 10) + static_cast<crd::i64>(j);
             crd::perf::emit_gpu_sample_on(make_gpu_sample(begin, pass), e.key, e.kind);
         }
     }
@@ -111,7 +112,7 @@ TEST_CASE("gpu-tracks: three (device,queue) keys land on three distinct tracks a
     REQUIRE(buf.size() > 0U);
     const crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};
     REQUIRE(view.is_valid());
-    REQUIRE(view.correlation_count() == static_cast<crd::u32>(kPer) * 3U);
+    REQUIRE(view.correlation_count() == static_cast<crd::u32>(per_key) * 3U);
 
     crd::u32 indices[3];
     for (crd::u32 t = 0U; t < 3U; ++t)
@@ -121,8 +122,8 @@ TEST_CASE("gpu-tracks: three (device,queue) keys land on three distinct tracks a
         indices[t] = idx;
 
         const auto samples = view.thread_samples(idx);
-        REQUIRE(samples.size() == kPer);
-        for (crd::u32 j = 0U; j < kPer; ++j)
+        REQUIRE(samples.size() == per_key);
+        for (crd::u32 j = 0U; j < per_key; ++j)
         {
             CHECK(samples[j].category == plan[t].expect_category);
             const auto* rec = view.correlation_for(idx, j);

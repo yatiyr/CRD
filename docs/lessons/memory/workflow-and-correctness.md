@@ -500,6 +500,37 @@ Related: [feedback_never_simplify_gate_tests_frontier_always](build-and-verifica
 
 <!-- end-memory:feedback_autotuner_winner_collapse_to_plan_equivalence_class -->
 
+<a id="memory-feedback_autotuner_interleave_and_pair_under_dvfs"></a>
+## feedback_autotuner_interleave_and_pair_under_dvfs
+
+---
+name: feedback_autotuner_interleave_and_pair_under_dvfs
+description: "Time autotune configs interleaved and judge them paired within a round: GPU clocks drift (DVFS), so block-ordered timing compares clock states, not configs."
+metadata: 
+  node_type: memory
+  type: feedback
+  modified: 2026-10-05T00:00:00.000Z
+---
+
+A measurer that times each config in its own BLOCK (all runs of config 0, then all of config 1, ...) compares configs
+measured at DIFFERENT GPU clock states. The clock is not stationary: in CEIR-28b-2b the same plans measured 17-25 us
+inside a full-suite run but 8-9 us in isolation, and one block caught a ramp mid-measurement (config 0 at 39.3 us, then
+configs 1-3 at ~9 us), leaving the plan-DISTINCT fuse vs no-fuse winner at a 1.03 ratio. The committed-row anti-drift
+then failed 2 of 7 suite runs on a CLOCK, not a hardware change, while 25 isolated runs never failed.
+
+**Why:** a median over a block cannot remove a drift that is correlated with the block order; only the measurement
+design can. The plan-equivalence collapse ([feedback_autotuner_winner_collapse_to_plan_equivalence_class](workflow-and-correctness.md#memory-feedback_autotuner_winner_collapse_to_plan_equivalence_class))
+handles identical plans, not distinct plans timed under different clocks.
+
+**How to apply:** run every config once per ROUND, rotating the starting config; judge each config by the MEDIAN of
+its per-round ratio to the default timed in the same round (the clock cancels); let a challenger displace the default
+only when it is MATERIALLY faster (a dead-band; 5% for CEIR-28, where the real fuse gain measured 9-19%). Keep the
+anti-drift strict: a committed row that disagrees with a material winner must still fail (teeth: flip the committed
+`fuse`). Apply the same rule to every mirrored measurer (Vulkan and DX12). Diagnose first with raw per-sample output in
+the failing context (the full suite), not only in isolation.
+
+<!-- end-memory:feedback_autotuner_interleave_and_pair_under_dvfs -->
+
 <a id="memory-feedback_b7_lower_entry_miscompiles_cooked_forward"></a>
 ## feedback_b7_lower_entry_miscompiles_cooked_forward
 

@@ -280,7 +280,7 @@ TEST_CASE("importer reports duplicate tags, unsafe symbol names, and manifest/se
         CHECK((imp.sections[0].import_flags & kImportSectionDuplicate) == 0U);
         CHECK((imp.sections[1].import_flags & kImportSectionDuplicate) != 0U); // second occurrence flagged
         REQUIRE(imp.sections[0].payload.size() == sizeof(a));
-        CHECK(imp.sections[0].payload.data()[0] == 0xAAU); // first section's bytes, not the duplicate's
+        CHECK(imp.sections[0].payload[0] == 0xAAU); // first section's bytes, not the duplicate's
     }
 
     SECTION("an unsafe (traversal) symbol name is counted, never resolved")

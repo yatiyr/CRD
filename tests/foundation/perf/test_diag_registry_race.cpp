@@ -22,13 +22,13 @@ TEST_CASE("registry: snapshot vs unregister+destroy is free of use-after-free", 
 {
     crd::perf::init({});
 
-    constexpr int     kCycles = 2000;
+    constexpr int     n_cycles = 2000;
     std::atomic<bool> done{false};
 
     std::thread worker(
         [&]
         {
-            for (int i = 0; i < kCycles; ++i)
+            for (int i = 0; i < n_cycles; ++i)
             {
                 crd::memory::TlsfAllocator a{1U << 16, nullptr, "stress"};
                 const crd::u32             idx = crd::perf::register_allocator("stress", &a);

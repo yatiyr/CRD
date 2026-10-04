@@ -3777,6 +3777,11 @@
       "path": "docs/lessons/memory/build-and-verification.md",
       "anchor": "memory-feedback_a_fuzz_finding_that_does_not_replay_alone_is_adopted_with_its_repetition_evidence_and_generated_source_statuses_are_declared_properties",
       "description": "A libFuzzer-process finding that does not replay in isolation on a fresh sanitizer build, nor over thousands of in-process repetitions, is adopted as a corpus input with that evidence, while a deterministic oracle failure is a defect fixed in the loader with a regression (REPO.DEV.11: two CKIR text writer/reader gaps fixed, six artifacts adopted). Generated-source statuses other than drifted are declared properties with no owner; drifted names the row that decides; formatted means generator output through the repository clang-format."
+    },
+    "feedback_autotuner_interleave_and_pair_under_dvfs": {
+      "path": "docs/lessons/memory/workflow-and-correctness.md",
+      "anchor": "memory-feedback_autotuner_interleave_and_pair_under_dvfs",
+      "description": "Time autotune configs interleaved and judge them paired within a round: GPU clocks drift (DVFS), so block-ordered timing compares clock states, not configs."
     }
   },
   "aliases": {

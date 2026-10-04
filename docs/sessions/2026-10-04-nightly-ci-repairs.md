@@ -276,3 +276,27 @@ workstation (10 cases); the sanitizer lane is the hosted one.
 
 `win-release` in the same run was not a test result: the hosted runner lost contact with the service two hours into
 Build. Its earlier failures (`519c6634`, `bf99a5e5`) were the Release dump-identity oracle fixed in the fourth batch.
+
+## After run 37235340378 (`2e1ed65e`): the second strict-analysis census
+
+The `win-tidy` lane on `2e1ed65e`, built with `-k 0` after the sixth batch, reached test files the earlier runs never
+analysed. It reported 38 new findings in 13 DIAG test files under `tests/foundation/jobs` and `tests/foundation/perf`;
+the workstation gate reproduced every one. All are repaired. None changes what a test asserts:
+- **Local constants** are lower case. File-wide renames were made only after a clash check, choosing other names where
+  the obvious one was taken: `kNormalJobs`, `kCount`, `kN`, `tA`/`tB`/`tC`, `kD`/`kD1`/`kD2`, `kPer`, `kCycles`,
+  `kFrames`, `kFill`, `kHammers`, `kThreads` and `kIters`. The namespace constant `MS` became `kMs`.
+- **Literals and declarations:**
+  - upper-case `U` literal suffixes;
+  - one declaration per statement in the GPU-calibration case;
+  - raw string literals for the three Perfetto JSON fragments;
+  - `operator[]` instead of `data()[0]`, and `data()` instead of `&x[0]`.
+- **Widening cast:** in the GPU-track test, each operand is widened before the arithmetic. The values are unchanged.
+- **Nested conditional:** the starvation case's priority selection is now an if-chain.
+- **`CRD_RETADDR`:** it stays a macro, with a `NOLINTNEXTLINE(cppcoreguidelines-macro-usage)` and its reason.
+  `_ReturnAddress` and `__builtin_return_address` must expand in the caller's frame; a function would report its own
+  return address.
+
+Workstation results:
+- The gate is clean on all 13 files.
+- `crd-perf-tests`: 203 cases, 1,319 assertions.
+- `crd-jobs-tests`: 174 cases, 29,729 assertions.

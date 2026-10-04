@@ -170,9 +170,22 @@ Device consumers of the compute path (hosted lanes have no Vulkan device, so thi
     `fuse=1`; the fresh measurement chose `fuse=0`, with `share` agreeing.
   - That case runs in about 0.5 s and ranks the plans by GPU timestamps (`last_gpu_ms`), which the seam's host-side
     bookkeeping does not enter. So the 30 s bound and the new submit path cannot decide it.
-  - It is read as a near-tie between two plan-distinct configurations flipping on timer noise. That is a
-    pre-existing weakness of a device-only anti-drift check, not a seam regression. It is recorded, not masked,
-    and left for a separate fix (a margin or hysteresis for plan-distinct near-ties).
+  - **Diagnosed and fixed (2026-10-05, at the user's request, in this session).** Raw per-sample timings showed the
+    cause was measurement design, not noise or the seam.
+    - In isolation, fused beat unfused by 9-19% in 25 of 25 runs, with no overlap between the two distributions.
+    - Inside the full suite, the same plans measured 17-25 us instead of 8-9 us, and one block caught a GPU clock
+      ramp (config 0 at 39.3 us, then 1-3 at ~9 us), leaving the fuse/no-fuse ratio at 1.03.
+    - The measurer timed configurations in blocks, so clock drift (DVFS) was compared instead of plans.
+  - **The fix.** The measurer, in both the Vulkan and DX12 mirrors, now:
+    - runs interleaved rounds, each configuration once per round with a rotating start;
+    - judges each configuration by the median of its per-round ratio to the default (the clock cancels);
+    - keeps the default unless a challenger is at least 5% faster, paired.
+  - **Evidence.**
+    - The paired ratios read [1, 1, 1.11, 1.11].
+    - Vulkan `[tune]` 15 of 15; the full Vulkan suite 7 of 7 (57 cases); DX12 `[tune]` 10 of 10 and the full DX12
+      suite (46 cases).
+    - Teeth: the committed RTX row flipped to `fuse = false` still fails the anti-drift. Restored, it passes.
+    - The lesson is `feedback_autotuner_interleave_and_pair_under_dvfs` in the memory corpus.
 
 **Tooling note:** a `cmake --build <dir> --target rebuild_cache` run outside the MSVC environment emptied
 `CMAKE_MAKE_PROGRAM` in `build/win-debug`. It was repaired with `scripts/configure-preset.bat win-debug

@@ -30,7 +30,7 @@ TEST_CASE("ring: frame-history reads are free of torn records under a wrapping w
 
     const auto id = crd::perf::register_counter_i64("ring.frame", crd::perf::CounterKind::Set);
 
-    constexpr crd::u64    kFrames = 200000U;
+    constexpr crd::u64    n_frames = 200000U;
     std::atomic<bool>     done{false};
     std::atomic<crd::u64> torn{0U};
 
@@ -55,7 +55,7 @@ TEST_CASE("ring: frame-history reads are free of torn records under a wrapping w
             }
         });
 
-    for (crd::u64 f = 0; f < kFrames; ++f)
+    for (crd::u64 f = 0; f < n_frames; ++f)
     {
         crd::perf::counter_set_i64(id, static_cast<crd::i64>(crd::perf::frame_count()));
         crd::perf::frame_mark();

@@ -349,7 +349,7 @@ TEST_CASE("read_symbol_index bounds-checks an untrusted payload", "[perf][diag][
     {
         cont::Array<crd::u8> bad = good;
         const crd::u32       ver = 999U;
-        std::memcpy(&bad[0], &ver, sizeof(ver)); // version is the first field
+        std::memcpy(bad.data(), &ver, sizeof(ver)); // version is the first field
         CHECK(read_symbol_index(span_of(bad.data(), bad.size())).size() == 0U);
     }
     SECTION("a corrupt id_kind is clamped to None (never a forged matchable kind)")

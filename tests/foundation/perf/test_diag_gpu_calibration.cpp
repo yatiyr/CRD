@@ -107,32 +107,32 @@ TEST_CASE("gpu-calib: a span between two calibrations widens the bound by the me
 
     // Two calibration instants; the CPU/GPU relation drifts by D ns between them (a real, measured drift, not a ppm
     // constant). The truth for a tick between them is a linear interpolation of that offset.
-    constexpr crd::u64 tA = 1000U;
-    constexpr crd::u64 tB = 2000U;
-    constexpr crd::i64 kD = 100;
+    constexpr crd::u64 t_a = 1000U;
+    constexpr crd::u64 t_b = 2000U;
+    constexpr crd::i64 drift_ns = 100;
     constexpr crd::u64 devdev = 5U; // each calibration's own reported deviation
 
     crd::time::GpuClockCalibration a{};
-    a.cpu_ns           = truth_no_drift(tA); // offset 0 at A
-    a.gpu_ticks        = tA;
+    a.cpu_ns           = truth_no_drift(t_a); // offset 0 at A
+    a.gpu_ticks        = t_a;
     a.ns_per_tick      = kPeriod;
     a.max_deviation_ns = devdev;
     crd::perf::set_gpu_clock_calibration(0U, a);
 
     crd::time::GpuClockCalibration b{};
-    b.cpu_ns           = truth_no_drift(tB) + kD; // offset D at B
-    b.gpu_ticks        = tB;
+    b.cpu_ns           = truth_no_drift(t_b) + drift_ns; // offset D at B
+    b.gpu_ticks        = t_b;
     b.ns_per_tick      = kPeriod;
     b.max_deviation_ns = devdev;
     crd::perf::set_gpu_clock_calibration(0U, b);
 
-    // A span at ts in (tA, tB), converted via the latest calibration (B). The fake truth applies a linear-interpolated
+    // A span at ts in (t_a, t_b), converted via the latest calibration (B). The fake truth applies a linear-interpolated
     // offset: near A the true offset is ~0, so converting via B (offset D) is wrong by ~D -- the bound must cover it.
     constexpr crd::u64 ts  = 1100U;
     constexpr crd::u64 tse = 1150U;
-    const crd::f64     frac  = (static_cast<crd::f64>(ts) - static_cast<crd::f64>(tA)) /
-                          (static_cast<crd::f64>(tB) - static_cast<crd::f64>(tA));
-    const crd::i64 true_begin = truth_no_drift(ts) + crd::time::gpu_round_ns(frac * static_cast<crd::f64>(kD));
+    const crd::f64     frac  = (static_cast<crd::f64>(ts) - static_cast<crd::f64>(t_a)) /
+                          (static_cast<crd::f64>(t_b) - static_cast<crd::f64>(t_a));
+    const crd::i64 true_begin = truth_no_drift(ts) + crd::time::gpu_round_ns(frac * static_cast<crd::f64>(drift_ns));
 
     crd::perf::emit_gpu_span_on(crd::perf::GpuTrackKey{0U, 0U}, crd::perf::GpuSampleKind::Execution, pass, ts, tse,
                                 kPeriod);
@@ -148,7 +148,7 @@ TEST_CASE("gpu-calib: a span between two calibrations widens the bound by the me
     REQUIRE(rec != nullptr);
 
     CHECK((rec->flags & crd::perf::kCorrelationCalibrated) != 0U);
-    CHECK(rec->clock_uncertainty_ns >= static_cast<crd::u64>(kD)); // TEETH: ignore drift (cur.max_dev only) -> fails
+    CHECK(rec->clock_uncertainty_ns >= static_cast<crd::u64>(drift_ns)); // TEETH: ignore drift (cur.max_dev only) -> fails
     // Honesty against the drifted truth. The correct bound (max_dev_B + |drift| + max_dev_A) covers the ~D conversion
     // error; a drift-ignoring bound would not.
     CHECK(abs_i64(samples[0].begin_ns - true_begin) <= rec->clock_uncertainty_ns);
@@ -166,21 +166,25 @@ TEST_CASE("gpu-calib: a third calibration shifts prev to the second, not the fir
     // Three calibrations. The big drift D1 happens A->B; only a small drift D2 happens B->C. A span AFTER C must be
     // bounded by the RECENT drift (|D2|), i.e. prev==B. A store that only ever kept the first calibration as prev would
     // bound by |D1+D2| and this discriminates.
-    constexpr crd::u64 tA = 1000U, tB = 2000U, tC = 3000U;
-    constexpr crd::i64 kD1 = 1000, kD2 = 10;
+    constexpr crd::u64 t_a     = 1000U;
+    constexpr crd::u64 t_b     = 2000U;
+    constexpr crd::u64 t_c     = 3000U;
+    constexpr crd::i64 drift_1 = 1000;
+    constexpr crd::i64 drift_2 = 10;
     constexpr crd::u64 devdev = 5U;
 
     crd::time::GpuClockCalibration a{};
-    a.cpu_ns = truth_no_drift(tA);            a.gpu_ticks = tA; a.ns_per_tick = kPeriod; a.max_deviation_ns = devdev;
+    a.cpu_ns = truth_no_drift(t_a);            a.gpu_ticks = t_a; a.ns_per_tick = kPeriod; a.max_deviation_ns = devdev;
     crd::perf::set_gpu_clock_calibration(0U, a);
     crd::time::GpuClockCalibration b{};
-    b.cpu_ns = truth_no_drift(tB) + kD1;      b.gpu_ticks = tB; b.ns_per_tick = kPeriod; b.max_deviation_ns = devdev;
+    b.cpu_ns = truth_no_drift(t_b) + drift_1;      b.gpu_ticks = t_b; b.ns_per_tick = kPeriod; b.max_deviation_ns = devdev;
     crd::perf::set_gpu_clock_calibration(0U, b);
     crd::time::GpuClockCalibration c{};
-    c.cpu_ns = truth_no_drift(tC) + kD1 + kD2; c.gpu_ticks = tC; c.ns_per_tick = kPeriod; c.max_deviation_ns = devdev;
+    c.cpu_ns = truth_no_drift(t_c) + drift_1 + drift_2; c.gpu_ticks = t_c; c.ns_per_tick = kPeriod; c.max_deviation_ns = devdev;
     crd::perf::set_gpu_clock_calibration(0U, c);
 
-    constexpr crd::u64 ts = 3100U, tse = 3150U;
+    constexpr crd::u64 ts  = 3100U;
+    constexpr crd::u64 tse = 3150U;
     crd::perf::emit_gpu_span_on(crd::perf::GpuTrackKey{0U, 0U}, crd::perf::GpuSampleKind::Execution, pass, ts, tse,
                                 kPeriod);
 
@@ -193,10 +197,10 @@ TEST_CASE("gpu-calib: a third calibration shifts prev to the second, not the fir
     REQUIRE(samples.size() == 1U);
     const auto* rec = view.correlation_for(idx, 0U);
     REQUIRE(rec != nullptr);
-    CHECK(rec->clock_uncertainty_ns >= static_cast<crd::u64>(kD2)); // covers the recent drift
+    CHECK(rec->clock_uncertainty_ns >= static_cast<crd::u64>(drift_2)); // covers the recent drift
     CHECK(rec->clock_uncertainty_ns < 100U);                        // NOT the stale |D1+D2| ~= 1015 (prev must be B)
     // The span sits after C, so the true offset is the accumulated D1+D2; converting via C is exact.
-    const crd::i64 true_begin = truth_no_drift(ts) + kD1 + kD2;
+    const crd::i64 true_begin = truth_no_drift(ts) + drift_1 + drift_2;
     CHECK(abs_i64(samples[0].begin_ns - true_begin) <= rec->clock_uncertainty_ns);
 
     crd::perf::shutdown();

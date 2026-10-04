@@ -583,12 +583,14 @@ MlpPayload build_mlp_payload(ce::Context& ctx, crd::u32 mrows, crd::u32 d0, crd:
 }
 
 // CEIR-28b-2a (sec-80) — the PORTABLE Vulkan MEASURER. Enumerate the FULL 4-config PlanOptions space (fuse × share), TIME each on
-// the REAL device (N warmup + K timed, MEDIAN of compute.last_gpu_ms() — the whole-plan GPU time: 2 device timestamps bracket the
+// the REAL device (interleaved rounds, each config judged by its median per-round ratio to the default;
+// compute.last_gpu_ms() is the whole-plan GPU time: 2 device timestamps bracket the
 // ONE submit's command buffer, vulkan_compute_context.cpp:541 TOP_OF_PIPE / :549 BOTTOM_OF_PIPE, so the fixed ShaderWrite→HostRead
 // barrier cost cancels across configs), and GATE EVERY config's output BIT-EXACT vs the default {fuse,share}={1,1} (the FREE
 // oracle-gate — 27b covered only 2 of the 4 configs; share is 26f-3a-INERT on this MLP but "should be equal" is what the frontier
 // rule forbids, so all 4 are compared). Emits ONE tune.entry ROW keying (device, env, program_hash(payload), shape) -> the WINNER's
-// schedule. ⛔ the WINNER is the argmin median COLLAPSED to the canonical (lowest-index, default-most) config in its plan-EQUIVALENCE
+// schedule. ⛔ the WINNER is the argmin paired ratio COLLAPSED to the canonical (lowest-index, default-most)
+// config in its plan-EQUIVALENCE
 // class (sig_out): tt and tf are the SAME plan (share inert), so a 64ns noise gap between them must NOT flip the emitted row — else
 // 28b-2b's anti-drift fires on jitter, not on a hardware change. Only a plan-DISTINCT winner (the fuse win) is emitted. ⛔ asserts
 // NOTHING about which plan-class wins (hardware-measured). Returns the emitted module (caller prints/parses/replays); fills
@@ -628,12 +630,20 @@ ce::Module* measure_tune_entry(crd::gpu::VulkanComputeContext& compute, ce::Cont
                                const ce::Module& payload, const QuantSeed* seeds, crd::usize n_seeds, const ce::Value* out_val,
                                crd::u32 out_len, crd::containers::StringView device, crd::containers::StringView env,
                                crd::containers::StringView shape, double medians_out[4], crd::u64 sig_out[4],
-                               ceg::PlanOptions* winner)
+                               ceg::PlanOptions* winner, double* paired_out = nullptr)
 {
-    constexpr crd::u32 n_warmup = 5; // ⛔ CEIR-28z-1: matched to DX12 — D3D12's first-submit PSO work justified 5, and ONE warmup
-                                     //    count across both backends beats two separately-justified numbers (the winner-collapse
-                                     //    makes the emitted row warmup-INDEPENDENT, so this cannot change what 28b-2b committed).
-    constexpr crd::u32 n_timed  = 7; // MEDIAN of K timed runs (odd → a real sample, not an average)
+    // ⛔ 2026-10-05: INTERLEAVED, PAIRED, DEAD-BANDED. The first measurer timed the four configs in BLOCKS (c=0 x7,
+    //    then c=1 x7, ...). The GPU clock is not stationary (DVFS): in full-suite runs the same plans measured 17-25
+    //    us where isolated runs measured 8-9 us, and one block caught a clock ramp mid-measurement (c0 39.3 us, then
+    //    c1-c3 ~9 us), leaving fuse vs no-fuse at a 1.03 ratio -- one sample from flipping the winner and failing
+    //    28b-2b's anti-drift on a CLOCK, not on a hardware change. Now every round runs each config once (rotating the
+    //    start, so no config always runs first), a config is judged by the MEDIAN of its per-round ratio to the
+    //    default timed in the SAME round (the clock state cancels), and a challenger displaces the default only when
+    //    it is materially faster (material_gain): the plan-identical collapse below, extended to measurement-
+    //    equivalent configs. The emitted row is then stable whenever no plan is materially faster.
+    constexpr crd::u32 n_warmup      = 5;    // interleaved warmup ROUNDS (every config once per round; matched to DX12)
+    constexpr crd::u32 n_rounds      = 9;    // interleaved timed ROUNDS (odd -> a real median)
+    constexpr double   material_gain = 0.05; // a challenger must be at least 5% faster than the default, paired, to win
 
     ceg::PlanOptions cfgs[4];
     cfgs[0].fuse_gemm_relu = true;  cfgs[0].share_intermediate_storage = true;  // index 0 = the DEFAULT (PlanOptions{}) — the oracle
@@ -641,59 +651,92 @@ ce::Module* measure_tune_entry(crd::gpu::VulkanComputeContext& compute, ce::Cont
     cfgs[2].fuse_gemm_relu = false; cfgs[2].share_intermediate_storage = true;
     cfgs[3].fuse_gemm_relu = false; cfgs[3].share_intermediate_storage = false;
 
+    const ceg::TensorPipelinePlan        p0       = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[0]);
+    const ceg::TensorPipelinePlan        p1       = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[1]);
+    const ceg::TensorPipelinePlan        p2       = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[2]);
+    const ceg::TensorPipelinePlan        p3       = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[3]);
+    const ceg::TensorPipelinePlan* const plans[4] = {&p0, &p1, &p2, &p3};
+    for (crd::u32 c = 0; c < 4U; ++c)
+    {
+        REQUIRE(plans[c]->reject == ceg::PlanReject::None);
+        sig_out[c] = plan_sig(root, *plans[c]); // the plan's identity — the winner-collapse + discriminating gate key
+    }
+
     crd::containers::Array<float> ref(root);  // the default config's output — the BIT-EXACT oracle for the other 3
     crd::containers::Array<float> got(root);  // the config-under-test's output (reused)
     ref.resize(out_len, 0.0F);
     got.resize(out_len, 0.0F);
 
-    for (crd::u32 c = 0; c < 4U; ++c)
+    for (crd::u32 w = 0; w < n_warmup; ++w)
     {
-        const ceg::TensorPipelinePlan plan = ceg::plan_tensor_pipeline(ctx, payload, root, cfgs[c]);
-        REQUIRE(plan.reject == ceg::PlanReject::None);
-        sig_out[c] = plan_sig(root, plan); // the plan's identity (before timing) — the winner-collapse + discriminating gate key
-        for (crd::u32 w = 0; w < n_warmup; ++w)
+        for (crd::u32 k = 0; k < 4U; ++k)
         {
-            REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, got.data(), out_len));
+            const crd::u32 c = (w + k) % 4U;
+            REQUIRE(run_quant_module(compute, ctx, root, *plans[c], seeds, n_seeds, out_val, got.data(), out_len));
         }
-        double ms[n_timed] = {};
-        for (crd::u32 t = 0; t < n_timed; ++t)
+    }
+    double ms[4][n_rounds]  = {};
+    int    first_mismatch[4] = {-1, -1, -1, -1};
+    for (crd::u32 r = 0; r < n_rounds; ++r)
+    {
+        for (crd::u32 k = 0; k < 4U; ++k)
         {
-            float* const dst = (c == 0U && t == 0U) ? ref.data() : got.data(); // capture the default output ONCE (t==0), rest reuse `got`
-            REQUIRE(run_quant_module(compute, ctx, root, plan, seeds, n_seeds, out_val, dst, out_len));
-            ms[t] = compute.last_gpu_ms();
-        }
-        medians_out[c] = median_of(ms, n_timed);
-        REQUIRE(medians_out[c] > 0.0); // ⛔ median==0 ⇒ no device timestamps ⇒ the measurer is measuring NOTHING (hard fail, not skip)
-        if (c != 0U) // the FREE oracle-gate: every config bit-EXACT to the default (share-inert or not, values are identical)
-        {
-            int first_mismatch = -1;
-            for (crd::u32 i = 0; i < out_len && first_mismatch < 0; ++i)
+            // Round 0 starts with the default, so `ref` is captured before any comparison.
+            const crd::u32 c   = (r + k) % 4U;
+            float* const   dst = (c == 0U && r == 0U) ? ref.data() : got.data();
+            REQUIRE(run_quant_module(compute, ctx, root, *plans[c], seeds, n_seeds, out_val, dst, out_len));
+            ms[c][r] = compute.last_gpu_ms();
+            // The FREE oracle-gate, on every run.
+            for (crd::u32 i = 0; c != 0U && i < out_len && first_mismatch[c] < 0; ++i)
             {
                 if (got[i] != ref[i])
                 {
-                    first_mismatch = static_cast<int>(i);
+                    first_mismatch[c] = static_cast<int>(i);
                 }
             }
-            CAPTURE(c, first_mismatch);
-            CHECK(first_mismatch == -1);
         }
     }
 
-    crd::u32 wi = 0; // argmin median across plan-CLASSES...
+    double paired[4] = {1.0, 1.0, 1.0, 1.0}; // the median over rounds of ms[c][r] / ms[0][r]
+    for (crd::u32 c = 0; c < 4U; ++c)
+    {
+        double ratio[n_rounds] = {};
+        for (crd::u32 r = 0; r < n_rounds; ++r)
+        {
+            // ⛔ 0 ⇒ no device timestamps ⇒ the measurer is measuring NOTHING (hard fail, not skip).
+            REQUIRE(ms[c][r] > 0.0);
+            ratio[r] = ms[c][r] / ms[0][r];
+        }
+        paired[c]      = median_of(ratio, n_rounds);
+        medians_out[c] = median_of(ms[c], n_rounds);
+        CAPTURE(c, first_mismatch[c]);
+        // Every config is bit-EXACT to the default (share-inert or not, the values are identical).
+        CHECK(first_mismatch[c] == -1);
+        if (paired_out != nullptr)
+        {
+            paired_out[c] = paired[c];
+        }
+    }
+
+    crd::u32 wi = 0; // argmin PAIRED ratio...
     for (crd::u32 c = 1; c < 4U; ++c)
     {
-        if (medians_out[c] < medians_out[wi])
+        if (paired[c] < paired[wi])
         {
             wi = c;
         }
     }
-    for (crd::u32 c = 0; c < wi; ++c) // ...collapsed to the canonical member (stable)
+    for (crd::u32 c = 0; c < wi; ++c) // ...collapsed to the canonical member of its plan class (stable)...
     {
         if (sig_out[c] == sig_out[wi])
         {
             wi = c;
             break;
         }
+    }
+    if (paired[wi] > 1.0 - material_gain) // ...and the default stands unless the challenger is MATERIALLY faster
+    {
+        wi = 0;
     }
     if (winner != nullptr)
     {
@@ -3534,11 +3577,16 @@ TEST_CASE("ceir 28b-2b: the committed 3-row tune_cache.ceir anti-drifts this dev
         double            medians[4] = {};
         crd::u64          sig[4]     = {};
         ceg::PlanOptions  winner;
-        ce::Module* const emit = measure_tune_entry(compute, ctx, &root, *m, seeds, 3U, out_val, out_len, device, env, shape, medians, sig, &winner);
+        double            paired[4]  = {};
+        ce::Module* const emit = measure_tune_entry(compute, ctx, &root, *m, seeds, 3U, out_val, out_len, device, env,
+                                                    shape, medians, sig, &winner, paired);
         REQUIRE(emit != nullptr);
         crd::containers::Array<ce::tune::TuneEntry> fresh(&root);
         REQUIRE(ce::tune::load_tune_entries(ctx, *emit, fresh) == 1U);
-        INFO("committed row fuse=" << row.fuse << " share=" << row.share << " | fresh fuse=" << fresh[0].fuse << " share=" << fresh[0].share);
+        INFO("committed row fuse=" << row.fuse << " share=" << row.share << " | fresh fuse=" << fresh[0].fuse
+             << " share=" << fresh[0].share
+             << " | paired ratio to default [tt,tf,ft,ff]=[" << paired[0] << "," << paired[1] << "," << paired[2] << ","
+             << paired[3] << "]");
         CHECK(row.device == fresh[0].device);
         CHECK(row.env == fresh[0].env);
         CHECK(row.program_hash == fresh[0].program_hash);

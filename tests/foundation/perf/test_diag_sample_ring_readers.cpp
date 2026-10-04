@@ -37,38 +37,38 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
     PerfFixture   fx;
     const crd::u8 idx = crd::perf::current_thread_index();
 
-    // Fill the ring so every SUCCESSFUL copy returns exactly kFill samples (distinguishes success from a genuinely
-    // empty ring) and each copy is a long (kFill-element) loop -- the window two copiers must overlap in.
-    constexpr crd::u32 kFill = 1024U;
-    for (crd::u32 i = 0U; i < kFill; ++i)
+    // Fill the ring so every SUCCESSFUL copy returns exactly fill_count samples (distinguishes success from a genuinely
+    // empty ring) and each copy is a long (fill_count-element) loop -- the window two copiers must overlap in.
+    constexpr crd::u32 fill_count = 1024U;
+    for (crd::u32 i = 0U; i < fill_count; ++i)
     {
         CRD_PERF_SCOPE("readers.fill");
     }
 
-    constexpr crd::u32    kThreads = 8U;
-    constexpr crd::u32    kIters   = 1000U;
+    constexpr crd::u32    n_threads = 8U;
+    constexpr crd::u32    iters   = 1000U;
     std::atomic<bool>     go{false};
     std::atomic<crd::u64> refused{0U};       // copies that came back contended
     std::atomic<crd::u64> succeeded{0U};     // copies that returned the live batch
-    std::atomic<crd::u64> bad_success{0U};   // a non-contended copy that did NOT return exactly kFill (must stay 0)
+    std::atomic<crd::u64> bad_success{0U};   // a non-contended copy that did NOT return exactly fill_count (must stay 0)
     std::atomic<crd::u64> bad_contended{0U}; // a contended copy that returned != 0 (must stay 0)
 
     crd::containers::Array<std::thread> ts;
-    ts.reserve(kThreads);
-    for (crd::u32 w = 0U; w < kThreads; ++w)
+    ts.reserve(n_threads);
+    for (crd::u32 w = 0U; w < n_threads; ++w)
     {
         ts.push_back(std::thread(
             [&]()
             {
-                crd::perf::Sample buf[kFill];
+                crd::perf::Sample buf[fill_count];
                 while (!go.load(std::memory_order_acquire))
                 {
                     // spin to a common start so the copies actually overlap
                 }
-                for (crd::u32 i = 0U; i < kIters; ++i)
+                for (crd::u32 i = 0U; i < iters; ++i)
                 {
                     bool           contended = false;
-                    const crd::u32 n = crd::perf::copy_thread_samples(idx, buf, kFill, &contended);
+                    const crd::u32 n = crd::perf::copy_thread_samples(idx, buf, fill_count, &contended);
                     if (contended)
                     {
                         refused.fetch_add(1U, std::memory_order_relaxed);
@@ -80,7 +80,7 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
                     else
                     {
                         succeeded.fetch_add(1U, std::memory_order_relaxed);
-                        if (n != kFill)
+                        if (n != fill_count)
                         {
                             bad_success.fetch_add(1U, std::memory_order_relaxed);
                         }
@@ -97,7 +97,7 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
     // (1) Exactness: every refused return bumped the per-ring counter exactly once, and nothing else did.
     CHECK(refused.load() == crd::perf::sample_copy_contended_count(idx));
     // Full accounting: every attempt either refused or succeeded.
-    CHECK(refused.load() + succeeded.load() == static_cast<crd::u64>(kThreads) * kIters);
+    CHECK(refused.load() + succeeded.load() == static_cast<crd::u64>(n_threads) * iters);
     // A refused copy always returns 0; a successful copy always returns the whole fixed batch (tail/head are fixed --
     // no producer runs while the workers copy). If either ever fails, the refusal did not fully protect the copy.
     CHECK(bad_contended.load() == 0U);
@@ -210,35 +210,35 @@ TEST_CASE("sample ring: a save's copy retry outlasts a competing consumer (no si
     PerfFixture                        fx;
     const crd::u8                      idx = crd::perf::current_thread_index();
 
-    constexpr crd::u32 kFill = 1024U;
-    for (crd::u32 i = 0U; i < kFill; ++i)
+    constexpr crd::u32 fill_count = 1024U;
+    for (crd::u32 i = 0U; i < fill_count; ++i)
     {
         CRD_PERF_SCOPE("cap.retry");
     }
 
-    // Sustained hammers hold the ring back-to-back (each copy is a full kFill window), keeping it busy ~continuously so
+    // Sustained hammers hold the ring back-to-back (each copy is a full fill_count window), keeping it busy ~continuously so
     // a save's per-thread copy reliably lands mid-window. Only a retry that OUTLASTS a copy window (time-bounded, not a
     // fixed spin count) still captures the batch; a too-short spin gives up inside the first window and drops the whole
     // thread to 0. A start-barrier guarantees the hammers are live before any save runs.
-    constexpr crd::u32                  kHammers = 2U;
+    constexpr crd::u32                  n_hammers = 2U;
     std::atomic<bool>                   stop{false};
     std::atomic<crd::u32>               running{0U};
     crd::containers::Array<std::thread> hammers;
-    hammers.reserve(kHammers);
-    for (crd::u32 w = 0U; w < kHammers; ++w)
+    hammers.reserve(n_hammers);
+    for (crd::u32 w = 0U; w < n_hammers; ++w)
     {
         hammers.push_back(std::thread(
             [&]()
             {
-                crd::perf::Sample buf[kFill];
+                crd::perf::Sample buf[fill_count];
                 running.fetch_add(1U, std::memory_order_release);
                 while (!stop.load(std::memory_order_acquire))
                 {
-                    (void)crd::perf::copy_thread_samples(idx, buf, kFill);
+                    (void)crd::perf::copy_thread_samples(idx, buf, fill_count);
                 }
             }));
     }
-    while (running.load(std::memory_order_acquire) < kHammers)
+    while (running.load(std::memory_order_acquire) < n_hammers)
     {
         // wait until every hammer is actively contending for the ring
     }
@@ -251,14 +251,14 @@ TEST_CASE("sample ring: a save's copy retry outlasts a competing consumer (no si
         REQUIRE(cap_buf.size() > 0U);
         const crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{cap_buf.data(), cap_buf.size()}};
         REQUIRE(view.is_valid());
-        // The only recorded samples are the kFill "cap.retry" on this thread (hammers are unregistered). Retry outlasts
+        // The only recorded samples are the fill_count "cap.retry" on this thread (hammers are unregistered). Retry outlasts
         // the window -> all present; retry gives up -> the thread is written as 0 and the sum collapses.
         crd::u32 total = 0U;
         for (crd::u32 t = 0U; t < view.thread_count(); ++t)
         {
             total += view.thread_sample_count(t);
         }
-        if (total != kFill)
+        if (total != fill_count)
         {
             all_batches_intact = false;
         }

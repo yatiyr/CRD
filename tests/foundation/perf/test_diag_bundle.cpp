@@ -386,8 +386,8 @@ TEST_CASE("retention keeps only the newest bundles", "[perf][diag][bundle]")
     w.add_section(BundleSectionTag::Manifest, span_of(a.data(), a.size()));
     const cont::Array<crd::u8> buf = w.finish();
 
-    constexpr int kCount = 13;
-    for (int i = 0; i < kCount; ++i)
+    constexpr int n_sections = 13;
+    for (int i = 0; i < n_sections; ++i)
     {
         char name[32];
         std::snprintf(name, sizeof(name), "bundle_%02d.cdb", i);
@@ -404,7 +404,7 @@ TEST_CASE("retention keeps only the newest bundles", "[perf][diag][bundle]")
 
     std::error_code ec;
     // The three oldest (00,01,02) are gone; 03..12 remain.
-    for (int i = 0; i < kCount; ++i)
+    for (int i = 0; i < n_sections; ++i)
     {
         char name[32];
         std::snprintf(name, sizeof(name), "bundle_%02d.cdb", i);

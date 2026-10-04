@@ -62,9 +62,9 @@ TEST_CASE("correlation: round-trips through CPROF and resolves by (thread, ordin
     const crd::u8 th = crd::perf::current_thread_index();
     crd::perf::enable_thread_correlation(th);
 
-    constexpr crd::u32 kN   = 16U;
+    constexpr crd::u32 n_events   = 16U;
     const crd::perf::NameId pass = crd::perf::intern_name("shadow_pass");
-    for (crd::u32 i = 0U; i < kN; ++i)
+    for (crd::u32 i = 0U; i < n_events; ++i)
     {
         const auto s = make_sample(1000 + static_cast<crd::i64>(i), th);
         const auto r = make_corr(1000U + i, pass); // queue_id == begin_ns, so we can join back
@@ -76,12 +76,12 @@ TEST_CASE("correlation: round-trips through CPROF and resolves by (thread, ordin
     REQUIRE(crd::perf::validate_capture_buffer(crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}));
     const crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};
     REQUIRE(view.is_valid());
-    REQUIRE(view.correlation_count() == kN);
+    REQUIRE(view.correlation_count() == n_events);
 
     // Every sample's record is findable by (thread, ordinal) and joins back to the sample (queue_id == begin_ns).
     const auto samples = view.thread_samples(0U); // dense thread 0 == live main
-    REQUIRE(samples.size() == kN);
-    for (crd::u32 i = 0U; i < kN; ++i)
+    REQUIRE(samples.size() == n_events);
+    for (crd::u32 i = 0U; i < n_events; ++i)
     {
         const auto* rec = view.correlation_for(th, i);
         REQUIRE(rec != nullptr);
@@ -90,14 +90,14 @@ TEST_CASE("correlation: round-trips through CPROF and resolves by (thread, ordin
         CHECK(std::strcmp(view.resolve_name(crd::perf::NameId{rec->pass_id}), "shadow_pass") == 0);
     }
     // An ordinal with no record returns nullptr.
-    CHECK(view.correlation_for(th, kN) == nullptr);
+    CHECK(view.correlation_for(th, n_events) == nullptr);
 
     // Indexed access: records are sorted by (thread, ordinal), so index 0 is thread 0 / ordinal 0, and an
     // out-of-range index is nullptr.
     const auto* first = view.correlation_at(0U);
     REQUIRE(first != nullptr);
     CHECK(first->queue_id == static_cast<crd::u32>(samples[0].begin_ns));
-    CHECK(view.correlation_at(kN) == nullptr);
+    CHECK(view.correlation_at(n_events) == nullptr);
     crd::perf::shutdown();
 }
 
@@ -153,8 +153,8 @@ TEST_CASE("correlation: mixed valid/none, and a slot reused without correlation 
         crd::perf::init({});
         const crd::u8 th = crd::perf::current_thread_index();
         crd::perf::enable_thread_correlation(th);
-        constexpr crd::u32 kN = 10U;
-        for (crd::u32 i = 0U; i < kN; ++i)
+        constexpr crd::u32 n_events = 10U;
+        for (crd::u32 i = 0U; i < n_events; ++i)
         {
             const auto s = make_sample(5000 + static_cast<crd::i64>(i), th);
             if ((i & 1U) == 0U)
@@ -171,8 +171,8 @@ TEST_CASE("correlation: mixed valid/none, and a slot reused without correlation 
         REQUIRE(buf.size() > 0U);
         const crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};
         REQUIRE(view.is_valid());
-        CHECK(view.correlation_count() == kN / 2U);
-        for (crd::u32 i = 0U; i < kN; ++i)
+        CHECK(view.correlation_count() == n_events / 2U);
+        for (crd::u32 i = 0U; i < n_events; ++i)
         {
             const auto* rec = view.correlation_for(th, i);
             if ((i & 1U) == 0U)

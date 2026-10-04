@@ -340,7 +340,7 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
         append_us(f, s.begin_ns);
         f.append(",\"dur\":");
         append_us(f, s.end_ns - s.begin_ns);
-        f.append(",\"name\":\"");
+        f.append(R"(,"name":")");
         f.append(name);
         f.push_back('"');
         return f;
@@ -355,7 +355,7 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
     REQUIRE(hot.category == static_cast<crd::u8>(crd::perf::Category::User));
     {
         crd::containers::String depthfrag{&fx.alloc};
-        depthfrag.append("\"name\":\"known_hotspot\",\"cat\":\"user\",\"args\":{\"depth\":");
+        depthfrag.append(R"("name":"known_hotspot","cat":"user","args":{"depth":)");
         // depth is a small integer; append it directly.
         char db[4];
         int  dn = 0;
@@ -389,7 +389,7 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
             crd::containers::String cfrag{&fx.alloc};
             cfrag.append("\"ts\":");
             append_us(cfrag, frames[f].frame_end_ns);
-            cfrag.append(",\"name\":\"draws.this_frame\",\"args\":{\"value\":42");
+            cfrag.append(R"(,"name":"draws.this_frame","args":{"value":42)");
             CHECK(contains(out, cfrag.c_str()));
             found_counter_frame = true;
             break;

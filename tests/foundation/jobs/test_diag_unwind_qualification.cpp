@@ -32,10 +32,13 @@
 #  include <windows.h> // RtlCaptureStackBackTrace
 #  include <intrin.h>  // _ReturnAddress
 #  pragma intrinsic(_ReturnAddress)
+// The intrinsic must expand in the CALLER's frame; a function would report its own return address instead.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #  define CRD_RETADDR() (_ReturnAddress())
 #  define CRD_NOINLINE  __declspec(noinline)
 #else
 #  include <execinfo.h> // backtrace
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): as above, __builtin_return_address must expand in the caller
 #  define CRD_RETADDR() (__builtin_return_address(0))
 #  define CRD_NOINLINE  __attribute__((noinline))
 #endif
@@ -123,7 +126,7 @@ FiberContext g_caller_ctx;
 bool         g_fiber_ran = false;
 
 // A generous, page-aligned fiber stack owned by this TU (the raw primitive takes a plain memory region).
-alignas(64) crd::u8 g_fiber_stack[256u * 1024u];
+alignas(64) crd::u8 g_fiber_stack[256U * 1024U];
 
 void fiber_entry()
 {
