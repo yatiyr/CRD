@@ -155,13 +155,16 @@ TEST_CASE("crash capture: a wild write terminates with the fault code and writes
         CHECK(count_crash_dumps(dir) == 1U);                                // one fault -> one dump (the handler ran)
 
         // The real fatal-filter dump (not a simulated one) is readable and correctly identifies the fault and the
-        // crashing specimen binary: the exception code round-trips and the module list names the specimen with an
-        // RSDS CV record -- the identity later symbolization (DIAG.5d) matches or rejects.
+        // crashing specimen binary: the exception code round-trips and the module list names the specimen, with an
+        // RSDS CV record exactly when the binary has one -- the identity later symbolization (DIAG.5d) matches or
+        // rejects. win-release links without /DEBUG, so there the binary and its dump correctly carry none.
         const fs::path dump = first_crash_dump(dir);
         REQUIRE_FALSE(dump.empty());
         CHECK(crd_test_minidump::exception_code(dump.c_str()) == kAccessViolation);
         const fs::path want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename();
-        CHECK(crd_test_minidump::names_module_with_cv(dump.c_str(), want.c_str()));
+        const crd_test_minidump::DumpModule module = crd_test_minidump::find_dump_module(dump.c_str(), want.c_str());
+        CHECK(module.named);
+        CHECK(module.rsds == crd_test_minidump::image_has_rsds(fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.c_str()));
     }
 
     std::error_code ec;
@@ -308,15 +311,20 @@ TEST_CASE("crash capture: a stack overflow on the installing thread still dumps"
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("crash capture: a stack overflow on an UNguarded worker thread still dumps", "[core][diag][crash-capture]")
+TEST_CASE("crash capture: a stack overflow on a raw thread created after install() dumps",
+          "[core][diag][crash-capture]")
 {
-    // Measured: because the dump runs on the dedicated handler thread's fresh stack, the overflowed faulting thread
-    // only needs room for the tiny filter hand-off (CAS + two stores + SetEvent + wait), which the OS's default
-    // guard-page slack covers. So a worker thread dumps even WITHOUT SetThreadStackGuarantee -- the guarantee is
-    // defensive, not required for dumpability (this is why worker-loop guard wiring is optional in a later slice).
+    // The specimen's raw std::thread never calls guard_current_thread_stack. It used to rely on the OS's default
+    // slack (about one page) for the exception dispatcher and the filter's hand-off, which an earlier comment called
+    // a measured guarantee. Hosted Windows Server 2025 refuted it on 2026-10-04: exit 0xC00000FD with no dump on
+    // MSVC win-debug, 0xC0000005 on clang-cl, while the workstation passed 30 of 30. crash.cpp now reserves the
+    // last-chance guarantee for every thread created after install() through a TLS callback, so this thread is
+    // guaranteed by construction and the dump no longer depends on slack. The marker shows how a failure happened:
+    // -1 means the filter never ran, any other value is the WriteResult the handler reported.
     const fs::path    dir = fresh_dir("overflow_thread");
     const cd::Outcome o   = run_mode("overflow_thread", dir);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code)
+                    << std::dec << " marker=" << read_marker(dir));
 
     if (built_with_asan())
     {
@@ -338,7 +346,8 @@ TEST_CASE("crash capture: a stack overflow on a guarded worker thread still dump
 {
     const fs::path    dir = fresh_dir("overflow_thread_guarded");
     const cd::Outcome o   = run_mode("overflow_thread_guarded", dir);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code)
+                    << std::dec << " marker=" << read_marker(dir));
 
     if (built_with_asan())
     {

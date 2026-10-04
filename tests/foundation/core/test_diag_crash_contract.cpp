@@ -406,7 +406,10 @@ TEST_CASE("crash contract: the written dump is readable and identifies the fault
     const DWORD n             = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
     REQUIRE(n > 0U);
     const fs::path exe_base = fs::path{exe, exe + n}.filename();
-    CHECK(crd_test_minidump::names_module_with_cv(dump_path.c_str(), exe_base.c_str())); // named + CV-identified
+    const crd_test_minidump::DumpModule module =
+        crd_test_minidump::find_dump_module(dump_path.c_str(), exe_base.c_str());
+    CHECK(module.named);                                            // the crashing binary is named...
+    CHECK(module.rsds == crd_test_minidump::image_has_rsds(exe)); // ...and CV-identified iff it has a PDB identity
 
     crd::crash::uninstall();
     std::error_code ec;
@@ -414,6 +417,58 @@ TEST_CASE("crash contract: the written dump is readable and identifies the fault
 }
 
 #endif // CRD_ENABLE_ASSERTS
+
+TEST_CASE("crash contract: threads created after install() reserve the stack guarantee automatically",
+          "[core][diag][crash]")
+{
+    // The lifecycle hook (a TLS callback in crash.cpp) applies the last-chance stack guarantee to every thread created
+    // while crash capture is installed, so an overflow on a thread nobody guarded by hand still has room to reach the
+    // filter. SetThreadStackGuarantee with 0 is a query: it reports the thread's current guarantee in place.
+    const auto guarantee_now = []() noexcept {
+        ULONG size = 0;
+        (void)SetThreadStackGuarantee(&size);
+        return size;
+    };
+    const auto guarantee_of_new_thread = [&guarantee_now]() {
+        ULONG seen = 0;
+        std::thread t([&seen, &guarantee_now] { seen = guarantee_now(); });
+        t.join();
+        return seen;
+    };
+    constexpr ULONG auto_guard = 65536U; // crash.cpp kAutoGuardBytes, the guard_current_thread_stack default
+
+    crd::crash::uninstall();
+    const ULONG before = guarantee_of_new_thread(); // not installed: the OS default, below the guarantee
+    INFO("guarantee before=" << before);
+    CHECK(before < auto_guard);
+
+    // A thread that already exists when install() runs is not touched (the hook fires only at thread creation).
+    // std::thread's constructor can return before the new thread runs its DLL_THREAD_ATTACH callbacks, so wait
+    // until it is demonstrably running; otherwise it may attach after install() and be guaranteed, correctly.
+    std::atomic<bool> started{false};
+    std::atomic<bool> go{false};
+    ULONG             existing_seen = 0;
+    std::thread       existing([&] {
+        started.store(true, std::memory_order_release);
+        while (!go.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        existing_seen = guarantee_now();
+    });
+    while (!started.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+
+    const fs::path dir = fresh_temp_dir();
+    REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
+    const ULONG during = guarantee_of_new_thread();
+    go.store(true, std::memory_order_release);
+    existing.join();
+    INFO("guarantee during=" << during << " existing=" << existing_seen);
+    CHECK(during >= auto_guard);   // created while installed: guaranteed without any call of its own
+    CHECK(existing_seen == before); // pre-existing: unchanged
+
+    crd::crash::uninstall();
+    CHECK(guarantee_of_new_thread() == before); // uninstalled: new threads are no longer guaranteed
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
 
 #else // non-Windows: the in-process minidump writer is unsupported; the install contract still holds
 

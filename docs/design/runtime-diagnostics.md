@@ -266,6 +266,11 @@ Replace the unreliable fatal-path dependency on in-process dumping with a qualif
 mechanism behind the owned crash API. Keep a minimal emergency fallback. Check every install/write result, preserve
 exception context, serialize DbgHelp access, use Unicode/long-path-safe and collision-safe files, and support early
 startup, native plugin faults, stack overflow and fail-fast limitations. No automatic upload.
+Stack overflow capture does not rely on the OS default slack: while crash capture is installed, a TLS callback
+reserves the last-chance stack guarantee (64 KiB, `SetThreadStackGuarantee`) for every thread the process creates.
+This is process-wide: each new thread spends that much of its stack reserve. Threads that existed before `install()`
+are not touched (the installing thread is guarded by `install()`; hosts call `guard_current_thread_stack` for others).
+Linux has no equivalent creation hook for raw threads and keeps per-thread alternate-stack registration.
 
 Acceptance: crash while allocating/holding a logger lock, concurrent crashes, handler failure, denied/full output,
 missing symbols and stack exhaustion. A successful report requires a readable correctly identified dump; failed

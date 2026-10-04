@@ -191,3 +191,51 @@ holds on hosted MSVC and on the workstation's clang-cl. Workstation `win-clang-c
 of 3 runs, guarded case passed. The hosted lane uses clang-cl **22.1.3**, which this workstation does not have, so the
 failure is not reproduced and no code was changed on a guess. It stays open on DIAG.5a: the next hosted run shows
 whether it repeats; a reproduction needs LLVM 22 or a hosted diagnostic run.
+
+## Fourth batch: second-run results and the stack-overflow guarantee
+
+Publication correction: both the third batch (`87f23d4`) and the DIAG.7b commit (`8e17e30`) reached GitHub; a stale
+local remote-tracking ref (a silently failing `git fetch`) made them look unpushed, and the user was asked to push
+again without need. `git ls-remote origin` is the check to use. Run
+[37231001716](https://github.com/yatiyr/CRD/actions/runs/37231001716) covers `8e17e30`.
+
+Run [37220832553](https://github.com/yatiyr/CRD/actions/runs/37220832553) (`519c663`, second batch): **`win-vs` passes**
+(the project-sync dependency-tree repair works) and `win-clang-cl` passes. Every Linux lane still fails on the snapshot
+and unwind defects the third batch repairs. `win-debug` failed one test, closing the open clang-cl finding above.
+
+### Closed: the unguarded-thread overflow was a false guarantee, now an engine guarantee (DIAG.5a)
+
+`crash capture: a stack overflow on an UNguarded worker thread still dumps` failed on `win-debug` (MSVC) as well:
+exit 0xC00000FD, no dump. With the clang-cl shape (0xC0000005) that is one mechanism. With no stack left to enter the
+dispatcher, Windows terminates with the original code and the filter never runs; when dispatch starts and faults
+partway, the second fault becomes the exit code. The test's comment had recorded the OS default slack (about one
+page) as a measured guarantee; two hosted counterexamples refute it, although the workstation passed 30 of 30 (a
+different OS build and recursion phase). LLVM 22 was not the cause.
+
+Repair (a lifecycle hook, not a call every thread must remember): `crash.cpp` registers a TLS callback
+(`.CRT$XLB`, kept by `/INCLUDE:_tls_used` and `/INCLUDE:kCrdCrashTlsCallback`) that, while crash capture is installed,
+calls `SetThreadStackGuarantee` with 64 KiB for every thread the process creates; `install()` enables it and
+`uninstall()` disables it. It runs under the loader lock with one atomic load and one kernel32 call. The process-wide
+effect and its limits (pre-existing threads untouched; Linux keeps per-thread registration) are in the
+[DIAG.5a contract](../design/runtime-diagnostics.md#diag-5a). New test `threads created after install() reserve the stack
+guarantee automatically` queries the guarantee (`SetThreadStackGuarantee` with 0): 0 before install, 65,536 on a thread
+created while installed, 0 on a thread that already existed, 0 again after uninstall, on MSVC and on clang-cl. The
+overflow test is renamed `a stack overflow on a raw thread created after install() dumps`, its comment records the
+refutation, and both overflow tests now print the specimen marker (-1: the filter never ran). Workstation: the raw-thread
+overflow passed 20 of 20, `[crash],[crash-capture]` 26 cases on MSVC and clang-cl, `crd-core-tests` 30 cases; strict gate
+clean on the three files.
+
+### Release builds carry no CodeView identity: the dump probe's oracle was wrong (DIAG.5a)
+
+Run 37219198785's `win-release` (the first Release lane to run tests since the DIAG work) failed
+`test_diag_crash_capture.cpp:164`: the dump did not "name the specimen with an RSDS CV record". Reproduced on the
+workstation's `win-release`. `dumpbin /headers` shows why: the Debug specimen's PE debug directory has a `cv` entry
+(RSDS, pointing at its PDB) and the Release specimen has none, because the `win-release` preset links without
+`/DEBUG`. The dump was correct; the oracle assumed every build carries a PDB identity. The probe now reports
+`find_dump_module` (named, rsds) separately, and a small PE reader, `image_has_rsds`, reads the binary's own debug
+directory; both crash tests assert the module is named and that the dump carries RSDS exactly when the binary does.
+`crd-core-tests` passes on `win-release` (22 cases) and `win-debug` (30 cases); strict gate clean.
+
+The new stack-guarantee test also exposed a race in its own first draft: `std::thread` can return before the new
+thread runs its `DLL_THREAD_ATTACH` callbacks, so a "pre-existing" thread could attach after `install()` and, correctly,
+be guaranteed. It now waits until that thread is demonstrably running before installing: 40 of 40 runs.

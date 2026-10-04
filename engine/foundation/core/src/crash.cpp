@@ -326,6 +326,28 @@ crd::crash::CrashReport s_req_report{};      // the handler thread's result, rea
 
 constexpr DWORD kHandlerWaitMs = 30000; // bounded: a wedged handler must not hang the crash forever
 
+// Last-chance stack every thread created after install() reserves automatically (the guard_current_thread_stack
+// default). Without it a thread that exhausts its stack has only the OS's default slack, about one page, to enter the
+// exception dispatcher and run the filter's hand-off; hosted Windows Server 2025 runs showed that is not reliably
+// enough (2026-10-04: an unguarded thread's overflow exited 0xC00000FD with no dump on MSVC, 0xC0000005 on
+// clang-cl).
+constexpr ULONG   kAutoGuardBytes = 65536U;
+std::atomic<bool> s_auto_guard{false}; // set while installed; read by the TLS callback on every thread attach
+
+// TLS callback: the loader calls it for every thread the process creates (DLL_THREAD_ATTACH), so threads created after
+// install() -- engine workers, host threads, raw std::threads -- get the guarantee without calling anything. It runs
+// under the loader lock: no allocation, no logging, one atomic load and one kernel32 call. A thread whose stack reserve
+// cannot hold the guarantee gets FALSE back and keeps the default slack. Threads that already existed at install()
+// are not touched (the installing thread is guarded by install() itself; hosts may call guard_current_thread_stack).
+void NTAPI crash_tls_callback(PVOID /*module*/, DWORD reason, PVOID /*reserved*/) noexcept
+{
+    if (reason == DLL_THREAD_ATTACH && s_auto_guard.load(std::memory_order_acquire))
+    {
+        ULONG bytes = kAutoGuardBytes;
+        (void)SetThreadStackGuarantee(&bytes);
+    }
+}
+
 // Perform the dump for s_req_ep / s_req_tid, print, record s_req_report, fire the hook. Runs on the handler
 // thread (the fresh-stack path); the caller holds nothing (this takes s_dump_lock itself).
 void do_fatal_dump() noexcept
@@ -499,6 +521,14 @@ LONG CALLBACK crash_filter(EXCEPTION_POINTERS* ep) noexcept
 
 } // namespace
 
+// Register crash_tls_callback with the loader: a pointer in the CRT's TLS-callback section (.CRT$XLB sorts between
+// the CRT's own XLA/XLZ bounds), plus linker includes so the TLS directory (_tls_used) and this pointer survive in a
+// static library and under /OPT:REF. extern "C" keeps the x64 symbol name literal for the /INCLUDE directive.
+#pragma section(".CRT$XLB", read)
+extern "C" __declspec(allocate(".CRT$XLB")) const PIMAGE_TLS_CALLBACK kCrdCrashTlsCallback = &crash_tls_callback;
+#pragma comment(linker, "/INCLUDE:_tls_used")
+#pragma comment(linker, "/INCLUDE:kCrdCrashTlsCallback")
+
 namespace crd::crash
 {
 
@@ -590,6 +620,7 @@ InstallResult install(const char* output_dir) noexcept
 #endif
 
     guard_current_thread_stack(); // reserve last-chance stack for the installing thread
+    s_auto_guard.store(true, std::memory_order_release); // and for every thread created from now on (TLS callback)
 
     const LPTOP_LEVEL_EXCEPTION_FILTER prev = SetUnhandledExceptionFilter(&crash_filter);
     if (!s_have_prev)
@@ -605,6 +636,7 @@ InstallResult install(const char* output_dir) noexcept
 
 void uninstall() noexcept
 {
+    s_auto_guard.store(false, std::memory_order_release); // threads created from now on are not guarded
     if (s_have_prev)
     {
         (void)SetUnhandledExceptionFilter(s_prev_filter);

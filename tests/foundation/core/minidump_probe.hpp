@@ -98,23 +98,36 @@ inline bool ends_with_icase(const wchar_t* name, std::size_t n, const wchar_t* s
     return true;
 }
 
-// True iff the dump's module list names a module whose path ends with want_basename (case-insensitive) AND that
-// module carries a CV record in RSDS format (>= 24 bytes: 'RSDS' magic + a 16-byte GUID + a 4-byte age). That is the
-// binary identity a symbol server keys on -- present without any frame being symbolized here.
-inline bool names_module_with_cv(const wchar_t* dump_path, const wchar_t* want_basename)
+// The dump's view of one module: whether the module list names a module whose path ends with want_basename
+// (case-insensitive), and whether that module carries a CodeView record in RSDS format (>= 24 bytes: 'RSDS' magic,
+// a 16-byte GUID, a 4-byte age) -- the binary identity a symbol server keys on, present without any frame being
+// symbolized.
+struct DumpModule
 {
+    bool named = false;
+    bool rsds  = false;
+};
+
+inline bool is_rsds(const unsigned char* p, std::size_t avail) noexcept
+{
+    return avail >= 24U && p[0] == 'R' && p[1] == 'S' && p[2] == 'D' && p[3] == 'S';
+}
+
+inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want_basename)
+{
+    DumpModule  result;
     const Bytes file = read_file_bytes(dump_path);
     if (file.size() < sizeof(std::uint32_t))
-        return false;
+        return result;
 
     constexpr std::uint32_t module_list_stream = 4U; // MINIDUMP_STREAM_TYPE::ModuleListStream
     const std::size_t       list_size = crd::crash::read_dump_stream(dump_path, module_list_stream, nullptr, 0);
     if (list_size < sizeof(std::uint32_t))
-        return false;
+        return result;
     Bytes list;
     list.resize(list_size);
     if (crd::crash::read_dump_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
-        return false;
+        return result;
 
     std::uint32_t count = 0;
     std::memcpy(&count, list.data(), sizeof(count));
@@ -144,14 +157,71 @@ inline bool names_module_with_cv(const wchar_t* dump_path, const wchar_t* want_b
         if (!ends_with_icase(name.data(), chars, want_basename))
             continue;
 
-        // The named module: require an RSDS CV record -- the identity later symbolization matches or refuses.
-        if (mod.CvRecord.DataSize < 24U)
+        result.named            = true;
+        const std::size_t crva  = static_cast<std::size_t>(mod.CvRecord.Rva);
+        const std::size_t csize = static_cast<std::size_t>(mod.CvRecord.DataSize);
+        result.rsds = crva + csize <= file.size() && is_rsds(file.data() + crva, csize);
+        return result;
+    }
+    return result;
+}
+
+// Whether the binary itself carries an RSDS CodeView entry in its PE debug directory -- i.e. whether it was linked with
+// debug information. A build linked without /DEBUG (the win-release preset) has none, so its dump correctly carries no
+// RSDS record either; the dump's CV identity is compared against this, never assumed.
+inline bool image_has_rsds(const wchar_t* image_path)
+{
+    const Bytes image = read_file_bytes(image_path);
+    if (image.size() < sizeof(IMAGE_DOS_HEADER))
+        return false;
+    IMAGE_DOS_HEADER dos{};
+    std::memcpy(&dos, image.data(), sizeof(dos));
+    const std::size_t nt_off = static_cast<std::size_t>(dos.e_lfanew);
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || nt_off + sizeof(IMAGE_NT_HEADERS64) > image.size())
+        return false;
+    IMAGE_NT_HEADERS64 nt{};
+    std::memcpy(&nt, image.data() + nt_off, sizeof(nt));
+    if (nt.Signature != IMAGE_NT_SIGNATURE || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return false;
+    const IMAGE_DATA_DIRECTORY debug_dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    if (debug_dir.VirtualAddress == 0U || debug_dir.Size == 0U)
+        return false;
+
+    // Map the debug directory's RVA to a file offset through the section table.
+    const std::size_t sections_off =
+        nt_off + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+    std::size_t dir_off = 0U;
+    bool        mapped  = false;
+    for (std::uint16_t i = 0; i < nt.FileHeader.NumberOfSections; ++i)
+    {
+        const std::size_t sh_off = sections_off + static_cast<std::size_t>(i) * sizeof(IMAGE_SECTION_HEADER);
+        if (sh_off + sizeof(IMAGE_SECTION_HEADER) > image.size())
             return false;
-        const std::size_t crva = static_cast<std::size_t>(mod.CvRecord.Rva);
-        if (crva + 4U > file.size())
+        IMAGE_SECTION_HEADER sh{};
+        std::memcpy(&sh, image.data() + sh_off, sizeof(sh));
+        if (debug_dir.VirtualAddress >= sh.VirtualAddress &&
+            debug_dir.VirtualAddress < sh.VirtualAddress + sh.SizeOfRawData)
+        {
+            dir_off = static_cast<std::size_t>(debug_dir.VirtualAddress - sh.VirtualAddress) + sh.PointerToRawData;
+            mapped  = true;
+            break;
+        }
+    }
+    if (!mapped)
+        return false;
+
+    const std::size_t entries = debug_dir.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
+    for (std::size_t i = 0; i < entries; ++i)
+    {
+        const std::size_t entry_off = dir_off + i * sizeof(IMAGE_DEBUG_DIRECTORY);
+        if (entry_off + sizeof(IMAGE_DEBUG_DIRECTORY) > image.size())
             return false;
-        const unsigned char* cv = file.data() + crva;
-        return cv[0] == 'R' && cv[1] == 'S' && cv[2] == 'D' && cv[3] == 'S';
+        IMAGE_DEBUG_DIRECTORY entry{};
+        std::memcpy(&entry, image.data() + entry_off, sizeof(entry));
+        const std::size_t data_off = entry.PointerToRawData;
+        if (entry.Type == IMAGE_DEBUG_TYPE_CODEVIEW && data_off + entry.SizeOfData <= image.size() &&
+            is_rsds(image.data() + data_off, entry.SizeOfData))
+            return true;
     }
     return false;
 }
