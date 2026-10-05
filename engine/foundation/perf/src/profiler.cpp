@@ -781,6 +781,86 @@ void pop_region(NameId id, BeginToken begin, Category cat, crd::u32 color_rgba) 
     ring->head.store(h + 1U, std::memory_order_release);
 }
 
+// ---- Frame-history seqlock payload --------------------------------------
+//
+// DIAG.6a(c1): a cross-thread reader may overlap frame_mark's write of a slot and then discards its copy. That overlap
+// is defined behaviour only when both sides access the shared record atomically, so the record moves member by member
+// through relaxed std::atomic_ref (a plain memcpy against the writer is a data race; TSan reported it 2026-10-05). The
+// sequence counter still provides the ordering; same-thread readers of frame_record() keep plain access.
+namespace
+{
+template <typename T>
+void relaxed_store(T& dst, T value) noexcept
+{
+    static_assert(std::atomic_ref<T>::is_always_lock_free, "seqlock payload words must be lock-free");
+    std::atomic_ref<T>(dst).store(value, std::memory_order_relaxed);
+}
+
+template <typename T>
+[[nodiscard]] T relaxed_load(T& src) noexcept
+{
+    return std::atomic_ref<T>(src).load(std::memory_order_relaxed);
+}
+
+void move_allocator_record(AllocatorRecord& dst, AllocatorRecord& src, bool publish) noexcept
+{
+    if (publish)
+    {
+        relaxed_store(dst.alloc_count, src.alloc_count);
+        relaxed_store(dst.dealloc_count, src.dealloc_count);
+        relaxed_store(dst.bytes_in_use, src.bytes_in_use);
+        relaxed_store(dst.peak_bytes, src.peak_bytes);
+        relaxed_store(dst.total_bytes, src.total_bytes);
+        relaxed_store(dst._pad, src._pad);
+    }
+    else
+    {
+        dst.alloc_count   = relaxed_load(src.alloc_count);
+        dst.dealloc_count = relaxed_load(src.dealloc_count);
+        dst.bytes_in_use  = relaxed_load(src.bytes_in_use);
+        dst.peak_bytes    = relaxed_load(src.peak_bytes);
+        dst.total_bytes   = relaxed_load(src.total_bytes);
+        dst._pad          = relaxed_load(src._pad);
+    }
+}
+
+// Publish the members frame_mark filled (the header, then the counted values and allocators) into the shared slot.
+void publish_frame_record(FrameRecord& slot, FrameRecord& rec) noexcept
+{
+    relaxed_store(slot.frame_index, rec.frame_index);
+    relaxed_store(slot.frame_begin_ns, rec.frame_begin_ns);
+    relaxed_store(slot.frame_end_ns, rec.frame_end_ns);
+    relaxed_store(slot.counter_count, rec.counter_count);
+    relaxed_store(slot.allocator_count, rec.allocator_count);
+    for (crd::u32 i = 0U; i < rec.counter_count; ++i)
+    {
+        relaxed_store(slot.values[i].bits, rec.values[i].bits);
+    }
+    for (crd::u32 i = 0U; i < rec.allocator_count; ++i)
+    {
+        move_allocator_record(slot.allocators[i], rec.allocators[i], true);
+    }
+}
+
+// Copy a whole shared slot into `out` (as the former memcpy did); valid only if the sequence check then passes.
+void read_frame_record(FrameRecord& out, FrameRecord& slot) noexcept
+{
+    out.frame_index     = relaxed_load(slot.frame_index);
+    out.frame_begin_ns  = relaxed_load(slot.frame_begin_ns);
+    out.frame_end_ns    = relaxed_load(slot.frame_end_ns);
+    out.counter_count   = relaxed_load(slot.counter_count);
+    out.allocator_count = relaxed_load(slot.allocator_count);
+    for (crd::u32 i = 0U; i < kMaxCounters; ++i)
+    {
+        out.values[i].bits = relaxed_load(slot.values[i].bits);
+    }
+    for (crd::u32 i = 0U; i < kMaxAllocators; ++i)
+    {
+        move_allocator_record(out.allocators[i], slot.allocators[i], false);
+    }
+}
+} // namespace
+
 // ---- Frame boundary -----------------------------------------------------
 
 void frame_mark() noexcept
@@ -805,7 +885,8 @@ void frame_mark() noexcept
     const crd::u32         seq_begin = seq.load(std::memory_order_relaxed);
     seq.store(seq_begin + 1U, std::memory_order_relaxed); // odd
     std::atomic_thread_fence(std::memory_order_release);  // record writes below stay after the odd marker
-    FrameRecord& rec      = state.frame_history[history_head_idx];
+    FrameRecord& slot     = state.frame_history[history_head_idx];
+    FrameRecord  rec{};   // built locally, then published into the slot word by word (see publish_frame_record)
     rec.frame_index       = frame_index;
     rec.frame_begin_ns    = state.last_frame_end_ns;
     rec.frame_end_ns      = end_ns;
@@ -857,7 +938,8 @@ void frame_mark() noexcept
     }
     state.snapshot_in_flight.fetch_sub(1U, std::memory_order_seq_cst);
 
-    // DIAG.6a(c1) seqlock: the record is fully written -- publish it by returning the sequence to even (release).
+    // DIAG.6a(c1) seqlock: copy the record into the slot, then publish it by returning the sequence to even (release).
+    publish_frame_record(slot, rec);
     seq.store(seq_begin + 2U, std::memory_order_release);
 
     // Retire the slot -- readers see this frame's record once the head
@@ -1647,7 +1729,7 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
     const crd::u64        target = head - 1U - static_cast<crd::u64>(frames_back);
     const crd::u32        idx    = static_cast<crd::u32>(target % state.frame_history_slots);
     std::atomic<crd::u32>& seq   = state.frame_history_seq[idx];
-    // Seqlock read: the memcpy is a speculative racy read that is DISCARDED unless the sequence was even and unchanged
+    // Seqlock read: the relaxed copy is speculative and DISCARDED unless the sequence was even and unchanged
     // across it (the design's "documented synchronization scheme"). Bounded retry -- a slot being lapped faster than we
     // can copy is reported as unavailable, never an unbounded spin (the acceptance's "unavailable" count).
     for (int attempt = 0; attempt < 8; ++attempt)
@@ -1657,7 +1739,7 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
         {
             continue; // a write is in progress
         }
-        std::memcpy(&out, &state.frame_history[idx], sizeof(FrameRecord));
+        read_frame_record(out, state.frame_history[idx]);
         std::atomic_thread_fence(std::memory_order_acquire); // the copy completes before we re-read the sequence
         const crd::u32 s2 = seq.load(std::memory_order_relaxed);
         if (s1 == s2)

@@ -16,6 +16,15 @@ extern "C" const char* __asan_default_options()
 }
 #endif
 
+#if CRD_DIAG_HAS_TSAN
+// The same for ThreadSanitizer, which otherwise reports the fault as "ThreadSanitizer: SEGV" and exits with code 66
+// instead of dying by the signal (DIAG.1b, first full TSan run 2026-10-05).
+extern "C" const char* __tsan_default_options()
+{
+    return "handle_segv=0";
+}
+#endif
+
 namespace
 {
 // The fault itself. UndefinedBehaviorSanitizer (the linux-gcc-asan lane builds with non-recovering

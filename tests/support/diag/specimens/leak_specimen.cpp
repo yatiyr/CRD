@@ -18,6 +18,7 @@
 #ifndef CRD_DIAG_LSAN_ROUTE
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no functional LeakSanitizer route on this toolchain
 #endif
+#define CRD_DIAG_SPECIMEN_ASAN_CLASS // an AddressSanitizer-only error class (see specimen_common.hpp)
 
 #include "specimen_common.hpp"
 

@@ -28,7 +28,7 @@ namespace
 {
     Counter* cp = nullptr;
     std::memcpy(&cp, &job._pad[0], sizeof(cp));
-    return (cp != nullptr) ? cp->task_id : 0U;
+    return (cp != nullptr) ? cp->task_id.load(std::memory_order_relaxed) : 0U;
 }
 } // namespace
 
@@ -194,8 +194,8 @@ static void job_fiber_trampoline() noexcept
 
         // Decrement the fiber's associated counter (if any) and wake satisfied waiters.
         cur_fiber = nullptr;    // completion signal: run_job_in_fiber checks this
-        Counter* const c = done->job_counter;
-        done->job_counter = nullptr;
+        Counter* const c = done->job_counter.load(std::memory_order_relaxed);
+        done->job_counter.store(nullptr, std::memory_order_relaxed);
         if (c != nullptr)
         {
             WorkerPool* const pool = tl_worker_pool();
@@ -295,7 +295,7 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
         tl_job_fn = job.fn;
         Counter* cp = nullptr;
         std::memcpy(&cp, &job._pad[0], sizeof(cp));
-        target->job_counter = cp;
+        target->job_counter.store(cp, std::memory_order_relaxed);
 
         // SBO path: callable bytes were packed into data + _pad[9..41] by make_job<F>.
         // Copy them into the fiber's sbo_buf so they survive suspension + resume on any thread.

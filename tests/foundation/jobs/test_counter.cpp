@@ -3,6 +3,7 @@
 
 #include "../../../engine/foundation/jobs/src/counter.hpp"
 #include "../../../engine/foundation/jobs/src/fiber.hpp"
+#include "../../../engine/foundation/jobs/src/sanitizer_fibers.hpp"
 #include "../../../engine/foundation/jobs/src/worker_pool.hpp"  // PendingPark / tl_take_pending_park
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/types.hpp>
@@ -17,6 +18,7 @@ using crd::jobs::detail::CounterPool;
 using crd::jobs::detail::Fiber;
 using crd::jobs::detail::FiberContext;
 using crd::jobs::detail::PendingPark;
+using crd::jobs::detail::SanitizerSwitch;
 using crd::jobs::detail::Waiter;
 using crd::jobs::detail::WaiterClaim;
 using crd::jobs::detail::counter_decrement;
@@ -24,6 +26,12 @@ using crd::jobs::detail::counter_finish_park;
 using crd::jobs::detail::counter_wait;
 using crd::jobs::detail::fiber_init_stack;
 using crd::jobs::detail::fiber_switch;
+using crd::jobs::detail::sanitizer_create_fiber;
+using crd::jobs::detail::sanitizer_current_fiber;
+using crd::jobs::detail::sanitizer_destroy_fiber;
+using crd::jobs::detail::sanitizer_fiber_entered;
+using crd::jobs::detail::sanitizer_switch_begin;
+using crd::jobs::detail::sanitizer_switch_end;
 using crd::jobs::detail::tl_take_pending_park;
 
 
@@ -348,6 +356,25 @@ TEST_CASE("counter_decrement: two waiters with same target, both woken", "[jobs]
 // Fiber-switch tests — globals (same pattern as test_fiber_switch.cpp)
 // ---------------------------------------------------------------------------
 
+// The worker pool annotates every fiber switch for ASan and TSan (sanitizer_fibers.hpp), and counter_wait switches
+// back to the TSan context the dispatcher recorded. These tests dispatch and resume the job fiber by hand, so they
+// mirror that choreography; without it a TSan build switches to a null fiber context and crashes.
+static void hand_enter(Fiber& f, FiberContext& sched_ctx, const void* stack, crd::usize size)
+{
+    f.tsan_return = sanitizer_current_fiber();
+    SanitizerSwitch sched{};
+    sanitizer_switch_begin(sched, stack, size, f.tsan_fiber);
+    fiber_switch(&sched_ctx, &f.context);
+    sanitizer_switch_end(sched);
+}
+
+static void hand_return(Fiber& f, FiberContext& sched_ctx)
+{
+    sanitizer_switch_begin(f.sanitizer, f.sanitizer.return_bottom, f.sanitizer.return_size, f.tsan_return);
+    fiber_switch(&f.context, &sched_ctx);
+    sanitizer_switch_end(f.sanitizer);
+}
+
 // Shared state for tests 10 and 11.
 struct WaitTestState
 {
@@ -367,11 +394,12 @@ static WaitTestState g_s10;
 
 static void wait_job_entry_10()
 {
+    sanitizer_fiber_entered(g_s10.job_fiber.sanitizer);
     // This fiber waits on the counter (value starts at 1, target = 0).
     counter_wait(g_s10.counter, &g_s10.waiter, &g_s10.job_fiber, g_s10.sched_ctx, 0U);
     g_s10.job_completed = true;
     // Return control to the scheduler.
-    fiber_switch(&g_s10.job_fiber.context, &g_s10.sched_ctx);
+    hand_return(g_s10.job_fiber, g_s10.sched_ctx);
 }
 
 TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
@@ -400,9 +428,10 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     constexpr crd::usize stack_size = 64U * 1024U;
     auto stack = std::make_unique<crd::u8[]>(stack_size);
     fiber_init_stack(g_s10.job_fiber.context, stack.get(), stack_size, wait_job_entry_10);
+    g_s10.job_fiber.tsan_fiber = sanitizer_create_fiber();
 
     // Switch into the job fiber — it will call counter_wait and suspend.
-    fiber_switch(&g_s10.sched_ctx, &g_s10.job_fiber.context);
+    hand_enter(g_s10.job_fiber, g_s10.sched_ctx, stack.get(), stack_size);
 
     // We're back in the "scheduler". The job fiber suspended (context now saved)
     // and handed us a park request; publish its Waiter on its behalf.
@@ -420,11 +449,12 @@ TEST_CASE("counter_wait: full suspension and resumption", "[jobs][counter]")
     CHECK(g_s10.waiter.next.load() == nullptr);
 
     // Resume the job fiber (in a real worker this would be a pushed resume job).
-    fiber_switch(&g_s10.sched_ctx, &woken->fiber->context);
+    hand_enter(*woken->fiber, g_s10.sched_ctx, stack.get(), stack_size);
 
     // Job fiber finished.
     CHECK(g_s10.job_completed);
 
+    sanitizer_destroy_fiber(g_s10.job_fiber.tsan_fiber);
     g_s10.pool.release(g_s10.counter);
     g_s10.pool.shutdown();
 }
@@ -479,15 +509,16 @@ static WaitTestState12 g_s12;
 
 static void wait_job_entry_12()
 {
+    sanitizer_fiber_entered(g_s12.job_fiber.sanitizer);
     // First wait.
     counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0U);
     ++g_s12.run_count;
-    fiber_switch(&g_s12.job_fiber.context, &g_s12.sched_ctx);
+    hand_return(g_s12.job_fiber, g_s12.sched_ctx);
 
     // Second wait (counter re-acquired externally between the two fiber runs).
     counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0U);
     ++g_s12.run_count;
-    fiber_switch(&g_s12.job_fiber.context, &g_s12.sched_ctx);
+    hand_return(g_s12.job_fiber, g_s12.sched_ctx);
 }
 
 TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][counter]")
@@ -513,9 +544,10 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
     constexpr crd::usize stack_size = 64U * 1024U;
     auto stack = std::make_unique<crd::u8[]>(stack_size);
     fiber_init_stack(g_s12.job_fiber.context, stack.get(), stack_size, wait_job_entry_12);
+    g_s12.job_fiber.tsan_fiber = sanitizer_create_fiber();
 
     // --- First round ---
-    fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
+    hand_enter(g_s12.job_fiber, g_s12.sched_ctx, stack.get(), stack_size);
     CHECK(g_s12.run_count == 0);  // suspended
     {
         const PendingPark p = tl_take_pending_park();
@@ -526,7 +558,7 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
 
     Waiter* woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);
-    fiber_switch(&g_s12.sched_ctx, &woken->fiber->context);
+    hand_enter(*woken->fiber, g_s12.sched_ctx, stack.get(), stack_size);
     CHECK(g_s12.run_count == 1);  // first wait done
 
     // --- Second round: re-acquire a fresh counter ---
@@ -543,7 +575,7 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
 #endif
 
     // Re-enter the job fiber for the second wait.
-    fiber_switch(&g_s12.sched_ctx, &g_s12.job_fiber.context);
+    hand_enter(g_s12.job_fiber, g_s12.sched_ctx, stack.get(), stack_size);
     CHECK(g_s12.run_count == 1);  // suspended again
     {
         const PendingPark p = tl_take_pending_park();
@@ -554,9 +586,10 @@ TEST_CASE("counter_wait: two sequential waits on renewed counter", "[jobs][count
 
     woken = counter_decrement(g_s12.counter, 1U);
     REQUIRE(woken != nullptr);
-    fiber_switch(&g_s12.sched_ctx, &woken->fiber->context);
+    hand_enter(*woken->fiber, g_s12.sched_ctx, stack.get(), stack_size);
     CHECK(g_s12.run_count == 2);  // second wait done
 
+    sanitizer_destroy_fiber(g_s12.job_fiber.tsan_fiber);
     g_s12.pool.release(g_s12.counter);
     g_s12.pool.shutdown();
 }

@@ -54,6 +54,15 @@
 #include <unistd.h> // rmdir (denied), getpid, write, close
 #endif
 
+#if CRD_DIAG_HAS_TSAN
+// The engine's crash handler under test must receive the fault. ThreadSanitizer otherwise handles SIGSEGV itself,
+// reports "ThreadSanitizer: SEGV" and exits with code 66 before crd::install's handler runs. Scoped to this specimen.
+extern "C" const char* __tsan_default_options()
+{
+    return "handle_segv=0";
+}
+#endif
+
 namespace
 {
 // A wild write through a null pointer -> an access violation. volatile so the store is not optimized away.

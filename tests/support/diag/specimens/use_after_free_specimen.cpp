@@ -3,6 +3,7 @@
 // (SanitizerCaught). With no sanitizer runtime there is nothing to catch it, so it announces
 // SANITIZER=none and exits cleanly -- the harness then reports InstrumentAbsent, never a silent pass.
 // Core ASan detects this on every ASan lane (win-asan and linux). Mirrors heap_overflow_specimen.
+#define CRD_DIAG_SPECIMEN_ASAN_CLASS // an AddressSanitizer-only error class (see specimen_common.hpp)
 #include "specimen_common.hpp"
 
 #include <cstdlib>

@@ -96,15 +96,15 @@ struct alignas(64) Counter
     std::atomic<crd::u32>    next_free   {kCounterNullIndex};
     // A unique task-instance id stamped on every acquire(). Distinct from the recycled
     // counter/fiber ADDRESS (which the pool reuses), so diagnostics can tell two runs on the same
-    // slot apart. Plain (non-atomic): written once in acquire() before the counter is handed out,
-    // read only by the owning task; never mutated concurrently.
-    crd::u64                 task_id     = 0U;
+    // slot apart. Written in acquire() before the counter is handed out. Atomic/relaxed because the
+    // diagnostics snapshots read it from the watchdog thread through a pointer that may already have been
+    // recycled; a stale or fresh id is acceptable there, a data race is not.
+    std::atomic<crd::u64>    task_id     {0U};
     // The task_id of the job that submitted this one (its immediate parent), captured in acquire() from
-    // the submitting fiber's context; 0 when submitted from outside any job. Same plain-write discipline
-    // as task_id (written once before hand-out, read only by the owning task). Retains the causal
-    // parent edge for diagnostics.
-    crd::u64                 parent_task_id = 0U;
-    crd::u8                  _pad1[24]  = {};
+    // the submitting fiber's context; 0 when submitted from outside any job. Same discipline as task_id.
+    // Retains the causal parent edge for diagnostics.
+    std::atomic<crd::u64>    parent_task_id {0U};
+    crd::u8                  pad1[24]   = {};
 };
 static_assert(sizeof(Counter)  == 64U, "Counter must be exactly one cache line");
 static_assert(alignof(Counter) == 64U, "Counter must be cache-line aligned");
@@ -154,7 +154,7 @@ public:
     // A released slot sits at value 0 (its last decrement drove it there), so a caller counting value > 0 sees
     // exactly the counters with outstanding jobs without needing acquired-state.
     template<typename Fn>
-    void for_each_counter(Fn&& fn) const
+    void for_each_counter(const Fn& fn) const
     {
         for (crd::u32 i = 0U; i < m_capacity; ++i)
         {

@@ -2,6 +2,7 @@
 // the runtime catches and aborts (SanitizerCaught). With no sanitizer runtime there
 // is nothing to catch a manufactured fault, so it announces SANITIZER=none and exits
 // cleanly -- the harness then reports InstrumentAbsent, never a silent pass.
+#define CRD_DIAG_SPECIMEN_ASAN_CLASS // an AddressSanitizer-only error class (see specimen_common.hpp)
 #include "specimen_common.hpp"
 
 #include <cstdlib>

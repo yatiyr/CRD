@@ -429,8 +429,8 @@ crd::u64 current_task_id() noexcept
     {
         return 0U; // off-fiber caller (main thread, or outside any job)
     }
-    const detail::Counter* const c = f->job_counter;
-    return (c != nullptr) ? c->task_id : 0U;
+    const detail::Counter* const c = f->job_counter.load(std::memory_order_relaxed);
+    return (c != nullptr) ? c->task_id.load(std::memory_order_relaxed) : 0U;
 }
 
 crd::u64 parent_task_id() noexcept
@@ -440,8 +440,8 @@ crd::u64 parent_task_id() noexcept
     {
         return 0U; // off-fiber caller (main thread, or outside any job)
     }
-    const detail::Counter* const c = f->job_counter;
-    return (c != nullptr) ? c->parent_task_id : 0U;
+    const detail::Counter* const c = f->job_counter.load(std::memory_order_relaxed);
+    return (c != nullptr) ? c->parent_task_id.load(std::memory_order_relaxed) : 0U;
 }
 
 void note_progress() noexcept
@@ -485,18 +485,18 @@ crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
             const crd::usize idx = total++;
             if (idx < out.size())
             {
-                // The fiber's OWN job counter (the edge source). Plain read of a non-atomic pointer, matching
-                // current_task_id()'s established racy-dump pattern -- a parked fiber does not rewrite it; 0 if
-                // this fiber carries no job counter (an unresolved chain end for cycle detection).
-                const detail::Counter* const own = f.job_counter;
+                // The fiber's OWN job counter (the edge source); a parked fiber does not rewrite it. Relaxed
+                // atomic read; 0 if this fiber carries no job counter (an unresolved chain end for cycle
+                // detection).
+                const detail::Counter* const own = f.job_counter.load(std::memory_order_relaxed);
 
                 WaitGraphNode& n            = out[idx];
                 n.fiber_index               = f.pool_index;
                 n.tier                      = static_cast<crd::u8>(tier);
-                n.waiting_on_task_id        = c->task_id;
-                n.waiting_on_parent_task_id = c->parent_task_id;
+                n.waiting_on_task_id        = c->task_id.load(std::memory_order_relaxed);
+                n.waiting_on_parent_task_id = c->parent_task_id.load(std::memory_order_relaxed);
                 n.waiting_on_remaining      = c->value.load(std::memory_order_relaxed);
-                n.own_task_id               = (own != nullptr) ? own->task_id : 0U;
+                n.own_task_id               = (own != nullptr) ? own->task_id.load(std::memory_order_relaxed) : 0U;
             }
         });
     return total;
@@ -527,12 +527,13 @@ crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept
             const crd::usize idx = total++;
             if (idx < out.size())
             {
-                const detail::Counter* const c = f.job_counter;
+                const detail::Counter* const c = f.job_counter.load(std::memory_order_relaxed);
                 ProgressNode&                n = out[idx];
                 n.fiber_index                  = f.pool_index;
                 n.tier                         = static_cast<crd::u8>(tier);
-                n.task_id                      = (c != nullptr) ? c->task_id : 0U;
-                n.parent_task_id               = (c != nullptr) ? c->parent_task_id : 0U;
+                n.task_id                      = (c != nullptr) ? c->task_id.load(std::memory_order_relaxed) : 0U;
+                n.parent_task_id               = (c != nullptr) ? c->parent_task_id.load(std::memory_order_relaxed)
+                                                                : 0U;
                 n.progress_epoch               = f.progress_epoch.load(std::memory_order_relaxed);
             }
         });

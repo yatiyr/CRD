@@ -14,11 +14,11 @@
 #if defined(__has_include)
 #if __has_include(<crd/core/assert.hpp>)
 #include <crd/core/assert.hpp> // set_assert_headless: a spawned specimen must never block on a modal assert dialog
-#define CRD_DIAG_HAS_CRD_ASSERT 1
+#define CRD_DIAG_HAS_CRD_ASSERT 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 #endif
 #ifndef CRD_DIAG_HAS_CRD_ASSERT
-#define CRD_DIAG_HAS_CRD_ASSERT 0
+#define CRD_DIAG_HAS_CRD_ASSERT 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
 #include <cstdio>
@@ -29,26 +29,26 @@
 
 // AddressSanitizer detection (heap/overflow specimens key on this specifically).
 #if defined(__SANITIZE_ADDRESS__)
-#define CRD_DIAG_HAS_ASAN 1
+#define CRD_DIAG_HAS_ASAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define CRD_DIAG_HAS_ASAN 1
+#define CRD_DIAG_HAS_ASAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 #endif
 #ifndef CRD_DIAG_HAS_ASAN
-#define CRD_DIAG_HAS_ASAN 0
+#define CRD_DIAG_HAS_ASAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
 // ThreadSanitizer detection (the DIAG.1b data-race specimen keys on this specifically).
 #if defined(__SANITIZE_THREAD__)
-#define CRD_DIAG_HAS_TSAN 1
+#define CRD_DIAG_HAS_TSAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-#define CRD_DIAG_HAS_TSAN 1
+#define CRD_DIAG_HAS_TSAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 #endif
 #ifndef CRD_DIAG_HAS_TSAN
-#define CRD_DIAG_HAS_TSAN 0
+#define CRD_DIAG_HAS_TSAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
 // Back-compat alias: any sanitizer runtime present.
@@ -59,14 +59,20 @@
 // stack-use-after-return is not reliably reported by MSVC ASan), or that no sanitizer is involved at all. The label
 // is then "none" and the harness treats it as InstrumentAbsent rather than expecting a catch -- an explicit
 // unqualified route, never a skip-pass. (A flag, not a string constant, keeps specimens free of constant macros.)
+//
+// A specimen whose error class only AddressSanitizer catches defines CRD_DIAG_SPECIMEN_ASAN_CLASS. Without ASan its
+// route is absent even when another sanitizer is linked: a ThreadSanitizer build cannot catch a heap overflow, so
+// the label is "none" there rather than "tsan" (which would make the harness wait for a catch that cannot come).
 #if defined(CRD_DIAG_SPECIMEN_ROUTE_ABSENT)
-#define CRD_DIAG_SPECIMEN_SANITIZER "none"
+#define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
+#elif defined(CRD_DIAG_SPECIMEN_ASAN_CLASS) && !CRD_DIAG_HAS_ASAN
+#define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
 #elif CRD_DIAG_HAS_ASAN
-#define CRD_DIAG_SPECIMEN_SANITIZER "asan"
+#define CRD_DIAG_SPECIMEN_SANITIZER "asan" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
 #elif CRD_DIAG_HAS_TSAN
-#define CRD_DIAG_SPECIMEN_SANITIZER "tsan"
+#define CRD_DIAG_SPECIMEN_SANITIZER "tsan" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
 #else
-#define CRD_DIAG_SPECIMEN_SANITIZER "none"
+#define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
 #endif
 
 #if defined(_WIN32)

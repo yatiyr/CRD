@@ -52,7 +52,10 @@ struct Fiber
     // handled by the generation tag packed into free_head — see fiber_pool.cpp.
     std::atomic<crd::u32> next_free{kFiberNullIndex};
     FiberTier  tier          = FiberTier::Small;
-    Counter*   job_counter   = nullptr;         // counter to decrement when this fiber's job completes
+    // The counter to decrement when this fiber's job completes. Written by the dispatching worker and cleared on
+    // completion; the diagnostics snapshots read it from the watchdog thread. Atomic/relaxed so that read is not a
+    // data race (TSan reported it as a plain pointer, 2026-10-05); the owning paths need no ordering from it.
+    std::atomic<Counter*> job_counter{nullptr};
     // The counter this fiber is currently BLOCKED on (distinct from job_counter, which is its own job's
     // completion counter): set on the park path in counter_wait before the switch, cleared to nullptr on
     // resume. It is the wait-graph edge — a diagnostics snapshot walks the fiber pool and reports every fiber

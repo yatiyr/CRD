@@ -13,6 +13,7 @@
 #if defined(_MSC_VER)
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // stack-use-after-return not qualified on MSVC ASan
 #endif
+#define CRD_DIAG_SPECIMEN_ASAN_CLASS // an AddressSanitizer-only error class (see specimen_common.hpp)
 #include "specimen_common.hpp"
 
 #if CRD_DIAG_HAS_ASAN && !defined(_MSC_VER)

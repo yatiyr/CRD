@@ -99,10 +99,10 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
             c->waiters.store(nullptr,       std::memory_order_relaxed);
             c->next_free.store(kCounterNullIndex, std::memory_order_relaxed);
             // Stamp a unique task-instance id, distinct from this recycled slot's address.
-            c->task_id = m_next_task_id.fetch_add(1U, std::memory_order_relaxed);
+            c->task_id.store(m_next_task_id.fetch_add(1U, std::memory_order_relaxed), std::memory_order_relaxed);
             // Retain the causal parent edge: the submitting task is whatever job runs on the calling
             // fiber right now (0 when submitted from the main thread / outside any job).
-            c->parent_task_id = crd::jobs::current_task_id();
+            c->parent_task_id.store(crd::jobs::current_task_id(), std::memory_order_relaxed);
             m_acquired.fetch_add(1U, std::memory_order_relaxed);
             return c;
         }
@@ -357,7 +357,7 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     // fresh task_id — while we are still touching it. If it changes before we finish, the slot was
     // recycled out from under a half-finished park: report it (a use-after-read here does not fault in a
     // debug build). The repaired algorithm never trips this; a variant that drops the handshake does.
-    const crd::u64 park_task_id = counter->task_id;
+    const crd::u64 park_task_id = counter->task_id.load(std::memory_order_relaxed);
 #endif
 
     // Publish w onto counter->waiters (Treiber push).
@@ -389,7 +389,7 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     // Owner-release invariant: the slot we parked must still be ours. A changed task_id means it was
     // released and re-acquired while this park was in flight — the reclamation race the handshake exists
     // to prevent (see park_task_id above).
-    if (counter->task_id != park_task_id)
+    if (counter->task_id.load(std::memory_order_relaxed) != park_task_id)
     {
         detail::sched_check_note_violation("fp.recycled-under-park");
     }

@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for the linux-clang-tsan preset (DIAG.1b).
+#
+# Only third-party libraries that are not built with -fsanitize=thread belong here. TSan cannot see the
+# happens-before edges their own atomics create (shared_ptr counts, driver-internal hand-offs), so their internal
+# synchronization reads as races. Engine and test code is never suppressed: a report in Cerid code is fixed.
+# Evidence: docs/sessions/2026-10-05-clang-werror-and-tsan-inventory.md.
+
+# Mesa lavapipe, the hosted Linux Vulkan device: its worker threads' mutex lifetime ordering.
+race:libvulkan_lvp.so
+
+# Khronos validation layer: its queue-retire thread and DestroyFence order fence state through shared_ptr counts.
+race:libVkLayer_khronos_validation.so
