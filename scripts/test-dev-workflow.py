@@ -381,7 +381,10 @@ VALUE:STRING=a=b=c
                                  self.root, dict(os.environ), self.build / 'status-retry', 10)
         self.assertEqual(result['status'], 'failed', result)
         self.assertEqual(result['exit_code'], 7)
-        self.assertEqual(result['status_read_retries'], 3)
+        # Every injected denial was retried. A real sharing denial on the host adds retries of its own (a hosted
+        # Windows runner counted 4), which is the case the retry exists for, so the count is a lower bound.
+        self.assertEqual(denials, 3)
+        self.assertGreaterEqual(result['status_read_retries'], 3)
         self.assertEqual(marker.read_text(), 'once\n')
 
     def test_supervisor_persistent_status_denial_is_an_instrument_failure(self):
